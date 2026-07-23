@@ -38,24 +38,32 @@ export function SiteSwitcher() {
     <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Live site">
       {sites.map((site) => {
         const active = site.id === siteId;
+        const disabled = !site.ready;
         return (
           <button
             key={site.id}
             type="button"
             role="tab"
             aria-selected={active}
+            aria-disabled={disabled}
+            disabled={disabled}
             title={site.ready ? site.name : `${site.name} (coming soon)`}
-            onClick={() => setSiteId(site.id)}
+            onClick={() => {
+              if (site.ready) setSiteId(site.id);
+            }}
             className={clsx(
               "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
               active
                 ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700",
-              !site.ready && "opacity-70",
+                : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+              disabled
+                ? "cursor-not-allowed opacity-40"
+                : !active &&
+                    "hover:bg-zinc-200 dark:hover:bg-zinc-700",
             )}
           >
             {site.name}
-            {!site.ready && (
+            {disabled && (
               <span className="ml-1 text-[10px] font-normal opacity-70">WIP</span>
             )}
           </button>
