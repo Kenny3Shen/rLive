@@ -82,7 +82,9 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // State<'_, T> must be accessed via .inner() for field use on all platforms.
                 if let Some(state) = app_handle.try_state::<AppState>() {
+                    let state = state.inner();
                     let _ = state.player.stop();
                     state.danmaku.disconnect();
                 }
