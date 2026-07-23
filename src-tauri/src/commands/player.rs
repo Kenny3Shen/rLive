@@ -111,3 +111,41 @@ pub fn player_status(state: State<'_, AppState>) -> AppResult<PlayerStatus> {
     let settings_path = load_mpv_setting(&state)?;
     Ok(state.player.status(settings_path.as_deref()))
 }
+
+#[tauri::command]
+pub fn player_enter_fullscreen(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    url: String,
+    headers: HashMap<String, String>,
+    title: Option<String>,
+) -> AppResult<()> {
+    let _ = window; // reserved for monitor / overlay (Task 4)
+    let settings_path = load_mpv_setting(&state)?;
+    let mpv = resolve_mpv_path(settings_path.as_deref())?;
+    state
+        .player
+        .enter_fullscreen(&mpv, &url, &headers, title.as_deref())
+}
+
+#[tauri::command]
+pub fn player_exit_fullscreen(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    url: String,
+    headers: HashMap<String, String>,
+    title: Option<String>,
+    bounds: Option<PlayerBounds>,
+) -> AppResult<()> {
+    let settings_path = load_mpv_setting(&state)?;
+    let mpv = resolve_mpv_path(settings_path.as_deref())?;
+    let main = main_window(&window);
+    state.player.exit_fullscreen(
+        Some(&main),
+        &mpv,
+        &url,
+        &headers,
+        title.as_deref(),
+        bounds,
+    )
+}

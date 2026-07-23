@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PlayUrl } from "@/shared/types/live";
-import type { PlayerStatus } from "@/shared/types/player";
+import type { PlayerStatus, PlayerUiMode } from "@/shared/types/player";
+import type { AppError } from "@/shared/types/error";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { invokeCmd } from "@/shared/api/tauri";
 import { DanmakuPanel } from "./DanmakuPanel";
@@ -74,6 +75,8 @@ export function PlayerPane({
   const [prevVolume, setPrevVolume] = useState(80);
   const [danmakuOn, setDanmakuOn] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
+  const [mode, setMode] = useState<PlayerUiMode>("windowed");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -108,6 +111,8 @@ export function PlayerPane({
     }
 
     setMpvError(null);
+    setLoadError(null);
+    setMode("windowed");
     void (async () => {
       try {
         const bounds = hostRef.current
@@ -186,6 +191,57 @@ export function PlayerPane({
     }
   }
 
+  const toggleFullscreen = useCallback(async () => {
+    if (!playUrl) return;
+    const prior = mode;
+    setLoadError(null);
+    try {
+      if (mode === "fullscreen") {
+        const bounds = hostRef.current
+          ? await measureClientBounds(hostRef.current)
+          : null;
+        await invokeCmd("player_exit_fullscreen", {
+          url: playUrl.url,
+          headers: playUrl.headers,
+          title: title ?? null,
+          bounds,
+        });
+        setMode("windowed");
+        window.setTimeout(() => void pushBounds(), 120);
+        window.setTimeout(() => void pushBounds(), 400);
+      } else {
+        await invokeCmd("player_enter_fullscreen", {
+          url: playUrl.url,
+          headers: playUrl.headers,
+          title: title ?? null,
+        });
+        setMode("fullscreen");
+      }
+      await refreshStatus();
+    } catch (e) {
+      // Keep prior mode on failure.
+      setMode(prior);
+      const msg =
+        typeof e === "object" && e && "message" in e
+          ? String((e as AppError).message)
+          : String(e);
+      setLoadError(msg || "全屏切换失败");
+    }
+  }, [playUrl, mode, title, pushBounds, refreshStatus]);
+
+  // Esc exits fullscreen (video-only; no overlay yet).
+  useEffect(() => {
+    if (mode !== "fullscreen") return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        void toggleFullscreen();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode, toggleFullscreen]);
+
   const displayError = error ?? mpvError;
   const showHost = !loading && displayError == null && !!playUrl;
   const transportDisabled = !showHost;
@@ -236,6 +292,8 @@ export function PlayerPane({
             qualityIndex={qualityIndex}
             lines={lines}
             lineIndex={lineIndex}
+            fullscreen={mode === "fullscreen"}
+            loadError={loadError}
             disabled={transportDisabled}
             onTogglePause={() => void togglePause()}
             onVolume={(v) => void changeVolume(v)}
@@ -245,10 +303,7 @@ export function PlayerPane({
             onQualityChange={onQualityChange ?? (() => {})}
             onLineChange={onLineChange ?? (() => {})}
             onToggleFullscreen={
-              onToggleFullscreen ??
-              (() => {
-                /* Task 2: fullscreen */
-              })
+              onToggleFullscreen ?? (() => void toggleFullscreen())
             }
           />
         </div>
