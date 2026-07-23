@@ -84,6 +84,7 @@ export function PlayerPane({
       setStatus(st);
       setPaused(st.paused);
       setVolume(st.volume);
+      setMode(st.mode);
     } catch {
       /* ignore */
     }

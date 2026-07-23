@@ -332,6 +332,9 @@ impl PlayerManager {
         inner.last_path = mpv_path.display().to_string();
         inner.paused = false;
         inner.embed_mode = mode;
+        // Embed/normal open always leaves dual-mode as windowed so quality/line
+        // re-open and exit_fullscreen paths can re-enter fullscreen later.
+        inner.mode = PlayerMode::Windowed;
         inner.bounds = bounds;
         Ok(())
     }
@@ -491,6 +494,8 @@ impl PlayerManager {
         // Destroy host after mpv exits so --wid is released cleanly.
         inner.host = None;
         inner.paused = false;
+        // Stop always returns to windowed; enter_fullscreen re-sets Fullscreen after spawn.
+        inner.mode = PlayerMode::Windowed;
         Ok(())
     }
 
