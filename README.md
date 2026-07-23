@@ -93,28 +93,42 @@ Project rules for this pipeline: `AGENTS.md`, `.grok/rules/windows-delivery.md`.
 
 - **Sidebar**: icon rail (首页 / 关注 / 分类 / 历史 / 设置)
 - **Search**: top-right of the main header (not in the rail)
-- **Room page**: top bar with back + LIVE badge; video embed; right chat/SC tabs; bottom actions (刷新 / 关注 / 复制链接 / **复制直链**)
-- **mpv HWND**: native video sits on top of the webview — chrome must stay **outside** the embed host (no overlays over video)
+- **Room page**: top bar with back + LIVE; video embed; right chat list; bottom strip (刷新 / 关注 / 复制链接 / 复制直链)
+- **Player controls** (under video, never over HWND): 播放 / 音量 / 弹幕 / **清晰度** / **线路** / **全屏**
+- **mpv HWND**: native video sits on top of the webview — chrome must stay **outside** the embed host
+
+## Playback v2 (fullscreen + lines + canvas danmaku)
+
+| Mode | Video | Danmaku |
+|------|-------|---------|
+| Windowed | `--wid` child embed | Right chat list (+ optional OSD) |
+| Fullscreen | mpv OS fullscreen (no wid) | Transparent always-on-top overlay + **Canvas** scrolling tracks |
+
+Esc or control-bar 全屏 exits overlay and restores embed. Spec/plan:
+
+- `docs/superpowers/specs/2026-07-24-room-playback-v2-design.md`
+- `docs/superpowers/plans/2026-07-24-room-playback-v2.md`
 
 ## Danmaku (Bilibili)
 
 1. Open **设置 → 哔哩哔哩 Cookie**, paste a valid browser cookie, save.
 2. Enter a live room — chat should show connect status, then chat / enter / gift lines.
-3. WS join uses **viewer** `DedeUserID` (or `0` when anonymous), real `room_id`, and token from `getDanmuInfo`.
+3. Fullscreen shows scrolling canvas danmaku over the picture.
+4. WS join uses **viewer** `DedeUserID` (or `0` when anonymous), real `room_id`, and token from `getDanmuInfo`.
 
 Never commit cookies. Profile export **excludes** cookies.
 
 ## Architecture
 
-- **React + Tailwind v4 + shadcn/ui (base-nova)**: desktop chrome, lists, settings, room UI
-- **Rust (`src-tauri`)**: `LiveSite` trait, SQLite, cookies, mpv process/embed, danmaku WebSocket
+- **React + Tailwind v4 + shadcn/ui (base-nova)**: desktop chrome, lists, settings, room UI, canvas danmaku overlay
+- **Rust (`src-tauri`)**: `LiveSite` trait, SQLite, cookies, mpv process/embed/fullscreen, overlay window, danmaku WebSocket
 - **mpv**: external process; Windows prefers `--wid` child embed when available
 
 Design & plan:
 
 - `docs/superpowers/specs/2026-07-23-rlive-tauri-design.md`
 - `docs/superpowers/plans/2026-07-23-rlive-phase1.md`
-- `docs/superpowers/changelog-2026-07-24.md` — recent UI / embed / danmaku notes
+- `docs/superpowers/changelog-2026-07-24.md`
 
 ## Compliance
 
