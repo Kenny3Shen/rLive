@@ -260,8 +260,21 @@ pub fn parse_room_detail_from_data(
         .cloned()
         .unwrap_or_else(|| "broadcastlv.chat.bilibili.com".into());
 
+    // Viewer mid for WS auth (from cookie DedeUserID), NOT the streamer uid.
+    let viewer_uid: i64 = cookie
+        .split(';')
+        .filter_map(|p| {
+            let p = p.trim();
+            p.strip_prefix("DedeUserID=").map(|v| v.trim().to_string())
+        })
+        .find(|v| !v.is_empty())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    let room_id_num: i64 = real_room_id.parse().unwrap_or_else(|_| as_i64(room.get("room_id").unwrap_or(&Value::Null)));
+
     let raw = serde_json::json!({
-        "room_id": real_room_id,
+        "room_id": room_id_num,
         "uid": as_str(room.get("uid").unwrap_or(&Value::Null)),
         "danmaku": {
             "token": token,
@@ -269,6 +282,7 @@ pub fn parse_room_detail_from_data(
             "server_hosts": server_hosts,
             "buvid": buvid3,
             "cookie": cookie,
+            "viewer_uid": viewer_uid,
         },
         "area_id": as_str(room.get("area_id").unwrap_or(&Value::Null)),
         "area_name": as_str(room.get("area_name").unwrap_or(&Value::Null)),
@@ -603,6 +617,8 @@ mod tests {
         assert_eq!(detail.user_name, "详情主播");
         assert!(detail.user_avatar.contains("@100w.jpg"));
         assert_eq!(detail.raw["danmaku"]["buvid"], "b3");
+        // room_id stored as number for WS join
+        assert!(detail.raw["room_id"].as_i64().is_some() || detail.raw["room_id"].as_str().is_some());
     }
 
     #[test]

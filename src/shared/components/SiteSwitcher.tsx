@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
-import clsx from "clsx";
-import { invokeCmd } from "../api/tauri";
-import { useSettingsStore } from "../stores/settingsStore";
-import type { SiteInfo } from "../types/live";
+import { invokeCmd } from "@/shared/api/tauri";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
+import type { SiteInfo } from "@/shared/types/live";
+import { cn, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
 
 const FALLBACK_SITES: SiteInfo[] = [
   { id: "bilibili", name: "Bilibili", ready: false },
-  { id: "huya", name: "Huya", ready: false },
   { id: "douyu", name: "Douyu", ready: false },
+  { id: "huya", name: "Huya", ready: false },
   { id: "douyin", name: "Douyin", ready: false },
   { id: "kuaishou", name: "Kuaishou", ready: false },
 ];
@@ -26,7 +26,7 @@ export function SiteSwitcher() {
           setSites(list);
         }
       } catch {
-        // Outside Tauri or command missing: keep fallback list.
+        /* keep fallback */
       }
     })();
     return () => {
@@ -35,10 +35,17 @@ export function SiteSwitcher() {
   }, []);
 
   return (
-    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Live site">
+    <div
+      className="flex items-center gap-1 rounded-full bg-card/80 p-1 ring-1 ring-border-subtle backdrop-blur-sm"
+      role="tablist"
+      aria-label="直播平台"
+    >
       {sites.map((site) => {
         const active = site.id === siteId;
         const disabled = !site.ready;
+        const accent = SITE_ACCENT[site.id] ?? "#6c8cff";
+        const label = SITE_LABELS[site.id] ?? site.name;
+
         return (
           <button
             key={site.id}
@@ -47,24 +54,31 @@ export function SiteSwitcher() {
             aria-selected={active}
             aria-disabled={disabled}
             disabled={disabled}
-            title={site.ready ? site.name : `${site.name} (coming soon)`}
+            title={site.ready ? label : `${label}（即将支持）`}
             onClick={() => {
               if (site.ready) setSiteId(site.id);
             }}
-            className={clsx(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+            className={cn(
+              "relative flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all focus-ring",
               active
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-              disabled
-                ? "cursor-not-allowed opacity-40"
-                : !active &&
-                    "hover:bg-zinc-200 dark:hover:bg-zinc-700",
+                ? "bg-muted text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+              disabled && "cursor-not-allowed opacity-35",
             )}
           >
-            {site.name}
-            {disabled && (
-              <span className="ml-1 text-[10px] font-normal opacity-70">WIP</span>
+            <span
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+              style={{ backgroundColor: accent }}
+              aria-hidden
+            >
+              {label.slice(0, 1)}
+            </span>
+            <span className="hidden sm:inline">{label}</span>
+            {active && (
+              <span
+                className="absolute inset-x-3 -bottom-px h-0.5 rounded-full"
+                style={{ backgroundColor: accent }}
+              />
             )}
           </button>
         );

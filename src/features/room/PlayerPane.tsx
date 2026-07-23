@@ -1,9 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { PlayUrl } from "../../shared/types/live";
-import { ErrorState } from "../../shared/components/ErrorState";
-import { invokeCmd } from "../../shared/api/tauri";
+import {
+  Pause,
+  Play,
+  Volume2,
+  VolumeX,
+  Maximize2,
+  PictureInPicture2,
+  MessageSquareText,
+  Captions,
+} from "lucide-react";
+import type { PlayUrl } from "@/shared/types/live";
+import { ErrorState } from "@/shared/components/ErrorState";
+import { invokeCmd } from "@/shared/api/tauri";
 import { DanmakuPanel } from "./DanmakuPanel";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Spinner } from "@/components/ui/spinner";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 type PlayerPaneProps = {
   playUrl: PlayUrl | null;
@@ -12,6 +27,11 @@ type PlayerPaneProps = {
   onRetry?: () => void;
   title?: string;
   danmakuActive?: boolean;
+  danmakuStatusText?: string | null;
+  /** Right-side meta (avatar, name…) rendered above chat. */
+  sideHeader?: React.ReactNode;
+  /** Bottom bar extras (quality, line, etc.). */
+  bottomExtras?: React.ReactNode;
 };
 
 type PlayerStatus = {
@@ -22,7 +42,6 @@ type PlayerStatus = {
   embed_mode: "child" | "geometry" | "window";
 };
 
-/** Client-relative physical-pixel bounds for child HWND embed. */
 type Bounds = { x: number; y: number; width: number; height: number };
 
 async function measureClientBounds(el: HTMLElement): Promise<Bounds | null> {
@@ -31,7 +50,6 @@ async function measureClientBounds(el: HTMLElement): Promise<Bounds | null> {
     const factor = await win.scaleFactor();
     const rect = el.getBoundingClientRect();
     if (rect.width < 8 || rect.height < 8) return null;
-    // Child windows use client coordinates of the main HWND.
     return {
       x: Math.round(rect.left * factor),
       y: Math.round(rect.top * factor),
@@ -43,14 +61,6 @@ async function measureClientBounds(el: HTMLElement): Promise<Bounds | null> {
   }
 }
 
-/**
- * Layout:
- *  ┌──────────────┬─────────┐
- *  │  video host  │ danmaku │
- *  │  (mpv wid)   │  panel  │
- *  └──────────────┴─────────┘
- *  │ controls               │
- */
 export function PlayerPane({
   playUrl,
   loading,
@@ -58,12 +68,17 @@ export function PlayerPane({
   onRetry,
   title,
   danmakuActive = false,
+  danmakuStatusText,
+  sideHeader,
+  bottomExtras,
 }: PlayerPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [mpvError, setMpvError] = useState<unknown>(null);
   const [status, setStatus] = useState<PlayerStatus | null>(null);
   const [paused, setPaused] = useState(false);
   const [volume, setVolume] = useState(80);
+  const [muted, setMuted] = useState(false);
+  const [prevVolume, setPrevVolume] = useState(80);
   const [danmakuOn, setDanmakuOn] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
 
@@ -158,6 +173,7 @@ export function PlayerPane({
   async function changeVolume(v: number) {
     const vol = Math.max(0, Math.min(100, Math.round(v)));
     setVolume(vol);
+    setMuted(vol === 0);
     try {
       await invokeCmd("player_set_volume", { volume: vol });
     } catch {
@@ -165,108 +181,166 @@ export function PlayerPane({
     }
   }
 
+  async function toggleMute() {
+    if (muted || volume === 0) {
+      const restore = prevVolume || 80;
+      setMuted(false);
+      await changeVolume(restore);
+    } else {
+      setPrevVolume(volume);
+      setMuted(true);
+      await changeVolume(0);
+    }
+  }
+
   const displayError = error ?? mpvError;
   const showHost = !loading && displayError == null && !!playUrl;
 
   return (
-    <div className="flex w-full flex-col gap-2">
-      <div className="flex min-h-[280px] w-full gap-2 lg:min-h-[360px]">
-        {/* Video host — native mpv child window sits here via --wid */}
-        <div
-          ref={hostRef}
-          className="relative min-w-0 flex-1 overflow-hidden rounded-lg border border-zinc-200 bg-black dark:border-zinc-700"
-        >
+    <div className="flex h-full min-h-0 w-full">
+      {/* Video stage — hostRef must NOT cover chrome overlays (HWND sits on top) */}
+      <div className="relative flex min-w-0 flex-1 flex-col bg-black">
+        <div ref={hostRef} className="relative min-h-0 flex-1 bg-black">
           {loading && (
-            <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-zinc-400">
-              Resolving play URL…
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+              <Spinner className="size-8 text-primary" />
+              <p className="text-sm">正在解析线路…</p>
             </div>
           )}
           {!loading && displayError != null && (
-            <div className="flex h-full min-h-[240px] items-center justify-center p-4">
-              <ErrorState
-                error={displayError}
-                title="Playback unavailable"
-                onRetry={onRetry}
-              />
+            <div className="absolute inset-0 flex items-center justify-center p-6">
+              <div className="w-full max-w-md">
+                <ErrorState
+                  error={displayError}
+                  title="播放不可用"
+                  onRetry={onRetry}
+                />
+              </div>
             </div>
           )}
           {!loading && displayError == null && !playUrl && (
-            <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-zinc-500">
-              No stream selected
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+              未选择流
             </div>
           )}
-          {showHost && (
-            <div className="pointer-events-none absolute inset-0 flex items-end justify-start p-2">
-              <span className="rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-zinc-300">
-                {status?.embed_mode === "child"
-                  ? "embedded (wid)"
-                  : status?.embed_mode === "geometry"
-                    ? "embedded (geometry)"
-                    : status?.running
-                      ? "mpv"
-                      : "starting…"}
-              </span>
+          {showHost && !status?.running && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <Spinner className="size-8 text-white/70" />
             </div>
           )}
         </div>
 
-        {/* Right danmaku column */}
-        <div className="hidden w-[280px] shrink-0 sm:block md:w-[320px]">
-          <DanmakuPanel active={danmakuActive && danmakuOn} osd={osdOn && !!playUrl} />
-        </div>
-      </div>
+        {/* Controls under embed host so they stay clickable */}
+        {showHost && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1 border-t border-border bg-card px-2 py-1.5">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              title={paused ? "播放" : "暂停"}
+              onClick={() => void togglePause()}
+            >
+              {paused ? (
+                <Play className="fill-current" />
+              ) : (
+                <Pause className="fill-current" />
+              )}
+            </Button>
 
-      {/* Mobile: danmaku below video */}
-      <div className="h-48 sm:hidden">
-        <DanmakuPanel active={danmakuActive && danmakuOn} osd={false} />
-      </div>
-
-      {showHost && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-          <button
-            type="button"
-            onClick={() => void togglePause()}
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            {paused ? "Play" : "Pause"}
-          </button>
-
-          <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
-            <span className="w-12">Vol {volume}</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              title={muted ? "取消静音" : "静音"}
+              onClick={() => void toggleMute()}
+            >
+              {muted || volume === 0 ? <VolumeX /> : <Volume2 />}
+            </Button>
             <input
               type="range"
               min={0}
               max={100}
               value={volume}
               onChange={(e) => void changeVolume(Number(e.target.value))}
-              className="w-32 accent-zinc-900 dark:accent-zinc-100"
+              className="w-24 accent-primary"
+              aria-label="音量"
             />
-          </label>
 
-          <label className="flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
-            <input
-              type="checkbox"
-              checked={danmakuOn}
-              onChange={(e) => setDanmakuOn(e.target.checked)}
-            />
-            弹幕栏
-          </label>
+            <Separator orientation="vertical" className="mx-1 h-4" />
 
-          <label className="flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
-            <input
-              type="checkbox"
-              checked={osdOn}
-              onChange={(e) => setOsdOn(e.target.checked)}
-            />
-            画面弹幕
-          </label>
+            <Button
+              variant={danmakuOn ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setDanmakuOn((v) => !v)}
+            >
+              <MessageSquareText data-icon="inline-start" />
+              弹幕
+            </Button>
+            <Button
+              variant={osdOn ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setOsdOn((v) => !v)}
+            >
+              <Captions data-icon="inline-start" />
+              飘屏
+            </Button>
 
-          {title && (
-            <span className="ml-auto max-w-[40%] truncate text-xs text-zinc-500">
-              {title}
-            </span>
+            {bottomExtras}
+
+            <div className="ml-auto flex items-center gap-1">
+              {status?.embed_mode && (
+                <span className="mr-1 hidden text-[10px] text-muted-foreground sm:inline">
+                  {status.embed_mode === "child"
+                    ? "wid"
+                    : status.embed_mode === "geometry"
+                      ? "geo"
+                      : "win"}
+                </span>
+              )}
+              <Button variant="ghost" size="icon-sm" disabled title="画中画">
+                <PictureInPicture2 />
+              </Button>
+              <Button variant="ghost" size="icon-sm" disabled title="全屏">
+                <Maximize2 />
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right panel — always outside HWND */}
+      {danmakuOn && (
+        <aside
+          className={cn(
+            "flex w-[300px] shrink-0 flex-col border-l border-border bg-sidebar lg:w-[320px]",
+            "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-56 max-md:w-full max-md:border-t max-md:border-l-0",
           )}
-        </div>
+        >
+          {sideHeader}
+          <Tabs defaultValue="chat" className="flex min-h-0 flex-1 flex-col gap-0">
+            <TabsList
+              variant="line"
+              className="w-full justify-start rounded-none border-b border-border bg-transparent px-2"
+            >
+              <TabsTrigger value="chat">聊天</TabsTrigger>
+              <TabsTrigger value="sc">SC</TabsTrigger>
+            </TabsList>
+            <TabsContent
+              value="chat"
+              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            >
+              <DanmakuPanel
+                active={danmakuActive}
+                osd={osdOn && !!playUrl}
+                statusText={danmakuStatusText}
+                className="h-full"
+              />
+            </TabsContent>
+            <TabsContent value="sc" className="mt-0 min-h-0 flex-1">
+              <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
+                Super Chat 将在后续版本展示
+              </div>
+            </TabsContent>
+          </Tabs>
+        </aside>
       )}
     </div>
   );

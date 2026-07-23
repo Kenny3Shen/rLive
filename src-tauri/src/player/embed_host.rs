@@ -44,6 +44,7 @@ impl EmbedHost {
             };
             let hwnd = HWND(self.hwnd as *mut core::ffi::c_void);
             unsafe {
+                // windows-0.61: hwndinsertafter is Option<HWND>
                 let _ = SetWindowPos(
                     hwnd,
                     Some(HWND_TOP),
@@ -78,7 +79,7 @@ impl EmbedHost {
     #[cfg(windows)]
     fn create_windows(window: &tauri::WebviewWindow, bounds: PlayerBounds) -> AppResult<Self> {
         use windows::core::PCWSTR;
-        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Foundation::{HINSTANCE, HWND};
         use windows::Win32::Graphics::Gdi::HBRUSH;
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::Win32::UI::WindowsAndMessaging::{
@@ -87,27 +88,29 @@ impl EmbedHost {
             WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
         };
 
-        let parent = window
+        // Tauri HWND is windows-0.61; keep the same crate version in Cargo.toml.
+        let parent: HWND = window
             .hwnd()
             .map_err(|e| AppError::new("embed_parent_error", format!("hwnd: {e}")))?;
 
         unsafe {
             let class_name: PCWSTR = windows::core::w!("RLIVE_MPV_HOST");
-            let hinstance = GetModuleHandleW(None).map_err(|e| {
+            let module = GetModuleHandleW(None).map_err(|e| {
                 AppError::new("embed_create_error", format!("GetModuleHandle: {e}"))
             })?;
+            // HMODULE and HINSTANCE share the same representation.
+            let hinstance = HINSTANCE(module.0);
 
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
                 lpfnWndProc: Some(host_wnd_proc),
-                hInstance: hinstance.into(),
+                hInstance: hinstance,
                 lpszClassName: class_name,
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 hbrBackground: HBRUSH(std::ptr::null_mut()),
                 ..Default::default()
             };
-            // ATOM 0 means already registered or failure; CreateWindow still works if registered.
             let _ = RegisterClassExW(&wc);
 
             let x = bounds.x;
@@ -115,6 +118,7 @@ impl EmbedHost {
             let w = bounds.width.max(16) as i32;
             let h = bounds.height.max(16) as i32;
 
+            // windows-0.61: parent/menu/instance are Option<_>.
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 class_name,
@@ -126,7 +130,7 @@ impl EmbedHost {
                 h,
                 Some(parent),
                 None,
-                Some(hinstance.into()),
+                Some(hinstance),
                 None,
             )
             .map_err(|e| AppError::new("embed_create_error", format!("CreateWindowEx: {e}")))?;

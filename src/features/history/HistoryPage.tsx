@@ -1,8 +1,13 @@
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { invokeCmd } from "../../shared/api/tauri";
-import { ErrorState } from "../../shared/components/ErrorState";
-import type { HistoryItem } from "../../shared/types/live";
+import { Clock, Trash2 } from "lucide-react";
+import { invokeCmd } from "@/shared/api/tauri";
+import { ErrorState } from "@/shared/components/ErrorState";
+import { PageHeader } from "@/shared/components/PageHeader";
+import type { HistoryItem } from "@/shared/types/live";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SITE_LABELS } from "@/lib/utils";
 
 function formatTime(ts: number): string {
   try {
@@ -31,43 +36,53 @@ export function HistoryPage() {
   const items = query.data ?? [];
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">History</h1>
-        <button
-          type="button"
-          disabled={items.length === 0 || clearMutation.isPending}
-          onClick={() => {
-            if (window.confirm("Clear all watch history?")) {
-              clearMutation.mutate();
-            }
-          }}
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm disabled:opacity-40 dark:border-zinc-700"
-        >
-          Clear
-        </button>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-4">
+      <PageHeader
+        title="观看历史"
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={items.length === 0 || clearMutation.isPending}
+            onClick={() => {
+              if (window.confirm("确定清空全部观看历史？")) {
+                clearMutation.mutate();
+              }
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            清空
+          </Button>
+        }
+      />
 
       {query.isLoading && (
-        <p className="text-sm text-zinc-500">Loading history…</p>
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-16 w-full rounded-xl" />
+          ))}
+        </div>
       )}
 
       {query.isError && (
         <ErrorState
           error={query.error}
-          title="Failed to load history"
+          title="历史记录加载失败"
           onRetry={() => void query.refetch()}
         />
       )}
 
       {!query.isLoading && !query.isError && items.length === 0 && (
-        <p className="text-sm text-zinc-500">No watch history yet.</p>
+        <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-20 text-muted-foreground">
+          <Clock className="h-8 w-8 opacity-40" />
+          <p className="text-sm">还没有观看记录</p>
+        </div>
       )}
 
       {items.length > 0 && (
-        <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="space-y-1.5">
           {items.map((item) => (
-            <li key={`${item.site_id}:${item.room_id}`}>
+            <li key={`${item.site_id}:${item.room_id}:${item.watched_at}`}>
               <button
                 type="button"
                 onClick={() =>
@@ -75,13 +90,15 @@ export function HistoryPage() {
                     `/room/${item.site_id}/${encodeURIComponent(item.room_id)}`,
                   )
                 }
-                className="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/60"
+                className="flex w-full flex-col gap-0.5 rounded-xl border border-transparent px-3.5 py-3 text-left transition-colors hover:border-border-subtle hover:bg-card focus-ring"
               >
                 <span className="text-sm font-medium">
-                  {item.title || "Untitled"}
+                  {item.title || "未命名直播间"}
                 </span>
-                <span className="text-xs text-zinc-500">
-                  {item.user_name} · {item.site_id} · {formatTime(item.watched_at)}
+                <span className="text-xs text-muted-foreground">
+                  {item.user_name} ·{" "}
+                  {SITE_LABELS[item.site_id] ?? item.site_id} ·{" "}
+                  {formatTime(item.watched_at)}
                 </span>
               </button>
             </li>

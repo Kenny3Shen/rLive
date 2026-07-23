@@ -1,4 +1,6 @@
-import type { AppError } from "../types/error";
+import { AlertCircle, RotateCcw } from "lucide-react";
+import type { AppError } from "@/shared/types/error";
+import { Button } from "@/components/ui/button";
 
 type ErrorStateProps = {
   error: unknown;
@@ -11,7 +13,7 @@ function messageFromError(error: unknown): string {
     return String((error as AppError).message);
   }
   if (error instanceof Error) return error.message;
-  return String(error ?? "Unknown error");
+  return String(error ?? "未知错误");
 }
 
 function codeFromError(error: unknown): string | null {
@@ -21,30 +23,34 @@ function codeFromError(error: unknown): string | null {
   return null;
 }
 
-export function ErrorState({ error, onRetry, title = "Something went wrong" }: ErrorStateProps) {
+export function ErrorState({
+  error,
+  onRetry,
+  title = "出了点问题",
+}: ErrorStateProps) {
   const message = messageFromError(error);
   const code = codeFromError(error);
 
   return (
     <div
       role="alert"
-      className="flex flex-col items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-5 dark:border-red-900/50 dark:bg-red-950/40"
+      className="flex flex-col items-start gap-3 rounded-xl border border-danger/25 bg-danger/10 px-4 py-5"
     >
-      <div>
-        <h2 className="text-sm font-semibold text-red-800 dark:text-red-200">{title}</h2>
-        <p className="mt-1 text-sm text-red-700 dark:text-red-300">{message}</p>
-        {code && (
-          <p className="mt-1 font-mono text-xs text-red-600/80 dark:text-red-400/80">{code}</p>
-        )}
+      <div className="flex items-start gap-2.5">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+        <div>
+          <h2 className="text-sm font-semibold text-danger">{title}</h2>
+          <p className="mt-1 text-sm text-danger/90">{message}</p>
+          {code && (
+            <p className="mt-1 font-mono text-xs text-danger/70">{code}</p>
+          )}
+        </div>
       </div>
       {onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 dark:bg-red-600 dark:hover:bg-red-500"
-        >
-          Retry
-        </button>
+        <Button variant="destructive" size="sm" onClick={onRetry}>
+          <RotateCcw data-icon="inline-start" />
+          重试
+        </Button>
       )}
     </div>
   );

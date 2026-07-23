@@ -1,10 +1,142 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
 
 /* Class-based dark mode so applyTheme() can toggle html.dark */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+  Simple Live–inspired dark stage for rLive.
+  shadcn tokens live in :root / .dark; @theme maps them for Tailwind.
+*/
 :root {
   color-scheme: light dark;
+  --radius: 0.75rem;
+  /* light (rarely used — app defaults to dark) */
+  --background: oklch(0.985 0.002 260);
+  --foreground: oklch(0.18 0.02 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.02 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.02 260);
+  --primary: oklch(0.58 0.16 265);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.95 0.01 260);
+  --secondary-foreground: oklch(0.25 0.02 260);
+  --muted: oklch(0.95 0.01 260);
+  --muted-foreground: oklch(0.5 0.02 260);
+  --accent: oklch(0.7 0.16 10);
+  --accent-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.58 0.22 25);
+  --border: oklch(0.9 0.01 260);
+  --input: oklch(0.9 0.01 260);
+  --ring: oklch(0.58 0.16 265);
+  --chart-1: oklch(0.58 0.16 265);
+  --chart-2: oklch(0.7 0.16 10);
+  --chart-3: oklch(0.7 0.14 150);
+  --chart-4: oklch(0.75 0.12 80);
+  --chart-5: oklch(0.55 0.1 300);
+  --sidebar: oklch(0.97 0.005 260);
+  --sidebar-foreground: oklch(0.18 0.02 260);
+  --sidebar-primary: oklch(0.58 0.16 265);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.94 0.01 260);
+  --sidebar-accent-foreground: oklch(0.2 0.02 260);
+  --sidebar-border: oklch(0.9 0.01 260);
+  --sidebar-ring: oklch(0.58 0.16 265);
+  --success: oklch(0.72 0.15 155);
+  --card-elevated: oklch(0.98 0.002 260);
+  --border-subtle: oklch(0.92 0.01 260);
+  --sidebar-active: oklch(0.93 0.015 260);
+}
+
+.dark {
+  color-scheme: dark;
+  /* charcoal stage #0b0c10 */
+  --background: oklch(0.145 0.012 265);
+  --foreground: oklch(0.96 0.005 260);
+  --card: oklch(0.19 0.015 265);
+  --card-foreground: oklch(0.96 0.005 260);
+  --popover: oklch(0.2 0.015 265);
+  --popover-foreground: oklch(0.96 0.005 260);
+  /* cool blue primary */
+  --primary: oklch(0.68 0.14 265);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.25 0.015 265);
+  --secondary-foreground: oklch(0.95 0.005 260);
+  --muted: oklch(0.24 0.015 265);
+  --muted-foreground: oklch(0.68 0.02 265);
+  /* bilibili pink accent */
+  --accent: oklch(0.7 0.16 10);
+  --accent-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.68 0.18 22);
+  --border: oklch(0.32 0.015 265);
+  --input: oklch(0.28 0.015 265);
+  --ring: oklch(0.68 0.14 265);
+  --chart-1: oklch(0.68 0.14 265);
+  --chart-2: oklch(0.7 0.16 10);
+  --chart-3: oklch(0.75 0.14 155);
+  --chart-4: oklch(0.78 0.12 85);
+  --chart-5: oklch(0.6 0.12 300);
+  --sidebar: oklch(0.16 0.014 265);
+  --sidebar-foreground: oklch(0.96 0.005 260);
+  --sidebar-primary: oklch(0.68 0.14 265);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.24 0.015 265);
+  --sidebar-accent-foreground: oklch(0.96 0.005 260);
+  --sidebar-border: oklch(0.28 0.015 265);
+  --sidebar-ring: oklch(0.68 0.14 265);
+  --success: oklch(0.75 0.15 155);
+  --card-elevated: oklch(0.22 0.015 265);
+  --border-subtle: oklch(0.26 0.012 265);
+  --sidebar-active: oklch(0.26 0.02 265);
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei",
+    "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-card-elevated: var(--card-elevated);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-success: var(--success);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
 }
 
 html,
@@ -15,5 +147,63 @@ body,
 }
 
 body {
-  @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+  font-family: var(--font-sans);
+  background-image:
+    radial-gradient(
+      ellipse 80% 50% at 50% -20%,
+      color-mix(in oklch, var(--primary) 12%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 60% 40% at 100% 100%,
+      color-mix(in oklch, var(--accent) 8%, transparent),
+      transparent
+    );
+  background-attachment: fixed;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent)
+    transparent;
+}
+
+@utility focus-ring {
+  @apply outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@utility animate-live {
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes spin-soft {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@utility animate-spin-soft {
+  animation: spin-soft 0.85s linear infinite;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  html {
+    @apply font-sans;
+  }
 }

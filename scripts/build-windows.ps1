@@ -112,8 +112,14 @@ if ($bunCmd) {
 Write-Step "tauri build (via vcvars64)"
 $cmd = "call `"$vcvars`" && cd /d `"$ProjectRoot`" && set CARGO_HOME=$env:CARGO_HOME&& set RUSTUP_HOME=$env:RUSTUP_HOME&& set TEMP=$env:TEMP&& set TMP=$env:TMP&& $buildInner"
 Write-Host $cmd
+# bun/cargo write progress to stderr; with $ErrorActionPreference=Stop that becomes
+# a terminating NativeCommandError and aborts before the build finishes.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 cmd.exe /c $cmd
-if ($LASTEXITCODE -ne 0) { throw "tauri build failed: $LASTEXITCODE" }
+$buildCode = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($buildCode -ne 0) { throw "tauri build failed: $buildCode" }
 
 $exe = Join-Path $ProjectRoot "src-tauri\target\release\rlive.exe"
 if (-not (Test-Path $exe)) {
