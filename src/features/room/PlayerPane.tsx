@@ -192,6 +192,26 @@ export function PlayerPane({
     }
   }
 
+  const emitOverlayInit = useCallback(async () => {
+    if (!playUrl) return;
+    try {
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit("overlay-init", {
+        url: playUrl.url,
+        headers: playUrl.headers,
+        title: title ?? null,
+        volume,
+        paused,
+        qualities,
+        qualityIndex,
+        lines,
+        lineIndex,
+      });
+    } catch {
+      /* outside tauri */
+    }
+  }, [playUrl, title, volume, paused, qualities, qualityIndex, lines, lineIndex]);
+
   const toggleFullscreen = useCallback(async () => {
     if (!playUrl) return;
     const prior = mode;
@@ -207,6 +227,7 @@ export function PlayerPane({
           title: title ?? null,
           bounds,
         });
+        await invokeCmd("overlay_close").catch(() => {});
         setMode("windowed");
         window.setTimeout(() => void pushBounds(), 120);
         window.setTimeout(() => void pushBounds(), 400);
@@ -216,6 +237,9 @@ export function PlayerPane({
           headers: playUrl.headers,
           title: title ?? null,
         });
+        await invokeCmd("overlay_open");
+        // Overlay may mount slightly later; send init now and on overlay-ready.
+        await emitOverlayInit();
         setMode("fullscreen");
       }
       await refreshStatus();
@@ -227,10 +251,34 @@ export function PlayerPane({
           ? String((e as AppError).message)
           : String(e);
       setLoadError(msg || "全屏切换失败");
+      await invokeCmd("overlay_close").catch(() => {});
     }
-  }, [playUrl, mode, title, pushBounds, refreshStatus]);
+  }, [
+    playUrl,
+    mode,
+    title,
+    pushBounds,
+    refreshStatus,
+    emitOverlayInit,
+  ]);
 
-  // Esc exits fullscreen (video-only; no overlay yet).
+  // Re-send init when overlay signals ready.
+  useEffect(() => {
+    if (mode !== "fullscreen") return;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      void listen("overlay-ready", () => {
+        void emitOverlayInit();
+      }).then((fn) => {
+        unlisten = fn;
+      });
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [mode, emitOverlayInit]);
+
+  // Esc exits fullscreen (overlay window also handles Esc).
   useEffect(() => {
     if (mode !== "fullscreen") return;
     const onKey = (ev: KeyboardEvent) => {

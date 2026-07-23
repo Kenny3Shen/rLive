@@ -1,5 +1,6 @@
 pub mod account;
 pub mod danmaku;
+pub mod overlay;
 pub mod follow;
 pub mod history;
 pub mod player;
