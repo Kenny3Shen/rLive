@@ -34,4 +34,9 @@ chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
 md-5 = "0.10"
 hex = "0.4"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+flate2 = "1"
+brotli = "7"
+uuid = { version = "1", features = ["v4"] }
 

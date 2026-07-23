@@ -20,6 +20,17 @@ impl SiteId {
             SiteId::Kuaishou => "kuaishou",
         }
     }
+
+    pub fn from_str_loose(s: &str) -> Option<SiteId> {
+        match s {
+            "bilibili" => Some(SiteId::Bilibili),
+            "huya" => Some(SiteId::Huya),
+            "douyu" => Some(SiteId::Douyu),
+            "douyin" => Some(SiteId::Douyin),
+            "kuaishou" => Some(SiteId::Kuaishou),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

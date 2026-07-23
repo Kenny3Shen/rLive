@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
+use crate::danmaku::DanmakuManager;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::player::PlayerManager;
@@ -10,6 +11,7 @@ use crate::player::PlayerManager;
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub player: PlayerManager,
+    pub danmaku: DanmakuManager,
 }
 
 impl AppState {
@@ -19,6 +21,7 @@ impl AppState {
         Ok(Self {
             db: Mutex::new(conn),
             player: PlayerManager::new(),
+            danmaku: DanmakuManager::new(),
         })
     }
 
@@ -29,6 +32,7 @@ impl AppState {
         Ok(Self {
             db: Mutex::new(conn),
             player: PlayerManager::new(),
+            danmaku: DanmakuManager::new(),
         })
     }
 }
