@@ -1,0 +1,26 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "room_info": {
+      "room_id": 23058,
+      "title": "详情标题",
+      "cover": "https://i0.hdslb.com/bfs/live/detail.jpg",
+      "online": 777,
+      "live_status": 1,
+      "description": "房间简介",
+      "live_start_time": 1700000000,
+      "area_id": 86,
+      "area_name": "英雄联盟",
+      "parent_area_id": 2,
+      "parent_area_name": "网游",
+      "uid": 123456
+    },
+    "anchor_info": {
+      "base_info": {
+        "uname": "详情主播",
+        "face": "https://i0.hdslb.com/bfs/face/avatar.jpg"
+      }
+    }
+  }
+}

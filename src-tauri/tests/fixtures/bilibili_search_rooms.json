@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "result": {
+      "live_room": [
+        {
+          "roomid": 555,
+          "title": "搜索<em class=\"keyword\">结果</em>房间",
+          "cover": "//i0.hdslb.com/bfs/live/s1.jpg",
+          "uname": "搜索主播",
+          "online": 88
+        }
+      ]
+    }
+  }
+}

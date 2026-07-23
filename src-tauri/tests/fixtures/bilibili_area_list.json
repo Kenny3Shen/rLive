@@ -1,0 +1,36 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "id": 1,
+      "name": "娱乐",
+      "list": [
+        {
+          "id": 21,
+          "name": "视频聊天",
+          "parent_id": "1",
+          "pic": "https://i0.hdslb.com/bfs/live/area21.png"
+        },
+        {
+          "id": 145,
+          "name": "视频唱见",
+          "parent_id": "1",
+          "pic": "https://i0.hdslb.com/bfs/live/area145.png"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "网游",
+      "list": [
+        {
+          "id": 86,
+          "name": "英雄联盟",
+          "parent_id": "2",
+          "pic": "https://i0.hdslb.com/bfs/live/area86.png"
+        }
+      ]
+    }
+  ]
+}

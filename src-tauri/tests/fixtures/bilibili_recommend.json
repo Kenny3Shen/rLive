@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "list": [
+      {
+        "roomid": 23058,
+        "title": "测试直播间标题",
+        "cover": "https://i0.hdslb.com/bfs/live/cover1.jpg",
+        "uname": "主播甲",
+        "online": 12345
+      },
+      {
+        "roomid": 6,
+        "title": "另一个房间",
+        "cover": "https://i0.hdslb.com/bfs/live/cover2.jpg",
+        "uname": "主播乙",
+        "online": "999"
+      }
+    ]
+  }
+}

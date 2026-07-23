@@ -3,6 +3,7 @@ mod account;
 mod commands;
 mod db;
 mod error;
+mod http_client;
 mod models;
 mod settings;
 mod sites;

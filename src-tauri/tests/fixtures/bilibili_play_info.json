@@ -1,0 +1,43 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "playurl_info": {
+      "playurl": {
+        "g_qn_desc": [
+          { "qn": 10000, "desc": "原画" },
+          { "qn": 400, "desc": "蓝光" },
+          { "qn": 250, "desc": "超清" },
+          { "qn": 150, "desc": "高清" }
+        ],
+        "stream": [
+          {
+            "protocol_name": "http_stream",
+            "format": [
+              {
+                "format_name": "flv",
+                "codec": [
+                  {
+                    "codec_name": "avc",
+                    "accept_qn": [10000, 400, 250],
+                    "base_url": "/live-bvc/room.flv",
+                    "url_info": [
+                      {
+                        "host": "https://d1--cn-gotcha01.bilivideo.com",
+                        "extra": "?expires=1&token=abc"
+                      },
+                      {
+                        "host": "https://mcdn.bilivideo.cn",
+                        "extra": "?expires=1&token=mcdn"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
