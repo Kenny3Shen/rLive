@@ -28,6 +28,10 @@ export function SettingsPage() {
   const [mpvStatusMsg, setMpvStatusMsg] = useState<string | null>(null);
   const [playerStatus, setPlayerStatus] = useState<PlayerStatus | null>(null);
   const [loadingCookie, setLoadingCookie] = useState(true);
+  const [profilePath, setProfilePath] = useState("");
+  const [profileStatus, setProfileStatus] = useState<string | null>(null);
+  const danmakuShieldWords = useSettingsStore((s) => s.danmakuShieldWords);
+  const [shieldDraft, setShieldDraft] = useState(danmakuShieldWords.join("\n"));
 
   useEffect(() => {
     void loadFromBackend();
@@ -123,6 +127,64 @@ export function SettingsPage() {
       setPlayerStatus(st);
     } catch {
       /* ignore outside tauri */
+    }
+  }
+
+  async function saveShieldWords() {
+    const words = shieldDraft
+      .split(/\r?\n|,/)
+      .map((w) => w.trim())
+      .filter(Boolean);
+    await useSettingsStore.getState().persistToBackend({
+      danmaku_shield_words: words,
+    });
+    useSettingsStore.setState({ danmakuShieldWords: words });
+    setShieldDraft(words.join("\n"));
+  }
+
+  async function exportProfile() {
+    setProfileStatus(null);
+    const path = profilePath.trim();
+    if (!path) {
+      setProfileStatus("Enter an absolute file path to export");
+      return;
+    }
+    try {
+      await invokeCmd("profile_export", { path });
+      setProfileStatus(`Exported to ${path}`);
+    } catch (e) {
+      const msg =
+        typeof e === "object" && e && "message" in e
+          ? String((e as { message: string }).message)
+          : String(e);
+      setProfileStatus(`Export failed: ${msg}`);
+    }
+  }
+
+  async function importProfile() {
+    setProfileStatus(null);
+    const path = profilePath.trim();
+    if (!path) {
+      setProfileStatus("Enter an absolute file path to import");
+      return;
+    }
+    try {
+      const r = await invokeCmd<{
+        follows: number;
+        tags: number;
+        history: number;
+        settings: boolean;
+      }>("profile_import", { path });
+      setProfileStatus(
+        `Imported follows=${r.follows} tags=${r.tags} history=${r.history}`,
+      );
+      await loadFromBackend();
+    } catch (e) {
+      const msg =
+        typeof e === "object" && e && "message" in e
+          ? String((e as { message: string }).message)
+          : String(e);
+      setProfileStatus(`Import failed: ${msg}`);
     }
   }
 
@@ -255,6 +317,64 @@ export function SettingsPage() {
             </p>
           )}
         </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          Danmaku shield words
+        </h2>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          One word per line. Matching chat lines are hidden in the overlay.
+        </p>
+        <textarea
+          value={shieldDraft}
+          onChange={(e) => setShieldDraft(e.target.value)}
+          rows={4}
+          className="w-full resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        />
+        <button
+          type="button"
+          onClick={() => void saveShieldWords()}
+          className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+        >
+          Save shield words
+        </button>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          Profile import / export
+        </h2>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Non-sensitive backup: settings, follows, tags, history, shield words.
+          Cookies are never included.
+        </p>
+        <input
+          type="text"
+          value={profilePath}
+          onChange={(e) => setProfilePath(e.target.value)}
+          placeholder="/tmp/rlive-profile.json"
+          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+        />
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void exportProfile()}
+            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Export
+          </button>
+          <button
+            type="button"
+            onClick={() => void importProfile()}
+            className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
+          >
+            Import
+          </button>
+        </div>
+        {profileStatus && (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{profileStatus}</p>
+        )}
       </section>
     </div>
   );

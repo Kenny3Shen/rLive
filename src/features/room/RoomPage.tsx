@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invokeCmd } from "../../shared/api/tauri";
 import { ErrorState } from "../../shared/components/ErrorState";
 import type {
+  FollowUser,
   HistoryItem,
   LivePlayQuality,
   LiveRoomDetail,
   PlayUrl,
   SiteId,
 } from "../../shared/types/live";
+import { DanmakuLayer } from "./DanmakuLayer";
 import { PlayerPane } from "./PlayerPane";
 
 function formatOnline(n: number): string {
@@ -27,8 +29,10 @@ export function RoomPage() {
   }>();
   const siteId = siteParam as SiteId | undefined;
   const roomId = roomParam ? decodeURIComponent(roomParam) : undefined;
+  const qc = useQueryClient();
 
   const [qualityIndex, setQualityIndex] = useState(0);
+  const [followBusy, setFollowBusy] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: ["room_detail", siteId, roomId],
@@ -56,6 +60,54 @@ export function RoomPage() {
     });
   }, [detailQuery.data]);
 
+  // Danmaku connect for the room lifetime.
+  useEffect(() => {
+    if (!siteId || !roomId || !detailQuery.data) return;
+    void invokeCmd("danmaku_connect", { siteId, roomId }).catch(() => {
+      // Token missing / offline: room still usable without danmaku.
+    });
+    return () => {
+      void invokeCmd("danmaku_disconnect").catch(() => {});
+    };
+  }, [siteId, roomId, detailQuery.data?.room_id]);
+
+  const followQuery = useQuery({
+    queryKey: ["follows"],
+    queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
+  });
+
+  const isFollowed = useMemo(() => {
+    if (!siteId || !roomId || !followQuery.data) return false;
+    return followQuery.data.some(
+      (f) => f.site_id === siteId && f.room_id === roomId,
+    );
+  }, [followQuery.data, siteId, roomId]);
+
+  async function toggleFollow() {
+    const detail = detailQuery.data;
+    if (!detail || !siteId || !roomId) return;
+    setFollowBusy(true);
+    try {
+      if (isFollowed) {
+        await invokeCmd("follow_remove", { siteId, roomId });
+      } else {
+        const user: FollowUser = {
+          site_id: detail.site_id,
+          room_id: detail.room_id,
+          user_name: detail.user_name,
+          face: detail.user_avatar,
+          tag_ids: [],
+          live_status: detail.status,
+          updated_at: Date.now(),
+        };
+        await invokeCmd("follow_add", { user });
+      }
+      await qc.invalidateQueries({ queryKey: ["follows"] });
+    } finally {
+      setFollowBusy(false);
+    }
+  }
+
   const qualitiesQuery = useQuery({
     queryKey: ["play_qualities", siteId, roomId, detailQuery.data?.room_id],
     enabled: !!detailQuery.data,
@@ -66,7 +118,6 @@ export function RoomPage() {
       }),
   });
 
-  // Reset quality selection when qualities list changes.
   useEffect(() => {
     setQualityIndex(0);
   }, [qualitiesQuery.data]);
@@ -103,7 +154,12 @@ export function RoomPage() {
   if (!siteId || !roomId) {
     return (
       <ErrorState
-        error={{ code: "bad_route", message: "Missing site or room id", site: null, retryable: false }}
+        error={{
+          code: "bad_route",
+          message: "Missing site or room id",
+          site: null,
+          retryable: false,
+        }}
         title="Invalid room link"
       />
     );
@@ -165,49 +221,66 @@ export function RoomPage() {
               )}
             </div>
 
-            {qualitiesQuery.data && qualitiesQuery.data.length > 0 && (
-              <label className="flex items-center gap-2 text-sm">
-                <span className="text-zinc-500">Quality</span>
-                <select
-                  value={qualityIndex}
-                  onChange={(e) => setQualityIndex(Number(e.target.value))}
-                  className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-                >
-                  {qualitiesQuery.data.map((q, i) => (
-                    <option key={`${q.quality}-${i}`} value={i}>
-                      {q.quality}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={followBusy}
+                onClick={() => void toggleFollow()}
+                className={
+                  isFollowed
+                    ? "rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700"
+                    : "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                }
+              >
+                {isFollowed ? "Unfollow" : "Follow"}
+              </button>
+              {qualitiesQuery.data && qualitiesQuery.data.length > 0 && (
+                <label className="flex items-center gap-2 text-sm">
+                  <span className="text-zinc-500">Quality</span>
+                  <select
+                    value={qualityIndex}
+                    onChange={(e) => setQualityIndex(Number(e.target.value))}
+                    className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                  >
+                    {qualitiesQuery.data.map((q, i) => (
+                      <option key={`${q.quality}-${i}`} value={i}>
+                        {q.quality}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
           </header>
 
-          <PlayerPane
-            playUrl={playUrl}
-            loading={
-              qualitiesQuery.isLoading ||
-              (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
-            }
-            error={
-              qualitiesQuery.isError
-                ? qualitiesQuery.error
-                : playUrlQuery.isError
-                  ? playUrlQuery.error
-                  : qualitiesQuery.isSuccess &&
-                      playUrlQuery.isSuccess &&
-                      !playUrl
-                    ? {
-                        code: "no_play_url",
-                        message: "No playable URL returned for this quality",
-                        site: siteId,
-                        retryable: true,
-                      }
-                    : undefined
-            }
-            onRetry={retryPlay}
-            title={detail.title}
-          />
+          <div className="relative">
+            <PlayerPane
+              playUrl={playUrl}
+              loading={
+                qualitiesQuery.isLoading ||
+                (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
+              }
+              error={
+                qualitiesQuery.isError
+                  ? qualitiesQuery.error
+                  : playUrlQuery.isError
+                    ? playUrlQuery.error
+                    : qualitiesQuery.isSuccess &&
+                        playUrlQuery.isSuccess &&
+                        !playUrl
+                      ? {
+                          code: "no_play_url",
+                          message: "No playable URL returned for this quality",
+                          site: siteId,
+                          retryable: true,
+                        }
+                      : undefined
+              }
+              onRetry={retryPlay}
+              title={detail.title}
+            />
+            <DanmakuLayer active={!!detailQuery.data} />
+          </div>
         </>
       )}
     </div>
