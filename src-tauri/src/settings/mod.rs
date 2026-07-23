@@ -18,12 +18,11 @@ pub fn get(conn: &Connection) -> AppResult<AppSettings> {
 
     match raw {
         None => Ok(AppSettings::default()),
-        Some(json) => serde_json::from_str(&json).map_err(|e| {
-            AppError::new(
-                "settings_decode_error",
-                format!("failed to decode app_settings: {e}"),
-            )
-        }),
+        Some(json) => match serde_json::from_str(&json) {
+            Ok(settings) => Ok(settings),
+            // Corrupt JSON: fall back to defaults so the app remains usable.
+            Err(_) => Ok(AppSettings::default()),
+        },
     }
 }
 
@@ -73,5 +72,17 @@ mod tests {
         set(&conn, &s).unwrap();
         let back = get(&conn).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn get_returns_defaults_on_corrupt_json() {
+        let conn = open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, "{not-valid-json"],
+        )
+        .unwrap();
+        let s = get(&conn).unwrap();
+        assert_eq!(s, AppSettings::default());
     }
 }
