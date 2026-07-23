@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tauri::State;
+use tauri::{Manager, State, WebviewWindow};
 
 use crate::error::{AppError, AppResult};
 use crate::player::{resolve_mpv_path, PlayerBounds, PlayerStatus};
@@ -20,45 +20,58 @@ fn load_mpv_setting(state: &AppState) -> AppResult<Option<String>> {
     Ok(s.mpv_path.filter(|p| !p.trim().is_empty()))
 }
 
+fn main_window(window: &WebviewWindow) -> WebviewWindow {
+    window
+        .app_handle()
+        .get_webview_window("main")
+        .unwrap_or_else(|| window.clone())
+}
+
 #[tauri::command]
 pub fn player_open(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     url: String,
     headers: HashMap<String, String>,
     title: Option<String>,
     bounds: Option<PlayerBounds>,
-    embed: Option<bool>,
+    prefer_child: Option<bool>,
 ) -> AppResult<()> {
     let settings_path = load_mpv_setting(&state)?;
     let mpv = resolve_mpv_path(settings_path.as_deref())?;
+    let main = main_window(&window);
     state.player.open(
+        Some(&main),
         &mpv,
         &url,
         &headers,
         title.as_deref(),
         bounds,
-        embed.unwrap_or(true),
+        prefer_child.unwrap_or(true),
     )
 }
 
 #[tauri::command]
 pub fn player_load(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     url: String,
     headers: HashMap<String, String>,
     title: Option<String>,
     bounds: Option<PlayerBounds>,
-    embed: Option<bool>,
+    prefer_child: Option<bool>,
 ) -> AppResult<()> {
     let settings_path = load_mpv_setting(&state)?;
     let mpv = resolve_mpv_path(settings_path.as_deref())?;
+    let main = main_window(&window);
     state.player.load(
+        Some(&main),
         &mpv,
         &url,
         &headers,
         title.as_deref(),
         bounds,
-        embed.unwrap_or(true),
+        prefer_child.unwrap_or(true),
     )
 }
 

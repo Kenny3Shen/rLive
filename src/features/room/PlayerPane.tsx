@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PlayUrl } from "../../shared/types/live";
 import { ErrorState } from "../../shared/components/ErrorState";
 import { invokeCmd } from "../../shared/api/tauri";
-import { DanmakuLayer } from "./DanmakuLayer";
+import { DanmakuPanel } from "./DanmakuPanel";
 
 type PlayerPaneProps = {
   playUrl: PlayUrl | null;
@@ -11,7 +11,6 @@ type PlayerPaneProps = {
   error?: unknown;
   onRetry?: () => void;
   title?: string;
-  /** Show flying danmaku overlay (frontend layer). */
   danmakuActive?: boolean;
 };
 
@@ -20,31 +19,38 @@ type PlayerStatus = {
   mpv_path: string;
   paused: boolean;
   volume: number;
-  embed: boolean;
+  embed_mode: "child" | "geometry" | "window";
 };
 
+/** Client-relative physical-pixel bounds for child HWND embed. */
 type Bounds = { x: number; y: number; width: number; height: number };
 
-async function measureHostBounds(el: HTMLElement): Promise<Bounds | null> {
+async function measureClientBounds(el: HTMLElement): Promise<Bounds | null> {
   try {
     const win = getCurrentWindow();
     const factor = await win.scaleFactor();
-    const pos = await win.innerPosition();
     const rect = el.getBoundingClientRect();
     if (rect.width < 8 || rect.height < 8) return null;
+    // Child windows use client coordinates of the main HWND.
     return {
-      x: Math.round(pos.x + rect.left * factor),
-      y: Math.round(pos.y + rect.top * factor),
+      x: Math.round(rect.left * factor),
+      y: Math.round(rect.top * factor),
       width: Math.max(16, Math.round(rect.width * factor)),
       height: Math.max(16, Math.round(rect.height * factor)),
     };
   } catch {
-    // Outside Tauri / no window API.
     return null;
   }
 }
 
-/** Embedded mpv host + controls + danmaku overlay. */
+/**
+ * Layout:
+ *  ┌──────────────┬─────────┐
+ *  │  video host  │ danmaku │
+ *  │  (mpv wid)   │  panel  │
+ *  └──────────────┴─────────┘
+ *  │ controls               │
+ */
 export function PlayerPane({
   playUrl,
   loading,
@@ -59,6 +65,7 @@ export function PlayerPane({
   const [paused, setPaused] = useState(false);
   const [volume, setVolume] = useState(80);
   const [danmakuOn, setDanmakuOn] = useState(true);
+  const [osdOn, setOsdOn] = useState(true);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -74,16 +81,15 @@ export function PlayerPane({
   const pushBounds = useCallback(async () => {
     const el = hostRef.current;
     if (!el) return;
-    const bounds = await measureHostBounds(el);
+    const bounds = await measureClientBounds(el);
     if (!bounds) return;
     try {
       await invokeCmd("player_set_bounds", { bounds });
     } catch {
-      /* player may not be running yet */
+      /* not running */
     }
   }, []);
 
-  // Open / stop player when URL changes.
   useEffect(() => {
     let cancelled = false;
     if (!playUrl) {
@@ -97,21 +103,19 @@ export function PlayerPane({
     void (async () => {
       try {
         const bounds = hostRef.current
-          ? await measureHostBounds(hostRef.current)
+          ? await measureClientBounds(hostRef.current)
           : null;
         await invokeCmd("player_open", {
           url: playUrl.url,
           headers: playUrl.headers,
           title: title ?? null,
           bounds,
-          embed: true,
+          preferChild: true,
         });
         if (!cancelled) {
           await refreshStatus();
-          // Re-sync bounds after window maps.
-          window.setTimeout(() => {
-            void pushBounds();
-          }, 200);
+          window.setTimeout(() => void pushBounds(), 120);
+          window.setTimeout(() => void pushBounds(), 400);
         }
       } catch (e) {
         if (!cancelled) setMpvError(e);
@@ -124,29 +128,18 @@ export function PlayerPane({
     };
   }, [playUrl?.url, title, refreshStatus, pushBounds]);
 
-  // Keep embed rect synced with layout / window move.
   useEffect(() => {
     if (!playUrl) return;
     const el = hostRef.current;
     if (!el) return;
-
-    const ro = new ResizeObserver(() => {
-      void pushBounds();
-    });
+    const ro = new ResizeObserver(() => void pushBounds());
     ro.observe(el);
-
-    const onScroll = () => void pushBounds();
-    const onResize = () => void pushBounds();
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onResize);
-
-    // Also poll lightly — window drag may not fire resize.
-    const timer = window.setInterval(() => void pushBounds(), 500);
-
+    const onWin = () => void pushBounds();
+    window.addEventListener("resize", onWin);
+    const timer = window.setInterval(() => void pushBounds(), 400);
     return () => {
       ro.disconnect();
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", onWin);
       window.clearInterval(timer);
     };
   }, [playUrl?.url, pushBounds]);
@@ -177,43 +170,55 @@ export function PlayerPane({
 
   return (
     <div className="flex w-full flex-col gap-2">
-      <div
-        ref={hostRef}
-        className="relative flex aspect-video w-full flex-col overflow-hidden rounded-lg border border-zinc-200 bg-black dark:border-zinc-700"
-      >
-        {loading && (
-          <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
-            Resolving play URL…
-          </div>
-        )}
-
-        {!loading && displayError != null && (
-          <div className="flex flex-1 items-center justify-center p-4">
-            <ErrorState
-              error={displayError}
-              title="Playback unavailable"
-              onRetry={onRetry}
-            />
-          </div>
-        )}
-
-        {!loading && displayError == null && !playUrl && (
-          <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-            No stream selected
-          </div>
-        )}
-
-        {showHost && (
-          <>
-            {/* Transparent host: native mpv window sits on top via geometry embed */}
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <p className="text-xs text-zinc-600">
-                {status?.running ? "Playing (embedded mpv)" : "Starting mpv…"}
-              </p>
+      <div className="flex min-h-[280px] w-full gap-2 lg:min-h-[360px]">
+        {/* Video host — native mpv child window sits here via --wid */}
+        <div
+          ref={hostRef}
+          className="relative min-w-0 flex-1 overflow-hidden rounded-lg border border-zinc-200 bg-black dark:border-zinc-700"
+        >
+          {loading && (
+            <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-zinc-400">
+              Resolving play URL…
             </div>
-            <DanmakuLayer active={danmakuActive && danmakuOn} mode="both" />
-          </>
-        )}
+          )}
+          {!loading && displayError != null && (
+            <div className="flex h-full min-h-[240px] items-center justify-center p-4">
+              <ErrorState
+                error={displayError}
+                title="Playback unavailable"
+                onRetry={onRetry}
+              />
+            </div>
+          )}
+          {!loading && displayError == null && !playUrl && (
+            <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-zinc-500">
+              No stream selected
+            </div>
+          )}
+          {showHost && (
+            <div className="pointer-events-none absolute inset-0 flex items-end justify-start p-2">
+              <span className="rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                {status?.embed_mode === "child"
+                  ? "embedded (wid)"
+                  : status?.embed_mode === "geometry"
+                    ? "embedded (geometry)"
+                    : status?.running
+                      ? "mpv"
+                      : "starting…"}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Right danmaku column */}
+        <div className="hidden w-[280px] shrink-0 sm:block md:w-[320px]">
+          <DanmakuPanel active={danmakuActive && danmakuOn} osd={osdOn && !!playUrl} />
+        </div>
+      </div>
+
+      {/* Mobile: danmaku below video */}
+      <div className="h-48 sm:hidden">
+        <DanmakuPanel active={danmakuActive && danmakuOn} osd={false} />
       </div>
 
       {showHost && (
@@ -244,7 +249,16 @@ export function PlayerPane({
               checked={danmakuOn}
               onChange={(e) => setDanmakuOn(e.target.checked)}
             />
-            Danmaku
+            弹幕栏
+          </label>
+
+          <label className="flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              checked={osdOn}
+              onChange={(e) => setOsdOn(e.target.checked)}
+            />
+            画面弹幕
           </label>
 
           {title && (
