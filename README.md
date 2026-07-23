@@ -41,13 +41,48 @@ Frontend only (no Tauri commands):
 bun run dev
 ```
 
-Build:
+Build (Linux / current platform):
 
 ```bash
 bun run build
 cd src-tauri && cargo test --lib
 bun run tauri build
 ```
+
+### Windows build (`D:\dev\rLive`)
+
+Cross-compiling a full Tauri Windows installer **from WSL is not supported** well.  
+Build on **Windows** (MSVC + WebView2 + Bun). The Windows working copy is:
+
+```text
+D:\dev\rLive
+```
+
+**From Windows PowerShell:**
+
+```powershell
+cd D:\dev\rLive
+.\scripts\build-windows.ps1
+# or only EXE, no installer:
+.\scripts\build-windows.ps1 -Bundles none
+```
+
+Outputs:
+
+- `D:\dev\rLive\src-tauri\target\release\rlive.exe`
+- Installer (if NSIS installed): `...\bundle\nsis\*.exe`
+
+**From WSL (sync only / optional remote build):**
+
+```bash
+# sync this tree → D:\dev\rLive
+./scripts/sync-to-windows.sh
+
+# if Windows interop works (powershell.exe runnable from WSL):
+./scripts/build-windows-from-wsl.sh
+```
+
+If `powershell.exe: cannot execute binary file` appears, open **Windows Terminal → PowerShell** and run `build-windows.ps1` there after sync.
 
 ## Architecture
 
