@@ -1,7 +1,7 @@
 # rLive Design: Room Playback v2 (Danmaku Overlay, Lines, Fullscreen)
 
 **Date:** 2026-07-24  
-**Status:** Draft for user review (brainstorming approved)  
+**Status:** Approved — implementation plan in `docs/superpowers/plans/2026-07-24-room-playback-v2.md`  
 **Workspace:** rLive (Tauri 2 + React + Rust + mpv)  
 **Related:** `docs/superpowers/specs/2026-07-23-rlive-tauri-design.md`, phase-1 player embed
 
