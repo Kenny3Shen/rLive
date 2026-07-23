@@ -1,85 +1,40 @@
-# Build rLive Windows bundle (run in Windows PowerShell / Terminal, NOT WSL bash).
-# Default project root: D:\dev\rLive
-#
-# Prerequisites (Windows):
-#   - Rust (x86_64-pc-windows-msvc)
-#   - Visual Studio Build Tools 2022 (C++ desktop)
-#   - WebView2 Runtime
-#   - Bun (https://bun.sh)
-#   - Optional: NSIS for .exe installer
-#
-# Usage:
-#   cd D:\dev\rLive
-#   .\scripts\build-windows.ps1
-#   .\scripts\build-windows.ps1 -Bundles nsis
-#   .\scripts\build-windows.ps1 -SkipInstall
-
+# Build rLive on Windows. Project default: D:\dev\rLive
+# Prerequisites: VS Build Tools on D:\VS\BuildTools, Rust on D:\dev\rust, Node on PATH
 param(
     [string]$ProjectRoot = "D:\dev\rLive",
-    [ValidateSet("nsis", "msi", "all", "none")]
-    [string]$Bundles = "nsis",
-    [switch]$SkipInstall
+    [switch]$BundleNsis
 )
 
 $ErrorActionPreference = "Stop"
+$env:CARGO_HOME  = if ($env:CARGO_HOME)  { $env:CARGO_HOME }  else { "D:\dev\rust\cargo" }
+$env:RUSTUP_HOME = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { "D:\dev\rust\rustup" }
+$env:TEMP = "D:\Temp\build"
+$env:TMP  = "D:\Temp\build"
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 
-function Assert-Command($Name) {
-    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "Required command not found: $Name"
-    }
-}
+$env:Path = "$env:CARGO_HOME\bin;D:\Program Files\nodejs;" +
+  [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+  [Environment]::GetEnvironmentVariable("Path","User")
 
-Write-Host "== rLive Windows build ==" -ForegroundColor Cyan
-Write-Host "ProjectRoot: $ProjectRoot"
-
-if (-not (Test-Path $ProjectRoot)) {
-    throw "Project root does not exist: $ProjectRoot"
-}
+$vcvars = @(
+  "D:\VS\BuildTools\VC\Auxiliary\Build\vcvars64.bat",
+  "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $vcvars) { throw "vcvars64.bat not found. Install VS Build Tools (VCTools)." }
 
 Set-Location $ProjectRoot
-
-Assert-Command cargo
-Assert-Command rustc
-
-$rustcHost = (rustc -vV | Select-String "host:").ToString()
-Write-Host $rustcHost
-if ($rustcHost -notmatch "windows") {
-    Write-Warning "rustc host does not look like Windows. Build from Windows PowerShell, not WSL."
-}
-
-if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-    throw "bun not found. Install from https://bun.sh then re-open the terminal."
-}
-
-if (-not $SkipInstall) {
-    Write-Host "== bun install ==" -ForegroundColor Cyan
-    bun install
-}
-
-Write-Host "== tauri build ==" -ForegroundColor Cyan
-if ($Bundles -eq "none") {
-    bunx tauri build --no-bundle
-} elseif ($Bundles -eq "all") {
-    bunx tauri build
+if (Get-Command bun -EA SilentlyContinue) {
+  bun install
+  $build = if ($BundleNsis) { "bunx tauri build --bundles nsis" } else { "bunx tauri build --no-bundle" }
 } else {
-    bunx tauri build --bundles $Bundles
+  npm install --no-fund --no-audit
+  $build = if ($BundleNsis) { "npx tauri build --bundles nsis" } else { "npx tauri build --no-bundle" }
 }
 
-$releaseDir = Join-Path $ProjectRoot "src-tauri\target\release"
-$exe = Join-Path $releaseDir "rlive.exe"
-$bundleDir = Join-Path $releaseDir "bundle"
+$cmd = "call `"$vcvars`" && cd /d `"$ProjectRoot`" && set CARGO_HOME=$env:CARGO_HOME&& set RUSTUP_HOME=$env:RUSTUP_HOME&& $build"
+Write-Host $cmd
+cmd.exe /c $cmd
+if ($LASTEXITCODE -ne 0) { throw "tauri build failed: $LASTEXITCODE" }
 
-Write-Host ""
-Write-Host "== outputs ==" -ForegroundColor Green
-if (Test-Path $exe) {
-    Write-Host "EXE: $exe"
-} else {
-    Write-Warning "rlive.exe not found under $releaseDir (check build log)"
-}
-if (Test-Path $bundleDir) {
-    Get-ChildItem -Path $bundleDir -Recurse -Include *.exe,*.msi | ForEach-Object {
-        Write-Host "BUNDLE: $($_.FullName)"
-    }
-}
-
-Write-Host "Done." -ForegroundColor Green
+$exe = Join-Path $ProjectRoot "src-tauri\target\release\rlive.exe"
+Write-Host "OK: $exe ($((Get-Item $exe).Length) bytes)" -ForegroundColor Green
