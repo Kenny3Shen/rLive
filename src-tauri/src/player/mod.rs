@@ -48,6 +48,15 @@ impl Default for EmbedMode {
     }
 }
 
+/// UI presentation mode (windowed embed vs app fullscreen). Not enter/exit logic yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayerMode {
+    #[default]
+    Windowed,
+    Fullscreen,
+}
+
 pub fn resolve_mpv_path(settings_path: Option<&str>) -> AppResult<PathBuf> {
     if let Some(p) = settings_path {
         let p = p.trim();
@@ -173,6 +182,7 @@ pub struct PlayerStatus {
     pub paused: bool,
     pub volume: u8,
     pub embed_mode: EmbedMode,
+    pub mode: PlayerMode,
 }
 
 struct PlayerInner {
@@ -183,6 +193,7 @@ struct PlayerInner {
     paused: bool,
     volume: u8,
     embed_mode: EmbedMode,
+    mode: PlayerMode,
     bounds: Option<PlayerBounds>,
 }
 
@@ -201,6 +212,7 @@ impl Default for PlayerManager {
                 paused: false,
                 volume: 80,
                 embed_mode: EmbedMode::Child,
+                mode: PlayerMode::Windowed,
                 bounds: None,
             }),
         }
@@ -324,6 +336,9 @@ impl PlayerManager {
         Ok(())
     }
 
+    /// Replace the current stream. Always stop + open so HTTP headers
+    /// (`--http-header-fields`, Referer, etc.) are re-applied. mpv
+    /// `loadfile replace` does not re-apply process-level header flags.
     pub fn load(
         &self,
         window: Option<&WebviewWindow>,
@@ -334,21 +349,7 @@ impl PlayerManager {
         bounds: Option<PlayerBounds>,
         prefer_child: bool,
     ) -> AppResult<()> {
-        {
-            let inner = self.lock()?;
-            if inner.child.is_some() && inner.ipc.is_some() {
-                let ipc = inner.ipc.clone().unwrap();
-                drop(inner);
-                let _ = Self::ipc_command_path(
-                    &ipc,
-                    serde_json::json!(["loadfile", url, "replace"]),
-                );
-                if let Some(b) = bounds {
-                    let _ = self.set_bounds(b);
-                }
-                return Ok(());
-            }
-        }
+        // open() already stop_locked; keep same prefer_child/bounds/mode path.
         self.open(
             window,
             mpv_path,
@@ -470,6 +471,7 @@ impl PlayerManager {
                     paused: false,
                     volume: 0,
                     embed_mode: EmbedMode::Child,
+                    mode: PlayerMode::Windowed,
                 };
             }
         };
@@ -499,6 +501,7 @@ impl PlayerManager {
             paused: inner.paused,
             volume: inner.volume,
             embed_mode: inner.embed_mode,
+            mode: inner.mode,
         }
     }
 
@@ -590,5 +593,29 @@ mod tests {
         };
         let v = serde_json::to_value(b).unwrap();
         assert_eq!(v["width"], 800);
+    }
+
+    #[test]
+    fn player_mode_serde_snake_case() {
+        assert_eq!(
+            serde_json::to_value(PlayerMode::Windowed).unwrap(),
+            serde_json::json!("windowed")
+        );
+        assert_eq!(
+            serde_json::to_value(PlayerMode::Fullscreen).unwrap(),
+            serde_json::json!("fullscreen")
+        );
+        let m: PlayerMode = serde_json::from_str("\"windowed\"").unwrap();
+        assert_eq!(m, PlayerMode::Windowed);
+    }
+
+    #[test]
+    fn player_status_includes_mode() {
+        let mgr = PlayerManager::default();
+        let st = mgr.status(None);
+        assert_eq!(st.mode, PlayerMode::Windowed);
+        assert!(!st.running);
+        let v = serde_json::to_value(&st).unwrap();
+        assert_eq!(v["mode"], "windowed");
     }
 }
