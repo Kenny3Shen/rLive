@@ -19,7 +19,8 @@ use commands::follow::{
 };
 use commands::history::{history_add, history_clear, history_list};
 use commands::player::{
-    player_load, player_open, player_set_pause, player_set_volume, player_status, player_stop,
+    player_load, player_open, player_set_bounds, player_set_pause, player_set_volume,
+    player_show_danmaku, player_status, player_stop,
 };
 use commands::profile::{profile_export, profile_import};
 use commands::settings::{settings_get, settings_set};
@@ -61,6 +62,8 @@ pub fn run() {
             player_stop,
             player_set_pause,
             player_set_volume,
+            player_set_bounds,
+            player_show_danmaku,
             player_status,
             danmaku_connect,
             danmaku_disconnect,
