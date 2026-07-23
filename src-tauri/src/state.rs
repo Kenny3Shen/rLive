@@ -5,9 +5,11 @@ use rusqlite::Connection;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::player::PlayerManager;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
+    pub player: PlayerManager,
 }
 
 impl AppState {
@@ -16,6 +18,7 @@ impl AppState {
         let conn = Db::open(&path)?;
         Ok(Self {
             db: Mutex::new(conn),
+            player: PlayerManager::new(),
         })
     }
 
@@ -25,6 +28,7 @@ impl AppState {
         let conn = crate::db::schema::open_in_memory()?;
         Ok(Self {
             db: Mutex::new(conn),
+            player: PlayerManager::new(),
         })
     }
 }
