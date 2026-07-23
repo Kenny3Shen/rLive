@@ -1,92 +1,84 @@
 import { useEffect, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { invokeCmd } from "../../shared/api/tauri";
-import { ErrorState } from "../../shared/components/ErrorState";
-import { RoomCard } from "../../shared/components/RoomCard";
-import { useSiteId } from "../../shared/hooks/useSiteQuery";
-import type { RoomListPage } from "../../shared/types/live";
-
-const DEBOUNCE_MS = 350;
+import { useSearchParams } from "react-router-dom";
+import { Loader2, Search } from "lucide-react";
+import { invokeCmd } from "@/shared/api/tauri";
+import { ErrorState } from "@/shared/components/ErrorState";
+import { RoomCard } from "@/shared/components/RoomCard";
+import { useSiteId } from "@/shared/hooks/useSiteQuery";
+import type { RoomListPage } from "@/shared/types/live";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SITE_LABELS } from "@/lib/utils";
 
 export function SearchPage() {
   const siteId = useSiteId();
-  const [input, setInput] = useState("");
-  const [keyword, setKeyword] = useState("");
+  const [params] = useSearchParams();
+  const keyword = (params.get("q") ?? "").trim();
+  const [debounced, setDebounced] = useState(keyword);
 
   useEffect(() => {
-    const t = window.setTimeout(() => {
-      setKeyword(input.trim());
-    }, DEBOUNCE_MS);
+    const t = window.setTimeout(() => setDebounced(keyword), 200);
     return () => window.clearTimeout(t);
-  }, [input]);
+  }, [keyword]);
 
   const query = useInfiniteQuery({
-    queryKey: ["search", siteId, keyword],
+    queryKey: ["search", siteId, debounced],
     queryFn: ({ pageParam }) =>
       invokeCmd<RoomListPage>("site_search_rooms", {
         siteId,
-        keyword,
+        keyword: debounced,
         page: pageParam,
       }),
     initialPageParam: 1,
-    enabled: keyword.length > 0,
+    enabled: debounced.length > 0,
     getNextPageParam: (last, _pages, lastPageParam) =>
       last.has_more ? lastPageParam + 1 : undefined,
   });
 
   const rooms = query.data?.pages.flatMap((p) => p.items) ?? [];
+  const siteLabel = SITE_LABELS[siteId] ?? siteId;
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Search</h1>
-
-      <div className="max-w-xl">
-        <label htmlFor="room-search" className="sr-only">
-          Search live rooms
-        </label>
-        <input
-          id="room-search"
-          type="search"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={`Search ${siteId} rooms…`}
-          autoComplete="off"
-          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-500"
-        />
-        {input !== keyword && input.trim().length > 0 && (
-          <p className="mt-1 text-xs text-zinc-400">Searching…</p>
-        )}
-      </div>
-
-      {keyword.length === 0 && (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Type a keyword to search live rooms.
-        </p>
+    <div className="mx-auto max-w-[1600px] space-y-5">
+      {debounced.length === 0 && (
+        <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
+          <Search className="h-8 w-8 opacity-30" />
+          <p className="text-sm">在右上角输入关键词搜索 {siteLabel} 直播间</p>
+        </div>
       )}
 
-      {keyword.length > 0 && query.isLoading && (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">Searching…</p>
+      {debounced.length > 0 && query.isLoading && (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="aspect-video w-full rounded-xl" />
+              <Skeleton className="h-3.5 w-4/5" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          ))}
+        </div>
       )}
 
-      {keyword.length > 0 && query.isError && (
+      {debounced.length > 0 && query.isError && (
         <ErrorState
           error={query.error}
-          title="Search failed"
+          title="搜索失败"
           onRetry={() => void query.refetch()}
         />
       )}
 
-      {keyword.length > 0 &&
+      {debounced.length > 0 &&
         !query.isLoading &&
         !query.isError &&
         rooms.length === 0 && (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            No results for “{keyword}”.
+          <p className="py-12 text-center text-sm text-muted-foreground">
+            没有找到与「{debounced}」相关的直播间
           </p>
         )}
 
       {rooms.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {rooms.map((room) => (
             <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
           ))}
@@ -95,14 +87,20 @@ export function SearchPage() {
 
       {query.hasNextPage && (
         <div className="flex justify-center pt-2">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             disabled={query.isFetchingNextPage}
             onClick={() => void query.fetchNextPage()}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            {query.isFetchingNextPage ? "Loading…" : "Load more"}
-          </button>
+            {query.isFetchingNextPage ? (
+              <>
+                <Loader2 className="animate-spin-soft" />
+                加载中…
+              </>
+            ) : (
+              "加载更多"
+            )}
+          </Button>
         </div>
       )}
     </div>

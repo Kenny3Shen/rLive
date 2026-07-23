@@ -70,7 +70,7 @@ pub async fn connect(
                         DanmakuEvent {
                             kind: crate::models::live::DanmakuKind::System,
                             user: "system".into(),
-                            content: format!("danmaku disconnected: {e}"),
+                            content: format!("弹幕连接断开: {e}"),
                             color: None,
                             ts: chrono::Utc::now().timestamp_millis(),
                         },

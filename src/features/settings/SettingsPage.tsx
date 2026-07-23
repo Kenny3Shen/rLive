@@ -1,15 +1,41 @@
 import { useEffect, useState } from "react";
-import { invokeCmd } from "../../shared/api/tauri";
-import type { ThemeMode } from "../../shared/stores/settingsStore";
-import { useSettingsStore } from "../../shared/stores/settingsStore";
+import { invokeCmd } from "@/shared/api/tauri";
+import type { ThemeMode } from "@/shared/stores/settingsStore";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { PageHeader } from "@/shared/components/PageHeader";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 const themes: { value: ThemeMode; label: string }[] = [
-  { value: "system", label: "System" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
+  { value: "system", label: "跟随系统" },
+  { value: "light", label: "浅色" },
+  { value: "dark", label: "深色" },
 ];
 
 type PlayerStatus = { running: boolean; mpv_path: string };
+
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-border-subtle bg-card/60 p-4 md:p-5">
+      <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+      {description && (
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </p>
+      )}
+      <div className="mt-3 space-y-2">{children}</div>
+    </section>
+  );
+}
 
 export function SettingsPage() {
   const theme = useSettingsStore((s) => s.theme);
@@ -53,17 +79,11 @@ export function SettingsPage() {
         const value = await invokeCmd<string | null>("account_get_cookie", {
           siteId: "bilibili",
         });
-        if (!cancelled) {
-          setCookie(value ?? "");
-        }
+        if (!cancelled) setCookie(value ?? "");
       } catch {
-        if (!cancelled) {
-          setCookie("");
-        }
+        if (!cancelled) setCookie("");
       } finally {
-        if (!cancelled) {
-          setLoadingCookie(false);
-        }
+        if (!cancelled) setLoadingCookie(false);
       }
     })();
     return () => {
@@ -93,20 +113,20 @@ export function SettingsPage() {
       if (trimmed.length === 0) {
         await invokeCmd<void>("account_clear_cookie", { siteId: "bilibili" });
         setCookie("");
-        setCookieStatus("Cookie cleared");
+        setCookieStatus("Cookie 已清除");
       } else {
         await invokeCmd<void>("account_set_cookie", {
           siteId: "bilibili",
           cookie: trimmed,
         });
-        setCookieStatus("Cookie saved");
+        setCookieStatus("Cookie 已保存");
       }
     } catch (e) {
       const msg =
         typeof e === "object" && e && "message" in e
           ? String((e as { message: string }).message)
           : String(e);
-      setCookieStatus(`Failed: ${msg}`);
+      setCookieStatus(`失败：${msg}`);
     }
   }
 
@@ -114,19 +134,19 @@ export function SettingsPage() {
     setProxyStatus(null);
     const next = proxyDraft.trim();
     setProxy(next.length === 0 ? null : next);
-    setProxyStatus("Proxy saved");
+    setProxyStatus("代理已保存");
   }
 
   async function saveMpvPath() {
     setMpvStatusMsg(null);
     const next = mpvDraft.trim();
     setMpvPath(next.length === 0 ? null : next);
-    setMpvStatusMsg("mpv path saved");
+    setMpvStatusMsg("mpv 路径已保存");
     try {
       const st = await invokeCmd<PlayerStatus>("player_status");
       setPlayerStatus(st);
     } catch {
-      /* ignore outside tauri */
+      /* ignore */
     }
   }
 
@@ -146,18 +166,18 @@ export function SettingsPage() {
     setProfileStatus(null);
     const path = profilePath.trim();
     if (!path) {
-      setProfileStatus("Enter an absolute file path to export");
+      setProfileStatus("请填写导出路径");
       return;
     }
     try {
       await invokeCmd("profile_export", { path });
-      setProfileStatus(`Exported to ${path}`);
+      setProfileStatus(`已导出到 ${path}`);
     } catch (e) {
       const msg =
         typeof e === "object" && e && "message" in e
           ? String((e as { message: string }).message)
           : String(e);
-      setProfileStatus(`Export failed: ${msg}`);
+      setProfileStatus(`导出失败：${msg}`);
     }
   }
 
@@ -165,7 +185,7 @@ export function SettingsPage() {
     setProfileStatus(null);
     const path = profilePath.trim();
     if (!path) {
-      setProfileStatus("Enter an absolute file path to import");
+      setProfileStatus("请填写导入路径");
       return;
     }
     try {
@@ -176,7 +196,7 @@ export function SettingsPage() {
         settings: boolean;
       }>("profile_import", { path });
       setProfileStatus(
-        `Imported follows=${r.follows} tags=${r.tags} history=${r.history}`,
+        `已导入 关注=${r.follows} 标签=${r.tags} 历史=${r.history}`,
       );
       await loadFromBackend();
     } catch (e) {
@@ -184,198 +204,135 @@ export function SettingsPage() {
         typeof e === "object" && e && "message" in e
           ? String((e as { message: string }).message)
           : String(e);
-      setProfileStatus(`Import failed: ${msg}`);
+      setProfileStatus(`导入失败：${msg}`);
     }
   }
 
   return (
-    <div className="space-y-8 max-w-xl">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+    <div className="mx-auto max-w-xl space-y-4">
+      <PageHeader title="设置" />
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          Theme
-        </h2>
+      <Section title="外观">
         <div className="flex flex-wrap gap-2">
           {themes.map(({ value, label }) => (
             <button
               key={value}
               type="button"
               onClick={() => setTheme(value)}
-              className={
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-ring",
                 theme === value
-                  ? "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              }
+                  ? "bg-primary text-primary-foreground"
+                  : "border border-border bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
             >
               {label}
             </button>
           ))}
         </div>
-      </section>
+      </Section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          Proxy
-        </h2>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Optional HTTP(S) proxy for site requests, e.g.{" "}
-          <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">
-            http://127.0.0.1:7890
-          </code>
-        </p>
+      <Section
+        title="网络代理"
+        description="可选 HTTP(S) 代理，例如 http://127.0.0.1:7890"
+      >
         <div className="flex gap-2">
-          <input
-            type="text"
+          <Input
             value={proxyDraft}
             onChange={(e) => setProxyDraft(e.target.value)}
             placeholder="http://127.0.0.1:7890"
-            className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           />
-          <button
-            type="button"
-            onClick={() => void saveProxy()}
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Save
-          </button>
+          <Button onClick={() => void saveProxy()}>保存</Button>
         </div>
         {proxyStatus && (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{proxyStatus}</p>
+          <p className="text-xs text-muted-foreground">{proxyStatus}</p>
         )}
-      </section>
+      </Section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          mpv player
-        </h2>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Optional absolute path to the mpv binary. Leave empty to use PATH (
-          <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">mpv</code>
-          ). Live playback opens an external mpv window.
-        </p>
+      <Section
+        title="mpv 播放器"
+        description="可选：mpv 可执行文件绝对路径。留空则使用 PATH 中的 mpv。"
+      >
         <div className="flex gap-2">
-          <input
-            type="text"
+          <Input
             value={mpvDraft}
             onChange={(e) => setMpvDraft(e.target.value)}
             placeholder="/usr/bin/mpv"
-            className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+            className="font-mono text-xs"
           />
-          <button
-            type="button"
-            onClick={() => void saveMpvPath()}
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Save
-          </button>
+          <Button onClick={() => void saveMpvPath()}>保存</Button>
         </div>
         {mpvStatusMsg && (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{mpvStatusMsg}</p>
+          <p className="text-xs text-muted-foreground">{mpvStatusMsg}</p>
         )}
         {playerStatus && (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Resolved:{" "}
-            <span className="font-mono">
-              {playerStatus.mpv_path || "(not found)"}
+          <p className="text-xs text-muted-foreground">
+            当前解析：
+            <span className="ml-1 font-mono">
+              {playerStatus.mpv_path || "（未找到）"}
             </span>
-            {playerStatus.running ? " · running" : ""}
+            {playerStatus.running ? " · 运行中" : ""}
           </p>
         )}
-      </section>
+      </Section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          Bilibili cookie
-        </h2>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Paste cookie string for read-only APIs that require login. Stored only
-          on this device. Leave empty and save to clear.
-        </p>
+      <Section
+        title="哔哩哔哩 Cookie"
+        description="粘贴用于只读 API 的 Cookie。仅保存在本机。清空后点保存即可删除。"
+      >
         <textarea
           value={cookie}
           onChange={(e) => setCookie(e.target.value)}
           disabled={loadingCookie}
           rows={5}
-          placeholder={loadingCookie ? "Loading…" : "SESSDATA=…; bili_jct=…"}
-          className="w-full resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+          placeholder={loadingCookie ? "加载中…" : "SESSDATA=…; bili_jct=…"}
+          className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs focus-ring disabled:opacity-50"
           spellCheck={false}
           autoComplete="off"
         />
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void saveCookie()}
-            disabled={loadingCookie}
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Save cookie
-          </button>
+          <Button onClick={() => void saveCookie()} disabled={loadingCookie}>
+            保存 Cookie
+          </Button>
           {cookieStatus && (
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              {cookieStatus}
-            </p>
+            <p className="text-xs text-muted-foreground">{cookieStatus}</p>
           )}
         </div>
-      </section>
+      </Section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          Danmaku shield words
-        </h2>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          One word per line. Matching chat lines are hidden in the overlay.
-        </p>
+      <Section
+        title="弹幕屏蔽词"
+        description="每行一个词。匹配的聊天消息将在列表与飘屏中隐藏。"
+      >
         <textarea
           value={shieldDraft}
           onChange={(e) => setShieldDraft(e.target.value)}
           rows={4}
-          className="w-full resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm focus-ring"
         />
-        <button
-          type="button"
-          onClick={() => void saveShieldWords()}
-          className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-        >
-          Save shield words
-        </button>
-      </section>
+        <Button onClick={() => void saveShieldWords()}>保存屏蔽词</Button>
+      </Section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          Profile import / export
-        </h2>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Non-sensitive backup: settings, follows, tags, history, shield words.
-          Cookies are never included.
-        </p>
-        <input
-          type="text"
+      <Section
+        title="配置导入 / 导出"
+        description="非敏感备份：设置、关注、标签、历史、屏蔽词。不包含 Cookie。"
+      >
+        <Input
           value={profilePath}
           onChange={(e) => setProfilePath(e.target.value)}
           placeholder="/tmp/rlive-profile.json"
-          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+          className="font-mono text-xs"
         />
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void exportProfile()}
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Export
-          </button>
-          <button
-            type="button"
-            onClick={() => void importProfile()}
-            className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
-          >
-            Import
-          </button>
+          <Button onClick={() => void exportProfile()}>导出</Button>
+          <Button variant="outline" onClick={() => void importProfile()}>
+            导入
+          </Button>
         </div>
         {profileStatus && (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{profileStatus}</p>
+          <p className="text-xs text-muted-foreground">{profileStatus}</p>
         )}
-      </section>
+      </Section>
     </div>
   );
 }

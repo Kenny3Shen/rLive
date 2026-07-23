@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { invokeCmd } from "../../shared/api/tauri";
-import { ErrorState } from "../../shared/components/ErrorState";
+import {
+  ArrowLeft,
+  Heart,
+  Flame,
+  MoreHorizontal,
+  Share2,
+  Link2,
+  RefreshCw,
+} from "lucide-react";
+import { invokeCmd } from "@/shared/api/tauri";
+import { ErrorState } from "@/shared/components/ErrorState";
 import type {
   FollowUser,
   HistoryItem,
@@ -10,18 +19,23 @@ import type {
   LiveRoomDetail,
   PlayUrl,
   SiteId,
-} from "../../shared/types/live";
+} from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Spinner } from "@/components/ui/spinner";
+import { formatOnline, SITE_LABELS, cn } from "@/lib/utils";
 
-function formatOnline(n: number): string {
-  if (n >= 10_000) {
-    const w = n / 10_000;
-    return `${w >= 10 ? Math.round(w) : w.toFixed(1).replace(/\.0$/, "")}万`;
+function errMessage(e: unknown): string {
+  if (typeof e === "object" && e && "message" in e) {
+    return String((e as { message: string }).message);
   }
-  return String(n);
+  return String(e ?? "未知错误");
 }
 
 export function RoomPage() {
+  const navigate = useNavigate();
   const { siteId: siteParam, roomId: roomParam } = useParams<{
     siteId: string;
     roomId: string;
@@ -32,6 +46,7 @@ export function RoomPage() {
 
   const [qualityIndex, setQualityIndex] = useState(0);
   const [followBusy, setFollowBusy] = useState(false);
+  const [danmakuStatus, setDanmakuStatus] = useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ["room_detail", siteId, roomId],
@@ -43,7 +58,6 @@ export function RoomPage() {
       }),
   });
 
-  // Record history once detail loads successfully.
   useEffect(() => {
     const detail = detailQuery.data;
     if (!detail) return;
@@ -54,18 +68,23 @@ export function RoomPage() {
       user_name: detail.user_name,
       watched_at: Date.now(),
     };
-    void invokeCmd("history_add", { item }).catch(() => {
-      // Non-fatal: room still usable without history write.
-    });
+    void invokeCmd("history_add", { item }).catch(() => {});
   }, [detailQuery.data]);
 
-  // Danmaku connect for the room lifetime.
+  // Danmaku lifecycle — surface errors instead of swallowing.
   useEffect(() => {
     if (!siteId || !roomId || !detailQuery.data) return;
-    void invokeCmd("danmaku_connect", { siteId, roomId }).catch(() => {
-      // Token missing / offline: room still usable without danmaku.
-    });
+    let cancelled = false;
+    setDanmakuStatus("正在连接弹幕服务器…");
+    void invokeCmd("danmaku_connect", { siteId, roomId })
+      .then(() => {
+        if (!cancelled) setDanmakuStatus(null);
+      })
+      .catch((e) => {
+        if (!cancelled) setDanmakuStatus(`弹幕连接失败：${errMessage(e)}`);
+      });
     return () => {
+      cancelled = true;
       void invokeCmd("danmaku_disconnect").catch(() => {});
     };
   }, [siteId, roomId, detailQuery.data?.room_id]);
@@ -152,134 +171,237 @@ export function RoomPage() {
 
   if (!siteId || !roomId) {
     return (
-      <ErrorState
-        error={{
-          code: "bad_route",
-          message: "Missing site or room id",
-          site: null,
-          retryable: false,
-        }}
-        title="Invalid room link"
-      />
+      <div className="p-6">
+        <ErrorState
+          error={{
+            code: "bad_route",
+            message: "缺少平台或房间号",
+            site: null,
+            retryable: false,
+          }}
+          title="无效的直播间链接"
+        />
+      </div>
     );
   }
 
   const detail = detailQuery.data;
 
-  return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div className="flex items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">
-        <Link to="/" className="hover:text-zinc-800 dark:hover:text-zinc-200">
-          ← Home
-        </Link>
-        <span className="text-zinc-300 dark:text-zinc-600">/</span>
-        <span className="font-mono text-xs">
-          {siteId}/{roomId}
-        </span>
+  if (detailQuery.isLoading) {
+    return (
+      <div className="flex h-full flex-col">
+        <RoomTopBar onBack={() => navigate(-1)} title="加载中…" />
+        <div className="flex flex-1 items-center justify-center">
+          <Spinner className="size-8 text-primary" />
+        </div>
       </div>
+    );
+  }
 
-      {detailQuery.isLoading && (
-        <p className="text-sm text-zinc-500">Loading room…</p>
-      )}
-
-      {detailQuery.isError && (
-        <ErrorState
-          error={detailQuery.error}
-          title="Failed to load room"
-          onRetry={() => void detailQuery.refetch()}
-        />
-      )}
-
-      {detail && (
-        <>
-          <header className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <h1 className="text-xl font-semibold leading-snug sm:text-2xl">
-                {detail.title || "Untitled room"}
-              </h1>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-                <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                  {detail.user_name}
-                </span>
-                <span>·</span>
-                <span>{formatOnline(detail.online)} online</span>
-                <span
-                  className={
-                    detail.status
-                      ? "rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-                      : "rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                  }
-                >
-                  {detail.status ? "Live" : "Offline"}
-                </span>
-              </div>
-              {detail.notice && (
-                <p className="max-w-3xl text-xs text-zinc-500 line-clamp-2">
-                  {detail.notice}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={followBusy}
-                onClick={() => void toggleFollow()}
-                className={
-                  isFollowed
-                    ? "rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700"
-                    : "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                }
-              >
-                {isFollowed ? "Unfollow" : "Follow"}
-              </button>
-              {qualitiesQuery.data && qualitiesQuery.data.length > 0 && (
-                <label className="flex items-center gap-2 text-sm">
-                  <span className="text-zinc-500">Quality</span>
-                  <select
-                    value={qualityIndex}
-                    onChange={(e) => setQualityIndex(Number(e.target.value))}
-                    className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-                  >
-                    {qualitiesQuery.data.map((q, i) => (
-                      <option key={`${q.quality}-${i}`} value={i}>
-                        {q.quality}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
-          </header>
-
-          <PlayerPane
-            playUrl={playUrl}
-            loading={
-              qualitiesQuery.isLoading ||
-              (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
-            }
-            error={
-              qualitiesQuery.isError
-                ? qualitiesQuery.error
-                : playUrlQuery.isError
-                  ? playUrlQuery.error
-                  : qualitiesQuery.isSuccess &&
-                      playUrlQuery.isSuccess &&
-                      !playUrl
-                    ? {
-                        code: "no_play_url",
-                        message: "No playable URL returned for this quality",
-                        site: siteId,
-                        retryable: true,
-                      }
-                    : undefined
-            }
-            onRetry={retryPlay}
-            title={detail.title}
-            danmakuActive={!!detailQuery.data}
+  if (detailQuery.isError) {
+    return (
+      <div className="flex h-full flex-col">
+        <RoomTopBar onBack={() => navigate(-1)} title="加载失败" />
+        <div className="p-6">
+          <ErrorState
+            error={detailQuery.error}
+            title="直播间加载失败"
+            onRetry={() => void detailQuery.refetch()}
           />
-        </>
+        </div>
+      </div>
+    );
+  }
+
+  if (!detail) return null;
+
+  const sideHeader = (
+    <div className="shrink-0 border-b border-border px-3 py-3">
+      <div className="flex items-start gap-2.5">
+        <Avatar className="size-11">
+          <AvatarImage src={detail.user_avatar || undefined} alt="" />
+          <AvatarFallback>
+            {(detail.user_name || "?").slice(0, 1)}
+          </AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{detail.user_name}</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <span>{SITE_LABELS[detail.site_id] ?? detail.site_id}</span>
+            <span className="inline-flex items-center gap-0.5 text-orange-400">
+              <Flame className="size-3" />
+              {formatOnline(detail.online)}
+            </span>
+          </div>
+        </div>
+        <Button variant="ghost" size="icon-sm" disabled title="更多">
+          <MoreHorizontal />
+        </Button>
+      </div>
+      {detail.title && (
+        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+          {detail.title}
+        </p>
       )}
     </div>
+  );
+
+  const bottomExtras = (
+    <>
+      {qualitiesQuery.data && qualitiesQuery.data.length > 0 && (
+        <select
+          value={qualityIndex}
+          onChange={(e) => setQualityIndex(Number(e.target.value))}
+          className="ml-1 h-7 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-label="清晰度"
+        >
+          {qualitiesQuery.data.map((q, i) => (
+            <option key={`${q.quality}-${i}`} value={i}>
+              {q.quality}
+            </option>
+          ))}
+        </select>
+      )}
+    </>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Top chrome is OUTSIDE the mpv HWND host — always visible & clickable */}
+      <RoomTopBar
+        onBack={() => navigate(-1)}
+        title={detail.title || "直播间"}
+        subtitle={`${detail.user_name} · ${SITE_LABELS[detail.site_id] ?? detail.site_id}`}
+        live={detail.status}
+      />
+
+      <div className="min-h-0 flex-1">
+        <PlayerPane
+          playUrl={playUrl}
+          loading={
+            qualitiesQuery.isLoading ||
+            (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
+          }
+          error={
+            qualitiesQuery.isError
+              ? qualitiesQuery.error
+              : playUrlQuery.isError
+                ? playUrlQuery.error
+                : qualitiesQuery.isSuccess &&
+                    playUrlQuery.isSuccess &&
+                    !playUrl
+                  ? {
+                      code: "no_play_url",
+                      message: "当前清晰度没有可用播放地址",
+                      site: siteId,
+                      retryable: true,
+                    }
+                  : undefined
+          }
+          onRetry={retryPlay}
+          title={detail.title}
+          danmakuActive={!!detailQuery.data}
+          danmakuStatusText={danmakuStatus}
+          sideHeader={sideHeader}
+          bottomExtras={bottomExtras}
+        />
+      </div>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-sidebar px-3 py-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void detailQuery.refetch()}
+        >
+          <RefreshCw data-icon="inline-start" />
+          刷新
+        </Button>
+        <Button
+          variant={isFollowed ? "secondary" : "default"}
+          size="sm"
+          disabled={followBusy}
+          onClick={() => void toggleFollow()}
+        >
+          <Heart
+            data-icon="inline-start"
+            className={cn(isFollowed && "fill-current")}
+          />
+          {isFollowed ? "已关注" : "关注"}
+        </Button>
+
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            title="复制房间页链接"
+            onClick={() => {
+              void navigator.clipboard?.writeText(
+                detail.url || window.location.href,
+              );
+            }}
+          >
+            <Link2 data-icon="inline-start" />
+            复制链接
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            title="复制当前播放直链（流地址）"
+            disabled={!playUrl?.url}
+            onClick={() => {
+              if (playUrl?.url) {
+                void navigator.clipboard?.writeText(playUrl.url);
+              }
+            }}
+          >
+            <Share2 data-icon="inline-start" />
+            复制直链
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoomTopBar({
+  onBack,
+  title,
+  subtitle,
+  live,
+}: {
+  onBack: () => void;
+  title: string;
+  subtitle?: string;
+  live?: boolean;
+}) {
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-sidebar px-2">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onBack}
+        aria-label="返回"
+        title="返回"
+      >
+        <ArrowLeft />
+      </Button>
+      <Link to="/" className="sr-only" tabIndex={-1}>
+        首页
+      </Link>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{title}</p>
+        {subtitle && (
+          <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p>
+        )}
+      </div>
+      {live != null &&
+        (live ? (
+          <Badge className="animate-live bg-accent text-accent-foreground">
+            LIVE
+          </Badge>
+        ) : (
+          <Badge variant="secondary">未开播</Badge>
+        ))}
+    </header>
   );
 }

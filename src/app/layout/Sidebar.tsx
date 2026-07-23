@@ -1,37 +1,60 @@
 import { NavLink } from "react-router-dom";
-import clsx from "clsx";
+import { Home, Heart, LayoutGrid, History, Settings } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const navItems: { to: string; label: string; end?: boolean }[] = [
-  { to: "/", label: "Home", end: true },
-  { to: "/category", label: "Category" },
-  { to: "/search", label: "Search" },
-  { to: "/follow", label: "Follow" },
-  { to: "/history", label: "History" },
-  { to: "/settings", label: "Settings" },
+const navItems: {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  end?: boolean;
+}[] = [
+  { to: "/", label: "首页", icon: Home, end: true },
+  { to: "/follow", label: "关注", icon: Heart },
+  { to: "/category", label: "分类", icon: LayoutGrid },
+  { to: "/history", label: "历史", icon: History },
+  { to: "/settings", label: "设置", icon: Settings },
 ];
 
 export function Sidebar() {
   return (
-    <aside className="flex h-full w-52 shrink-0 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-        <span className="text-lg font-semibold tracking-tight">rLive</span>
+    <aside className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar py-3">
+      <div
+        className="mb-4 flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/90 to-accent/80 text-sm font-bold text-white shadow-lg shadow-primary/20"
+        title="rLive"
+      >
+        r
       </div>
-      <nav className="flex flex-1 flex-col gap-0.5 p-2">
-        {navItems.map(({ to, label, end }) => (
+
+      <nav className="flex flex-1 flex-col items-center gap-1.5" aria-label="主导航">
+        {navItems.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
+            title={label}
             className={({ isActive }) =>
-              clsx(
-                "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              cn(
+                "group relative flex h-11 w-11 items-center justify-center rounded-2xl transition-all focus-ring",
                 isActive
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
+                  ? "bg-sidebar-active text-foreground shadow-inner"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
               )
             }
           >
-            {label}
+            {({ isActive }) => (
+              <>
+                {isActive && (
+                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />
+                )}
+                <Icon
+                  className={cn(
+                    "h-[22px] w-[22px] transition-transform group-hover:scale-105",
+                    isActive && "text-primary",
+                  )}
+                />
+                <span className="sr-only">{label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </nav>

@@ -488,18 +488,40 @@ impl LiveSite for BilibiliSite {
         // Danmaku info is best-effort (upstream: failure must not block room entry).
         let mut danmaku: Option<Value> = None;
         {
-            let mut dparams = BTreeMap::new();
-            dparams.insert("id".into(), real_room_id.clone());
-            match self
-                .get_json_signed(
+            // Prefer plain getDanmuInfo (cookie + type=0); fall back to WBI signed.
+            let plain = self
+                .get_json(
                     "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
-                    dparams,
+                    &[
+                        ("id", real_room_id.clone()),
+                        ("type", "0".into()),
+                    ],
                 )
-                .await
-            {
+                .await;
+            let fetched = match plain {
+                Ok(t) => Ok(t),
+                Err(_) => {
+                    let mut dparams = BTreeMap::new();
+                    dparams.insert("id".into(), real_room_id.clone());
+                    dparams.insert("type".into(), "0".into());
+                    self.get_json_signed(
+                        "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
+                        dparams,
+                    )
+                    .await
+                }
+            };
+            match fetched {
                 Ok(text) => {
                     if let Ok(v) = serde_json::from_str::<Value>(&text) {
                         danmaku = v.get("data").cloned();
+                        let tok_len = danmaku
+                            .as_ref()
+                            .and_then(|d| d.get("token"))
+                            .and_then(|t| t.as_str())
+                            .map(|s| s.len())
+                            .unwrap_or(0);
+                        tracing::info!(room_id = %real_room_id, token_len = tok_len, "danmaku info ok");
                     }
                 }
                 Err(e) => {
