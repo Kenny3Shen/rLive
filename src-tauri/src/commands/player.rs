@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::player::{resolve_mpv_path, PlayerStatus};
+use crate::player::{resolve_mpv_path, PlayerBounds, PlayerStatus};
 use crate::settings;
 use crate::state::AppState;
 
@@ -26,12 +26,19 @@ pub fn player_open(
     url: String,
     headers: HashMap<String, String>,
     title: Option<String>,
+    bounds: Option<PlayerBounds>,
+    embed: Option<bool>,
 ) -> AppResult<()> {
     let settings_path = load_mpv_setting(&state)?;
     let mpv = resolve_mpv_path(settings_path.as_deref())?;
-    state
-        .player
-        .open(&mpv, &url, &headers, title.as_deref())
+    state.player.open(
+        &mpv,
+        &url,
+        &headers,
+        title.as_deref(),
+        bounds,
+        embed.unwrap_or(true),
+    )
 }
 
 #[tauri::command]
@@ -40,12 +47,19 @@ pub fn player_load(
     url: String,
     headers: HashMap<String, String>,
     title: Option<String>,
+    bounds: Option<PlayerBounds>,
+    embed: Option<bool>,
 ) -> AppResult<()> {
     let settings_path = load_mpv_setting(&state)?;
     let mpv = resolve_mpv_path(settings_path.as_deref())?;
-    state
-        .player
-        .load(&mpv, &url, &headers, title.as_deref())
+    state.player.load(
+        &mpv,
+        &url,
+        &headers,
+        title.as_deref(),
+        bounds,
+        embed.unwrap_or(true),
+    )
 }
 
 #[tauri::command]
@@ -61,6 +75,22 @@ pub fn player_set_pause(state: State<'_, AppState>, paused: bool) -> AppResult<(
 #[tauri::command]
 pub fn player_set_volume(state: State<'_, AppState>, volume: u8) -> AppResult<()> {
     state.player.set_volume(volume)
+}
+
+#[tauri::command]
+pub fn player_set_bounds(state: State<'_, AppState>, bounds: PlayerBounds) -> AppResult<()> {
+    state.player.set_bounds(bounds)
+}
+
+#[tauri::command]
+pub fn player_show_danmaku(
+    state: State<'_, AppState>,
+    text: String,
+    duration_ms: Option<u64>,
+) -> AppResult<()> {
+    state
+        .player
+        .show_osd_text(&text, duration_ms.unwrap_or(3500))
 }
 
 #[tauri::command]

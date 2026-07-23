@@ -11,7 +11,6 @@ import type {
   PlayUrl,
   SiteId,
 } from "../../shared/types/live";
-import { DanmakuLayer } from "./DanmakuLayer";
 import { PlayerPane } from "./PlayerPane";
 
 function formatOnline(n: number): string {
@@ -253,34 +252,32 @@ export function RoomPage() {
             </div>
           </header>
 
-          <div className="relative">
-            <PlayerPane
-              playUrl={playUrl}
-              loading={
-                qualitiesQuery.isLoading ||
-                (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
-              }
-              error={
-                qualitiesQuery.isError
-                  ? qualitiesQuery.error
-                  : playUrlQuery.isError
-                    ? playUrlQuery.error
-                    : qualitiesQuery.isSuccess &&
-                        playUrlQuery.isSuccess &&
-                        !playUrl
-                      ? {
-                          code: "no_play_url",
-                          message: "No playable URL returned for this quality",
-                          site: siteId,
-                          retryable: true,
-                        }
-                      : undefined
-              }
-              onRetry={retryPlay}
-              title={detail.title}
-            />
-            <DanmakuLayer active={!!detailQuery.data} />
-          </div>
+          <PlayerPane
+            playUrl={playUrl}
+            loading={
+              qualitiesQuery.isLoading ||
+              (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
+            }
+            error={
+              qualitiesQuery.isError
+                ? qualitiesQuery.error
+                : playUrlQuery.isError
+                  ? playUrlQuery.error
+                  : qualitiesQuery.isSuccess &&
+                      playUrlQuery.isSuccess &&
+                      !playUrl
+                    ? {
+                        code: "no_play_url",
+                        message: "No playable URL returned for this quality",
+                        site: siteId,
+                        retryable: true,
+                      }
+                    : undefined
+            }
+            onRetry={retryPlay}
+            title={detail.title}
+            danmakuActive={!!detailQuery.data}
+          />
         </>
       )}
     </div>
