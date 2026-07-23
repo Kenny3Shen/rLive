@@ -10,7 +10,7 @@ use crate::player::PlayerBounds;
 /// Opaque embed host; destroyed on drop.
 pub struct EmbedHost {
     #[cfg(windows)]
-    hwnd: windows::Win32::Foundation::HWND,
+    hwnd: isize,
     #[cfg(not(windows))]
     _pad: (),
 }
@@ -38,22 +38,21 @@ impl EmbedHost {
         }
         #[cfg(windows)]
         {
+            use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_SHOWWINDOW,
             };
+            let hwnd = HWND(self.hwnd as *mut core::ffi::c_void);
             unsafe {
-                SetWindowPos(
-                    self.hwnd,
+                let _ = SetWindowPos(
+                    hwnd,
                     Some(HWND_TOP),
                     bounds.x,
                     bounds.y,
                     bounds.width as i32,
                     bounds.height as i32,
                     SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                )
-                .map_err(|e| {
-                    AppError::new("embed_bounds_error", format!("SetWindowPos: {e}"))
-                })?;
+                );
             }
             return Ok(());
         }
@@ -68,7 +67,7 @@ impl EmbedHost {
     pub fn wid_arg(&self) -> String {
         #[cfg(windows)]
         {
-            format!("{}", self.hwnd.0 as isize)
+            format!("{}", self.hwnd)
         }
         #[cfg(not(windows))]
         {
@@ -78,12 +77,14 @@ impl EmbedHost {
 
     #[cfg(windows)]
     fn create_windows(window: &tauri::WebviewWindow, bounds: PlayerBounds) -> AppResult<Self> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::HWND;
         use windows::Win32::Graphics::Gdi::HBRUSH;
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, LoadCursorW, RegisterClassW, SetWindowPos, CS_HREDRAW, CS_OWNDC,
+            CreateWindowExW, LoadCursorW, RegisterClassExW, SetWindowPos, CS_HREDRAW, CS_OWNDC,
             CS_VREDRAW, HWND_TOP, IDC_ARROW, SWP_NOACTIVATE, SWP_SHOWWINDOW, WINDOW_EX_STYLE,
-            WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
+            WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
         };
 
         let parent = window
@@ -91,12 +92,13 @@ impl EmbedHost {
             .map_err(|e| AppError::new("embed_parent_error", format!("hwnd: {e}")))?;
 
         unsafe {
-            let class_name = windows::core::w!("RLIVE_MPV_HOST");
+            let class_name: PCWSTR = windows::core::w!("RLIVE_MPV_HOST");
             let hinstance = GetModuleHandleW(None).map_err(|e| {
                 AppError::new("embed_create_error", format!("GetModuleHandle: {e}"))
             })?;
 
-            let wc = WNDCLASSW {
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
                 lpfnWndProc: Some(host_wnd_proc),
                 hInstance: hinstance.into(),
@@ -105,7 +107,8 @@ impl EmbedHost {
                 hbrBackground: HBRUSH(std::ptr::null_mut()),
                 ..Default::default()
             };
-            let _ = RegisterClassW(&wc);
+            // ATOM 0 means already registered or failure; CreateWindow still works if registered.
+            let _ = RegisterClassExW(&wc);
 
             let x = bounds.x;
             let y = bounds.y;
@@ -138,7 +141,9 @@ impl EmbedHost {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
 
-            Ok(Self { hwnd })
+            Ok(Self {
+                hwnd: hwnd.0 as isize,
+            })
         }
     }
 }
@@ -147,9 +152,11 @@ impl Drop for EmbedHost {
     fn drop(&mut self) {
         #[cfg(windows)]
         {
+            use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
             unsafe {
-                let _ = DestroyWindow(self.hwnd);
+                let hwnd = HWND(self.hwnd as *mut core::ffi::c_void);
+                let _ = DestroyWindow(hwnd);
             }
         }
     }
@@ -162,8 +169,9 @@ unsafe extern "system" fn host_wnd_proc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::COLORREF;
     use windows::Win32::Graphics::Gdi::{
-        BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, PAINTSTRUCT,
+        BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, HGDIOBJ, PAINTSTRUCT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DefWindowProcW, WM_DESTROY, WM_ERASEBKGND, WM_PAINT,
@@ -174,10 +182,9 @@ unsafe extern "system" fn host_wnd_proc(
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
-            // Black fill while mpv attaches.
-            let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0x000000));
+            let brush = CreateSolidBrush(COLORREF(0x0000_0000));
             let _ = FillRect(hdc, &ps.rcPaint, brush);
-            let _ = DeleteObject(brush);
+            let _ = DeleteObject(HGDIOBJ(brush.0));
             let _ = EndPaint(hwnd, &ps);
             windows::Win32::Foundation::LRESULT(0)
         }
