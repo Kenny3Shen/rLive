@@ -59,13 +59,17 @@ fn which_mpv() -> Option<PathBuf> {
             }
         }
     }
-    // Fallback: check a few absolute locations.
-    for candidate in [
-        "/usr/bin/mpv",
-        "/usr/local/bin/mpv",
-        "/opt/homebrew/bin/mpv",
-    ] {
-        let p = Path::new(candidate);
+    // Fallback: check common absolute locations + user-local install.
+    let mut candidates = vec![
+        "/usr/bin/mpv".to_string(),
+        "/usr/local/bin/mpv".to_string(),
+        "/opt/homebrew/bin/mpv".to_string(),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local/bin/mpv").display().to_string());
+    }
+    for candidate in candidates {
+        let p = Path::new(&candidate);
         if p.is_file() {
             return Some(p.to_path_buf());
         }
@@ -262,5 +266,37 @@ mod tests {
     fn resolve_invalid_configured_path() {
         let err = resolve_mpv_path(Some("/definitely/not/a/real/mpv-binary-xyz")).unwrap_err();
         assert_eq!(err.code, "mpv_not_found");
+    }
+}
+
+#[cfg(test)]
+mod smoke_integration {
+    use super::*;
+    use std::collections::HashMap;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "requires mpv on PATH"]
+    fn player_manager_open_stop_smoke() {
+        let mpv = resolve_mpv_path(None).expect("mpv");
+        let mgr = PlayerManager::new();
+        let mut headers = HashMap::new();
+        headers.insert("User-Agent".into(), "rlive-smoke".into());
+        // short generated video
+        mgr.open(
+            &mpv,
+            "av://lavfi:testsrc=duration=10:size=320x240:rate=30",
+            &headers,
+            Some("rlive-smoke"),
+        )
+        .expect("open");
+        thread::sleep(Duration::from_millis(800));
+        let st = mgr.status(None);
+        assert!(st.running, "mpv should be running");
+        mgr.stop().expect("stop");
+        thread::sleep(Duration::from_millis(200));
+        let st2 = mgr.status(None);
+        assert!(!st2.running, "mpv should be stopped");
     }
 }
