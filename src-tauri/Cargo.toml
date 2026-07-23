@@ -31,4 +31,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "gzip", "brotli"] }
 url = "2"
 chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1.91"
 

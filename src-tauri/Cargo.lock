@@ -3055,6 +3055,7 @@ dependencies = [
 name = "rlive"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs",
  "reqwest 0.12.28",

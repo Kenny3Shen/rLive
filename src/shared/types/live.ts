@@ -1,6 +1,13 @@
 /** Mirrors Rust `SiteId` serde snake_case values. */
 export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "kuaishou";
 
+/** Mirrors Rust `commands::site::SiteInfo`. */
+export type SiteInfo = {
+  id: SiteId;
+  name: string;
+  ready: boolean;
+};
+
 export type LiveSubCategory = {
   id: string;
   name: string;
