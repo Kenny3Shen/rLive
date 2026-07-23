@@ -45,7 +45,23 @@ pub fn resolve_mpv_path(settings_path: Option<&str>) -> AppResult<PathBuf> {
 }
 
 fn which_mpv() -> Option<PathBuf> {
-    // Prefer `which` on Unix; also try common names.
+    // Prefer packaged system binaries over PATH (user wrappers may be stale).
+    let mut candidates = vec![
+        "/usr/bin/mpv".to_string(),
+        "/usr/local/bin/mpv".to_string(),
+        "/opt/homebrew/bin/mpv".to_string(),
+        "/bin/mpv".to_string(),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local/bin/mpv").display().to_string());
+    }
+    for candidate in &candidates {
+        let p = Path::new(candidate);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    // Fall back to PATH lookup.
     for name in ["mpv", "mpv.exe"] {
         if let Ok(output) = Command::new("which").arg(name).output() {
             if output.status.success() {
@@ -57,21 +73,6 @@ fn which_mpv() -> Option<PathBuf> {
                     }
                 }
             }
-        }
-    }
-    // Fallback: check common absolute locations + user-local install.
-    let mut candidates = vec![
-        "/usr/bin/mpv".to_string(),
-        "/usr/local/bin/mpv".to_string(),
-        "/opt/homebrew/bin/mpv".to_string(),
-    ];
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local/bin/mpv").display().to_string());
-    }
-    for candidate in candidates {
-        let p = Path::new(&candidate);
-        if p.is_file() {
-            return Some(p.to_path_buf());
         }
     }
     None
@@ -266,6 +267,15 @@ mod tests {
     fn resolve_invalid_configured_path() {
         let err = resolve_mpv_path(Some("/definitely/not/a/real/mpv-binary-xyz")).unwrap_err();
         assert_eq!(err.code, "mpv_not_found");
+    }
+
+    #[test]
+    fn resolve_prefers_system_mpv_when_present() {
+        if !Path::new("/usr/bin/mpv").is_file() {
+            return;
+        }
+        let p = resolve_mpv_path(None).expect("mpv should resolve");
+        assert_eq!(p, PathBuf::from("/usr/bin/mpv"));
     }
 }
 
