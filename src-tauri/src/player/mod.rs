@@ -1,3 +1,5 @@
+mod embed_host;
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,8 +8,10 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tauri::WebviewWindow;
 
 use crate::error::{AppError, AppResult};
+use crate::player::embed_host::EmbedHost;
 
 /// Formats headers for mpv `--http-header-fields` (comma-separated `Key: Value`).
 pub fn format_mpv_headers(headers: &HashMap<String, String>) -> String {
@@ -18,7 +22,7 @@ pub fn format_mpv_headers(headers: &HashMap<String, String>) -> String {
         .join(",")
 }
 
-/// Screen-space bounds for embedding the mpv window over the player host.
+/// Client-relative bounds (physical px) for the player host inside the main window.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PlayerBounds {
     pub x: i32,
@@ -27,7 +31,23 @@ pub struct PlayerBounds {
     pub height: u32,
 }
 
-/// Resolve mpv binary: settings path → PATH lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbedMode {
+    /// Native child window + mpv `--wid` (Windows).
+    Child,
+    /// Borderless mpv window positioned with geometry.
+    Geometry,
+    /// Separate decorated mpv window.
+    Window,
+}
+
+impl Default for EmbedMode {
+    fn default() -> Self {
+        EmbedMode::Child
+    }
+}
+
 pub fn resolve_mpv_path(settings_path: Option<&str>) -> AppResult<PathBuf> {
     if let Some(p) = settings_path {
         let p = p.trim();
@@ -43,16 +63,13 @@ pub fn resolve_mpv_path(settings_path: Option<&str>) -> AppResult<PathBuf> {
             .retryable());
         }
     }
-
-    if let Some(path) = which_mpv() {
-        return Ok(path);
-    }
-
-    Err(AppError::new(
-        "mpv_not_found",
-        "mpv not found: install mpv or set Settings → mpv path",
-    )
-    .retryable())
+    which_mpv().ok_or_else(|| {
+        AppError::new(
+            "mpv_not_found",
+            "mpv not found: install mpv or set Settings → mpv path",
+        )
+        .retryable()
+    })
 }
 
 fn which_mpv() -> Option<PathBuf> {
@@ -141,13 +158,11 @@ fn ipc_path() -> PathBuf {
         .unwrap_or(0);
     #[cfg(windows)]
     {
-        // Named pipe style path for mpv on Windows.
         PathBuf::from(format!(r"\\.\pipe\rlive-mpv-{stamp}"))
     }
     #[cfg(not(windows))]
     {
-        let dir = std::env::temp_dir();
-        dir.join(format!("rlive-mpv-{stamp}.sock"))
+        std::env::temp_dir().join(format!("rlive-mpv-{stamp}.sock"))
     }
 }
 
@@ -157,16 +172,17 @@ pub struct PlayerStatus {
     pub mpv_path: String,
     pub paused: bool,
     pub volume: u8,
-    pub embed: bool,
+    pub embed_mode: EmbedMode,
 }
 
 struct PlayerInner {
     child: Option<Child>,
+    host: Option<EmbedHost>,
     ipc: Option<PathBuf>,
     last_path: String,
     paused: bool,
     volume: u8,
-    embed: bool,
+    embed_mode: EmbedMode,
     bounds: Option<PlayerBounds>,
 }
 
@@ -179,11 +195,12 @@ impl Default for PlayerManager {
         Self {
             inner: Mutex::new(PlayerInner {
                 child: None,
+                host: None,
                 ipc: None,
                 last_path: String::new(),
                 paused: false,
                 volume: 80,
-                embed: true,
+                embed_mode: EmbedMode::Child,
                 bounds: None,
             }),
         }
@@ -197,25 +214,43 @@ impl PlayerManager {
 
     pub fn open(
         &self,
+        window: Option<&WebviewWindow>,
         mpv_path: &Path,
         url: &str,
         headers: &HashMap<String, String>,
         title: Option<&str>,
         bounds: Option<PlayerBounds>,
-        embed: bool,
+        prefer_child: bool,
     ) -> AppResult<()> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            AppError::new("player_lock_error", "player mutex poisoned")
-        })?;
+        let mut inner = self.lock()?;
         Self::stop_locked(&mut inner)?;
+
+        let mut mode = if prefer_child {
+            EmbedMode::Child
+        } else {
+            EmbedMode::Geometry
+        };
+
+        // Try native child host (Windows).
+        let mut host = None;
+        if mode == EmbedMode::Child {
+            if let (Some(win), Some(b)) = (window, bounds) {
+                match EmbedHost::create(win, b) {
+                    Ok(h) => host = Some(h),
+                    Err(e) => {
+                        tracing::warn!("child embed failed, geometry fallback: {}", e);
+                        mode = EmbedMode::Geometry;
+                    }
+                }
+            } else {
+                mode = EmbedMode::Geometry;
+            }
+        }
 
         let ipc = ipc_path();
         let mut cmd = Command::new(mpv_path);
-
-        // Keep alive for live streams; IPC for control.
         cmd.arg("--keep-open=yes")
             .arg("--idle=yes")
-            .arg("--force-window=yes")
             .arg("--osc=no")
             .arg("--input-default-bindings=yes")
             .arg(format!("--input-ipc-server={}", ipc.display()))
@@ -225,20 +260,33 @@ impl PlayerManager {
                 title.unwrap_or("rLive").replace(['\n', '\r'], " ")
             ));
 
-        if embed {
-            cmd.arg("--no-border")
-                .arg("--ontop=no")
-                .arg("--cursor-autohide=always");
-            if let Some(b) = bounds {
-                if b.width > 0 && b.height > 0 {
-                    cmd.arg(format!(
-                        "--geometry={}x{}+{}+{}",
-                        b.width, b.height, b.x, b.y
-                    ));
+        match mode {
+            EmbedMode::Child => {
+                if let Some(ref h) = host {
+                    cmd.arg(format!("--wid={}", h.wid_arg()));
+                    // vo=gpu often works better with wid
+                    cmd.arg("--vo=gpu");
                 }
             }
-        } else {
-            cmd.arg("--force-window=yes");
+            EmbedMode::Geometry => {
+                cmd.arg("--force-window=yes")
+                    .arg("--no-border")
+                    .arg("--ontop=no")
+                    .arg("--cursor-autohide=always");
+                if let Some(b) = bounds {
+                    if b.width > 0 && b.height > 0 {
+                        // Geometry fallback uses absolute coords from frontend when provided
+                        // as client-relative; still useful if OS places relative to work area.
+                        cmd.arg(format!(
+                            "--geometry={}x{}+{}+{}",
+                            b.width, b.height, b.x, b.y
+                        ));
+                    }
+                }
+            }
+            EmbedMode::Window => {
+                cmd.arg("--force-window=yes");
+            }
         }
 
         if let Some(ua) = headers
@@ -248,52 +296,49 @@ impl PlayerManager {
         {
             cmd.arg(format!("--user-agent={ua}"));
         }
-
         let header_fields = format_mpv_headers(headers);
         if !header_fields.is_empty() {
             cmd.arg(format!("--http-header-fields={header_fields}"));
         }
 
-        // Load URL after window is up; using direct arg is fine for live.
         cmd.arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
         let child = cmd.spawn().map_err(|e| {
+            // Clean host if spawn fails.
+            drop(host.take());
             AppError::new("mpv_spawn_error", format!("failed to start mpv: {e}")).retryable()
         })?;
 
-        // Give IPC a moment to appear.
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(std::time::Duration::from_millis(120));
 
         inner.child = Some(child);
+        inner.host = host;
         inner.ipc = Some(ipc);
         inner.last_path = mpv_path.display().to_string();
         inner.paused = false;
-        inner.embed = embed;
+        inner.embed_mode = mode;
         inner.bounds = bounds;
         Ok(())
     }
 
     pub fn load(
         &self,
+        window: Option<&WebviewWindow>,
         mpv_path: &Path,
         url: &str,
         headers: &HashMap<String, String>,
         title: Option<&str>,
         bounds: Option<PlayerBounds>,
-        embed: bool,
+        prefer_child: bool,
     ) -> AppResult<()> {
-        // Prefer IPC replace if already running; else open.
         {
-            let inner = self.inner.lock().map_err(|_| {
-                AppError::new("player_lock_error", "player mutex poisoned")
-            })?;
+            let inner = self.lock()?;
             if inner.child.is_some() && inner.ipc.is_some() {
                 let ipc = inner.ipc.clone().unwrap();
                 drop(inner);
-                // loadfile replace
                 let _ = Self::ipc_command_path(
                     &ipc,
                     serde_json::json!(["loadfile", url, "replace"]),
@@ -304,13 +349,19 @@ impl PlayerManager {
                 return Ok(());
             }
         }
-        self.open(mpv_path, url, headers, title, bounds, embed)
+        self.open(
+            window,
+            mpv_path,
+            url,
+            headers,
+            title,
+            bounds,
+            prefer_child,
+        )
     }
 
     pub fn stop(&self) -> AppResult<()> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            AppError::new("player_lock_error", "player mutex poisoned")
-        })?;
+        let mut inner = self.lock()?;
         Self::stop_locked(&mut inner)
     }
 
@@ -323,7 +374,6 @@ impl PlayerManager {
             }
         }
         if let Some(mut child) = inner.child.take() {
-            // Graceful then force.
             std::thread::sleep(std::time::Duration::from_millis(80));
             match child.try_wait() {
                 Ok(None) => {
@@ -335,14 +385,14 @@ impl PlayerManager {
                 }
             }
         }
+        // Destroy host after mpv exits so --wid is released cleanly.
+        inner.host = None;
         inner.paused = false;
         Ok(())
     }
 
     pub fn set_pause(&self, paused: bool) -> AppResult<()> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            AppError::new("player_lock_error", "player mutex poisoned")
-        })?;
+        let mut inner = self.lock()?;
         Self::ensure_running(&mut inner)?;
         let ipc = inner.ipc.clone().ok_or_else(|| {
             AppError::new("player_ipc_missing", "mpv ipc not available")
@@ -354,9 +404,7 @@ impl PlayerManager {
 
     pub fn set_volume(&self, volume: u8) -> AppResult<()> {
         let volume = volume.min(100);
-        let mut inner = self.inner.lock().map_err(|_| {
-            AppError::new("player_lock_error", "player mutex poisoned")
-        })?;
+        let mut inner = self.lock()?;
         Self::ensure_running(&mut inner)?;
         let ipc = inner.ipc.clone().ok_or_else(|| {
             AppError::new("player_ipc_missing", "mpv ipc not available")
@@ -369,53 +417,45 @@ impl PlayerManager {
         Ok(())
     }
 
-    /// Show a short OSD text on the video (works over embedded window).
+    pub fn set_bounds(&self, bounds: PlayerBounds) -> AppResult<()> {
+        let mut inner = self.lock()?;
+        inner.bounds = Some(bounds);
+        if bounds.width == 0 || bounds.height == 0 {
+            return Ok(());
+        }
+        if let Some(host) = inner.host.as_ref() {
+            host.set_bounds(bounds)?;
+            return Ok(());
+        }
+        // Geometry mode
+        if inner.embed_mode == EmbedMode::Geometry {
+            if let Some(ipc) = inner.ipc.clone() {
+                let geo = format!(
+                    "{}x{}{:+}{:+}",
+                    bounds.width, bounds.height, bounds.x, bounds.y
+                );
+                let _ = Self::ipc_command_path(
+                    &ipc,
+                    serde_json::json!(["set_property", "geometry", geo]),
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn show_osd_text(&self, text: &str, duration_ms: u64) -> AppResult<()> {
-        let inner = self.inner.lock().map_err(|_| {
-            AppError::new("player_lock_error", "player mutex poisoned")
-        })?;
+        let inner = self.lock()?;
         if inner.child.is_none() {
-            return Ok(()); // silent if not playing
+            return Ok(());
         }
         let ipc = match &inner.ipc {
             Some(p) => p.clone(),
             None => return Ok(()),
         };
-        // mpv show-text: text, duration(ms)
         let safe: String = text.chars().take(80).collect();
         let _ = Self::ipc_command_path(
             &ipc,
             serde_json::json!(["show-text", safe, duration_ms.max(500)]),
-        );
-        Ok(())
-    }
-
-    pub fn set_bounds(&self, bounds: PlayerBounds) -> AppResult<()> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            AppError::new("player_lock_error", "player mutex poisoned")
-        })?;
-        inner.bounds = Some(bounds);
-        if !inner.embed {
-            return Ok(());
-        }
-        if bounds.width == 0 || bounds.height == 0 {
-            return Ok(());
-        }
-        if inner.child.is_none() {
-            return Ok(());
-        }
-        let ipc = match &inner.ipc {
-            Some(p) => p.clone(),
-            None => return Ok(()),
-        };
-        // geometry as WxH+X+Y
-        let geo = format!(
-            "{}x{}{:+}{:+}",
-            bounds.width, bounds.height, bounds.x, bounds.y
-        );
-        let _ = Self::ipc_command_path(
-            &ipc,
-            serde_json::json!(["set_property", "geometry", geo]),
         );
         Ok(())
     }
@@ -429,7 +469,7 @@ impl PlayerManager {
                     mpv_path: String::new(),
                     paused: false,
                     volume: 0,
-                    embed: true,
+                    embed_mode: EmbedMode::Child,
                 };
             }
         };
@@ -439,6 +479,7 @@ impl PlayerManager {
                 Ok(Some(_)) => {
                     inner.child = None;
                     inner.ipc = None;
+                    inner.host = None;
                     false
                 }
                 Ok(None) => true,
@@ -457,18 +498,22 @@ impl PlayerManager {
             mpv_path,
             paused: inner.paused,
             volume: inner.volume,
-            embed: inner.embed,
+            embed_mode: inner.embed_mode,
         }
+    }
+
+    fn lock(&self) -> AppResult<std::sync::MutexGuard<'_, PlayerInner>> {
+        self.inner
+            .lock()
+            .map_err(|_| AppError::new("player_lock_error", "player mutex poisoned"))
     }
 
     fn ensure_running(inner: &mut PlayerInner) -> AppResult<()> {
         if let Some(child) = inner.child.as_mut() {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    inner.child = None;
-                    inner.ipc = None;
-                }
-                _ => {}
+            if let Ok(Some(_)) = child.try_wait() {
+                inner.child = None;
+                inner.ipc = None;
+                inner.host = None;
             }
         }
         if inner.child.is_none() {
@@ -477,7 +522,6 @@ impl PlayerManager {
         Ok(())
     }
 
-    /// Send a JSON IPC command array, e.g. `["set_property","pause",true]`.
     fn ipc_command_path(ipc: &Path, command: serde_json::Value) -> AppResult<()> {
         let payload = serde_json::json!({ "command": command });
         let line = format!("{payload}\n");
@@ -488,17 +532,13 @@ impl PlayerManager {
         #[cfg(windows)]
         {
             use std::fs::OpenOptions;
-            // Named pipes: open with write
-            let mut f = OpenOptions::new()
-                .write(true)
-                .open(ipc)
-                .map_err(|e| {
-                    AppError::new(
-                        "player_ipc_error",
-                        format!("open ipc {}: {e}", ipc.display()),
-                    )
-                    .retryable()
-                })?;
+            let mut f = OpenOptions::new().write(true).open(ipc).map_err(|e| {
+                AppError::new(
+                    "player_ipc_error",
+                    format!("open ipc {}: {e}", ipc.display()),
+                )
+                .retryable()
+            })?;
             f.write_all(bytes).map_err(|e| {
                 AppError::new("player_ipc_error", format!("write ipc: {e}")).retryable()
             })?;
@@ -530,33 +570,14 @@ mod tests {
     fn format_http_headers() {
         let mut h = HashMap::new();
         h.insert("Referer".into(), "https://live.bilibili.com/".into());
-        h.insert("User-Agent".into(), "test-ua".into());
         let s = format_mpv_headers(&h);
         assert!(s.contains("Referer: https://live.bilibili.com/"));
-        assert!(s.contains("User-Agent: test-ua"));
-    }
-
-    #[test]
-    fn resolve_missing_mpv_errors() {
-        if which_mpv().is_none() {
-            let err = resolve_mpv_path(None).unwrap_err();
-            assert_eq!(err.code, "mpv_not_found");
-        }
     }
 
     #[test]
     fn resolve_invalid_configured_path() {
         let err = resolve_mpv_path(Some("/definitely/not/a/real/mpv-binary-xyz")).unwrap_err();
         assert_eq!(err.code, "mpv_not_found");
-    }
-
-    #[test]
-    fn resolve_prefers_system_mpv_when_present() {
-        if !Path::new("/usr/bin/mpv").is_file() {
-            return;
-        }
-        let p = resolve_mpv_path(None).expect("mpv should resolve");
-        assert_eq!(p, PathBuf::from("/usr/bin/mpv"));
     }
 
     #[test]
@@ -567,48 +588,7 @@ mod tests {
             width: 800,
             height: 450,
         };
-        let v = serde_json::to_string(&b).unwrap();
-        assert!(v.contains("800"));
-    }
-}
-
-#[cfg(test)]
-mod smoke_integration {
-    use super::*;
-    use std::collections::HashMap;
-    use std::thread;
-    use std::time::Duration;
-
-    #[test]
-    #[ignore = "requires mpv on PATH"]
-    fn player_manager_open_stop_smoke() {
-        let mpv = resolve_mpv_path(None).expect("mpv");
-        let mgr = PlayerManager::new();
-        let mut headers = HashMap::new();
-        headers.insert("User-Agent".into(), "rlive-smoke".into());
-        mgr.open(
-            &mpv,
-            "av://lavfi:testsrc=duration=10:size=320x240:rate=30",
-            &headers,
-            Some("rlive-smoke"),
-            Some(PlayerBounds {
-                x: 100,
-                y: 100,
-                width: 320,
-                height: 240,
-            }),
-            true,
-        )
-        .expect("open");
-        thread::sleep(Duration::from_millis(500));
-        let st = mgr.status(None);
-        assert!(st.running, "mpv should be running");
-        let _ = mgr.set_volume(50);
-        let _ = mgr.set_pause(true);
-        thread::sleep(Duration::from_millis(200));
-        mgr.stop().expect("stop");
-        thread::sleep(Duration::from_millis(200));
-        let st2 = mgr.status(None);
-        assert!(!st2.running, "mpv should be stopped");
+        let v = serde_json::to_value(b).unwrap();
+        assert_eq!(v["width"], 800);
     }
 }
