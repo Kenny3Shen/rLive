@@ -13,6 +13,8 @@
 
 - Windows embed host aligned to **windows 0.61** (Tauri HWND types).
 - Controls bar sits **below** the embed host so UI remains clickable under HWND.
+- **Playback v2:** manual 清晰度 + 线路 under video; dual-mode fullscreen (`player_enter/exit_fullscreen`); `PlayerMode` on status; load re-applies HTTP headers.
+- Fullscreen opens transparent **`danmaku-overlay`** webview for Canvas tracks + auto-hide controls (Esc exits).
 
 ## Danmaku
 
@@ -21,6 +23,8 @@
 - Decompress + nested packet parsing (zlib/brotli); support `DANMU_MSG:…` cmds.
 - Surface connect / disconnect system lines; enter / gift events.
 - `getDanmuInfo` with `type=0`, plain request then WBI fallback.
+- Fullscreen **Canvas** engine (`danmakuEngine` + `CanvasDanmaku`) with lane layout, shield words, settings opacity/size/speed.
+
 
 ## Tooling
 
