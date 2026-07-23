@@ -575,4 +575,89 @@ mod live_tests {
         assert!(!cats.is_empty());
         assert!(!cats[0].children.is_empty());
     }
+
+    /// Full path: recommend → live room → play URL → mpv demux for a few seconds.
+    #[tokio::test]
+    #[ignore = "live network + mpv smoke — run with --ignored"]
+    async fn live_play_url_mpv_smoke() {
+        use crate::player::{format_mpv_headers, resolve_mpv_path};
+        use std::process::Command;
+
+        let mpv = resolve_mpv_path(None).expect("mpv must be on PATH for this smoke");
+        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+        let page = site.get_recommend_rooms(1).await.expect("recommend");
+        assert!(!page.items.is_empty());
+
+        let mut detail = None;
+        for item in page.items.iter().take(10) {
+            if let Ok(d) = site.get_room_detail(&item.room_id).await {
+                if d.status {
+                    detail = Some(d);
+                    break;
+                }
+            }
+        }
+        let detail = detail.expect("need at least one live room in recommend");
+        eprintln!(
+            "playing room {} — {} ({})",
+            detail.room_id, detail.title, detail.user_name
+        );
+
+        let qualities = site
+            .get_play_qualities(&detail)
+            .await
+            .expect("qualities");
+        assert!(!qualities.is_empty(), "no play qualities");
+        let urls = site
+            .get_play_urls(&detail, &qualities[0])
+            .await
+            .expect("play urls");
+        assert!(!urls.is_empty(), "no play urls");
+        let play = &urls[0];
+
+        let mut cmd = Command::new(&mpv);
+        cmd.arg("--no-config")
+            .arg("--vo=null")
+            .arg("--ao=null")
+            .arg("--length=6")
+            .arg("--quiet")
+            .arg("--msg-level=all=warn");
+        if let Some(ua) = play
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+            .map(|(_, v)| v.clone())
+        {
+            cmd.arg(format!("--user-agent={ua}"));
+        }
+        let header_fields = format_mpv_headers(&play.headers);
+        if !header_fields.is_empty() {
+            cmd.arg(format!("--http-header-fields={header_fields}"));
+        }
+        cmd.arg(&play.url);
+
+        let output = cmd.output().expect("spawn mpv");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{stderr}\n{stdout}");
+        eprintln!("mpv exit={:?}\n{}", output.status, combined);
+
+        // Hard fails: can't open URL / no demuxer
+        assert!(
+            !combined.to_lowercase().contains("failed to open"),
+            "mpv failed to open stream: {combined}"
+        );
+        assert!(
+            !combined.to_lowercase().contains("no video or audio"),
+            "mpv opened but no A/V: {combined}"
+        );
+        // Prefer success exit; allow non-zero if stream ended abruptly but demux worked
+        assert!(
+            output.status.success()
+                || combined.contains("Exiting")
+                || combined.is_empty()
+                || combined.contains("warn"),
+            "unexpected mpv failure: {combined}"
+        );
+    }
 }
