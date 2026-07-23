@@ -1,0 +1,20 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "roomid": 10001,
+      "title": "分类房间1",
+      "cover": "https://i0.hdslb.com/bfs/live/c1.jpg",
+      "uname": "分类主播",
+      "online": 50
+    },
+    {
+      "roomid": 10002,
+      "title": "分类房间2",
+      "user_cover": "https://i0.hdslb.com/bfs/live/c2.jpg",
+      "uname": "主播2",
+      "online": 0
+    }
+  ]
+}
