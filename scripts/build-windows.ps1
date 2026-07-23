@@ -87,8 +87,8 @@ if ($rustc) {
 
 Set-Location $ProjectRoot
 
-# Prefer: bun x tauri  (works without a separate bunx.exe)
-# Fallback: npx tauri
+# Prefer local CLI via package.json script: "tauri": "tauri"
+# (winget bun often has no bunx.exe; `bun x tauri` may not resolve the binary either)
 $tauriArgs = if ($BundleNsis) { "build --bundles nsis" } else { "build --no-bundle" }
 
 if ($bunCmd) {
@@ -96,8 +96,8 @@ if ($bunCmd) {
     & bun install
     if ($LASTEXITCODE -ne 0) { throw "bun install failed: $LASTEXITCODE" }
 
-    # Use "bun x" not "bunx" — winget installs often omit bunx shim
-    $buildInner = "bun x tauri $tauriArgs"
+    # bun run <script> -- <args>
+    $buildInner = "bun run tauri -- $tauriArgs"
     Write-Host "Using: $buildInner"
 } else {
     Write-Step "npm install (bun not found)"
