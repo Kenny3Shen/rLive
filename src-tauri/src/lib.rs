@@ -18,6 +18,7 @@ use commands::follow::{
     tag_upsert,
 };
 use commands::history::{history_add, history_clear, history_list};
+use commands::overlay::{overlay_close, overlay_open};
 use commands::player::{
     player_enter_fullscreen, player_exit_fullscreen, player_load, player_open,
     player_set_bounds, player_set_pause, player_set_volume, player_show_danmaku, player_status,
@@ -68,6 +69,8 @@ pub fn run() {
             player_status,
             player_enter_fullscreen,
             player_exit_fullscreen,
+            overlay_open,
+            overlay_close,
             danmaku_connect,
             danmaku_disconnect,
             follow_list,
