@@ -102,6 +102,11 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       persistToBackend: async (patch) => {
+        // Avoid clobbering backend fields (proxy, danmaku_*, mpv_path) with
+        // local defaults before loadFromBackend / applyFromBackend finishes.
+        if (!get().hydratedFromBackend) {
+          return;
+        }
         const current = toAppSettings(get());
         const next: AppSettings = { ...defaultSettings, ...current, ...patch };
         try {
