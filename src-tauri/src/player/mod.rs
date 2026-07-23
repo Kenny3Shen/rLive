@@ -45,15 +45,52 @@ pub fn resolve_mpv_path(settings_path: Option<&str>) -> AppResult<PathBuf> {
 }
 
 fn which_mpv() -> Option<PathBuf> {
-    // Prefer packaged system binaries over PATH (user wrappers may be stale).
-    let mut candidates = vec![
-        "/usr/bin/mpv".to_string(),
-        "/usr/local/bin/mpv".to_string(),
-        "/opt/homebrew/bin/mpv".to_string(),
-        "/bin/mpv".to_string(),
+    // Prefer known install locations (Linux + Windows).
+    let mut candidates: Vec<String> = vec![
+        // Linux
+        "/usr/bin/mpv".into(),
+        "/usr/local/bin/mpv".into(),
+        "/opt/homebrew/bin/mpv".into(),
+        "/bin/mpv".into(),
+        // Windows common / winget (shinchiro) / scoop / chocolatey / portable
+        r"C:\Program Files\MPV Player\mpv.exe".into(),
+        r"C:\Program Files\mpv\mpv.exe".into(),
+        r"C:\Program Files (x86)\mpv\mpv.exe".into(),
+        r"C:\Program Files (x86)\MPV Player\mpv.exe".into(),
+        r"D:\dev\tools\mpv\mpv.exe".into(),
+        r"D:\mpv\mpv.exe".into(),
+        r"C:\mpv\mpv.exe".into(),
     ];
     if let Some(home) = dirs::home_dir() {
         candidates.push(home.join(".local/bin/mpv").display().to_string());
+        candidates.push(home.join(r"scoop\apps\mpv\current\mpv.exe").display().to_string());
+        candidates.push(
+            home.join(r"AppData\Local\Microsoft\WinGet\Links\mpv.exe")
+                .display()
+                .to_string(),
+        );
+        // winget package layout (varies by version)
+        if let Ok(entries) = std::fs::read_dir(home.join(r"AppData\Local\Microsoft\WinGet\Packages"))
+        {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                if name.contains("mpv") {
+                    let exe = entry.path().join("mpv.exe");
+                    if exe.is_file() {
+                        candidates.push(exe.display().to_string());
+                    }
+                    // nested folder
+                    if let Ok(sub) = std::fs::read_dir(entry.path()) {
+                        for s in sub.flatten() {
+                            let p = s.path().join("mpv.exe");
+                            if p.is_file() {
+                                candidates.push(p.display().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     for candidate in &candidates {
         let p = Path::new(candidate);
@@ -61,13 +98,23 @@ fn which_mpv() -> Option<PathBuf> {
             return Some(p.to_path_buf());
         }
     }
-    // Fall back to PATH lookup.
+
+    // PATH lookup: `where` on Windows, `which` on Unix.
+    #[cfg(windows)]
+    let finder = "where";
+    #[cfg(not(windows))]
+    let finder = "which";
+
     for name in ["mpv", "mpv.exe"] {
-        if let Ok(output) = Command::new("which").arg(name).output() {
+        if let Ok(output) = Command::new(finder).arg(name).output() {
             if output.status.success() {
-                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !s.is_empty() {
-                    let p = PathBuf::from(&s);
+                // `where` may print multiple lines; take the first existing file.
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let s = line.trim();
+                    if s.is_empty() {
+                        continue;
+                    }
+                    let p = PathBuf::from(s);
                     if p.is_file() {
                         return Some(p);
                     }
