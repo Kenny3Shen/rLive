@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PlayUrl } from "@/shared/types/live";
+import type { PlayerStatus } from "@/shared/types/player";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { invokeCmd } from "@/shared/api/tauri";
 import { DanmakuPanel } from "./DanmakuPanel";
@@ -26,14 +27,6 @@ type PlayerPaneProps = {
   lineIndex?: number;
   onLineChange?: (index: number) => void;
   onToggleFullscreen?: () => void;
-};
-
-type PlayerStatus = {
-  running: boolean;
-  mpv_path: string;
-  paused: boolean;
-  volume: number;
-  embed_mode: "child" | "geometry" | "window";
 };
 
 type Bounds = { x: number; y: number; width: number; height: number };
