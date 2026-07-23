@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
+import { clampIndex } from "@/lib/playUrl";
 import { formatOnline, SITE_LABELS, cn } from "@/lib/utils";
 
 function errMessage(e: unknown): string {
@@ -45,6 +46,7 @@ export function RoomPage() {
   const qc = useQueryClient();
 
   const [qualityIndex, setQualityIndex] = useState(0);
+  const [lineIndex, setLineIndex] = useState(0);
   const [followBusy, setFollowBusy] = useState(false);
   const [danmakuStatus, setDanmakuStatus] = useState<string | null>(null);
 
@@ -138,6 +140,7 @@ export function RoomPage() {
 
   useEffect(() => {
     setQualityIndex(0);
+    setLineIndex(0);
   }, [qualitiesQuery.data]);
 
   const selectedQuality: LivePlayQuality | null = useMemo(() => {
@@ -145,6 +148,10 @@ export function RoomPage() {
     if (!list || list.length === 0) return null;
     return list[Math.min(qualityIndex, list.length - 1)] ?? null;
   }, [qualitiesQuery.data, qualityIndex]);
+
+  useEffect(() => {
+    setLineIndex(0);
+  }, [selectedQuality?.quality, selectedQuality?.data]);
 
   const playUrlQuery = useQuery({
     queryKey: [
@@ -163,7 +170,8 @@ export function RoomPage() {
       }),
   });
 
-  const playUrl = playUrlQuery.data?.[0] ?? null;
+  const playUrls = playUrlQuery.data ?? [];
+  const playUrl = playUrls[clampIndex(lineIndex, playUrls.length)] ?? null;
 
   const retryPlay = useCallback(() => {
     void qualitiesQuery.refetch().then(() => playUrlQuery.refetch());
@@ -246,25 +254,6 @@ export function RoomPage() {
     </div>
   );
 
-  const bottomExtras = (
-    <>
-      {qualitiesQuery.data && qualitiesQuery.data.length > 0 && (
-        <select
-          value={qualityIndex}
-          onChange={(e) => setQualityIndex(Number(e.target.value))}
-          className="ml-1 h-7 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          aria-label="清晰度"
-        >
-          {qualitiesQuery.data.map((q, i) => (
-            <option key={`${q.quality}-${i}`} value={i}>
-              {q.quality}
-            </option>
-          ))}
-        </select>
-      )}
-    </>
-  );
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Top chrome is OUTSIDE the mpv HWND host — always visible & clickable */}
@@ -303,7 +292,15 @@ export function RoomPage() {
           danmakuActive={!!detailQuery.data}
           danmakuStatusText={danmakuStatus}
           sideHeader={sideHeader}
-          bottomExtras={bottomExtras}
+          qualities={qualitiesQuery.data ?? []}
+          qualityIndex={qualityIndex}
+          onQualityChange={(i) => {
+            setQualityIndex(i);
+            setLineIndex(0);
+          }}
+          lines={playUrls}
+          lineIndex={lineIndex}
+          onLineChange={setLineIndex}
         />
       </div>
 

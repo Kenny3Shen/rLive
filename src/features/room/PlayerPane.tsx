@@ -1,23 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  Pause,
-  Play,
-  Volume2,
-  VolumeX,
-  Maximize2,
-  PictureInPicture2,
-  MessageSquareText,
-  Captions,
-} from "lucide-react";
 import type { PlayUrl } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { invokeCmd } from "@/shared/api/tauri";
 import { DanmakuPanel } from "./DanmakuPanel";
-import { Button } from "@/components/ui/button";
+import { PlayerControls } from "./PlayerControls";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Spinner } from "@/components/ui/spinner";
-import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 type PlayerPaneProps = {
@@ -30,8 +19,13 @@ type PlayerPaneProps = {
   danmakuStatusText?: string | null;
   /** Right-side meta (avatar, name…) rendered above chat. */
   sideHeader?: React.ReactNode;
-  /** Bottom bar extras (quality, line, etc.). */
-  bottomExtras?: React.ReactNode;
+  qualities?: { quality: string }[];
+  qualityIndex?: number;
+  onQualityChange?: (index: number) => void;
+  lines?: { url: string }[];
+  lineIndex?: number;
+  onLineChange?: (index: number) => void;
+  onToggleFullscreen?: () => void;
 };
 
 type PlayerStatus = {
@@ -70,7 +64,13 @@ export function PlayerPane({
   danmakuActive = false,
   danmakuStatusText,
   sideHeader,
-  bottomExtras,
+  qualities = [],
+  qualityIndex = 0,
+  onQualityChange,
+  lines = [],
+  lineIndex = 0,
+  onLineChange,
+  onToggleFullscreen,
 }: PlayerPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [mpvError, setMpvError] = useState<unknown>(null);
@@ -195,115 +195,70 @@ export function PlayerPane({
 
   const displayError = error ?? mpvError;
   const showHost = !loading && displayError == null && !!playUrl;
+  const transportDisabled = !showHost;
 
   return (
     <div className="flex h-full min-h-0 w-full">
       {/* Video stage — hostRef must NOT cover chrome overlays (HWND sits on top) */}
       <div className="relative flex min-w-0 flex-1 flex-col bg-black">
-        <div ref={hostRef} className="relative min-h-0 flex-1 bg-black">
-          {loading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
-              <Spinner className="size-8 text-primary" />
-              <p className="text-sm">正在解析线路…</p>
-            </div>
-          )}
-          {!loading && displayError != null && (
-            <div className="absolute inset-0 flex items-center justify-center p-6">
-              <div className="w-full max-w-md">
-                <ErrorState
-                  error={displayError}
-                  title="播放不可用"
-                  onRetry={onRetry}
-                />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div ref={hostRef} className="relative min-h-0 flex-1 bg-black">
+            {loading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Spinner className="size-8 text-primary" />
+                <p className="text-sm">正在解析线路…</p>
               </div>
-            </div>
-          )}
-          {!loading && displayError == null && !playUrl && (
-            <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-              未选择流
-            </div>
-          )}
-          {showHost && !status?.running && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <Spinner className="size-8 text-white/70" />
-            </div>
-          )}
-        </div>
-
-        {/* Controls under embed host so they stay clickable */}
-        {showHost && (
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-t border-border bg-card px-2 py-1.5">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title={paused ? "播放" : "暂停"}
-              onClick={() => void togglePause()}
-            >
-              {paused ? (
-                <Play className="fill-current" />
-              ) : (
-                <Pause className="fill-current" />
-              )}
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title={muted ? "取消静音" : "静音"}
-              onClick={() => void toggleMute()}
-            >
-              {muted || volume === 0 ? <VolumeX /> : <Volume2 />}
-            </Button>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={volume}
-              onChange={(e) => void changeVolume(Number(e.target.value))}
-              className="w-24 accent-primary"
-              aria-label="音量"
-            />
-
-            <Separator orientation="vertical" className="mx-1 h-4" />
-
-            <Button
-              variant={danmakuOn ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setDanmakuOn((v) => !v)}
-            >
-              <MessageSquareText data-icon="inline-start" />
-              弹幕
-            </Button>
-            <Button
-              variant={osdOn ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setOsdOn((v) => !v)}
-            >
-              <Captions data-icon="inline-start" />
-              飘屏
-            </Button>
-
-            {bottomExtras}
-
-            <div className="ml-auto flex items-center gap-1">
-              {status?.embed_mode && (
-                <span className="mr-1 hidden text-[10px] text-muted-foreground sm:inline">
-                  {status.embed_mode === "child"
-                    ? "wid"
-                    : status.embed_mode === "geometry"
-                      ? "geo"
-                      : "win"}
-                </span>
-              )}
-              <Button variant="ghost" size="icon-sm" disabled title="画中画">
-                <PictureInPicture2 />
-              </Button>
-              <Button variant="ghost" size="icon-sm" disabled title="全屏">
-                <Maximize2 />
-              </Button>
-            </div>
+            )}
+            {!loading && displayError != null && (
+              <div className="absolute inset-0 flex items-center justify-center p-6">
+                <div className="w-full max-w-md">
+                  <ErrorState
+                    error={displayError}
+                    title="播放不可用"
+                    onRetry={onRetry}
+                  />
+                </div>
+              </div>
+            )}
+            {!loading && displayError == null && !playUrl && (
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+                未选择流
+              </div>
+            )}
+            {showHost && !status?.running && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <Spinner className="size-8 text-white/70" />
+              </div>
+            )}
           </div>
-        )}
+
+          {/* Controls under embed host so they stay clickable (never inside HWND host) */}
+          <PlayerControls
+            paused={paused}
+            volume={volume}
+            muted={muted}
+            danmakuOn={danmakuOn}
+            osdOn={osdOn}
+            qualities={qualities}
+            qualityIndex={qualityIndex}
+            lines={lines}
+            lineIndex={lineIndex}
+            disabled={transportDisabled}
+            onTogglePause={() => void togglePause()}
+            onVolume={(v) => void changeVolume(v)}
+            onToggleMute={() => void toggleMute()}
+            onToggleDanmaku={() => setDanmakuOn((v) => !v)}
+            onToggleOsd={() => setOsdOn((v) => !v)}
+            onQualityChange={onQualityChange ?? (() => {})}
+            onLineChange={onLineChange ?? (() => {})}
+            onToggleFullscreen={
+              onToggleFullscreen ??
+              (() => {
+                /* Task 2: fullscreen */
+              })
+            }
+          />
+        </div>
       </div>
 
       {/* Right panel — always outside HWND */}
