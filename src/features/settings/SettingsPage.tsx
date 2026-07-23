@@ -9,17 +9,24 @@ const themes: { value: ThemeMode; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
+type PlayerStatus = { running: boolean; mpv_path: string };
+
 export function SettingsPage() {
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const proxy = useSettingsStore((s) => s.proxy);
   const setProxy = useSettingsStore((s) => s.setProxy);
+  const mpvPath = useSettingsStore((s) => s.mpvPath);
+  const setMpvPath = useSettingsStore((s) => s.setMpvPath);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
 
   const [cookie, setCookie] = useState("");
   const [proxyDraft, setProxyDraft] = useState(proxy ?? "");
+  const [mpvDraft, setMpvDraft] = useState(mpvPath ?? "");
   const [cookieStatus, setCookieStatus] = useState<string | null>(null);
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
+  const [mpvStatusMsg, setMpvStatusMsg] = useState<string | null>(null);
+  const [playerStatus, setPlayerStatus] = useState<PlayerStatus | null>(null);
   const [loadingCookie, setLoadingCookie] = useState(true);
 
   useEffect(() => {
@@ -29,6 +36,10 @@ export function SettingsPage() {
   useEffect(() => {
     setProxyDraft(proxy ?? "");
   }, [proxy]);
+
+  useEffect(() => {
+    setMpvDraft(mpvPath ?? "");
+  }, [mpvPath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +60,21 @@ export function SettingsPage() {
         if (!cancelled) {
           setLoadingCookie(false);
         }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const st = await invokeCmd<PlayerStatus>("player_status");
+        if (!cancelled) setPlayerStatus(st);
+      } catch {
+        if (!cancelled) setPlayerStatus(null);
       }
     })();
     return () => {
@@ -85,6 +111,19 @@ export function SettingsPage() {
     const next = proxyDraft.trim();
     setProxy(next.length === 0 ? null : next);
     setProxyStatus("Proxy saved");
+  }
+
+  async function saveMpvPath() {
+    setMpvStatusMsg(null);
+    const next = mpvDraft.trim();
+    setMpvPath(next.length === 0 ? null : next);
+    setMpvStatusMsg("mpv path saved");
+    try {
+      const st = await invokeCmd<PlayerStatus>("player_status");
+      setPlayerStatus(st);
+    } catch {
+      /* ignore outside tauri */
+    }
   }
 
   return (
@@ -141,6 +180,45 @@ export function SettingsPage() {
         </div>
         {proxyStatus && (
           <p className="text-xs text-zinc-500 dark:text-zinc-400">{proxyStatus}</p>
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          mpv player
+        </h2>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Optional absolute path to the mpv binary. Leave empty to use PATH (
+          <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">mpv</code>
+          ). Live playback opens an external mpv window.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={mpvDraft}
+            onChange={(e) => setMpvDraft(e.target.value)}
+            placeholder="/usr/bin/mpv"
+            className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+          />
+          <button
+            type="button"
+            onClick={() => void saveMpvPath()}
+            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Save
+          </button>
+        </div>
+        {mpvStatusMsg && (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{mpvStatusMsg}</p>
+        )}
+        {playerStatus && (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Resolved:{" "}
+            <span className="font-mono">
+              {playerStatus.mpv_path || "(not found)"}
+            </span>
+            {playerStatus.running ? " · running" : ""}
+          </p>
         )}
       </section>
 

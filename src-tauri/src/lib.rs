@@ -5,12 +5,16 @@ mod db;
 mod error;
 mod http_client;
 mod models;
+mod player;
 mod settings;
 mod sites;
 mod state;
 
 use commands::account::{account_clear_cookie, account_get_cookie, account_set_cookie};
 use commands::history::{history_add, history_clear, history_list};
+use commands::player::{
+    player_load, player_open, player_set_pause, player_set_volume, player_status, player_stop,
+};
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
     site_get_categories, site_get_category_rooms, site_get_play_qualities, site_get_play_urls,
@@ -51,7 +55,20 @@ pub fn run() {
             history_list,
             history_add,
             history_clear,
+            player_open,
+            player_load,
+            player_stop,
+            player_set_pause,
+            player_set_volume,
+            player_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let _ = state.player.stop();
+                }
+            }
+        });
 }

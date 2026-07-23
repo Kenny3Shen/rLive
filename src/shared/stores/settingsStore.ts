@@ -23,6 +23,7 @@ type SettingsState = {
   setTheme: (theme: ThemeMode) => void;
   setSiteId: (siteId: string) => void;
   setProxy: (proxy: string | null) => void;
+  setMpvPath: (mpvPath: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -77,6 +78,10 @@ export const useSettingsStore = create<SettingsState>()(
       setProxy: (proxy) => {
         set({ proxy });
         void get().persistToBackend({ proxy });
+      },
+      setMpvPath: (mpvPath) => {
+        set({ mpvPath });
+        void get().persistToBackend({ mpv_path: mpvPath });
       },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
