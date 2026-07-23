@@ -48,7 +48,7 @@ impl Default for EmbedMode {
     }
 }
 
-/// UI presentation mode (windowed embed vs app fullscreen). Not enter/exit logic yet.
+/// UI presentation mode: HWND/geometry embed vs independent fullscreen mpv window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PlayerMode {
@@ -359,6 +359,108 @@ impl PlayerManager {
             bounds,
             prefer_child,
         )
+    }
+
+    /// Leave embed and open mpv as a true fullscreen OS window (no `--wid`).
+    /// Canvas/overlay is Task 4 — video only here.
+    pub fn enter_fullscreen(
+        &self,
+        mpv_path: &Path,
+        url: &str,
+        headers: &HashMap<String, String>,
+        title: Option<&str>,
+    ) -> AppResult<()> {
+        let mut inner = self.lock()?;
+
+        // Already fullscreen and still running → no-op.
+        if inner.mode == PlayerMode::Fullscreen {
+            if let Some(child) = inner.child.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        inner.child = None;
+                        inner.ipc = None;
+                        inner.host = None;
+                    }
+                    Ok(None) | Err(_) => return Ok(()),
+                }
+            }
+        }
+
+        Self::stop_locked(&mut inner)?;
+
+        let ipc = ipc_path();
+        let mut cmd = Command::new(mpv_path);
+        cmd.arg("--keep-open=yes")
+            .arg("--idle=yes")
+            .arg("--osc=no")
+            .arg("--input-default-bindings=yes")
+            .arg(format!("--input-ipc-server={}", ipc.display()))
+            .arg(format!("--volume={}", inner.volume))
+            .arg(format!(
+                "--title={}",
+                title.unwrap_or("rLive").replace(['\n', '\r'], " ")
+            ))
+            // No --wid: independent window, force FS.
+            .arg("--force-window=yes")
+            .arg("--fullscreen=yes");
+
+        if let Some(ua) = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+            .map(|(_, v)| v.clone())
+        {
+            cmd.arg(format!("--user-agent={ua}"));
+        }
+        let header_fields = format_mpv_headers(headers);
+        if !header_fields.is_empty() {
+            cmd.arg(format!("--http-header-fields={header_fields}"));
+        }
+
+        cmd.arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let child = cmd.spawn().map_err(|e| {
+            AppError::new("mpv_spawn_error", format!("failed to start mpv fullscreen: {e}"))
+                .retryable()
+        })?;
+
+        std::thread::sleep(std::time::Duration::from_millis(120));
+
+        inner.child = Some(child);
+        inner.host = None;
+        inner.ipc = Some(ipc);
+        inner.last_path = mpv_path.display().to_string();
+        inner.paused = false;
+        inner.embed_mode = EmbedMode::Window;
+        inner.mode = PlayerMode::Fullscreen;
+        Ok(())
+    }
+
+    /// Stop fullscreen mpv and re-open embedded (prefer_child + bounds).
+    pub fn exit_fullscreen(
+        &self,
+        window: Option<&WebviewWindow>,
+        mpv_path: &Path,
+        url: &str,
+        headers: &HashMap<String, String>,
+        title: Option<&str>,
+        bounds: Option<PlayerBounds>,
+    ) -> AppResult<()> {
+        // open() stop_locked first, then restores HWND/geometry embed.
+        self.open(
+            window,
+            mpv_path,
+            url,
+            headers,
+            title,
+            bounds,
+            true,
+        )?;
+        let mut inner = self.lock()?;
+        inner.mode = PlayerMode::Windowed;
+        Ok(())
     }
 
     pub fn stop(&self) -> AppResult<()> {
