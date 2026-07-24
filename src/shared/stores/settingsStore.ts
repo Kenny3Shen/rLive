@@ -2,11 +2,17 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { invokeCmd } from "../api/tauri";
 import type { AppSettings } from "../types/live";
+import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
 
 function isThemeMode(v: string): v is ThemeMode {
   return v === "system" || v === "light" || v === "dark";
+}
+
+function parseQualityLevel(value: unknown): QualityLevel {
+  if (value === "mid" || value === "low" || value === "high") return value;
+  return "high";
 }
 
 type SettingsState = {
@@ -18,12 +24,14 @@ type SettingsState = {
   danmakuSpeed: number;
   danmakuShieldWords: string[];
   mpvPath: string | null;
+  qualityLevel: QualityLevel;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
   setSiteId: (siteId: string) => void;
   setProxy: (proxy: string | null) => void;
   setMpvPath: (mpvPath: string | null) => void;
+  setQualityLevel: (level: QualityLevel) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -40,6 +48,7 @@ const defaultSettings: AppSettings = {
   danmaku_speed: 8,
   danmaku_shield_words: [],
   mpv_path: null,
+  quality_level: "high",
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
@@ -52,6 +61,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_speed: state.danmakuSpeed,
     danmaku_shield_words: state.danmakuShieldWords,
     mpv_path: state.mpvPath,
+    quality_level: state.qualityLevel,
   };
 }
 
@@ -66,6 +76,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSpeed: 8,
       danmakuShieldWords: [],
       mpvPath: null,
+      qualityLevel: "high",
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
@@ -83,6 +94,10 @@ export const useSettingsStore = create<SettingsState>()(
         set({ mpvPath });
         void get().persistToBackend({ mpv_path: mpvPath });
       },
+      setQualityLevel: (qualityLevel) => {
+        set({ qualityLevel });
+        void get().persistToBackend({ quality_level: qualityLevel });
+      },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         set({
@@ -94,6 +109,7 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSpeed: settings.danmaku_speed,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           mpvPath: settings.mpv_path,
+          qualityLevel: parseQualityLevel(settings.quality_level),
           hydratedFromBackend: true,
         });
       },

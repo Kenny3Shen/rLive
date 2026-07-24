@@ -17,6 +17,30 @@ export function formatOnline(n: number): string {
   return String(n);
 }
 
+/**
+ * Make remote avatar URLs safe for WebView loading.
+ *
+ * Live APIs often return protocol-relative image addresses (`//…`). Those work
+ * on a normal https webpage, but resolve against Tauri's custom page protocol
+ * in the desktop app. Upgrading plain http URLs also avoids mixed-content
+ * failures in the WebView.
+ */
+export function normalizeImageUrl(value: string | null | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+
+  const url = raw.startsWith("//")
+    ? `https:${raw}`
+    : raw.replace(/^http:\/\//i, "https://");
+
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const SITE_LABELS: Record<string, string> = {
   bilibili: "哔哩哔哩",
   douyu: "斗鱼直播",

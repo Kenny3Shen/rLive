@@ -32,3 +32,6 @@ src-tauri/target/
 *.log
 .DS_Store
 .playwright-cli/
+
+# Windows libmpv runtime (~110MB; fetch via scripts/fetch-libmpv-windows.sh)
+vendor/libmpv-windows/*.dll

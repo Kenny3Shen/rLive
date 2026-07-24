@@ -1,11 +1,18 @@
 {
   "name": "rlive",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "lint": "oxlint --react-plugin src",
+    "lint:fix": "oxlint --react-plugin --fix src",
+    "format": "oxfmt --write src package.json vite.config.ts tsconfig.json tsconfig.node.json",
+    "format:check": "oxfmt --check src package.json vite.config.ts tsconfig.json tsconfig.node.json",
+    "check": "bun run lint",
+    "test:danmaku": "bun test tests/danmakuEngine.test.ts tests/playback-failover.test.ts",
+    "test:unit": "bun test tests/",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -32,6 +39,8 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "oxfmt": "^0.60.0",
+    "oxlint": "^1.75.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"

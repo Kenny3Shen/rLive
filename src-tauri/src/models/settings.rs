@@ -14,6 +14,13 @@ pub struct AppSettings {
     pub danmaku_speed: u32,
     pub danmaku_shield_words: Vec<String>,
     pub mpv_path: Option<String>,
+    /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
+    #[serde(default = "default_quality_level")]
+    pub quality_level: String,
+}
+
+fn default_quality_level() -> String {
+    "high".into()
 }
 
 impl Default for AppSettings {
@@ -27,6 +34,7 @@ impl Default for AppSettings {
             danmaku_speed: 8,
             danmaku_shield_words: Vec::new(),
             mpv_path: None,
+            quality_level: default_quality_level(),
         }
     }
 }

@@ -162,6 +162,15 @@ body {
   background-attachment: fixed;
 }
 
+/* The native danmaku window is transparent. The app shell's decorative
+   background gradients must not turn that top-level window into a veil. */
+html.overlay-window,
+html.overlay-window body,
+html.overlay-window #root {
+  background: transparent !important;
+  background-image: none !important;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent)

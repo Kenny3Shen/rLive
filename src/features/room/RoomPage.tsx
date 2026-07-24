@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -15,25 +15,17 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import type {
   FollowUser,
   HistoryItem,
-  LivePlayQuality,
   LiveRoomDetail,
-  PlayUrl,
   SiteId,
 } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
+import { usePlaybackController } from "./playback/usePlaybackController";
+import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
-import { clampIndex } from "@/lib/playUrl";
-import { formatOnline, SITE_LABELS, cn } from "@/lib/utils";
-
-function errMessage(e: unknown): string {
-  if (typeof e === "object" && e && "message" in e) {
-    return String((e as { message: string }).message);
-  }
-  return String(e ?? "未知错误");
-}
+import { formatOnline, normalizeImageUrl, SITE_LABELS, cn } from "@/lib/utils";
 
 export function RoomPage() {
   const navigate = useNavigate();
@@ -45,10 +37,7 @@ export function RoomPage() {
   const roomId = roomParam ? decodeURIComponent(roomParam) : undefined;
   const qc = useQueryClient();
 
-  const [qualityIndex, setQualityIndex] = useState(0);
-  const [lineIndex, setLineIndex] = useState(0);
   const [followBusy, setFollowBusy] = useState(false);
-  const [danmakuStatus, setDanmakuStatus] = useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ["room_detail", siteId, roomId],
@@ -73,23 +62,19 @@ export function RoomPage() {
     void invokeCmd("history_add", { item }).catch(() => {});
   }, [detailQuery.data]);
 
-  // Danmaku lifecycle — surface errors instead of swallowing.
-  useEffect(() => {
-    if (!siteId || !roomId || !detailQuery.data) return;
-    let cancelled = false;
-    setDanmakuStatus("正在连接弹幕服务器…");
-    void invokeCmd("danmaku_connect", { siteId, roomId })
-      .then(() => {
-        if (!cancelled) setDanmakuStatus(null);
-      })
-      .catch((e) => {
-        if (!cancelled) setDanmakuStatus(`弹幕连接失败：${errMessage(e)}`);
-      });
-    return () => {
-      cancelled = true;
-      void invokeCmd("danmaku_disconnect").catch(() => {});
-    };
-  }, [siteId, roomId, detailQuery.data?.room_id]);
+  const danmaku = useDanmakuConnection({
+    siteId,
+    roomId,
+    detailRoomId: detailQuery.data?.room_id,
+    enabled: !!detailQuery.data,
+  });
+
+  const playback = usePlaybackController({
+    siteId,
+    roomId,
+    detail: detailQuery.data,
+    enabled: !!detailQuery.data,
+  });
 
   const followQuery = useQuery({
     queryKey: ["follows"],
@@ -127,55 +112,6 @@ export function RoomPage() {
       setFollowBusy(false);
     }
   }
-
-  const qualitiesQuery = useQuery({
-    queryKey: ["play_qualities", siteId, roomId, detailQuery.data?.room_id],
-    enabled: !!detailQuery.data,
-    queryFn: () =>
-      invokeCmd<LivePlayQuality[]>("site_get_play_qualities", {
-        siteId,
-        detail: detailQuery.data,
-      }),
-  });
-
-  useEffect(() => {
-    setQualityIndex(0);
-    setLineIndex(0);
-  }, [qualitiesQuery.data]);
-
-  const selectedQuality: LivePlayQuality | null = useMemo(() => {
-    const list = qualitiesQuery.data;
-    if (!list || list.length === 0) return null;
-    return list[Math.min(qualityIndex, list.length - 1)] ?? null;
-  }, [qualitiesQuery.data, qualityIndex]);
-
-  useEffect(() => {
-    setLineIndex(0);
-  }, [selectedQuality?.quality, selectedQuality?.data]);
-
-  const playUrlQuery = useQuery({
-    queryKey: [
-      "play_urls",
-      siteId,
-      roomId,
-      selectedQuality?.quality,
-      selectedQuality?.data,
-    ],
-    enabled: !!detailQuery.data && !!selectedQuality,
-    queryFn: () =>
-      invokeCmd<PlayUrl[]>("site_get_play_urls", {
-        siteId,
-        detail: detailQuery.data,
-        quality: selectedQuality,
-      }),
-  });
-
-  const playUrls = playUrlQuery.data ?? [];
-  const playUrl = playUrls[clampIndex(lineIndex, playUrls.length)] ?? null;
-
-  const retryPlay = useCallback(() => {
-    void qualitiesQuery.refetch().then(() => playUrlQuery.refetch());
-  }, [qualitiesQuery, playUrlQuery]);
 
   if (!siteId || !roomId) {
     return (
@@ -223,11 +159,13 @@ export function RoomPage() {
 
   if (!detail) return null;
 
+  const userAvatar = normalizeImageUrl(detail.user_avatar);
+
   const sideHeader = (
     <div className="shrink-0 border-b border-border px-3 py-3">
       <div className="flex items-start gap-2.5">
         <Avatar className="size-11">
-          <AvatarImage src={detail.user_avatar || undefined} alt="" />
+          <AvatarImage src={userAvatar} alt="" referrerPolicy="no-referrer" />
           <AvatarFallback>
             {(detail.user_name || "?").slice(0, 1)}
           </AvatarFallback>
@@ -256,7 +194,6 @@ export function RoomPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Top chrome is OUTSIDE the mpv HWND host — always visible & clickable */}
       <RoomTopBar
         onBack={() => navigate(-1)}
         title={detail.title || "直播间"}
@@ -266,41 +203,24 @@ export function RoomPage() {
 
       <div className="min-h-0 flex-1">
         <PlayerPane
-          playUrl={playUrl}
-          loading={
-            qualitiesQuery.isLoading ||
-            (qualitiesQuery.isSuccess && playUrlQuery.isLoading)
-          }
-          error={
-            qualitiesQuery.isError
-              ? qualitiesQuery.error
-              : playUrlQuery.isError
-                ? playUrlQuery.error
-                : qualitiesQuery.isSuccess &&
-                    playUrlQuery.isSuccess &&
-                    !playUrl
-                  ? {
-                      code: "no_play_url",
-                      message: "当前清晰度没有可用播放地址",
-                      site: siteId,
-                      retryable: true,
-                    }
-                  : undefined
-          }
-          onRetry={retryPlay}
+          playUrl={playback.playUrl}
+          loading={playback.loading}
+          error={playback.error}
+          onRetry={playback.retryPlay}
           title={detail.title}
-          danmakuActive={!!detailQuery.data}
-          danmakuStatusText={danmakuStatus}
+          danmakuActive={danmaku.active || !!detailQuery.data}
+          danmakuStatusText={danmaku.statusText}
           sideHeader={sideHeader}
-          qualities={qualitiesQuery.data ?? []}
-          qualityIndex={qualityIndex}
-          onQualityChange={(i) => {
-            setQualityIndex(i);
-            setLineIndex(0);
-          }}
-          lines={playUrls}
-          lineIndex={lineIndex}
-          onLineChange={setLineIndex}
+          qualities={playback.qualities}
+          qualityIndex={playback.qualityIndex}
+          onQualityChange={playback.onQualityChange}
+          lines={playback.lines}
+          lineIndex={playback.lineIndex}
+          onLineChange={playback.onLineChange}
+          loadError={playback.loadError}
+          reloadToken={playback.reloadToken}
+          onPlayerMediaFailure={playback.onPlayerMediaFailure}
+          onPlayerPlaying={playback.onPlayerPlaying}
         />
       </div>
 
@@ -344,10 +264,10 @@ export function RoomPage() {
             variant="secondary"
             size="sm"
             title="复制当前播放直链（流地址）"
-            disabled={!playUrl?.url}
+            disabled={!playback.playUrl?.url}
             onClick={() => {
-              if (playUrl?.url) {
-                void navigator.clipboard?.writeText(playUrl.url);
+              if (playback.playUrl?.url) {
+                void navigator.clipboard?.writeText(playback.playUrl.url);
               }
             }}
           >

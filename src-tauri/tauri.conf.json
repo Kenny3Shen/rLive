@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.shenss.rlive",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "title": "rlive",
-        "width": 1100,
+        "width": 1280,
         "height": 720
       }
     ],

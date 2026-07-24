@@ -7,11 +7,13 @@ use crate::danmaku::DanmakuManager;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::player::PlayerManager;
+use crate::stream_proxy::StreamProxy;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub player: PlayerManager,
     pub danmaku: DanmakuManager,
+    pub stream_proxy: StreamProxy,
 }
 
 impl AppState {
@@ -22,6 +24,7 @@ impl AppState {
             db: Mutex::new(conn),
             player: PlayerManager::new(),
             danmaku: DanmakuManager::new(),
+            stream_proxy: StreamProxy::new(),
         })
     }
 
@@ -33,6 +36,7 @@ impl AppState {
             db: Mutex::new(conn),
             player: PlayerManager::new(),
             danmaku: DanmakuManager::new(),
+            stream_proxy: StreamProxy::new(),
         })
     }
 }

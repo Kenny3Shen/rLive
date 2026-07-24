@@ -44,6 +44,8 @@ export function SettingsPage() {
   const setProxy = useSettingsStore((s) => s.setProxy);
   const mpvPath = useSettingsStore((s) => s.mpvPath);
   const setMpvPath = useSettingsStore((s) => s.setMpvPath);
+  const qualityLevel = useSettingsStore((s) => s.qualityLevel);
+  const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
 
   const [cookie, setCookie] = useState("");
@@ -222,6 +224,35 @@ export function SettingsPage() {
               className={cn(
                 "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-ring",
                 theme === value
+                  ? "bg-primary text-primary-foreground"
+                  : "border border-border bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </Section>
+
+      <Section
+        title="默认清晰度"
+        description="进入直播间时按偏好选择清晰度（高 / 中 / 低），对齐 Simple Live"
+      >
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              { value: "high" as const, label: "最高" },
+              { value: "mid" as const, label: "中间" },
+              { value: "low" as const, label: "最低" },
+            ] as const
+          ).map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setQualityLevel(value)}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus-ring",
+                qualityLevel === value
                   ? "bg-primary text-primary-foreground"
                   : "border border-border bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
               )}

@@ -125,5 +125,22 @@ $exe = Join-Path $ProjectRoot "src-tauri\target\release\rlive.exe"
 if (-not (Test-Path $exe)) {
     throw "Build reported success but EXE missing: $exe"
 }
+
+# Ensure libmpv runtime sits next to the EXE (required for in-process playback).
+Write-Step "libmpv-2.dll next to rlive.exe"
+$releaseDir = Split-Path $exe -Parent
+$dllCandidates = @(
+    (Join-Path $ProjectRoot "vendor\libmpv-windows\libmpv-2.dll"),
+    "D:\dev\tools\mpv\libmpv-2.dll"
+)
+$dllSrc = $dllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($dllSrc) {
+    Copy-Item -Force $dllSrc (Join-Path $releaseDir "libmpv-2.dll")
+    Copy-Item -Force $dllSrc (Join-Path $releaseDir "mpv-2.dll")
+    Write-Host "OK: copied libmpv from $dllSrc"
+} else {
+    Write-Warning "libmpv-2.dll not found. Run scripts/fetch-libmpv-windows.sh then rebuild, or playback will fail with libmpv_load_error."
+}
+
 Write-Host ""
 Write-Host "OK: $exe ($((Get-Item $exe).Length) bytes)" -ForegroundColor Green

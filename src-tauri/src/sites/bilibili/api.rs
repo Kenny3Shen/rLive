@@ -86,13 +86,55 @@ fn cover_thumb(cover: &str, suffix: &str) -> String {
     }
 }
 
+/// Turn the Bilibili avatar field into a secure, directly loadable image URL.
+///
+/// The API can return a protocol-relative `//i0.hdslb.com/...` value. That is
+/// not valid relative to Tauri's custom WebView protocol, so always make it
+/// explicit before handing it to the frontend. Keep any query/fragment after
+/// the CDN resize suffix rather than appending the suffix to the query string.
+fn avatar_thumb(face: &str) -> String {
+    let face = face.trim();
+    if face.is_empty() {
+        return String::new();
+    }
+
+    let split_at = face
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '?' | '#').then_some(index))
+        .unwrap_or(face.len());
+    let (path, tail) = face.split_at(split_at);
+    let path = if let Some(path) = path.strip_prefix("//") {
+        format!("https://{path}")
+    } else if let Some(path) = path.strip_prefix("http://") {
+        format!("https://{path}")
+    } else if path.starts_with("https://") {
+        path.to_string()
+    } else {
+        format!("https://{path}")
+    };
+
+    // Do not repeatedly append a CDN transform when an upstream response is
+    // already resized. The last segment is the only part where Bilibili uses
+    // `@...` transformations.
+    let has_transform = path
+        .rsplit('/')
+        .next()
+        .is_some_and(|segment| segment.contains('@'));
+    if has_transform {
+        format!("{path}{tail}")
+    } else {
+        format!("{path}@100w_100h.webp{tail}")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure parsers (fixture-testable)
 // ---------------------------------------------------------------------------
 
 /// Parse `room/v1/Area/getList` response body.
 pub fn parse_categories(raw: &str) -> AppResult<Vec<LiveCategory>> {
-    let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("categories json: {e}")))?;
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| json_err(format!("categories json: {e}")))?;
     let data = root
         .get("data")
         .and_then(|d| d.as_array())
@@ -154,7 +196,8 @@ fn room_item_from_list_obj(item: &Value) -> LiveRoomItem {
 
 /// Parse `room/v1/Area/getRoomList` body. `page_size` defaults to 30 for has_more.
 pub fn parse_category_rooms(raw: &str, page_size: usize) -> AppResult<RoomListPage> {
-    let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("category rooms: {e}")))?;
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| json_err(format!("category rooms: {e}")))?;
     let data = root
         .get("data")
         .and_then(|d| d.as_array())
@@ -236,11 +279,7 @@ pub fn parse_room_detail_from_data(
 
     let real_room_id = as_str(room.get("room_id").unwrap_or(&Value::Null));
     let face = as_str(anchor.get("face").unwrap_or(&Value::Null));
-    let user_avatar = if face.is_empty() {
-        String::new()
-    } else {
-        format!("{face}@100w.jpg")
-    };
+    let user_avatar = avatar_thumb(&face);
 
     let mut server_hosts: Vec<String> = Vec::new();
     let mut token = String::new();
@@ -271,7 +310,9 @@ pub fn parse_room_detail_from_data(
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
-    let room_id_num: i64 = real_room_id.parse().unwrap_or_else(|_| as_i64(room.get("room_id").unwrap_or(&Value::Null)));
+    let room_id_num: i64 = real_room_id
+        .parse()
+        .unwrap_or_else(|_| as_i64(room.get("room_id").unwrap_or(&Value::Null)));
 
     let raw = serde_json::json!({
         "room_id": room_id_num,
@@ -309,20 +350,15 @@ pub fn parse_room_detail_from_data(
 
 /// Extract playurl map from getRoomPlayInfo response.
 pub fn read_playurl(result: &Value) -> AppResult<&Value> {
-    result
-        .pointer("/data/playurl_info/playurl")
-        .ok_or_else(|| {
-            AppError::new(
-                "bilibili_play_info",
-                "B站播放信息响应异常，请稍后重试",
-            )
-            .with_site("bilibili")
-        })
+    result.pointer("/data/playurl_info/playurl").ok_or_else(|| {
+        AppError::new("bilibili_play_info", "B站播放信息响应异常，请稍后重试").with_site("bilibili")
+    })
 }
 
 /// Parse qualities from play-info response.
 pub fn parse_play_qualities(raw: &str) -> AppResult<Vec<LivePlayQuality>> {
-    let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("play qualities: {e}")))?;
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| json_err(format!("play qualities: {e}")))?;
     let playurl = read_playurl(&root)?;
 
     let mut qualities_map: BTreeMap<i64, String> = BTreeMap::new();
@@ -426,11 +462,9 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
 
 /// Parse live status from `Room/get_info`.
 pub fn parse_live_status(raw: &str) -> AppResult<bool> {
-    let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("live status: {e}")))?;
-    let status = root
-        .pointer("/data/live_status")
-        .map(as_i64)
-        .unwrap_or(0);
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| json_err(format!("live status: {e}")))?;
+    let status = root.pointer("/data/live_status").map(as_i64).unwrap_or(0);
     Ok(status == 1)
 }
 
@@ -615,10 +649,28 @@ mod tests {
         assert_eq!(detail.room_id, "23058");
         assert!(detail.status);
         assert_eq!(detail.user_name, "详情主播");
-        assert!(detail.user_avatar.contains("@100w.jpg"));
+        assert!(detail.user_avatar.contains("@100w_100h.webp"));
         assert_eq!(detail.raw["danmaku"]["buvid"], "b3");
         // room_id stored as number for WS join
-        assert!(detail.raw["room_id"].as_i64().is_some() || detail.raw["room_id"].as_str().is_some());
+        assert!(
+            detail.raw["room_id"].as_i64().is_some() || detail.raw["room_id"].as_str().is_some()
+        );
+    }
+
+    #[test]
+    fn avatar_thumb_makes_protocol_and_transform_unambiguous() {
+        assert_eq!(
+            avatar_thumb("//i0.hdslb.com/bfs/face/avatar.jpg?token=abc"),
+            "https://i0.hdslb.com/bfs/face/avatar.jpg@100w_100h.webp?token=abc"
+        );
+        assert_eq!(
+            avatar_thumb("http://i0.hdslb.com/bfs/face/avatar.jpg#top"),
+            "https://i0.hdslb.com/bfs/face/avatar.jpg@100w_100h.webp#top"
+        );
+        assert_eq!(
+            avatar_thumb("https://i0.hdslb.com/bfs/face/avatar.jpg@50w_50h.webp"),
+            "https://i0.hdslb.com/bfs/face/avatar.jpg@50w_50h.webp"
+        );
     }
 
     #[test]
@@ -648,23 +700,30 @@ mod tests {
         let mut params = BTreeMap::new();
         params.insert("foo".into(), "1".into());
         params.insert("bar".into(), "2".into());
-        let signed = wbi_sign_params(params, "imgkey1234567890abcdefghijklmn", "subkey1234567890abcdefghijklmn", 1700000000);
+        let signed = wbi_sign_params(
+            params,
+            "imgkey1234567890abcdefghijklmn",
+            "subkey1234567890abcdefghijklmn",
+            1700000000,
+        );
         assert_eq!(signed.get("wts").unwrap(), "1700000000");
         assert_eq!(signed.get("w_rid").unwrap().len(), 32);
         // deterministic
         let mut params2 = BTreeMap::new();
         params2.insert("foo".into(), "1".into());
         params2.insert("bar".into(), "2".into());
-        let signed2 = wbi_sign_params(params2, "imgkey1234567890abcdefghijklmn", "subkey1234567890abcdefghijklmn", 1700000000);
+        let signed2 = wbi_sign_params(
+            params2,
+            "imgkey1234567890abcdefghijklmn",
+            "subkey1234567890abcdefghijklmn",
+            1700000000,
+        );
         assert_eq!(signed.get("w_rid"), signed2.get("w_rid"));
     }
 
     #[test]
     fn strip_em_basic() {
         assert_eq!(strip_em_tags("a<em>b</em>c"), "abc");
-        assert_eq!(
-            strip_em_tags(r#"搜<em class="keyword">索</em>"#),
-            "搜索"
-        );
+        assert_eq!(strip_em_tags(r#"搜<em class="keyword">索</em>"#), "搜索");
     }
 }

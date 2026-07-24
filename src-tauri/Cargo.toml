@@ -20,6 +20,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# Automation bridge for https://github.com/hypothesi/mcp-server-tauri (localhost only)
+tauri-plugin-mcp-bridge = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -28,7 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "gzip", "brotli"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "gzip", "brotli", "stream"] }
 url = "2"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
@@ -40,6 +42,7 @@ flate2 = "1"
 brotli = "7"
 uuid = { version = "1", features = ["v4"] }
 raw-window-handle = "0.6"
+boa_engine = "0.20"
 
 [target.'cfg(windows)'.dependencies]
 # Match Tauri 2 / tao HWND types (windows 0.61) to avoid dual-version Param mismatches.
@@ -48,5 +51,6 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_System_SystemServices",
 ] }
 

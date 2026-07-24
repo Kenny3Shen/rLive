@@ -1,16 +1,41 @@
+import { useLayoutEffect, useRef } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
+import { closeCurrentOverlay } from "@/features/room/overlayLifecycle";
+import { stopCurrentPlayer } from "@/features/room/playerLifecycle";
 import { Sidebar } from "./Sidebar";
 import { cn } from "@/lib/utils";
 
 export function Shell() {
   const { pathname } = useLocation();
   const isRoom = pathname.startsWith("/room/");
+  const previousIsRoomRef = useRef(isRoom);
+  const hasCommittedRef = useRef(false);
   const showSiteSwitcher =
-    pathname === "/" ||
-    pathname.startsWith("/category") ||
-    pathname.startsWith("/search");
+    pathname === "/" || pathname.startsWith("/category") || pathname.startsWith("/search");
+
+  useLayoutEffect(() => {
+    const wasRoom = previousIsRoomRef.current;
+    previousIsRoomRef.current = isRoom;
+    const isInitialCommit = !hasCommittedRef.current;
+    hasCommittedRef.current = true;
+
+    // This runs in React's layout phase, after the room subtree is removed
+    // but before the destination page can paint. Start native teardown now;
+    // it must never hold up navigation waiting for a native command.
+    if ((isInitialCommit && !isRoom) || (wasRoom && !isRoom)) {
+      // Web player tears down on unmount; still stop legacy mpv/overlay/proxy
+      // so a prior session or mid-migration path cannot leave native windows.
+      void stopCurrentPlayer().catch(() => {});
+      void closeCurrentOverlay().catch(() => {});
+      void import("@/shared/api/tauri").then(({ invokeCmd }) => {
+        void invokeCmd("player_stop", { epoch: null }).catch(() => {});
+        void invokeCmd("overlay_close", { epoch: null }).catch(() => {});
+        void invokeCmd("stream_proxy_stop").catch(() => {});
+      });
+    }
+  }, [isRoom]);
 
   return (
     <div className="flex h-full min-h-0">
