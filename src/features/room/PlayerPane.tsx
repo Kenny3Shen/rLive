@@ -169,7 +169,6 @@ export function PlayerPane({
             <TabsContent value="chat" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
               <DanmakuPanel
                 active={danmakuActive}
-                osd={false}
                 statusText={danmakuStatusText}
                 className="h-full"
               />

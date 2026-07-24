@@ -13,8 +13,6 @@ const themes: { value: ThemeMode; label: string }[] = [
   { value: "dark", label: "深色" },
 ];
 
-type PlayerStatus = { running: boolean; mpv_path: string };
-
 function Section({
   title,
   description,
@@ -42,19 +40,14 @@ export function SettingsPage() {
   const setTheme = useSettingsStore((s) => s.setTheme);
   const proxy = useSettingsStore((s) => s.proxy);
   const setProxy = useSettingsStore((s) => s.setProxy);
-  const mpvPath = useSettingsStore((s) => s.mpvPath);
-  const setMpvPath = useSettingsStore((s) => s.setMpvPath);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
   const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
 
   const [cookie, setCookie] = useState("");
   const [proxyDraft, setProxyDraft] = useState(proxy ?? "");
-  const [mpvDraft, setMpvDraft] = useState(mpvPath ?? "");
   const [cookieStatus, setCookieStatus] = useState<string | null>(null);
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
-  const [mpvStatusMsg, setMpvStatusMsg] = useState<string | null>(null);
-  const [playerStatus, setPlayerStatus] = useState<PlayerStatus | null>(null);
   const [loadingCookie, setLoadingCookie] = useState(true);
   const [profilePath, setProfilePath] = useState("");
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
@@ -69,9 +62,6 @@ export function SettingsPage() {
     setProxyDraft(proxy ?? "");
   }, [proxy]);
 
-  useEffect(() => {
-    setMpvDraft(mpvPath ?? "");
-  }, [mpvPath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,20 +83,6 @@ export function SettingsPage() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const st = await invokeCmd<PlayerStatus>("player_status");
-        if (!cancelled) setPlayerStatus(st);
-      } catch {
-        if (!cancelled) setPlayerStatus(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function saveCookie() {
     setCookieStatus(null);
@@ -139,18 +115,6 @@ export function SettingsPage() {
     setProxyStatus("代理已保存");
   }
 
-  async function saveMpvPath() {
-    setMpvStatusMsg(null);
-    const next = mpvDraft.trim();
-    setMpvPath(next.length === 0 ? null : next);
-    setMpvStatusMsg("mpv 路径已保存");
-    try {
-      const st = await invokeCmd<PlayerStatus>("player_status");
-      setPlayerStatus(st);
-    } catch {
-      /* ignore */
-    }
-  }
 
   async function saveShieldWords() {
     const words = shieldDraft
@@ -280,32 +244,6 @@ export function SettingsPage() {
         )}
       </Section>
 
-      <Section
-        title="mpv 播放器"
-        description="可选：mpv 可执行文件绝对路径。留空则使用 PATH 中的 mpv。"
-      >
-        <div className="flex gap-2">
-          <Input
-            value={mpvDraft}
-            onChange={(e) => setMpvDraft(e.target.value)}
-            placeholder="/usr/bin/mpv"
-            className="font-mono text-xs"
-          />
-          <Button onClick={() => void saveMpvPath()}>保存</Button>
-        </div>
-        {mpvStatusMsg && (
-          <p className="text-xs text-muted-foreground">{mpvStatusMsg}</p>
-        )}
-        {playerStatus && (
-          <p className="text-xs text-muted-foreground">
-            当前解析：
-            <span className="ml-1 font-mono">
-              {playerStatus.mpv_path || "（未找到）"}
-            </span>
-            {playerStatus.running ? " · 运行中" : ""}
-          </p>
-        )}
-      </Section>
 
       <Section
         title="哔哩哔哩 Cookie"
