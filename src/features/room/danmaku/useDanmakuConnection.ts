@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
 
+const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya"]);
+
 function errMessage(e: unknown): string {
   if (typeof e === "object" && e && "message" in e) {
     return String((e as { message: string }).message);
@@ -25,9 +27,34 @@ export function useDanmakuConnection(opts: {
   const [statusText, setStatusText] = useState<string | null>(null);
   const [active, setActive] = useState(false);
 
+  // A route change should be able to start the next room immediately. The
+  // backend's `danmaku_connect` atomically replaces the active task, so only
+  // disconnect here when no next connection is requested or on unmount. Doing
+  // it in every dependency cleanup races a new connect IPC call and can abort
+  // the freshly-created room connection.
+  useEffect(() => {
+    return () => {
+      void invokeCmd("danmaku_disconnect").catch(() => {});
+    };
+  }, []);
+
   useEffect(() => {
     if (!enabled || !siteId || !roomId || !detailRoomId) {
       setActive(false);
+      setStatusText(null);
+      // During a direct room switch, detail is briefly unavailable while the
+      // next route fetches. Keep the old task until the next `connect` can
+      // atomically replace it; a standalone disconnect here could arrive
+      // after that new command and kill the fresh connection.
+      if (!siteId || !roomId) {
+        void invokeCmd("danmaku_disconnect").catch(() => {});
+      }
+      return;
+    }
+    if (!DANMAKU_ENABLED_SITES.has(siteId)) {
+      setActive(false);
+      setStatusText("当前平台暂不支持实时弹幕");
+      void invokeCmd("danmaku_disconnect").catch(() => {});
       return;
     }
     let cancelled = false;
@@ -49,7 +76,6 @@ export function useDanmakuConnection(opts: {
     return () => {
       cancelled = true;
       setActive(false);
-      void invokeCmd("danmaku_disconnect").catch(() => {});
     };
   }, [enabled, siteId, roomId, detailRoomId]);
 

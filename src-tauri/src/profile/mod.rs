@@ -50,21 +50,18 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
 
 pub fn write_package(path: &Path, package: &ProfilePackage) -> AppResult<()> {
     // Ensure cookies never appear even if someone extends the model later.
-    let value = serde_json::to_value(package).map_err(|e| {
-        AppError::new("profile_encode_error", format!("serialize: {e}"))
-    })?;
+    let value = serde_json::to_value(package)
+        .map_err(|e| AppError::new("profile_encode_error", format!("serialize: {e}")))?;
     if value.get("cookies").is_some() {
         return Err(AppError::new(
             "profile_security",
             "refusing to export package that contains cookies field",
         ));
     }
-    let text = serde_json::to_string_pretty(&value).map_err(|e| {
-        AppError::new("profile_encode_error", format!("serialize pretty: {e}"))
-    })?;
-    std::fs::write(path, text).map_err(|e| {
-        AppError::new("profile_io_error", format!("write {}: {e}", path.display()))
-    })?;
+    let text = serde_json::to_string_pretty(&value)
+        .map_err(|e| AppError::new("profile_encode_error", format!("serialize pretty: {e}")))?;
+    std::fs::write(path, text)
+        .map_err(|e| AppError::new("profile_io_error", format!("write {}: {e}", path.display())))?;
     Ok(())
 }
 
@@ -77,16 +74,17 @@ pub struct ProfileImportResult {
 }
 
 pub fn import_package(conn: &Connection, path: &Path) -> AppResult<ProfileImportResult> {
-    let text = std::fs::read_to_string(path).map_err(|e| {
-        AppError::new("profile_io_error", format!("read {}: {e}", path.display()))
-    })?;
-    let package: ProfilePackage = serde_json::from_str(&text).map_err(|e| {
-        AppError::new("profile_decode_error", format!("invalid profile json: {e}"))
-    })?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| AppError::new("profile_io_error", format!("read {}: {e}", path.display())))?;
+    let package: ProfilePackage = serde_json::from_str(&text)
+        .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))?;
     merge_into_db(conn, &package)
 }
 
-pub fn merge_into_db(conn: &Connection, package: &ProfilePackage) -> AppResult<ProfileImportResult> {
+pub fn merge_into_db(
+    conn: &Connection,
+    package: &ProfilePackage,
+) -> AppResult<ProfileImportResult> {
     for tag in &package.tags {
         follow::upsert_tag(conn, tag.clone())?;
     }
@@ -105,6 +103,10 @@ pub fn merge_into_db(conn: &Connection, package: &ProfilePackage) -> AppResult<P
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_size = package.settings.danmaku_font_size;
     settings.danmaku_speed = package.settings.danmaku_speed;
+    settings.danmaku_area = package.settings.danmaku_area;
+    settings.danmaku_line_count = package.settings.danmaku_line_count;
+    settings.danmaku_font_weight = package.settings.danmaku_font_weight;
+    settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.mpv_path = package.settings.mpv_path.clone();
 
     let mut words: HashSet<String> = settings.danmaku_shield_words.into_iter().collect();

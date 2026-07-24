@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { PlayUrl } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
+import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
+import { FollowPanel } from "./FollowPanel";
 import { SuperChatPanel } from "./SuperChatPanel";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
@@ -10,6 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { PlayerEvent } from "@/shared/types/player";
+
+export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
 type PlayerPaneProps = {
   playUrl: PlayUrl | null;
@@ -30,6 +34,11 @@ type PlayerPaneProps = {
   reloadToken?: number;
   onPlayerMediaFailure?: (event: PlayerEvent) => void;
   onPlayerPlaying?: () => void;
+  /** Stable room identity, used to discard messages during direct room switches. */
+  roomSessionKey?: string;
+  /** Controlled by RoomPage so a follow-list room switch keeps this tab open. */
+  sideTab?: RoomSideTab;
+  onSideTabChange?: (tab: RoomSideTab) => void;
 };
 
 /**
@@ -56,6 +65,9 @@ export function PlayerPane({
   reloadToken = 0,
   onPlayerMediaFailure,
   onPlayerPlaying,
+  roomSessionKey,
+  sideTab,
+  onSideTabChange,
 }: PlayerPaneProps) {
   const [danmakuOn, setDanmakuOn] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
@@ -67,19 +79,21 @@ export function PlayerPane({
     onPlaying: onPlayerPlaying,
   });
 
-  const displayError = error ?? (player.loadError ? { code: "play_error", message: player.loadError, site: null, retryable: true } : null);
+  const displayError =
+    error ??
+    (player.loadError
+      ? { code: "play_error", message: player.loadError, site: null, retryable: true }
+      : null);
   const showHost = !loading && displayError == null && !!playUrl;
   const transportDisabled = !showHost;
   const loadError = externalLoadError ?? player.loadError;
+  const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
 
   return (
     <div className="flex h-full min-h-0 w-full">
       <div className="relative flex min-w-0 flex-1 flex-col bg-black">
         <div className="flex min-h-0 flex-1 flex-col">
-          <div
-            ref={player.stageRef}
-            className="relative min-h-0 flex-1 overflow-hidden bg-black"
-          >
+          <div ref={player.stageRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
             {loading && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                 <Spinner className="size-8 text-primary" />
@@ -119,7 +133,7 @@ export function PlayerPane({
             {showHost && osdOn && (
               <CanvasDanmaku
                 active={danmakuActive && osdOn}
-                sessionKey={playUrl?.url ?? "idle"}
+                sessionKey={danmakuSessionKey}
                 className="z-10"
               />
             )}
@@ -158,23 +172,40 @@ export function PlayerPane({
           )}
         >
           {sideHeader}
-          <Tabs defaultValue="chat" className="flex min-h-0 flex-1 flex-col gap-0">
+          <Tabs
+            {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
+            className="flex min-h-0 flex-1 flex-col gap-0"
+            onValueChange={(value) => onSideTabChange?.(value as RoomSideTab)}
+          >
             <TabsList
               variant="line"
               className="w-full justify-start rounded-none border-b border-border bg-transparent px-2"
             >
               <TabsTrigger value="chat">聊天</TabsTrigger>
               <TabsTrigger value="sc">SC</TabsTrigger>
+              <TabsTrigger value="settings">弹幕设置</TabsTrigger>
+              <TabsTrigger value="follow">关注</TabsTrigger>
             </TabsList>
             <TabsContent value="chat" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
               <DanmakuPanel
+                key={`chat:${roomSessionKey ?? "room"}`}
                 active={danmakuActive}
                 statusText={danmakuStatusText}
                 className="h-full"
               />
             </TabsContent>
             <TabsContent value="sc" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
-              <SuperChatPanel active={danmakuActive} className="h-full" />
+              <SuperChatPanel
+                key={`sc:${roomSessionKey ?? "room"}`}
+                active={danmakuActive}
+                className="h-full"
+              />
+            </TabsContent>
+            <TabsContent value="settings" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
+              <DanmakuSettingsPanel className="h-full" />
+            </TabsContent>
+            <TabsContent value="follow" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
+              <FollowPanel className="h-full" />
             </TabsContent>
           </Tabs>
         </aside>

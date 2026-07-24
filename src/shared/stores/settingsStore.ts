@@ -6,6 +6,11 @@ import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
 
+// `settings_set` writes one complete object. Serialize writes so rapid room
+// controls (for example two slider commits) cannot resolve out of order and
+// restore an earlier snapshot over the newest setting.
+let settingsWriteQueue: Promise<void> = Promise.resolve();
+
 function isThemeMode(v: string): v is ThemeMode {
   return v === "system" || v === "light" || v === "dark";
 }
@@ -22,6 +27,10 @@ type SettingsState = {
   danmakuOpacity: number;
   danmakuFontSize: number;
   danmakuSpeed: number;
+  danmakuArea: number;
+  danmakuLineCount: number;
+  danmakuFontWeight: number;
+  danmakuFilterRepeats: boolean;
   danmakuShieldWords: string[];
   mpvPath: string | null;
   qualityLevel: QualityLevel;
@@ -46,6 +55,10 @@ const defaultSettings: AppSettings = {
   danmaku_opacity: 1,
   danmaku_font_size: 18,
   danmaku_speed: 8,
+  danmaku_area: 0.9,
+  danmaku_line_count: 0,
+  danmaku_font_weight: 600,
+  danmaku_filter_repeats: true,
   danmaku_shield_words: [],
   mpv_path: null,
   quality_level: "high",
@@ -59,6 +72,10 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_size: state.danmakuFontSize,
     danmaku_speed: state.danmakuSpeed,
+    danmaku_area: state.danmakuArea,
+    danmaku_line_count: state.danmakuLineCount,
+    danmaku_font_weight: state.danmakuFontWeight,
+    danmaku_filter_repeats: state.danmakuFilterRepeats,
     danmaku_shield_words: state.danmakuShieldWords,
     mpv_path: state.mpvPath,
     quality_level: state.qualityLevel,
@@ -74,6 +91,10 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuOpacity: 1,
       danmakuFontSize: 18,
       danmakuSpeed: 8,
+      danmakuArea: 0.9,
+      danmakuLineCount: 0,
+      danmakuFontWeight: 600,
+      danmakuFilterRepeats: true,
       danmakuShieldWords: [],
       mpvPath: null,
       qualityLevel: "high",
@@ -107,6 +128,10 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontSize: settings.danmaku_font_size,
           danmakuSpeed: settings.danmaku_speed,
+          danmakuArea: settings.danmaku_area,
+          danmakuLineCount: settings.danmaku_line_count,
+          danmakuFontWeight: settings.danmaku_font_weight,
+          danmakuFilterRepeats: settings.danmaku_filter_repeats,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           mpvPath: settings.mpv_path,
           qualityLevel: parseQualityLevel(settings.quality_level),
@@ -130,11 +155,16 @@ export const useSettingsStore = create<SettingsState>()(
         }
         const current = toAppSettings(get());
         const next: AppSettings = { ...defaultSettings, ...current, ...patch };
-        try {
-          await invokeCmd<void>("settings_set", { settings: next });
-        } catch {
-          // Ignore when not running under Tauri.
-        }
+        settingsWriteQueue = settingsWriteQueue
+          .catch(() => {})
+          .then(async () => {
+            try {
+              await invokeCmd<void>("settings_set", { settings: next });
+            } catch {
+              // Ignore when not running under Tauri.
+            }
+          });
+        await settingsWriteQueue;
       },
     }),
     {

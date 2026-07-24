@@ -57,6 +57,10 @@ mod tests {
         assert_eq!(s.danmaku_opacity, 1.0);
         assert_eq!(s.danmaku_font_size, 18);
         assert_eq!(s.danmaku_speed, 8);
+        assert_eq!(s.danmaku_area, 0.9);
+        assert_eq!(s.danmaku_line_count, 0);
+        assert_eq!(s.danmaku_font_weight, 600);
+        assert!(s.danmaku_filter_repeats);
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
         assert!(s.mpv_path.is_none());

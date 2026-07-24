@@ -1,145 +1,147 @@
 # rLive
 
-**rLive** is a desktop live-stream aggregator built with **Tauri 2 + React + TypeScript + Rust**.  
-It is an independent rewrite inspired by [Simple Live](https://github.com/June6699/dart_simple_live) / [xiaoyaocz/dart_simple_live](https://github.com/xiaoyaocz/dart_simple_live) — **not** an official client.
+**rLive** 是一款桌面端直播聚合客户端，基于 **Tauri 2 + React + TypeScript + Rust**。  
+灵感来自 [Simple Live](https://github.com/June6699/dart_simple_live) / [xiaoyaocz/dart_simple_live](https://github.com/xiaoyaocz/dart_simple_live)，为独立重写，**非**官方客户端。
 
-> 简简单单的看直播 — watch live streams simply.
+> 简简单单的看直播。
 
-## Phase-1 features
+**English:** rLive is a desktop live-stream aggregator (Tauri 2 + React + Rust), inspired by Simple Live — an independent rewrite, not an official client. *Watch live streams simply.*
 
-| Area | Status |
-|------|--------|
-| Desktop shell (Linux + Windows) | Done |
-| Dark UI (Simple Live–style) + **shadcn/ui** | Done |
-| Bilibili: categories, recommend, search, room detail, play URLs | Done |
-| **mpv** embed (Windows child HWND / geometry fallback) | Done |
-| Right chat panel + Bilibili danmaku (WS) | Done |
-| Follows + tags + live refresh | Done |
-| Watch history | Done |
-| Settings, proxy, cookie paste, shield words | Done |
-| Profile import/export (no cookies) | Done |
-| Huya / Douyu / Douyin / Kuaishou | Registered stubs (coming later) |
+---
 
-**Not in phase 1:** TV apps, multi-room, remote/LAN/WebDAV sync, recording/download, sending danmaku or gifts.
+## 功能现状 / Feature status
 
-## Requirements
+| 功能 Feature | 状态 Status |
+|--------------|-------------|
+| 桌面壳 (Linux / Windows) | 完成 Done |
+| 深色 UI + shadcn/ui（中文主界面） | 完成 Done |
+| **哔哩哔哩** 分类 / 推荐 / 搜索 / 播放 / 弹幕 | 完成 Done |
+| **虎牙** 列表 / 房间 / 播放 / 弹幕 | 完成 Done |
+| **斗鱼** 列表 / 房间 / 播放 / 弹幕 | 完成 Done |
+| **抖音** 分类 / 推荐首屏 / 房间 / 播放 | 完成 Done（SSR 列表仅可靠支持首屏；搜索需完整登录 Cookie） |
+| **抖音** 实时弹幕 | 暂不支持 Not yet supported |
+| **快手** | 占位 Stub |
+| Web 播放（mpegts.js + 本地 `stream_proxy`） | 完成 Done |
+| 右侧消息列表 + 飘屏 Canvas 弹幕 | 完成 Done |
+| 房间内弹幕设置（区域 / 行数 / 透明度 / 字号 / 字重 / 速度 / 重复过滤 / 屏蔽词） | 完成 Done |
+| 醒目留言 SC 面板（哔哩哔哩） | 完成 Done（金额、时长、卡片色） |
+| 关注 / 标签 / 开播刷新 / 房间内直接切换 | 完成 Done |
+| 观看历史 | 完成 Done |
+| 设置：主题、代理、Cookie、清晰度偏好、配置导入导出 | 完成 Done |
 
-- [Rust](https://www.rust-lang.org/) (stable)
-- [bun](https://bun.sh/) (frontend package manager)
-- Platform toolchain for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
-- **[mpv](https://mpv.io/)** installed and on `PATH` (or set absolute path in Settings)
+**不在当前范围：** 电视端、多开房间、录制/下载、发送弹幕或礼物、官方登录写流程。
 
-### Windows toolchain (recommended layout)
+---
 
-| Component | Path |
-|-----------|------|
-| Project (Windows mirror) | `D:\dev\rLive` |
+## 文档索引 / Documentation
+
+| 文档 | 说明 |
+|------|------|
+| [docs/README.md](docs/README.md) | 文档目录（中 / 英） |
+| [docs/zh/用户指南.md](docs/zh/用户指南.md) | 中文用户指南（优先） |
+| [docs/zh/架构说明.md](docs/zh/架构说明.md) | 中文架构说明 |
+| [docs/en/user-guide.md](docs/en/user-guide.md) | English user guide |
+| [docs/en/architecture.md](docs/en/architecture.md) | English architecture |
+
+界面文案以**中文**为主；代码注释与提交说明可用中英。
+
+---
+
+## 环境要求 / Requirements
+
+- [Rust](https://www.rust-lang.org/) stable  
+- [bun](https://bun.sh/)  
+- [Tauri 2 平台依赖](https://v2.tauri.app/start/prerequisites/)  
+
+**无需 mpv**：当前播放路径为 **Web MSE**（`mpegts.js` + Rust 本地代理），不依赖外置播放器。
+
+### Windows 推荐目录
+
+| 组件 | 路径 |
+|------|------|
+| 项目镜像 | `D:\dev\rLive` |
 | Rust | `D:\dev\rust\{cargo,rustup}` |
-| VS Build Tools | `D:\VS\BuildTools` (`vcvars64.bat`) |
-| Temp | `D:\Temp\build` |
+| VS Build Tools | `D:\VS\BuildTools` |
+| 临时目录 | `D:\Temp\build` |
 
-## Develop
+---
+
+## 开发 / Develop
 
 ```bash
 bun install
 bun run tauri dev
 ```
 
-Frontend only (no Tauri commands):
+仅前端：
 
 ```bash
 bun run dev
 ```
 
-Build (Linux / current platform):
+构建与测试：
 
 ```bash
 bun run build
+bun run test:unit
 cd src-tauri && cargo test --lib
 bun run tauri build
 ```
 
-### Windows delivery (WSL → `D:\dev\rLive`)
+### Windows 交付（WSL → `D:\dev\rLive`）
 
-Development often happens under WSL (`/home/.../rLive`); the runnable desktop app is built on Windows.
-
-**After app code changes**, agents and humans should sync + build:
+日常在 WSL 开发，在 Windows 上出可执行文件：
 
 ```bash
-# From WSL repo root — syncs then runs PowerShell build
+# WSL 仓库根目录：同步 + 构建
 ./scripts/build-windows-from-wsl.sh
 ```
 
-Or step by step:
-
-```bash
-./scripts/sync-to-windows.sh
-# On Windows PowerShell:
-cd D:\dev\rLive
-.\scripts\build-windows.ps1
-# Optional NSIS installer:
-.\scripts\build-windows.ps1 -BundleNsis
-```
-
-Success output:
+成功产物：
 
 ```text
 D:\dev\rLive\src-tauri\target\release\rlive.exe
 ```
 
-Project rules for this pipeline: `AGENTS.md`, `.grok/rules/windows-delivery.md`.
+规则见 `AGENTS.md`、`.grok/rules/windows-delivery.md`。
 
-## UI notes
+---
 
-- **Sidebar**: icon rail (首页 / 关注 / 分类 / 历史 / 设置)
-- **Search**: top-right of the main header (not in the rail)
-- **Room page**: top bar with back + LIVE; video embed; right chat list; bottom strip (刷新 / 关注 / 复制链接 / 复制直链)
-- **Player controls** (under video, never over HWND): 播放 / 音量 / 弹幕 / **清晰度** / **线路** / **全屏**
-- **mpv HWND**: native video sits on top of the webview — chrome must stay **outside** the embed host
+## 快速使用 / Quick start
 
-## Playback v2 (fullscreen + lines + canvas danmaku)
+1. 启动应用，顶部切换站点（哔哩哔哩 / 虎牙 / 斗鱼 / 抖音…）。
+2. 从首页推荐、分类或搜索进入直播间。
+3. **哔哩哔哩弹幕**：设置 → 粘贴 Cookie → 进入房间后右侧列表与飘屏生效。
+4. **弹幕设置**：进入房间后，在右侧「弹幕设置」标签调整显示区域、行数、不透明度、字号、字重、速度、重复过滤和屏蔽词；拖动滑块即时预览。
+5. **SC / 关注**：右侧「SC」查看哔哩哔哩醒目留言；「关注」可直接切换到任一已关注房间，无需先退出当前房间。
+6. **抖音**：可匿名浏览首屏分类/推荐并播放；若要搜索，请在设置中保存完整网页 Cookie。
 
-| Mode | Video | Danmaku |
-|------|-------|---------|
-| Windowed | `--wid` child embed | Right chat list (+ optional OSD) |
-| Fullscreen | mpv OS fullscreen (no wid) | Transparent always-on-top overlay + **Canvas** scrolling tracks |
+English: switch site in the header, open a room, paste a Bilibili cookie for danmaku, then tune live danmaku under the room-side **弹幕设置** tab. The **SC** and **关注** tabs show Super Chats and let you switch directly to a followed room. Douyin supports first-page browse and playback; search needs a logged-in browser cookie.
 
-Esc or control-bar 全屏 exits overlay and restores embed. Spec/plan:
+---
 
-- `docs/superpowers/specs/2026-07-24-room-playback-v2-design.md`
-- `docs/superpowers/plans/2026-07-24-room-playback-v2.md`
+## 架构一览 / Architecture (short)
 
-## Danmaku (Bilibili)
+| 层 | 技术 |
+|----|------|
+| UI | React + Tailwind v4 + shadcn/ui，中文主界面 |
+| 业务壳 | 首页 / 关注 / 分类 / 历史 / 设置 / 房间页 |
+| 播放 | 前端 `mpegts.js`；Rust `stream_proxy` 同源代理拉流 |
+| 站点 | Rust `LiveSite`：bilibili / huya / douyu / douyin（ready）；kuaishou（stub） |
+| 弹幕 | Rust WebSocket → Tauri 事件 `danmaku` → 批处理列表 + 按需 Canvas + SC / 设置 / 关注侧栏 |
+| 存储 | SQLite：关注、历史、设置、本机 Cookie |
 
-1. Open **设置 → 哔哩哔哩 Cookie**, paste a valid browser cookie, save.
-2. Enter a live room — chat should show connect status, then chat / enter / gift lines.
-3. Fullscreen shows scrolling canvas danmaku over the picture.
-4. WS join uses **viewer** `DedeUserID` (or `0` when anonymous), real `room_id`, and token from `getDanmuInfo`.
+详见 [docs/zh/架构说明.md](docs/zh/架构说明.md) / [docs/en/architecture.md](docs/en/architecture.md)。
 
-Never commit cookies. Profile export **excludes** cookies.
+---
 
-## Architecture
+## 合规 / Compliance
 
-- **React + Tailwind v4 + shadcn/ui (base-nova)**: desktop chrome, lists, settings, room UI, canvas danmaku overlay
-- **Rust (`src-tauri`)**: `LiveSite` trait, SQLite, cookies, mpv process/embed/fullscreen, overlay window, danmaku WebSocket
-- **mpv**: external process; Windows prefers `--wid` child embed when available
+只读聚合：列表、播放地址、接收弹幕；可选用户粘贴 Cookie。  
+**不做**官方登录写操作、支付、送礼、发弹幕、录制。  
 
-Design & plan:
-
-- `docs/superpowers/specs/2026-07-23-rlive-tauri-design.md`
-- `docs/superpowers/plans/2026-07-23-rlive-phase1.md`
-- `docs/superpowers/changelog-2026-07-24.md`
-
-## Compliance
-
-Read-only aggregation only:
-
-- Lists, play URLs, receive danmaku
-- Optional user-pasted cookies for read-only APIs
-- **No** official login write flows, payments, gifts, send-chat, or stream recording
-
-This project is for learning and personal use. Respect platform terms of service and local laws.
+仅供学习与个人使用；请遵守各平台服务条款与当地法律。
 
 ## License
 
-See repository `LICENSE` if present. Upstream Simple Live ideas are referenced for educational reimplementation; do not assume identical licensing of their assets.
+见仓库 `LICENSE`（若有）。Simple Live 仅作学习参考，不代表其资源许可可直接复用。

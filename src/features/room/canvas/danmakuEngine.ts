@@ -22,9 +22,29 @@ export type TrackItem = {
 export type DanmakuEngine = {
   push: (ev: DanmakuEvent) => void;
   tick: (dt: number, width: number, height: number) => void;
-  visibleItems: () => TrackItem[];
-  setOpts: (opts: { fontSize: number; speed: number; opacity: number }) => void;
+  /**
+   * The engine owns this array. Consumers must only read it during a render
+   * pass; returning the backing array avoids a short-lived copy on every
+   * animation frame.
+   */
+  visibleItems: () => readonly TrackItem[];
+  /** Whether the canvas needs another frame to move or expire an item. */
+  hasWork: () => boolean;
+  setOpts: (opts: DanmakuEngineOptions) => void;
   opacity: () => number;
+  fontWeight: () => number;
+};
+
+export type DanmakuEngineOptions = {
+  fontSize: number;
+  speed: number;
+  opacity: number;
+  /** Portion of the player height occupied by scrolling danmaku. */
+  area?: number;
+  /** Maximum visible lanes; zero lets the engine choose automatically. */
+  lineCount?: number;
+  /** CSS-compatible canvas font weight. */
+  fontWeight?: number;
 };
 
 type PendingScroll = Omit<TrackItem, "kind" | "lane" | "x" | "y"> & {
@@ -41,7 +61,7 @@ const MAX_ITEMS = 80;
 const MAX_PENDING_ITEMS = 80;
 const MAX_QUEUE_AGE_MS = 5000;
 const TOP_DURATION_MS = 3000;
-const SCROLL_AREA_RATIO = 0.9;
+const DEFAULT_SCROLL_AREA_RATIO = 0.9;
 const SPAWN_PADDING = 12;
 
 function measureWidth(text: string, fontSize: number): number {
@@ -67,6 +87,24 @@ function clampOpacity(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function clampArea(value: number | undefined): number {
+  if (!Number.isFinite(value)) return DEFAULT_SCROLL_AREA_RATIO;
+  return Math.max(0.1, Math.min(1, value ?? DEFAULT_SCROLL_AREA_RATIO));
+}
+
+function clampLineCount(value: number | undefined): number {
+  if (!Number.isFinite(value) || !value || value < 0) return 0;
+  return Math.min(20, Math.round(value));
+}
+
+function clampFontWeight(value: number | undefined): number {
+  const weight = Number.isFinite(value) ? (value ?? 600) : 600;
+  if (weight < 450) return 400;
+  if (weight < 550) return 500;
+  if (weight < 650) return 600;
+  return 700;
+}
+
 /**
  * Returns a breadth-first middle-out order. Compared with scanning from lane 0,
  * the first few comments already occupy the centre and both halves of the video.
@@ -90,11 +128,12 @@ function createBalancedLaneOrder(count: number): number[] {
   return order;
 }
 
-function layoutFor(height: number, fontSize: number): LaneLayout {
+function layoutFor(height: number, fontSize: number, area: number, lineCount: number): LaneLayout {
   const safeHeight = Math.max(1, Math.floor(height));
   const laneHeight = Math.max(fontSize + 9, 24);
-  const preferredArea = Math.max(laneHeight, Math.floor(safeHeight * SCROLL_AREA_RATIO));
-  const count = Math.max(1, Math.floor(preferredArea / laneHeight));
+  const preferredArea = Math.max(laneHeight, Math.floor(safeHeight * area));
+  const autoCount = Math.max(1, Math.floor(preferredArea / laneHeight));
+  const count = lineCount > 0 ? Math.min(lineCount, autoCount) : autoCount;
   const blockHeight = Math.min(safeHeight, count * laneHeight);
 
   return {
@@ -124,14 +163,13 @@ function remapLane(lane: number, previousCount: number, nextCount: number): numb
   return Math.round(position * (nextCount - 1));
 }
 
-export function createEngine(opts: {
-  fontSize: number;
-  speed: number;
-  opacity: number;
-}): DanmakuEngine {
+export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let fontSize = clampFontSize(opts.fontSize);
   let logicalSpeed = opts.speed;
   let currentOpacity = clampOpacity(opts.opacity);
+  let scrollArea = clampArea(opts.area);
+  let maxLineCount = clampLineCount(opts.lineCount);
+  let currentFontWeight = clampFontWeight(opts.fontWeight);
   let items: TrackItem[] = [];
   let pending: PendingScroll[] = [];
   let sequence = 0;
@@ -142,10 +180,13 @@ export function createEngine(opts: {
   let laneCursor = 0;
 
   function largestActiveScrollFontSize(): number {
-    return items.reduce(
-      (largest, item) => (item.kind === "scroll" ? Math.max(largest, item.fontSize) : largest),
-      fontSize,
-    );
+    let largest = fontSize;
+    for (const item of items) {
+      if (item.kind === "scroll" && item.fontSize > largest) {
+        largest = item.fontSize;
+      }
+    }
+    return largest;
   }
 
   function refreshLayout(): LaneLayout | null {
@@ -153,18 +194,26 @@ export function createEngine(opts: {
 
     // Existing messages retain the size they had at insertion. Keep enough
     // vertical room for them while a setting change is still on screen.
-    const nextLayout = layoutFor(viewportHeight, largestActiveScrollFontSize());
+    const nextLayout = layoutFor(
+      viewportHeight,
+      largestActiveScrollFontSize(),
+      scrollArea,
+      maxLineCount,
+    );
     if (sameLayout(layout, nextLayout)) return layout;
 
     const previousLayout = layout;
     if (previousLayout) {
-      items = items.map((item) => {
-        if (item.kind !== "scroll") return item;
+      // Items are engine-private, so this can update them in place instead of
+      // allocating a replacement array during resize/layout changes.
+      for (const item of items) {
+        if (item.kind !== "scroll") continue;
 
         const oldLane = item.lane ?? 0;
         const lane = remapLane(oldLane, previousLayout.count, nextLayout.count);
-        return { ...item, lane, y: laneY(lane, nextLayout) };
-      });
+        item.lane = lane;
+        item.y = laneY(lane, nextLayout);
+      }
     }
 
     layout = nextLayout;
@@ -186,22 +235,23 @@ export function createEngine(opts: {
     const spawnX = viewportWidth + SPAWN_PADDING;
     const gap = minTailGap(candidate);
 
-    return !items.some((item) => {
-      if (item.kind !== "scroll" || item.lane !== lane) return false;
+    for (const item of items) {
+      if (item.kind !== "scroll" || item.lane !== lane) continue;
 
       const leadingRight = item.x + item.width;
-      if (leadingRight <= 0) return false;
+      if (leadingRight <= 0) continue;
 
       const initialDistance = spawnX - leadingRight;
-      if (initialDistance < gap) return true;
+      if (initialDistance < gap) return false;
 
       const closingSpeed = candidate.speed - item.speed;
-      if (closingSpeed <= 0) return false;
+      if (closingSpeed <= 0) continue;
 
       const timeUntilGap = (initialDistance - gap) / closingSpeed;
       const timeUntilLeadingItemLeaves = leadingRight / item.speed;
-      return timeUntilGap < timeUntilLeadingItemLeaves;
-    });
+      if (timeUntilGap < timeUntilLeadingItemLeaves) return false;
+    }
+    return true;
   }
 
   function findSafeLane(candidate: PendingScroll): number | null {
@@ -233,7 +283,14 @@ export function createEngine(opts: {
     if (!currentLayout || viewportWidth <= 0) return;
 
     const now = Date.now();
-    pending = pending.filter((item) => now - item.queuedAt <= MAX_QUEUE_AGE_MS);
+    let firstFreshIndex = 0;
+    while (
+      firstFreshIndex < pending.length &&
+      now - pending[firstFreshIndex].queuedAt > MAX_QUEUE_AGE_MS
+    ) {
+      firstFreshIndex += 1;
+    }
+    if (firstFreshIndex > 0) pending.splice(0, firstFreshIndex);
 
     while (pending.length > 0) {
       const candidate = pending[0];
@@ -298,33 +355,38 @@ export function createEngine(opts: {
     refreshLayout();
     const now = Date.now();
     const elapsedSeconds = Math.max(0, Math.min(0.2, dt));
-    const nextItems: TrackItem[] = [];
-
+    let nextLength = 0;
     for (const item of items) {
       if (item.kind === "top") {
         if (item.expireAt && item.expireAt <= now) continue;
-        nextItems.push(item);
+        items[nextLength] = item;
+        nextLength += 1;
         continue;
       }
 
-      const x = item.x - item.speed * elapsedSeconds;
-      if (x + item.width < -20) continue;
-      nextItems.push({ ...item, x });
+      item.x -= item.speed * elapsedSeconds;
+      if (item.x + item.width < -20) continue;
+      items[nextLength] = item;
+      nextLength += 1;
     }
-
-    items = nextItems;
+    items.length = nextLength;
     schedulePending();
   }
 
   return {
     push,
     tick,
-    visibleItems: () => items.slice(),
+    visibleItems: () => items,
+    hasWork: () => items.length > 0 || pending.length > 0,
     setOpts: (nextOpts) => {
       fontSize = clampFontSize(nextOpts.fontSize);
       logicalSpeed = nextOpts.speed;
       currentOpacity = clampOpacity(nextOpts.opacity);
+      scrollArea = clampArea(nextOpts.area);
+      maxLineCount = clampLineCount(nextOpts.lineCount);
+      currentFontWeight = clampFontWeight(nextOpts.fontWeight);
     },
     opacity: () => currentOpacity,
+    fontWeight: () => currentFontWeight,
   };
 }

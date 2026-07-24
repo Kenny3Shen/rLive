@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invokeCmd } from "@/shared/api/tauri";
-import type {
-  LivePlayQuality,
-  LiveRoomDetail,
-  PlayUrl,
-  SiteId,
-} from "@/shared/types/live";
+import type { LivePlayQuality, LiveRoomDetail, PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, QualityLevel } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { clampIndex } from "@/lib/playUrl";
 import { pickDefaultQualityIndex } from "./quality";
 import { nextFailoverAction } from "./failover";
+
+const EMPTY_QUALITIES: LivePlayQuality[] = [];
+const EMPTY_PLAY_URLS: PlayUrl[] = [];
 
 export type PlaybackController = {
   qualities: LivePlayQuality[];
@@ -58,6 +56,25 @@ export function usePlaybackController(opts: {
     lineIndexRef.current = lineIndex;
   }, [lineIndex]);
 
+  const clearFailoverTimer = useCallback(() => {
+    if (failoverTimerRef.current != null) {
+      window.clearTimeout(failoverTimerRef.current);
+      failoverTimerRef.current = null;
+    }
+  }, []);
+
+  // A direct route change reuses this hook instance. Reset local choices even
+  // when two rooms expose identically named qualities, otherwise a stale line
+  // index or the previous quality cache key can carry into the new stream.
+  useEffect(() => {
+    clearFailoverTimer();
+    appliedQualitiesKeyRef.current = null;
+    retryCountRef.current = 0;
+    setQualityIndex(0);
+    setLineIndex(0);
+    setLoadError(null);
+  }, [siteId, roomId, detail?.room_id, clearFailoverTimer]);
+
   const qualitiesQuery = useQuery({
     queryKey: ["play_qualities", siteId, roomId, detail?.room_id],
     enabled: enabled && !!detail,
@@ -72,7 +89,7 @@ export function usePlaybackController(opts: {
       }),
   });
 
-  const qualities = qualitiesQuery.data ?? [];
+  const qualities = qualitiesQuery.data ?? EMPTY_QUALITIES;
   const qualitiesKey = useMemo(() => {
     if (!qualities.length) return "";
     return qualities.map((q) => `${q.quality}:${String(q.data)}`).join("|");
@@ -101,13 +118,7 @@ export function usePlaybackController(opts: {
   }, [selectedQuality?.quality, selectedQuality?.data]);
 
   const playUrlQuery = useQuery({
-    queryKey: [
-      "play_urls",
-      siteId,
-      roomId,
-      selectedQuality?.quality,
-      selectedQuality?.data,
-    ],
+    queryKey: ["play_urls", siteId, roomId, selectedQuality?.quality, selectedQuality?.data],
     enabled: enabled && !!detail && !!selectedQuality,
     // CDN play URLs (esp. FLV/HLS tokens) go stale within minutes. Re-enter
     // must not reuse the previous visit's cached list — that caused black
@@ -123,33 +134,32 @@ export function usePlaybackController(opts: {
       }),
   });
 
-  const lines = playUrlQuery.data ?? [];
+  const lines = playUrlQuery.data ?? EMPTY_PLAY_URLS;
   lineCountRef.current = lines.length;
   const playUrl = lines[clampIndex(lineIndex, lines.length)] ?? null;
 
-  const clearFailoverTimer = useCallback(() => {
-    if (failoverTimerRef.current != null) {
-      window.clearTimeout(failoverTimerRef.current);
-      failoverTimerRef.current = null;
-    }
-  }, []);
-
   useEffect(() => () => clearFailoverTimer(), [clearFailoverTimer]);
 
-  const onQualityChange = useCallback((index: number) => {
-    clearFailoverTimer();
-    retryCountRef.current = 0;
-    setLoadError(null);
-    setQualityIndex(index);
-    setLineIndex(0);
-  }, [clearFailoverTimer]);
+  const onQualityChange = useCallback(
+    (index: number) => {
+      clearFailoverTimer();
+      retryCountRef.current = 0;
+      setLoadError(null);
+      setQualityIndex(index);
+      setLineIndex(0);
+    },
+    [clearFailoverTimer],
+  );
 
-  const onLineChange = useCallback((index: number) => {
-    clearFailoverTimer();
-    retryCountRef.current = 0;
-    setLoadError(null);
-    setLineIndex(index);
-  }, [clearFailoverTimer]);
+  const onLineChange = useCallback(
+    (index: number) => {
+      clearFailoverTimer();
+      retryCountRef.current = 0;
+      setLoadError(null);
+      setLineIndex(index);
+    },
+    [clearFailoverTimer],
+  );
 
   const retryPlay = useCallback(() => {
     clearFailoverTimer();
@@ -197,25 +207,20 @@ export function usePlaybackController(opts: {
     [clearFailoverTimer],
   );
 
-  const loading =
-    qualitiesQuery.isLoading ||
-    (qualitiesQuery.isSuccess && playUrlQuery.isLoading);
+  const loading = qualitiesQuery.isLoading || (qualitiesQuery.isSuccess && playUrlQuery.isLoading);
 
-  const error =
-    qualitiesQuery.isError
-      ? qualitiesQuery.error
-      : playUrlQuery.isError
-        ? playUrlQuery.error
-        : qualitiesQuery.isSuccess &&
-            playUrlQuery.isSuccess &&
-            !playUrl
-          ? {
-              code: "no_play_url",
-              message: "当前清晰度没有可用播放地址",
-              site: siteId ?? null,
-              retryable: true,
-            }
-          : undefined;
+  const error = qualitiesQuery.isError
+    ? qualitiesQuery.error
+    : playUrlQuery.isError
+      ? playUrlQuery.error
+      : qualitiesQuery.isSuccess && playUrlQuery.isSuccess && !playUrl
+        ? {
+            code: "no_play_url",
+            message: "当前清晰度没有可用播放地址",
+            site: siteId ?? null,
+            retryable: true,
+          }
+        : undefined;
 
   return {
     qualities,

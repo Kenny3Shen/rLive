@@ -50,5 +50,8 @@ Prefer the combined script when available:
 ## Product context (short)
 
 - Tauri 2 + React + Tailwind + shadcn-style UI
-- Desktop live client (Bilibili-first, mpv embed, follows/history/settings)
-- UI language: Chinese primary chrome matching Simple Live–style desktop UX
+- Desktop live client: **web MSE player** (`mpegts.js` + `stream_proxy`), not mpv
+- Sites ready: **Bilibili / Huya / Douyu** (lists + play + danmaku); **Douyin** (SSR 首屏浏览 + 房间/播放，登录 Cookie 搜索；无实时弹幕); Kuaishou stub
+- Danmaku: settings (opacity / size / speed / shield), list + canvas + SC panel
+- UI language: **Chinese primary** chrome (Simple Live–style); docs: `docs/zh/*` first, `docs/en/*` secondary
+- User-facing docs: `README.md`, `docs/README.md`

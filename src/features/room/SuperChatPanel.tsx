@@ -1,12 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { isShielded } from "./danmaku/filter";
+import { createShieldMatcher } from "./danmaku/filter";
+import {
+  formatSuperChatAmount,
+  formatSuperChatDuration,
+  MAX_BUFFERED_SUPER_CHATS,
+  MAX_SUPER_CHAT_DEDUPE_KEYS,
+  MAX_SUPER_CHATS_PER_FRAME,
+  retainSuperChatItems,
+  superChatDedupeKey,
+  superChatPalette,
+  type SuperChatLine,
+} from "./superChat";
 import { cn } from "@/lib/utils";
-
-const MAX = 80;
 
 type SuperChatPanelProps = {
   active: boolean;
@@ -14,71 +23,205 @@ type SuperChatPanelProps = {
 };
 
 export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
-  const [items, setItems] = useState<DanmakuEvent[]>([]);
+  const [items, setItems] = useState<SuperChatLine[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const autoScroll = useRef(true);
+  const pendingRef = useRef<SuperChatLine[]>([]);
+  const flushFrameRef = useRef<number | null>(null);
+  const nextIdRef = useRef(0);
+  const dedupeKeysRef = useRef(new Set<string>());
+  const dedupeOrderRef = useRef<string[]>([]);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
-
-  const shield = useMemo(
-    () => shieldWords.map((w) => w.toLowerCase()).filter(Boolean),
-    [shieldWords],
-  );
+  const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
+  const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
 
   useEffect(() => {
+    const cancelFlush = () => {
+      if (flushFrameRef.current !== null) {
+        cancelAnimationFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
+    };
+
+    const resetBuffers = () => {
+      cancelFlush();
+      pendingRef.current = [];
+      dedupeKeysRef.current.clear();
+      dedupeOrderRef.current = [];
+      nextIdRef.current = 0;
+    };
+
     if (!active) {
+      resetBuffers();
+      autoScroll.current = true;
       setItems([]);
       return;
     }
+
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
+
+    const flush = () => {
+      flushFrameRef.current = null;
+      const batch = pendingRef.current.splice(0, MAX_SUPER_CHATS_PER_FRAME);
+      if (batch.length === 0) return;
+
+      setItems((previous) => retainSuperChatItems(previous, batch));
+
+      // Drain bursts across frames so one websocket spike cannot force a large
+      // React reconciliation in a single paint.
+      if (pendingRef.current.length > 0) scheduleFlush();
+    };
+
+    const scheduleFlush = () => {
+      if (flushFrameRef.current === null) {
+        flushFrameRef.current = requestAnimationFrame(flush);
+      }
+    };
+
+    const rememberDedupeKey = (key: string): boolean => {
+      if (dedupeKeysRef.current.has(key)) return false;
+
+      dedupeKeysRef.current.add(key);
+      dedupeOrderRef.current.push(key);
+      if (dedupeOrderRef.current.length > MAX_SUPER_CHAT_DEDUPE_KEYS) {
+        const oldest = dedupeOrderRef.current.shift();
+        if (oldest) dedupeKeysRef.current.delete(oldest);
+      }
+      return true;
+    };
+
     void listen<DanmakuEvent>("danmaku", (event) => {
       if (cancelled) return;
-      const msg = event.payload;
-      if (!msg || msg.kind !== "super_chat") return;
-      if (isShielded(msg, shield)) return;
-      setItems((prev) => {
-        const next = [...prev, msg];
-        return next.length > MAX ? next.slice(next.length - MAX) : next;
-      });
-    }).then((fn) => {
-      unlisten = fn;
-    });
+      const message = event.payload;
+      if (message?.kind !== "super_chat" || !message.content?.trim()) return;
+      if (shieldMatcher(message)) return;
+
+      const dedupeKey = superChatDedupeKey(message);
+      if (!rememberDedupeKey(dedupeKey)) return;
+
+      const pending = pendingRef.current;
+      pending.push({ id: ++nextIdRef.current, event: message });
+      if (pending.length > MAX_BUFFERED_SUPER_CHATS) {
+        pending.splice(0, pending.length - MAX_BUFFERED_SUPER_CHATS);
+      }
+      scheduleFlush();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          void fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
       unlisten?.();
+      resetBuffers();
     };
-  }, [active, shield]);
+  }, [active, shieldMatcher]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [items.length]);
+    if (autoScroll.current) {
+      bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    }
+  }, [items]);
+
+  function onViewportScroll(event: UIEvent<HTMLDivElement>) {
+    const element = event.target;
+    if (!(element instanceof HTMLElement)) return;
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    autoScroll.current = distanceToBottom < 48;
+  }
 
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" onScrollCapture={onViewportScroll}>
         <div
           className="flex flex-col gap-2 px-2.5 py-2"
-          style={{ fontSize: Math.max(12, (fontSize || 16) - 2) }}
+          style={{
+            fontSize: Math.max(12, (fontSize || 16) - 2),
+            fontWeight,
+          }}
         >
           {active && items.length === 0 && (
-            <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-              等待醒目留言…
-            </p>
+            <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待醒目留言…</p>
           )}
           {!active && (
             <p className="px-1 py-6 text-center text-xs text-muted-foreground">
               进入直播间后显示 SC
             </p>
           )}
-          {items.map((line, i) => (
-            <div
-              key={`${line.ts}-${i}-${line.user}`}
-              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2"
-            >
-              <p className="text-xs font-semibold text-amber-300">{line.user}</p>
-              <p className="mt-0.5 text-sm text-foreground/95">{line.content}</p>
-            </div>
-          ))}
+          {items.map(({ id, event: line }) => {
+            const info = line.super_chat;
+            const amount = formatSuperChatAmount(info);
+            const duration = formatSuperChatDuration(info);
+            const palette = superChatPalette(info);
+
+            return (
+              <div
+                key={id}
+                className={cn(
+                  "rounded-lg border px-2.5 py-2 shadow-sm",
+                  palette ? "" : "border-amber-500/30 bg-amber-500/10",
+                )}
+                style={
+                  palette
+                    ? {
+                        background: palette.background,
+                        borderColor: palette.borderColor,
+                      }
+                    : undefined
+                }
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p
+                    className={cn(
+                      "min-w-0 truncate text-xs font-semibold",
+                      !palette && "text-amber-300",
+                    )}
+                    style={palette ? { color: palette.foreground } : undefined}
+                    title={line.user}
+                  >
+                    {line.user}
+                  </p>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {amount && (
+                      <span
+                        className={cn(
+                          "rounded-full px-1.5 py-0.5 text-xs font-bold",
+                          palette ? "bg-black/15" : "bg-amber-500/15 text-amber-300",
+                        )}
+                        style={palette ? { color: palette.foreground } : undefined}
+                      >
+                        {amount}
+                      </span>
+                    )}
+                    {duration && (
+                      <span
+                        className={cn("text-[11px]", !palette && "text-muted-foreground")}
+                        style={palette ? { color: palette.mutedForeground } : undefined}
+                      >
+                        {duration}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p
+                  className={cn(
+                    "mt-0.5 whitespace-pre-wrap break-words text-sm",
+                    !palette && "text-foreground/95",
+                  )}
+                  style={palette ? { color: palette.foreground } : undefined}
+                >
+                  {line.content}
+                </p>
+              </div>
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
