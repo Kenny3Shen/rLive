@@ -95,7 +95,38 @@ impl HuyaSite {
 }
 
 fn find_matching_brace(s: &str) -> Option<usize> {
+    find_matching_brace_bytes(s.as_bytes())
+}
+
+fn strip_js_functions(s: &str) -> String {
+    // Replace `function (...) { ... }` with `""` (brace-matched).
+    // IMPORTANT: never slice `str` at non-char boundaries — Huya pages contain
+    // Chinese UTF-8; a byte-index walk + `s[i..]` panics and aborts the app.
     let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"function") {
+            // Find opening brace from byte offset (ASCII `{` is a single byte).
+            if let Some(rel) = bytes[i..].iter().position(|&b| b == b'{') {
+                let start_brace = i + rel;
+                if let Some(end) = find_matching_brace_bytes(&bytes[start_brace..]) {
+                    out.push_str("\"\"");
+                    i = start_brace + end + 1;
+                    continue;
+                }
+            }
+        }
+        // Copy one UTF-8 character safely.
+        let ch = s[i..].chars().next().unwrap_or('\u{FFFD}');
+        let len = ch.len_utf8();
+        out.push(ch);
+        i += len;
+    }
+    out
+}
+
+fn find_matching_brace_bytes(bytes: &[u8]) -> Option<usize> {
     if bytes.first() != Some(&b'{') {
         return None;
     }
@@ -126,29 +157,6 @@ fn find_matching_brace(s: &str) -> Option<usize> {
         }
     }
     None
-}
-
-fn strip_js_functions(s: &str) -> String {
-    // Replace `function (...) { ... }` with `""` (non-greedy by brace matching).
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if s[i..].starts_with("function") {
-            // skip to opening brace
-            if let Some(rel) = s[i..].find('{') {
-                let start_brace = i + rel;
-                if let Some(end) = find_matching_brace(&s[start_brace..]) {
-                    out.push_str("\"\"");
-                    i = start_brace + end + 1;
-                    continue;
-                }
-            }
-        }
-        out.push(bytes[i] as char);
-        i += 1;
-    }
-    out
 }
 
 fn extract_i64_near(html: &str, key: &str) -> Option<i64> {
@@ -441,9 +449,39 @@ impl LiveSite for HuyaSite {
             .pointer("/roomInfo/tProfileInfo")
             .cloned()
             .unwrap_or(Value::Null);
-        let top_sid = json_i64(info.get("topSid").unwrap_or(&Value::Null));
-        let sub_sid = json_i64(info.get("subSid").unwrap_or(&Value::Null));
+        let mut top_sid = json_i64(info.get("topSid").unwrap_or(&Value::Null));
+        let mut sub_sid = json_i64(info.get("subSid").unwrap_or(&Value::Null));
+        // Prefer channel ids from first stream line when HTML scrape missed them.
+        if let Some(first) = live_info
+            .pointer("/tLiveStreamInfo/vStreamInfo/value")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+        {
+            if top_sid == 0 {
+                top_sid = json_i64(first.get("lChannelId").unwrap_or(&Value::Null));
+            }
+            if sub_sid == 0 {
+                sub_sid = json_i64(first.get("lSubChannelId").unwrap_or(&Value::Null));
+            }
+        }
+        if top_sid == 0 {
+            top_sid = json_i64(live_info.get("lChannel").unwrap_or(&Value::Null));
+        }
+        if top_sid == 0 {
+            top_sid = json_i64(live_info.get("lUid").unwrap_or(&Value::Null));
+        }
+        if sub_sid == 0 {
+            sub_sid = top_sid;
+        }
         let presenter = if top_sid > 0 { top_sid } else { sub_sid };
+        let ayyuid = {
+            let y = json_i64(live_info.get("lYyid").unwrap_or(&Value::Null));
+            if y != 0 {
+                y
+            } else {
+                json_i64(profile.get("lYyid").unwrap_or(&Value::Null))
+            }
+        };
 
         let mut title = json_str(live_info.get("sIntroduction").unwrap_or(&Value::Null));
         if title.is_empty() {
@@ -532,6 +570,9 @@ impl LiveSite for HuyaSite {
                 "bitRates": bit_rates,
                 "topSid": top_sid,
                 "subSid": sub_sid,
+                // Danmaku join needs yyuid + channel sids (simple_live HuyaDanmakuArgs).
+                "ayyuid": ayyuid,
+                "lYyid": ayyuid,
             }),
         })
     }
@@ -609,6 +650,12 @@ impl LiveSite for HuyaSite {
                 continue;
             }
             let q = process_anticode(&anti, &uid, &stream);
+            // Prefer https for the local stream proxy / TLS stacks.
+            let base = if let Some(rest) = base.strip_prefix("http://") {
+                format!("https://{rest}")
+            } else {
+                base
+            };
             let mut url = format!("{base}/{stream}.flv?{q}");
             if bit_rate > 0 {
                 url.push_str(&format!("&ratio={bit_rate}"));
@@ -626,5 +673,33 @@ impl LiveSite for HuyaSite {
 
     async fn get_live_status(&self, room_id: &str) -> AppResult<bool> {
         Ok(self.get_room_detail(room_id).await?.status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_js_functions_handles_chinese_utf8() {
+        // Must not panic on multi-byte UTF-8 (old byte-index walk aborted the app).
+        let src = r#"{"sNick":"虎牙英雄联盟赛事","cb":function(x){return x;},"ok":1}"#;
+        let out = strip_js_functions(src);
+        assert!(out.contains("虎牙英雄联盟赛事"), "{out}");
+        assert!(out.contains(r#""cb":"""#), "{out}");
+        assert!(out.contains(r#""ok":1"#), "{out}");
+        let v: Value = serde_json::from_str(&out).expect("valid json");
+        assert_eq!(v["sNick"], "虎牙英雄联盟赛事");
+        assert_eq!(v["ok"], 1);
+    }
+
+    #[test]
+    fn process_anticode_builds_query() {
+        let anti = "wsSecret=abc&wsTime=1&fm=UkZkeE9FSmpTak5vTmtSS2REWlVXVjhrTUY4a01WOGtNbDhrTXclM0QlM0Q%3D&ctype=tars_mobile&fs=bgct&t=103";
+        // fm base64 decodes to something with underscores for prefix extraction.
+        let q = process_anticode(anti, "1234567890", "stream-name");
+        assert!(q.contains("wsSecret="), "{q}");
+        assert!(q.contains("uid=1234567890"), "{q}");
+        assert!(q.contains("ctype=tars_mobile"), "{q}");
     }
 }

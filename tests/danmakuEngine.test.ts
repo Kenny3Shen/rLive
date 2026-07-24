@@ -12,6 +12,21 @@ function chat(content: string, ts: number) {
 }
 
 describe("danmaku engine", () => {
+  test("reports when the canvas can safely stop requesting animation frames", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 120, 40);
+
+    expect(engine.hasWork()).toBe(false);
+    engine.push(chat("会离开画面的弹幕", 1));
+    expect(engine.hasWork()).toBe(true);
+
+    for (let index = 0; index < 20; index += 1) {
+      engine.tick(0.2, 120, 40);
+    }
+
+    expect(engine.hasWork()).toBe(false);
+  });
+
   test("spreads the first comments across the video instead of filling from the top", () => {
     const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
     engine.tick(0, 1280, 720);
@@ -76,5 +91,37 @@ describe("danmaku engine", () => {
       expect(item.y).toBeGreaterThanOrEqual(0);
       expect(item.y + item.fontSize).toBeLessThanOrEqual(180);
     }
+  });
+
+  test("limits scrolling lanes when the user selects a visible-line cap", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      area: 1,
+      lineCount: 1,
+    });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("第一条", 1));
+    engine.push(chat("第二条", 2));
+
+    expect(engine.visibleItems()).toHaveLength(1);
+    expect(engine.hasWork()).toBe(true);
+  });
+
+  test("applies a live font-weight setting without restarting the engine", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1, fontWeight: 400 });
+    expect(engine.fontWeight()).toBe(400);
+
+    engine.setOpts({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      area: 0.5,
+      lineCount: 6,
+      fontWeight: 700,
+    });
+
+    expect(engine.fontWeight()).toBe(700);
   });
 });

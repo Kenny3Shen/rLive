@@ -9,7 +9,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::danmaku::emit_event;
 use crate::error::{AppError, AppResult};
-use crate::models::live::{DanmakuEvent, DanmakuKind};
+use crate::models::live::{DanmakuEvent, DanmakuKind, SuperChatInfo};
 
 #[derive(Debug, Clone)]
 pub struct BilibiliDanmakuArgs {
@@ -255,6 +255,87 @@ fn json_stringish(v: &Value) -> String {
     }
 }
 
+const MAX_SUPER_CHAT_PRICE: f64 = 1_000_000.0;
+const MAX_SUPER_CHAT_DURATION_SECS: u64 = 86_400;
+
+/// Bilibili provides card colours as CSS-style hex strings. Keep the decoder
+/// strict because this value is later used as an inline style in the client.
+fn safe_css_hex_color(value: Option<&Value>) -> Option<String> {
+    let color = value?.as_str()?.trim();
+    let hex = color.strip_prefix('#')?;
+    if !matches!(hex.len(), 3 | 4 | 6 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{hex}"))
+}
+
+fn safe_currency(value: Option<&Value>) -> Option<String> {
+    let currency = value?.as_str()?.trim();
+    if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some(currency.to_ascii_uppercase())
+}
+
+fn safe_super_chat_id(data: &Value) -> Option<String> {
+    let value = data.get("id").or_else(|| data.get("id_str"))?;
+    let id = match value {
+        Value::String(value) => value.trim().to_string(),
+        Value::Number(value) => value.to_string(),
+        _ => return None,
+    };
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
+    }
+    Some(id)
+}
+
+fn safe_super_chat_price(value: Option<&Value>) -> Option<f64> {
+    let price = match value? {
+        Value::Number(value) => value.as_f64(),
+        Value::String(value) => value.trim().parse::<f64>().ok(),
+        _ => None,
+    }?;
+    if !price.is_finite() || !(0.0..=MAX_SUPER_CHAT_PRICE).contains(&price) {
+        return None;
+    }
+    Some(price)
+}
+
+fn safe_super_chat_duration(value: Option<&Value>) -> Option<u32> {
+    let duration = match value? {
+        Value::Number(value) => value.as_u64(),
+        Value::String(value) => value.trim().parse::<u64>().ok(),
+        _ => None,
+    }?;
+    if !(1..=MAX_SUPER_CHAT_DURATION_SECS).contains(&duration) {
+        return None;
+    }
+    u32::try_from(duration).ok()
+}
+
+fn parse_super_chat_info(data: &Value) -> SuperChatInfo {
+    SuperChatInfo {
+        id: safe_super_chat_id(data),
+        price: safe_super_chat_price(data.get("price")),
+        currency: safe_currency(data.get("currency").or_else(|| data.get("currency_type"))),
+        background_color: safe_css_hex_color(
+            data.get("background_color")
+                .or_else(|| data.get("background_color_start")),
+        ),
+        background_bottom_color: safe_css_hex_color(
+            data.get("background_bottom_color")
+                .or_else(|| data.get("background_color_end")),
+        ),
+        duration: safe_super_chat_duration(data.get("time").or_else(|| data.get("duration"))),
+    }
+}
+
 pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
     let obj: Value = serde_json::from_str(json_message).ok()?;
     let cmd = obj.get("cmd")?.as_str()?.to_string();
@@ -298,6 +379,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user,
             content: message,
             color,
+            super_chat: None,
             ts,
         });
     }
@@ -322,6 +404,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user,
             content: message,
             color: None,
+            super_chat: Some(parse_super_chat_info(data)),
             ts,
         });
     }
@@ -338,6 +421,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user: user.clone(),
             content: format!("{user} 进入直播间"),
             color: None,
+            super_chat: None,
             ts,
         });
     }
@@ -359,6 +443,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user,
             content: format!("投喂 {gift} x{num}"),
             color: None,
+            super_chat: None,
             ts,
         });
     }
@@ -390,6 +475,7 @@ pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()
                 args.room_id, args.server_host
             ),
             color: None,
+            super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },
     );
@@ -443,6 +529,7 @@ pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()
                                     user: "system".into(),
                                     content: "弹幕服务器连接成功".into(),
                                     color: None,
+                                    super_chat: None,
                                     ts: chrono::Utc::now().timestamp_millis(),
                                 },
                             );
@@ -459,6 +546,7 @@ pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()
                                         user: "system".into(),
                                         content: "弹幕服务器连接成功".into(),
                                         color: None,
+                                        super_chat: None,
                                         ts: chrono::Utc::now().timestamp_millis(),
                                     },
                                 );
@@ -497,6 +585,7 @@ pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()
             user: "system".into(),
             content: format!("弹幕连接结束（已收 {msg_count} 条）"),
             color: None,
+            super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },
     );
@@ -535,6 +624,54 @@ mod tests {
         let ev = parse_message_json(json).unwrap();
         assert_eq!(ev.user, "bob");
         assert_eq!(ev.content, "hi");
+    }
+
+    #[test]
+    fn parse_super_chat_metadata() {
+        let json = r##"{
+          "cmd":"SUPER_CHAT_MESSAGE",
+          "data": {
+            "id": 123456,
+            "message": "辛苦了！",
+            "price": 30,
+            "currency": "cny",
+            "background_color": "#2A60B2",
+            "background_bottom_color": "#1D4A92",
+            "time": 60,
+            "user_info": {"uname": "SC 用户"}
+          }
+        }"##;
+        let ev = parse_message_json(json).unwrap();
+        assert!(matches!(ev.kind, DanmakuKind::SuperChat));
+        assert_eq!(ev.user, "SC 用户");
+        assert_eq!(ev.content, "辛苦了！");
+
+        let info = ev.super_chat.as_ref().unwrap();
+        assert_eq!(info.id.as_deref(), Some("123456"));
+        assert_eq!(info.price, Some(30.0));
+        assert_eq!(info.currency.as_deref(), Some("CNY"));
+        assert_eq!(info.background_color.as_deref(), Some("#2A60B2"));
+        assert_eq!(info.background_bottom_color.as_deref(), Some("#1D4A92"));
+        assert_eq!(info.duration, Some(60));
+    }
+
+    #[test]
+    fn parse_super_chat_ignores_unsafe_metadata() {
+        let json = r##"{
+          "cmd":"SUPER_CHAT_MESSAGE",
+          "data": {
+            "id": "<bad-id>",
+            "message": "仍应显示",
+            "price": -1,
+            "currency": "CNY; color:red",
+            "background_color": "url(javascript:alert(1))",
+            "background_color_end": "#not-a-color",
+            "duration": 999999
+          }
+        }"##;
+        let ev = parse_message_json(json).unwrap();
+        let info = ev.super_chat.as_ref().unwrap();
+        assert_eq!(info, &SuperChatInfo::default());
     }
 
     #[test]

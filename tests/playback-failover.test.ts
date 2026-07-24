@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { nextFailoverAction } from "../src/features/room/playback/failover";
 import { pickDefaultQualityIndex, parseQualityLevel } from "../src/features/room/playback/quality";
 import {
+  createShieldMatcher,
   floatingDanmakuText,
   isShielded,
   shouldShowOnCanvas,
@@ -112,6 +113,8 @@ describe("danmaku filter", () => {
       ts: 1,
     };
     expect(isShielded(chat, ["屏蔽词"])).toBe(true);
+    const matcher = createShieldMatcher(["  屏蔽词  "]);
+    expect(matcher(chat)).toBe(true);
     expect(shouldShowOnCanvas({ ...chat, kind: "system", content: "x" })).toBe(false);
   });
 });

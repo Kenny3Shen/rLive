@@ -103,12 +103,35 @@ pub enum DanmakuKind {
     System,
 }
 
+/// Optional metadata carried by a Bilibili Super Chat event.
+///
+/// The websocket payload is not fully stable across Bilibili clients, so each
+/// field is independently optional. Values are validated while decoding before
+/// they enter this model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SuperChatInfo {
+    /// Bilibili's message id, used by clients to de-duplicate reconnects.
+    pub id: Option<String>,
+    /// Price paid for the Super Chat.
+    pub price: Option<f64>,
+    /// ISO-style currency code when supplied by the upstream payload.
+    pub currency: Option<String>,
+    /// Safe CSS hexadecimal primary background colour.
+    pub background_color: Option<String>,
+    /// Safe CSS hexadecimal secondary background colour, if supplied.
+    pub background_bottom_color: Option<String>,
+    /// Highlight duration in seconds.
+    pub duration: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DanmakuEvent {
     pub kind: DanmakuKind,
     pub user: String,
     pub content: String,
     pub color: Option<String>,
+    #[serde(default)]
+    pub super_chat: Option<SuperChatInfo>,
     pub ts: i64,
 }
 

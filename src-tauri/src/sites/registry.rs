@@ -57,14 +57,20 @@ pub fn site(id: &SiteId, cookie: Option<String>) -> AppResult<Box<dyn LiveSite>>
         }
         SiteId::Huya => Ok(Box::new(HuyaSite::new(http_client::default_client()))),
         SiteId::Douyu => Ok(Box::new(DouyuSite::new(http_client::default_client()))),
-        SiteId::Douyin => Ok(Box::new(DouyinSite)),
+        SiteId::Douyin => Ok(Box::new(DouyinSite::new(
+            http_client::default_client(),
+            cookie.unwrap_or_default(),
+        ))),
         SiteId::Kuaishou => Ok(Box::new(KuaishouSite)),
     }
 }
 
 /// Whether a site's LiveSite methods are fully implemented (HTTP, etc.).
 pub fn is_ready(id: &SiteId) -> bool {
-    matches!(id, SiteId::Bilibili | SiteId::Huya | SiteId::Douyu)
+    matches!(
+        id,
+        SiteId::Bilibili | SiteId::Huya | SiteId::Douyu | SiteId::Douyin
+    )
 }
 
 #[cfg(test)]
@@ -90,6 +96,6 @@ mod tests {
         assert!(is_ready(&SiteId::Bilibili));
         assert!(is_ready(&SiteId::Huya));
         assert!(is_ready(&SiteId::Douyu));
-        assert!(!is_ready(&SiteId::Douyin));
+        assert!(is_ready(&SiteId::Douyin));
     }
 }

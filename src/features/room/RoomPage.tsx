@@ -19,6 +19,7 @@ import type {
   SiteId,
 } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
+import type { RoomSideTab } from "./PlayerPane";
 import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ export function RoomPage() {
   const qc = useQueryClient();
 
   const [followBusy, setFollowBusy] = useState(false);
+  const [sideTab, setSideTab] = useState<RoomSideTab>("chat");
 
   const detailQuery = useQuery({
     queryKey: ["room_detail", siteId, roomId],
@@ -208,7 +210,7 @@ export function RoomPage() {
           error={playback.error}
           onRetry={playback.retryPlay}
           title={detail.title}
-          danmakuActive={danmaku.active || !!detailQuery.data}
+          danmakuActive={danmaku.active}
           danmakuStatusText={danmaku.statusText}
           sideHeader={sideHeader}
           qualities={playback.qualities}
@@ -221,6 +223,9 @@ export function RoomPage() {
           reloadToken={playback.reloadToken}
           onPlayerMediaFailure={playback.onPlayerMediaFailure}
           onPlayerPlaying={playback.onPlayerPlaying}
+          roomSessionKey={`${siteId}:${roomId}`}
+          sideTab={sideTab}
+          onSideTabChange={setSideTab}
         />
       </div>
 

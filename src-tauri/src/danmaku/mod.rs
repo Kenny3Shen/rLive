@@ -1,4 +1,7 @@
 pub mod bilibili;
+pub mod douyu;
+pub mod huya;
+pub mod tars;
 
 use std::sync::Mutex;
 
@@ -42,6 +45,30 @@ impl DanmakuManager {
     }
 }
 
+fn spawn_loop<F>(app: AppHandle, manager: &DanmakuManager, site: &'static str, fut: F)
+where
+    F: std::future::Future<Output = AppResult<()>> + Send + 'static,
+{
+    let app2 = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        if let Err(e) = fut.await {
+            tracing::warn!("{site} danmaku ended: {e}");
+            let _ = app2.emit(
+                "danmaku",
+                DanmakuEvent {
+                    kind: crate::models::live::DanmakuKind::System,
+                    user: "system".into(),
+                    content: format!("弹幕连接断开: {e}"),
+                    color: None,
+                    super_chat: None,
+                    ts: chrono::Utc::now().timestamp_millis(),
+                },
+            );
+        }
+    });
+    manager.set_task(task);
+}
+
 pub async fn connect(
     app: AppHandle,
     manager: &DanmakuManager,
@@ -61,23 +88,17 @@ pub async fn connect(
                 )
                 .with_site("bilibili"));
             }
-            let app2 = app.clone();
-            let task = tauri::async_runtime::spawn(async move {
-                if let Err(e) = bilibili::run_loop(app2.clone(), args).await {
-                    tracing::warn!("bilibili danmaku ended: {}", e);
-                    let _ = app2.emit(
-                        "danmaku",
-                        DanmakuEvent {
-                            kind: crate::models::live::DanmakuKind::System,
-                            user: "system".into(),
-                            content: format!("弹幕连接断开: {e}"),
-                            color: None,
-                            ts: chrono::Utc::now().timestamp_millis(),
-                        },
-                    );
-                }
-            });
-            manager.set_task(task);
+            spawn_loop(app.clone(), manager, "bilibili", bilibili::run_loop(app, args));
+            Ok(())
+        }
+        SiteId::Douyu => {
+            let args = douyu::args_from_raw(room_id, detail_raw)?;
+            spawn_loop(app.clone(), manager, "douyu", douyu::run_loop(app, args));
+            Ok(())
+        }
+        SiteId::Huya => {
+            let args = huya::args_from_raw(room_id, detail_raw)?;
+            spawn_loop(app.clone(), manager, "huya", huya::run_loop(app, args));
             Ok(())
         }
         other => Err(AppError::new(

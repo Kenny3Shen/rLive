@@ -63,11 +63,22 @@ export type RoomListPage = {
 
 export type DanmakuKind = "chat" | "gift" | "enter" | "super_chat" | "system";
 
+/** Optional Bilibili Super Chat metadata emitted with `super_chat` events. */
+export type SuperChatInfo = {
+  id?: string | null;
+  price?: number | null;
+  currency?: string | null;
+  background_color?: string | null;
+  background_bottom_color?: string | null;
+  duration?: number | null;
+};
+
 export type DanmakuEvent = {
   kind: DanmakuKind;
   user: string;
   content: string;
   color: string | null;
+  super_chat?: SuperChatInfo | null;
   ts: number;
 };
 
@@ -97,6 +108,10 @@ export type AppSettings = {
   danmaku_opacity: number;
   danmaku_font_size: number;
   danmaku_speed: number;
+  danmaku_area: number;
+  danmaku_line_count: number;
+  danmaku_font_weight: number;
+  danmaku_filter_repeats: boolean;
   danmaku_shield_words: string[];
   mpv_path: string | null;
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */

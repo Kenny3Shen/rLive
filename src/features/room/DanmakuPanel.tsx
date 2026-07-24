@@ -1,13 +1,24 @@
-import { useEffect, useRef, useState, type UIEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { isShielded } from "./danmaku/filter";
+import {
+  createRepeatMatcher,
+  createShieldMatcher,
+  shouldShowInDanmakuPanel,
+} from "./danmaku/filter";
 import { cn } from "@/lib/utils";
 
 const MAX = 400;
+const MAX_BUFFERED = 200;
+const MAX_PER_FRAME = 50;
+
+type DanmakuLine = {
+  id: number;
+  event: DanmakuEvent;
+};
 
 type DanmakuPanelProps = {
   active: boolean;
@@ -15,104 +26,134 @@ type DanmakuPanelProps = {
   statusText?: string | null;
 };
 
-export function DanmakuPanel({
-  active,
-  className,
-  statusText,
-}: DanmakuPanelProps) {
-  const [items, setItems] = useState<DanmakuEvent[]>([]);
+export function DanmakuPanel({ active, className, statusText }: DanmakuPanelProps) {
+  const [items, setItems] = useState<DanmakuLine[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
+  const pendingRef = useRef<DanmakuLine[]>([]);
+  const flushFrameRef = useRef<number | null>(null);
+  const nextIdRef = useRef(0);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
+  const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
+  const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
+  const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
+  const repeatMatcher = useMemo(() => createRepeatMatcher(filterRepeats), [filterRepeats]);
 
   useEffect(() => {
     if (!active) {
+      if (flushFrameRef.current !== null) {
+        cancelAnimationFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
+      pendingRef.current = [];
+      nextIdRef.current = 0;
       setItems([]);
       return;
     }
+
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
+
+    const flush = () => {
+      flushFrameRef.current = null;
+      const batch = pendingRef.current.splice(0, MAX_PER_FRAME);
+      if (batch.length === 0) return;
+
+      setItems((previous) => {
+        const next = previous.concat(batch);
+        return next.length > MAX ? next.slice(next.length - MAX) : next;
+      });
+
+      // A burst should not make one animation frame reconcile hundreds of
+      // nodes. Remaining recent messages drain over following frames.
+      if (pendingRef.current.length > 0) scheduleFlush();
+    };
+
+    const scheduleFlush = () => {
+      if (flushFrameRef.current === null) {
+        flushFrameRef.current = requestAnimationFrame(flush);
+      }
+    };
+
     void listen<DanmakuEvent>("danmaku", (event) => {
       if (cancelled) return;
       const msg = event.payload;
-      if (!msg?.content?.trim()) return;
-      if (isShielded(msg, shieldWords)) return;
+      if (!shouldShowInDanmakuPanel(msg)) return;
+      if (shieldMatcher(msg)) return;
+      if (repeatMatcher(msg)) return;
 
-      setItems((prev) => {
-        const next = [...prev, msg];
-        return next.length > MAX ? next.slice(next.length - MAX) : next;
-      });
-    }).then((fn) => {
-      unlisten = fn;
-    });
+      const pending = pendingRef.current;
+      pending.push({ id: ++nextIdRef.current, event: msg });
+      if (pending.length > MAX_BUFFERED) {
+        pending.splice(0, pending.length - MAX_BUFFERED);
+      }
+      scheduleFlush();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          void fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
       unlisten?.();
+      if (flushFrameRef.current !== null) {
+        cancelAnimationFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
+      pendingRef.current = [];
     };
-  }, [active, shieldWords]);
+  }, [active, shieldMatcher, repeatMatcher]);
 
   useEffect(() => {
     if (autoScroll.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      // One non-animated scroll per rendered batch avoids stacking native
+      // smooth-scroll animations when a room is busy.
+      bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
     }
-  }, [items.length]);
+  }, [items]);
 
-  function onScroll(e: UIEvent<HTMLDivElement>) {
-    const el = e.currentTarget;
+  function onViewportScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     autoScroll.current = dist < 48;
   }
 
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" onScrollCapture={onViewportScroll}>
         <div
           className="flex flex-col gap-0.5 px-2.5 py-2"
-          onScroll={onScroll}
-          style={{ fontSize: Math.max(12, (fontSize || 16) - 2) }}
+          style={{
+            fontSize: Math.max(12, (fontSize || 16) - 2),
+            fontWeight,
+          }}
         >
-          {statusText && (
-            <p className="px-1.5 py-1 text-xs text-muted-foreground">
-              {statusText}
-            </p>
-          )}
+          {statusText && <p className="px-1.5 py-1 text-xs text-muted-foreground">{statusText}</p>}
           {!active && !statusText && (
             <p className="px-1 py-6 text-center text-xs text-muted-foreground">
               进入直播间后显示弹幕
             </p>
           )}
           {active && items.length === 0 && !statusText && (
-            <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-              等待弹幕…
-            </p>
+            <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
           )}
-          {items.map((line, i) => {
+          {items.map(({ id, event: line }) => {
             if (line.kind === "system") {
               return (
-                <div
-                  key={`${line.ts}-${i}-sys`}
-                  className="px-1.5 py-0.5 text-xs text-muted-foreground"
-                >
-                  {line.content}
-                </div>
-              );
-            }
-            if (line.kind === "enter") {
-              return (
-                <div
-                  key={`${line.ts}-${i}-enter`}
-                  className="px-1.5 py-0.5 text-xs text-muted-foreground"
-                >
+                <div key={id} className="px-1.5 py-0.5 text-xs text-muted-foreground">
                   {line.content}
                 </div>
               );
             }
             return (
-              <div
-                key={`${line.ts}-${i}-${line.user}`}
-                className="rounded-md px-1.5 py-1 leading-relaxed hover:bg-muted/50"
-              >
+              <div key={id} className="rounded-md px-1.5 py-1 leading-relaxed hover:bg-muted/50">
                 <span
                   className="mr-1.5 font-medium text-primary"
                   style={line.color ? { color: line.color } : undefined}

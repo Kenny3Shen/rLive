@@ -1,8 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { isShielded, shouldShowOnCanvas } from "../danmaku/filter";
+import { createRepeatMatcher, createShieldMatcher, shouldShowOnCanvas } from "../danmaku/filter";
 import { createEngine, type DanmakuEngine } from "./danmakuEngine";
 import { cn } from "@/lib/utils";
 
@@ -16,10 +16,17 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DanmakuEngine | null>(null);
   const engineSessionRef = useRef<number | string | null>(sessionKey);
+  const requestFrameRef = useRef<() => void>(() => {});
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const speed = useSettingsStore((s) => s.danmakuSpeed);
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
+  const area = useSettingsStore((s) => s.danmakuArea);
+  const lineCount = useSettingsStore((s) => s.danmakuLineCount);
+  const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
+  const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
+  const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
+  const repeatMatcher = useMemo(() => createRepeatMatcher(filterRepeats), [filterRepeats]);
 
   if (engineRef.current === null || engineSessionRef.current !== sessionKey) {
     engineSessionRef.current = sessionKey;
@@ -27,6 +34,9 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       fontSize: fontSize || 18,
       speed: speed || 8,
       opacity: opacity ?? 1,
+      area: area || 0.9,
+      lineCount,
+      fontWeight,
     });
   }
 
@@ -35,8 +45,12 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       fontSize: fontSize || 18,
       speed: speed || 8,
       opacity: opacity ?? 1,
+      area: area || 0.9,
+      lineCount,
+      fontWeight,
     });
-  }, [fontSize, speed, opacity]);
+    requestFrameRef.current();
+  }, [fontSize, speed, opacity, area, lineCount, fontWeight]);
 
   useEffect(() => {
     if (!active) return;
@@ -47,8 +61,10 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       if (cancelled) return;
       const msg = event.payload;
       if (!shouldShowOnCanvas(msg)) return;
-      if (isShielded(msg, shieldWords)) return;
+      if (shieldMatcher(msg)) return;
+      if (repeatMatcher(msg)) return;
       engineRef.current?.push(msg);
+      requestFrameRef.current();
     })
       .then((fn) => {
         if (cancelled) {
@@ -63,7 +79,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       cancelled = true;
       unlisten?.();
     };
-  }, [active, sessionKey, shieldWords]);
+  }, [active, sessionKey, shieldMatcher, repeatMatcher]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -76,38 +92,47 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     let lastFrameAt = last;
     let ro: ResizeObserver | null = null;
     let stopped = false;
+    let needsDraw = true;
+    let width = 0;
+    let height = 0;
 
     const resize = () => {
+      if (stopped) return;
       const parent = canvas.parentElement;
       if (!parent) return;
       const dpr = window.devicePixelRatio || 1;
-      const w = parent.clientWidth;
-      const h = parent.clientHeight;
-      canvas.width = Math.max(1, Math.floor(w * dpr));
-      canvas.height = Math.max(1, Math.floor(h * dpr));
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
+      width = parent.clientWidth;
+      height = parent.clientHeight;
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      requestFrame();
     };
-
-    resize();
-    ro = new ResizeObserver(resize);
-    if (canvas.parentElement) ro.observe(canvas.parentElement);
 
     const loop = (now: number) => {
       raf = null;
-      if (stopped) return;
+      if (stopped || document.hidden) return;
+      if (width <= 0 || height <= 0) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       lastFrameAt = now;
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
       const engine = engineRef.current;
+      const hadWork = active && Boolean(engine?.hasWork());
       if (engine && active) {
-        engine.tick(dt, w, h);
+        engine.tick(dt, width, height);
       }
-      ctx.clearRect(0, 0, w, h);
-      if (engine) {
+      const hasWork = active && Boolean(engine?.hasWork());
+
+      // Do one clear after state/size changes, then leave an empty canvas
+      // completely idle until a new danmaku arrives.
+      if (needsDraw || hadWork || hasWork) {
+        ctx.clearRect(0, 0, width, height);
+      }
+      needsDraw = false;
+
+      if (engine && active) {
         ctx.save();
         ctx.globalAlpha = engine.opacity();
         ctx.textBaseline = "top";
@@ -118,14 +143,17 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
         ctx.shadowOffsetY = 1;
 
         let drawnFontSize = 0;
+        let drawnFontWeight = 0;
+        const currentFontWeight = engine.fontWeight();
         for (const it of engine.visibleItems()) {
-          if (it.fontSize !== drawnFontSize) {
+          if (it.fontSize !== drawnFontSize || currentFontWeight !== drawnFontWeight) {
             drawnFontSize = it.fontSize;
-            ctx.font = `600 ${drawnFontSize}px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`;
+            drawnFontWeight = currentFontWeight;
+            ctx.font = `${drawnFontWeight} ${drawnFontSize}px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`;
             ctx.lineWidth = Math.max(2, drawnFontSize * 0.13);
           }
 
-          const x = it.kind === "top" ? Math.max(0, (w - it.width) / 2) : it.x;
+          const x = it.kind === "top" ? Math.max(0, (width - it.width) / 2) : it.x;
           ctx.fillStyle = it.color || "#fff";
           ctx.strokeStyle = "rgba(0,0,0,0.82)";
           ctx.strokeText(it.text, x, it.y);
@@ -133,39 +161,60 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
         }
         ctx.restore();
       }
-      scheduleFrame();
+
+      if (hasWork) scheduleFrame();
     };
 
-    const scheduleFrame = () => {
-      if (!stopped && raf === null) raf = requestAnimationFrame(loop);
-    };
+    function scheduleFrame() {
+      if (!stopped && !document.hidden && width > 0 && height > 0 && raf === null) {
+        raf = requestAnimationFrame(loop);
+      }
+    }
 
-    const restartLoop = () => {
+    function requestFrame() {
       if (stopped) return;
+      needsDraw = true;
+      scheduleFrame();
+    }
+
+    function restartFrame() {
+      if (stopped || document.hidden) return;
       if (raf !== null) cancelAnimationFrame(raf);
       raf = null;
       last = performance.now();
       lastFrameAt = last;
-      scheduleFrame();
-    };
+      requestFrame();
+    }
 
     const resumeIfVisible = () => {
-      if (!document.hidden) restartLoop();
+      if (document.hidden) return;
+      restartFrame();
     };
 
+    requestFrameRef.current = requestFrame;
+    resize();
+    ro = new ResizeObserver(resize);
+    if (canvas.parentElement) ro.observe(canvas.parentElement);
     document.addEventListener("visibilitychange", resumeIfVisible);
-    window.addEventListener("focus", restartLoop);
+    window.addEventListener("focus", resumeIfVisible);
     const watchdog = window.setInterval(() => {
-      if (!document.hidden && performance.now() - lastFrameAt > 2000) restartLoop();
+      if (
+        !document.hidden &&
+        active &&
+        engineRef.current?.hasWork() &&
+        performance.now() - lastFrameAt > 2000
+      ) {
+        restartFrame();
+      }
     }, 1000);
-    restartLoop();
 
     return () => {
       stopped = true;
       if (raf !== null) cancelAnimationFrame(raf);
       ro?.disconnect();
+      if (requestFrameRef.current === requestFrame) requestFrameRef.current = () => {};
       document.removeEventListener("visibilitychange", resumeIfVisible);
-      window.removeEventListener("focus", restartLoop);
+      window.removeEventListener("focus", resumeIfVisible);
       window.clearInterval(watchdog);
     };
   }, [active, sessionKey]);
