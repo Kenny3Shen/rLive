@@ -9,7 +9,7 @@ export function cn(...inputs: ClassValue[]) {
 export function formatOnline(n: number): string {
   if (n >= 10_000) {
     const w = n / 10_000;
-    return `${w >= 10 ? Math.round(w) : w.toFixed(1).replace(/\.0$/, "")}万`;
+    return `${w.toFixed(1).replace(/\.0$/, "")}万`;
   }
   if (n >= 1000) {
     return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
@@ -29,9 +29,7 @@ export function normalizeImageUrl(value: string | null | undefined): string | un
   const raw = value?.trim();
   if (!raw) return undefined;
 
-  const url = raw.startsWith("//")
-    ? `https:${raw}`
-    : raw.replace(/^http:\/\//i, "https://");
+  const url = raw.startsWith("//") ? `https:${raw}` : raw.replace(/^http:\/\//i, "https://");
 
   try {
     const parsed = new URL(url);

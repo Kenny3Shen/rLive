@@ -14,6 +14,20 @@ const FALLBACK_SITES: SiteInfo[] = [
   { id: "kuaishou", name: "Kuaishou", ready: false },
 ];
 
+const PLATFORM_ORDER: readonly SiteId[] = ["bilibili", "douyu", "huya", "douyin", "kuaishou"];
+
+const platformOrderIndex = new Map<SiteId, number>(
+  PLATFORM_ORDER.map((siteId, index) => [siteId, index]),
+);
+
+function sortSites(sites: SiteInfo[]): SiteInfo[] {
+  return [...sites].sort(
+    (left, right) =>
+      (platformOrderIndex.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (platformOrderIndex.get(right.id) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
 type SiteSwitcherValue = SiteId | "all";
 
 type SiteSwitcherProps = {
@@ -49,7 +63,7 @@ export function SiteSwitcher({
       try {
         const list = await invokeCmd<SiteInfo[]>("site_list");
         if (!cancelled && Array.isArray(list) && list.length > 0) {
-          setSites(list);
+          setSites(sortSites(list));
         }
       } catch {
         /* keep fallback */
@@ -95,7 +109,9 @@ export function SiteSwitcher({
             )}
           >
             {site.id === "all" ? (
-              <LayoutGrid className={cn("size-5 shrink-0", active && "motion-safe:animate-platform-logo")} />
+              <LayoutGrid
+                className={cn("size-5 shrink-0", active && "motion-safe:animate-platform-logo")}
+              />
             ) : (
               <SiteLogo
                 siteId={site.id}

@@ -21,7 +21,8 @@ pub struct ProfilePackage {
 }
 
 impl ProfilePackage {
-    pub fn sample() -> Self {
+    #[cfg(test)]
+    fn sample() -> Self {
         Self {
             version: 1,
             exported_at: 0,

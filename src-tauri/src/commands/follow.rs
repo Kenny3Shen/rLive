@@ -134,9 +134,11 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
     for f in follows {
         let site_id = f.site_id.clone();
         let room_id = f.room_id.clone();
-        let permit = sem.clone().acquire_owned().await.map_err(|_| {
-            AppError::new("refresh_error", "semaphore closed")
-        })?;
+        let permit = sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::new("refresh_error", "semaphore closed"))?;
         let cookie = {
             let sid = SiteId::from_str_loose(&site_id);
             let conn = lock_db(&state)?;

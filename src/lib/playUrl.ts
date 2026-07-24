@@ -1,10 +1,6 @@
 /** Use stable, human-readable labels rather than exposing CDN host names. */
 export function lineLabel(url: string, index: number): string {
-  const transport = /\.m3u8(?:[?#]|$)|(?:[/?&=_-])hls(?:[/?&=_-]|$)/i.test(
-    url,
-  )
-    ? "HLS"
-    : "FLV";
+  const transport = /\.m3u8(?:[?#]|$)|(?:[/?&=_-])hls(?:[/?&=_-]|$)/i.test(url) ? "HLS" : "FLV";
   return `线路${index + 1}（${transport}）`;
 }
 

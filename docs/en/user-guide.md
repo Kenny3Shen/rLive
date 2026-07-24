@@ -33,18 +33,19 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 |------|------|
 | Sidebar | Home, follows, categories, history, settings |
 | Header | Site switcher, search (user / room ID / title) |
-| Room | Player, refresh / play, quality / line, chat / SC / danmaku settings / follows side tabs |
+| Room | Centred room title, player, host information, and side tabs in the order Danmaku / SC / Follows / Settings |
 
 ## 4. Watching
 
 1. Pick a site in the header.  
 2. Selecting a category opens its own room-list page; search can target **all**, **user**, **room ID**, or **title**.
-3. The refresh control sits left of pause and refreshes stream metadata before rebuilding the playback session.
-4. **Quality** and **line** are separate selectors on the right; the volume icon opens a vertical slider.
-5. The right sidebar, floating danmaku, and fullscreen use compact icon controls. Reopening the sidebar preserves chat and SC lists.
-6. Default quality preference: **Settings → Playback**.
-7. Back from a room always returns to home instead of the previously switched room.
-8. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie.
+3. The room header shows only the centred room title. The side-header shows the host avatar, name, platform, and current heat.
+4. The player controls are a transparent overlay at the bottom of the video. They hide after a short idle period during playback and reappear on pointer, click, or keyboard activity.
+5. The refresh control sits left of pause and refreshes stream metadata before rebuilding the playback session; the volume icon opens a vertical slider.
+6. **Quality** and **line** are separate selectors on the right and show only the active selection.
+7. The right sidebar, floating danmaku, and fullscreen use compact icon controls. Reopening the sidebar preserves chat and SC lists.
+8. Default quality preference: **Settings → Playback**.
+9. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie.
 
 Streams are fetched via a localhost proxy so the web player can attach with correct headers.
 
@@ -60,7 +61,7 @@ Entering a Bilibili, Huya, or Douyu room connects that site's danmaku WebSocket.
 
 ### Room-side settings
 
-Open any room and select the **弹幕设置** tab on the right. Values are saved locally and apply to later rooms too.
+Open any room and select the **Settings** tab on the right; the tabs are ordered **Danmaku / SC / Follows / Settings**. Values are saved locally and apply to later rooms too.
 
 | Control | Effect |
 |---------|--------|
@@ -85,7 +86,7 @@ Follow anchors (with tags) from the room page; refresh live status on the follow
 
 ## 7. Settings summary
 
-Theme, default quality, HTTP proxy, Bilibili cookie, optional Douyin cookie, profile import/export (**cookies excluded**). Danmaku settings live in each room's **弹幕设置** tab rather than the global settings page.
+Use the appearance switcher above **设置** in the sidebar for the app theme. The global settings page contains default quality, HTTP proxy, Bilibili cookie, optional Douyin cookie, and profile import/export (**cookies excluded**). Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
 
 For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite.
 

@@ -9,13 +9,7 @@ type ChipProps = {
   className?: string;
 };
 
-export function Chip({
-  active,
-  onClick,
-  onClear,
-  children,
-  className,
-}: ChipProps) {
+export function Chip({ active, onClick, onClear, children, className }: ChipProps) {
   return (
     <button
       type="button"

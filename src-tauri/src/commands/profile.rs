@@ -20,10 +20,7 @@ pub fn profile_export(state: State<'_, AppState>, path: String) -> AppResult<()>
 }
 
 #[tauri::command]
-pub fn profile_import(
-    state: State<'_, AppState>,
-    path: String,
-) -> AppResult<ProfileImportResult> {
+pub fn profile_import(state: State<'_, AppState>, path: String) -> AppResult<ProfileImportResult> {
     let conn = lock_db(&state)?;
     profile::import_package(&conn, &PathBuf::from(path))
 }

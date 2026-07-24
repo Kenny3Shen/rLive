@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Database, MonitorPlay, Network, Palette, UserRound } from "lucide-react";
+import { Database, MonitorPlay, Network, UserRound } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
-import type { ThemeMode } from "@/shared/stores/settingsStore";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -22,20 +21,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-const themes: { value: ThemeMode; label: string }[] = [
-  { value: "system", label: "跟随系统" },
-  { value: "light", label: "浅色" },
-  { value: "dark", label: "深色" },
-];
-
-type SettingsCategory = "appearance" | "playback" | "network" | "account" | "data";
+type SettingsCategory = "playback" | "network" | "account" | "data";
 
 const settingsCategories: {
   value: SettingsCategory;
   label: string;
   icon: LucideIcon;
 }[] = [
-  { value: "appearance", label: "外观", icon: Palette },
   { value: "playback", label: "播放", icon: MonitorPlay },
   { value: "network", label: "网络", icon: Network },
   { value: "account", label: "账号", icon: UserRound },
@@ -151,8 +143,6 @@ function CookieField({
 }
 
 export function SettingsPage() {
-  const theme = useSettingsStore((s) => s.theme);
-  const setTheme = useSettingsStore((s) => s.setTheme);
   const proxy = useSettingsStore((s) => s.proxy);
   const setProxy = useSettingsStore((s) => s.setProxy);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
@@ -162,7 +152,7 @@ export function SettingsPage() {
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
   const [profilePath, setProfilePath] = useState("");
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
-  const [category, setCategory] = useState<SettingsCategory>("appearance");
+  const [category, setCategory] = useState<SettingsCategory>("playback");
 
   useEffect(() => {
     void loadFromBackend();
@@ -250,38 +240,6 @@ export function SettingsPage() {
         </TabsList>
 
         <div className="min-w-0 flex-1">
-          <TabsContent value="appearance" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="外观">
-              <Section title="主题">
-                <Field orientation="responsive">
-                  <FieldContent>
-                    <FieldTitle id="theme-label">应用主题</FieldTitle>
-                    <FieldDescription>跟随系统或固定显示。</FieldDescription>
-                  </FieldContent>
-                  <ToggleGroup
-                    aria-labelledby="theme-label"
-                    value={[theme]}
-                    variant="outline"
-                    size="sm"
-                    spacing={1}
-                    onValueChange={(values) => {
-                      const next = values[0];
-                      if (next === "system" || next === "light" || next === "dark") {
-                        setTheme(next);
-                      }
-                    }}
-                  >
-                    {themes.map(({ value, label }) => (
-                      <ToggleGroupItem key={value} value={value}>
-                        {label}
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                </Field>
-              </Section>
-            </SettingsContent>
-          </TabsContent>
-
           <TabsContent value="playback" keepMounted className="mt-0 data-[hidden]:hidden">
             <SettingsContent title="播放">
               <Section title="清晰度">
@@ -355,7 +313,10 @@ export function SettingsPage() {
 
           <TabsContent value="data" keepMounted className="mt-0 data-[hidden]:hidden">
             <SettingsContent title="数据">
-              <Section title="导入 / 导出" description="设置、关注、标签、历史和屏蔽词；不含 Cookie。">
+              <Section
+                title="导入 / 导出"
+                description="设置、关注、标签、历史和屏蔽词；不含 Cookie。"
+              >
                 <Field>
                   <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>
                   <FieldContent>
@@ -384,13 +345,7 @@ export function SettingsPage() {
   );
 }
 
-function SettingsContent({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function SettingsContent({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-4">
       <div>

@@ -146,13 +146,6 @@ fn parse_mix_list(v: &Value) -> AppResult<RoomListPage> {
 
 #[async_trait::async_trait]
 impl LiveSite for DouyuSite {
-    fn id(&self) -> SiteId {
-        SiteId::Douyu
-    }
-    fn name(&self) -> &'static str {
-        "Douyu"
-    }
-
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
         let v = self
             .get_json("https://m.douyu.com/api/cate/list", "https://m.douyu.com/")
@@ -181,17 +174,10 @@ impl LiveSite for DouyuSite {
                     id: json_str(c2.get("cate2Id").unwrap_or(&Value::Null)),
                     name: json_str(c2.get("cate2Name").unwrap_or(&Value::Null)),
                     parent_id: id.clone(),
-                    pic: c2
-                        .get("icon")
-                        .map(json_str)
-                        .filter(|s| !s.is_empty()),
+                    pic: c2.get("icon").map(json_str).filter(|s| !s.is_empty()),
                 });
             }
-            categories.push(LiveCategory {
-                id,
-                name,
-                children,
-            });
+            categories.push(LiveCategory { id, name, children });
         }
         categories.sort_by(|a, b| {
             a.id.parse::<i64>()
@@ -297,10 +283,7 @@ impl LiveSite for DouyuSite {
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
         let root = self.room_info(room_id).await?;
-        let room = root
-            .get("room")
-            .cloned()
-            .unwrap_or_else(|| root.clone());
+        let room = root.get("room").cloned().unwrap_or_else(|| root.clone());
 
         let enc = self
             .get_json(
@@ -309,10 +292,7 @@ impl LiveSite for DouyuSite {
             )
             .await?;
         let key = format!("room{room_id}");
-        let crptext = json_str(
-            enc.pointer(&format!("/data/{key}"))
-                .unwrap_or(&Value::Null),
-        );
+        let crptext = json_str(enc.pointer(&format!("/data/{key}")).unwrap_or(&Value::Null));
         if crptext.is_empty() {
             return Err(Self::err("homeH5Enc empty"));
         }
@@ -327,7 +307,10 @@ impl LiveSite for DouyuSite {
 
         Ok(LiveRoomDetail {
             site_id: SiteId::Douyu,
-            room_id: json_str(room.get("room_id").unwrap_or(&Value::String(room_id.into()))),
+            room_id: json_str(
+                room.get("room_id")
+                    .unwrap_or(&Value::String(room_id.into())),
+            ),
             title: json_str(room.get("room_name").unwrap_or(&Value::Null)),
             cover: json_str(room.get("room_pic").unwrap_or(&Value::Null)),
             user_name: json_str(room.get("owner_name").unwrap_or(&Value::Null)),

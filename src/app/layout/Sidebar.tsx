@@ -1,5 +1,7 @@
 import { NavLink } from "react-router-dom";
-import { Home, Heart, LayoutGrid, History, Settings } from "lucide-react";
+import { Home, Heart, LayoutGrid, History, Moon, Settings, Sun } from "lucide-react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 
 const navItems: {
@@ -54,6 +56,41 @@ function SidebarLink({
   );
 }
 
+function AppearanceToggle() {
+  const theme = useSettingsStore((state) => state.theme);
+  const setTheme = useSettingsStore((state) => state.setTheme);
+  const selectedTheme =
+    theme === "system"
+      ? document.documentElement.classList.contains("dark")
+        ? "dark"
+        : "light"
+      : theme;
+
+  return (
+    <ToggleGroup
+      aria-label="切换应用外观"
+      value={[selectedTheme]}
+      variant="default"
+      size="sm"
+      spacing={1}
+      orientation="vertical"
+      onValueChange={(values) => {
+        const next = values[0];
+        if (next === "light" || next === "dark") {
+          setTheme(next);
+        }
+      }}
+    >
+      <ToggleGroupItem value="light" className="size-8 px-0" aria-label="浅色模式" title="浅色模式">
+        <Sun aria-hidden />
+      </ToggleGroupItem>
+      <ToggleGroupItem value="dark" className="size-8 px-0" aria-label="深色模式" title="深色模式">
+        <Moon aria-hidden />
+      </ToggleGroupItem>
+    </ToggleGroup>
+  );
+}
+
 export function Sidebar() {
   return (
     <aside className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar py-3">
@@ -69,6 +106,9 @@ export function Sidebar() {
           <SidebarLink key={item.to} {...item} />
         ))}
       </nav>
+      <div className="mb-1.5 flex flex-col items-center">
+        <AppearanceToggle />
+      </div>
       <SidebarLink to="/settings" label="设置" icon={Settings} />
     </aside>
   );

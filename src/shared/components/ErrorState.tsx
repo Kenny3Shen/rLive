@@ -23,11 +23,7 @@ function codeFromError(error: unknown): string | null {
   return null;
 }
 
-export function ErrorState({
-  error,
-  onRetry,
-  title = "出了点问题",
-}: ErrorStateProps) {
+export function ErrorState({ error, onRetry, title = "出了点问题" }: ErrorStateProps) {
   const message = messageFromError(error);
   const code = codeFromError(error);
 
@@ -41,9 +37,7 @@ export function ErrorState({
         <div>
           <h2 className="text-sm font-semibold text-danger">{title}</h2>
           <p className="mt-1 text-sm text-danger/90">{message}</p>
-          {code && (
-            <p className="mt-1 font-mono text-xs text-danger/70">{code}</p>
-          )}
+          {code && <p className="mt-1 font-mono text-xs text-danger/70">{code}</p>}
         </div>
       </div>
       {onRetry && (

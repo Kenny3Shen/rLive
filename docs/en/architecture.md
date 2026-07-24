@@ -24,6 +24,8 @@ Rust LiveSite + danmaku + proxy + DB
 3. Frontend plays proxied FLV via MSE.  
 4. Leave room: stop player + proxy.
 
+The room player renders controls as a transparent bottom overlay. They auto-hide after playback is idle and reappear on pointer, click, or keyboard activity.
+
 ## 3. Sites
 
 | Path | Role |

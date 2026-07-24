@@ -1,12 +1,10 @@
 use crate::error::AppResult;
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage, SiteId,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage,
 };
 
 #[async_trait::async_trait]
 pub trait LiveSite: Send + Sync {
-    fn id(&self) -> SiteId;
-    fn name(&self) -> &'static str;
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>>;
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage>;
     async fn get_category_rooms(

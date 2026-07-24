@@ -1,31 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowLeft,
-  Heart,
-  Share2,
-  Link2,
-} from "lucide-react";
+import { Flame, Heart, Share2, Link2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
-import type {
-  FollowUser,
-  HistoryItem,
-  LiveRoomDetail,
-  SiteId,
-} from "@/shared/types/live";
+import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
 import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
-import { SITE_LABELS, cn } from "@/lib/utils";
+import { SiteLogo } from "@/shared/components/SiteLogo";
+import { formatOnline, SITE_LABELS, cn, normalizeImageUrl } from "@/lib/utils";
 
 export function RoomPage() {
-  const navigate = useNavigate();
   const { siteId: siteParam, roomId: roomParam } = useParams<{
     siteId: string;
     roomId: string;
@@ -81,9 +71,7 @@ export function RoomPage() {
 
   const isFollowed = useMemo(() => {
     if (!siteId || !roomId || !followQuery.data) return false;
-    return followQuery.data.some(
-      (f) => f.site_id === siteId && f.room_id === roomId,
-    );
+    return followQuery.data.some((f) => f.site_id === siteId && f.room_id === roomId);
   }, [followQuery.data, siteId, roomId]);
 
   async function toggleFollow() {
@@ -132,7 +120,7 @@ export function RoomPage() {
   if (detailQuery.isLoading) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar onBack={() => navigate("/", { replace: true })} title="加载中…" />
+        <RoomTopBar title="加载中…" />
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-8 text-primary" />
         </div>
@@ -143,7 +131,7 @@ export function RoomPage() {
   if (detailQuery.isError) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar onBack={() => navigate("/", { replace: true })} title="加载失败" />
+        <RoomTopBar title="加载失败" />
         <div className="p-6">
           <ErrorState
             error={detailQuery.error}
@@ -157,14 +145,41 @@ export function RoomPage() {
 
   if (!detail) return null;
 
+  const platformLabel = SITE_LABELS[detail.site_id] ?? detail.site_id;
+  const onlineLabel = formatOnline(detail.online);
+
+  const sideHeader = (
+    <div className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-3">
+      <Avatar size="lg" className="size-11">
+        <AvatarImage
+          src={normalizeImageUrl(detail.user_avatar)}
+          alt={detail.user_name}
+          referrerPolicy="no-referrer"
+        />
+        <AvatarFallback>{(detail.user_name || "?").slice(0, 1)}</AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold leading-5">{detail.user_name || "未知主播"}</p>
+        <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1 truncate" title={platformLabel}>
+            <SiteLogo siteId={detail.site_id} className="size-3.5" />
+            <span className="truncate">{platformLabel}</span>
+          </span>
+          <span
+            className="flex shrink-0 items-center gap-1 text-orange-400"
+            title={`当前热度 ${onlineLabel}`}
+          >
+            <Flame className="size-3.5" aria-hidden />
+            <span>{onlineLabel}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <RoomTopBar
-        onBack={() => navigate("/", { replace: true })}
-        title={detail.title || "直播间"}
-        subtitle={`${detail.user_name} · ${SITE_LABELS[detail.site_id] ?? detail.site_id}`}
-        live={detail.status}
-      />
+      <RoomTopBar title={detail.title || "直播间"} />
 
       <div className="min-h-0 flex-1">
         <PlayerPane
@@ -174,6 +189,7 @@ export function RoomPage() {
           onRetry={playback.retryPlay}
           danmakuActive={danmaku.active}
           danmakuStatusText={danmaku.statusText}
+          sideHeader={sideHeader}
           qualities={playback.qualities}
           qualityIndex={playback.qualityIndex}
           onQualityChange={playback.onQualityChange}
@@ -210,9 +226,7 @@ export function RoomPage() {
             size="sm"
             title="复制房间页链接"
             onClick={() => {
-              void navigator.clipboard?.writeText(
-                detail.url || window.location.href,
-              );
+              void navigator.clipboard?.writeText(detail.url || window.location.href);
             }}
           >
             <Link2 data-icon="inline-start" />
@@ -238,45 +252,10 @@ export function RoomPage() {
   );
 }
 
-function RoomTopBar({
-  onBack,
-  title,
-  subtitle,
-  live,
-}: {
-  onBack: () => void;
-  title: string;
-  subtitle?: string;
-  live?: boolean;
-}) {
+function RoomTopBar({ title }: { title: string }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-sidebar px-2">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onBack}
-        aria-label="返回"
-        title="返回"
-      >
-        <ArrowLeft />
-      </Button>
-      <Link to="/" className="sr-only" tabIndex={-1}>
-        首页
-      </Link>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{title}</p>
-        {subtitle && (
-          <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p>
-        )}
-      </div>
-      {live != null &&
-        (live ? (
-          <Badge className="animate-live bg-accent text-accent-foreground">
-            LIVE
-          </Badge>
-        ) : (
-          <Badge variant="secondary">未开播</Badge>
-        ))}
+    <header className="flex h-12 shrink-0 items-center justify-center border-b border-border bg-sidebar px-4">
+      <p className="max-w-full truncate text-sm font-medium">{title}</p>
     </header>
   );
 }

@@ -1,4 +1,11 @@
-import { useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type { PlayUrl } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
@@ -15,11 +22,16 @@ import type { PlayerEvent } from "@/shared/types/player";
 
 export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
+const CONTROLS_HIDE_DELAY_MS = 2_600;
+const CONTROLS_HOVER_ZONE_PX = 64;
+
 type PlayerPaneProps = {
   playUrl: PlayUrl | null;
   loading?: boolean;
   error?: unknown;
   onRetry?: () => void;
+  /** Compact streamer identity shown above the side tabs. */
+  sideHeader?: ReactNode;
   danmakuActive?: boolean;
   danmakuStatusText?: string | null;
   qualities?: { quality: string }[];
@@ -52,6 +64,7 @@ export function PlayerPane({
   loading,
   error,
   onRetry,
+  sideHeader,
   danmakuActive = false,
   danmakuStatusText,
   qualities = [],
@@ -71,6 +84,8 @@ export function PlayerPane({
 }: PlayerPaneProps) {
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsHideTimerRef = useRef<number | null>(null);
 
   const player = useWebPlayer({
     playUrl,
@@ -92,12 +107,72 @@ export function PlayerPane({
   const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
+  const canAutoHideControls = showHost && !player.paused;
+
+  const clearControlsHideTimer = useCallback(() => {
+    if (controlsHideTimerRef.current !== null) {
+      window.clearTimeout(controlsHideTimerRef.current);
+      controlsHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleControlsHide = useCallback(() => {
+    clearControlsHideTimer();
+    if (!canAutoHideControls) {
+      setControlsVisible(true);
+      return;
+    }
+    controlsHideTimerRef.current = window.setTimeout(() => {
+      controlsHideTimerRef.current = null;
+      setControlsVisible(false);
+    }, CONTROLS_HIDE_DELAY_MS);
+  }, [canAutoHideControls, clearControlsHideTimer]);
+
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    scheduleControlsHide();
+  }, [scheduleControlsHide]);
+
+  const holdControlsVisible = useCallback(() => {
+    clearControlsHideTimer();
+    setControlsVisible(true);
+  }, [clearControlsHideTimer]);
+
+  const handleStagePointerActivity = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      // A pointer can enter the control area while it is still transparent and
+      // pointer-events are disabled. Treat the bottom strip as interactive on
+      // that first movement so it does not fade out underneath the cursor.
+      const stage = event.currentTarget.getBoundingClientRect();
+      if (event.clientY >= stage.bottom - CONTROLS_HOVER_ZONE_PX) {
+        holdControlsVisible();
+        return;
+      }
+      revealControls();
+    },
+    [holdControlsVisible, revealControls],
+  );
+
+  // Live playback stays unobstructed by default, while every pointer, touch
+  // or keyboard interaction brings the bottom chrome back immediately.
+  useEffect(() => {
+    setControlsVisible(true);
+    scheduleControlsHide();
+    return clearControlsHideTimer;
+  }, [roomSessionKey, scheduleControlsHide, clearControlsHideTimer]);
 
   return (
     <div className="flex h-full min-h-0 w-full">
       <div className="relative flex min-w-0 flex-1 flex-col bg-black">
         <div className="flex min-h-0 flex-1 flex-col">
-          <div ref={player.stageRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+          <div
+            ref={player.stageRef}
+            className="relative min-h-0 flex-1 overflow-hidden bg-black"
+            onPointerEnter={handleStagePointerActivity}
+            onPointerMove={handleStagePointerActivity}
+            onPointerDown={handleStagePointerActivity}
+            onKeyDownCapture={revealControls}
+          >
             {loading && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                 <Spinner className="size-8 text-primary" />
@@ -141,32 +216,61 @@ export function PlayerPane({
                 className="z-10"
               />
             )}
-          </div>
 
-          <PlayerControls
-            paused={player.paused}
-            volume={player.volume}
-            muted={player.muted}
-            sidePanelOpen={sidePanelOpen}
-            osdOn={osdOn}
-            qualities={qualities}
-            qualityIndex={qualityIndex}
-            lines={lines}
-            lineIndex={lineIndex}
-            fullscreen={player.mode === "fullscreen"}
-            loadError={loadError}
-            disabled={transportDisabled}
-            refreshDisabled={refreshDisabled}
-            onRefresh={onRefresh}
-            onTogglePause={() => player.togglePause()}
-            onVolume={(v) => player.changeVolume(v)}
-            onToggleMute={player.toggleMute}
-            onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
-            onToggleOsd={() => setOsdOn((v) => !v)}
-            onQualityChange={onQualityChange ?? (() => {})}
-            onLineChange={onLineChange ?? (() => {})}
-            onToggleFullscreen={() => void player.toggleFullscreen()}
-          />
+            <div
+              data-player-controls
+              data-visible={controlsVisible ? "true" : "false"}
+              className={cn(
+                "absolute inset-x-0 bottom-0 z-30 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                controlsVisible
+                  ? "translate-y-0 opacity-100"
+                  : "pointer-events-none translate-y-2 opacity-0",
+              )}
+              onPointerEnter={holdControlsVisible}
+              onPointerMove={(event) => {
+                event.stopPropagation();
+                holdControlsVisible();
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                holdControlsVisible();
+              }}
+              onPointerLeave={scheduleControlsHide}
+              onFocusCapture={holdControlsVisible}
+              onBlurCapture={(event) => {
+                const nextFocused = event.relatedTarget;
+                if (!(nextFocused instanceof Node) || !event.currentTarget.contains(nextFocused)) {
+                  scheduleControlsHide();
+                }
+              }}
+            >
+              <PlayerControls
+                paused={player.paused}
+                volume={player.volume}
+                muted={player.muted}
+                sidePanelOpen={sidePanelOpen}
+                osdOn={osdOn}
+                qualities={qualities}
+                qualityIndex={qualityIndex}
+                lines={lines}
+                lineIndex={lineIndex}
+                fullscreen={player.mode === "fullscreen"}
+                loadError={loadError}
+                disabled={transportDisabled}
+                overlay
+                refreshDisabled={refreshDisabled}
+                onRefresh={onRefresh}
+                onTogglePause={() => player.togglePause()}
+                onVolume={(v) => player.changeVolume(v)}
+                onToggleMute={player.toggleMute}
+                onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
+                onToggleOsd={() => setOsdOn((v) => !v)}
+                onQualityChange={onQualityChange ?? (() => {})}
+                onLineChange={onLineChange ?? (() => {})}
+                onToggleFullscreen={() => void player.toggleFullscreen()}
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -178,6 +282,7 @@ export function PlayerPane({
           !sidePanelOpen && "hidden",
         )}
       >
+        {sideHeader}
         <Tabs
           {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
           className="flex min-h-0 flex-1 flex-col gap-0"
@@ -185,12 +290,20 @@ export function PlayerPane({
         >
           <TabsList
             variant="line"
-            className="h-10 w-full justify-start rounded-none border-b border-border bg-transparent px-2"
+            className="h-12! w-full justify-start rounded-none border-b border-border bg-transparent px-2"
           >
-            <TabsTrigger value="chat" className="text-base">聊天</TabsTrigger>
-            <TabsTrigger value="sc" className="text-base">SC</TabsTrigger>
-            <TabsTrigger value="settings" className="text-base">弹幕设置</TabsTrigger>
-            <TabsTrigger value="follow" className="text-base">关注</TabsTrigger>
+            <TabsTrigger value="chat" className="px-3 text-sm">
+              弹幕
+            </TabsTrigger>
+            <TabsTrigger value="sc" className="text-sm">
+              SC
+            </TabsTrigger>
+            <TabsTrigger value="follow" className="text-sm">
+              关注
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="text-sm">
+              设置
+            </TabsTrigger>
           </TabsList>
           <TabsContent
             value="chat"
@@ -214,18 +327,18 @@ export function PlayerPane({
             />
           </TabsContent>
           <TabsContent
-            value="settings"
-            keepMounted
-            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-          >
-            <DanmakuSettingsPanel className="h-full" />
-          </TabsContent>
-          <TabsContent
             value="follow"
             keepMounted
             className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
           >
             <FollowPanel className="h-full" />
+          </TabsContent>
+          <TabsContent
+            value="settings"
+            keepMounted
+            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+          >
+            <DanmakuSettingsPanel className="h-full" />
           </TabsContent>
         </Tabs>
       </aside>

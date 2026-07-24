@@ -49,21 +49,21 @@ impl Db {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    AppError::new("db_io_error", format!("create data dir: {e}"))
-                })?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| AppError::new("db_io_error", format!("create data dir: {e}")))?;
             }
         }
-        let conn = Connection::open(path)
-            .map_err(|e| AppError::new("db_open_error", e.to_string()))?;
+        let conn =
+            Connection::open(path).map_err(|e| AppError::new("db_open_error", e.to_string()))?;
         migrate(&conn)?;
         Ok(conn)
     }
 }
 
+#[cfg(test)]
 pub fn open_in_memory() -> AppResult<Connection> {
-    let conn = Connection::open_in_memory()
-        .map_err(|e| AppError::new("db_open_error", e.to_string()))?;
+    let conn =
+        Connection::open_in_memory().map_err(|e| AppError::new("db_open_error", e.to_string()))?;
     migrate(&conn)?;
     Ok(conn)
 }

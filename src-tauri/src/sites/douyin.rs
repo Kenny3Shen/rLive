@@ -270,14 +270,6 @@ impl DouyinSite {
 
 #[async_trait::async_trait]
 impl LiveSite for DouyinSite {
-    fn id(&self) -> SiteId {
-        SiteId::Douyin
-    }
-
-    fn name(&self) -> &'static str {
-        "Douyin"
-    }
-
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
         self.ensure_web_session().await?;
         let html = self.get_text(LIVE_ROOT, &[], LIVE_ROOT, false).await?;

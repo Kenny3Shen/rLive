@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "rlive",
+  "productName": "rLive",
   "version": "0.1.0",
   "identifier": "com.shenss.rlive",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "rlive",
+        "title": "rLive",
         "width": 1280,
         "height": 720
       }

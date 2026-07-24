@@ -24,17 +24,6 @@ impl AppState {
             stream_proxy: StreamProxy::new(),
         })
     }
-
-    /// In-memory state for unit tests.
-    #[cfg(test)]
-    pub fn init_in_memory() -> AppResult<Self> {
-        let conn = crate::db::schema::open_in_memory()?;
-        Ok(Self {
-            db: Mutex::new(conn),
-            danmaku: DanmakuManager::new(),
-            stream_proxy: StreamProxy::new(),
-        })
-    }
 }
 
 fn db_path() -> AppResult<PathBuf> {
