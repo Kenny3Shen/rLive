@@ -66,9 +66,8 @@ if (typeof String.prototype.substr !== 'function') {
 "#;
 
 fn eval_js(ctx: &mut Context, src: &str, stage: &str) -> AppResult<()> {
-    ctx.eval(Source::from_bytes(src)).map_err(|e| {
-        AppError::new("douyu_sign", format!("{stage}: {e}")).with_site("douyu")
-    })?;
+    ctx.eval(Source::from_bytes(src))
+        .map_err(|e| AppError::new("douyu_sign", format!("{stage}: {e}")).with_site("douyu"))?;
     Ok(())
 }
 
@@ -91,9 +90,9 @@ pub fn get_sign(html_js: &str, rid: &str) -> AppResult<String> {
         .unwrap_or(0);
     // rid/did/time are digits; keep as plain string literals.
     let call = format!("ub98484234('{rid}','{did}','{time}')");
-    let value = ctx.eval(Source::from_bytes(&call)).map_err(|e| {
-        AppError::new("douyu_sign", format!("ub98484234: {e}")).with_site("douyu")
-    })?;
+    let value = ctx
+        .eval(Source::from_bytes(&call))
+        .map_err(|e| AppError::new("douyu_sign", format!("ub98484234: {e}")).with_site("douyu"))?;
     value
         .to_string(&mut ctx)
         .map(|js| js.to_std_string_escaped())

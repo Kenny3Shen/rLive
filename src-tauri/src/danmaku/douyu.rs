@@ -6,7 +6,6 @@
 //! Note: Douyu's TLS stack only offers RSA-AES-GCM ciphers. Connections must
 //! use the system TLS backend (`native-tls`), not rustls.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -162,11 +161,9 @@ fn for_each_packet(data: &[u8], mut visit: impl FnMut(&str)) {
     }
 }
 
-/// Decode zero or more STT body strings from a binary buffer.
-///
-/// Kept as a public helper for protocol tests and diagnostics. The live hot
-/// path uses [`decode_binary_with`] to avoid these intermediate allocations.
-pub fn deserialize_packets(data: &[u8]) -> Vec<String> {
+/// Test-only convenience wrapper around the borrowing packet visitor.
+#[cfg(test)]
+fn deserialize_packets(data: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     for_each_packet(data, |body| out.push(body.to_owned()));
     out
@@ -175,27 +172,6 @@ pub fn deserialize_packets(data: &[u8]) -> Vec<String> {
 /// Unescape Douyu STT `@S` / `@A` sequences.
 pub fn unescape_slash_at(s: &str) -> String {
     s.replace("@S", "/").replace("@A", "@")
-}
-
-/// Parse Douyu "STT" key/value text into a flat string map for the top-level object.
-/// Nested values are kept as raw strings (enough for chatmsg fields).
-///
-/// This compatibility/debugging helper intentionally stays outside the live
-/// parser hot path, which only borrows the few fields required per event.
-#[allow(dead_code)]
-pub fn stt_to_map(str_in: &str) -> HashMap<String, String> {
-    let mut result = HashMap::new();
-    if str_in.contains("@=") {
-        for field in str_in.split('/') {
-            if field.is_empty() {
-                continue;
-            }
-            if let Some((k, v)) = field.split_once("@=") {
-                result.insert(k.to_string(), unescape_slash_at(v));
-            }
-        }
-    }
-    result
 }
 
 /// Read the message type without constructing a map. Douyu sends `type` as
@@ -370,7 +346,8 @@ fn decode_binary_with(data: &[u8], mut emit: impl FnMut(DanmakuEvent)) {
     });
 }
 
-pub fn decode_binary(data: &[u8]) -> Vec<DanmakuEvent> {
+#[cfg(test)]
+fn decode_binary(data: &[u8]) -> Vec<DanmakuEvent> {
     let mut events = Vec::new();
     decode_binary_with(data, |event| events.push(event));
     events

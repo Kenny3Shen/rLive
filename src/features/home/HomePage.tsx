@@ -27,7 +27,10 @@ export function HomePage() {
   const rooms = query.data?.pages.flatMap((p) => p.items) ?? [];
 
   return (
-    <div key={siteId} className="mx-auto flex max-w-[1600px] flex-col gap-4 motion-safe:animate-platform-enter">
+    <div
+      key={siteId}
+      className="mx-auto flex max-w-[1600px] flex-col gap-4 motion-safe:animate-platform-enter"
+    >
       {query.isLoading && (
         <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {Array.from({ length: 12 }).map((_, i) => (
@@ -50,9 +53,7 @@ export function HomePage() {
 
       {!query.isLoading && !query.isError && rooms.length === 0 && (
         <div className="flex flex-col items-center justify-center gap-2 py-24 text-muted-foreground">
-          <p className="text-sm">
-            暂无 {SITE_LABELS[siteId] ?? siteId} 推荐直播
-          </p>
+          <p className="text-sm">暂无 {SITE_LABELS[siteId] ?? siteId} 推荐直播</p>
         </div>
       )}
 

@@ -1,21 +1,13 @@
 use crate::error::AppResult;
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage, SiteId,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage,
 };
-use crate::sites::traits::{not_implemented, LiveSite};
+use crate::sites::traits::{LiveSite, not_implemented};
 
 pub struct KuaishouSite;
 
 #[async_trait::async_trait]
 impl LiveSite for KuaishouSite {
-    fn id(&self) -> SiteId {
-        SiteId::Kuaishou
-    }
-
-    fn name(&self) -> &'static str {
-        "Kuaishou"
-    }
-
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
         Err(not_implemented("kuaishou", "get_categories"))
     }
@@ -40,7 +32,10 @@ impl LiveSite for KuaishouSite {
         Err(not_implemented("kuaishou", "get_room_detail"))
     }
 
-    async fn get_play_qualities(&self, _detail: &LiveRoomDetail) -> AppResult<Vec<LivePlayQuality>> {
+    async fn get_play_qualities(
+        &self,
+        _detail: &LiveRoomDetail,
+    ) -> AppResult<Vec<LivePlayQuality>> {
         Err(not_implemented("kuaishou", "get_play_qualities"))
     }
 

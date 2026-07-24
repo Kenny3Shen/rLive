@@ -19,7 +19,6 @@ pub struct BilibiliDanmakuArgs {
     pub server_host: String,
     /// Viewer mid (DedeUserID). Use 0 when anonymous.
     pub uid: i64,
-    pub cookie: String,
 }
 
 /// Extract `key=value` from a cookie header string.
@@ -94,7 +93,6 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<BilibiliDanmakuArg
         buvid,
         server_host,
         uid,
-        cookie,
     })
 }
 
@@ -149,8 +147,9 @@ fn inflate_brotli(body: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Parse one or more protocol packets; returns chat/superchat/enter/gift events.
-pub fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
+/// Test-only allocating wrapper around the streaming packet decoder.
+#[cfg(test)]
+fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
     let mut out = Vec::new();
     decode_packets_with(data, &mut |event| out.push(event));
     out
@@ -159,8 +158,7 @@ pub fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
 /// Decode a packet buffer directly into a caller-owned sink.
 ///
 /// The websocket loop can emit each event as it is decoded, avoiding a
-/// short-lived `Vec<DanmakuEvent>` for every busy-room frame.  Keep the
-/// allocating [`decode_packets`] wrapper for tests and diagnostics.
+/// short-lived `Vec<DanmakuEvent>` for every busy-room frame.
 fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     let mut offset = 0usize;
     while offset + 16 <= data.len() {
@@ -725,8 +723,8 @@ mod tests {
         // Build a nested op=5 JSON packet, zlib-compress as outer ver=2 body.
         let inner_json = br#"{"cmd":"DANMU_MSG","info":[[0,1,25,0],"nested",[1,"carol",0]]}"#;
         let inner = encode_packet(inner_json, 5);
-        use flate2::write::ZlibEncoder;
         use flate2::Compression;
+        use flate2::write::ZlibEncoder;
         use std::io::Write;
         let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
         enc.write_all(&inner).unwrap();

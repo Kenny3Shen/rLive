@@ -1,7 +1,7 @@
 import { useSettingsStore } from "../stores/settingsStore";
 import type { SiteId } from "../types/live";
 
-const SITE_IDS: SiteId[] = ["bilibili", "huya", "douyu", "douyin", "kuaishou"];
+const SITE_IDS: SiteId[] = ["bilibili", "douyu", "huya", "douyin", "kuaishou"];
 
 function isSiteId(v: string): v is SiteId {
   return (SITE_IDS as string[]).includes(v);

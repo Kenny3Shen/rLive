@@ -165,10 +165,7 @@ fn extract_i64_near(html: &str, key: &str) -> Option<i64> {
     let after = &html[idx + pat.len()..];
     let colon = after.find(':')?;
     let rest = after[colon + 1..].trim_start();
-    let num: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     num.parse().ok()
 }
 
@@ -251,7 +248,10 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     for (i, &c) in T.iter().enumerate() {
         inv[c as usize] = i as u8;
     }
-    let s: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    let s: Vec<u8> = s
+        .bytes()
+        .filter(|c| !c.is_ascii_whitespace() && *c != b'=')
+        .collect();
     let mut out = Vec::with_capacity(s.len() * 3 / 4);
     for chunk in s.chunks(4) {
         if chunk.len() < 2 {
@@ -339,13 +339,6 @@ fn parse_huya_room_list(v: &Value) -> AppResult<RoomListPage> {
 
 #[async_trait::async_trait]
 impl LiveSite for HuyaSite {
-    fn id(&self) -> SiteId {
-        SiteId::Huya
-    }
-    fn name(&self) -> &'static str {
-        "Huya"
-    }
-
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
         let v = self
             .get_json("https://live.cdn.huya.com/liveconfig/game/bussLive")
@@ -550,11 +543,7 @@ impl LiveSite for HuyaSite {
                         .get("lProfileRoom")
                         .unwrap_or(&Value::String(room_id.into())),
                 );
-                if r.is_empty() {
-                    room_id.to_string()
-                } else {
-                    r
-                }
+                if r.is_empty() { room_id.to_string() } else { r }
             },
             title,
             cover: json_str(live_info.get("sScreenshot").unwrap_or(&Value::Null)),

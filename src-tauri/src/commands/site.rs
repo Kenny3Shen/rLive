@@ -17,9 +17,10 @@ pub struct SiteInfo {
 }
 
 fn load_cookie(state: &AppState, site_id: &SiteId) -> AppResult<Option<String>> {
-    let conn = state.db.lock().map_err(|_| {
-        AppError::new("db_lock_error", "database mutex poisoned")
-    })?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
     account::get_cookie(&conn, site_id)
 }
 

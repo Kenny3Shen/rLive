@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import {
   Captions,
+  CaptionsOff,
   Maximize2,
   Minimize2,
   PanelRightClose,
@@ -24,6 +25,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineLabel } from "@/lib/playUrl";
+import { cn } from "@/lib/utils";
 
 export type PlayerControlsProps = {
   paused: boolean;
@@ -37,6 +39,8 @@ export type PlayerControlsProps = {
   lineIndex: number;
   fullscreen?: boolean;
   disabled?: boolean;
+  /** Use when controls are rendered over the bottom edge of the video. */
+  overlay?: boolean;
   refreshDisabled?: boolean;
   loadError?: string | null;
   onRefresh?: () => void;
@@ -105,6 +109,7 @@ export function PlayerControls({
   lineIndex,
   fullscreen = false,
   disabled = false,
+  overlay = false,
   refreshDisabled = disabled,
   loadError,
   onRefresh,
@@ -120,6 +125,18 @@ export function PlayerControls({
   const isMuted = muted || volume === 0;
   const volumeLabel = "调节音量";
   const muteLabel = isMuted ? "取消静音" : "静音";
+  const overlayButtonClass = overlay
+    ? "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70"
+    : undefined;
+  const overlaySelectTriggerClass = overlay
+    ? "bg-transparent text-white hover:bg-white/15 hover:text-white data-placeholder:text-white/70 focus-visible:ring-white/70 [&_svg]:text-white/75"
+    : undefined;
+  const overlaySelectContentClass = overlay
+    ? "border-0 bg-black/85 text-white shadow-xl backdrop-blur-md"
+    : undefined;
+  const overlaySelectItemClass = overlay
+    ? "text-white hover:bg-white/15 hover:text-white data-highlighted:bg-white/15 data-highlighted:text-white data-selected:bg-white/20 data-selected:text-white data-selected:hover:bg-white/20 data-selected:data-highlighted:bg-white/20"
+    : undefined;
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
@@ -132,14 +149,31 @@ export function PlayerControls({
   };
 
   return (
-    <div className="flex shrink-0 items-center gap-1 border-t border-border bg-card px-2 py-1.5">
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-1 px-2 py-1.5",
+        overlay
+          ? "border-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent text-white"
+          : "border-t border-border bg-card",
+      )}
+    >
       <div className="flex shrink-0 items-center gap-1">
         {onRefresh && (
-          <ControlButton label="刷新播放" disabled={refreshDisabled} onClick={onRefresh}>
+          <ControlButton
+            label="刷新播放"
+            className={overlayButtonClass}
+            disabled={refreshDisabled}
+            onClick={onRefresh}
+          >
             <RefreshCw />
           </ControlButton>
         )}
-        <ControlButton label={paused ? "播放" : "暂停"} disabled={disabled} onClick={onTogglePause}>
+        <ControlButton
+          label={paused ? "播放" : "暂停"}
+          className={overlayButtonClass}
+          disabled={disabled}
+          onClick={onTogglePause}
+        >
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
 
@@ -152,12 +186,20 @@ export function PlayerControls({
                 disabled={disabled}
                 aria-label={volumeLabel}
                 title={volumeLabel}
+                className={overlayButtonClass}
               />
             }
           >
             <Volume2 />
           </PopoverTrigger>
-          <PopoverContent side="top" align="start" className="w-auto p-3">
+          <PopoverContent
+            side="top"
+            align="start"
+            className={cn(
+              "w-auto p-3",
+              overlay && "border-0 bg-black/85 text-white shadow-xl backdrop-blur-md",
+            )}
+          >
             <Slider
               value={volume}
               min={0}
@@ -176,6 +218,7 @@ export function PlayerControls({
 
         <ControlButton
           label={muteLabel}
+          className={overlayButtonClass}
           disabled={disabled}
           aria-pressed={isMuted}
           onClick={onToggleMute}
@@ -185,7 +228,13 @@ export function PlayerControls({
       </div>
 
       {loadError && (
-        <span className="min-w-0 max-w-40 truncate px-1 text-xs text-destructive" title={loadError}>
+        <span
+          className={cn(
+            "min-w-0 max-w-40 truncate px-1 text-xs",
+            overlay ? "text-red-200" : "text-destructive",
+          )}
+          title={loadError}
+        >
           {loadError}
         </span>
       )}
@@ -199,18 +248,26 @@ export function PlayerControls({
               if (value != null) onQualityChange(Number(value));
             }}
           >
-            <SelectTrigger size="sm" className="w-28 shrink-0" aria-label="清晰度">
+            <SelectTrigger
+              size="sm"
+              className={cn("w-36 shrink-0", overlaySelectTriggerClass)}
+              aria-label="清晰度"
+            >
               <SelectValue>
                 {(value) => {
                   const index = typeof value === "string" ? Number(value) : -1;
-                  return index >= 0 ? `清晰度 · ${qualityLabel(index)}` : "清晰度";
+                  return index >= 0 ? qualityLabel(index) : "清晰度";
                 }}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent side="top" align="end">
+            <SelectContent side="top" align="end" className={overlaySelectContentClass}>
               <SelectGroup>
                 {qualities.map((quality, index) => (
-                  <SelectItem key={`${quality.quality}-${index}`} value={String(index)}>
+                  <SelectItem
+                    key={`${quality.quality}-${index}`}
+                    value={String(index)}
+                    className={overlaySelectItemClass}
+                  >
                     {qualityLabel(index)}
                   </SelectItem>
                 ))}
@@ -227,20 +284,26 @@ export function PlayerControls({
               if (value != null) onLineChange(Number(value));
             }}
           >
-            <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="线路">
+            <SelectTrigger
+              size="sm"
+              className={cn("w-32 shrink-0", overlaySelectTriggerClass)}
+              aria-label="线路"
+            >
               <SelectValue>
                 {(value) => {
                   const index = typeof value === "string" ? Number(value) : -1;
-                  return index >= 0 && lines[index]
-                    ? `线路 · ${lineLabel(lines[index].url, index)}`
-                    : "线路";
+                  return index >= 0 && lines[index] ? lineLabel(lines[index].url, index) : "线路";
                 }}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent side="top" align="end">
+            <SelectContent side="top" align="end" className={overlaySelectContentClass}>
               <SelectGroup>
                 {lines.map((line, index) => (
-                  <SelectItem key={`${line.url}-${index}`} value={String(index)}>
+                  <SelectItem
+                    key={`${line.url}-${index}`}
+                    value={String(index)}
+                    className={overlaySelectItemClass}
+                  >
                     {lineLabel(line.url, index)}
                   </SelectItem>
                 ))}
@@ -252,17 +315,19 @@ export function PlayerControls({
         {onToggleOsd && (
           <ControlButton
             label={osdOn ? "关闭弹幕" : "开启弹幕"}
-            variant={osdOn ? "secondary" : "ghost"}
+            variant={overlay ? "ghost" : osdOn ? "secondary" : "ghost"}
+            className={overlayButtonClass}
             disabled={disabled}
             aria-pressed={osdOn}
             onClick={onToggleOsd}
           >
-            <Captions />
+            {osdOn ? <CaptionsOff /> : <Captions />}
           </ControlButton>
         )}
         <ControlButton
           label={sidePanelOpen ? "收起右侧栏" : "展开右侧栏"}
-          variant={sidePanelOpen ? "secondary" : "ghost"}
+          variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
+          className={overlayButtonClass}
           disabled={disabled}
           aria-pressed={sidePanelOpen}
           onClick={onToggleSidePanel}
@@ -271,6 +336,7 @@ export function PlayerControls({
         </ControlButton>
         <ControlButton
           label={fullscreen ? "退出全屏" : "全屏"}
+          className={overlayButtonClass}
           disabled={disabled}
           onClick={onToggleFullscreen}
         >

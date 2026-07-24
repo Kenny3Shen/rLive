@@ -6,8 +6,8 @@
 //! mpegts.js / hls.js — no mpv HWND.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -54,11 +54,7 @@ impl StreamProxy {
     }
 
     /// Start (or replace) a proxy for `url` with `headers`. Returns local play URL.
-    pub async fn start(
-        &self,
-        url: String,
-        headers: HashMap<String, String>,
-    ) -> AppResult<String> {
+    pub async fn start(&self, url: String, headers: HashMap<String, String>) -> AppResult<String> {
         self.stop();
         // Give the aborted accept-loop a moment to drop the previous socket so
         // re-enter does not race a half-closed listener.
@@ -92,7 +88,6 @@ impl StreamProxy {
         self.port.store(port, Ordering::Release);
         Ok(format!("http://127.0.0.1:{port}/live"))
     }
-
 }
 
 /// Streaming deliberately has no overall request timeout: a healthy live

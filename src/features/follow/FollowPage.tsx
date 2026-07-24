@@ -1,12 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  RefreshCw,
-  Star,
-  UserRoundX,
-  Radio,
-} from "lucide-react";
+import { RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Chip } from "@/shared/components/Chip";
@@ -104,10 +99,7 @@ export function FollowPage() {
             title="刷新开播状态"
           >
             <RefreshCw
-              className={cn(
-                "h-4 w-4",
-                refreshMutation.isPending && "animate-spin-soft",
-              )}
+              className={cn("h-4 w-4", refreshMutation.isPending && "animate-spin-soft")}
             />
           </Button>
         }
@@ -131,16 +123,10 @@ export function FollowPage() {
         >
           仅显示开播
         </Chip>
-        <Chip
-          active={sortMode === "status"}
-          onClick={() => setSortMode("status")}
-        >
+        <Chip active={sortMode === "status"} onClick={() => setSortMode("status")}>
           按状态
         </Chip>
-        <Chip
-          active={sortMode === "platform"}
-          onClick={() => setSortMode("platform")}
-        >
+        <Chip active={sortMode === "platform"} onClick={() => setSortMode("platform")}>
           按平台
         </Chip>
       </div>
@@ -167,18 +153,11 @@ export function FollowPage() {
         {(tagsQuery.data?.length ?? 0) > 0 && (
           <>
             <span className="mx-1 h-4 w-px bg-border" />
-            <Chip
-              active={tagFilter === "all"}
-              onClick={() => setTagFilter("all")}
-            >
+            <Chip active={tagFilter === "all"} onClick={() => setTagFilter("all")}>
               全部标签
             </Chip>
             {tagsQuery.data?.map((t) => (
-              <Chip
-                key={t.id}
-                active={tagFilter === t.id}
-                onClick={() => setTagFilter(t.id)}
-              >
+              <Chip key={t.id} active={tagFilter === t.id} onClick={() => setTagFilter(t.id)}>
                 {t.name}
               </Chip>
             ))}
@@ -227,11 +206,7 @@ export function FollowPage() {
                   <button
                     type="button"
                     className="flex min-w-0 flex-1 items-center gap-3 text-left focus-ring rounded-xl"
-                    onClick={() =>
-                      navigate(
-                        `/room/${u.site_id}/${encodeURIComponent(u.room_id)}`,
-                      )
-                    }
+                    onClick={() => navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)}
                   >
                     <div className="relative h-16 w-[104px] shrink-0 overflow-hidden rounded-xl bg-muted">
                       {avatarSrc ? (
@@ -247,9 +222,7 @@ export function FollowPage() {
                         </div>
                       )}
                       {live && (
-                        <Badge
-                          className="absolute left-1.5 top-1.5 animate-live bg-accent text-accent-foreground"
-                        >
+                        <Badge className="absolute left-1.5 top-1.5 animate-live bg-accent text-accent-foreground">
                           直播中
                         </Badge>
                       )}
@@ -258,14 +231,8 @@ export function FollowPage() {
                     <div className="relative min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <Avatar className="size-8 ring-2 ring-background">
-                          <AvatarImage
-                            src={avatarSrc}
-                            alt=""
-                            referrerPolicy="no-referrer"
-                          />
-                          <AvatarFallback>
-                            {(u.user_name || "?").slice(0, 1)}
-                          </AvatarFallback>
+                          <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
+                          <AvatarFallback>{(u.user_name || "?").slice(0, 1)}</AvatarFallback>
                         </Avatar>
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium">
@@ -275,20 +242,13 @@ export function FollowPage() {
                             )}
                           </p>
                           <p className="truncate text-xs text-muted-foreground">
-                            {SITE_LABELS[u.site_id] ?? u.site_id} · 房间{" "}
-                            {u.room_id}
+                            {SITE_LABELS[u.site_id] ?? u.site_id} · 房间 {u.room_id}
                           </p>
                         </div>
                       </div>
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline">
-                          {SITE_LABELS[u.site_id] ?? u.site_id}
-                        </Badge>
-                        {live && (
-                          <Badge className="bg-success/15 text-success">
-                            直播中
-                          </Badge>
-                        )}
+                        <Badge variant="outline">{SITE_LABELS[u.site_id] ?? u.site_id}</Badge>
+                        {live && <Badge className="bg-success/15 text-success">直播中</Badge>}
                         {offline && <Badge>未开播</Badge>}
                         {u.live_status == null && <Badge>未知</Badge>}
                       </div>

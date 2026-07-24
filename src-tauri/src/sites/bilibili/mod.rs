@@ -3,9 +3,8 @@
 mod api;
 
 pub use api::{
-    parse_categories, parse_category_rooms, parse_live_status, parse_play_qualities, parse_play_urls,
-    parse_recommend_rooms, parse_room_detail, parse_search_rooms, DEFAULT_REFERER,
-    DEFAULT_USER_AGENT,
+    DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_categories, parse_category_rooms, parse_live_status,
+    parse_play_qualities, parse_play_urls, parse_recommend_rooms, parse_search_rooms,
 };
 
 use std::collections::BTreeMap;
@@ -18,7 +17,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage, SiteId,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage,
 };
 use crate::sites::traits::LiveSite;
 
@@ -118,11 +117,7 @@ impl BilibiliSite {
         ])
     }
 
-    async fn get_json(
-        &self,
-        url: &str,
-        query: &[(&str, String)],
-    ) -> AppResult<String> {
+    async fn get_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
         let headers = self.headers().await?;
         let mut req = self.client.get(url);
         for (k, v) in headers {
@@ -135,14 +130,19 @@ impl BilibiliSite {
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;
         if status.as_u16() == 429 {
-            return Err(AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
-                .with_site("bilibili")
-                .retryable());
+            return Err(
+                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
+                    .with_site("bilibili")
+                    .retryable(),
+            );
         }
         if !status.is_success() {
             return Err(AppError::new(
                 "bilibili_http_error",
-                format!("HTTP {status}: {}", text.chars().take(200).collect::<String>()),
+                format!(
+                    "HTTP {status}: {}",
+                    text.chars().take(200).collect::<String>()
+                ),
             )
             .with_site("bilibili"));
         }
@@ -189,11 +189,7 @@ impl BilibiliSite {
     }
 
     /// HTTP GET that does not require API `code == 0` (for nav / WBI keys).
-    async fn get_json_raw(
-        &self,
-        url: &str,
-        query: &[(&str, String)],
-    ) -> AppResult<String> {
+    async fn get_json_raw(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
         let headers = self.headers().await?;
         let mut req = self.client.get(url);
         for (k, v) in headers {
@@ -206,11 +202,10 @@ impl BilibiliSite {
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;
         if !status.is_success() {
-            return Err(AppError::new(
-                "bilibili_http_error",
-                format!("HTTP {status}"),
-            )
-            .with_site("bilibili"));
+            return Err(
+                AppError::new("bilibili_http_error", format!("HTTP {status}"))
+                    .with_site("bilibili"),
+            );
         }
         Ok(text)
     }
@@ -248,16 +243,17 @@ impl BilibiliSite {
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;
         if status.as_u16() == 429 {
-            return Err(AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
-                .with_site("bilibili")
-                .retryable());
+            return Err(
+                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
+                    .with_site("bilibili")
+                    .retryable(),
+            );
         }
         if !status.is_success() {
-            return Err(AppError::new(
-                "bilibili_http_error",
-                format!("HTTP {status}"),
-            )
-            .with_site("bilibili"));
+            return Err(
+                AppError::new("bilibili_http_error", format!("HTTP {status}"))
+                    .with_site("bilibili"),
+            );
         }
         if let Ok(v) = serde_json::from_str::<Value>(&text) {
             if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
@@ -278,13 +274,9 @@ impl BilibiliSite {
         Ok(text)
     }
 
-    async fn get_room_play_info(
-        &self,
-        query: BTreeMap<String, String>,
-    ) -> AppResult<String> {
+    async fn get_room_play_info(&self, query: BTreeMap<String, String>) -> AppResult<String> {
         const RETRY_DELAYS_MS: &[u64] = &[800, 1600];
-        let url =
-            "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
+        let url = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
         let mut last_err = None;
         for attempt in 0..=RETRY_DELAYS_MS.len() {
             // Throttle: min 450ms between play-info calls.
@@ -319,8 +311,7 @@ impl BilibiliSite {
             }
         }
         Err(last_err.unwrap_or_else(|| {
-            AppError::new("bilibili_play_info", "B站播放信息接口重试失败")
-                .with_site("bilibili")
+            AppError::new("bilibili_play_info", "B站播放信息接口重试失败").with_site("bilibili")
         }))
     }
 
@@ -341,16 +332,17 @@ impl BilibiliSite {
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;
         if status.as_u16() == 429 {
-            return Err(AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
-                .with_site("bilibili")
-                .retryable());
+            return Err(
+                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
+                    .with_site("bilibili")
+                    .retryable(),
+            );
         }
         if !status.is_success() {
-            return Err(AppError::new(
-                "bilibili_http_error",
-                format!("HTTP {status}"),
-            )
-            .with_site("bilibili"));
+            return Err(
+                AppError::new("bilibili_http_error", format!("HTTP {status}"))
+                    .with_site("bilibili"),
+            );
         }
         if let Ok(v) = serde_json::from_str::<Value>(&text) {
             if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
@@ -380,22 +372,11 @@ fn map_http(e: reqwest::Error) -> AppError {
 
 #[async_trait::async_trait]
 impl LiveSite for BilibiliSite {
-    fn id(&self) -> SiteId {
-        SiteId::Bilibili
-    }
-
-    fn name(&self) -> &'static str {
-        "Bilibili"
-    }
-
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
         let text = self
             .get_json(
                 "https://api.live.bilibili.com/room/v1/Area/getList",
-                &[
-                    ("need_entrance", "1".into()),
-                    ("parent_id", "0".into()),
-                ],
+                &[("need_entrance", "1".into()), ("parent_id", "0".into())],
             )
             .await?;
         parse_categories(&text)
@@ -470,13 +451,9 @@ impl LiveSite for BilibiliSite {
         let info_root: Value = serde_json::from_str(&info_text).map_err(|e| {
             AppError::new("bilibili_parse_error", format!("room info: {e}")).with_site("bilibili")
         })?;
-        let data = info_root
-            .get("data")
-            .cloned()
-            .ok_or_else(|| {
-                AppError::new("bilibili_parse_error", "room info missing data")
-                    .with_site("bilibili")
-            })?;
+        let data = info_root.get("data").cloned().ok_or_else(|| {
+            AppError::new("bilibili_parse_error", "room info missing data").with_site("bilibili")
+        })?;
         let real_room_id = data
             .pointer("/room_info/room_id")
             .map(|v| match v {
@@ -492,10 +469,7 @@ impl LiveSite for BilibiliSite {
             let plain = self
                 .get_json(
                     "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
-                    &[
-                        ("id", real_room_id.clone()),
-                        ("type", "0".into()),
-                    ],
+                    &[("id", real_room_id.clone()), ("type", "0".into())],
                 )
                 .await;
             let fetched = match plain {
@@ -616,10 +590,7 @@ mod live_tests {
             }
         }
         let detail = detail.expect("need at least one live room in recommend");
-        let qualities = site
-            .get_play_qualities(&detail)
-            .await
-            .expect("qualities");
+        let qualities = site.get_play_qualities(&detail).await.expect("qualities");
         assert!(!qualities.is_empty(), "no play qualities");
         let urls = site
             .get_play_urls(&detail, &qualities[0])

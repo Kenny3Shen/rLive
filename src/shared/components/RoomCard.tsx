@@ -47,9 +47,7 @@ export function RoomCard({ room }: RoomCardProps) {
         <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
           {room.title || "未命名直播间"}
         </p>
-        <p className="truncate text-xs text-muted-foreground">
-          {room.user_name || "未知主播"}
-        </p>
+        <p className="truncate text-xs text-muted-foreground">{room.user_name || "未知主播"}</p>
       </div>
     </button>
   );

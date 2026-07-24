@@ -250,7 +250,8 @@ pub fn parse_search_rooms(raw: &str) -> AppResult<RoomListPage> {
 
 /// Parse `getInfoByRoom` data object into LiveRoomDetail.
 /// `danmaku` optional JSON for token/hosts stored in `raw`.
-pub fn parse_room_detail(
+#[cfg(test)]
+fn parse_room_detail(
     room_info_root: &str,
     danmaku: Option<&Value>,
     buvid3: &str,
@@ -603,11 +604,13 @@ mod tests {
         assert_eq!(cats[0].name, "娱乐");
         assert!(!cats[0].children.is_empty());
         assert_eq!(cats[0].children[0].id, "21");
-        assert!(cats[0].children[0]
-            .pic
-            .as_ref()
-            .unwrap()
-            .ends_with("@100w.png"));
+        assert!(
+            cats[0].children[0]
+                .pic
+                .as_ref()
+                .unwrap()
+                .ends_with("@100w.png")
+        );
     }
 
     #[test]
