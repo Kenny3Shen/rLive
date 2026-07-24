@@ -4,6 +4,7 @@ import type { PlayUrl } from "@/shared/types/live";
 import type { PlayerEvent, PlayerUiMode } from "@/shared/types/player";
 import type { AppError } from "@/shared/types/error";
 import type { MpegtsStatic, Player as MpegtsPlayer } from "@/vendor/mpegts";
+import { createSerialTaskQueue } from "./serialTaskQueue";
 
 /** Load vendored UMD from /mpegts.js (public/) — no npm github deps on Windows. */
 async function loadMpegts(): Promise<MpegtsStatic> {
@@ -80,6 +81,11 @@ function playUrlKey(playUrl: PlayUrl | null): string {
   return `${playUrl.url}::${headerKey}`;
 }
 
+// The native proxy has one process-global active listener. Queue the complete
+// teardown/start sequence so an async cleanup from room A cannot stop the
+// listener room B has just opened.
+const proxyLifecycleQueue = createSerialTaskQueue();
+
 /**
  * DOM/MSE live player (no mpv). Streams via localhost proxy so CDN headers work.
  *
@@ -89,11 +95,13 @@ function playUrlKey(playUrl: PlayUrl | null): string {
  */
 export function useWebPlayer(opts: {
   playUrl: PlayUrl | null;
+  /** Rebuild even when two rooms happen to resolve to the same stream URL. */
+  sessionKey?: string;
   reloadToken?: number;
   onMediaFailure?: (event: PlayerEvent) => void;
   onPlaying?: () => void;
 }): WebPlayerApi {
-  const { playUrl, reloadToken = 0, onMediaFailure, onPlaying } = opts;
+  const { playUrl, sessionKey = "", reloadToken = 0, onMediaFailure, onPlaying } = opts;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<MpegtsPlayer | null>(null);
@@ -157,7 +165,7 @@ export function useWebPlayer(opts: {
     setRunning(false);
   }, []);
 
-  const streamKey = playUrlKey(playUrl);
+  const streamKey = `${sessionKey}::${playUrlKey(playUrl)}`;
 
   // Open / replace stream whenever the logical stream identity changes.
   useEffect(() => {
@@ -172,14 +180,14 @@ export function useWebPlayer(opts: {
       }
     };
 
-    if (!playUrl || !streamKey) {
+    if (!playUrl) {
       destroyPlayer();
-      void stopProxy();
+      void proxyLifecycleQueue.enqueue(stopProxy);
       setLoadError(null);
       return () => {
         cancelled = true;
         destroyPlayer();
-        void stopProxy();
+        void proxyLifecycleQueue.enqueue(stopProxy);
       };
     }
 
@@ -189,185 +197,199 @@ export function useWebPlayer(opts: {
     setMuted(false);
     mutedRef.current = false;
 
-    void (async () => {
-      try {
-        // 1) Tear down previous MSE + proxy completely.
-        destroyPlayer();
-        await stopProxy();
-        // Let the OS release the previous listen socket / MediaSource settle.
-        await sleep(50);
-        if (cancelled || genRef.current !== gen) return;
-
-        // 2) Force a brand-new <video> node so MediaSource is never reused.
-        setMediaKey((k) => k + 1);
-        await nextFrame();
-        await nextFrame();
-        if (cancelled || genRef.current !== gen) return;
-
-        // Wait until the new video element is mounted (ref attached).
-        let video: HTMLVideoElement | null = null;
-        for (let i = 0; i < 20; i += 1) {
-          video = videoRef.current;
-          if (video) break;
-          await sleep(16);
-        }
-        if (!video) {
-          throw {
-            code: "web_player_no_video",
-            message: "video element not ready",
-            site: null,
-            retryable: true,
-          } satisfies AppError;
-        }
-
-        // 3) Fresh proxy (new port) + cache-bust query so the browser never
-        // reuses a closed keep-alive to the previous listener.
-        const localUrl = await invokeCmd<string>("stream_proxy_start", {
-          url: playUrl.url,
-          headers: playUrl.headers,
-        });
-        if (cancelled || genRef.current !== gen) {
-          await stopProxy();
-          return;
-        }
-        const playLocal = `${localUrl}${localUrl.includes("?") ? "&" : "?"}t=${Date.now()}_${gen}`;
-
-        const mpegts = await loadMpegts();
+    void proxyLifecycleQueue
+      .enqueue(async () => {
+        // An earlier route's queued setup may be reached only after a newer
+        // route has rendered. It must still stop its own stale proxy before
+        // allowing the replacement operation through the queue.
         if (cancelled || genRef.current !== gen) {
           await stopProxy();
           return;
         }
 
-        if (!mpegts.getFeatureList().mseLivePlayback) {
-          throw {
-            code: "web_player_no_mse",
-            message: "当前环境不支持 MSE 直播播放",
-            site: null,
-            retryable: false,
-          } satisfies AppError;
-        }
-
-        // Hard-reset the element before attach.
-        video.pause();
-        video.removeAttribute("src");
-        video.srcObject = null;
-        video.load();
-
-        const player = mpegts.createPlayer(
-          {
-            type: mediaType(playUrl.url),
-            isLive: true,
-            url: playLocal,
-            hasAudio: true,
-            hasVideo: true,
-          },
-          {
-            enableWorker: false,
-            enableStashBuffer: true,
-            stashInitialSize: 384,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 2.5,
-            liveBufferLatencyMinRemain: 0.4,
-            autoCleanupSourceBuffer: true,
-          } as Parameters<MpegtsStatic["createPlayer"]>[1],
-        );
-
-        player.attachMediaElement(video);
-        player.load();
-
-        player.on(mpegts.Events.ERROR, (...args: unknown[]) => {
+        try {
+          // 1) Tear down previous MSE + proxy completely.
+          destroyPlayer();
+          await stopProxy();
+          // Let the OS release the previous listen socket / MediaSource settle.
+          await sleep(50);
           if (cancelled || genRef.current !== gen) return;
-          const [type, detail, info] = args;
-          const message =
-            (info && typeof info === "object" && info !== null && "msg" in info
-              ? String((info as { msg?: string }).msg)
-              : null) ||
-            `${String(type ?? "")} ${String(detail ?? "")}`.trim() ||
-            "播放失败";
-          setLoadError(message);
+
+          // 2) Force a brand-new <video> node so MediaSource is never reused.
+          setMediaKey((k) => k + 1);
+          await nextFrame();
+          await nextFrame();
+          if (cancelled || genRef.current !== gen) return;
+
+          // Wait until the new video element is mounted (ref attached).
+          let video: HTMLVideoElement | null = null;
+          for (let i = 0; i < 20; i += 1) {
+            video = videoRef.current;
+            if (video) break;
+            await sleep(16);
+          }
+          if (!video) {
+            throw {
+              code: "web_player_no_video",
+              message: "video element not ready",
+              site: null,
+              retryable: true,
+            } satisfies AppError;
+          }
+
+          // 3) Fresh proxy (new port) + cache-bust query so the browser never
+          // reuses a closed keep-alive to the previous listener.
+          const localUrl = await invokeCmd<string>("stream_proxy_start", {
+            url: playUrl.url,
+            headers: playUrl.headers,
+          });
+          if (cancelled || genRef.current !== gen) {
+            await stopProxy();
+            return;
+          }
+          const playLocal = `${localUrl}${localUrl.includes("?") ? "&" : "?"}t=${Date.now()}_${gen}`;
+
+          const mpegts = await loadMpegts();
+          if (cancelled || genRef.current !== gen) {
+            await stopProxy();
+            return;
+          }
+
+          if (!mpegts.getFeatureList().mseLivePlayback) {
+            throw {
+              code: "web_player_no_mse",
+              message: "当前环境不支持 MSE 直播播放",
+              site: null,
+              retryable: false,
+            } satisfies AppError;
+          }
+
+          // Hard-reset the element before attach.
+          video.pause();
+          video.removeAttribute("src");
+          video.srcObject = null;
+          video.load();
+
+          const player = mpegts.createPlayer(
+            {
+              type: mediaType(playUrl.url),
+              isLive: true,
+              url: playLocal,
+              hasAudio: true,
+              hasVideo: true,
+            },
+            {
+              enableWorker: false,
+              enableStashBuffer: true,
+              stashInitialSize: 384,
+              liveBufferLatencyChasing: true,
+              liveBufferLatencyMaxLatency: 2.5,
+              liveBufferLatencyMinRemain: 0.4,
+              autoCleanupSourceBuffer: true,
+            } as Parameters<MpegtsStatic["createPlayer"]>[1],
+          );
+
+          player.attachMediaElement(video);
+          player.load();
+
+          player.on(mpegts.Events.ERROR, (...args: unknown[]) => {
+            if (cancelled || genRef.current !== gen) return;
+            const [type, detail, info] = args;
+            const message =
+              (info && typeof info === "object" && info !== null && "msg" in info
+                ? String((info as { msg?: string }).msg)
+                : null) ||
+              `${String(type ?? "")} ${String(detail ?? "")}`.trim() ||
+              "播放失败";
+            setLoadError(message);
+            setRunning(false);
+            onMediaFailureRef.current?.({
+              epoch: gen,
+              generation: gen,
+              kind: "error",
+              message,
+            });
+          });
+
+          // Apply current transport prefs (unmuted after room re-entry).
+          video.volume = Math.max(0, Math.min(1, volumeRef.current / 100));
+          video.muted = mutedRef.current;
+
+          // User navigated into the room — treat as gesture-friendly autoplay.
+          try {
+            await player.play();
+          } catch {
+            // Last resort: brief muted start then unmute (WebView2 policy).
+            video.muted = true;
+            try {
+              await player.play();
+              await sleep(80);
+              if (!cancelled && genRef.current === gen) {
+                video.muted = false;
+                mutedRef.current = false;
+                setMuted(false);
+              }
+            } catch {
+              /* play() may still reject; error event will surface */
+            }
+          }
+
+          if (cancelled || genRef.current !== gen) {
+            try {
+              player.destroy();
+            } catch {
+              /* ignore */
+            }
+            await stopProxy();
+            return;
+          }
+
+          playerRef.current = player;
+
+          // If we already have frames, mark running; otherwise wait for play event.
+          if (!video.paused && video.readyState >= 2) {
+            setRunning(true);
+            setLoadError(null);
+            onPlayingRef.current?.();
+          } else {
+            // Give the demuxer a moment; spinner stays until 'playing'.
+            window.setTimeout(() => {
+              if (cancelled || genRef.current !== gen) return;
+              if (playerRef.current === player && !video.paused) {
+                setRunning(true);
+                setLoadError(null);
+                onPlayingRef.current?.();
+              }
+            }, 400);
+          }
+        } catch (e) {
+          if (cancelled || genRef.current !== gen) return;
+          const msg =
+            typeof e === "object" && e && "message" in e
+              ? String((e as AppError).message)
+              : String(e);
+          setLoadError(msg || "播放失败");
           setRunning(false);
+          destroyPlayer();
+          await stopProxy();
           onMediaFailureRef.current?.({
             epoch: gen,
             generation: gen,
             kind: "error",
-            message,
+            message: msg,
           });
-        });
-
-        // Apply current transport prefs (unmuted after room re-entry).
-        video.volume = Math.max(0, Math.min(1, volumeRef.current / 100));
-        video.muted = mutedRef.current;
-
-        // User navigated into the room — treat as gesture-friendly autoplay.
-        try {
-          await player.play();
-        } catch {
-          // Last resort: brief muted start then unmute (WebView2 policy).
-          video.muted = true;
-          try {
-            await player.play();
-            await sleep(80);
-            if (!cancelled && genRef.current === gen) {
-              video.muted = false;
-              mutedRef.current = false;
-              setMuted(false);
-            }
-          } catch {
-            /* play() may still reject; error event will surface */
-          }
         }
-
-        if (cancelled || genRef.current !== gen) {
-          try {
-            player.destroy();
-          } catch {
-            /* ignore */
-          }
-          await stopProxy();
-          return;
-        }
-
-        playerRef.current = player;
-
-        // If we already have frames, mark running; otherwise wait for play event.
-        if (!video.paused && video.readyState >= 2) {
-          setRunning(true);
-          setLoadError(null);
-          onPlayingRef.current?.();
-        } else {
-          // Give the demuxer a moment; spinner stays until 'playing'.
-          window.setTimeout(() => {
-            if (cancelled || genRef.current !== gen) return;
-            if (playerRef.current === player && !video.paused) {
-              setRunning(true);
-              setLoadError(null);
-              onPlayingRef.current?.();
-            }
-          }, 400);
-        }
-      } catch (e) {
-        if (cancelled || genRef.current !== gen) return;
-        const msg =
-          typeof e === "object" && e && "message" in e
-            ? String((e as AppError).message)
-            : String(e);
-        setLoadError(msg || "播放失败");
-        setRunning(false);
-        destroyPlayer();
-        await stopProxy();
-        onMediaFailureRef.current?.({
-          epoch: gen,
-          generation: gen,
-          kind: "error",
-          message: msg,
-        });
-      }
-    })();
+      })
+      .catch(() => {
+        // The setup body reports recoverable failures to the controller. This
+        // catch only prevents an unexpected queue failure from becoming an
+        // unhandled promise rejection.
+      });
 
     return () => {
       cancelled = true;
       destroyPlayer();
-      void stopProxy();
+      void proxyLifecycleQueue.enqueue(stopProxy);
     };
   }, [streamKey, reloadToken, destroyPlayer, playUrl]);
 

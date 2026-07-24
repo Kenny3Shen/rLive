@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createShieldMatcher } from "./danmaku/filter";
+import { createShieldMatcher, isDanmakuEvent } from "./danmaku/filter";
 import {
   formatSuperChatAmount,
   formatSuperChatDuration,
@@ -19,22 +19,47 @@ import { cn } from "@/lib/utils";
 
 type SuperChatPanelProps = {
   active: boolean;
+  /** Keep buffered SCs while this keep-mounted tab is hidden. */
+  visible?: boolean;
   className?: string;
 };
 
-export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
+export function SuperChatPanel({ active, visible = true, className }: SuperChatPanelProps) {
   const [items, setItems] = useState<SuperChatLine[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
   const pendingRef = useRef<SuperChatLine[]>([]);
   const flushFrameRef = useRef<number | null>(null);
+  const scheduleFlushRef = useRef<() => void>(() => {});
   const nextIdRef = useRef(0);
   const dedupeKeysRef = useRef(new Set<string>());
   const dedupeOrderRef = useRef<string[]>([]);
+  const activeRef = useRef(active);
+  const visibleRef = useRef(visible);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
+  const shieldMatcherRef = useRef(shieldMatcher);
+
+  // Keep the native event listener alive while settings change. Resetting it
+  // used to reset `nextIdRef` while old rows were still rendered, producing
+  // duplicate React keys after a shield-word edit.
+  useLayoutEffect(() => {
+    shieldMatcherRef.current = shieldMatcher;
+  }, [shieldMatcher]);
+
+  useLayoutEffect(() => {
+    activeRef.current = active;
+    return () => {
+      activeRef.current = false;
+    };
+  }, [active]);
+
+  useLayoutEffect(() => {
+    visibleRef.current = visible;
+    if (visible) scheduleFlushRef.current();
+  }, [visible]);
 
   useEffect(() => {
     const cancelFlush = () => {
@@ -44,7 +69,7 @@ export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
       }
     };
 
-    const resetBuffers = () => {
+    const resetSession = () => {
       cancelFlush();
       pendingRef.current = [];
       dedupeKeysRef.current.clear();
@@ -53,7 +78,7 @@ export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
     };
 
     if (!active) {
-      resetBuffers();
+      resetSession();
       autoScroll.current = true;
       setItems([]);
       return;
@@ -64,6 +89,7 @@ export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
 
     const flush = () => {
       flushFrameRef.current = null;
+      if (!activeRef.current || !visibleRef.current) return;
       const batch = pendingRef.current.splice(0, MAX_SUPER_CHATS_PER_FRAME);
       if (batch.length === 0) return;
 
@@ -75,10 +101,11 @@ export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
     };
 
     const scheduleFlush = () => {
-      if (flushFrameRef.current === null) {
+      if (activeRef.current && visibleRef.current && flushFrameRef.current === null) {
         flushFrameRef.current = requestAnimationFrame(flush);
       }
     };
+    scheduleFlushRef.current = scheduleFlush;
 
     const rememberDedupeKey = (key: string): boolean => {
       if (dedupeKeysRef.current.has(key)) return false;
@@ -93,10 +120,12 @@ export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
     };
 
     void listen<DanmakuEvent>("danmaku", (event) => {
-      if (cancelled) return;
+      if (cancelled || !activeRef.current) return;
       const message = event.payload;
-      if (message?.kind !== "super_chat" || !message.content?.trim()) return;
-      if (shieldMatcher(message)) return;
+      if (!isDanmakuEvent(message) || message.kind !== "super_chat" || !message.content.trim()) {
+        return;
+      }
+      if (shieldMatcherRef.current(message)) return;
 
       const dedupeKey = superChatDedupeKey(message);
       if (!rememberDedupeKey(dedupeKey)) return;
@@ -120,9 +149,12 @@ export function SuperChatPanel({ active, className }: SuperChatPanelProps) {
     return () => {
       cancelled = true;
       unlisten?.();
-      resetBuffers();
+      // Session state is reset only when `active` becomes false. A live
+      // setting change must not recycle row ids or discard a hidden-tab queue.
+      cancelFlush();
+      if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
     };
-  }, [active, shieldMatcher]);
+  }, [active]);
 
   useEffect(() => {
     if (autoScroll.current) {

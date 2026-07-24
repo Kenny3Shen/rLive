@@ -105,27 +105,9 @@ function clampFontWeight(value: number | undefined): number {
   return 700;
 }
 
-/**
- * Returns a breadth-first middle-out order. Compared with scanning from lane 0,
- * the first few comments already occupy the centre and both halves of the video.
- */
-function createBalancedLaneOrder(count: number): number[] {
-  const order: number[] = [];
-  let ranges: Array<[number, number]> = [[0, count - 1]];
-
-  while (ranges.length > 0) {
-    const next: Array<[number, number]> = [];
-    for (const [start, end] of ranges) {
-      if (start > end) continue;
-
-      const middle = Math.floor((start + end) / 2);
-      order.push(middle);
-      next.push([start, middle - 1], [middle + 1, end]);
-    }
-    ranges = next;
-  }
-
-  return order;
+/** First-fit order from the top edge down, matching Simple Live's tracks. */
+function createTopDownLaneOrder(count: number): number[] {
+  return Array.from({ length: count }, (_, lane) => lane);
 }
 
 function layoutFor(height: number, fontSize: number, area: number, lineCount: number): LaneLayout {
@@ -134,12 +116,10 @@ function layoutFor(height: number, fontSize: number, area: number, lineCount: nu
   const preferredArea = Math.max(laneHeight, Math.floor(safeHeight * area));
   const autoCount = Math.max(1, Math.floor(preferredArea / laneHeight));
   const count = lineCount > 0 ? Math.min(lineCount, autoCount) : autoCount;
-  const blockHeight = Math.min(safeHeight, count * laneHeight);
-
   return {
     count,
     laneHeight,
-    top: Math.max(0, Math.floor((safeHeight - blockHeight) / 2)),
+    top: 0,
   };
 }
 
@@ -217,7 +197,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     }
 
     layout = nextLayout;
-    laneOrder = createBalancedLaneOrder(nextLayout.count);
+    laneOrder = createTopDownLaneOrder(nextLayout.count);
     laneCursor %= laneOrder.length;
     return layout;
   }

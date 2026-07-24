@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -24,9 +24,15 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
   const lineCount = useSettingsStore((s) => s.danmakuLineCount);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
+  const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const repeatMatcher = useMemo(() => createRepeatMatcher(filterRepeats), [filterRepeats]);
+  const matchersRef = useRef({ shieldMatcher, repeatMatcher, filterGifts });
+
+  useLayoutEffect(() => {
+    matchersRef.current = { shieldMatcher, repeatMatcher, filterGifts };
+  }, [shieldMatcher, repeatMatcher, filterGifts]);
 
   if (engineRef.current === null || engineSessionRef.current !== sessionKey) {
     engineSessionRef.current = sessionKey;
@@ -60,9 +66,14 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     void listen<DanmakuEvent>("danmaku", (event) => {
       if (cancelled) return;
       const msg = event.payload;
-      if (!shouldShowOnCanvas(msg)) return;
-      if (shieldMatcher(msg)) return;
-      if (repeatMatcher(msg)) return;
+      const {
+        shieldMatcher: currentShieldMatcher,
+        repeatMatcher: currentRepeatMatcher,
+        filterGifts: currentFilterGifts,
+      } = matchersRef.current;
+      if (!shouldShowOnCanvas(msg, currentFilterGifts)) return;
+      if (currentShieldMatcher(msg)) return;
+      if (currentRepeatMatcher(msg)) return;
       engineRef.current?.push(msg);
       requestFrameRef.current();
     })
@@ -79,7 +90,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       cancelled = true;
       unlisten?.();
     };
-  }, [active, sessionKey, shieldMatcher, repeatMatcher]);
+  }, [active, sessionKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

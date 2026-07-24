@@ -139,7 +139,8 @@ fn inflate_brotli(body: &[u8]) -> Option<Vec<u8>> {
     } else {
         // Fallback: whole-buffer API when streaming decompress fails.
         out.clear();
-        if brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut out).is_ok() && !out.is_empty()
+        if brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut out).is_ok()
+            && !out.is_empty()
         {
             Some(out)
         } else {
@@ -453,8 +454,9 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
 
 pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()> {
     if args.room_id <= 0 {
-        return Err(AppError::new("danmaku_bad_room", "invalid room id for danmaku")
-            .with_site("bilibili"));
+        return Err(
+            AppError::new("danmaku_bad_room", "invalid room id for danmaku").with_site("bilibili"),
+        );
     }
     if args.token.is_empty() {
         return Err(AppError::new(

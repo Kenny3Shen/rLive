@@ -53,13 +53,13 @@ Huya HTML stripping must not slice mid UTF-8 character (`panic = "abort"` in rel
 
 Frontend consumes Tauri event `danmaku` through a high-throughput path:
 
-- `useDanmakuConnection` connects only Bilibili, Huya, and Douyu; route switches atomically replace the backend connection instead of racing an old disconnect against a new room.
-- `DanmakuPanel` and `SuperChatPanel` batch incoming events per animation frame with bounded queues; chat hides join notices and optionally consecutive repeats, while SC has bounded deduplication.
-- `CanvasDanmaku` and `danmakuEngine` stop requesting frames while no floating item is active and resume on a message, setting change, or resize; area, line cap, and font weight apply live.
+- `useDanmakuConnection` connects only Bilibili, Huya, and Douyu; frontend and backend epochs prevent stale connect/disconnect work from taking over after a direct room switch.
+- `DanmakuPanel` and `SuperChatPanel` batch incoming events per animation frame with bounded queues; chat hides join notices, optional gifts, and consecutive repeats, while SC has bounded deduplication.
+- `CanvasDanmaku` and `danmakuEngine` allocate tracks from top to bottom, stop requesting frames while no floating item is active, and resume on a message, setting change, or resize; area, line cap, and font weight apply live.
 - `DanmakuSettingsPanel` provides Simple Live-style room-side controls; `FollowPanel` ranks live follows first and changes rooms through the current route.
 - `superChat.ts` formats safe amounts/durations and only passes validated hexadecimal colours to inline styles; `danmaku/filter` precompiles shield/repeat matchers.
 
-Persisted: `danmaku_area`, `danmaku_line_count`, `danmaku_opacity`, `danmaku_font_size`, `danmaku_font_weight`, `danmaku_speed`, `danmaku_filter_repeats`, `danmaku_shield_words`.
+Persisted: `danmaku_area`, `danmaku_line_count`, `danmaku_opacity`, `danmaku_font_size`, `danmaku_font_weight`, `danmaku_speed`, `danmaku_filter_repeats`, `danmaku_filter_gifts`, `danmaku_shield_words`.
 
 ## 5. Delivery
 

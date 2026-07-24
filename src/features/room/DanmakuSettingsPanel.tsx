@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
@@ -84,11 +84,16 @@ function normalizeShieldWords(value: string): string[] {
     .split(/\r?\n|,/)
     .map((word) => word.trim())
     .filter((word) => {
-      const key = word.toLocaleLowerCase();
+      // Keep de-duplication consistent with the high-frequency matcher.
+      const key = word.toLowerCase();
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+}
+
+function sameWords(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((word, index) => word === right[index]);
 }
 
 /**
@@ -103,13 +108,41 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
   const lineCount = useSettingsStore((s) => s.danmakuLineCount);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
+  const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const [shieldDraft, setShieldDraft] = useState(shieldWords.join("\n"));
   const [shieldStatus, setShieldStatus] = useState<string | null>(null);
+  const shieldSaveTimerRef = useRef<number | null>(null);
+  const pendingShieldWordsRef = useRef(shieldWords);
 
   useEffect(() => {
-    setShieldDraft(shieldWords.join("\n"));
-  }, [shieldWords]);
+    // Keep externally imported/profile-updated values in sync without
+    // rewriting the user's current textarea format while they are typing.
+    if (!sameWords(normalizeShieldWords(shieldDraft), shieldWords)) {
+      // This is an external replacement rather than the local normalized
+      // value we just wrote. Do not let its older debounce overwrite it.
+      if (shieldSaveTimerRef.current !== null) {
+        window.clearTimeout(shieldSaveTimerRef.current);
+        shieldSaveTimerRef.current = null;
+        setShieldStatus(null);
+      }
+      setShieldDraft(shieldWords.join("\n"));
+    }
+    pendingShieldWordsRef.current = shieldWords;
+  }, [shieldDraft, shieldWords]);
+
+  useEffect(
+    () => () => {
+      if (shieldSaveTimerRef.current !== null) {
+        window.clearTimeout(shieldSaveTimerRef.current);
+        shieldSaveTimerRef.current = null;
+        void useSettingsStore
+          .getState()
+          .persistToBackend({ danmaku_shield_words: pendingShieldWordsRef.current });
+      }
+    },
+    [],
+  );
 
   function preview(patch: {
     danmakuOpacity?: number;
@@ -119,6 +152,7 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
     danmakuLineCount?: number;
     danmakuFontWeight?: number;
     danmakuFilterRepeats?: boolean;
+    danmakuFilterGifts?: boolean;
   }) {
     useSettingsStore.setState(patch);
   }
@@ -127,12 +161,24 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
     void useSettingsStore.getState().persistToBackend(patch);
   }
 
-  function saveShieldWords() {
-    const words = normalizeShieldWords(shieldDraft);
+  function updateShieldWords(value: string) {
+    const words = normalizeShieldWords(value);
+    setShieldDraft(value);
     useSettingsStore.setState({ danmakuShieldWords: words });
-    persist({ danmaku_shield_words: words });
-    setShieldDraft(words.join("\n"));
-    setShieldStatus("已保存，新的消息会立即按此过滤");
+    pendingShieldWordsRef.current = words;
+    setShieldStatus("新的消息会立即按此过滤，正在保存…");
+
+    if (shieldSaveTimerRef.current !== null) {
+      window.clearTimeout(shieldSaveTimerRef.current);
+    }
+    shieldSaveTimerRef.current = window.setTimeout(() => {
+      shieldSaveTimerRef.current = null;
+      // A profile import can update the store while this debounce is pending.
+      // Persist the latest value rather than allowing an older closure to
+      // overwrite it after the user has already moved on.
+      persist({ danmaku_shield_words: pendingShieldWordsRef.current });
+      setShieldStatus("已自动保存，新的消息会立即按此过滤");
+    }, 350);
   }
 
   function resetAppearance() {
@@ -144,6 +190,7 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
       danmakuLineCount: 0,
       danmakuFontWeight: 600,
       danmakuFilterRepeats: true,
+      danmakuFilterGifts: false,
     };
     preview(defaults);
     persist({
@@ -154,6 +201,7 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
       danmaku_line_count: defaults.danmakuLineCount,
       danmaku_font_weight: defaults.danmakuFontWeight,
       danmaku_filter_repeats: defaults.danmakuFilterRepeats,
+      danmaku_filter_gifts: defaults.danmakuFilterGifts,
     });
   }
 
@@ -268,6 +316,20 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
             “进入直播间”等进场提示默认隐藏；屏蔽词对聊天、SC 与飘屏生效。
           </FieldDescription>
           <FieldGroup className="gap-3">
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle id="room-danmaku-gift-filter">屏蔽礼物消息</FieldTitle>
+                <FieldDescription>隐藏斗鱼等平台的礼物通知，不影响 SC。</FieldDescription>
+              </FieldContent>
+              <Switch
+                aria-labelledby="room-danmaku-gift-filter"
+                checked={filterGifts}
+                onCheckedChange={(checked) => {
+                  preview({ danmakuFilterGifts: checked });
+                  persist({ danmaku_filter_gifts: checked });
+                }}
+              />
+            </Field>
             <Field>
               <FieldLabel htmlFor="room-danmaku-shield-words">屏蔽词</FieldLabel>
               <FieldContent>
@@ -275,19 +337,13 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
                   id="room-danmaku-shield-words"
                   value={shieldDraft}
                   onChange={(event) => {
-                    setShieldDraft(event.target.value);
-                    setShieldStatus(null);
+                    updateShieldWords(event.target.value);
                   }}
                   rows={5}
                   placeholder="每行一个词，也可用逗号分隔"
                   className="resize-y"
                 />
-                <div className="flex items-center gap-3">
-                  <Button size="sm" onClick={saveShieldWords}>
-                    保存屏蔽词
-                  </Button>
-                  {shieldStatus && <FieldDescription>{shieldStatus}</FieldDescription>}
-                </div>
+                {shieldStatus && <FieldDescription>{shieldStatus}</FieldDescription>}
               </FieldContent>
             </Field>
           </FieldGroup>

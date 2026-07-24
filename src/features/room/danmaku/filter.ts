@@ -1,14 +1,63 @@
-import type { DanmakuEvent } from "@/shared/types/live";
+import type { DanmakuEvent, DanmakuKind } from "@/shared/types/live";
 
 function normalizedShieldWords(shieldWords: readonly string[]): string[] {
-  return shieldWords.map((word) => word.trim().toLowerCase()).filter(Boolean);
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const rawWord of shieldWords) {
+    if (typeof rawWord !== "string") continue;
+    const word = rawWord.trim().toLowerCase();
+    if (!word || seen.has(word)) continue;
+    seen.add(word);
+    words.push(word);
+  }
+  return words;
 }
 
 function matchesShieldWords(event: DanmakuEvent, shieldWords: readonly string[]): boolean {
-  if (event.kind === "system") return false;
+  if (shieldWords.length === 0 || event.kind === "system") return false;
   const lower = (event.content || "").toLowerCase();
   if (!lower) return true;
   return shieldWords.some((word) => lower.includes(word));
+}
+
+const DANMAKU_KINDS: readonly DanmakuKind[] = ["chat", "gift", "enter", "super_chat", "system"];
+
+/**
+ * Tauri events originate outside the TypeScript type system. Treat a malformed
+ * payload as a dropped message instead of letting a busy listener throw.
+ */
+export function isDanmakuEvent(value: unknown): value is DanmakuEvent {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Partial<DanmakuEvent>;
+  return (
+    typeof event.kind === "string" &&
+    DANMAKU_KINDS.includes(event.kind as DanmakuKind) &&
+    typeof event.user === "string" &&
+    typeof event.content === "string" &&
+    typeof event.ts === "number" &&
+    Number.isFinite(event.ts) &&
+    (event.color === null || typeof event.color === "string")
+  );
+}
+
+const ROOM_ENTER_SUFFIXES = ["进入直播间", "进入了直播间", "进入直播间了"];
+
+/**
+ * A few relays encode an entry notice as ordinary chat text instead of the
+ * shared `enter` event. Normalize whitespace so both “小明进入直播间” and
+ * “小明 进入了直播间” are suppressed consistently after an upstream fallback.
+ */
+function isRoomEnterNotice(kind: DanmakuKind, content: string): boolean {
+  if (kind === "enter") return true;
+  // This runs for every chat line. Avoid allocating a whitespace-normalized
+  // copy for ordinary messages; all known notices end in this final character.
+  if (!content.endsWith("间")) return false;
+  if (ROOM_ENTER_SUFFIXES.some((suffix) => content.endsWith(suffix))) return true;
+  // Preserve support for relays which insert spaces inside the notice without
+  // paying the replace-all cost in the normal high-frequency path.
+  if (!/\s/.test(content)) return false;
+  const compact = content.replaceAll(/\s+/g, "");
+  return ROOM_ENTER_SUFFIXES.some((suffix) => compact.endsWith(suffix));
 }
 
 /**
@@ -32,8 +81,17 @@ export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]):
  * Douyu additionally drops them before IPC, while this keeps other sites
  * consistent if they emit the shared `enter` event.
  */
-export function shouldShowInDanmakuPanel(event: DanmakuEvent): boolean {
-  return Boolean(event.content?.trim()) && event.kind !== "enter";
+export function shouldShowInDanmakuPanel(
+  event: unknown,
+  filterGifts = false,
+): event is DanmakuEvent {
+  if (!isDanmakuEvent(event)) return false;
+  const content = event.content.trim();
+  return (
+    Boolean(content) &&
+    !isRoomEnterNotice(event.kind, content) &&
+    !(filterGifts && event.kind === "gift")
+  );
 }
 
 /**
@@ -76,8 +134,8 @@ export function floatingDanmakuText(event: DanmakuEvent): string {
   return content;
 }
 
-export function shouldShowOnCanvas(event: DanmakuEvent): boolean {
-  if (!shouldShowInDanmakuPanel(event)) return false;
+export function shouldShowOnCanvas(event: unknown, filterGifts = false): event is DanmakuEvent {
+  if (!shouldShowInDanmakuPanel(event, filterGifts)) return false;
   if (event.kind === "system") return false;
   return true;
 }

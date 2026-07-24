@@ -24,7 +24,23 @@ use crate::models::live::{DanmakuEvent, DanmakuKind};
 /// Official proxy ports (simple_live uses 8506; rotate on failure).
 const SERVER_PORTS: &[u16] = &[8506, 8505, 8504, 8503, 8502, 8501];
 const CLIENT_TO_SERVER: u16 = 689;
+const SERVER_TO_CLIENT: u16 = 690;
 const HEARTBEAT_SECS: u64 = 45;
+
+// A Douyu packet has a four-byte outer length followed by this fixed header:
+// duplicate length (4), message type (2), encryption/reserved (2).  The
+// declared length also includes the one-byte NUL terminator after the body.
+const PACKET_HEADER_LEN: usize = 12;
+const PACKET_TRAILER_LEN: usize = 1;
+const MIN_PACKET_FULL_LEN: usize = 4 + 2 + 1 + 1 + PACKET_TRAILER_LEN;
+// Danmaku STT messages are normally tiny.  A finite upper bound keeps a
+// corrupt length field from making the hot path repeatedly inspect a giant
+// payload while still leaving ample space for a legitimate control packet.
+const MAX_PACKET_FULL_LEN: usize = 256 * 1024;
+// Recover a following valid packet after a local header corruption, but do
+// not turn an arbitrarily large invalid WebSocket binary frame into an
+// unbounded byte-by-byte CPU scan.
+const MAX_PACKET_RESYNC_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct DouyuDanmakuArgs {
@@ -66,42 +82,83 @@ pub fn serialize_packet(body: &str) -> Vec<u8> {
     out
 }
 
+/// Return the body and total byte length of a well-formed packet at `offset`.
+///
+/// The two length fields, known packet type, and trailing NUL are all cheap
+/// checks that sharply reduce false positives when recovering after a corrupt
+/// packet in an otherwise valid WebSocket frame.
+fn packet_at(data: &[u8], offset: usize) -> Option<(usize, &[u8])> {
+    let header_end = offset.checked_add(PACKET_HEADER_LEN)?;
+    if header_end > data.len() {
+        return None;
+    }
+
+    let full = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+    let duplicate_full = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().ok()?) as usize;
+    let packet_type = u16::from_le_bytes(data[offset + 8..offset + 10].try_into().ok()?);
+    let encryption = data[offset + 10];
+    let reserved = data[offset + 11];
+    if full != duplicate_full
+        || !(MIN_PACKET_FULL_LEN..=MAX_PACKET_FULL_LEN).contains(&full)
+        || (packet_type != CLIENT_TO_SERVER && packet_type != SERVER_TO_CLIENT)
+        // This parser only understands plaintext STT. Rejecting non-zero
+        // flags also makes a false header during bounded resynchronisation
+        // substantially less likely.
+        || encryption != 0
+        || reserved != 0
+    {
+        return None;
+    }
+
+    // `full` excludes the first length field.  It includes the duplicate
+    // length/type/flags, body, and terminal NUL.
+    let total = 4usize.checked_add(full)?;
+    let packet_end = offset.checked_add(total)?;
+    if packet_end > data.len() || data[packet_end - 1] != 0 {
+        return None;
+    }
+
+    let body_len = full.checked_sub(MIN_PACKET_FULL_LEN)?;
+    let body_start = header_end;
+    let body_end = body_start.checked_add(body_len)?;
+    // The body must end immediately before the protocol's NUL terminator.
+    if body_end != packet_end - PACKET_TRAILER_LEN {
+        return None;
+    }
+    Some((total, &data[body_start..body_end]))
+}
+
 /// Visit zero or more UTF-8 STT body strings from a binary buffer.
 ///
 /// The Douyu proxy commonly bundles many protocol packets into a single WS
 /// frame. Keeping this as a borrowing iterator-style helper lets the live
 /// connection discard uninteresting packets (especially `uenter`) without
-/// first allocating a `String` for every body.
+/// first allocating a `String` for every body.  A malformed packet advances
+/// one byte and searches for the next validated header so it cannot hide a
+/// following valid chat packet in the same WebSocket frame.
 fn for_each_packet(data: &[u8], mut visit: impl FnMut(&str)) {
     let mut offset = 0usize;
-    while offset + 12 <= data.len() {
-        let full = u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
-        let total = 4 + full;
-        if full < 9 || offset + total > data.len() {
-            break;
-        }
-        // body starts after: len1(4 already counted) + len2(4) + type(2) + enc(1) + rsv(1) = 12 from packet start
-        // body_len = full - 9 = full - (len2 4 + type 2 + enc 1 + rsv 1 + nul 1)
-        let body_len = full - 9;
-        let body_start = offset + 12;
-        let body_end = body_start + body_len;
-        if body_end > offset + total {
-            break;
-        }
-        let body = &data[body_start..body_end];
-        // strip trailing nuls inside body slice
-        let body = body.strip_suffix(&[0]).unwrap_or(body);
-        if let Ok(s) = std::str::from_utf8(body) {
-            if !s.is_empty() {
-                visit(s);
+    let mut resync_bytes = 0usize;
+    while offset
+        .checked_add(PACKET_HEADER_LEN)
+        .is_some_and(|header_end| header_end <= data.len())
+    {
+        let Some((total, body)) = packet_at(data, offset) else {
+            if resync_bytes >= MAX_PACKET_RESYNC_BYTES {
+                break;
+            }
+            offset += 1;
+            resync_bytes += 1;
+            continue;
+        };
+
+        if let Ok(stt) = std::str::from_utf8(body) {
+            if !stt.is_empty() {
+                visit(stt);
             }
         }
         offset += total;
+        resync_bytes = 0;
     }
 }
 
@@ -166,6 +223,18 @@ fn decode_value(value: &str) -> String {
     }
 }
 
+/// Some upstream relay variants encode room-entry notices as `chatmsg`
+/// instead of the normal high-volume `uenter` packet.  They have no value in
+/// the chat UI and used to cross the IPC boundary as text such as
+/// "某某进入直播间".  Keep this check on the borrowed STT field, before escape
+/// decoding or allocating a [`DanmakuEvent`].
+fn is_room_enter_noise(content: &str) -> bool {
+    let content = content.trim();
+    ["进入直播间", "进入了直播间", "进入直播间了"]
+        .iter()
+        .any(|suffix| content.ends_with(suffix))
+}
+
 fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
     let mut user = None;
     let mut content = None;
@@ -193,7 +262,12 @@ fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
         return None;
     }
 
-    let content = decode_value(content?);
+    let raw_content = content?;
+    if is_room_enter_noise(raw_content) {
+        return None;
+    }
+
+    let content = decode_value(raw_content);
     if content.is_empty() {
         return None;
     }
@@ -484,6 +558,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_chatmsg_suppresses_textual_room_entry_noise() {
+        for text in [
+            "热心观众进入直播间",
+            "热心观众 进入直播间",
+            "热心观众进入了直播间",
+            "热心观众进入直播间了",
+        ] {
+            let stt = format!("type@=chatmsg/nn@=热心观众/txt@={text}/dms@=1/");
+            assert!(
+                parse_stt_message(&stt).is_none(),
+                "entry notice must not become a chat event: {text}"
+            );
+        }
+
+        let normal = "type@=chatmsg/nn@=热心观众/txt@=刚进入直播间就看到好节目/dms@=1/";
+        assert!(parse_stt_message(normal).is_some());
+    }
+
+    #[test]
     fn parse_gift_preserves_user_and_gift_fields() {
         let stt = "type@=dgb/nn@=alice/gfn@=火箭/gfcnt@=2/gn@=备用礼物/hits@=3/";
         let event = parse_stt_message(stt).expect("gift event");
@@ -521,9 +614,11 @@ mod tests {
     fn decode_binary_skips_uenter_without_dropping_useful_events() {
         let chat = serialize_packet("type@=chatmsg/nn@=u1/txt@=聊天/dms@=1/");
         let enter = serialize_packet("type@=uenter/nn@=路人/");
+        let text_enter = serialize_packet("type@=chatmsg/nn@=路人/txt@=路人进入直播间/dms@=1/");
         let gift = serialize_packet("type@=odfbc/nn@=u2/gn@=荧光棒/hits@=4/");
         let mut buffer = chat;
         buffer.extend_from_slice(&enter);
+        buffer.extend_from_slice(&text_enter);
         buffer.extend_from_slice(&gift);
 
         let events = decode_binary(&buffer);
@@ -531,5 +626,49 @@ mod tests {
         assert!(matches!(events[0].kind, DanmakuKind::Chat));
         assert!(matches!(events[1].kind, DanmakuKind::Gift));
         assert_eq!(events[1].content, "投喂 荧光棒 x4");
+    }
+
+    #[test]
+    fn packet_parser_accepts_server_packets_and_recovers_after_bad_header() {
+        let mut corrupt = serialize_packet("type@=chatmsg/nn@=bad/txt@=bad/dms@=1/");
+        // Duplicate length mismatch: this packet must be ignored rather than
+        // allowing its body to be interpreted as a future header.
+        corrupt[4] ^= 0x01;
+
+        let mut valid = serialize_packet("type@=chatmsg/nn@=ok/txt@=仍可收到/dms@=1/");
+        valid[8..10].copy_from_slice(&SERVER_TO_CLIENT.to_le_bytes());
+        corrupt.extend_from_slice(&valid);
+
+        let events = decode_binary(&corrupt);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].user, "ok");
+        assert_eq!(events[0].content, "仍可收到");
+    }
+
+    #[test]
+    fn packet_parser_rejects_bad_terminator_and_truncated_packets() {
+        let mut bad_terminator = serialize_packet("type@=chatmsg/nn@=bad/txt@=bad/dms@=1/");
+        *bad_terminator.last_mut().expect("packet terminator") = 1;
+        let valid = serialize_packet("type@=chatmsg/nn@=ok/txt@=good/dms@=1/");
+        bad_terminator.extend_from_slice(&valid);
+
+        let events = decode_binary(&bad_terminator);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content, "good");
+
+        let truncated = &valid[..valid.len() - 1];
+        assert!(decode_binary(truncated).is_empty());
+    }
+
+    #[test]
+    fn packet_parser_rejects_non_plaintext_headers_and_resyncs() {
+        let mut unsupported = serialize_packet("type@=chatmsg/nn@=bad/txt@=bad/dms@=1/");
+        unsupported[10] = 1;
+        let valid = serialize_packet("type@=chatmsg/nn@=ok/txt@=good/dms@=1/");
+        unsupported.extend_from_slice(&valid);
+
+        let events = decode_binary(&unsupported);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content, "good");
     }
 }

@@ -12,8 +12,50 @@ const navItems: {
   { to: "/follow", label: "关注", icon: Heart },
   { to: "/category", label: "分类", icon: LayoutGrid },
   { to: "/history", label: "历史", icon: History },
-  { to: "/settings", label: "设置", icon: Settings },
 ];
+
+function SidebarLink({
+  to,
+  label,
+  icon: Icon,
+  end,
+}: {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  end?: boolean;
+}) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      title={label}
+      className={({ isActive }) =>
+        cn(
+          "group relative flex h-11 w-11 items-center justify-center rounded-2xl transition-all focus-ring",
+          isActive
+            ? "bg-sidebar-active text-foreground shadow-inner"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />
+          )}
+          <Icon
+            className={cn(
+              "h-[22px] w-[22px] transition-transform group-hover:scale-105",
+              isActive && "text-primary",
+            )}
+          />
+          <span className="sr-only">{label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+}
 
 export function Sidebar() {
   return (
@@ -26,38 +68,11 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-1 flex-col items-center gap-1.5" aria-label="主导航">
-        {navItems.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            title={label}
-            className={({ isActive }) =>
-              cn(
-                "group relative flex h-11 w-11 items-center justify-center rounded-2xl transition-all focus-ring",
-                isActive
-                  ? "bg-sidebar-active text-foreground shadow-inner"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />
-                )}
-                <Icon
-                  className={cn(
-                    "h-[22px] w-[22px] transition-transform group-hover:scale-105",
-                    isActive && "text-primary",
-                  )}
-                />
-                <span className="sr-only">{label}</span>
-              </>
-            )}
-          </NavLink>
+        {navItems.map((item) => (
+          <SidebarLink key={item.to} {...item} />
         ))}
       </nav>
+      <SidebarLink to="/settings" label="设置" icon={Settings} />
     </aside>
   );
 }

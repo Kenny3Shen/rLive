@@ -8,7 +8,6 @@ import {
   MoreHorizontal,
   Share2,
   Link2,
-  RefreshCw,
 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -136,7 +135,7 @@ export function RoomPage() {
   if (detailQuery.isLoading) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar onBack={() => navigate(-1)} title="加载中…" />
+        <RoomTopBar onBack={() => navigate("/", { replace: true })} title="加载中…" />
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-8 text-primary" />
         </div>
@@ -147,7 +146,7 @@ export function RoomPage() {
   if (detailQuery.isError) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar onBack={() => navigate(-1)} title="加载失败" />
+        <RoomTopBar onBack={() => navigate("/", { replace: true })} title="加载失败" />
         <div className="p-6">
           <ErrorState
             error={detailQuery.error}
@@ -197,7 +196,7 @@ export function RoomPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <RoomTopBar
-        onBack={() => navigate(-1)}
+        onBack={() => navigate("/", { replace: true })}
         title={detail.title || "直播间"}
         subtitle={`${detail.user_name} · ${SITE_LABELS[detail.site_id] ?? detail.site_id}`}
         live={detail.status}
@@ -219,6 +218,7 @@ export function RoomPage() {
           lines={playback.lines}
           lineIndex={playback.lineIndex}
           onLineChange={playback.onLineChange}
+          onRefresh={playback.retryPlay}
           loadError={playback.loadError}
           reloadToken={playback.reloadToken}
           onPlayerMediaFailure={playback.onPlayerMediaFailure}
@@ -230,14 +230,6 @@ export function RoomPage() {
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-sidebar px-3 py-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void detailQuery.refetch()}
-        >
-          <RefreshCw data-icon="inline-start" />
-          刷新
-        </Button>
         <Button
           variant={isFollowed ? "secondary" : "default"}
           size="sm"

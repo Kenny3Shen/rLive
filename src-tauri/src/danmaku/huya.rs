@@ -102,7 +102,8 @@ pub fn encode_join(ayyuid: i64, tid: i64, sid: i64) -> Vec<u8> {
 }
 
 pub fn heartbeat_bytes() -> Vec<u8> {
-    base64_decode(HEARTBEAT_B64).unwrap_or_else(|| vec![0x00, 0x14, 0x1d, 0x00, 0x0c, 0x2c, 0x36, 0x00, 0x4c])
+    base64_decode(HEARTBEAT_B64)
+        .unwrap_or_else(|| vec![0x00, 0x14, 0x1d, 0x00, 0x0c, 0x2c, 0x36, 0x00, 0x4c])
 }
 
 fn base64_decode(s: &str) -> Option<Vec<u8>> {

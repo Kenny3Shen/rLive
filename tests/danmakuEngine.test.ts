@@ -27,7 +27,7 @@ describe("danmaku engine", () => {
     expect(engine.hasWork()).toBe(false);
   });
 
-  test("spreads the first comments across the video instead of filling from the top", () => {
+  test("assigns the first comments to tracks from the top down", () => {
     const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
     engine.tick(0, 1280, 720);
 
@@ -39,8 +39,7 @@ describe("danmaku engine", () => {
     const positions = items.map((item) => item.y);
 
     expect(items).toHaveLength(4);
-    expect(new Set(positions).size).toBe(4);
-    expect(Math.max(...positions) - Math.min(...positions)).toBeGreaterThan(360);
+    expect(positions).toEqual([0, 27, 54, 81]);
     for (const item of items) {
       expect(item.y).toBeGreaterThanOrEqual(0);
       expect(item.y + item.fontSize).toBeLessThanOrEqual(720);

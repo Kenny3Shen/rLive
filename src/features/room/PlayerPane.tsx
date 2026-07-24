@@ -30,6 +30,8 @@ type PlayerPaneProps = {
   lines?: { url: string }[];
   lineIndex?: number;
   onLineChange?: (index: number) => void;
+  /** Refresh the active stream metadata and rebuild the MSE session. */
+  onRefresh?: () => void;
   loadError?: string | null;
   reloadToken?: number;
   onPlayerMediaFailure?: (event: PlayerEvent) => void;
@@ -61,6 +63,7 @@ export function PlayerPane({
   lines = [],
   lineIndex = 0,
   onLineChange,
+  onRefresh,
   loadError: externalLoadError,
   reloadToken = 0,
   onPlayerMediaFailure,
@@ -69,11 +72,12 @@ export function PlayerPane({
   sideTab,
   onSideTabChange,
 }: PlayerPaneProps) {
-  const [danmakuOn, setDanmakuOn] = useState(true);
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
 
   const player = useWebPlayer({
     playUrl,
+    sessionKey: roomSessionKey,
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
@@ -86,6 +90,9 @@ export function PlayerPane({
       : null);
   const showHost = !loading && displayError == null && !!playUrl;
   const transportDisabled = !showHost;
+  // A failed MSE session still has a stream URL and must be refreshable; the
+  // error state is precisely where this control is most useful.
+  const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
 
@@ -143,7 +150,7 @@ export function PlayerPane({
             paused={player.paused}
             volume={player.volume}
             muted={player.muted}
-            danmakuOn={danmakuOn}
+            sidePanelOpen={sidePanelOpen}
             osdOn={osdOn}
             qualities={qualities}
             qualityIndex={qualityIndex}
@@ -152,10 +159,11 @@ export function PlayerPane({
             fullscreen={player.mode === "fullscreen"}
             loadError={loadError}
             disabled={transportDisabled}
+            refreshDisabled={refreshDisabled}
+            onRefresh={onRefresh}
             onTogglePause={() => player.togglePause()}
             onVolume={(v) => player.changeVolume(v)}
-            onToggleMute={() => player.toggleMute()}
-            onToggleDanmaku={() => setDanmakuOn((v) => !v)}
+            onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
             onToggleOsd={() => setOsdOn((v) => !v)}
             onQualityChange={onQualityChange ?? (() => {})}
             onLineChange={onLineChange ?? (() => {})}
@@ -164,52 +172,66 @@ export function PlayerPane({
         </div>
       </div>
 
-      {danmakuOn && (
-        <aside
-          className={cn(
-            "flex w-[300px] shrink-0 flex-col border-l border-border bg-sidebar lg:w-[320px]",
-            "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-56 max-md:w-full max-md:border-t max-md:border-l-0",
-          )}
+      <aside
+        aria-hidden={!sidePanelOpen}
+        className={cn(
+          "flex w-[300px] shrink-0 flex-col border-l border-border bg-sidebar lg:w-[320px]",
+          "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-56 max-md:w-full max-md:border-t max-md:border-l-0",
+          !sidePanelOpen && "hidden",
+        )}
+      >
+        {sideHeader}
+        <Tabs
+          {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
+          className="flex min-h-0 flex-1 flex-col gap-0"
+          onValueChange={(value) => onSideTabChange?.(value as RoomSideTab)}
         >
-          {sideHeader}
-          <Tabs
-            {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
-            className="flex min-h-0 flex-1 flex-col gap-0"
-            onValueChange={(value) => onSideTabChange?.(value as RoomSideTab)}
+          <TabsList
+            variant="line"
+            className="w-full justify-start rounded-none border-b border-border bg-transparent px-2"
           >
-            <TabsList
-              variant="line"
-              className="w-full justify-start rounded-none border-b border-border bg-transparent px-2"
-            >
-              <TabsTrigger value="chat">聊天</TabsTrigger>
-              <TabsTrigger value="sc">SC</TabsTrigger>
-              <TabsTrigger value="settings">弹幕设置</TabsTrigger>
-              <TabsTrigger value="follow">关注</TabsTrigger>
-            </TabsList>
-            <TabsContent value="chat" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
-              <DanmakuPanel
-                key={`chat:${roomSessionKey ?? "room"}`}
-                active={danmakuActive}
-                statusText={danmakuStatusText}
-                className="h-full"
-              />
-            </TabsContent>
-            <TabsContent value="sc" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
-              <SuperChatPanel
-                key={`sc:${roomSessionKey ?? "room"}`}
-                active={danmakuActive}
-                className="h-full"
-              />
-            </TabsContent>
-            <TabsContent value="settings" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
-              <DanmakuSettingsPanel className="h-full" />
-            </TabsContent>
-            <TabsContent value="follow" className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
-              <FollowPanel className="h-full" />
-            </TabsContent>
-          </Tabs>
-        </aside>
-      )}
+            <TabsTrigger value="chat">聊天</TabsTrigger>
+            <TabsTrigger value="sc">SC</TabsTrigger>
+            <TabsTrigger value="settings">弹幕设置</TabsTrigger>
+            <TabsTrigger value="follow">关注</TabsTrigger>
+          </TabsList>
+          <TabsContent
+            value="chat"
+            keepMounted
+            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+          >
+            <DanmakuPanel
+              key={`chat:${roomSessionKey ?? "room"}`}
+              active={danmakuActive}
+              visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
+              statusText={danmakuStatusText}
+              className="h-full"
+            />
+          </TabsContent>
+          <TabsContent value="sc" keepMounted className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
+            <SuperChatPanel
+              key={`sc:${roomSessionKey ?? "room"}`}
+              active={danmakuActive}
+              visible={sidePanelOpen && (sideTab === undefined || sideTab === "sc")}
+              className="h-full"
+            />
+          </TabsContent>
+          <TabsContent
+            value="settings"
+            keepMounted
+            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+          >
+            <DanmakuSettingsPanel className="h-full" />
+          </TabsContent>
+          <TabsContent
+            value="follow"
+            keepMounted
+            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+          >
+            <FollowPanel className="h-full" />
+          </TabsContent>
+        </Tabs>
+      </aside>
     </div>
   );
 }

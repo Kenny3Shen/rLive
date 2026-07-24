@@ -112,6 +112,7 @@ export type AppSettings = {
   danmaku_line_count: number;
   danmaku_font_weight: number;
   danmaku_filter_repeats: boolean;
+  danmaku_filter_gifts: boolean;
   danmaku_shield_words: string[];
   mpv_path: string | null;
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */

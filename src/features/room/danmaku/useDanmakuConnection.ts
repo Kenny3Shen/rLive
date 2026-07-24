@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
+import { nextDanmakuConnectionEpoch } from "./connectionEpoch";
 
 const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya"]);
 
@@ -26,41 +27,49 @@ export function useDanmakuConnection(opts: {
   const { siteId, roomId, detailRoomId, enabled = true } = opts;
   const [statusText, setStatusText] = useState<string | null>(null);
   const [active, setActive] = useState(false);
+  const connectionEpochRef = useRef(0);
 
-  // A route change should be able to start the next room immediately. The
-  // backend's `danmaku_connect` atomically replaces the active task, so only
-  // disconnect here when no next connection is requested or on unmount. Doing
-  // it in every dependency cleanup races a new connect IPC call and can abort
-  // the freshly-created room connection.
+  // Fence every route change before waiting for the next room-detail query.
+  // The backend compares this epoch before installing a websocket task, so a
+  // slow command for the previous room cannot reconnect after a newer route.
+  useEffect(() => {
+    const connectionEpoch = nextDanmakuConnectionEpoch();
+    connectionEpochRef.current = connectionEpoch;
+    setActive(false);
+    setStatusText(null);
+    void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
+  }, [siteId, roomId]);
+
+  // Leaving RoomPage also gets a newer epoch. This invalidates any in-flight
+  // metadata fetch that reaches the backend after the component has gone.
   useEffect(() => {
     return () => {
-      void invokeCmd("danmaku_disconnect").catch(() => {});
+      const connectionEpoch = nextDanmakuConnectionEpoch();
+      connectionEpochRef.current = connectionEpoch;
+      void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
     };
   }, []);
 
   useEffect(() => {
+    const connectionEpoch = connectionEpochRef.current;
     if (!enabled || !siteId || !roomId || !detailRoomId) {
       setActive(false);
       setStatusText(null);
-      // During a direct room switch, detail is briefly unavailable while the
-      // next route fetches. Keep the old task until the next `connect` can
-      // atomically replace it; a standalone disconnect here could arrive
-      // after that new command and kill the fresh connection.
-      if (!siteId || !roomId) {
-        void invokeCmd("danmaku_disconnect").catch(() => {});
+      if (!enabled || !siteId || !roomId) {
+        void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
       }
       return;
     }
     if (!DANMAKU_ENABLED_SITES.has(siteId)) {
       setActive(false);
       setStatusText("当前平台暂不支持实时弹幕");
-      void invokeCmd("danmaku_disconnect").catch(() => {});
+      void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
       return;
     }
     let cancelled = false;
     setStatusText("正在连接弹幕服务器…");
     setActive(false);
-    void invokeCmd("danmaku_connect", { siteId, roomId })
+    void invokeCmd("danmaku_connect", { siteId, roomId, connectionEpoch })
       .then(() => {
         if (!cancelled) {
           setStatusText(null);
