@@ -3887,7 +3887,6 @@ dependencies = [
  "futures-util",
  "hex",
  "md-5",
- "raw-window-handle",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -3901,9 +3900,7 @@ dependencies = [
  "tokio-tungstenite 0.26.2",
  "tracing",
  "tracing-subscriber",
- "url",
  "uuid",
- "windows",
 ]
 
 [[package]]

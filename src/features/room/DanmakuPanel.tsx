@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type UIEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { invokeCmd } from "@/shared/api/tauri";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { isShielded } from "./danmaku/filter";
@@ -12,21 +11,17 @@ const MAX = 400;
 
 type DanmakuPanelProps = {
   active: boolean;
-  /** Also push OSD onto embedded mpv video. */
-  osd?: boolean;
   className?: string;
   statusText?: string | null;
 };
 
 export function DanmakuPanel({
   active,
-  osd = true,
   className,
   statusText,
 }: DanmakuPanelProps) {
   const [items, setItems] = useState<DanmakuEvent[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const lastOsdAt = useRef(0);
   const autoScroll = useRef(true);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
@@ -48,21 +43,6 @@ export function DanmakuPanel({
         const next = [...prev, msg];
         return next.length > MAX ? next.slice(next.length - MAX) : next;
       });
-
-      if (osd && msg.kind !== "system") {
-        const now = Date.now();
-        if (now - lastOsdAt.current >= 250) {
-          lastOsdAt.current = now;
-          const line =
-            msg.kind === "super_chat"
-              ? `【SC】${msg.user}: ${msg.content}`
-              : `${msg.user}: ${msg.content}`;
-          void invokeCmd("player_show_danmaku", {
-            text: line.slice(0, 72),
-            durationMs: 3000,
-          }).catch(() => {});
-        }
-      }
     }).then((fn) => {
       unlisten = fn;
     });
@@ -70,7 +50,7 @@ export function DanmakuPanel({
       cancelled = true;
       unlisten?.();
     };
-  }, [active, shieldWords, osd]);
+  }, [active, shieldWords]);
 
   useEffect(() => {
     if (autoScroll.current) {

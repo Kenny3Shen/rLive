@@ -5,12 +5,7 @@ description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "rlive_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -29,9 +24,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "gzip", "brotli", "stream"] }
-url = "2"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
 md-5 = "0.10"
@@ -41,16 +35,4 @@ futures-util = "0.3"
 flate2 = "1"
 brotli = "7"
 uuid = { version = "1", features = ["v4"] }
-raw-window-handle = "0.6"
 boa_engine = "0.20"
-
-[target.'cfg(windows)'.dependencies]
-# Match Tauri 2 / tao HWND types (windows 0.61) to avoid dual-version Param mismatches.
-windows = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_System_LibraryLoader",
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_System_SystemServices",
-] }
-

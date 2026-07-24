@@ -25,7 +25,6 @@ pub struct StreamProxy {
 }
 
 struct ProxyInner {
-    port: u16,
     shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
 }
@@ -80,7 +79,6 @@ impl StreamProxy {
         {
             let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             *guard = Some(ProxyInner {
-                port,
                 shutdown: shutdown_tx,
                 task,
             });
@@ -89,14 +87,6 @@ impl StreamProxy {
         Ok(format!("http://127.0.0.1:{port}/live"))
     }
 
-    pub fn local_url(&self) -> Option<String> {
-        let port = self.port.load(Ordering::Acquire);
-        if port == 0 {
-            None
-        } else {
-            Some(format!("http://127.0.0.1:{port}/live"))
-        }
-    }
 }
 
 async fn run_proxy_loop(
