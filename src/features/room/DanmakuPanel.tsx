@@ -169,7 +169,7 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
         <div
           className="flex flex-col gap-0.5 px-2.5 py-2"
           style={{
-            fontSize: Math.max(12, (fontSize || 16) - 2),
+            fontSize: Math.max(12, (fontSize || 16) - 4),
             fontWeight,
           }}
         >

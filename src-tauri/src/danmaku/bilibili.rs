@@ -152,6 +152,16 @@ fn inflate_brotli(body: &[u8]) -> Option<Vec<u8>> {
 /// Parse one or more protocol packets; returns chat/superchat/enter/gift events.
 pub fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
     let mut out = Vec::new();
+    decode_packets_with(data, &mut |event| out.push(event));
+    out
+}
+
+/// Decode a packet buffer directly into a caller-owned sink.
+///
+/// The websocket loop can emit each event as it is decoded, avoiding a
+/// short-lived `Vec<DanmakuEvent>` for every busy-room frame.  Keep the
+/// allocating [`decode_packets`] wrapper for tests and diagnostics.
+fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     let mut offset = 0usize;
     while offset + 16 <= data.len() {
         let packet_len = match read_u32(data, offset) {
@@ -173,34 +183,38 @@ pub fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
             8 => {}
             // Notify / danmaku payload
             5 => {
-                let payload = match protocol_version {
-                    2 => match inflate_zlib(body) {
-                        Some(v) => v,
-                        None => continue,
-                    },
-                    3 => match inflate_brotli(body) {
-                        Some(v) => v,
-                        None => continue,
-                    },
-                    _ => body.to_vec(),
-                };
-
-                // Compressed frames expand into nested packets (headers + bodies).
-                if protocol_version == 2 || protocol_version == 3 {
-                    if payload.len() >= 16 {
-                        let nested_len = read_u32(&payload, 0).unwrap_or(0) as usize;
-                        if nested_len >= 16 && nested_len <= payload.len() {
-                            out.extend(decode_packets(&payload));
+                match protocol_version {
+                    // Compressed frames expand into nested packets (headers +
+                    // bodies). They necessarily own a decompression buffer,
+                    // but the recursive decoder streams events from it rather
+                    // than allocating an additional event vector.
+                    2 | 3 => {
+                        let payload = if protocol_version == 2 {
+                            inflate_zlib(body)
+                        } else {
+                            inflate_brotli(body)
+                        };
+                        let Some(payload) = payload else {
                             continue;
+                        };
+                        if payload.len() >= 16 {
+                            let nested_len = read_u32(&payload, 0).unwrap_or(0) as usize;
+                            if nested_len >= 16 && nested_len <= payload.len() {
+                                decode_packets_with(&payload, emit);
+                                continue;
+                            }
                         }
+                        parse_notify_body_with(&payload, emit);
                     }
+                    // Raw JSON payloads borrow the websocket frame directly;
+                    // copying them was a measurable allocation source in
+                    // high-traffic rooms.
+                    _ => parse_notify_body_with(body, emit),
                 }
-                out.extend(parse_notify_body(&payload));
             }
             _ => {}
         }
     }
-    out
 }
 
 /// Whether this buffer looks like a server auth-ok packet (op=8).
@@ -223,28 +237,28 @@ pub fn packets_contain_auth_ok(data: &[u8]) -> bool {
     false
 }
 
-fn parse_notify_body(body: &[u8]) -> Vec<DanmakuEvent> {
+fn parse_notify_body_with(body: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     let text = String::from_utf8_lossy(body);
-    let mut events = Vec::new();
+    let mut emitted = false;
     // One WS body may contain multiple JSON objects glued by control bytes.
     for part in text.split(|c: char| c.is_control()) {
         let part = part.trim();
         if part.len() > 2 && part.starts_with('{') {
             if let Some(ev) = parse_message_json(part) {
-                events.push(ev);
+                emit(ev);
+                emitted = true;
             }
         }
     }
     // Fallback: whole body as single JSON
-    if events.is_empty() {
+    if !emitted {
         let trimmed = text.trim();
         if trimmed.starts_with('{') {
             if let Some(ev) = parse_message_json(trimmed) {
-                events.push(ev);
+                emit(ev);
             }
         }
     }
-    events
 }
 
 fn json_stringish(v: &Value) -> String {
@@ -536,9 +550,10 @@ pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()
                                 },
                             );
                         }
-                        let events = decode_packets(&bin);
-                        if !events.is_empty() {
-                            // First payload often arrives with/without op=8 frame.
+                        decode_packets_with(&bin, &mut |ev| {
+                            // First payload often arrives with/without an
+                            // operation-8 frame.  Announce success before
+                            // forwarding that first event, as before.
                             if !auth_ok {
                                 auth_ok = true;
                                 emit_event(
@@ -553,18 +568,15 @@ pub async fn run_loop(app: AppHandle, args: BilibiliDanmakuArgs) -> AppResult<()
                                     },
                                 );
                             }
-                            for ev in events {
-                                msg_count += 1;
-                                emit_event(&app, ev);
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Text(text))) => {
-                        let events = decode_packets(text.as_bytes());
-                        for ev in events {
                             msg_count += 1;
                             emit_event(&app, ev);
-                        }
+                        });
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        decode_packets_with(text.as_bytes(), &mut |ev| {
+                            msg_count += 1;
+                            emit_event(&app, ev);
+                        });
                     }
                     Some(Ok(Message::Ping(p))) => {
                         let _ = write.send(Message::Pong(p)).await;
@@ -734,5 +746,32 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].user, "carol");
         assert_eq!(events[0].content, "nested");
+    }
+
+    #[test]
+    fn streaming_decoder_forwards_all_packets_in_order() {
+        let first = encode_packet(
+            br#"{"cmd":"DANMU_MSG","info":[[0,1,25,0],"first",[1,"alice",0]]}"#,
+            5,
+        );
+        let second = encode_packet(
+            br#"{"cmd":"DANMU_MSG","info":[[0,1,25,0],"second",[1,"bob",0]]}"#,
+            5,
+        );
+        let mut frame = first;
+        frame.extend(second);
+
+        let mut received = Vec::new();
+        decode_packets_with(&frame, &mut |event| {
+            received.push((event.user, event.content))
+        });
+
+        assert_eq!(
+            received,
+            vec![
+                ("alice".to_string(), "first".to_string()),
+                ("bob".to_string(), "second".to_string()),
+            ]
+        );
     }
 }

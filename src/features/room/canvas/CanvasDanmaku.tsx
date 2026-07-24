@@ -106,19 +106,39 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     let needsDraw = true;
     let width = 0;
     let height = 0;
+    let pixelRatio = 0;
 
     const resize = () => {
       if (stopped) return;
       const parent = canvas.parentElement;
       if (!parent) return;
-      const dpr = window.devicePixelRatio || 1;
-      width = parent.clientWidth;
-      height = parent.clientHeight;
-      canvas.width = Math.max(1, Math.floor(width * dpr));
-      canvas.height = Math.max(1, Math.floor(height * dpr));
+      const nextPixelRatio = window.devicePixelRatio || 1;
+      const nextWidth = parent.clientWidth;
+      const nextHeight = parent.clientHeight;
+      const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
+      const nextCanvasHeight = Math.max(1, Math.floor(nextHeight * nextPixelRatio));
+
+      // ResizeObserver can fire for layout work that leaves the canvas size
+      // unchanged. Resetting a canvas erases it and costs a full redraw, so
+      // avoid touching its bitmap until a CSS size or device scale changed.
+      if (
+        width === nextWidth &&
+        height === nextHeight &&
+        pixelRatio === nextPixelRatio &&
+        canvas.width === nextCanvasWidth &&
+        canvas.height === nextCanvasHeight
+      ) {
+        return;
+      }
+
+      width = nextWidth;
+      height = nextHeight;
+      pixelRatio = nextPixelRatio;
+      canvas.width = nextCanvasWidth;
+      canvas.height = nextCanvasHeight;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       requestFrame();
     };
 

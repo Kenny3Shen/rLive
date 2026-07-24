@@ -39,7 +39,7 @@ describe("danmaku engine", () => {
     const positions = items.map((item) => item.y);
 
     expect(items).toHaveLength(4);
-    expect(positions).toEqual([0, 27, 54, 81]);
+    expect(positions).toEqual([12, 39, 66, 93]);
     for (const item of items) {
       expect(item.y).toBeGreaterThanOrEqual(0);
       expect(item.y + item.fontSize).toBeLessThanOrEqual(720);

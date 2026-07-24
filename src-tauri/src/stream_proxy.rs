@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 
 use futures_util::StreamExt;
+use reqwest::Client;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -70,10 +71,15 @@ impl StreamProxy {
             .local_addr()
             .map_err(|e| AppError::new("stream_proxy_bind", e.to_string()))?
             .port();
+        // mpegts.js can issue several localhost requests for one live stream.
+        // Build one client per proxy lifetime so those requests share its
+        // connection pool instead of rebuilding TLS/pool state per request.
+        let client = build_stream_client()
+            .map_err(|e| AppError::new("stream_proxy_client", format!("client: {e}")))?;
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let task = tauri::async_runtime::spawn(async move {
-            run_proxy_loop(listener, url, headers, shutdown_rx).await;
+            run_proxy_loop(listener, client, url, headers, shutdown_rx).await;
         });
 
         {
@@ -89,8 +95,21 @@ impl StreamProxy {
 
 }
 
+/// Streaming deliberately has no overall request timeout: a healthy live
+/// response may remain open indefinitely.  It still shares the same transport
+/// limits for every client connected to this proxy instance.
+fn build_stream_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .use_rustls_tls()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(2)
+        .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT)
+        .build()
+}
+
 async fn run_proxy_loop(
     listener: TcpListener,
+    client: Client,
     url: String,
     headers: HashMap<String, String>,
     mut shutdown: watch::Receiver<bool>,
@@ -105,10 +124,12 @@ async fn run_proxy_loop(
             accept = listener.accept() => {
                 match accept {
                     Ok((mut socket, _)) => {
+                        let client = client.clone();
                         let url = url.clone();
                         let headers = headers.clone();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = handle_client(&mut socket, &url, &headers).await {
+                            if let Err(e) = handle_client(&mut socket, &client, &url, &headers).await
+                            {
                                 tracing::debug!(%e, "stream proxy client ended");
                             }
                         });
@@ -125,6 +146,7 @@ async fn run_proxy_loop(
 
 async fn handle_client(
     socket: &mut tokio::net::TcpStream,
+    client: &Client,
     url: &str,
     headers: &HashMap<String, String>,
 ) -> Result<(), String> {
@@ -159,14 +181,6 @@ async fn handle_client(
         return Ok(());
     }
 
-    // Live streams must not use the short site-API timeout.
-    let client = reqwest::Client::builder()
-        .use_rustls_tls()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .pool_max_idle_per_host(2)
-        .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT)
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
     let mut req = client.get(url);
     for (k, v) in headers {
         req = req.header(k.as_str(), v.as_str());

@@ -4,8 +4,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Heart,
-  Flame,
-  MoreHorizontal,
   Share2,
   Link2,
 } from "lucide-react";
@@ -23,9 +21,8 @@ import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
-import { formatOnline, normalizeImageUrl, SITE_LABELS, cn } from "@/lib/utils";
+import { SITE_LABELS, cn } from "@/lib/utils";
 
 export function RoomPage() {
   const navigate = useNavigate();
@@ -160,39 +157,6 @@ export function RoomPage() {
 
   if (!detail) return null;
 
-  const userAvatar = normalizeImageUrl(detail.user_avatar);
-
-  const sideHeader = (
-    <div className="shrink-0 border-b border-border px-3 py-3">
-      <div className="flex items-start gap-2.5">
-        <Avatar className="size-11">
-          <AvatarImage src={userAvatar} alt="" referrerPolicy="no-referrer" />
-          <AvatarFallback>
-            {(detail.user_name || "?").slice(0, 1)}
-          </AvatarFallback>
-        </Avatar>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{detail.user_name}</p>
-          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <span>{SITE_LABELS[detail.site_id] ?? detail.site_id}</span>
-            <span className="inline-flex items-center gap-0.5 text-orange-400">
-              <Flame className="size-3" />
-              {formatOnline(detail.online)}
-            </span>
-          </div>
-        </div>
-        <Button variant="ghost" size="icon-sm" disabled title="更多">
-          <MoreHorizontal />
-        </Button>
-      </div>
-      {detail.title && (
-        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-          {detail.title}
-        </p>
-      )}
-    </div>
-  );
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <RoomTopBar
@@ -208,10 +172,8 @@ export function RoomPage() {
           loading={playback.loading}
           error={playback.error}
           onRetry={playback.retryPlay}
-          title={detail.title}
           danmakuActive={danmaku.active}
           danmakuStatusText={danmaku.statusText}
-          sideHeader={sideHeader}
           qualities={playback.qualities}
           qualityIndex={playback.qualityIndex}
           onQualityChange={playback.onQualityChange}
@@ -231,16 +193,15 @@ export function RoomPage() {
 
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-sidebar px-3 py-2">
         <Button
-          variant={isFollowed ? "secondary" : "default"}
-          size="sm"
+          variant="ghost"
+          size="icon-sm"
           disabled={followBusy}
           onClick={() => void toggleFollow()}
+          aria-label={isFollowed ? "取消关注" : "关注"}
+          aria-pressed={isFollowed}
+          title={isFollowed ? "取消关注" : "关注"}
         >
-          <Heart
-            data-icon="inline-start"
-            className={cn(isFollowed && "fill-current")}
-          />
-          {isFollowed ? "已关注" : "关注"}
+          <Heart className={cn(isFollowed && "fill-current")} />
         </Button>
 
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -258,7 +219,7 @@ export function RoomPage() {
             复制链接
           </Button>
           <Button
-            variant="secondary"
+            variant="ghost"
             size="sm"
             title="复制当前播放直链（流地址）"
             disabled={!playback.playUrl?.url}
