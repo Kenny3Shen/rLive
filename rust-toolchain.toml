@@ -1,0 +1,5 @@
+# Pin the Rust channel used by agents and CI. Update intentionally.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

@@ -3,7 +3,7 @@ name = "rlive"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "rlive_lib"
@@ -36,3 +36,11 @@ flate2 = "1"
 brotli = "7"
 uuid = { version = "1", features = ["v4"] }
 boa_engine = "0.20"
+
+# Desktop release: smaller + faster binary (web player + sites + proxy).
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+strip = "symbols"
+panic = "abort"
