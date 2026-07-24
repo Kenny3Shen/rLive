@@ -99,4 +99,6 @@ export type AppSettings = {
   danmaku_speed: number;
   danmaku_shield_words: string[];
   mpv_path: string | null;
+  /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
+  quality_level?: "high" | "mid" | "low";
 };

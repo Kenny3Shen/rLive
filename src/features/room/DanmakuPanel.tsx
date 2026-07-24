@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { useEffect, useRef, useState, type UIEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { isShielded } from "./danmaku/filter";
 import { cn } from "@/lib/utils";
 
 const MAX = 400;
@@ -30,11 +31,6 @@ export function DanmakuPanel({
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
 
-  const shieldLower = useMemo(
-    () => shieldWords.map((w) => w.toLowerCase()).filter(Boolean),
-    [shieldWords],
-  );
-
   useEffect(() => {
     if (!active) {
       setItems([]);
@@ -46,11 +42,7 @@ export function DanmakuPanel({
       if (cancelled) return;
       const msg = event.payload;
       if (!msg?.content?.trim()) return;
-
-      if (msg.kind !== "system") {
-        const lower = msg.content.toLowerCase();
-        if (shieldLower.some((w) => lower.includes(w))) return;
-      }
+      if (isShielded(msg, shieldWords)) return;
 
       setItems((prev) => {
         const next = [...prev, msg];
@@ -78,7 +70,7 @@ export function DanmakuPanel({
       cancelled = true;
       unlisten?.();
     };
-  }, [active, shieldLower, osd]);
+  }, [active, shieldWords, osd]);
 
   useEffect(() => {
     if (autoScroll.current) {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { SiteInfo } from "@/shared/types/live";
+import { SiteLogo } from "@/shared/components/SiteLogo";
 import { cn, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
 
 const FALLBACK_SITES: SiteInfo[] = [
@@ -36,7 +37,7 @@ export function SiteSwitcher() {
 
   return (
     <div
-      className="flex items-center gap-1 rounded-full bg-card/80 p-1 ring-1 ring-border-subtle backdrop-blur-sm"
+      className="flex h-full items-stretch gap-1"
       role="tablist"
       aria-label="直播平台"
     >
@@ -59,20 +60,14 @@ export function SiteSwitcher() {
               if (site.ready) setSiteId(site.id);
             }}
             className={cn(
-              "relative flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all focus-ring",
+              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors focus-ring",
               active
-                ? "bg-muted text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
+                ? "text-foreground"
+                : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
               disabled && "cursor-not-allowed opacity-35",
             )}
           >
-            <span
-              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
-              style={{ backgroundColor: accent }}
-              aria-hidden
-            >
-              {label.slice(0, 1)}
-            </span>
+            <SiteLogo siteId={site.id} />
             <span className="hidden sm:inline">{label}</span>
             {active && (
               <span

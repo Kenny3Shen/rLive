@@ -15,7 +15,8 @@ import type { FollowUser } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, SITE_LABELS } from "@/lib/utils";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type TagRecord = { id: string; name: string };
 type LiveFilter = "all" | "live" | "offline";
@@ -198,6 +199,7 @@ export function FollowPage() {
           {items.map((u) => {
             const live = u.live_status === true;
             const offline = u.live_status === false;
+            const avatarSrc = normalizeImageUrl(u.face);
             return (
               <li key={`${u.site_id}:${u.room_id}`}>
                 <div
@@ -216,9 +218,9 @@ export function FollowPage() {
                     }
                   >
                     <div className="relative h-16 w-[104px] shrink-0 overflow-hidden rounded-xl bg-muted">
-                      {u.face ? (
+                      {avatarSrc ? (
                         <img
-                          src={u.face}
+                          src={avatarSrc}
                           alt=""
                           className="h-full w-full object-cover"
                           referrerPolicy="no-referrer"
@@ -239,16 +241,16 @@ export function FollowPage() {
 
                     <div className="relative min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        {u.face ? (
-                          <img
-                            src={u.face}
+                        <Avatar className="size-8 ring-2 ring-background">
+                          <AvatarImage
+                            src={avatarSrc}
                             alt=""
-                            className="h-8 w-8 rounded-full object-cover ring-2 ring-background"
                             referrerPolicy="no-referrer"
                           />
-                        ) : (
-                          <div className="h-8 w-8 rounded-full bg-muted" />
-                        )}
+                          <AvatarFallback>
+                            {(u.user_name || "?").slice(0, 1)}
+                          </AvatarFallback>
+                        </Avatar>
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium">
                             {u.user_name}

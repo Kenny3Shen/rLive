@@ -1,5 +1,14 @@
 # Changelog — 2026-07-24
 
+## Playback + Danmaku v3 (Simple Live alignment)
+
+- Room playback refactored into controllers: `usePlaybackController`, `usePlayerSession`, `useDanmakuSurface`, `useDanmakuConnection`.
+- **Failover** like Simple Live: retry current line ≤2, then next line; surface 播放失败 when exhausted.
+- **Default quality** preference (`high` / `mid` / `low`) in settings + room open.
+- libmpv emits `player_event` (`playing` / `eof` / `error`) via wait_event observer.
+- Floating danmaku: content-only text (no `user:`); shared shield filter; Super Chat tab lists SC events.
+- Design: `docs/superpowers/specs/2026-07-24-playback-danmaku-v3-design.md`.
+
 ## UI / UX
 
 - Simple Live–inspired dark shell: icon sidebar, centered site tabs, top-right search.

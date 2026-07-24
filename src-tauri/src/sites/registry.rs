@@ -8,11 +8,6 @@ use crate::sites::huya::HuyaSite;
 use crate::sites::kuaishou::KuaishouSite;
 use crate::sites::traits::LiveSite;
 
-static HUYA: HuyaSite = HuyaSite;
-static DOUYU: DouyuSite = DouyuSite;
-static DOUYIN: DouyinSite = DouyinSite;
-static KUAISHOU: KuaishouSite = KuaishouSite;
-
 /// Metadata for site list UI (no cookie / HTTP session).
 pub struct SiteMeta {
     pub id: SiteId,
@@ -60,22 +55,16 @@ pub fn site(id: &SiteId, cookie: Option<String>) -> AppResult<Box<dyn LiveSite>>
                 cookie,
             )))
         }
-        SiteId::Huya => Ok(Box::new(HuyaSite)),
-        SiteId::Douyu => Ok(Box::new(DouyuSite)),
+        SiteId::Huya => Ok(Box::new(HuyaSite::new(http_client::default_client()))),
+        SiteId::Douyu => Ok(Box::new(DouyuSite::new(http_client::default_client()))),
         SiteId::Douyin => Ok(Box::new(DouyinSite)),
         SiteId::Kuaishou => Ok(Box::new(KuaishouSite)),
     }
 }
 
-// Keep static stubs referenced so the type system still sees them as LiveSite.
-#[allow(dead_code)]
-fn _static_sites() -> [&'static dyn LiveSite; 4] {
-    [&HUYA, &DOUYU, &DOUYIN, &KUAISHOU]
-}
-
 /// Whether a site's LiveSite methods are fully implemented (HTTP, etc.).
 pub fn is_ready(id: &SiteId) -> bool {
-    matches!(id, SiteId::Bilibili)
+    matches!(id, SiteId::Bilibili | SiteId::Huya | SiteId::Douyu)
 }
 
 #[cfg(test)]
@@ -97,8 +86,10 @@ mod tests {
     }
 
     #[test]
-    fn bilibili_is_ready() {
+    fn ready_sites() {
         assert!(is_ready(&SiteId::Bilibili));
-        assert!(!is_ready(&SiteId::Huya));
+        assert!(is_ready(&SiteId::Huya));
+        assert!(is_ready(&SiteId::Douyu));
+        assert!(!is_ready(&SiteId::Douyin));
     }
 }

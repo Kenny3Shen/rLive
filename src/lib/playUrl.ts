@@ -1,12 +1,11 @@
-/** Prefer short host for line label; fall back to 线路 n (1-based). */
+/** Use stable, human-readable labels rather than exposing CDN host names. */
 export function lineLabel(url: string, index: number): string {
-  try {
-    const host = new URL(url).hostname;
-    if (host) return host.replace(/^www\./, "");
-  } catch {
-    /* ignore */
-  }
-  return `线路${index + 1}`;
+  const transport = /\.m3u8(?:[?#]|$)|(?:[/?&=_-])hls(?:[/?&=_-]|$)/i.test(
+    url,
+  )
+    ? "HLS"
+    : "FLV";
+  return `线路${index + 1}（${transport}）`;
 }
 
 export function clampIndex(i: number, len: number): number {

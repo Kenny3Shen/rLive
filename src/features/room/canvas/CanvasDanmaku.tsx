@@ -2,29 +2,33 @@ import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { isShielded, shouldShowOnCanvas } from "../danmaku/filter";
 import { createEngine, type DanmakuEngine } from "./danmakuEngine";
 import { cn } from "@/lib/utils";
 
 type CanvasDanmakuProps = {
   className?: string;
   active?: boolean;
+  sessionKey?: number | string | null;
 };
 
-export function CanvasDanmaku({ className, active = true }: CanvasDanmakuProps) {
+export function CanvasDanmaku({ className, active = true, sessionKey = null }: CanvasDanmakuProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DanmakuEngine | null>(null);
+  const engineSessionRef = useRef<number | string | null>(sessionKey);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const speed = useSettingsStore((s) => s.danmakuSpeed);
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
 
-  useEffect(() => {
+  if (engineRef.current === null || engineSessionRef.current !== sessionKey) {
+    engineSessionRef.current = sessionKey;
     engineRef.current = createEngine({
       fontSize: fontSize || 18,
       speed: speed || 8,
       opacity: opacity ?? 1,
     });
-  }, []);
+  }
 
   useEffect(() => {
     engineRef.current?.setOpts({
@@ -38,25 +42,28 @@ export function CanvasDanmaku({ className, active = true }: CanvasDanmakuProps) 
     if (!active) return;
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
-    const shield = shieldWords.map((w) => w.toLowerCase()).filter(Boolean);
 
     void listen<DanmakuEvent>("danmaku", (event) => {
       if (cancelled) return;
       const msg = event.payload;
-      if (!msg?.content?.trim()) return;
-      if (msg.kind === "system") return;
-      const lower = msg.content.toLowerCase();
-      if (shield.some((w) => lower.includes(w))) return;
+      if (!shouldShowOnCanvas(msg)) return;
+      if (isShielded(msg, shieldWords)) return;
       engineRef.current?.push(msg);
-    }).then((fn) => {
-      unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          void fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {});
 
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [active, shieldWords]);
+  }, [active, sessionKey, shieldWords]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,9 +71,11 @@ export function CanvasDanmaku({ className, active = true }: CanvasDanmakuProps) 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    let raf = 0;
+    let raf: number | null = null;
     let last = performance.now();
+    let lastFrameAt = last;
     let ro: ResizeObserver | null = null;
+    let stopped = false;
 
     const resize = () => {
       const parent = canvas.parentElement;
@@ -86,8 +95,11 @@ export function CanvasDanmaku({ className, active = true }: CanvasDanmakuProps) 
     if (canvas.parentElement) ro.observe(canvas.parentElement);
 
     const loop = (now: number) => {
+      raf = null;
+      if (stopped) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
+      lastFrameAt = now;
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const engine = engineRef.current;
@@ -96,34 +108,67 @@ export function CanvasDanmaku({ className, active = true }: CanvasDanmakuProps) 
       }
       ctx.clearRect(0, 0, w, h);
       if (engine) {
+        ctx.save();
         ctx.globalAlpha = engine.opacity();
         ctx.textBaseline = "top";
-        ctx.font = `600 ${fontSize || 18}px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`;
+        ctx.lineJoin = "round";
         ctx.shadowColor = "rgba(0,0,0,0.75)";
-        ctx.shadowBlur = 3;
+        ctx.shadowBlur = 2;
         ctx.shadowOffsetX = 1;
         ctx.shadowOffsetY = 1;
+
+        let drawnFontSize = 0;
         for (const it of engine.visibleItems()) {
-          ctx.fillStyle = it.color || "#fff";
-          if (it.kind === "top") {
-            const x = (w - it.width) / 2;
-            ctx.fillText(it.text, x, it.y);
-          } else {
-            ctx.fillText(it.text, it.x, it.y);
+          if (it.fontSize !== drawnFontSize) {
+            drawnFontSize = it.fontSize;
+            ctx.font = `600 ${drawnFontSize}px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`;
+            ctx.lineWidth = Math.max(2, drawnFontSize * 0.13);
           }
+
+          const x = it.kind === "top" ? Math.max(0, (w - it.width) / 2) : it.x;
+          ctx.fillStyle = it.color || "#fff";
+          ctx.strokeStyle = "rgba(0,0,0,0.82)";
+          ctx.strokeText(it.text, x, it.y);
+          ctx.fillText(it.text, x, it.y);
         }
-        ctx.shadowBlur = 0;
-        ctx.globalAlpha = 1;
+        ctx.restore();
       }
-      raf = requestAnimationFrame(loop);
+      scheduleFrame();
     };
-    raf = requestAnimationFrame(loop);
+
+    const scheduleFrame = () => {
+      if (!stopped && raf === null) raf = requestAnimationFrame(loop);
+    };
+
+    const restartLoop = () => {
+      if (stopped) return;
+      if (raf !== null) cancelAnimationFrame(raf);
+      raf = null;
+      last = performance.now();
+      lastFrameAt = last;
+      scheduleFrame();
+    };
+
+    const resumeIfVisible = () => {
+      if (!document.hidden) restartLoop();
+    };
+
+    document.addEventListener("visibilitychange", resumeIfVisible);
+    window.addEventListener("focus", restartLoop);
+    const watchdog = window.setInterval(() => {
+      if (!document.hidden && performance.now() - lastFrameAt > 2000) restartLoop();
+    }, 1000);
+    restartLoop();
 
     return () => {
-      cancelAnimationFrame(raf);
+      stopped = true;
+      if (raf !== null) cancelAnimationFrame(raf);
       ro?.disconnect();
+      document.removeEventListener("visibilitychange", resumeIfVisible);
+      window.removeEventListener("focus", restartLoop);
+      window.clearInterval(watchdog);
     };
-  }, [active, fontSize]);
+  }, [active, sessionKey]);
 
   return (
     <canvas
