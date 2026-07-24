@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { LayoutGrid } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import type { SiteInfo } from "@/shared/types/live";
+import type { SiteId, SiteInfo } from "@/shared/types/live";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { cn, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
 
@@ -13,10 +14,34 @@ const FALLBACK_SITES: SiteInfo[] = [
   { id: "kuaishou", name: "Kuaishou", ready: false },
 ];
 
-export function SiteSwitcher() {
+type SiteSwitcherValue = SiteId | "all";
+
+type SiteSwitcherProps = {
+  /** Controlled selection for filter use; omitted on the home-page switcher. */
+  value?: SiteSwitcherValue;
+  onValueChange?: (value: SiteSwitcherValue) => void;
+  /** Adds an all-platform option before the regular platform tabs. */
+  includeAll?: boolean;
+  /** Historical follows remain selectable even for a currently unavailable site. */
+  filterMode?: boolean;
+  className?: string;
+};
+
+export function SiteSwitcher({
+  value,
+  onValueChange,
+  includeAll = false,
+  filterMode = false,
+  className,
+}: SiteSwitcherProps) {
   const siteId = useSettingsStore((s) => s.siteId);
   const setSiteId = useSettingsStore((s) => s.setSiteId);
   const [sites, setSites] = useState<SiteInfo[]>(FALLBACK_SITES);
+  const selectedValue = value ?? siteId;
+
+  const entries: Array<SiteInfo | { id: "all"; name: string; ready: true }> = includeAll
+    ? [{ id: "all", name: "全部平台", ready: true }, ...sites]
+    : sites;
 
   useEffect(() => {
     let cancelled = false;
@@ -37,15 +62,15 @@ export function SiteSwitcher() {
 
   return (
     <div
-      className="flex h-full items-stretch gap-1"
+      className={cn("flex h-full items-stretch gap-1", className)}
       role="tablist"
-      aria-label="直播平台"
+      aria-label={filterMode ? "筛选直播平台" : "直播平台"}
     >
-      {sites.map((site) => {
-        const active = site.id === siteId;
-        const disabled = !site.ready;
-        const accent = SITE_ACCENT[site.id] ?? "#6c8cff";
-        const label = SITE_LABELS[site.id] ?? site.name;
+      {entries.map((site) => {
+        const active = site.id === selectedValue;
+        const disabled = !site.ready && !filterMode;
+        const accent = site.id === "all" ? undefined : (SITE_ACCENT[site.id] ?? "#6c8cff");
+        const label = site.id === "all" ? site.name : (SITE_LABELS[site.id] ?? site.name);
 
         return (
           <button
@@ -57,22 +82,32 @@ export function SiteSwitcher() {
             disabled={disabled}
             title={site.ready ? label : `${label}（即将支持）`}
             onClick={() => {
-              if (site.ready) setSiteId(site.id);
+              if (disabled) return;
+              if (value === undefined && site.id !== "all") setSiteId(site.id);
+              onValueChange?.(site.id);
             }}
             className={cn(
-              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors focus-ring",
+              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-[color,background-color,transform] duration-200 focus-ring motion-safe:active:scale-[0.98]",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
               disabled && "cursor-not-allowed opacity-35",
             )}
           >
-            <SiteLogo siteId={site.id} />
+            {site.id === "all" ? (
+              <LayoutGrid className={cn("size-5 shrink-0", active && "motion-safe:animate-platform-logo")} />
+            ) : (
+              <SiteLogo
+                siteId={site.id}
+                className={cn(active && "motion-safe:animate-platform-logo")}
+              />
+            )}
             <span className="hidden sm:inline">{label}</span>
             {active && (
               <span
-                className="absolute inset-x-3 -bottom-px h-0.5 rounded-full"
-                style={{ backgroundColor: accent }}
+                key={`${site.id}-indicator`}
+                className="absolute inset-x-3 -bottom-px h-0.5 rounded-full motion-safe:animate-platform-indicator"
+                style={accent ? { backgroundColor: accent } : undefined}
               />
             )}
           </button>

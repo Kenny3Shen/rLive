@@ -11,7 +11,8 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Chip } from "@/shared/components/Chip";
 import { PageHeader } from "@/shared/components/PageHeader";
-import type { FollowUser } from "@/shared/types/live";
+import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
+import type { FollowUser, SiteId } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +22,7 @@ import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 type TagRecord = { id: string; name: string };
 type LiveFilter = "all" | "live" | "offline";
 type SortMode = "status" | "platform";
+type PlatformFilter = SiteId | "all";
 
 export function FollowPage() {
   const navigate = useNavigate();
@@ -29,6 +31,7 @@ export function FollowPage() {
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("status");
   const [onlyLiveChip, setOnlyLiveChip] = useState(false);
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all");
 
   const followsQuery = useQuery({
     queryKey: ["follows"],
@@ -60,6 +63,9 @@ export function FollowPage() {
 
   const items = useMemo(() => {
     let list = [...(followsQuery.data ?? [])];
+    if (platformFilter !== "all") {
+      list = list.filter((follow) => follow.site_id === platformFilter);
+    }
     if (tagFilter !== "all") {
       list = list.filter((f) => f.tag_ids.includes(tagFilter));
     }
@@ -83,10 +89,10 @@ export function FollowPage() {
       });
     }
     return list;
-  }, [followsQuery.data, tagFilter, liveFilter, onlyLiveChip, sortMode]);
+  }, [followsQuery.data, platformFilter, tagFilter, liveFilter, onlyLiveChip, sortMode]);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
+    <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <PageHeader
         title="关注用户"
         actions={
@@ -106,6 +112,16 @@ export function FollowPage() {
           </Button>
         }
       />
+
+      <div className="h-11 overflow-x-auto rounded-xl border border-border bg-card">
+        <SiteSwitcher
+          value={platformFilter}
+          onValueChange={setPlatformFilter}
+          includeAll
+          filterMode
+          className="min-w-max px-1"
+        />
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <Chip
@@ -171,7 +187,7 @@ export function FollowPage() {
       </div>
 
       {followsQuery.isLoading && (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-[88px] w-full rounded-2xl" />
           ))}
@@ -195,7 +211,7 @@ export function FollowPage() {
       )}
 
       {items.length > 0 && (
-        <ul className="space-y-2.5">
+        <ul className="flex flex-col gap-2.5">
           {items.map((u) => {
             const live = u.live_status === true;
             const offline = u.live_status === false;

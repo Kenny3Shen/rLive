@@ -63,6 +63,7 @@ const MAX_QUEUE_AGE_MS = 5000;
 const TOP_DURATION_MS = 3000;
 const DEFAULT_SCROLL_AREA_RATIO = 0.9;
 const SPAWN_PADDING = 12;
+const TOP_PADDING = 12;
 
 function measureWidth(text: string, fontSize: number): number {
   // Approximate CJK-friendly width without a canvas context.
@@ -113,13 +114,15 @@ function createTopDownLaneOrder(count: number): number[] {
 function layoutFor(height: number, fontSize: number, area: number, lineCount: number): LaneLayout {
   const safeHeight = Math.max(1, Math.floor(height));
   const laneHeight = Math.max(fontSize + 9, 24);
-  const preferredArea = Math.max(laneHeight, Math.floor(safeHeight * area));
+  const top = Math.min(TOP_PADDING, Math.max(0, safeHeight - fontSize));
+  const usableHeight = Math.max(1, safeHeight - top);
+  const preferredArea = Math.max(laneHeight, Math.floor(usableHeight * area));
   const autoCount = Math.max(1, Math.floor(preferredArea / laneHeight));
   const count = lineCount > 0 ? Math.min(lineCount, autoCount) : autoCount;
   return {
     count,
     laneHeight,
-    top: 0,
+    top,
   };
 }
 
@@ -315,7 +318,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       makeRoomForItem();
       items.push({
         ...item,
-        y: Math.max(8, Math.round(itemFontSize * 0.5)),
+        y: Math.max(TOP_PADDING, Math.round(itemFontSize * 0.5)),
         x: 0, // centered by the canvas renderer
         kind: "top",
         expireAt: Date.now() + TOP_DURATION_MS,

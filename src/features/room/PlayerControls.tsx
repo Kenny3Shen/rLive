@@ -42,6 +42,7 @@ export type PlayerControlsProps = {
   onRefresh?: () => void;
   onTogglePause: () => void;
   onVolume: (v: number) => void;
+  onToggleMute: () => void;
   onToggleSidePanel: () => void;
   onToggleOsd?: () => void;
   onQualityChange: (index: number) => void;
@@ -109,32 +110,39 @@ export function PlayerControls({
   onRefresh,
   onTogglePause,
   onVolume,
+  onToggleMute,
   onToggleSidePanel,
   onToggleOsd,
   onQualityChange,
   onLineChange,
   onToggleFullscreen,
 }: PlayerControlsProps) {
-  const volumeLabel = muted || volume === 0 ? "音量（已静音）" : "调节音量";
+  const isMuted = muted || volume === 0;
+  const volumeLabel = "调节音量";
+  const muteLabel = isMuted ? "取消静音" : "静音";
+
+  const qualityLabel = (index: number) => {
+    const label = qualities[index]?.quality?.trim();
+    // The Select stores its index as the value. Do not expose that internal
+    // value (or an upstream numeric-only label) in the player chrome.
+    if (!label || /^(?:rate)?\d+$/i.test(label)) {
+      return ["原画", "蓝光", "超清", "高清", "流畅", "标清"][index] ?? "可用清晰度";
+    }
+    return label;
+  };
 
   return (
     <div className="flex shrink-0 items-center gap-1 border-t border-border bg-card px-2 py-1.5">
-      {onRefresh && (
-        <ControlButton label="刷新播放" disabled={refreshDisabled} onClick={onRefresh}>
-          <RefreshCw />
+      <div className="flex shrink-0 items-center gap-1">
+        {onRefresh && (
+          <ControlButton label="刷新播放" disabled={refreshDisabled} onClick={onRefresh}>
+            <RefreshCw />
+          </ControlButton>
+        )}
+        <ControlButton label={paused ? "播放" : "暂停"} disabled={disabled} onClick={onTogglePause}>
+          {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
-      )}
-      <ControlButton label={paused ? "播放" : "暂停"} disabled={disabled} onClick={onTogglePause}>
-        {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
-      </ControlButton>
 
-      {loadError && (
-        <span className="min-w-0 max-w-40 truncate px-1 text-xs text-destructive" title={loadError}>
-          {loadError}
-        </span>
-      )}
-
-      <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto pl-2">
         <Popover>
           <PopoverTrigger
             render={
@@ -147,7 +155,7 @@ export function PlayerControls({
               />
             }
           >
-            {muted || volume === 0 ? <VolumeX /> : <Volume2 />}
+            <Volume2 />
           </PopoverTrigger>
           <PopoverContent side="top" align="start" className="w-auto p-3">
             <Slider
@@ -166,6 +174,23 @@ export function PlayerControls({
           </PopoverContent>
         </Popover>
 
+        <ControlButton
+          label={muteLabel}
+          disabled={disabled}
+          aria-pressed={isMuted}
+          onClick={onToggleMute}
+        >
+          {isMuted ? <VolumeX /> : <Volume2 />}
+        </ControlButton>
+      </div>
+
+      {loadError && (
+        <span className="min-w-0 max-w-40 truncate px-1 text-xs text-destructive" title={loadError}>
+          {loadError}
+        </span>
+      )}
+
+      <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto pl-2">
         {qualities.length > 0 && (
           <Select
             value={String(qualityIndex)}
@@ -174,14 +199,19 @@ export function PlayerControls({
               if (value != null) onQualityChange(Number(value));
             }}
           >
-            <SelectTrigger size="sm" className="w-20 shrink-0" aria-label="清晰度">
-              <SelectValue />
+            <SelectTrigger size="sm" className="w-28 shrink-0" aria-label="清晰度">
+              <SelectValue>
+                {(value) => {
+                  const index = typeof value === "string" ? Number(value) : -1;
+                  return index >= 0 ? `清晰度 · ${qualityLabel(index)}` : "清晰度";
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent side="top" align="end">
               <SelectGroup>
                 {qualities.map((quality, index) => (
                   <SelectItem key={`${quality.quality}-${index}`} value={String(index)}>
-                    {quality.quality}
+                    {qualityLabel(index)}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -197,8 +227,15 @@ export function PlayerControls({
               if (value != null) onLineChange(Number(value));
             }}
           >
-            <SelectTrigger size="sm" className="w-28 shrink-0" aria-label="线路">
-              <SelectValue />
+            <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="线路">
+              <SelectValue>
+                {(value) => {
+                  const index = typeof value === "string" ? Number(value) : -1;
+                  return index >= 0 && lines[index]
+                    ? `线路 · ${lineLabel(lines[index].url, index)}`
+                    : "线路";
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent side="top" align="end">
               <SelectGroup>
@@ -214,7 +251,7 @@ export function PlayerControls({
 
         {onToggleOsd && (
           <ControlButton
-            label={osdOn ? "关闭飘屏" : "开启飘屏"}
+            label={osdOn ? "关闭弹幕" : "开启弹幕"}
             variant={osdOn ? "secondary" : "ghost"}
             disabled={disabled}
             aria-pressed={osdOn}

@@ -41,9 +41,6 @@ function SidebarLink({
     >
       {({ isActive }) => (
         <>
-          {isActive && (
-            <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />
-          )}
           <Icon
             className={cn(
               "h-[22px] w-[22px] transition-transform group-hover:scale-105",

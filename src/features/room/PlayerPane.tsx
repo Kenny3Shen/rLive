@@ -20,10 +20,8 @@ type PlayerPaneProps = {
   loading?: boolean;
   error?: unknown;
   onRetry?: () => void;
-  title?: string;
   danmakuActive?: boolean;
   danmakuStatusText?: string | null;
-  sideHeader?: React.ReactNode;
   qualities?: { quality: string }[];
   qualityIndex?: number;
   onQualityChange?: (index: number) => void;
@@ -56,7 +54,6 @@ export function PlayerPane({
   onRetry,
   danmakuActive = false,
   danmakuStatusText,
-  sideHeader,
   qualities = [],
   qualityIndex = 0,
   onQualityChange,
@@ -163,6 +160,7 @@ export function PlayerPane({
             onRefresh={onRefresh}
             onTogglePause={() => player.togglePause()}
             onVolume={(v) => player.changeVolume(v)}
+            onToggleMute={player.toggleMute}
             onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
             onToggleOsd={() => setOsdOn((v) => !v)}
             onQualityChange={onQualityChange ?? (() => {})}
@@ -180,7 +178,6 @@ export function PlayerPane({
           !sidePanelOpen && "hidden",
         )}
       >
-        {sideHeader}
         <Tabs
           {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
           className="flex min-h-0 flex-1 flex-col gap-0"
@@ -188,12 +185,12 @@ export function PlayerPane({
         >
           <TabsList
             variant="line"
-            className="w-full justify-start rounded-none border-b border-border bg-transparent px-2"
+            className="h-10 w-full justify-start rounded-none border-b border-border bg-transparent px-2"
           >
-            <TabsTrigger value="chat">聊天</TabsTrigger>
-            <TabsTrigger value="sc">SC</TabsTrigger>
-            <TabsTrigger value="settings">弹幕设置</TabsTrigger>
-            <TabsTrigger value="follow">关注</TabsTrigger>
+            <TabsTrigger value="chat" className="text-base">聊天</TabsTrigger>
+            <TabsTrigger value="sc" className="text-base">SC</TabsTrigger>
+            <TabsTrigger value="settings" className="text-base">弹幕设置</TabsTrigger>
+            <TabsTrigger value="follow" className="text-base">关注</TabsTrigger>
           </TabsList>
           <TabsContent
             value="chat"

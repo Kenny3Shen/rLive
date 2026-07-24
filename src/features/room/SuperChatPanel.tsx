@@ -175,7 +175,7 @@ export function SuperChatPanel({ active, visible = true, className }: SuperChatP
         <div
           className="flex flex-col gap-2 px-2.5 py-2"
           style={{
-            fontSize: Math.max(12, (fontSize || 16) - 2),
+            fontSize: Math.max(12, (fontSize || 16) - 4),
             fontWeight,
           }}
         >
@@ -244,7 +244,7 @@ export function SuperChatPanel({ active, visible = true, className }: SuperChatP
                 </div>
                 <p
                   className={cn(
-                    "mt-0.5 whitespace-pre-wrap break-words text-sm",
+                    "mt-0.5 whitespace-pre-wrap break-words leading-relaxed",
                     !palette && "text-foreground/95",
                   )}
                   style={palette ? { color: palette.foreground } : undefined}
