@@ -31,6 +31,7 @@ type SettingsState = {
   danmakuLineCount: number;
   danmakuFontWeight: number;
   danmakuFilterRepeats: boolean;
+  danmakuFilterGifts: boolean;
   danmakuShieldWords: string[];
   mpvPath: string | null;
   qualityLevel: QualityLevel;
@@ -59,6 +60,7 @@ const defaultSettings: AppSettings = {
   danmaku_line_count: 0,
   danmaku_font_weight: 600,
   danmaku_filter_repeats: true,
+  danmaku_filter_gifts: false,
   danmaku_shield_words: [],
   mpv_path: null,
   quality_level: "high",
@@ -76,6 +78,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_line_count: state.danmakuLineCount,
     danmaku_font_weight: state.danmakuFontWeight,
     danmaku_filter_repeats: state.danmakuFilterRepeats,
+    danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_shield_words: state.danmakuShieldWords,
     mpv_path: state.mpvPath,
     quality_level: state.qualityLevel,
@@ -95,6 +98,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuLineCount: 0,
       danmakuFontWeight: 600,
       danmakuFilterRepeats: true,
+      danmakuFilterGifts: false,
       danmakuShieldWords: [],
       mpvPath: null,
       qualityLevel: "high",
@@ -132,6 +136,7 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuLineCount: settings.danmaku_line_count,
           danmakuFontWeight: settings.danmaku_font_weight,
           danmakuFilterRepeats: settings.danmaku_filter_repeats,
+          danmakuFilterGifts: settings.danmaku_filter_gifts ?? false,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           mpvPath: settings.mpv_path,
           qualityLevel: parseQualityLevel(settings.quality_level),

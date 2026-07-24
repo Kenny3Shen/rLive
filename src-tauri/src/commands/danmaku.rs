@@ -21,15 +21,34 @@ pub async fn danmaku_connect(
     state: State<'_, AppState>,
     site_id: SiteId,
     room_id: String,
+    connection_epoch: u64,
 ) -> AppResult<()> {
+    if !state.danmaku.begin_connect(connection_epoch) {
+        return Ok(());
+    }
     let cookie = load_cookie(&state, &site_id)?;
     let site = sites::site(&site_id, cookie)?;
     let detail = site.get_room_detail(&room_id).await?;
-    danmaku::connect(app, &state.danmaku, site_id, &room_id, &detail.raw).await
+    danmaku::connect(
+        app,
+        &state.danmaku,
+        connection_epoch,
+        site_id,
+        &room_id,
+        &detail.raw,
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn danmaku_disconnect(state: State<'_, AppState>) -> AppResult<()> {
-    state.danmaku.disconnect();
+pub fn danmaku_disconnect(
+    state: State<'_, AppState>,
+    connection_epoch: Option<u64>,
+) -> AppResult<()> {
+    if let Some(epoch) = connection_epoch {
+        state.danmaku.disconnect_for_generation(epoch);
+    } else {
+        state.danmaku.disconnect();
+    }
     Ok(())
 }

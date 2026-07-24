@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import { Database, MonitorPlay, Network, Palette, UserRound } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
 import type { ThemeMode } from "@/shared/stores/settingsStore";
@@ -18,11 +20,26 @@ import {
 } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const themes: { value: ThemeMode; label: string }[] = [
   { value: "system", label: "跟随系统" },
   { value: "light", label: "浅色" },
   { value: "dark", label: "深色" },
+];
+
+type SettingsCategory = "appearance" | "playback" | "network" | "account" | "data";
+
+const settingsCategories: {
+  value: SettingsCategory;
+  label: string;
+  icon: LucideIcon;
+}[] = [
+  { value: "appearance", label: "外观", icon: Palette },
+  { value: "playback", label: "播放", icon: MonitorPlay },
+  { value: "network", label: "网络", icon: Network },
+  { value: "account", label: "账号", icon: UserRound },
+  { value: "data", label: "数据", icon: Database },
 ];
 
 function Section({
@@ -145,6 +162,7 @@ export function SettingsPage() {
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
   const [profilePath, setProfilePath] = useState("");
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
+  const [category, setCategory] = useState<SettingsCategory>("appearance");
 
   useEffect(() => {
     void loadFromBackend();
@@ -206,122 +224,179 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-4">
+    <div className="mx-auto flex max-w-5xl flex-col gap-4">
       <PageHeader title="设置" />
 
-      <Section title="外观">
-        <Field orientation="responsive">
-          <FieldContent>
-            <FieldTitle id="theme-label">应用主题</FieldTitle>
-            <FieldDescription>选择界面的亮暗模式。</FieldDescription>
-          </FieldContent>
-          <ToggleGroup
-            aria-labelledby="theme-label"
-            value={[theme]}
-            variant="outline"
-            size="sm"
-            spacing={1}
-            onValueChange={(values) => {
-              const next = values[0];
-              if (next === "system" || next === "light" || next === "dark") {
-                setTheme(next);
-              }
-            }}
-          >
-            {themes.map(({ value, label }) => (
-              <ToggleGroupItem key={value} value={value}>
-                {label}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </Field>
-      </Section>
-
-      <Section
-        title="默认清晰度"
-        description="进入直播间时按偏好选择清晰度（高 / 中 / 低），对齐 Simple Live"
+      <Tabs
+        value={category}
+        orientation="vertical"
+        className="min-h-[32rem] max-md:flex-col"
+        onValueChange={(value) => setCategory(value as SettingsCategory)}
       >
-        <Field orientation="responsive">
-          <FieldContent>
-            <FieldTitle id="quality-label">优先清晰度</FieldTitle>
-            <FieldDescription>线路提供时优先选择此档位。</FieldDescription>
-          </FieldContent>
-          <ToggleGroup
-            aria-labelledby="quality-label"
-            value={[qualityLevel]}
-            variant="outline"
-            size="sm"
-            spacing={1}
-            onValueChange={(values) => {
-              const next = values[0];
-              if (next === "high" || next === "mid" || next === "low") {
-                setQualityLevel(next);
-              }
-            }}
-          >
-            <ToggleGroupItem value="high">最高</ToggleGroupItem>
-            <ToggleGroupItem value="mid">中间</ToggleGroupItem>
-            <ToggleGroupItem value="low">最低</ToggleGroupItem>
-          </ToggleGroup>
-        </Field>
-      </Section>
+        <TabsList
+          aria-label="设置分类"
+          className="w-44 shrink-0 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:w-full max-md:flex-row! max-md:overflow-x-auto"
+        >
+          {settingsCategories.map(({ value, label, icon: Icon }) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="h-11 shrink-0 gap-2 rounded-lg px-3 py-2 text-left"
+            >
+              <Icon aria-hidden />
+              <span>{label}</span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
-      <Section title="网络代理" description="可选 HTTP(S) 代理，例如 http://127.0.0.1:7890">
-        <Field>
-          <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
-          <FieldContent>
-            <div className="flex gap-2">
-              <Input
-                id="proxy"
-                value={proxyDraft}
-                onChange={(event) => setProxyDraft(event.target.value)}
-                placeholder="http://127.0.0.1:7890"
-              />
-              <Button onClick={() => void saveProxy()}>保存</Button>
-            </div>
-            {proxyStatus && <FieldDescription>{proxyStatus}</FieldDescription>}
-          </FieldContent>
-        </Field>
-      </Section>
+        <div className="min-w-0 flex-1">
+          <TabsContent value="appearance" keepMounted className="mt-0 data-[hidden]:hidden">
+            <SettingsContent title="外观">
+              <Section title="主题">
+                <Field orientation="responsive">
+                  <FieldContent>
+                    <FieldTitle id="theme-label">应用主题</FieldTitle>
+                    <FieldDescription>跟随系统或固定显示。</FieldDescription>
+                  </FieldContent>
+                  <ToggleGroup
+                    aria-labelledby="theme-label"
+                    value={[theme]}
+                    variant="outline"
+                    size="sm"
+                    spacing={1}
+                    onValueChange={(values) => {
+                      const next = values[0];
+                      if (next === "system" || next === "light" || next === "dark") {
+                        setTheme(next);
+                      }
+                    }}
+                  >
+                    {themes.map(({ value, label }) => (
+                      <ToggleGroupItem key={value} value={value}>
+                        {label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </Field>
+              </Section>
+            </SettingsContent>
+          </TabsContent>
 
-      <CookieField
-        siteId="bilibili"
-        title="哔哩哔哩 Cookie"
-        description="粘贴用于只读 API 的 Cookie。仅保存在本机；清空后保存即可删除。"
-        placeholder="SESSDATA=…; bili_jct=…"
-      />
+          <TabsContent value="playback" keepMounted className="mt-0 data-[hidden]:hidden">
+            <SettingsContent title="播放">
+              <Section title="清晰度">
+                <Field orientation="responsive">
+                  <FieldContent>
+                    <FieldTitle id="quality-label">优先清晰度</FieldTitle>
+                    <FieldDescription>有可用线路时优先选择此档。</FieldDescription>
+                  </FieldContent>
+                  <ToggleGroup
+                    aria-labelledby="quality-label"
+                    value={[qualityLevel]}
+                    variant="outline"
+                    size="sm"
+                    spacing={1}
+                    onValueChange={(values) => {
+                      const next = values[0];
+                      if (next === "high" || next === "mid" || next === "low") {
+                        setQualityLevel(next);
+                      }
+                    }}
+                  >
+                    <ToggleGroupItem value="high">最高</ToggleGroupItem>
+                    <ToggleGroupItem value="mid">中间</ToggleGroupItem>
+                    <ToggleGroupItem value="low">最低</ToggleGroupItem>
+                  </ToggleGroup>
+                </Field>
+              </Section>
+            </SettingsContent>
+          </TabsContent>
 
-      <CookieField
-        siteId="douyin"
-        title="抖音 Cookie"
-        description="可选。保存网页端 Cookie（至少含 ttwid）可提高抖音房间解析与画质可用性；仅保存在本机。"
-        placeholder="ttwid=…; msToken=…"
-      />
+          <TabsContent value="network" keepMounted className="mt-0 data-[hidden]:hidden">
+            <SettingsContent title="网络">
+              <Section title="代理" description="可选 HTTP(S) 代理">
+                <Field>
+                  <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
+                  <FieldContent className="flex-row items-center gap-2">
+                    <Input
+                      id="proxy"
+                      value={proxyDraft}
+                      onChange={(event) => setProxyDraft(event.target.value)}
+                      placeholder="http://127.0.0.1:7890"
+                    />
+                    <Button className="shrink-0" onClick={() => void saveProxy()}>
+                      保存
+                    </Button>
+                  </FieldContent>
+                  {proxyStatus && <FieldDescription>{proxyStatus}</FieldDescription>}
+                </Field>
+              </Section>
+            </SettingsContent>
+          </TabsContent>
 
-      <Section
-        title="配置导入 / 导出"
-        description="非敏感备份：设置、关注、标签、历史、屏蔽词。不包含 Cookie。"
-      >
-        <Field>
-          <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>
-          <FieldContent>
-            <Input
-              id="profile-path"
-              value={profilePath}
-              onChange={(event) => setProfilePath(event.target.value)}
-              placeholder="/tmp/rlive-profile.json"
-              className="font-mono text-xs"
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={() => void exportProfile()}>导出</Button>
-              <Button variant="outline" onClick={() => void importProfile()}>
-                导入
-              </Button>
-            </div>
-            {profileStatus && <FieldDescription>{profileStatus}</FieldDescription>}
-          </FieldContent>
-        </Field>
-      </Section>
+          <TabsContent value="account" keepMounted className="mt-0 data-[hidden]:hidden">
+            <SettingsContent title="账号">
+              <div className="flex flex-col gap-4">
+                <CookieField
+                  siteId="bilibili"
+                  title="哔哩哔哩"
+                  description="用于只读 API；清空后保存即可删除。"
+                  placeholder="SESSDATA=…; bili_jct=…"
+                />
+                <CookieField
+                  siteId="douyin"
+                  title="抖音"
+                  description="含 ttwid 可提高解析与画质可用性。"
+                  placeholder="ttwid=…; msToken=…"
+                />
+              </div>
+            </SettingsContent>
+          </TabsContent>
+
+          <TabsContent value="data" keepMounted className="mt-0 data-[hidden]:hidden">
+            <SettingsContent title="数据">
+              <Section title="导入 / 导出" description="设置、关注、标签、历史和屏蔽词；不含 Cookie。">
+                <Field>
+                  <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>
+                  <FieldContent>
+                    <Input
+                      id="profile-path"
+                      value={profilePath}
+                      onChange={(event) => setProfilePath(event.target.value)}
+                      placeholder="/tmp/rlive-profile.json"
+                      className="font-mono text-xs"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => void exportProfile()}>导出</Button>
+                      <Button variant="outline" onClick={() => void importProfile()}>
+                        导入
+                      </Button>
+                    </div>
+                    {profileStatus && <FieldDescription>{profileStatus}</FieldDescription>}
+                  </FieldContent>
+                </Field>
+              </Section>
+            </SettingsContent>
+          </TabsContent>
+        </div>
+      </Tabs>
     </div>
+  );
+}
+
+function SettingsContent({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-4">
+      <div>
+        <h2 className="text-base font-semibold">{title}</h2>
+      </div>
+      {children}
+    </section>
   );
 }

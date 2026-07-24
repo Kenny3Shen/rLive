@@ -32,16 +32,19 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 | Area | Role |
 |------|------|
 | Sidebar | Home, follows, categories, history, settings |
-| Header | Site switcher, search |
-| Room | Player, quality/line, danmaku toggle, chat / SC / danmaku settings / follows side tabs |
+| Header | Site switcher, search (user / room ID / title) |
+| Room | Player, refresh / play, quality / line, chat / SC / danmaku settings / follows side tabs |
 
 ## 4. Watching
 
 1. Pick a site in the header.  
-2. Open a room from home, categories, or search.  
-3. Use bottom controls for **quality** and **line**.  
-4. Default quality preference: **Settings → 默认清晰度**.
-5. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie.
+2. Selecting a category opens its own room-list page; search can target **all**, **user**, **room ID**, or **title**.
+3. The refresh control sits left of pause and refreshes stream metadata before rebuilding the playback session.
+4. **Quality** and **line** are separate selectors on the right; the volume icon opens a vertical slider.
+5. The right sidebar, floating danmaku, and fullscreen use compact icon controls. Reopening the sidebar preserves chat and SC lists.
+6. Default quality preference: **Settings → Playback**.
+7. Back from a room always returns to home instead of the previously switched room.
+8. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie.
 
 Streams are fetched via a localhost proxy so the web player can attach with correct headers.
 
@@ -67,9 +70,10 @@ Open any room and select the **弹幕设置** tab on the right. Values are saved
 | Font size / weight | Canvas + list base size; weight improves readability over bright video |
 | Speed | Scroll speed (logical 1–10) |
 | Repeat filter | Hides consecutive identical chat lines from one user within 5 seconds |
-| Shield words | One word per line; shared by chat, SC, and canvas |
+| Gift filter | Hides gift notices from Douyu and similar sites without affecting SC |
+| Shield words | One word per line; filtering applies while typing, shared by chat, SC, and canvas, and auto-saves |
 
-For busy rooms, chat and SC updates are batched per animation frame with bounded queues. The canvas stops requesting frames while it has no active floating messages, then resumes for new messages, setting changes, or resizes to reduce CPU use. Douyu drops high-volume join packets in Rust, and all `xxx entered the room` events are hidden consistently in the frontend.
+Every display control applies live: sliders preview while dragged and persist on release, while toggles and font weight persist immediately. For busy rooms, chat and SC updates are batched per animation frame with bounded queues; inactive chat / SC tabs retain a bounded backlog without continuously reconciling hidden rows, so tab changes do not reset the lists. The canvas stops requesting frames while it has no active floating messages, then resumes for new messages, setting changes, or resizes to reduce CPU use; tracks are allocated from top to bottom. Douyu drops high-volume join packets and text-shaped `xxx entered the room` notices in Rust, while all sites consistently hide enter events in the frontend.
 
 ### Super Chat (SC)
 

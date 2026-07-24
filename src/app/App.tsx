@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Shell } from "./layout/Shell";
 import { HomePage } from "../features/home/HomePage";
 import { CategoryPage } from "../features/category/CategoryPage";
+import { CategoryRoomsPage } from "../features/category/CategoryRoomsPage";
 import { SearchPage } from "../features/search/SearchPage";
 import { FollowPage } from "../features/follow/FollowPage";
 import { HistoryPage } from "../features/history/HistoryPage";
@@ -15,6 +16,7 @@ export function App() {
         <Route element={<Shell />}>
           <Route index element={<HomePage />} />
           <Route path="category" element={<CategoryPage />} />
+          <Route path="category/:parentId/:categoryId" element={<CategoryRoomsPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="follow" element={<FollowPage />} />
           <Route path="history" element={<HistoryPage />} />

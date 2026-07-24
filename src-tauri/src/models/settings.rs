@@ -24,6 +24,9 @@ pub struct AppSettings {
     /// Suppress consecutive duplicate chat messages in the visual clients.
     #[serde(default = "default_danmaku_filter_repeats")]
     pub danmaku_filter_repeats: bool,
+    /// Hide gift notices in the room chat list and floating danmaku.
+    #[serde(default)]
+    pub danmaku_filter_gifts: bool,
     pub danmaku_shield_words: Vec<String>,
     pub mpv_path: Option<String>,
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
@@ -60,6 +63,7 @@ impl Default for AppSettings {
             danmaku_line_count: 0,
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
+            danmaku_filter_gifts: false,
             danmaku_shield_words: Vec::new(),
             mpv_path: None,
             quality_level: default_quality_level(),
@@ -97,5 +101,6 @@ mod tests {
         assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
+        assert!(!settings.danmaku_filter_gifts);
     }
 }

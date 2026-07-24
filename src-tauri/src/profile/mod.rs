@@ -107,6 +107,7 @@ pub fn merge_into_db(
     settings.danmaku_line_count = package.settings.danmaku_line_count;
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
+    settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.mpv_path = package.settings.mpv_path.clone();
 
     let mut words: HashSet<String> = settings.danmaku_shield_words.into_iter().collect();
@@ -157,5 +158,16 @@ mod tests {
         });
         merge_into_db(&conn, &package).unwrap();
         assert_eq!(follow::list(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn merge_carries_the_gift_filter_preference() {
+        let conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.settings.danmaku_filter_gifts = true;
+
+        merge_into_db(&conn, &package).unwrap();
+
+        assert!(settings::get(&conn).unwrap().danmaku_filter_gifts);
     }
 }

@@ -165,6 +165,10 @@ export function usePlaybackController(opts: {
     clearFailoverTimer();
     retryCountRef.current = 0;
     setLoadError(null);
+    // A metadata refetch alone does not recreate an already-attached MSE
+    // player when the CDN returns the same URL. Bump the session token first
+    // so the refresh control always rebuilds the active playback pipeline.
+    setReloadToken((token) => token + 1);
     void qualitiesQuery.refetch().then(() => playUrlQuery.refetch());
   }, [clearFailoverTimer, qualitiesQuery, playUrlQuery]);
 
