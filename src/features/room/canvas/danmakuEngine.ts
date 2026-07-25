@@ -27,6 +27,8 @@ export type DanmakuEngine = {
    * event in a busy room.
    */
   push: (ev: DanmakuEvent, alreadyVisible?: boolean) => void;
+  /** Enqueues a transport batch and schedules it only once. */
+  pushBatch: (events: readonly DanmakuEvent[], alreadyVisible?: boolean) => void;
   tick: (dt: number, width: number, height: number) => void;
   /**
    * The engine owns this array. Consumers must only read it during a render
@@ -39,6 +41,24 @@ export type DanmakuEngine = {
   setOpts: (opts: DanmakuEngineOptions) => void;
   opacity: () => number;
   fontWeight: () => number;
+  /**
+   * Lightweight scheduling counters for deterministic pressure tests. They
+   * are only incremented when the engine is created with `debug: true`.
+   */
+  debugStats: () => DanmakuEngineStats;
+};
+
+export type DanmakuEngineStats = {
+  /** Number of passes that attempted to put queued comments into lanes. */
+  schedulePasses: number;
+  /** Calls skipped because the queue head cannot be safe before a later tick. */
+  scheduleSkips: number;
+  /** Number of lanes considered by collision scheduling. */
+  laneChecks: number;
+  /** Number of existing scrolling items considered by collision scheduling. */
+  laneItemChecks: number;
+  activeItems: number;
+  pendingItems: number;
 };
 
 export type DanmakuEngineOptions = {
@@ -51,10 +71,19 @@ export type DanmakuEngineOptions = {
   lineCount?: number;
   /** CSS-compatible canvas font weight. */
   fontWeight?: number;
+  /** Test/diagnostic only: collect scheduling counters without production overhead. */
+  debug?: boolean;
 };
 
 type PendingScroll = Omit<TrackItem, "kind" | "lane" | "x" | "y"> & {
   queuedAt: number;
+};
+
+type EngineTrackItem = TrackItem & {
+  /** O(1) removal from the render list when the 80-item cap is reached. */
+  itemIndex: number;
+  /** Stale entries in the amortized scroll eviction queue are marked inactive. */
+  active: boolean;
 };
 
 type LaneLayout = {
@@ -181,13 +210,32 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let scrollArea = clampArea(opts.area);
   let maxLineCount = clampLineCount(opts.lineCount);
   let currentFontWeight = clampFontWeight(opts.fontWeight);
-  let items: TrackItem[] = [];
+  let items: EngineTrackItem[] = [];
   let pending: PendingScroll[] = [];
+  // Keep a head cursor instead of shifting the array for every scheduled
+  // comment. At a busy room this queue is touched much more often than it is
+  // compacted, and Array#shift repeatedly moves all remaining entries.
+  let pendingHead = 0;
+  // A blocked queue head cannot become safe until leading comments move. Do
+  // not repeat the same collision scan for each incoming IPC event; tick()
+  // decrements this estimate and retries at the first useful animation frame.
+  let pendingBlocked = false;
+  let pendingRetrySeconds = 0;
+  let pendingRetryOnNextTick = false;
   let sequence = 0;
   let viewportWidth = 0;
   let viewportHeight = 0;
   let layout: LaneLayout | null = null;
   let laneOrder: number[] = [];
+  // Each lane keeps only its own active scroll messages. The old scheduler
+  // scanned the complete item list once per lane, which is O(lanes × items)
+  // for every queued message under load.
+  let laneItems: EngineTrackItem[][] = [];
+  // Insertion-order queue used only when the global visible-item cap is
+  // reached. Its head advances monotonically, so evicting a scroll comment
+  // never needs Array#findIndex over the render list.
+  let scrollItems: EngineTrackItem[] = [];
+  let scrollItemHead = 0;
   let laneCursor = 0;
   // Layout is a function of the viewport height, active font sizes and the
   // two layout settings. Recomputing it on every animation frame used to scan
@@ -195,6 +243,104 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let layoutDirty = true;
   let largestScrollFontSize = fontSize;
   let largestScrollFontSizeNeedsRefresh = false;
+  const collectDebugStats = opts.debug === true;
+  let schedulePasses = 0;
+  let scheduleSkips = 0;
+  let laneChecks = 0;
+  let laneItemChecks = 0;
+
+  function pendingCount(): number {
+    return pending.length - pendingHead;
+  }
+
+  function resetPendingScheduling(): void {
+    pendingBlocked = false;
+    pendingRetrySeconds = 0;
+    pendingRetryOnNextTick = false;
+  }
+
+  function compactPending(): void {
+    if (pendingHead === 0) return;
+    if (pendingHead >= pending.length) {
+      pending = [];
+      pendingHead = 0;
+      return;
+    }
+    // Small head offsets are cheaper to keep than a new backing array. Once
+    // at least half the entries are consumed, compact the bounded queue.
+    if (pendingHead < 24 && pendingHead * 2 < pending.length) return;
+    pending = pending.slice(pendingHead);
+    pendingHead = 0;
+  }
+
+  function discardExpiredPending(now: number): boolean {
+    const initialHead = pendingHead;
+    while (pendingHead < pending.length && now - pending[pendingHead].queuedAt > MAX_QUEUE_AGE_MS) {
+      pendingHead += 1;
+    }
+    if (pendingHead === initialHead) return false;
+    compactPending();
+    resetPendingScheduling();
+    return true;
+  }
+
+  function rebuildLaneItems(count: number): void {
+    const nextLaneItems = Array.from({ length: count }, () => [] as EngineTrackItem[]);
+    for (const item of items) {
+      if (item.kind !== "scroll" || item.lane === undefined) continue;
+      const lane = nextLaneItems[item.lane];
+      if (lane) lane.push(item);
+    }
+    laneItems = nextLaneItems;
+  }
+
+  function removeFromLane(item: EngineTrackItem): void {
+    if (item.kind !== "scroll" || item.lane === undefined) return;
+    const lane = laneItems[item.lane];
+    if (!lane) return;
+    const index = lane.indexOf(item);
+    if (index >= 0) lane.splice(index, 1);
+  }
+
+  function appendItem(item: EngineTrackItem): void {
+    item.active = true;
+    item.itemIndex = items.length;
+    items.push(item);
+    if (item.kind !== "scroll") return;
+    laneItems[item.lane ?? 0]?.push(item);
+    scrollItems.push(item);
+  }
+
+  function compactScrollItems(force = false): void {
+    if (scrollItemHead >= scrollItems.length) {
+      scrollItems = [];
+      scrollItemHead = 0;
+      return;
+    }
+    // Removed entries can only accumulate when comments naturally leave the
+    // screen. Rebuild this small queue occasionally, never per incoming event.
+    if (!force && scrollItems.length <= MAX_ITEMS * 3 && scrollItemHead < 24) return;
+    const next: EngineTrackItem[] = [];
+    for (let index = scrollItemHead; index < scrollItems.length; index += 1) {
+      const item = scrollItems[index];
+      if (item.active) next.push(item);
+    }
+    scrollItems = next;
+    scrollItemHead = 0;
+  }
+
+  function takeOldestScrollItem(): EngineTrackItem | undefined {
+    while (scrollItemHead < scrollItems.length) {
+      const item = scrollItems[scrollItemHead];
+      scrollItemHead += 1;
+      if (item.active) {
+        compactScrollItems();
+        return item;
+      }
+    }
+    compactScrollItems();
+    return undefined;
+  }
 
   function refreshLargestScrollFontSize(): number {
     let largest = fontSize;
@@ -250,8 +396,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
 
     layout = nextLayout;
     laneOrder = createTopDownLaneOrder(nextLayout.count);
+    rebuildLaneItems(nextLayout.count);
     laneCursor %= laneOrder.length;
     layoutDirty = false;
+    // A resize or live line-count change may open a lane immediately.
+    resetPendingScheduling();
     return layout;
   }
 
@@ -260,79 +409,108 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   }
 
   /**
-   * A lane is safe when a new message will not get closer than `minTailGap`
-   * before every leading item has left the visible area. This is the common
-   * time-to-catch-up check used by scrolling-danmaku renderers.
+   * Returns how long this lane needs before a candidate is safe, or zero when
+   * it is safe now. The equivalent no-catch-up condition is calculated as a
+   * position threshold, avoiding the old pair of divisions for every item.
    */
-  function isLaneSafe(lane: number, candidate: PendingScroll): boolean {
+  function laneRetryAfter(lane: number, candidate: PendingScroll): number {
+    if (collectDebugStats) laneChecks += 1;
+    const existingItems = laneItems[lane];
+    if (!existingItems || existingItems.length === 0) return 0;
+
     const spawnX = viewportWidth + SPAWN_PADDING;
     const gap = minTailGap(candidate);
+    const staticTailLimit = Math.max(0, spawnX - gap);
+    let retryAfter = 0;
 
-    for (const item of items) {
-      if (item.kind !== "scroll" || item.lane !== lane) continue;
-
+    for (const item of existingItems) {
+      if (collectDebugStats) laneItemChecks += 1;
       const leadingRight = item.x + item.width;
       if (leadingRight <= 0) continue;
 
-      const initialDistance = spawnX - leadingRight;
-      if (initialDistance < gap) return false;
+      // If the candidate is faster, it must leave enough room that it cannot
+      // catch this leading item before that item exits. Algebraically this is
+      // `leadingRight <= item.speed * (spawnX - gap) / candidate.speed`.
+      // Slower/equal candidates only need the tail-gap boundary itself.
+      const safeRightLimit =
+        candidate.speed > item.speed
+          ? Math.max(0, (item.speed * staticTailLimit) / candidate.speed)
+          : staticTailLimit;
+      if (leadingRight <= safeRightLimit) continue;
 
-      const closingSpeed = candidate.speed - item.speed;
-      if (closingSpeed <= 0) continue;
-
-      const timeUntilGap = (initialDistance - gap) / closingSpeed;
-      const timeUntilLeadingItemLeaves = leadingRight / item.speed;
-      if (timeUntilGap < timeUntilLeadingItemLeaves) return false;
+      retryAfter = Math.max(retryAfter, (leadingRight - safeRightLimit) / item.speed);
     }
-    return true;
+    return retryAfter;
   }
 
   function findSafeLane(candidate: PendingScroll): number | null {
+    let earliestRetry = Number.POSITIVE_INFINITY;
     for (let offset = 0; offset < laneOrder.length; offset += 1) {
       const orderIndex = (laneCursor + offset) % laneOrder.length;
       const lane = laneOrder[orderIndex];
-      if (isLaneSafe(lane, candidate)) {
+      const retryAfter = laneRetryAfter(lane, candidate);
+      if (retryAfter <= 0) {
         laneCursor = (orderIndex + 1) % laneOrder.length;
         return lane;
       }
+      earliestRetry = Math.min(earliestRetry, retryAfter);
     }
 
+    pendingRetrySeconds = Number.isFinite(earliestRetry) ? earliestRetry : 0;
     return null;
+  }
+
+  function removeItemAt(index: number): EngineTrackItem | undefined {
+    if (index < 0 || index >= items.length) return undefined;
+    const lastIndex = items.length - 1;
+    const removed = items[index];
+    const lastItem = items[lastIndex];
+    items.pop();
+    if (index !== lastIndex) {
+      items[index] = lastItem;
+      lastItem.itemIndex = index;
+    }
+    removed.active = false;
+    if (removed.kind === "scroll") {
+      removeFromLane(removed);
+      resetPendingScheduling();
+    }
+    noteRemovedItem(removed);
+    return removed;
   }
 
   function makeRoomForItem(): void {
     while (items.length >= MAX_ITEMS) {
-      const scrollIndex = items.findIndex((item) => item.kind === "scroll");
-      if (scrollIndex >= 0) {
-        const [removed] = items.splice(scrollIndex, 1);
-        noteRemovedItem(removed);
+      const oldestScroll = takeOldestScrollItem();
+      if (oldestScroll) {
+        removeItemAt(oldestScroll.itemIndex);
       } else {
-        noteRemovedItem(items.shift());
+        removeItemAt(0);
       }
     }
   }
 
   function schedulePending(): void {
-    // This runs after every paint while scrolling. Avoid a Date call, a
-    // layout lookup and collision checks when there is nothing waiting.
-    if (pending.length === 0) return;
+    if (pendingCount() === 0) return;
+    if (collectDebugStats) schedulePasses += 1;
 
     const now = Date.now();
-    let firstFreshIndex = 0;
-    while (
-      firstFreshIndex < pending.length &&
-      now - pending[firstFreshIndex].queuedAt > MAX_QUEUE_AGE_MS
-    ) {
-      firstFreshIndex += 1;
-    }
-    if (firstFreshIndex > 0) pending.splice(0, firstFreshIndex);
-    if (pending.length === 0) return;
+    discardExpiredPending(now);
+    if (pendingCount() === 0) return;
 
     let currentLayout = refreshLayout();
-    if (!currentLayout || viewportWidth <= 0) return;
+    if (!currentLayout || viewportWidth <= 0) {
+      // Until the first non-zero resize tick there is no meaningful spawn
+      // position. A burst of IPC events must not redo this failed work.
+      pendingBlocked = true;
+      pendingRetrySeconds = Number.POSITIVE_INFINITY;
+      pendingRetryOnNextTick = false;
+      return;
+    }
 
-    while (pending.length > 0) {
-      const candidate = pending[0];
+    resetPendingScheduling();
+    while (pendingHead < pending.length) {
+      const candidate = pending[pendingHead];
       if (candidate.fontSize > largestScrollFontSize) {
         largestScrollFontSize = candidate.fontSize;
         layoutDirty = true;
@@ -342,61 +520,120 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       const lane = findSafeLane(candidate);
       if (lane === null) {
         // Preserving a small queue is preferable to deliberately overlapping
-        // comments. Stale entries are discarded above to keep the feed live.
-        break;
+        // comments. Retry only when the first lane can become available, or
+        // when this queue head reaches its five-second expiry.
+        const untilExpiry = Math.max(
+          0,
+          (MAX_QUEUE_AGE_MS - (Date.now() - candidate.queuedAt)) / 1000,
+        );
+        pendingBlocked = true;
+        pendingRetrySeconds = Math.min(pendingRetrySeconds, untilExpiry);
+        pendingRetryOnNextTick = false;
+        return;
       }
 
-      pending.shift();
+      pendingHead += 1;
       makeRoomForItem();
-      items.push({
-        ...candidate,
+      const item: EngineTrackItem = {
+        id: candidate.id,
+        text: candidate.text,
+        color: candidate.color,
+        width: candidate.width,
+        speed: candidate.speed,
+        fontSize: candidate.fontSize,
         kind: "scroll",
         lane,
         x: viewportWidth + SPAWN_PADDING,
         y: laneY(lane, currentLayout),
-      });
+        itemIndex: -1,
+        active: true,
+      };
+      appendItem(item);
     }
+    compactPending();
   }
 
-  function push(ev: DanmakuEvent, alreadyVisible = false): void {
+  function trySchedulePending(fromTick = false): void {
+    if (pendingCount() === 0) return;
+    if (pendingBlocked && (pendingRetrySeconds > 0 || (pendingRetryOnNextTick && !fromTick))) {
+      if (collectDebugStats) scheduleSkips += 1;
+      return;
+    }
+    schedulePending();
+  }
+
+  function enqueue(ev: DanmakuEvent, alreadyVisible: boolean): boolean {
     // Simple Live canvas style: content-only floating text; skip system.
-    if (!alreadyVisible && !shouldShowOnCanvas(ev)) return;
+    if (!alreadyVisible && !shouldShowOnCanvas(ev)) return false;
 
     const text = floatingDanmakuText(ev);
-    if (!text) return;
+    if (!text) return false;
 
     const isTop = ev.kind === "super_chat";
     const itemFontSize = fontSize;
-    const item = {
-      id: `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`,
-      text,
-      color: ev.color || (isTop ? "#ffb020" : "#ffffff"),
-      width: measureWidth(text, itemFontSize),
-      speed: speedPx(logicalSpeed, itemFontSize),
-      fontSize: itemFontSize,
-    };
+    const id = `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`;
+    const color = ev.color || (isTop ? "#ffb020" : "#ffffff");
+    const width = measureWidth(text, itemFontSize);
+    const speed = speedPx(logicalSpeed, itemFontSize);
 
     if (isTop) {
       makeRoomForItem();
-      items.push({
-        ...item,
+      appendItem({
+        id,
+        text,
+        color,
+        width,
+        speed,
+        fontSize: itemFontSize,
         y: Math.max(TOP_PADDING, Math.round(itemFontSize * 0.5)),
         x: 0, // centered by the canvas renderer
         kind: "top",
         expireAt: Date.now() + TOP_DURATION_MS,
+        itemIndex: -1,
+        active: true,
       });
-      return;
+      return true;
     }
 
-    pending.push({ ...item, queuedAt: Date.now() });
-    if (pending.length > MAX_PENDING_ITEMS) pending.shift();
-    schedulePending();
+    pending.push({ id, text, color, width, speed, fontSize: itemFontSize, queuedAt: Date.now() });
+    if (pendingCount() > MAX_PENDING_ITEMS) {
+      // Drop the oldest waiting comment under sustained overload. The head
+      // changed, so defer one fresh collision check to the next render tick
+      // instead of repeating it for every event in this burst.
+      pendingHead += 1;
+      compactPending();
+      pendingBlocked = true;
+      pendingRetrySeconds = 0;
+      pendingRetryOnNextTick = true;
+    }
+    return true;
+  }
+
+  function push(ev: DanmakuEvent, alreadyVisible = false): void {
+    if (enqueue(ev, alreadyVisible)) trySchedulePending();
+  }
+
+  function pushBatch(events: readonly DanmakuEvent[], alreadyVisible = false): void {
+    let enqueued = false;
+    for (const event of events) {
+      if (enqueue(event, alreadyVisible)) enqueued = true;
+    }
+    // Native transport emits at a bounded cadence. Scheduling once per batch
+    // avoids repeating lane scans for the other events in the same delivery.
+    if (!enqueued) return;
+    // If overload replaced the queue head while this batch was being ingested,
+    // run exactly one fresh pass now. The single-message path still defers to
+    // the next animation tick so an IPC burst cannot create N retry scans.
+    if (pendingRetryOnNextTick) resetPendingScheduling();
+    trySchedulePending();
   }
 
   function tick(dt: number, width: number, height: number): void {
+    let viewportChanged = false;
     if (Number.isFinite(width) && width > 0 && viewportWidth !== width) {
       const previousWidth = viewportWidth;
       viewportWidth = width;
+      viewportChanged = true;
       if (previousWidth > 0) {
         for (const item of items) {
           if (item.kind !== "scroll") continue;
@@ -407,42 +644,57 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     if (Number.isFinite(height) && height > 0 && viewportHeight !== height) {
       viewportHeight = height;
       layoutDirty = true;
+      viewportChanged = true;
     }
+    if (viewportChanged) resetPendingScheduling();
 
     refreshLayout();
     const now = Date.now();
     const elapsedSeconds = Math.max(0, Math.min(0.2, dt));
+    if (pendingBlocked && Number.isFinite(pendingRetrySeconds)) {
+      pendingRetrySeconds = Math.max(0, pendingRetrySeconds - elapsedSeconds);
+    }
+    if (pendingRetryOnNextTick) pendingRetryOnNextTick = false;
+
     let nextLength = 0;
-    let removedPotentialLargest = false;
+    let removedScrollItem = false;
     for (const item of items) {
       if (item.kind === "top") {
-        if (item.expireAt && item.expireAt <= now) continue;
+        if (item.expireAt && item.expireAt <= now) {
+          item.active = false;
+          noteRemovedItem(item);
+          continue;
+        }
         items[nextLength] = item;
+        item.itemIndex = nextLength;
         nextLength += 1;
         continue;
       }
 
       item.x -= item.speed * elapsedSeconds;
       if (item.x + item.width < -20) {
-        if (item.fontSize >= largestScrollFontSize) removedPotentialLargest = true;
+        item.active = false;
+        removeFromLane(item);
+        noteRemovedItem(item);
+        removedScrollItem = true;
         continue;
       }
       items[nextLength] = item;
+      item.itemIndex = nextLength;
       nextLength += 1;
     }
     items.length = nextLength;
-    if (removedPotentialLargest) {
-      largestScrollFontSizeNeedsRefresh = true;
-      layoutDirty = true;
-    }
-    schedulePending();
+    if (scrollItems.length > MAX_ITEMS * 3) compactScrollItems(true);
+    if (removedScrollItem) resetPendingScheduling();
+    trySchedulePending(true);
   }
 
   return {
     push,
+    pushBatch,
     tick,
     visibleItems: () => items,
-    hasWork: () => items.length > 0 || pending.length > 0,
+    hasWork: () => items.length > 0 || pendingCount() > 0,
     setOpts: (nextOpts) => {
       const nextFontSize = clampFontSize(nextOpts.fontSize);
       const nextScrollArea = clampArea(nextOpts.area);
@@ -457,6 +709,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         // settings change rather than once per frame.
         largestScrollFontSizeNeedsRefresh = true;
         layoutDirty = true;
+        resetPendingScheduling();
       }
       fontSize = nextFontSize;
       logicalSpeed = nextOpts.speed;
@@ -467,5 +720,13 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     },
     opacity: () => currentOpacity,
     fontWeight: () => currentFontWeight,
+    debugStats: () => ({
+      schedulePasses,
+      scheduleSkips,
+      laneChecks,
+      laneItemChecks,
+      activeItems: items.length,
+      pendingItems: pendingCount(),
+    }),
   };
 }

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -9,16 +9,27 @@ import {
   shouldShowInDanmakuPanel,
 } from "./danmaku/filter";
 import { DanmakuEmojiText } from "./danmaku/emoji";
+import { batchEvents, type DanmakuBatch } from "./danmaku/batch";
+import { BoundedQueue } from "./danmaku/boundedQueue";
 import { cn } from "@/lib/utils";
 
-const MAX = 400;
+// Keep the rendered DOM deliberately small even when a room is producing
+// thousands of comments per minute. The native and pending queues preserve
+// recent traffic without asking React to retain an ever-growing chat tree.
+const MAX = 300;
 const MAX_BUFFERED = 200;
-const MAX_PER_FRAME = 50;
+const MAX_PER_FLUSH = 32;
+const MIN_FLUSH_INTERVAL_MS = 32;
 const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
 
 function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
   const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
-  if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  if (!viewport) return;
+  const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  // Assigning `scrollTop` even when it is already pinned can dispatch extra
+  // scroll work in the primitive. Avoid that synchronous write on every
+  // batched React commit.
+  if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
 }
 
 type DanmakuLine = {
@@ -28,7 +39,7 @@ type DanmakuLine = {
 
 /**
  * Appending a batch keeps prior `DanmakuLine` references intact. Memoizing a
- * row therefore avoids reconciling up to 400 already-rendered messages for
+ * row therefore avoids reconciling up to 300 already-rendered messages for
  * each animation-frame flush in a busy room.
  */
 const DanmakuRow = memo(function DanmakuRow({ line }: { line: DanmakuLine }) {
@@ -66,8 +77,10 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
   const [items, setItems] = useState<DanmakuLine[]>([]);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
-  const pendingRef = useRef<DanmakuLine[]>([]);
+  const pendingRef = useRef(new BoundedQueue<DanmakuLine>(MAX_BUFFERED));
   const flushFrameRef = useRef<number | null>(null);
+  const flushTimerRef = useRef<number | null>(null);
+  const lastFlushAtRef = useRef(0);
   const scheduleFlushRef = useRef<() => void>(() => {});
   const nextIdRef = useRef(0);
   const activeRef = useRef(active);
@@ -101,13 +114,23 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
   }, [visible]);
 
   useEffect(() => {
-    if (!active) {
+    const pending = pendingRef.current;
+    const cancelFlush = () => {
       if (flushFrameRef.current !== null) {
         cancelAnimationFrame(flushFrameRef.current);
         flushFrameRef.current = null;
       }
-      pendingRef.current = [];
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+    };
+
+    if (!active) {
+      cancelFlush();
+      pending.clear();
       nextIdRef.current = 0;
+      lastFlushAtRef.current = 0;
       autoScroll.current = true;
       setItems([]);
       return;
@@ -122,43 +145,61 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       // Hold new events in the bounded queue while this panel is hidden so
       // chat traffic cannot reconcile hundreds of invisible React nodes.
       if (!activeRef.current || !visibleRef.current) return;
-      const batch = pendingRef.current.splice(0, MAX_PER_FRAME);
+      const batch = pending.take(MAX_PER_FLUSH);
       if (batch.length === 0) return;
+      lastFlushAtRef.current = performance.now();
 
       setItems((previous) => {
         const next = previous.concat(batch);
         return next.length > MAX ? next.slice(next.length - MAX) : next;
       });
 
-      // A burst should not make one animation frame reconcile hundreds of
-      // nodes. Remaining recent messages drain over following frames.
-      if (pendingRef.current.length > 0) scheduleFlush();
+      // A burst should not make every animation frame reconcile hundreds of
+      // nodes. The native source already coalesces messages; retain a local
+      // cadence cap for a hidden-tab backlog or a very large native batch.
+      if (pending.length > 0) scheduleFlush();
     };
 
     const scheduleFlush = () => {
-      if (activeRef.current && visibleRef.current && flushFrameRef.current === null) {
-        flushFrameRef.current = requestAnimationFrame(flush);
+      if (
+        !activeRef.current ||
+        !visibleRef.current ||
+        pending.length === 0 ||
+        flushFrameRef.current !== null ||
+        flushTimerRef.current !== null
+      ) {
+        return;
       }
+
+      const remaining = MIN_FLUSH_INTERVAL_MS - (performance.now() - lastFlushAtRef.current);
+      if (remaining > 0) {
+        flushTimerRef.current = window.setTimeout(() => {
+          flushTimerRef.current = null;
+          scheduleFlush();
+        }, remaining);
+        return;
+      }
+      flushFrameRef.current = requestAnimationFrame(flush);
     };
     scheduleFlushRef.current = scheduleFlush;
 
-    void listen<DanmakuEvent>("danmaku", (event) => {
+    void listen<DanmakuBatch>("danmaku-batch", (event) => {
       if (cancelled || !activeRef.current) return;
-      const msg = event.payload;
       const {
         shieldMatcher: currentShieldMatcher,
         repeatMatcher: currentRepeatMatcher,
         filterGifts: currentFilterGifts,
       } = matchersRef.current;
-      if (!shouldShowInDanmakuPanel(msg, currentFilterGifts)) return;
-      if (currentShieldMatcher(msg)) return;
-      if (currentRepeatMatcher(msg)) return;
-
-      const pending = pendingRef.current;
-      pending.push({ id: ++nextIdRef.current, event: msg });
-      if (pending.length > MAX_BUFFERED) {
-        pending.splice(0, pending.length - MAX_BUFFERED);
+      const accepted: DanmakuLine[] = [];
+      for (const message of batchEvents(event.payload)) {
+        if (!shouldShowInDanmakuPanel(message, currentFilterGifts)) continue;
+        if (currentShieldMatcher(message)) continue;
+        if (currentRepeatMatcher(message)) continue;
+        accepted.push({ id: ++nextIdRef.current, event: message });
       }
+      if (accepted.length === 0) return;
+
+      pending.pushAll(accepted);
       scheduleFlush();
     })
       .then((fn) => {
@@ -173,12 +214,9 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
     return () => {
       cancelled = true;
       unlisten?.();
-      if (flushFrameRef.current !== null) {
-        cancelAnimationFrame(flushFrameRef.current);
-        flushFrameRef.current = null;
-      }
+      cancelFlush();
       if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
-      pendingRef.current = [];
+      pending.clear();
     };
   }, [active]);
 
@@ -187,16 +225,8 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
 
     // Base UI owns a nested viewport, so scrolling a sentinel with
     // `scrollIntoView` can select an outer ancestor instead of the chat
-    // viewport. Set the actual viewport position directly and repeat on the
-    // next frame after its scrollbar has measured the new batch.
-    const scrollToBottom = () => {
-      if (!autoScroll.current) return;
-      scrollDanmakuViewportToBottom(scrollRootRef.current);
-    };
-
-    scrollToBottom();
-    const frame = window.requestAnimationFrame(scrollToBottom);
-    return () => window.cancelAnimationFrame(frame);
+    // viewport. Set only the actual viewport, once per committed batch.
+    scrollDanmakuViewportToBottom(scrollRootRef.current);
   }, [items, visible]);
 
   useEffect(() => {
@@ -226,17 +256,25 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
     };
   }, [visible]);
 
-  function onViewportScroll(e: UIEvent<HTMLDivElement>) {
-    const el = e.target;
-    if (!(el instanceof HTMLElement)) return;
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-    autoScroll.current = dist < 48;
-  }
+  useEffect(() => {
+    const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+    if (!viewport) return;
+
+    // React's delegated scroll handler runs for every programmatic pin as
+    // well as user scrolling. This listener mutates only refs, so attach it
+    // directly and passively to the actual nested viewport instead.
+    const updateAutoScroll = () => {
+      const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      autoScroll.current = distanceToBottom < 48;
+    };
+    viewport.addEventListener("scroll", updateAutoScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", updateAutoScroll);
+  }, []);
 
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
       <div ref={scrollRootRef} className="min-h-0 flex-1">
-        <ScrollArea className="h-full min-h-0" onScrollCapture={onViewportScroll}>
+        <ScrollArea className="h-full min-h-0">
           <div
             className="flex flex-col gap-0.5 px-2.5 py-2"
             style={{
