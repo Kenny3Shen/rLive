@@ -123,4 +123,54 @@ describe("danmaku engine", () => {
 
     expect(engine.fontWeight()).toBe(700);
   });
+
+  test("invalidates the cached lane layout after a live font-size change", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 400, 120);
+    engine.push(chat("旧字号弹幕", 1));
+
+    engine.setOpts({
+      fontSize: 30,
+      speed: 8,
+      opacity: 1,
+      area: 0.9,
+      lineCount: 0,
+      fontWeight: 600,
+    });
+    engine.tick(0, 400, 120);
+    engine.push(chat("新字号弹幕", 2));
+
+    const newer = engine.visibleItems().find((item) => item.text === "新字号弹幕");
+    expect(newer?.fontSize).toBe(30);
+    // 30px text uses a 39px lane (font + 9), not the stale 27px lane from
+    // the 18px setting. This guards the cache invalidation path.
+    expect(newer?.y).toBe(51);
+  });
+
+  test("shrinks cached lanes after the last larger message leaves", () => {
+    const engine = createEngine({ fontSize: 36, speed: 8, opacity: 1 });
+    engine.tick(0, 120, 120);
+    engine.push(chat("大字号", 1));
+
+    engine.setOpts({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      area: 0.9,
+      lineCount: 0,
+      fontWeight: 600,
+    });
+    for (let index = 0; index < 24; index += 1) {
+      engine.tick(0.2, 120, 120);
+    }
+    expect(engine.visibleItems()).toHaveLength(0);
+
+    engine.push(chat("恢复小字号一", 2));
+    engine.push(chat("恢复小字号二", 3));
+    const yPositions = engine.visibleItems().map((item) => item.y);
+    expect(yPositions).toHaveLength(2);
+    // Lane selection continues round-robin, but its spacing must return to
+    // the 18px setting's 27px lane rather than retaining the old 45px lane.
+    expect(yPositions[1] - yPositions[0]).toBe(27);
+  });
 });

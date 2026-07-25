@@ -20,7 +20,7 @@
 | **斗鱼** 列表 / 房间 / 播放 / 弹幕 | 完成 Done |
 | **抖音** 分类 / 推荐首屏 / 房间 / 播放 | 完成 Done（SSR 列表仅可靠支持首屏；搜索需完整登录 Cookie） |
 | **抖音** 实时弹幕 | 暂不支持 Not yet supported |
-| **快手** | 占位 Stub |
+| **快手** 分类 / 推荐 / 游戏分区搜索 / 房间 / 播放 | 完成 Done（搜索仅匹配游戏分区；实时弹幕暂不支持） |
 | Web 播放（mpegts.js + 本地 `stream_proxy`；底部透明控制条自动隐藏） | 完成 Done |
 | 房间右栏（主播信息 + 弹幕 / SC / 关注 / 设置）+ 飘屏 Canvas 弹幕 | 完成 Done |
 | 房间内弹幕设置（区域 / 行数 / 透明度 / 字号 / 字重 / 速度 / 重复 / 礼物过滤 / 屏蔽词） | 完成 Done |
@@ -40,8 +40,10 @@
 | [docs/README.md](docs/README.md) | 文档目录（中 / 英） |
 | [docs/zh/用户指南.md](docs/zh/用户指南.md) | 中文用户指南（优先） |
 | [docs/zh/架构说明.md](docs/zh/架构说明.md) | 中文架构说明 |
+| [docs/zh/B站发送弹幕调研.md](docs/zh/B站发送弹幕调研.md) | B 站发送弹幕可行性与安全前置 |
 | [docs/en/user-guide.md](docs/en/user-guide.md) | English user guide |
 | [docs/en/architecture.md](docs/en/architecture.md) | English architecture |
+| [docs/en/bilibili-danmaku-send-research.md](docs/en/bilibili-danmaku-send-research.md) | Bilibili send-chat research |
 
 界面文案以**中文**为主；代码注释与提交说明可用中英。
 
@@ -110,15 +112,15 @@ D:\dev\rLive\src-tauri\target\release\rlive.exe
 ## 快速使用 / Quick start
 
 1. 首次启动默认打开哔哩哔哩；可在顶部切换站点（哔哩哔哩 / 斗鱼 / 虎牙 / 抖音 / 快手）。
-2. 从首页推荐、分类或搜索进入直播间；房间顶栏左侧的「返回」会回到来源页面，直接打开房间链接时则回到首页。
+2. 从首页推荐、分类或搜索进入直播间；房间顶栏左侧的返回图标会回到来源页面，直接打开房间链接时则回到首页。
 3. **哔哩哔哩弹幕**：设置 → 账号 → 粘贴 Cookie → 进入房间后右侧列表与飘屏生效。
 4. **弹幕设置**：右侧标签依次为「弹幕 / SC / 关注列表 / 设置」；在「设置」中调整显示区域、行数、不透明度、字号、字重、速度、重复过滤、礼物过滤和屏蔽词。滑块与屏蔽词输入都会即时生效，屏蔽词会自动保存。
-5. **主播信息 / SC / 关注**：右栏顶部显示主播头像、用户名、所属平台和当前热度；「SC」查看哔哩哔哩醒目留言；「关注列表」可直接切换到任一已关注房间，无需先退出当前房间。关注页顶部可按「全部平台」或单个平台筛选，右下角浮动按钮刷新开播状态。
+5. **主播信息 / SC / 关注**：右栏顶部显示主播头像、用户名、所属平台和当前热度；「SC」查看哔哩哔哩醒目留言；「关注列表」可直接切换到任一已关注房间，无需先退出当前房间。关注页顶部可按「全部平台」或单个平台筛选；关注状态按钮仅有「全部 / 直播中 / 未开播」，右下角浮动按钮刷新开播状态。
 6. **播放器控制**：控制条以透明方式叠放在视频底部，播放期间闲置后自动隐藏，移动、点击或键盘操作可再次显示；打开音量、清晰度或线路选项时会保持显示。焦点位于画面时，`Space` / `K` 播放或暂停，`M` 静音，`F` 全屏。刷新位于暂停左侧；音量按钮展开竖向滑杆；清晰度和线路仅显示当前选择项；右栏、飘屏与全屏均为图标开关。
 7. **外观**：侧栏「设置」上方只有一个太阳 / 月亮按钮；每次点击会在亮色与暗色模式之间轮换。
-8. **抖音**：可匿名浏览首屏分类/推荐并播放；若要搜索，请在设置中保存完整网页 Cookie。
+8. **抖音 / 快手**：抖音可匿名浏览首屏分类/推荐并播放；若要搜索，请在设置中保存完整网页 Cookie。快手支持公开推荐、分类、游戏分区、房间与播放；搜索只匹配游戏分区名称，实时弹幕暂不支持。
 
-English: switch site in the header, open a room, and paste a Bilibili cookie under **Settings → Account** for danmaku. The room-side tabs are **Danmaku / SC / Follows / Settings**; danmaku settings apply live, shield words auto-save, and gift notices can be hidden. The sidebar header shows the host avatar, name, platform, and current heat. **SC** shows Super Chats, while **Follows** switches directly to a followed room. A single sun / moon button above **Settings** alternates between light and dark mode. The transparent bottom player controls hide after playback is idle and reappear on pointer, click, or keyboard activity; quality and line selectors show only the active choice. Search supports user, room-ID, and title fields; category results open on their own page. Douyin supports first-page browse and playback; search needs a logged-in browser cookie.
+English: switch site in the header, open a room, and paste a Bilibili cookie under **Settings → Account** for danmaku. The room-side tabs are **Danmaku / SC / Follows / Settings**; danmaku settings apply live, shield words auto-save, and gift notices can be hidden. The sidebar header shows the host avatar, name, platform, and current heat. **SC** shows Super Chats, while **Follows** switches directly to a followed room. The Follows page exposes only **All / Live / Offline** status filters. A single sun / moon button above **Settings** alternates between light and dark mode. The transparent bottom player controls hide after playback is idle and reappear on pointer, click, or keyboard activity; quality and line selectors show only the active choice. Search supports user, room-ID, and title fields; category results open on their own page. Douyin supports first-page browse and playback; search needs a logged-in browser cookie. Kuaishou supports public recommendations, categories, game-category search, rooms, and playback; it has no real-time danmaku yet.
 
 ---
 
@@ -129,7 +131,7 @@ English: switch site in the header, open a room, and paste a Bilibili cookie und
 | UI | React + Tailwind v4 + shadcn/ui，中文主界面 |
 | 业务壳 | 首页 / 关注 / 分类 / 历史 / 设置 / 房间页 |
 | 播放 | 前端 `mpegts.js`；Rust `stream_proxy` 同源代理拉流 |
-| 站点 | Rust `LiveSite`：bilibili / huya / douyu / douyin（ready）；kuaishou（stub） |
+| 站点 | Rust `LiveSite`：bilibili / huya / douyu / douyin / kuaishou（ready；快手无实时弹幕） |
 | 弹幕 | Rust WebSocket → Tauri 事件 `danmaku` → 批处理列表 + 按需 Canvas + SC / 设置 / 关注侧栏 |
 | 存储 | SQLite：关注、历史、设置、本机 Cookie |
 

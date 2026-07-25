@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -19,6 +19,40 @@ type DanmakuLine = {
   id: number;
   event: DanmakuEvent;
 };
+
+/**
+ * Appending a batch keeps prior `DanmakuLine` references intact. Memoizing a
+ * row therefore avoids reconciling up to 400 already-rendered messages for
+ * each animation-frame flush in a busy room.
+ */
+const DanmakuRow = memo(function DanmakuRow({ line }: { line: DanmakuLine }) {
+  const event = line.event;
+  if (event.kind === "system") {
+    return <div className="px-1.5 py-0.5 text-xs text-muted-foreground">{event.content}</div>;
+  }
+
+  return (
+    <div className="rounded-md px-1.5 py-1 leading-relaxed hover:bg-muted/50">
+      <span
+        className="mr-1.5 font-medium text-primary"
+        style={event.color ? { color: event.color } : undefined}
+      >
+        {event.user}
+      </span>
+      {event.kind === "super_chat" && (
+        <Badge variant="secondary" className="mr-1 align-middle">
+          SC
+        </Badge>
+      )}
+      {event.kind === "gift" && (
+        <Badge variant="outline" className="mr-1 align-middle">
+          礼物
+        </Badge>
+      )}
+      <span className="text-foreground/90">{event.content}</span>
+    </div>
+  );
+});
 
 type DanmakuPanelProps = {
   active: boolean;
@@ -182,36 +216,9 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
           {active && items.length === 0 && !statusText && (
             <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
           )}
-          {items.map(({ id, event: line }) => {
-            if (line.kind === "system") {
-              return (
-                <div key={id} className="px-1.5 py-0.5 text-xs text-muted-foreground">
-                  {line.content}
-                </div>
-              );
-            }
-            return (
-              <div key={id} className="rounded-md px-1.5 py-1 leading-relaxed hover:bg-muted/50">
-                <span
-                  className="mr-1.5 font-medium text-primary"
-                  style={line.color ? { color: line.color } : undefined}
-                >
-                  {line.user}
-                </span>
-                {line.kind === "super_chat" && (
-                  <Badge variant="secondary" className="mr-1 align-middle">
-                    SC
-                  </Badge>
-                )}
-                {line.kind === "gift" && (
-                  <Badge variant="outline" className="mr-1 align-middle">
-                    礼物
-                  </Badge>
-                )}
-                <span className="text-foreground/90">{line.content}</span>
-              </div>
-            );
-          })}
+          {items.map((line) => (
+            <DanmakuRow key={line.id} line={line} />
+          ))}
           <div ref={bottomRef} />
         </div>
       </ScrollArea>

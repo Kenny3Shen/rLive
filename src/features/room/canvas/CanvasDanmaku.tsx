@@ -74,7 +74,10 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       if (!shouldShowOnCanvas(msg, currentFilterGifts)) return;
       if (currentShieldMatcher(msg)) return;
       if (currentRepeatMatcher(msg)) return;
-      engineRef.current?.push(msg);
+      // The listener has already run the same structural visibility check
+      // with the live gift setting. Mark it verified so the engine does not
+      // repeat parsing/trimming work for every incoming IPC event.
+      engineRef.current?.push(msg, true);
       requestFrameRef.current();
     })
       .then((fn) => {
@@ -163,7 +166,8 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       }
       needsDraw = false;
 
-      if (engine && active) {
+      const visibleItems = engine && active ? engine.visibleItems() : [];
+      if (visibleItems.length > 0 && engine && active) {
         ctx.save();
         ctx.globalAlpha = engine.opacity();
         ctx.textBaseline = "top";
@@ -172,11 +176,13 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
         ctx.shadowBlur = 2;
         ctx.shadowOffsetX = 1;
         ctx.shadowOffsetY = 1;
+        ctx.strokeStyle = "rgba(0,0,0,0.82)";
 
         let drawnFontSize = 0;
         let drawnFontWeight = 0;
+        let drawnColor = "";
         const currentFontWeight = engine.fontWeight();
-        for (const it of engine.visibleItems()) {
+        for (const it of visibleItems) {
           if (it.fontSize !== drawnFontSize || currentFontWeight !== drawnFontWeight) {
             drawnFontSize = it.fontSize;
             drawnFontWeight = currentFontWeight;
@@ -185,8 +191,11 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
           }
 
           const x = it.kind === "top" ? Math.max(0, (width - it.width) / 2) : it.x;
-          ctx.fillStyle = it.color || "#fff";
-          ctx.strokeStyle = "rgba(0,0,0,0.82)";
+          const color = it.color || "#fff";
+          if (color !== drawnColor) {
+            drawnColor = color;
+            ctx.fillStyle = color;
+          }
           ctx.strokeText(it.text, x, it.y);
           ctx.fillText(it.text, x, it.y);
         }

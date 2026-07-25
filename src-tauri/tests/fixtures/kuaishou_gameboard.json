@@ -1,0 +1,18 @@
+{
+  "data": {
+    "hasMore": true,
+    "list": [
+      {
+        "id": "transient-stream-id",
+        "poster": "https://img.example/poster.jpg",
+        "caption": "测试直播标题",
+        "watchingCount": "1.2万",
+        "author": {
+          "id": "creator_123",
+          "name": "测试主播",
+          "avatar": "https://img.example/avatar.jpg"
+        }
+      }
+    ]
+  }
+}

@@ -351,10 +351,11 @@ fn parse_super_chat_info(data: &Value) -> SuperChatInfo {
 
 pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
     let obj: Value = serde_json::from_str(json_message).ok()?;
-    let cmd = obj.get("cmd")?.as_str()?.to_string();
+    // Keep the command borrowed from `serde_json::Value`. It is inspected for
+    // every websocket payload, while only a subset becomes a UI event.
+    let cmd = obj.get("cmd")?.as_str()?;
     // Newer cmds look like "DANMU_MSG:4:0:0:0"
-    let cmd_base = cmd.split(':').next().unwrap_or(&cmd);
-    let ts = chrono::Utc::now().timestamp_millis();
+    let cmd_base = cmd.split(':').next().unwrap_or(cmd);
 
     if cmd_base == "DANMU_MSG" || cmd.contains("DANMU_MSG") {
         let info = obj.get("info")?.as_array()?;
@@ -393,7 +394,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             content: message,
             color,
             super_chat: None,
-            ts,
+            ts: chrono::Utc::now().timestamp_millis(),
         });
     }
 
@@ -418,7 +419,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             content: message,
             color: None,
             super_chat: Some(parse_super_chat_info(data)),
-            ts,
+            ts: chrono::Utc::now().timestamp_millis(),
         });
     }
 
@@ -435,7 +436,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             content: format!("{user} 进入直播间"),
             color: None,
             super_chat: None,
-            ts,
+            ts: chrono::Utc::now().timestamp_millis(),
         });
     }
 
@@ -457,7 +458,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             content: format!("投喂 {gift} x{num}"),
             color: None,
             super_chat: None,
-            ts,
+            ts: chrono::Utc::now().timestamp_millis(),
         });
     }
 

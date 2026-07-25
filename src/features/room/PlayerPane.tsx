@@ -98,6 +98,8 @@ export function PlayerPane({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const controlsHideTimerRef = useRef<number | null>(null);
+  const controlsVisibleRef = useRef(true);
+  const lastControlsActivityAtRef = useRef(Date.now());
   const overlayInteractionOpenRef = useRef(false);
 
   const player = useWebPlayer({
@@ -130,27 +132,65 @@ export function PlayerPane({
     }
   }, []);
 
+  const setControlVisibility = useCallback((visible: boolean) => {
+    if (controlsVisibleRef.current === visible) return;
+    controlsVisibleRef.current = visible;
+    setControlsVisible(visible);
+  }, []);
+
+  const markControlsActivity = useCallback(() => {
+    lastControlsActivityAtRef.current = Date.now();
+  }, []);
+
   const scheduleControlsHide = useCallback(() => {
     clearControlsHideTimer();
     if (!canAutoHideControls || overlayInteractionOpenRef.current) {
-      setControlsVisible(true);
+      setControlVisibility(true);
       return;
     }
-    controlsHideTimerRef.current = window.setTimeout(() => {
+
+    // Pointer events can fire at display refresh rate. Rather than resetting a
+    // timeout for each one, keep one timer and let it check the latest activity
+    // timestamp when it wakes up. This leaves the video/danmaku main thread
+    // free while retaining an exact idle-delay contract.
+    const hideWhenIdle = () => {
+      const remaining = CONTROLS_HIDE_DELAY_MS - (Date.now() - lastControlsActivityAtRef.current);
+      if (remaining > 0) {
+        controlsHideTimerRef.current = window.setTimeout(hideWhenIdle, remaining);
+        return;
+      }
+
       controlsHideTimerRef.current = null;
-      setControlsVisible(false);
-    }, CONTROLS_HIDE_DELAY_MS);
-  }, [canAutoHideControls, clearControlsHideTimer]);
+      if (!canAutoHideControls || overlayInteractionOpenRef.current) {
+        setControlVisibility(true);
+        return;
+      }
+      setControlVisibility(false);
+    };
+
+    const initialDelay = Math.max(
+      0,
+      CONTROLS_HIDE_DELAY_MS - (Date.now() - lastControlsActivityAtRef.current),
+    );
+    controlsHideTimerRef.current = window.setTimeout(hideWhenIdle, initialDelay);
+  }, [canAutoHideControls, clearControlsHideTimer, setControlVisibility]);
 
   const revealControls = useCallback(() => {
-    setControlsVisible(true);
-    scheduleControlsHide();
-  }, [scheduleControlsHide]);
+    markControlsActivity();
+    setControlVisibility(true);
+    if (controlsHideTimerRef.current === null) scheduleControlsHide();
+  }, [markControlsActivity, scheduleControlsHide, setControlVisibility]);
 
   const holdControlsVisible = useCallback(() => {
+    markControlsActivity();
     clearControlsHideTimer();
-    setControlsVisible(true);
-  }, [clearControlsHideTimer]);
+    setControlVisibility(true);
+  }, [clearControlsHideTimer, markControlsActivity, setControlVisibility]);
+
+  const resumeControlsAutoHide = useCallback(() => {
+    markControlsActivity();
+    scheduleControlsHide();
+  }, [markControlsActivity, scheduleControlsHide]);
 
   const handleOverlayInteractionChange = useCallback(
     (open: boolean) => {
@@ -217,19 +257,26 @@ export function PlayerPane({
   // Live playback stays unobstructed by default, while every pointer, touch
   // or keyboard interaction brings the bottom chrome back immediately.
   useEffect(() => {
-    setControlsVisible(true);
+    markControlsActivity();
+    setControlVisibility(true);
     scheduleControlsHide();
     return clearControlsHideTimer;
-  }, [roomSessionKey, scheduleControlsHide, clearControlsHideTimer]);
+  }, [
+    roomSessionKey,
+    scheduleControlsHide,
+    clearControlsHideTimer,
+    markControlsActivity,
+    setControlVisibility,
+  ]);
 
   useEffect(() => {
     if (overlayInteractionOpen) return;
     // Base UI returns focus from a portalled Select/Popover to its trigger.
     // Its exit transition is 100ms, so schedule after focus restoration rather
     // than allowing that focus handler to clear the idle timer.
-    const timer = window.setTimeout(scheduleControlsHide, OVERLAY_FOCUS_RESTORE_DELAY_MS);
+    const timer = window.setTimeout(resumeControlsAutoHide, OVERLAY_FOCUS_RESTORE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [overlayInteractionOpen, scheduleControlsHide]);
+  }, [overlayInteractionOpen, resumeControlsAutoHide]);
 
   useEffect(() => {
     const onFullscreenChange = () => revealControls();
@@ -314,12 +361,12 @@ export function PlayerPane({
                 event.stopPropagation();
                 holdControlsVisible();
               }}
-              onPointerLeave={scheduleControlsHide}
+              onPointerLeave={resumeControlsAutoHide}
               onFocusCapture={holdControlsVisible}
               onBlurCapture={(event) => {
                 const nextFocused = event.relatedTarget;
                 if (!(nextFocused instanceof Node) || !event.currentTarget.contains(nextFocused)) {
-                  scheduleControlsHide();
+                  resumeControlsAutoHide();
                 }
               }}
             >

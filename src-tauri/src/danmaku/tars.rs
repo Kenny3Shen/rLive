@@ -320,12 +320,22 @@ impl<'a> TarsReader<'a> {
         Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
-    pub fn read_bytes(&mut self, tag: u8, required: bool) -> Result<Vec<u8>> {
+    /// Read a byte list while borrowing the common TARS simple-list encoding.
+    ///
+    /// Huya's websocket envelopes contain nested `simple list<byte>` fields.
+    /// Its live decoder only needs to inspect those fields synchronously, so
+    /// this avoids cloning both envelope layers into temporary `Vec`s. Generic
+    /// `list<byte>` remains supported as an owned fallback.
+    pub fn read_bytes_cow(
+        &mut self,
+        tag: u8,
+        required: bool,
+    ) -> Result<std::borrow::Cow<'a, [u8]>> {
         if !self.skip_to_tag(tag)? {
             if required {
                 return Err(err(format!("required bytes tag {tag} missing")));
             }
-            return Ok(Vec::new());
+            return Ok(std::borrow::Cow::Borrowed(&[]));
         }
         let hd = self.read_head()?;
         match hd.typ {
@@ -335,7 +345,7 @@ impl<'a> TarsReader<'a> {
                     return Err(err("simple list not byte"));
                 }
                 let size = self.read_i64(0, true)? as usize;
-                Ok(self.read_exact(size)?.to_vec())
+                Ok(std::borrow::Cow::Borrowed(self.read_exact(size)?))
             }
             ty::LIST => {
                 let size = self.read_i64(0, true)? as usize;
@@ -343,10 +353,14 @@ impl<'a> TarsReader<'a> {
                 for _ in 0..size {
                     out.push(self.read_i64(0, true)? as u8);
                 }
-                Ok(out)
+                Ok(std::borrow::Cow::Owned(out))
             }
             _ => Err(err(format!("bytes type mismatch {}", hd.typ))),
         }
+    }
+
+    pub fn read_bytes(&mut self, tag: u8, required: bool) -> Result<Vec<u8>> {
+        Ok(self.read_bytes_cow(tag, required)?.into_owned())
     }
 
     pub fn read_struct_begin(&mut self, tag: u8, required: bool) -> Result<bool> {
@@ -399,6 +413,18 @@ mod tests {
         assert_eq!(ir.read_i64(1, true).unwrap(), 1); // bool true
         assert_eq!(ir.read_string(2, true).unwrap(), "");
         assert_eq!(ir.read_i64(4, true).unwrap(), 111);
+    }
+
+    #[test]
+    fn simple_byte_list_borrows_the_source_buffer() {
+        let mut writer = TarsWriter::new();
+        writer.write_bytes(b"huya-push", 1);
+        let packet = writer.into_bytes();
+
+        let mut reader = TarsReader::new(&packet);
+        let bytes = reader.read_bytes_cow(1, true).unwrap();
+        assert!(matches!(bytes, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(bytes.as_ref(), b"huya-push");
     }
 
     #[test]

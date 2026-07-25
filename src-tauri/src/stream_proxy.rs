@@ -6,8 +6,8 @@
 //! mpegts.js / hls.js — no mpv HWND.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -75,7 +75,14 @@ impl StreamProxy {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let task = tauri::async_runtime::spawn(async move {
-            run_proxy_loop(listener, client, url, headers, shutdown_rx).await;
+            run_proxy_loop(
+                listener,
+                client,
+                Arc::<str>::from(url),
+                Arc::new(headers),
+                shutdown_rx,
+            )
+            .await;
         });
 
         {
@@ -105,8 +112,8 @@ fn build_stream_client() -> Result<Client, reqwest::Error> {
 async fn run_proxy_loop(
     listener: TcpListener,
     client: Client,
-    url: String,
-    headers: HashMap<String, String>,
+    url: Arc<str>,
+    headers: Arc<HashMap<String, String>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
@@ -123,7 +130,13 @@ async fn run_proxy_loop(
                         let url = url.clone();
                         let headers = headers.clone();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = handle_client(&mut socket, &client, &url, &headers).await
+                            if let Err(e) = handle_client(
+                                &mut socket,
+                                &client,
+                                url.as_ref(),
+                                headers.as_ref(),
+                            )
+                            .await
                             {
                                 tracing::debug!(%e, "stream proxy client ended");
                             }
@@ -146,7 +159,7 @@ async fn handle_client(
     headers: &HashMap<String, String>,
 ) -> Result<(), String> {
     // Read request head (we only need method/path; body unused for GET).
-    let mut buf = vec![0u8; 4096];
+    let mut buf = [0u8; 4096];
     let n = socket
         .read(&mut buf)
         .await

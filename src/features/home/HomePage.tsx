@@ -1,10 +1,11 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
+import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import type { LiveRoomItem, RoomListPage } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,7 +19,9 @@ const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {rooms.map((room) => (
-        <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
+        <div data-page-enter-item key={`${room.site_id}:${room.room_id}`}>
+          <RoomCard room={room} />
+        </div>
       ))}
     </div>
   );
@@ -26,6 +29,7 @@ const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
 
 export function HomePage() {
   const siteId = useSiteId();
+  const pageRef = useRef<HTMLDivElement>(null);
 
   const query = useInfiniteQuery({
     queryKey: ["recommend", siteId],
@@ -42,11 +46,13 @@ export function HomePage() {
   const pages = query.data?.pages;
   const rooms = useMemo(() => pages?.flatMap((page) => page.items) ?? [], [pages]);
 
+  usePageEntrance(pageRef, {
+    entryKey: `home:${siteId}`,
+    ready: rooms.length > 0,
+  });
+
   return (
-    <div
-      key={siteId}
-      className="mx-auto flex max-w-[1600px] flex-col gap-4 motion-safe:animate-platform-enter"
-    >
+    <div ref={pageRef} key={siteId} className="mx-auto flex max-w-[1600px] flex-col gap-4">
       {query.isLoading && (
         <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {Array.from({ length: 12 }).map((_, i) => (
