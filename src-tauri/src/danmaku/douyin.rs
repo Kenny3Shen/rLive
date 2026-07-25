@@ -16,7 +16,6 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::json;
-use tauri::AppHandle;
 use tokio::time;
 use tokio_tungstenite::{
     connect_async,
@@ -27,7 +26,7 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::danmaku::emit_event;
+use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -230,7 +229,7 @@ fn sanitize_ws_headers(headers: HashMap<String, String>) -> HashMap<String, Stri
         .collect()
 }
 
-pub async fn run_loop(app: AppHandle, args: DouyinDanmakuArgs) -> AppResult<()> {
+pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> AppResult<()> {
     let mut request = args.wss_url.clone().into_client_request().map_err(|_| {
         AppError::new("douyin_ws_request_invalid", "抖音弹幕连接地址无效").with_site("douyin")
     })?;
@@ -244,7 +243,7 @@ pub async fn run_loop(app: AppHandle, args: DouyinDanmakuArgs) -> AppResult<()> 
         request.headers_mut().insert(name, value);
     }
 
-    emit_system(&app, "正在连接抖音弹幕服务器…");
+    emit_system(&events, "正在连接抖音弹幕服务器…");
     let (ws, _) = connect_async(request).await.map_err(|_| {
         AppError::new(
             "douyin_ws_connect_failed",
@@ -263,7 +262,7 @@ pub async fn run_loop(app: AppHandle, args: DouyinDanmakuArgs) -> AppResult<()> 
                 .retryable()
         })?;
 
-    emit_system(&app, "抖音弹幕服务器连接成功");
+    emit_system(&events, "抖音弹幕服务器连接成功");
     let mut heartbeat = time::interval(args.heartbeat_interval);
     // `interval` ticks immediately; consume that tick because the opening
     // heartbeat above has already been sent.
@@ -280,7 +279,7 @@ pub async fn run_loop(app: AppHandle, args: DouyinDanmakuArgs) -> AppResult<()> 
                 Some(Ok(Message::Binary(bytes))) => {
                     let decoded = decode_push_frame(&bytes)?;
                     let payload = maybe_gunzip(decoded.payload)?;
-                    let ack = decode_response(&payload, &mut |event| emit_event(&app, event))?;
+                    let ack = decode_response(&payload, &mut |event| emit_event(&events, event))?;
                     if ack.need_ack {
                         let frame = encode_ack(decoded.log_id, ack.internal_ext.as_bytes());
                         if write.send(Message::Binary(frame.into())).await.is_err() {
@@ -309,9 +308,9 @@ pub async fn run_loop(app: AppHandle, args: DouyinDanmakuArgs) -> AppResult<()> 
         .retryable())
 }
 
-fn emit_system(app: &AppHandle, content: &str) {
+fn emit_system(events: &DanmakuEventSender, content: &str) {
     emit_event(
-        app,
+        events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),

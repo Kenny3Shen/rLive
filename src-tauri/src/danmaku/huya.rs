@@ -7,12 +7,11 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
-use tauri::AppHandle;
 use tokio::time;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::danmaku::emit_event;
 use crate::danmaku::tars::{TarsReader, TarsWriter};
+use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 
@@ -218,9 +217,9 @@ fn decode_message(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
-pub async fn run_loop(app: AppHandle, args: HuyaDanmakuArgs) -> AppResult<()> {
+pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppResult<()> {
     emit_event(
-        &app,
+        &events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
@@ -257,7 +256,7 @@ pub async fn run_loop(app: AppHandle, args: HuyaDanmakuArgs) -> AppResult<()> {
         })?;
 
     emit_event(
-        &app,
+        &events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
@@ -285,7 +284,7 @@ pub async fn run_loop(app: AppHandle, args: HuyaDanmakuArgs) -> AppResult<()> {
                     Some(Ok(Message::Binary(bin))) => {
                         decode_message_with(&bin, &mut |ev| {
                             msg_count += 1;
-                            emit_event(&app, ev);
+                            emit_event(&events, ev);
                         });
                     }
                     Some(Ok(Message::Ping(p))) => {
@@ -303,7 +302,7 @@ pub async fn run_loop(app: AppHandle, args: HuyaDanmakuArgs) -> AppResult<()> {
     }
 
     emit_event(
-        &app,
+        &events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),

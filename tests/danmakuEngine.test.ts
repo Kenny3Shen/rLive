@@ -219,4 +219,113 @@ describe("danmaku engine", () => {
     // the 18px setting's 27px lane rather than retaining the old 45px lane.
     expect(yPositions[1] - yPositions[0]).toBe(27);
   });
+
+  test("keeps a faster queued comment from catching a slower leading comment", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 2,
+      opacity: 1,
+      lineCount: 1,
+    });
+    engine.tick(0, 600, 40);
+    engine.push(chat("慢速前导弹幕需要保留安全间距", 1));
+
+    engine.setOpts({
+      fontSize: 18,
+      speed: 10,
+      opacity: 1,
+      lineCount: 1,
+      area: 0.9,
+      fontWeight: 600,
+    });
+    engine.push(chat("快速后续弹幕", 2));
+
+    let followedWhileLeadingWasVisible = false;
+    for (let index = 0; index < 100; index += 1) {
+      engine.tick(0.1, 600, 40);
+      const leading = engine.visibleItems().find((item) => item.text.includes("慢速前导"));
+      const following = engine.visibleItems().find((item) => item.text.includes("快速后续"));
+      if (!leading || !following) continue;
+      // The collision invariant applies until the leading message leaves the
+      // visible viewport; the engine retains it for a short offscreen tail so
+      // the next compaction does not churn the active array.
+      if (leading.x + leading.width <= 0) continue;
+
+      followedWhileLeadingWasVisible = true;
+      expect(following.x - (leading.x + leading.width)).toBeGreaterThanOrEqual(24);
+    }
+
+    expect(followedWhileLeadingWasVisible).toBe(true);
+  });
+
+  test("coalesces a high-volume native batch without repeated full-lane scans", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      lineCount: 20,
+      debug: true,
+    });
+    engine.tick(0, 1920, 1080);
+
+    const burst = Array.from({ length: 1_200 }, (_, index) => chat(`压力弹幕 ${index}`, index));
+    engine.pushBatch(burst, true);
+
+    const afterBatch = engine.debugStats();
+    expect(afterBatch.activeItems).toBe(20);
+    expect(afterBatch.pendingItems).toBe(60);
+    // One transport batch gets one scheduler pass. The collision work is
+    // lane-local: filling 20 lanes plus checking the blocked head touches 40
+    // lanes / 20 existing items, rather than rechecking 1,200 arrivals.
+    expect(afterBatch.schedulePasses).toBe(1);
+    expect(afterBatch.laneChecks).toBeLessThanOrEqual(40);
+    expect(afterBatch.laneItemChecks).toBeLessThanOrEqual(20);
+
+    for (let index = 0; index < 10; index += 1) {
+      engine.tick(1 / 120, 1920, 1080);
+    }
+    const afterFrames = engine.debugStats();
+    // The retry deadline prevents a collision scan on every 120fps frame
+    // while the queue head is known to be blocked.
+    expect(afterFrames.schedulePasses - afterBatch.schedulePasses).toBeLessThanOrEqual(1);
+    expect(afterFrames.laneItemChecks - afterBatch.laneItemChecks).toBeLessThanOrEqual(20);
+  });
+
+  test("keeps 5k and 10k transport bursts memory-bounded without scheduler churn", () => {
+    for (const total of [5_000, 10_000]) {
+      const engine = createEngine({
+        fontSize: 18,
+        speed: 8,
+        opacity: 1,
+        lineCount: 20,
+        debug: true,
+      });
+      engine.tick(0, 1920, 1080);
+
+      engine.pushBatch(
+        Array.from({ length: total }, (_, index) => chat(`极限压力 ${index}`, index)),
+        true,
+      );
+
+      const afterBurst = engine.debugStats();
+      // The renderer has an explicit active-item cap and the scheduler has a
+      // separate bounded waiting queue, so burst size cannot grow either
+      // retained collection or trigger one lane pass per message.
+      expect(afterBurst.activeItems).toBeLessThanOrEqual(80);
+      expect(afterBurst.pendingItems).toBeLessThanOrEqual(80);
+      expect(afterBurst.schedulePasses).toBe(1);
+      expect(afterBurst.laneChecks).toBeLessThanOrEqual(40);
+      expect(afterBurst.laneItemChecks).toBeLessThanOrEqual(20);
+
+      for (let frame = 0; frame < 30; frame += 1) {
+        engine.tick(1 / 120, 1920, 1080);
+      }
+      const afterFrames = engine.debugStats();
+      // A blocked head carries its predicted retry deadline, so a 120fps
+      // render loop does not repeatedly rescan lanes while nothing can fit.
+      expect(afterFrames.schedulePasses - afterBurst.schedulePasses).toBeLessThanOrEqual(1);
+      expect(afterFrames.activeItems).toBeLessThanOrEqual(80);
+      expect(afterFrames.pendingItems).toBeLessThanOrEqual(80);
+    }
+  });
 });

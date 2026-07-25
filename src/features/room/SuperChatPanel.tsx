@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createShieldMatcher, isDanmakuEvent } from "./danmaku/filter";
 import { DanmakuEmojiText } from "./danmaku/emoji";
+import { batchEvents, type DanmakuBatch } from "./danmaku/batch";
+import { BoundedQueue } from "./danmaku/boundedQueue";
 import {
   formatSuperChatAmount,
   formatSuperChatDuration,
@@ -18,6 +19,65 @@ import {
   type SuperChatLine,
 } from "./superChat";
 import { cn } from "@/lib/utils";
+
+const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
+const MIN_FLUSH_INTERVAL_MS = 32;
+
+function scrollSuperChatViewportToBottom(root: HTMLElement | null): void {
+  const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+  if (!viewport) return;
+  const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
+}
+
+/** Existing cards retain their line reference, so only incoming SCs rerender. */
+const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLine }) {
+  const event = line.event;
+  const info = event.super_chat;
+  const amount = formatSuperChatAmount(info);
+  const duration = formatSuperChatDuration(info);
+  const palette = superChatPalette(info) ?? DEFAULT_SUPER_CHAT_PALETTE;
+
+  return (
+    <article
+      className="overflow-hidden rounded-lg border shadow-sm shadow-black/15"
+      style={{ borderColor: palette.borderColor }}
+    >
+      <header
+        className="flex min-h-12 items-center justify-between gap-3 px-3 py-2"
+        style={{
+          backgroundColor: palette.headerBackground,
+          color: palette.headerForeground,
+        }}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold" title={event.user}>
+            {event.user.trim() || "匿名用户"}
+          </p>
+          {duration && (
+            <p className="mt-0.5 text-[11px]" style={{ color: palette.mutedForeground }}>
+              醒目留言 · {duration}
+            </p>
+          )}
+        </div>
+        <span className="shrink-0 text-lg leading-none font-bold tabular-nums">
+          {amount ?? "SC"}
+        </span>
+      </header>
+      <div
+        className="min-h-14 px-3 py-2.5"
+        style={{
+          backgroundColor: palette.bodyBackground,
+          color: palette.bodyForeground,
+        }}
+      >
+        <p className="whitespace-pre-wrap break-words leading-relaxed">
+          <DanmakuEmojiText content={event.content} />
+        </p>
+      </div>
+    </article>
+  );
+});
 
 type SuperChatPanelProps = {
   active: boolean;
@@ -36,14 +96,18 @@ export function SuperChatPanel({
 }: SuperChatPanelProps) {
   const [items, setItems] = useState<SuperChatLine[]>([]);
   const [newItemsBelow, setNewItemsBelow] = useState(0);
+  const newItemsBelowRef = useRef(0);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
-  const pendingRef = useRef<SuperChatLine[]>([]);
+  const pendingRef = useRef(new BoundedQueue<SuperChatLine>(MAX_BUFFERED_SUPER_CHATS));
   const flushFrameRef = useRef<number | null>(null);
+  const flushTimerRef = useRef<number | null>(null);
+  const lastFlushAtRef = useRef(0);
   const scheduleFlushRef = useRef<() => void>(() => {});
   const nextIdRef = useRef(0);
   const dedupeKeysRef = useRef(new Set<string>());
   const dedupeOrderRef = useRef<string[]>([]);
+  const dedupeHeadRef = useRef(0);
   const activeRef = useRef(active);
   const visibleRef = useRef(visible);
   const unreadCountRef = useRef(0);
@@ -73,6 +137,13 @@ export function SuperChatPanel({
     onUnreadCountChangeRef.current?.(bounded);
   }
 
+  function setNewItemsBelowCount(nextCount: number) {
+    const bounded = Math.max(0, Math.min(MAX_BUFFERED_SUPER_CHATS, nextCount));
+    if (newItemsBelowRef.current === bounded) return;
+    newItemsBelowRef.current = bounded;
+    setNewItemsBelow(bounded);
+  }
+
   useLayoutEffect(() => {
     activeRef.current = active;
     return () => {
@@ -94,21 +165,27 @@ export function SuperChatPanel({
         cancelAnimationFrame(flushFrameRef.current);
         flushFrameRef.current = null;
       }
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
     };
 
     const resetSession = () => {
       cancelFlush();
-      pendingRef.current = [];
+      pendingRef.current.clear();
       dedupeKeysRef.current.clear();
       dedupeOrderRef.current = [];
+      dedupeHeadRef.current = 0;
       nextIdRef.current = 0;
+      lastFlushAtRef.current = 0;
     };
 
     if (!active) {
       resetSession();
       autoScroll.current = true;
       setUnreadCount(0);
-      setNewItemsBelow(0);
+      setNewItemsBelowCount(0);
       setItems([]);
       return;
     }
@@ -119,23 +196,40 @@ export function SuperChatPanel({
     const flush = () => {
       flushFrameRef.current = null;
       if (!activeRef.current || !visibleRef.current) return;
-      const batch = pendingRef.current.splice(0, MAX_SUPER_CHATS_PER_FRAME);
+      const batch = pendingRef.current.take(MAX_SUPER_CHATS_PER_FRAME);
       if (batch.length === 0) return;
+      lastFlushAtRef.current = performance.now();
 
       setItems((previous) => retainSuperChatItems(previous, batch));
       if (!autoScroll.current) {
-        setNewItemsBelow((count) => Math.min(MAX_BUFFERED_SUPER_CHATS, count + batch.length));
+        setNewItemsBelowCount(newItemsBelowRef.current + batch.length);
       }
 
-      // Drain bursts across frames so one websocket spike cannot force a large
-      // React reconciliation in a single paint.
+      // Drain a hidden-tab backlog at a capped cadence so one websocket spike
+      // cannot force a large React reconciliation in every paint.
       if (pendingRef.current.length > 0) scheduleFlush();
     };
 
     const scheduleFlush = () => {
-      if (activeRef.current && visibleRef.current && flushFrameRef.current === null) {
-        flushFrameRef.current = requestAnimationFrame(flush);
+      if (
+        !activeRef.current ||
+        !visibleRef.current ||
+        pendingRef.current.length === 0 ||
+        flushFrameRef.current !== null ||
+        flushTimerRef.current !== null
+      ) {
+        return;
       }
+
+      const remaining = MIN_FLUSH_INTERVAL_MS - (performance.now() - lastFlushAtRef.current);
+      if (remaining > 0) {
+        flushTimerRef.current = window.setTimeout(() => {
+          flushTimerRef.current = null;
+          scheduleFlush();
+        }, remaining);
+        return;
+      }
+      flushFrameRef.current = requestAnimationFrame(flush);
     };
     scheduleFlushRef.current = scheduleFlush;
 
@@ -143,33 +237,46 @@ export function SuperChatPanel({
       if (dedupeKeysRef.current.has(key)) return false;
 
       dedupeKeysRef.current.add(key);
-      dedupeOrderRef.current.push(key);
-      if (dedupeOrderRef.current.length > MAX_SUPER_CHAT_DEDUPE_KEYS) {
-        const oldest = dedupeOrderRef.current.shift();
+      const order = dedupeOrderRef.current;
+      order.push(key);
+      if (order.length - dedupeHeadRef.current > MAX_SUPER_CHAT_DEDUPE_KEYS) {
+        const oldest = order[dedupeHeadRef.current];
+        dedupeHeadRef.current += 1;
         if (oldest) dedupeKeysRef.current.delete(oldest);
+        // Avoid shifting a 240-item array once per SC. Compact occasionally
+        // instead, which is O(1) amortized across sustained traffic.
+        if (dedupeHeadRef.current >= 128 && dedupeHeadRef.current * 2 >= order.length) {
+          dedupeOrderRef.current = order.slice(dedupeHeadRef.current);
+          dedupeHeadRef.current = 0;
+        }
       }
       return true;
     };
 
-    void listen<DanmakuEvent>("danmaku", (event) => {
+    void listen<DanmakuBatch>("danmaku-batch", (event) => {
       if (cancelled || !activeRef.current) return;
-      const message = event.payload;
-      if (!isDanmakuEvent(message) || message.kind !== "super_chat" || !message.content.trim()) {
-        return;
-      }
-      if (shieldMatcherRef.current(message)) return;
+      const accepted: SuperChatLine[] = [];
+      for (const message of batchEvents(event.payload)) {
+        // Most traffic is ordinary chat. Check the discriminator before the
+        // full native-payload validation to keep the hidden SC tab inexpensive.
+        if (
+          !message ||
+          typeof message !== "object" ||
+          (message as { kind?: unknown }).kind !== "super_chat" ||
+          !isDanmakuEvent(message) ||
+          !message.content.trim() ||
+          shieldMatcherRef.current(message)
+        ) {
+          continue;
+        }
 
-      const dedupeKey = superChatDedupeKey(message);
-      if (!rememberDedupeKey(dedupeKey)) return;
+        if (!rememberDedupeKey(superChatDedupeKey(message))) continue;
+        accepted.push({ id: ++nextIdRef.current, event: message });
+      }
+      if (accepted.length === 0) return;
 
-      const pending = pendingRef.current;
-      pending.push({ id: ++nextIdRef.current, event: message });
-      if (pending.length > MAX_BUFFERED_SUPER_CHATS) {
-        pending.splice(0, pending.length - MAX_BUFFERED_SUPER_CHATS);
-      }
-      if (!visibleRef.current) {
-        setUnreadCount(unreadCountRef.current + 1);
-      }
+      pendingRef.current.pushAll(accepted);
+      if (!visibleRef.current) setUnreadCount(unreadCountRef.current + accepted.length);
       scheduleFlush();
     })
       .then((fn) => {
@@ -196,41 +303,58 @@ export function SuperChatPanel({
 
     // ScrollArea's viewport is nested. Going through a sentinel's
     // `scrollIntoView` can choose an ancestor instead, leaving this list at
-    // an older message. Set its real viewport directly after each batch.
-    const scrollToBottom = () => {
-      if (!autoScroll.current) return;
-      const viewport = scrollRootRef.current?.querySelector<HTMLElement>(
-        '[data-slot="scroll-area-viewport"]',
-      );
-      if (viewport) viewport.scrollTop = viewport.scrollHeight;
-    };
-
-    scrollToBottom();
-    const frame = window.requestAnimationFrame(scrollToBottom);
-    return () => window.cancelAnimationFrame(frame);
+    // an older message. Set its real viewport once after each batch instead
+    // of issuing a second identical scroll write on the following frame.
+    scrollSuperChatViewportToBottom(scrollRootRef.current);
   }, [items, visible]);
 
-  function onViewportScroll(event: UIEvent<HTMLDivElement>) {
-    const element = event.target;
-    if (!(element instanceof HTMLElement)) return;
-    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    autoScroll.current = distanceToBottom < 48;
-    if (autoScroll.current) setNewItemsBelow(0);
-  }
+  useEffect(() => {
+    if (!visible || typeof ResizeObserver === "undefined") return;
+    const root = scrollRootRef.current;
+    const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+    if (!viewport) return;
+
+    let frame: number | null = null;
+    const scrollIfPinned = () => {
+      if (!autoScroll.current || frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        if (autoScroll.current) scrollSuperChatViewportToBottom(root);
+      });
+    };
+    const observer = new ResizeObserver(scrollIfPinned);
+    observer.observe(viewport);
+    scrollIfPinned();
+
+    return () => {
+      observer.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [visible]);
+
+  useEffect(() => {
+    const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+    if (!viewport) return;
+
+    const updateAutoScroll = () => {
+      const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      autoScroll.current = distanceToBottom < 48;
+      if (autoScroll.current) setNewItemsBelowCount(0);
+    };
+    viewport.addEventListener("scroll", updateAutoScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", updateAutoScroll);
+  }, []);
 
   function jumpToLatest() {
     autoScroll.current = true;
-    setNewItemsBelow(0);
-    const viewport = scrollRootRef.current?.querySelector<HTMLElement>(
-      '[data-slot="scroll-area-viewport"]',
-    );
-    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+    setNewItemsBelowCount(0);
+    scrollSuperChatViewportToBottom(scrollRootRef.current);
   }
 
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
-        <ScrollArea className="h-full min-h-0" onScrollCapture={onViewportScroll}>
+        <ScrollArea className="h-full min-h-0">
           <div
             className="flex flex-col gap-2 px-2.5 py-2"
             style={{
@@ -246,56 +370,9 @@ export function SuperChatPanel({
                 进入直播间后显示 SC
               </p>
             )}
-            {items.map(({ id, event: line }) => {
-              const info = line.super_chat;
-              const amount = formatSuperChatAmount(info);
-              const duration = formatSuperChatDuration(info);
-              const palette = superChatPalette(info) ?? DEFAULT_SUPER_CHAT_PALETTE;
-
-              return (
-                <article
-                  key={id}
-                  className="overflow-hidden rounded-lg border shadow-sm shadow-black/15"
-                  style={{ borderColor: palette.borderColor }}
-                >
-                  <header
-                    className="flex min-h-12 items-center justify-between gap-3 px-3 py-2"
-                    style={{
-                      backgroundColor: palette.headerBackground,
-                      color: palette.headerForeground,
-                    }}
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold" title={line.user}>
-                        {line.user.trim() || "匿名用户"}
-                      </p>
-                      {duration && (
-                        <p
-                          className="mt-0.5 text-[11px]"
-                          style={{ color: palette.mutedForeground }}
-                        >
-                          醒目留言 · {duration}
-                        </p>
-                      )}
-                    </div>
-                    <span className="shrink-0 text-lg leading-none font-bold tabular-nums">
-                      {amount ?? "SC"}
-                    </span>
-                  </header>
-                  <div
-                    className="min-h-14 px-3 py-2.5"
-                    style={{
-                      backgroundColor: palette.bodyBackground,
-                      color: palette.bodyForeground,
-                    }}
-                  >
-                    <p className="whitespace-pre-wrap break-words leading-relaxed">
-                      <DanmakuEmojiText content={line.content} />
-                    </p>
-                  </div>
-                </article>
-              );
-            })}
+            {items.map((line) => (
+              <SuperChatCard key={line.id} line={line} />
+            ))}
           </div>
         </ScrollArea>
         {visible && newItemsBelow > 0 && (
