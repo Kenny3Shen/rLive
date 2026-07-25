@@ -14,7 +14,7 @@
 | 功能 Feature | 状态 Status |
 |--------------|-------------|
 | 桌面壳 (Linux / Windows) | 完成 Done |
-| 深色 UI + shadcn/ui（中文主界面） | 完成 Done |
+| 亮 / 暗 UI + shadcn/ui（侧栏单一按钮轮换；中文主界面） | 完成 Done |
 | **哔哩哔哩** 分类 / 推荐 / 搜索 / 播放 / 弹幕 | 完成 Done |
 | **虎牙** 列表 / 房间 / 播放 / 弹幕 | 完成 Done |
 | **斗鱼** 列表 / 房间 / 播放 / 弹幕 | 完成 Done |
@@ -27,7 +27,7 @@
 | 醒目留言 SC 面板（哔哩哔哩） | 完成 Done（金额、时长、卡片色） |
 | 关注 / 标签 / 开播刷新 / 房间内直接切换 | 完成 Done |
 | 观看历史 | 完成 Done |
-| 设置：主题、代理、Cookie、清晰度偏好、配置导入导出 | 完成 Done |
+| 设置：侧栏亮 / 暗模式切换、代理、Cookie、清晰度偏好、配置导入导出 | 完成 Done |
 
 **不在当前范围：** 电视端、多开房间、录制/下载、发送弹幕或礼物、官方登录写流程。
 
@@ -115,9 +115,10 @@ D:\dev\rLive\src-tauri\target\release\rlive.exe
 4. **弹幕设置**：右侧标签依次为「弹幕 / SC / 关注 / 设置」；在「设置」中调整显示区域、行数、不透明度、字号、字重、速度、重复过滤、礼物过滤和屏蔽词。滑块与屏蔽词输入都会即时生效，屏蔽词会自动保存。
 5. **主播信息 / SC / 关注**：右栏顶部显示主播头像、用户名、所属平台和当前热度；「SC」查看哔哩哔哩醒目留言；「关注」可直接切换到任一已关注房间，无需先退出当前房间。
 6. **播放器控制**：控制条以透明方式叠放在视频底部，播放期间闲置后自动隐藏，移动、点击或键盘操作可再次显示。刷新位于暂停左侧；音量按钮展开竖向滑杆；清晰度和线路仅显示当前选择项；右栏、飘屏与全屏均为图标开关。
-7. **抖音**：可匿名浏览首屏分类/推荐并播放；若要搜索，请在设置中保存完整网页 Cookie。
+7. **外观**：侧栏「设置」上方只有一个太阳 / 月亮按钮；每次点击会在亮色与暗色模式之间轮换。
+8. **抖音**：可匿名浏览首屏分类/推荐并播放；若要搜索，请在设置中保存完整网页 Cookie。
 
-English: switch site in the header, open a room, and paste a Bilibili cookie under **Settings → Account** for danmaku. The room-side tabs are **Danmaku / SC / Follows / Settings**; danmaku settings apply live, shield words auto-save, and gift notices can be hidden. The sidebar header shows the host avatar, name, platform, and current heat. **SC** shows Super Chats, while **Follows** switches directly to a followed room. The transparent bottom player controls hide after playback is idle and reappear on pointer, click, or keyboard activity; quality and line selectors show only the active choice. Search supports user, room-ID, and title fields; category results open on their own page. Douyin supports first-page browse and playback; search needs a logged-in browser cookie.
+English: switch site in the header, open a room, and paste a Bilibili cookie under **Settings → Account** for danmaku. The room-side tabs are **Danmaku / SC / Follows / Settings**; danmaku settings apply live, shield words auto-save, and gift notices can be hidden. The sidebar header shows the host avatar, name, platform, and current heat. **SC** shows Super Chats, while **Follows** switches directly to a followed room. A single sun / moon button above **Settings** alternates between light and dark mode. The transparent bottom player controls hide after playback is idle and reappear on pointer, click, or keyboard activity; quality and line selectors show only the active choice. Search supports user, room-ID, and title fields; category results open on their own page. Douyin supports first-page browse and playback; search needs a logged-in browser cookie.
 
 ---
 

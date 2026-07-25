@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Flame } from "lucide-react";
 import type { LiveRoomItem } from "@/shared/types/live";
@@ -7,7 +8,7 @@ type RoomCardProps = {
   room: LiveRoomItem;
 };
 
-export function RoomCard({ room }: RoomCardProps) {
+export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
 
   function openRoom() {
@@ -29,6 +30,7 @@ export function RoomCard({ room }: RoomCardProps) {
             src={room.cover}
             alt=""
             loading="lazy"
+            decoding="async"
             className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
             referrerPolicy="no-referrer"
           />
@@ -51,4 +53,4 @@ export function RoomCard({ room }: RoomCardProps) {
       </div>
     </button>
   );
-}
+});

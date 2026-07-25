@@ -1,13 +1,28 @@
+import { memo, useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
-import type { RoomListPage } from "@/shared/types/live";
+import type { LiveRoomItem, RoomListPage } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SITE_LABELS } from "@/lib/utils";
+
+type RoomGridProps = {
+  rooms: readonly LiveRoomItem[];
+};
+
+const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
+  return (
+    <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+      {rooms.map((room) => (
+        <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
+      ))}
+    </div>
+  );
+});
 
 export function HomePage() {
   const siteId = useSiteId();
@@ -24,7 +39,8 @@ export function HomePage() {
       last.has_more ? lastPageParam + 1 : undefined,
   });
 
-  const rooms = query.data?.pages.flatMap((p) => p.items) ?? [];
+  const pages = query.data?.pages;
+  const rooms = useMemo(() => pages?.flatMap((page) => page.items) ?? [], [pages]);
 
   return (
     <div
@@ -57,13 +73,7 @@ export function HomePage() {
         </div>
       )}
 
-      {rooms.length > 0 && (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {rooms.map((room) => (
-            <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
-          ))}
-        </div>
-      )}
+      {rooms.length > 0 && <RoomGrid rooms={rooms} />}
 
       {query.hasNextPage && (
         <div className="flex justify-center pt-3 pb-2">
