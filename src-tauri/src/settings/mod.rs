@@ -8,6 +8,14 @@ const SETTINGS_KEY: &str = "app_settings";
 
 /// Load app settings from `settings_kv`, or return defaults if missing/invalid.
 pub fn get(conn: &Connection) -> AppResult<AppSettings> {
+    Ok(get_with_status(conn)?.0)
+}
+
+/// Load settings along with whether a valid saved settings record exists.
+///
+/// The distinction lets the frontend retain a legacy local platform choice
+/// when it is being run against a database that has not saved settings yet.
+pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     let mut stmt = conn
         .prepare("SELECT value FROM settings_kv WHERE key = ?1")
         .map_err(map_db_err)?;
@@ -17,11 +25,11 @@ pub fn get(conn: &Connection) -> AppResult<AppSettings> {
         .map_err(map_db_err)?;
 
     match raw {
-        None => Ok(AppSettings::default()),
+        None => Ok((AppSettings::default(), false)),
         Some(json) => match serde_json::from_str(&json) {
-            Ok(settings) => Ok(settings),
+            Ok(settings) => Ok((settings, true)),
             // Corrupt JSON: fall back to defaults so the app remains usable.
-            Err(_) => Ok(AppSettings::default()),
+            Err(_) => Ok((AppSettings::default(), false)),
         },
     }
 }
@@ -51,7 +59,8 @@ mod tests {
     #[test]
     fn get_returns_defaults_when_empty() {
         let conn = open_in_memory().unwrap();
-        let s = get(&conn).unwrap();
+        let (s, has_saved_settings) = get_with_status(&conn).unwrap();
+        assert!(!has_saved_settings);
         assert_eq!(s.default_site, "bilibili");
         assert_eq!(s.theme, "system");
         assert_eq!(s.danmaku_opacity, 1.0);
@@ -75,7 +84,8 @@ mod tests {
         s.proxy = Some("http://127.0.0.1:7890".into());
         s.danmaku_font_size = 22;
         set(&conn, &s).unwrap();
-        let back = get(&conn).unwrap();
+        let (back, has_saved_settings) = get_with_status(&conn).unwrap();
+        assert!(has_saved_settings);
         assert_eq!(back, s);
     }
 
@@ -87,7 +97,8 @@ mod tests {
             params![SETTINGS_KEY, "{not-valid-json"],
         )
         .unwrap();
-        let s = get(&conn).unwrap();
+        let (s, has_saved_settings) = get_with_status(&conn).unwrap();
+        assert!(!has_saved_settings);
         assert_eq!(s, AppSettings::default());
     }
 }

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { invokeCmd } from "../api/tauri";
+import { DEFAULT_SITE_ID, isSiteId, normalizeSiteId, resolveStartupSiteId } from "../siteId";
 import type { AppSettings } from "../types/live";
 import type { QualityLevel } from "../types/player";
 
@@ -10,6 +11,17 @@ export type ThemeMode = "system" | "light" | "dark";
 // controls (for example two slider commits) cannot resolve out of order and
 // restore an earlier snapshot over the newest setting.
 let settingsWriteQueue: Promise<void> = Promise.resolve();
+
+type SettingsGetResponse = {
+  settings: AppSettings;
+  has_saved_settings: boolean;
+};
+
+function isSettingsGetResponse(
+  value: AppSettings | SettingsGetResponse,
+): value is SettingsGetResponse {
+  return typeof value === "object" && value !== null && "settings" in value;
+}
 
 function isThemeMode(v: string): v is ThemeMode {
   return v === "system" || v === "light" || v === "dark";
@@ -51,7 +63,7 @@ type SettingsState = {
 
 const defaultSettings: AppSettings = {
   theme: "system",
-  default_site: "bilibili",
+  default_site: DEFAULT_SITE_ID,
   proxy: null,
   danmaku_opacity: 1,
   danmaku_font_size: 18,
@@ -89,7 +101,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
       theme: "system",
-      siteId: "bilibili",
+      siteId: DEFAULT_SITE_ID,
       proxy: null,
       danmakuOpacity: 1,
       danmakuFontSize: 18,
@@ -127,7 +139,7 @@ export const useSettingsStore = create<SettingsState>()(
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         set({
           theme,
-          siteId: settings.default_site || "bilibili",
+          siteId: normalizeSiteId(settings.default_site),
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontSize: settings.danmaku_font_size,
@@ -145,8 +157,25 @@ export const useSettingsStore = create<SettingsState>()(
       },
       loadFromBackend: async () => {
         try {
-          const settings = await invokeCmd<AppSettings>("settings_get");
-          get().applyFromBackend(settings);
+          const result = await invokeCmd<AppSettings | SettingsGetResponse>("settings_get");
+          // A legacy backend returns AppSettings directly. Treat it as saved
+          // rather than allowing a local cache to overwrite a real setting.
+          const { settings, hasSavedSettings } = isSettingsGetResponse(result)
+            ? {
+                settings: result.settings,
+                hasSavedSettings: result.has_saved_settings,
+              }
+            : { settings: result, hasSavedSettings: true };
+          const localSiteId = get().siteId;
+          const siteId = resolveStartupSiteId(settings.default_site, hasSavedSettings, localSiteId);
+
+          get().applyFromBackend({ ...settings, default_site: siteId });
+
+          // Migrate a pre-backend local platform choice once. This makes the
+          // choice durable without changing the first-run Bilibili default.
+          if (!hasSavedSettings && isSiteId(localSiteId) && siteId !== DEFAULT_SITE_ID) {
+            await get().persistToBackend({ default_site: siteId });
+          }
         } catch {
           // Outside Tauri (vite-only) or backend unavailable: keep local defaults.
           set({ hydratedFromBackend: true });

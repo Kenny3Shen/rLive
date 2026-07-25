@@ -1,19 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Flame, Heart, Share2, Link2 } from "lucide-react";
+import { ChevronLeft, Heart, Share2, Link2 } from "lucide-react";
+import { gsap } from "gsap";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
+import { RoomHostInfo } from "./RoomHostInfo";
 import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Spinner } from "@/components/ui/spinner";
-import { SiteLogo } from "@/shared/components/SiteLogo";
-import { formatOnline, SITE_LABELS, cn, normalizeImageUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -145,37 +145,7 @@ export function RoomPage() {
 
   if (!detail) return null;
 
-  const platformLabel = SITE_LABELS[detail.site_id] ?? detail.site_id;
-  const onlineLabel = formatOnline(detail.online);
-
-  const sideHeader = (
-    <div className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-3">
-      <Avatar size="lg" className="size-11">
-        <AvatarImage
-          src={normalizeImageUrl(detail.user_avatar)}
-          alt={detail.user_name}
-          referrerPolicy="no-referrer"
-        />
-        <AvatarFallback>{(detail.user_name || "?").slice(0, 1)}</AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold leading-5">{detail.user_name || "未知主播"}</p>
-        <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <span className="flex min-w-0 items-center gap-1 truncate" title={platformLabel}>
-            <SiteLogo siteId={detail.site_id} className="size-3.5" />
-            <span className="truncate">{platformLabel}</span>
-          </span>
-          <span
-            className="flex shrink-0 items-center gap-1 text-orange-400"
-            title={`当前热度 ${onlineLabel}`}
-          >
-            <Flame className="size-3.5" aria-hidden />
-            <span>{onlineLabel}</span>
-          </span>
-        </div>
-      </div>
-    </div>
-  );
+  const sideHeader = <RoomHostInfo detail={detail} />;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -253,9 +223,90 @@ export function RoomPage() {
 }
 
 function RoomTopBar({ title }: { title: string }) {
+  const navigate = useNavigate();
+  const topBarRef = useRef<HTMLElement>(null);
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+  const titleRef = useRef<HTMLParagraphElement>(null);
+  const reduceMotion = useReducedMotionPreference();
+
+  useLayoutEffect(() => {
+    const topBar = topBarRef.current;
+    const backButton = backButtonRef.current;
+    const roomTitle = titleRef.current;
+    if (reduceMotion || !topBar || !backButton || !roomTitle) return;
+
+    const context = gsap.context(() => {
+      gsap
+        .timeline({ defaults: { ease: "power3.out" } })
+        .from(backButton, { autoAlpha: 0, duration: 0.32, x: -12 })
+        .from(roomTitle, { autoAlpha: 0, duration: 0.28, y: -6 }, "-=0.16");
+    }, topBar);
+
+    return () => {
+      gsap.killTweensOf(backButton);
+      context.revert();
+    };
+  }, [reduceMotion]);
+
+  function goBack() {
+    const historyState = window.history.state as { idx?: number } | null;
+    if (typeof historyState?.idx === "number" && historyState.idx > 0) {
+      navigate(-1);
+      return;
+    }
+    navigate("/", { replace: true });
+  }
+
+  function animateBackButton(offset: number) {
+    if (reduceMotion || !backButtonRef.current) return;
+    gsap.to(backButtonRef.current, {
+      duration: 0.18,
+      ease: "power2.out",
+      overwrite: "auto",
+      x: offset,
+    });
+  }
+
   return (
-    <header className="flex h-12 shrink-0 items-center justify-center border-b border-border bg-sidebar px-4">
-      <p className="max-w-full truncate text-sm font-medium">{title}</p>
+    <header
+      ref={topBarRef}
+      className="relative flex h-12 shrink-0 items-center justify-center border-b border-border bg-sidebar px-4"
+    >
+      <Button
+        ref={backButtonRef}
+        variant="ghost"
+        size="sm"
+        className="absolute left-2"
+        aria-label="返回上一页"
+        title="返回上一页"
+        onClick={goBack}
+        onPointerEnter={() => animateBackButton(-2)}
+        onPointerLeave={() => animateBackButton(0)}
+      >
+        <ChevronLeft data-icon="inline-start" aria-hidden />
+        返回
+      </Button>
+      <p ref={titleRef} className="max-w-[calc(100%-6rem)] truncate text-sm font-medium">
+        {title}
+      </p>
     </header>
   );
+}
+
+function useReducedMotionPreference() {
+  const [reduceMotion, setReduceMotion] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setReduceMotion(query.matches);
+    updatePreference();
+    query.addEventListener("change", updatePreference);
+    return () => query.removeEventListener("change", updatePreference);
+  }, []);
+
+  return reduceMotion;
 }

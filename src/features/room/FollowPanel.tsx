@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 function sortFollows(follows: FollowUser[]): FollowUser[] {
@@ -71,29 +72,19 @@ export function FollowPanel({ className }: { className?: string }) {
   }
 
   return (
-    <section className={cn("flex min-h-0 flex-1 flex-col", className)} aria-label="关注直播间">
-      <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
+    <section
+      className={cn("relative flex min-h-0 flex-1 flex-col", className)}
+      aria-label="关注直播间"
+    >
+      <div className="flex shrink-0 items-center gap-2 px-3 py-2">
         <div className="min-w-0">
-          <p className="text-sm font-medium">关注</p>
+          <p className="text-sm font-medium">关注列表</p>
           <p className="text-xs text-muted-foreground">选择直播间即可直接切换</p>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={refreshMutation.isPending}
-          title="刷新开播状态"
-          aria-label="刷新开播状态"
-          onClick={() => refreshMutation.mutate()}
-        >
-          <RefreshCw
-            data-icon="inline-start"
-            className={cn(refreshMutation.isPending && "animate-spin-soft")}
-          />
-        </Button>
       </div>
 
       {followsQuery.isLoading && (
-        <div className="flex flex-col gap-2 px-2 pb-2">
+        <div className="flex flex-col gap-2 px-2 pb-14">
           {Array.from({ length: 5 }).map((_, index) => (
             <Skeleton key={index} className="h-14 w-full" />
           ))}
@@ -118,7 +109,7 @@ export function FollowPanel({ className }: { className?: string }) {
       )}
 
       {follows.length > 0 && (
-        <ScrollArea className="min-h-0 flex-1 px-2 pb-2">
+        <ScrollArea className="min-h-0 flex-1 px-2 pb-14">
           <ul className="flex flex-col gap-1">
             {follows.map((user) => {
               const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
@@ -154,6 +145,28 @@ export function FollowPanel({ className }: { className?: string }) {
           </ul>
         </ScrollArea>
       )}
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-lg"
+              className="absolute right-3 bottom-3 z-10 rounded-full shadow-lg shadow-primary/25"
+              disabled={refreshMutation.isPending}
+              aria-label="刷新关注列表"
+              title="刷新关注列表"
+              onClick={() => refreshMutation.mutate()}
+            />
+          }
+        >
+          <RefreshCw
+            data-icon="inline-start"
+            aria-hidden
+            className={cn(refreshMutation.isPending && "animate-spin-soft")}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="left">刷新关注列表</TooltipContent>
+      </Tooltip>
     </section>
   );
 }

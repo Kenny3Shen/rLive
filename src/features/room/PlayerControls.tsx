@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import {
   Captions,
   CaptionsOff,
@@ -41,6 +41,11 @@ export type PlayerControlsProps = {
   disabled?: boolean;
   /** Use when controls are rendered over the bottom edge of the video. */
   overlay?: boolean;
+  /**
+   * The menu content is portalled outside the player stage. Tell the stage
+   * when one is open so its idle timer cannot fade out beneath a menu.
+   */
+  onOverlayInteractionChange?: (open: boolean) => void;
   refreshDisabled?: boolean;
   loadError?: string | null;
   onRefresh?: () => void;
@@ -110,6 +115,7 @@ export function PlayerControls({
   fullscreen = false,
   disabled = false,
   overlay = false,
+  onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
   onRefresh,
@@ -122,6 +128,9 @@ export function PlayerControls({
   onLineChange,
   onToggleFullscreen,
 }: PlayerControlsProps) {
+  const [volumeOpen, setVolumeOpen] = useState(false);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  const [lineOpen, setLineOpen] = useState(false);
   const isMuted = muted || volume === 0;
   const volumeLabel = "调节音量";
   const muteLabel = isMuted ? "取消静音" : "静音";
@@ -137,6 +146,18 @@ export function PlayerControls({
   const overlaySelectItemClass = overlay
     ? "text-white hover:bg-white/15 hover:text-white data-highlighted:bg-white/15 data-highlighted:text-white data-selected:bg-white/20 data-selected:text-white data-selected:hover:bg-white/20 data-selected:data-highlighted:bg-white/20"
     : undefined;
+  const overlayInteractionOpen = volumeOpen || qualityOpen || lineOpen;
+
+  useEffect(() => {
+    onOverlayInteractionChange?.(overlayInteractionOpen);
+  }, [onOverlayInteractionChange, overlayInteractionOpen]);
+
+  useEffect(
+    () => () => {
+      onOverlayInteractionChange?.(false);
+    },
+    [onOverlayInteractionChange],
+  );
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
@@ -177,7 +198,7 @@ export function PlayerControls({
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
 
-        <Popover>
+        <Popover onOpenChange={(open) => setVolumeOpen(open)}>
           <PopoverTrigger
             render={
               <Button
@@ -244,6 +265,7 @@ export function PlayerControls({
           <Select
             value={String(qualityIndex)}
             disabled={disabled || qualities.length <= 1}
+            onOpenChange={(open) => setQualityOpen(open)}
             onValueChange={(value) => {
               if (value != null) onQualityChange(Number(value));
             }}
@@ -280,6 +302,7 @@ export function PlayerControls({
           <Select
             value={String(lineIndex)}
             disabled={disabled || lines.length <= 1}
+            onOpenChange={(open) => setLineOpen(open)}
             onValueChange={(value) => {
               if (value != null) onLineChange(Number(value));
             }}
