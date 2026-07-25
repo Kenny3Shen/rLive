@@ -124,12 +124,28 @@ pub struct SuperChatInfo {
     pub duration: Option<u32>,
 }
 
+/// A validated, ordered fragment of a rich danmaku message.
+///
+/// At present this is emitted only for Bilibili image emotes. Image URLs are
+/// accepted by the decoder only after enforcing HTTPS and a Bilibili-owned CDN
+/// host, so consumers can pass them to their image loader without interpreting
+/// arbitrary protocol content as markup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DanmakuContentSpan {
+    Text { text: String },
+    Image { image_url: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DanmakuEvent {
     pub kind: DanmakuKind,
     pub user: String,
     pub content: String,
     pub color: Option<String>,
+    /// Optional text/image fragments for platform-provided rich danmaku.
+    #[serde(default)]
+    pub spans: Option<Vec<DanmakuContentSpan>>,
     #[serde(default)]
     pub super_chat: Option<SuperChatInfo>,
     pub ts: i64,

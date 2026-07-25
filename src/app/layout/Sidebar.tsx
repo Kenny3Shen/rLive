@@ -35,10 +35,10 @@ function SidebarLink({
       title={label}
       className={({ isActive }) =>
         cn(
-          "group relative flex h-11 w-11 items-center justify-center rounded-2xl transition-all focus-ring",
+          "group relative flex h-10 w-10 items-center justify-center rounded-xl transition-[background-color,color,box-shadow,transform] duration-150 focus-ring",
           isActive
-            ? "bg-sidebar-active text-foreground shadow-inner"
-            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            ? "bg-primary/12 text-primary ring-1 ring-primary/15 shadow-sm shadow-primary/10"
+            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
         )
       }
     >
@@ -46,7 +46,7 @@ function SidebarLink({
         <>
           <Icon
             className={cn(
-              "h-[22px] w-[22px] transition-transform group-hover:scale-105",
+              "size-5 transition-transform duration-150 group-hover:scale-105",
               isActive && "text-primary",
             )}
           />
@@ -89,8 +89,8 @@ function AppearanceToggle() {
 
 export function Sidebar() {
   return (
-    <aside className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar py-3">
-      <nav className="flex flex-1 flex-col items-center gap-1.5" aria-label="主导航">
+    <aside className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar/95 py-3">
+      <nav className="flex flex-1 flex-col items-center gap-2" aria-label="主导航">
         {navItems.map((item) => (
           <SidebarLink key={item.to} {...item} />
         ))}

@@ -20,12 +20,43 @@ use crate::error::{AppError, AppResult};
 
 /// Active proxy endpoint (one per app — single-room desktop client).
 pub struct StreamProxy {
-    inner: Mutex<Option<ProxyInner>>,
+    state: Mutex<ProxyState>,
     /// Last bound port (0 = none). Exposed for diagnostics.
     port: AtomicU16,
 }
 
+/// All lifecycle mutations share one short, synchronous critical section.
+///
+/// Binding a TCP listener is asynchronous, so an active proxy alone is not
+/// enough to describe the lifecycle: while a new listener is being created we
+/// also need to remember which playback session is allowed to install it.
+/// Otherwise two overlapping `start` commands can each bind a listener and
+/// the later assignment can orphan the former task.
+struct ProxyState {
+    inner: Option<ProxyInner>,
+    pending: Option<PendingProxy>,
+    generation: u64,
+}
+
+impl Default for ProxyState {
+    fn default() -> Self {
+        Self {
+            inner: None,
+            pending: None,
+            generation: 0,
+        }
+    }
+}
+
+struct PendingProxy {
+    generation: u64,
+    session_id: String,
+}
+
 struct ProxyInner {
+    /// The frontend playback generation that owns this listener.  A stale
+    /// room cleanup must never be able to stop a newer room's proxy.
+    session_id: String,
     shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
 }
@@ -33,7 +64,7 @@ struct ProxyInner {
 impl Default for StreamProxy {
     fn default() -> Self {
         Self {
-            inner: Mutex::new(None),
+            state: Mutex::new(ProxyState::default()),
             port: AtomicU16::new(0),
         }
     }
@@ -45,35 +76,103 @@ impl StreamProxy {
     }
 
     pub fn stop(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(inner) = guard.take() {
-            let _ = inner.shutdown.send(true);
-            inner.task.abort();
-        }
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        // A global stop is used only during application shutdown.  Invalidate
+        // a listener currently being bound as well as an already-active one.
+        Self::advance_generation(&mut state);
+        state.pending = None;
+        Self::stop_active(&mut state);
         self.port.store(0, Ordering::Release);
     }
 
-    /// Start (or replace) a proxy for `url` with `headers`. Returns local play URL.
-    pub async fn start(&self, url: String, headers: HashMap<String, String>) -> AppResult<String> {
-        self.stop();
-        // Give the aborted accept-loop a moment to drop the previous socket so
-        // re-enter does not race a half-closed listener.
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    /// Stop only when the caller still owns the active listener.
+    ///
+    /// Route unmount cleanup is asynchronous.  Without this ownership check,
+    /// an old room can finish its `stream_proxy_stop` command after a fast
+    /// re-entry has already started a fresh proxy, producing a black player.
+    pub fn stop_for_session(&self, session_id: &str) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let owns_active_proxy = state
+            .inner
+            .as_ref()
+            .is_some_and(|inner| inner.session_id == session_id);
+        let owns_pending_proxy = state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.session_id == session_id);
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
-            AppError::new("stream_proxy_bind", format!("bind localhost failed: {e}")).retryable()
-        })?;
+        if !owns_active_proxy && !owns_pending_proxy {
+            return false;
+        }
+
+        // The matching session may still be awaiting TcpListener::bind.  Its
+        // completion checks this generation before it can install a task.
+        Self::advance_generation(&mut state);
+        state.pending = None;
+        Self::stop_active(&mut state);
+        self.port.store(0, Ordering::Release);
+        true
+    }
+
+    /// Start (or replace) a proxy for `url` with `headers`. Returns local play URL.
+    pub async fn start(
+        &self,
+        url: String,
+        headers: HashMap<String, String>,
+        session_id: String,
+    ) -> AppResult<String> {
+        // Reserve ownership before the first await.  A later start or a stop
+        // can supersede this reservation, in which case this request drops
+        // its uninstalled listener instead of overwriting a newer task.
+        let generation = self.reserve_start(&session_id);
+
+        // Every proxy gets an ephemeral port, so there is no need to wait for
+        // a previous socket's port to become reusable.  Avoiding that sleep is
+        // also important: it used to widen the enter/exit/re-enter race.
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) => {
+                self.clear_pending(generation);
+                return Err(AppError::new(
+                    "stream_proxy_bind",
+                    format!("bind localhost failed: {e}"),
+                )
+                .retryable());
+            }
+        };
         let port = listener
             .local_addr()
-            .map_err(|e| AppError::new("stream_proxy_bind", e.to_string()))?
+            .map_err(|e| {
+                self.clear_pending(generation);
+                AppError::new("stream_proxy_bind", e.to_string())
+            })?
             .port();
         // mpegts.js can issue several localhost requests for one live stream.
         // Build one client per proxy lifetime so those requests share its
         // connection pool instead of rebuilding TLS/pool state per request.
-        let client = build_stream_client()
-            .map_err(|e| AppError::new("stream_proxy_client", format!("client: {e}")))?;
+        let client = match build_stream_client() {
+            Ok(client) => client,
+            Err(e) => {
+                self.clear_pending(generation);
+                return Err(AppError::new("stream_proxy_client", format!("client: {e}")));
+            }
+        };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let is_current = state.pending.as_ref().is_some_and(|pending| {
+            pending.generation == generation && pending.session_id == session_id
+        });
+        if !is_current {
+            // `listener` has never been spawned, so dropping it is enough to
+            // release the socket.  Do not touch a newer reservation/task.
+            return Err(AppError::new(
+                "stream_proxy_superseded",
+                "playback session was replaced before proxy startup finished",
+            )
+            .retryable());
+        }
+
         let task = tauri::async_runtime::spawn(async move {
             run_proxy_loop(
                 listener,
@@ -84,16 +183,131 @@ impl StreamProxy {
             )
             .await;
         });
+        state.pending = None;
+        state.inner = Some(ProxyInner {
+            session_id,
+            shutdown: shutdown_tx,
+            task,
+        });
+        self.port.store(port, Ordering::Release);
+        Ok(format!("http://127.0.0.1:{port}/live"))
+    }
 
+    /// Stop the active task and reserve the next generation for `session_id`.
+    /// This is deliberately synchronous and contains no await points.
+    fn reserve_start(&self, session_id: &str) -> u64 {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let generation = Self::advance_generation(&mut state);
+        state.pending = Some(PendingProxy {
+            generation,
+            session_id: session_id.to_string(),
+        });
+        Self::stop_active(&mut state);
+        self.port.store(0, Ordering::Release);
+        generation
+    }
+
+    fn clear_pending(&self, generation: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.generation == generation)
         {
-            let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-            *guard = Some(ProxyInner {
-                shutdown: shutdown_tx,
+            state.pending = None;
+        }
+    }
+
+    fn advance_generation(state: &mut ProxyState) -> u64 {
+        state.generation = state.generation.wrapping_add(1);
+        // `0` is not special today, but keeping generated values nonzero makes
+        // future diagnostics and optional IDs less surprising after wrapping.
+        if state.generation == 0 {
+            state.generation = 1;
+        }
+        state.generation
+    }
+
+    fn stop_active(state: &mut ProxyState) {
+        if let Some(inner) = state.inner.take() {
+            let _ = inner.shutdown.send(true);
+            inner.task.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProxyInner, StreamProxy};
+    use tokio::sync::watch;
+
+    #[test]
+    fn stale_session_cannot_stop_a_newer_proxy() {
+        let proxy = StreamProxy::new();
+        let (shutdown, _) = watch::channel(false);
+        let task = tauri::async_runtime::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        {
+            let mut state = proxy.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.inner = Some(ProxyInner {
+                session_id: "new-room:2".to_string(),
+                shutdown,
                 task,
             });
         }
-        self.port.store(port, Ordering::Release);
-        Ok(format!("http://127.0.0.1:{port}/live"))
+
+        assert!(!proxy.stop_for_session("old-room:1"));
+        assert!(
+            proxy
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .inner
+                .is_some()
+        );
+        assert!(proxy.stop_for_session("new-room:2"));
+        assert!(
+            proxy
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .inner
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn newer_start_reservation_supersedes_an_uninstalled_proxy() {
+        let proxy = StreamProxy::new();
+        let first = proxy.reserve_start("room-a:1");
+        let second = proxy.reserve_start("room-b:2");
+
+        let state = proxy.state.lock().unwrap_or_else(|p| p.into_inner());
+        assert_ne!(first, second);
+        assert!(
+            state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.generation == second)
+        );
+        assert!(
+            state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.session_id == "room-b:2")
+        );
+    }
+
+    #[test]
+    fn matching_stop_cancels_a_pending_start() {
+        let proxy = StreamProxy::new();
+        let generation = proxy.reserve_start("room-a:1");
+
+        assert!(proxy.stop_for_session("room-a:1"));
+        let state = proxy.state.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(state.pending.is_none());
+        assert_ne!(state.generation, generation);
     }
 }
 

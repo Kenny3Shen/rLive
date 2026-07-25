@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createShieldMatcher, isDanmakuEvent } from "./danmaku/filter";
-import { DanmakuEmojiText } from "./danmaku/emoji";
+import { DanmakuRichText } from "./danmaku/emoji";
 import { batchEvents, type DanmakuBatch } from "./danmaku/batch";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import {
@@ -40,41 +40,35 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
 
   return (
     <article
-      className="overflow-hidden rounded-lg border shadow-sm shadow-black/15"
-      style={{ borderColor: palette.borderColor }}
+      data-slot="super-chat-card"
+      className="overflow-hidden rounded-md bg-card px-2.5 py-1.5 shadow-sm shadow-black/10"
     >
-      <header
-        className="flex min-h-12 items-center justify-between gap-3 px-3 py-2"
-        style={{
-          backgroundColor: palette.headerBackground,
-          color: palette.headerForeground,
-        }}
-      >
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold" title={event.user}>
+      <header className="flex min-w-0 items-center gap-2">
+        <p className="min-w-0 flex-1" title={event.user}>
+          <span
+            className="block max-w-full truncate rounded px-1.5 py-0.5 text-xs leading-4 font-semibold"
+            style={{
+              backgroundColor: palette.senderBackground,
+              color: palette.senderForeground,
+            }}
+          >
             {event.user.trim() || "匿名用户"}
-          </p>
-          {duration && (
-            <p className="mt-0.5 text-[11px]" style={{ color: palette.mutedForeground }}>
-              醒目留言 · {duration}
-            </p>
-          )}
-        </div>
-        <span className="shrink-0 text-lg leading-none font-bold tabular-nums">
+          </span>
+        </p>
+        {duration && <span className="shrink-0 text-[11px] text-muted-foreground">{duration}</span>}
+        <span
+          className="shrink-0 text-sm leading-none font-bold tabular-nums"
+          style={{ color: palette.amountForeground }}
+        >
           {amount ?? "SC"}
         </span>
       </header>
-      <div
-        className="min-h-14 px-3 py-2.5"
-        style={{
-          backgroundColor: palette.bodyBackground,
-          color: palette.bodyForeground,
-        }}
+      <p
+        className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[13px] leading-5"
+        title={event.content}
       >
-        <p className="whitespace-pre-wrap break-words leading-relaxed">
-          <DanmakuEmojiText content={event.content} />
-        </p>
-      </div>
+        <DanmakuRichText content={event.content} spans={event.spans} />
+      </p>
     </article>
   );
 });

@@ -21,14 +21,16 @@ export class BoundedQueue<T> {
     this.head = 0;
   }
 
-  push(value: T): void {
+  /** Adds one item and returns any oldest items evicted by the capacity cap. */
+  push(value: T): T[] {
     this.items.push(value);
-    this.trimToCapacity();
+    return this.trimToCapacity();
   }
 
-  pushAll(values: Iterable<T>): void {
+  /** Adds a batch and returns any oldest items evicted by the capacity cap. */
+  pushAll(values: Iterable<T>): T[] {
     for (const value of values) this.items.push(value);
-    this.trimToCapacity();
+    return this.trimToCapacity();
   }
 
   /** Takes at most `limit` items in FIFO order. */
@@ -47,11 +49,13 @@ export class BoundedQueue<T> {
     return batch;
   }
 
-  private trimToCapacity(): void {
+  private trimToCapacity(): T[] {
     const overflow = this.length - this.capacity;
-    if (overflow <= 0) return;
+    if (overflow <= 0) return [];
+    const discarded = this.items.slice(this.head, this.head + overflow);
     this.head += overflow;
     this.compactIfUseful();
+    return discarded;
   }
 
   /**

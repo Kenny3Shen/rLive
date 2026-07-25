@@ -138,16 +138,16 @@ export function PlayerControls({
   const volumeLabel = "调节音量";
   const muteLabel = isMuted ? "取消静音" : "静音";
   const overlayButtonClass = overlay
-    ? "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70"
+    ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/14 aria-expanded:text-white focus-visible:ring-white/70"
     : undefined;
   const overlaySelectTriggerClass = overlay
-    ? "bg-transparent text-white hover:bg-white/15 hover:text-white data-placeholder:text-white/70 focus-visible:ring-white/70 [&_svg]:text-white/75"
+    ? "rounded-lg border border-white/10 bg-white/[0.055] px-2 text-xs font-medium text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/14 aria-expanded:text-white data-placeholder:text-white/70 focus-visible:ring-white/70 [&_svg]:text-white/75"
     : undefined;
   const overlaySelectContentClass = overlay
-    ? "border-0 bg-black/85 text-white shadow-xl backdrop-blur-md"
+    ? "border border-white/10 bg-black/90 text-white shadow-xl"
     : undefined;
   const overlaySelectItemClass = overlay
-    ? "text-white hover:bg-white/15 hover:text-white data-highlighted:bg-white/15 data-highlighted:text-white data-selected:bg-white/20 data-selected:text-white data-selected:hover:bg-white/20 data-selected:data-highlighted:bg-white/20"
+    ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
     : undefined;
   const overlayInteractionOpen = volumeOpen || qualityOpen || lineOpen;
 
@@ -175,13 +175,13 @@ export function PlayerControls({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-1 px-2 py-1.5",
+        "flex min-w-0 shrink-0 items-center gap-1 px-1.5 py-1",
         overlay
-          ? "border-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent text-white"
+          ? "rounded-xl border border-white/10 bg-black/72 text-white shadow-[0_10px_30px_rgb(0_0_0_/_0.34)]"
           : "border-t border-border bg-card",
       )}
     >
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-0.5">
         {onRefresh && (
           <ControlButton
             label="刷新播放"
@@ -221,7 +221,7 @@ export function PlayerControls({
             align="start"
             className={cn(
               "w-auto p-3",
-              overlay && "border-0 bg-black/85 text-white shadow-xl backdrop-blur-md",
+              overlay && "border border-white/10 bg-black/90 text-white shadow-xl",
             )}
           >
             <Slider
@@ -254,7 +254,7 @@ export function PlayerControls({
       {loadError && (
         <span
           className={cn(
-            "min-w-0 max-w-40 truncate px-1 text-xs",
+            "min-w-0 max-w-28 truncate px-1 text-xs",
             overlay ? "text-red-200" : "text-destructive",
           )}
           title={loadError}
@@ -265,7 +265,7 @@ export function PlayerControls({
 
       <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
 
-      <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto pl-2">
+      <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1">
         {qualities.length > 0 && (
           <Select
             value={String(qualityIndex)}
@@ -277,8 +277,9 @@ export function PlayerControls({
           >
             <SelectTrigger
               size="sm"
-              className={cn("w-36 shrink-0", overlaySelectTriggerClass)}
+              className={cn("w-auto max-w-24 shrink-0", overlaySelectTriggerClass)}
               aria-label="清晰度"
+              title={`清晰度：${qualityLabel(qualityIndex)}`}
             >
               <SelectValue>
                 {(value) => {
@@ -314,8 +315,9 @@ export function PlayerControls({
           >
             <SelectTrigger
               size="sm"
-              className={cn("w-32 shrink-0", overlaySelectTriggerClass)}
+              className={cn("w-auto max-w-24 shrink-0", overlaySelectTriggerClass)}
               aria-label="线路"
+              title={`线路：${lineIndex >= 0 && lines[lineIndex] ? lineLabel(lines[lineIndex].url, lineIndex) : "未选择"}`}
             >
               <SelectValue>
                 {(value) => {
@@ -344,7 +346,11 @@ export function PlayerControls({
           <ControlButton
             label={osdOn ? "关闭弹幕" : "开启弹幕"}
             variant={overlay ? "ghost" : osdOn ? "secondary" : "ghost"}
-            className={cn(overlayButtonClass, "max-[360px]:hidden")}
+            className={cn(
+              overlayButtonClass,
+              overlay && osdOn && "bg-white/12 text-white",
+              "max-[360px]:hidden",
+            )}
             disabled={disabled}
             aria-pressed={osdOn}
             onClick={onToggleOsd}
@@ -355,7 +361,7 @@ export function PlayerControls({
         <ControlButton
           label={sidePanelOpen ? "收起右侧栏" : "展开右侧栏"}
           variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
-          className={overlayButtonClass}
+          className={cn(overlayButtonClass, overlay && sidePanelOpen && "bg-white/12 text-white")}
           disabled={disabled}
           aria-pressed={sidePanelOpen}
           onClick={onToggleSidePanel}
@@ -364,8 +370,9 @@ export function PlayerControls({
         </ControlButton>
         <ControlButton
           label={fullscreen ? "退出全屏" : "全屏"}
-          className={overlayButtonClass}
+          className={cn(overlayButtonClass, overlay && fullscreen && "bg-white/16 text-white")}
           disabled={disabled}
+          aria-pressed={fullscreen}
           onClick={onToggleFullscreen}
         >
           {fullscreen ? <Minimize2 /> : <Maximize2 />}

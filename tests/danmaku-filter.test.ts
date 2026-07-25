@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
-  createRepeatMatcher,
+  aggregatedDanmakuText,
+  createDanmakuContentAggregator,
   createShieldMatcher,
   isDanmakuEvent,
   shouldShowInDanmakuPanel,
@@ -64,11 +65,23 @@ describe("danmaku display filter", () => {
     expect(matcher(event({ content: "正常聊天" }))).toBe(false);
   });
 
-  test("suppresses only consecutive repeated chat messages inside its window", () => {
-    const matcher = createRepeatMatcher(true, 5_000);
-    expect(matcher(event({ ts: 1_000 }))).toBe(false);
-    expect(matcher(event({ ts: 2_000 }))).toBe(true);
-    expect(matcher(event({ ts: 8_100 }))).toBe(false);
-    expect(matcher(event({ kind: "gift", ts: 8_200 }))).toBe(false);
+  test("groups matching chat content across senders inside its five-second window", () => {
+    const aggregator = createDanmakuContentAggregator(true, 5_000);
+    expect(aggregator.aggregate(event({ user: "观众甲", ts: 1_000 }))).toEqual({
+      key: "你好",
+      count: 1,
+    });
+    // The unrelated line must not break a content-specific grouping window.
+    expect(aggregator.aggregate(event({ content: "别的内容", ts: 1_500 })).count).toBe(1);
+    expect(aggregator.aggregate(event({ user: "观众乙", ts: 2_000 }))).toEqual({
+      key: "你好",
+      count: 2,
+    });
+    expect(aggregatedDanmakuText("你好", 2)).toBe("你好 ×2");
+    expect(aggregator.aggregate(event({ ts: 8_100 }))).toEqual({ key: "你好", count: 1 });
+    expect(aggregator.aggregate(event({ kind: "gift", ts: 8_200 }))).toEqual({
+      key: null,
+      count: 1,
+    });
   });
 });

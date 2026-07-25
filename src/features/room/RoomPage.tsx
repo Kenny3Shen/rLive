@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Heart, Share2, Link2 } from "lucide-react";
+import { ChevronLeft, Share2, Link2 } from "lucide-react";
 import { gsap } from "gsap";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -9,17 +9,11 @@ import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/t
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
 import { RoomHostInfo } from "./RoomHostInfo";
+import { roomNavigationReturnsHome, roomSideTabFromNavigationState } from "./roomNavigation";
 import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
-
-function sideTabFromNavigationState(state: unknown): RoomSideTab {
-  if (!state || typeof state !== "object" || !("roomSideTab" in state)) return "chat";
-  const tab = (state as { roomSideTab?: unknown }).roomSideTab;
-  return tab === "chat" || tab === "sc" || tab === "settings" || tab === "follow" ? tab : "chat";
-}
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -32,7 +26,8 @@ export function RoomPage() {
   const qc = useQueryClient();
 
   const [followBusy, setFollowBusy] = useState(false);
-  const requestedSideTab = sideTabFromNavigationState(location.state);
+  const requestedSideTab = roomSideTabFromNavigationState(location.state);
+  const returnToHome = roomNavigationReturnsHome(location.state);
   const [sideTab, setSideTab] = useState<RoomSideTab>(requestedSideTab);
 
   // A regular room navigation starts at chat, while a navigation initiated by
@@ -135,7 +130,7 @@ export function RoomPage() {
   if (detailQuery.isLoading) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载中…" />
+        <RoomTopBar title="加载中…" returnToHome={returnToHome} />
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-8 text-primary" />
         </div>
@@ -146,7 +141,7 @@ export function RoomPage() {
   if (detailQuery.isError) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载失败" />
+        <RoomTopBar title="加载失败" returnToHome={returnToHome} />
         <div className="p-6">
           <ErrorState
             error={detailQuery.error}
@@ -160,11 +155,18 @@ export function RoomPage() {
 
   if (!detail) return null;
 
-  const sideHeader = <RoomHostInfo detail={detail} />;
+  const sideHeader = (
+    <RoomHostInfo
+      detail={detail}
+      isFollowed={isFollowed}
+      followBusy={followBusy}
+      onToggleFollow={() => void toggleFollow()}
+    />
+  );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <RoomTopBar title={detail.title || "直播间"} />
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <RoomTopBar title={detail.title || "直播间"} returnToHome={returnToHome} />
 
       <div className="flex min-h-0 flex-1 flex-col">
         <PlayerPane
@@ -194,52 +196,38 @@ export function RoomPage() {
         />
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-sidebar px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 py-1.5">
         <Button
           variant="ghost"
-          size="icon-sm"
-          disabled={followBusy}
-          onClick={() => void toggleFollow()}
-          aria-label={isFollowed ? "取消关注" : "关注"}
-          aria-pressed={isFollowed}
-          title={isFollowed ? "取消关注" : "关注"}
+          size="sm"
+          title="复制房间页链接"
+          onClick={() => {
+            void navigator.clipboard?.writeText(detail.url || window.location.href);
+          }}
         >
-          <Heart className={cn(isFollowed && "fill-current")} />
+          <Link2 data-icon="inline-start" />
+          复制链接
         </Button>
-
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            title="复制房间页链接"
-            onClick={() => {
-              void navigator.clipboard?.writeText(detail.url || window.location.href);
-            }}
-          >
-            <Link2 data-icon="inline-start" />
-            复制链接
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            title="复制当前播放直链（流地址）"
-            disabled={!playback.playUrl?.url}
-            onClick={() => {
-              if (playback.playUrl?.url) {
-                void navigator.clipboard?.writeText(playback.playUrl.url);
-              }
-            }}
-          >
-            <Share2 data-icon="inline-start" />
-            复制直链
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="复制当前播放直链（流地址）"
+          disabled={!playback.playUrl?.url}
+          onClick={() => {
+            if (playback.playUrl?.url) {
+              void navigator.clipboard?.writeText(playback.playUrl.url);
+            }
+          }}
+        >
+          <Share2 data-icon="inline-start" />
+          复制直链
+        </Button>
       </div>
     </div>
   );
 }
 
-function RoomTopBar({ title }: { title: string }) {
+function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHome?: boolean }) {
   const navigate = useNavigate();
   const topBarRef = useRef<HTMLElement>(null);
   const backButtonRef = useRef<HTMLButtonElement>(null);
@@ -266,6 +254,10 @@ function RoomTopBar({ title }: { title: string }) {
   }, [reduceMotion]);
 
   function goBack() {
+    if (returnToHome) {
+      navigate("/", { replace: true });
+      return;
+    }
     const historyState = window.history.state as { idx?: number } | null;
     if (typeof historyState?.idx === "number" && historyState.idx > 0) {
       navigate(-1);
@@ -287,13 +279,13 @@ function RoomTopBar({ title }: { title: string }) {
   return (
     <header
       ref={topBarRef}
-      className="relative flex h-12 shrink-0 items-center justify-center border-b border-border bg-sidebar px-4"
+      className="relative flex h-11 shrink-0 items-center border-b border-border/80 bg-sidebar/90 px-3"
     >
       <Button
         ref={backButtonRef}
         variant="ghost"
         size="icon-sm"
-        className="absolute left-2"
+        className="rounded-lg hover:bg-muted/70"
         aria-label="返回上一页"
         title="返回上一页"
         onClick={goBack}
@@ -302,7 +294,11 @@ function RoomTopBar({ title }: { title: string }) {
       >
         <ChevronLeft data-icon="inline-start" aria-hidden />
       </Button>
-      <p ref={titleRef} className="max-w-[calc(100%-6rem)] truncate text-sm font-medium">
+      <p
+        ref={titleRef}
+        className="ml-2 min-w-0 max-w-[calc(100%-5rem)] truncate text-sm font-semibold tracking-tight text-foreground/90"
+        title={title}
+      >
         {title}
       </p>
     </header>

@@ -149,22 +149,10 @@ body,
 
 body {
   font-family: var(--font-sans);
-  background-image:
-    radial-gradient(
-      ellipse 80% 50% at 50% -20%,
-      color-mix(in oklch, var(--primary) 12%, transparent),
-      transparent
-    ),
-    radial-gradient(
-      ellipse 60% 40% at 100% 100%,
-      color-mix(in oklch, var(--accent) 8%, transparent),
-      transparent
-    );
-  background-attachment: fixed;
 }
 
-/* The native danmaku window is transparent. The app shell's decorative
-   background gradients must not turn that top-level window into a veil. */
+/* The native danmaku window is transparent. Keep its top-level surface clear
+   rather than inheriting the regular application background. */
 html.overlay-window,
 html.overlay-window body,
 html.overlay-window #root {

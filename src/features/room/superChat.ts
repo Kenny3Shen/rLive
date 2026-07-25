@@ -11,13 +11,11 @@ export type SuperChatLine = {
 };
 
 export type SuperChatPalette = {
-  /** Bilibili supplies a darker title strip and a lighter message body. */
-  headerBackground: string;
-  bodyBackground: string;
-  borderColor: string;
-  headerForeground: string;
-  bodyForeground: string;
-  mutedForeground: string;
+  /** Bilibili's amount-tier colour, displayed on the sender label. */
+  senderBackground: string;
+  senderForeground: string;
+  /** Kept visible as the compact amount text beside the sender label. */
+  amountForeground: string;
 };
 
 const HEX_COLOR = /^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i;
@@ -28,12 +26,9 @@ const SUPER_CHAT_AMOUNT_FORMATTER = new Intl.NumberFormat("zh-CN", {
 
 /** Bilibili's standard blue tier when a platform omits colour metadata. */
 export const DEFAULT_SUPER_CHAT_PALETTE: SuperChatPalette = {
-  headerBackground: "#2A60B2",
-  bodyBackground: "#1D4A92",
-  borderColor: "#1D4A92",
-  headerForeground: "#ffffff",
-  bodyForeground: "#ffffff",
-  mutedForeground: "rgba(255, 255, 255, 0.78)",
+  senderBackground: "#2A60B2",
+  senderForeground: "#ffffff",
+  amountForeground: "#2A60B2",
 };
 
 export function safeSuperChatColor(value: unknown): string | null {
@@ -58,16 +53,11 @@ function colorLuminance(color: string): number {
 export function superChatPalette(info: SuperChatInfo | null | undefined): SuperChatPalette | null {
   const primary = safeSuperChatColor(info?.background_color);
   if (!primary) return null;
-  const secondary = safeSuperChatColor(info?.background_bottom_color) ?? primary;
-  const headerForeground = colorLuminance(primary) > 0.62 ? "#172033" : "#ffffff";
-  const bodyForeground = colorLuminance(secondary) > 0.62 ? "#172033" : "#ffffff";
+  const senderForeground = colorLuminance(primary) > 0.62 ? "#172033" : "#ffffff";
   return {
-    headerBackground: primary,
-    bodyBackground: secondary,
-    borderColor: secondary,
-    headerForeground,
-    bodyForeground,
-    mutedForeground: bodyForeground === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : "#465168",
+    senderBackground: primary,
+    senderForeground,
+    amountForeground: primary,
   };
 }
 

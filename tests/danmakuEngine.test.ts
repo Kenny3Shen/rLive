@@ -1,13 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { createEngine } from "../src/features/room/canvas/danmakuEngine";
 
-function chat(content: string, ts: number) {
+function chat(content: string, ts: number, user = "观众") {
   return {
     kind: "chat" as const,
-    user: "观众",
+    user,
     content,
     color: null,
     ts,
+  };
+}
+
+function richChat(content: string, ts: number, user = "观众") {
+  return {
+    ...chat(content, ts, user),
+    spans: [
+      { type: "text" as const, text: "收到 " },
+      {
+        type: "image" as const,
+        image_url: "https://i0.hdslb.com/bfs/emote/test-question.png",
+      },
+      { type: "text" as const, text: "！" },
+    ],
   };
 }
 
@@ -44,6 +58,101 @@ describe("danmaku engine", () => {
       expect(item.y).toBeGreaterThanOrEqual(0);
       expect(item.y + item.fontSize).toBeLessThanOrEqual(720);
     }
+  });
+
+  test("keeps Bilibili image-emote spans with a textual canvas fallback", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(richChat("[鸣潮·共鸣与群星_问号]", 1));
+
+    const item = engine.visibleItems()[0];
+    expect(item?.text).toBe("[鸣潮·共鸣与群星_问号]");
+    expect(item?.richSpans).toEqual([
+      { type: "text", text: "收到 " },
+      {
+        type: "image",
+        image_url: "https://i0.hdslb.com/bfs/emote/test-question.png",
+      },
+      { type: "text", text: "！" },
+    ]);
+    // A fixed image box is included in the track's collision width before
+    // the browser has loaded the CDN image.
+    expect(item?.width).toBeGreaterThan(18 * 1.35);
+  });
+
+  test("adds repeat counts after a Bilibili image-emote instead of discarding it", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+    });
+    engine.tick(0, 1280, 720);
+    engine.push(richChat("[Ave Mujica_怎么突然]", 1_000, "观众甲"));
+    engine.push(richChat("[Ave Mujica_怎么突然]", 2_000, "观众乙"));
+
+    const item = engine.visibleItems()[0];
+    expect(item?.text).toBe("[Ave Mujica_怎么突然] ×2");
+    expect(item?.richSpans).toEqual([
+      { type: "text", text: "收到 " },
+      {
+        type: "image",
+        image_url: "https://i0.hdslb.com/bfs/emote/test-question.png",
+      },
+      { type: "text", text: "！ ×2" },
+    ]);
+  });
+
+  test("aggregates matching floating chat from different viewers for five seconds", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+    });
+    engine.tick(0, 1280, 720);
+
+    engine.push(chat("加油", 1_000, "观众甲"));
+    engine.push(chat("加油", 2_000, "观众乙"));
+
+    expect(engine.visibleItems()).toHaveLength(1);
+    expect(engine.visibleItems()[0]?.text).toBe("加油 ×2");
+
+    engine.push(chat("加油", 8_100, "观众丙"));
+    expect(engine.visibleItems()).toHaveLength(2);
+    expect(engine.visibleItems()[1]?.text).toBe("加油");
+  });
+
+  test("keeps a growing aggregate clear of its leading lane item", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      lineCount: 1,
+      aggregateRepeats: true,
+    });
+    engine.tick(0, 400, 40);
+    engine.push(chat("一条足够长的前导弹幕", 1));
+    engine.tick(0.2, 400, 40);
+    engine.push(chat("B", 1_000));
+
+    let leading = engine.visibleItems().find((item) => item.text.includes("前导弹幕"));
+    let aggregate = engine.visibleItems().find((item) => item.text === "B");
+    for (let index = 0; index < 20 && (!leading || !aggregate); index += 1) {
+      engine.tick(0.2, 400, 40);
+      leading = engine.visibleItems().find((item) => item.text.includes("前导弹幕"));
+      aggregate = engine.visibleItems().find((item) => item.text === "B");
+    }
+
+    if (!leading || !aggregate) throw new Error("expected both same-lane items to be visible");
+
+    for (let count = 2; count <= 31; count += 1) {
+      engine.push(chat("B", 1_000 + count, `观众 ${count}`));
+    }
+
+    const updated = engine.visibleItems().find((item) => item.text === "B ×31");
+    if (!updated) throw new Error("expected the aggregate count to update in place");
+    expect(updated.x - (leading.x + leading.width)).toBeGreaterThanOrEqual(24);
   });
 
   test("delays a same-lane comment until it can keep a safe tail gap", () => {

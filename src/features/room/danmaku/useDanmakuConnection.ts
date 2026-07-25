@@ -14,8 +14,9 @@ function errMessage(e: unknown): string {
 
 /**
  * Connects the room danmaku WS while mounted; surfaces status text.
- * Reconnect with simple backoff when the connection drops is handled by
- * listening for system disconnect events (optional enhancement).
+ * Site loops own their protocol-specific reconnect behavior (Bilibili
+ * refreshes its token and rotates gateways); this hook only fences route
+ * changes so an old room can never revive after a direct switch.
  */
 export function useDanmakuConnection(opts: {
   siteId: SiteId | undefined;

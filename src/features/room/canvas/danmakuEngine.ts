@@ -1,9 +1,25 @@
-import type { DanmakuEvent } from "@/shared/types/live";
-import { floatingDanmakuText, shouldShowOnCanvas } from "../danmaku/filter";
+import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
+import {
+  createDanmakuContentAggregator,
+  floatingDanmakuText,
+  shouldShowOnCanvas,
+} from "../danmaku/filter";
+import {
+  DANMAKU_IMAGE_HORIZONTAL_GAP,
+  DANMAKU_IMAGE_SCALE,
+  richDanmakuContent,
+  withDanmakuContentSuffix,
+} from "../danmaku/content";
 
 export type TrackItem = {
   id: string;
   text: string;
+  /**
+   * Ordered Bilibili image-emote fragments. The canvas uses `text` until all
+   * images are ready, so a slow or failed CDN image never makes a message
+   * disappear.
+   */
+  richSpans?: readonly DanmakuContentSpan[];
   color: string;
   /** Top-left y position in CSS pixels. */
   y: number;
@@ -71,12 +87,19 @@ export type DanmakuEngineOptions = {
   lineCount?: number;
   /** CSS-compatible canvas font weight. */
   fontWeight?: number;
+  /** Combine matching normal-chat content into one floating item for five seconds. */
+  aggregateRepeats?: boolean;
   /** Test/diagnostic only: collect scheduling counters without production overhead. */
   debug?: boolean;
 };
 
 type PendingScroll = Omit<TrackItem, "kind" | "lane" | "x" | "y"> & {
   queuedAt: number;
+  active: boolean;
+  aggregationKey?: string;
+  aggregationBaseId?: string;
+  aggregationReservedWidth?: number;
+  aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
 };
 
 type EngineTrackItem = TrackItem & {
@@ -84,6 +107,18 @@ type EngineTrackItem = TrackItem & {
   itemIndex: number;
   /** Stale entries in the amortized scroll eviction queue are marked inactive. */
   active: boolean;
+  aggregationKey?: string;
+  aggregationBaseId?: string;
+  aggregationReservedWidth?: number;
+  aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
+};
+
+type AggregationTarget = Pick<TrackItem, "id" | "text" | "richSpans" | "width" | "fontSize"> & {
+  active: boolean;
+  aggregationKey?: string;
+  aggregationBaseId?: string;
+  aggregationReservedWidth?: number;
+  aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
 };
 
 type LaneLayout = {
@@ -99,14 +134,85 @@ const TOP_DURATION_MS = 3000;
 const DEFAULT_SCROLL_AREA_RATIO = 0.9;
 const SPAWN_PADDING = 12;
 const TOP_PADDING = 12;
+// A fixed suffix reservation lets an aggregated item reveal a growing count
+// without moving into either neighbour on its lane. The cap is far beyond a
+// practical five-second burst; pathological counts use the `+` form.
+const MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 
-function measureWidth(text: string, fontSize: number): number {
+function measureTextAdvance(text: string, fontSize: number): number {
   // Approximate CJK-friendly width without a canvas context.
   let width = 0;
   for (const char of text) {
     width += char.charCodeAt(0) > 255 ? fontSize : fontSize * 0.55;
   }
+  return width;
+}
+
+function measureWidth(text: string, fontSize: number): number {
+  const width = measureTextAdvance(text, fontSize);
   return Math.max(fontSize, width + 8);
+}
+
+function measureRichWidth(spans: readonly DanmakuContentSpan[], fontSize: number): number {
+  let width = 8;
+  for (const span of spans) {
+    width +=
+      span.type === "image"
+        ? fontSize * DANMAKU_IMAGE_SCALE + DANMAKU_IMAGE_HORIZONTAL_GAP
+        : measureTextAdvance(span.text, fontSize);
+  }
+  return Math.max(fontSize, width);
+}
+
+function aggregateSuffix(count: number): string {
+  const boundedCount = Math.max(1, Math.floor(count));
+  if (boundedCount === 1) return "";
+  const suffix =
+    boundedCount > MAX_AGGREGATED_DISPLAY_COUNT
+      ? `${MAX_AGGREGATED_DISPLAY_COUNT}+`
+      : `${boundedCount}`;
+  return ` ×${suffix}`;
+}
+
+function aggregatedText(content: string, count: number): string {
+  return `${content}${aggregateSuffix(count)}`;
+}
+
+function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentSpan[] | undefined {
+  const richSpans = richDanmakuContent(event.spans);
+  if (!richSpans) return undefined;
+
+  // `floatingDanmakuText` prepends the SC marker. Mirror that fallback text
+  // in the rich representation so either rendering path communicates the
+  // same message semantics.
+  if (event.kind === "super_chat" && !event.content.trim().startsWith("【SC】")) {
+    return [{ type: "text", text: "【SC】" }, ...richSpans];
+  }
+  return richSpans;
+}
+
+function richSpansWithAggregateSuffix(
+  spans: readonly DanmakuContentSpan[] | undefined,
+  count: number,
+): readonly DanmakuContentSpan[] | undefined {
+  if (!spans) return undefined;
+  const suffix = aggregateSuffix(count);
+  return suffix ? withDanmakuContentSuffix(spans, suffix) : spans;
+}
+
+function measureTrackWidth(
+  text: string,
+  richSpans: readonly DanmakuContentSpan[] | undefined,
+  fontSize: number,
+): number {
+  const textWidth = measureWidth(text, fontSize);
+  if (!richSpans) return textWidth;
+
+  // The canvas draws the original text while an image-emote CDN request is
+  // pending or has failed. A raw Bilibili token such as `[xxx_问号]` can be
+  // much wider than its final 1.35em image, so reserve both forms to avoid a
+  // temporary collision with another item in the same lane.
+  return Math.max(textWidth, measureRichWidth(richSpans, fontSize));
 }
 
 function speedPx(logical: number, fontSize: number): number {
@@ -210,6 +316,9 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let scrollArea = clampArea(opts.area);
   let maxLineCount = clampLineCount(opts.lineCount);
   let currentFontWeight = clampFontWeight(opts.fontWeight);
+  let aggregateRepeats = opts.aggregateRepeats === true;
+  let contentAggregator = createDanmakuContentAggregator(aggregateRepeats);
+  const aggregationTargets = new Map<string, AggregationTarget>();
   let items: EngineTrackItem[] = [];
   let pending: PendingScroll[] = [];
   // Keep a head cursor instead of shifting the array for every scheduled
@@ -259,6 +368,44 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     pendingRetryOnNextTick = false;
   }
 
+  function forgetAggregationTarget(target: AggregationTarget): void {
+    target.active = false;
+    const key = target.aggregationKey;
+    if (!key || aggregationTargets.get(key) !== target) return;
+    aggregationTargets.delete(key);
+    contentAggregator.forget(key);
+  }
+
+  function replaceAggregationTarget(previous: PendingScroll, next: EngineTrackItem): void {
+    previous.active = false;
+    const key = previous.aggregationKey;
+    if (!key || aggregationTargets.get(key) !== previous) return;
+    next.aggregationKey = key;
+    next.aggregationBaseId = previous.aggregationBaseId;
+    next.aggregationBaseRichSpans = previous.aggregationBaseRichSpans;
+    aggregationTargets.set(key, next);
+  }
+
+  function updateAggregatedTarget(target: AggregationTarget, content: string, count: number): void {
+    const nextText = aggregatedText(content, count);
+    // Once a pathological burst reaches the capped display label, further
+    // count changes have no visual effect and should not churn raster keys.
+    if (target.text === nextText) return;
+    const nextRichSpans = richSpansWithAggregateSuffix(target.aggregationBaseRichSpans, count);
+    const nextWidth = measureTrackWidth(nextText, nextRichSpans, target.fontSize);
+    // The initial item reserves room for the largest display suffix. Keeping
+    // its bounds fixed avoids widening left into the leading comment or right
+    // into a later comment on the same lane.
+    target.text = nextText;
+    target.richSpans = nextRichSpans;
+    target.width = Math.max(nextWidth, target.aggregationReservedWidth ?? nextWidth);
+    const baseId = target.aggregationBaseId ?? target.id;
+    target.aggregationBaseId = baseId;
+    // Canvas raster entries are keyed by id, so a bounded count update needs
+    // a new key to redraw the existing floating item with its new suffix.
+    target.id = `${baseId}-x${count}`;
+  }
+
   function compactPending(): void {
     if (pendingHead === 0) return;
     if (pendingHead >= pending.length) {
@@ -276,6 +423,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   function discardExpiredPending(now: number): boolean {
     const initialHead = pendingHead;
     while (pendingHead < pending.length && now - pending[pendingHead].queuedAt > MAX_QUEUE_AGE_MS) {
+      forgetAggregationTarget(pending[pendingHead]);
       pendingHead += 1;
     }
     if (pendingHead === initialHead) return false;
@@ -470,7 +618,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       items[index] = lastItem;
       lastItem.itemIndex = index;
     }
-    removed.active = false;
+    forgetAggregationTarget(removed);
     if (removed.kind === "scroll") {
       removeFromLane(removed);
       resetPendingScheduling();
@@ -537,6 +685,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       const item: EngineTrackItem = {
         id: candidate.id,
         text: candidate.text,
+        richSpans: candidate.richSpans,
         color: candidate.color,
         width: candidate.width,
         speed: candidate.speed,
@@ -547,8 +696,13 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         y: laneY(lane, currentLayout),
         itemIndex: -1,
         active: true,
+        aggregationKey: candidate.aggregationKey,
+        aggregationBaseId: candidate.aggregationBaseId,
+        aggregationReservedWidth: candidate.aggregationReservedWidth,
+        aggregationBaseRichSpans: candidate.aggregationBaseRichSpans,
       };
       appendItem(item);
+      replaceAggregationTarget(candidate, item);
     }
     compactPending();
   }
@@ -566,14 +720,41 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     // Simple Live canvas style: content-only floating text; skip system.
     if (!alreadyVisible && !shouldShowOnCanvas(ev)) return false;
 
-    const text = floatingDanmakuText(ev);
-    if (!text) return false;
+    const baseText = floatingDanmakuText(ev);
+    if (!baseText) return false;
+
+    let aggregation = contentAggregator.aggregate(ev);
+    const existingAggregationTarget = aggregation.key
+      ? aggregationTargets.get(aggregation.key)
+      : undefined;
+    if (existingAggregationTarget?.active && aggregation.count > 1) {
+      updateAggregatedTarget(existingAggregationTarget, baseText, aggregation.count);
+      resetPendingScheduling();
+      return true;
+    }
+
+    // A target can age out of the bounded render/pending queues before the
+    // content-key cache does. Start a visible count from one in that case.
+    if (aggregation.key && aggregation.count > 1) {
+      contentAggregator.forget(aggregation.key);
+      aggregation = contentAggregator.aggregate(ev);
+    }
 
     const isTop = ev.kind === "super_chat";
+    const text = aggregatedText(baseText, aggregation.count);
     const itemFontSize = fontSize;
     const id = `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`;
     const color = ev.color || (isTop ? "#ffb020" : "#ffffff");
-    const width = measureWidth(text, itemFontSize);
+    const baseRichSpans = floatingRichSpans(ev);
+    const richSpans = richSpansWithAggregateSuffix(baseRichSpans, aggregation.count);
+    const aggregationReservedWidth = aggregation.key
+      ? measureTrackWidth(
+          aggregatedText(baseText, MAX_AGGREGATED_DISPLAY_COUNT + 1),
+          richSpansWithAggregateSuffix(baseRichSpans, MAX_AGGREGATED_DISPLAY_COUNT + 1),
+          itemFontSize,
+        )
+      : undefined;
+    const width = aggregationReservedWidth ?? measureTrackWidth(text, richSpans, itemFontSize);
     const speed = speedPx(logicalSpeed, itemFontSize);
 
     if (isTop) {
@@ -581,6 +762,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       appendItem({
         id,
         text,
+        richSpans,
         color,
         width,
         speed,
@@ -595,11 +777,28 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       return true;
     }
 
-    pending.push({ id, text, color, width, speed, fontSize: itemFontSize, queuedAt: Date.now() });
+    const pendingItem: PendingScroll = {
+      id,
+      text,
+      richSpans,
+      color,
+      width,
+      speed,
+      fontSize: itemFontSize,
+      queuedAt: Date.now(),
+      active: true,
+      aggregationKey: aggregation.key ?? undefined,
+      aggregationBaseId: aggregation.key ? id : undefined,
+      aggregationReservedWidth,
+      aggregationBaseRichSpans: aggregation.key ? baseRichSpans : undefined,
+    };
+    if (aggregation.key) aggregationTargets.set(aggregation.key, pendingItem);
+    pending.push(pendingItem);
     if (pendingCount() > MAX_PENDING_ITEMS) {
       // Drop the oldest waiting comment under sustained overload. The head
       // changed, so defer one fresh collision check to the next render tick
       // instead of repeating it for every event in this burst.
+      forgetAggregationTarget(pending[pendingHead]);
       pendingHead += 1;
       compactPending();
       pendingBlocked = true;
@@ -661,7 +860,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     for (const item of items) {
       if (item.kind === "top") {
         if (item.expireAt && item.expireAt <= now) {
-          item.active = false;
+          forgetAggregationTarget(item);
           noteRemovedItem(item);
           continue;
         }
@@ -673,7 +872,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
 
       item.x -= item.speed * elapsedSeconds;
       if (item.x + item.width < -20) {
-        item.active = false;
+        forgetAggregationTarget(item);
         removeFromLane(item);
         noteRemovedItem(item);
         removedScrollItem = true;
@@ -699,6 +898,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       const nextFontSize = clampFontSize(nextOpts.fontSize);
       const nextScrollArea = clampArea(nextOpts.area);
       const nextLineCount = clampLineCount(nextOpts.lineCount);
+      const nextAggregateRepeats = nextOpts.aggregateRepeats ?? aggregateRepeats;
       if (
         nextFontSize !== fontSize ||
         nextScrollArea !== scrollArea ||
@@ -717,6 +917,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       scrollArea = nextScrollArea;
       maxLineCount = nextLineCount;
       currentFontWeight = clampFontWeight(nextOpts.fontWeight);
+      if (nextAggregateRepeats !== aggregateRepeats) {
+        aggregateRepeats = nextAggregateRepeats;
+        contentAggregator = createDanmakuContentAggregator(aggregateRepeats);
+        aggregationTargets.clear();
+      }
     },
     opacity: () => currentOpacity,
     fontWeight: () => currentFontWeight,
