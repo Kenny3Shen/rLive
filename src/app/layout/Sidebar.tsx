@@ -90,13 +90,6 @@ function AppearanceToggle() {
 export function Sidebar() {
   return (
     <aside className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar py-3">
-      <div
-        className="mb-4 flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/90 to-accent/80 text-sm font-bold text-white shadow-lg shadow-primary/20"
-        title="rLive"
-      >
-        r
-      </div>
-
       <nav className="flex flex-1 flex-col items-center gap-1.5" aria-label="主导航">
         {navItems.map((item) => (
           <SidebarLink key={item.to} {...item} />

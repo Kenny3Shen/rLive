@@ -31,6 +31,8 @@ describe("danmaku display filter", () => {
     expect(shouldShowInDanmakuPanel(joinedAsChat)).toBe(false);
     expect(shouldShowOnCanvas(joinedAsChat)).toBe(false);
     expect(shouldShowInDanmakuPanel(event({ content: "小 明 进 入 了 直 播 间" }))).toBe(false);
+    expect(shouldShowInDanmakuPanel(event({ content: "小明进入直播间了" }))).toBe(false);
+    expect(shouldShowOnCanvas(event({ content: "小 明 进 入 直 播 间 了" }))).toBe(false);
     expect(shouldShowInDanmakuPanel(event({ content: "刚进入直播间就收到弹幕" }))).toBe(true);
     expect(shouldShowInDanmakuPanel(event({ content: "我要进房间" }))).toBe(true);
   });

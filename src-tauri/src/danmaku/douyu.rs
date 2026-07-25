@@ -204,11 +204,43 @@ fn decode_value(value: &str) -> String {
 /// the chat UI and used to cross the IPC boundary as text such as
 /// "某某进入直播间".  Keep this check on the borrowed STT field, before escape
 /// decoding or allocating a [`DanmakuEvent`].
-fn is_room_enter_noise(content: &str) -> bool {
-    let content = content.trim();
-    ["进入直播间", "进入了直播间", "进入直播间了"]
+const ROOM_ENTER_SUFFIXES: [&str; 3] = ["进入直播间", "进入了直播间", "进入直播间了"];
+
+fn has_room_enter_suffix(content: &str) -> bool {
+    // The normal packet path avoids any allocation. `进入直播间了` ends in
+    // `了`, so it must not be skipped by the usual final-`间` shortcut.
+    if !matches!(content.chars().next_back(), Some('间' | '了')) {
+        return false;
+    }
+    ROOM_ENTER_SUFFIXES
         .iter()
         .any(|suffix| content.ends_with(suffix))
+}
+
+fn ends_with_room_enter_suffix_ignoring_whitespace(content: &str, suffix: &str) -> bool {
+    let mut content_chars = content
+        .chars()
+        .rev()
+        .filter(|character| !character.is_whitespace());
+    suffix
+        .chars()
+        .rev()
+        .all(|expected| content_chars.next() == Some(expected))
+}
+
+fn is_room_enter_noise(content: &str) -> bool {
+    let content = content.trim();
+    if has_room_enter_suffix(content) {
+        return true;
+    }
+    if !matches!(content.chars().next_back(), Some('间' | '了'))
+        || !content.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    ROOM_ENTER_SUFFIXES
+        .iter()
+        .any(|suffix| ends_with_room_enter_suffix_ignoring_whitespace(content, suffix))
 }
 
 fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
@@ -541,6 +573,8 @@ mod tests {
             "热心观众 进入直播间",
             "热心观众进入了直播间",
             "热心观众进入直播间了",
+            "热 心 观 众 进 入 了 直 播 间",
+            "热 心 观 众 进 入 直 播 间 了",
         ] {
             let stt = format!("type@=chatmsg/nn@=热心观众/txt@={text}/dms@=1/");
             assert!(

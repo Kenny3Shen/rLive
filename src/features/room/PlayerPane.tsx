@@ -13,6 +13,7 @@ import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
 import { SuperChatPanel } from "./SuperChatPanel";
+import { BilibiliDanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useWebPlayer } from "./player/useWebPlayer";
@@ -25,6 +26,7 @@ export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
+type OverlayInteractionSource = "controls" | "composer";
 
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -101,11 +103,20 @@ export function PlayerPane({
   const [osdOn, setOsdOn] = useState(true);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
+  const [scUnreadCount, setScUnreadCount] = useState(0);
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
+  // Keep the bottom chrome present for keyboard users.  A pointer may leave
+  // the control bar while an input retains focus, so pointer leave alone must
+  // never restart the idle fade timer.
+  const controlsFocusWithinRef = useRef(false);
   const lastControlsActivityAtRef = useRef(Date.now());
   const overlayInteractionOpenRef = useRef(false);
+  const overlayInteractionSourcesRef = useRef<Record<OverlayInteractionSource, boolean>>({
+    controls: false,
+    composer: false,
+  });
 
   const player = useWebPlayer({
     playUrl,
@@ -149,7 +160,11 @@ export function PlayerPane({
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsHideTimer();
-    if (!canAutoHideControls || overlayInteractionOpenRef.current) {
+    if (
+      !canAutoHideControls ||
+      overlayInteractionOpenRef.current ||
+      controlsFocusWithinRef.current
+    ) {
       setControlVisibility(true);
       return;
     }
@@ -166,7 +181,11 @@ export function PlayerPane({
       }
 
       controlsHideTimerRef.current = null;
-      if (!canAutoHideControls || overlayInteractionOpenRef.current) {
+      if (
+        !canAutoHideControls ||
+        overlayInteractionOpenRef.current ||
+        controlsFocusWithinRef.current
+      ) {
         setControlVisibility(true);
         return;
       }
@@ -198,12 +217,39 @@ export function PlayerPane({
   }, [markControlsActivity, scheduleControlsHide]);
 
   const handleOverlayInteractionChange = useCallback(
-    (open: boolean) => {
-      overlayInteractionOpenRef.current = open;
-      setOverlayInteractionOpen(open);
-      if (open) holdControlsVisible();
+    (source: OverlayInteractionSource, open: boolean) => {
+      overlayInteractionSourcesRef.current[source] = open;
+      const hasOpenOverlay =
+        overlayInteractionSourcesRef.current.controls ||
+        overlayInteractionSourcesRef.current.composer;
+      overlayInteractionOpenRef.current = hasOpenOverlay;
+      setOverlayInteractionOpen(hasOpenOverlay);
+      if (hasOpenOverlay) holdControlsVisible();
     },
     [holdControlsVisible],
+  );
+
+  const handleControlsOverlayInteractionChange = useCallback(
+    (open: boolean) => handleOverlayInteractionChange("controls", open),
+    [handleOverlayInteractionChange],
+  );
+
+  const handleComposerOverlayInteractionChange = useCallback(
+    (open: boolean) => handleOverlayInteractionChange("composer", open),
+    [handleOverlayInteractionChange],
+  );
+
+  const handleScUnreadCountChange = useCallback((count: number) => {
+    setScUnreadCount(count);
+  }, []);
+
+  const handleSideTabValueChange = useCallback(
+    (value: string) => {
+      const nextTab = value as RoomSideTab;
+      if (nextTab === "sc") setScUnreadCount(0);
+      onSideTabChange?.(nextTab);
+    },
+    [onSideTabChange],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -285,6 +331,17 @@ export function PlayerPane({
   ]);
 
   useEffect(() => {
+    // A direct room switch unmounts popovers, but reset the source fence as a
+    // fallback so a closing portal can never pin controls for the next room.
+    overlayInteractionSourcesRef.current.controls = false;
+    overlayInteractionSourcesRef.current.composer = false;
+    overlayInteractionOpenRef.current = false;
+    controlsFocusWithinRef.current = false;
+    setOverlayInteractionOpen(false);
+    setScUnreadCount(0);
+  }, [roomSessionKey]);
+
+  useEffect(() => {
     if (overlayInteractionOpen) return;
     // Base UI returns focus from a portalled Select/Popover to its trigger.
     // Its exit transition is 100ms, so schedule after focus restoration rather
@@ -300,7 +357,7 @@ export function PlayerPane({
   }, [revealControls]);
 
   return (
-    <div className="flex h-full min-h-0 w-full">
+    <div className="relative flex h-full min-h-0 w-full">
       <div className="relative flex min-w-0 flex-1 flex-col bg-black">
         <div className="flex min-h-0 flex-1 flex-col">
           <div
@@ -376,12 +433,19 @@ export function PlayerPane({
                 holdControlsVisible();
               }}
               onPointerLeave={resumeControlsAutoHide}
-              onFocusCapture={holdControlsVisible}
+              onFocusCapture={() => {
+                controlsFocusWithinRef.current = true;
+                holdControlsVisible();
+              }}
               onBlurCapture={(event) => {
                 const nextFocused = event.relatedTarget;
-                if (!(nextFocused instanceof Node) || !event.currentTarget.contains(nextFocused)) {
-                  resumeControlsAutoHide();
+                if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
+                  controlsFocusWithinRef.current = true;
+                  holdControlsVisible();
+                  return;
                 }
+                controlsFocusWithinRef.current = false;
+                resumeControlsAutoHide();
               }}
             >
               <PlayerControls
@@ -398,7 +462,15 @@ export function PlayerPane({
                 loadError={loadError}
                 disabled={transportDisabled}
                 overlay
-                onOverlayInteractionChange={handleOverlayInteractionChange}
+                centerSlot={
+                  <BilibiliDanmakuComposer
+                    siteId={siteId}
+                    roomId={roomId}
+                    overlay
+                    onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                  />
+                }
+                onOverlayInteractionChange={handleControlsOverlayInteractionChange}
                 refreshDisabled={refreshDisabled}
                 onRefresh={onRefresh}
                 onTogglePause={() => player.togglePause()}
@@ -427,7 +499,7 @@ export function PlayerPane({
         <Tabs
           {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
           className="flex min-h-0 flex-1 flex-col gap-0"
-          onValueChange={(value) => onSideTabChange?.(value as RoomSideTab)}
+          onValueChange={handleSideTabValueChange}
         >
           <TabsList
             variant="line"
@@ -436,11 +508,27 @@ export function PlayerPane({
             <TabsTrigger value="chat" className="px-3 text-sm">
               弹幕
             </TabsTrigger>
-            <TabsTrigger value="sc" className="text-sm">
+            <TabsTrigger
+              value="sc"
+              className="text-sm"
+              aria-label={
+                scUnreadCount > 0
+                  ? `SC，${scUnreadCount > 99 ? "99+" : scUnreadCount} 条新醒目留言`
+                  : "SC"
+              }
+            >
               SC
+              {scUnreadCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="rounded-full bg-destructive px-1.5 py-px text-[10px] leading-4 font-semibold text-destructive-foreground tabular-nums"
+                >
+                  {scUnreadCount > 99 ? "99+" : scUnreadCount}
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="follow" className="text-sm">
-              关注列表
+              关注
             </TabsTrigger>
             <TabsTrigger value="settings" className="text-sm">
               设置
@@ -456,8 +544,6 @@ export function PlayerPane({
               active={danmakuActive}
               visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
               statusText={danmakuStatusText}
-              siteId={siteId}
-              roomId={roomId}
               className="h-full"
             />
           </TabsContent>
@@ -466,6 +552,7 @@ export function PlayerPane({
               key={`sc:${roomSessionKey ?? "room"}`}
               active={danmakuActive}
               visible={sidePanelOpen && (sideTab === undefined || sideTab === "sc")}
+              onUnreadCountChange={handleScUnreadCountChange}
               className="h-full"
             />
           </TabsContent>

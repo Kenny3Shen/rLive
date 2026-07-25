@@ -142,6 +142,14 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+
+      // A native window resize can temporarily throttle animation frames while
+      // the browser is repeatedly rebuilding the canvas bitmap. Do not charge
+      // that layout pause to the next danmaku tick; the engine remaps the
+      // existing comments to the new width and they resume at that same visual
+      // progress rather than jumping off-screen.
+      last = performance.now();
+      lastFrameAt = last;
       requestFrame();
     };
 

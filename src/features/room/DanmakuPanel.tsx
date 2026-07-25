@@ -3,19 +3,23 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
 import {
   createRepeatMatcher,
   createShieldMatcher,
   shouldShowInDanmakuPanel,
 } from "./danmaku/filter";
+import { DanmakuEmojiText } from "./danmaku/emoji";
 import { cn } from "@/lib/utils";
-import type { SiteId } from "@/shared/types/live";
-import { BilibiliDanmakuComposer } from "./BilibiliDanmakuComposer";
 
 const MAX = 400;
 const MAX_BUFFERED = 200;
 const MAX_PER_FRAME = 50;
+const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
+
+function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
+  const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+  if (viewport) viewport.scrollTop = viewport.scrollHeight;
+}
 
 type DanmakuLine = {
   id: number;
@@ -30,7 +34,11 @@ type DanmakuLine = {
 const DanmakuRow = memo(function DanmakuRow({ line }: { line: DanmakuLine }) {
   const event = line.event;
   if (event.kind === "system") {
-    return <div className="px-1.5 py-0.5 text-xs text-muted-foreground">{event.content}</div>;
+    return (
+      <div className="px-1.5 py-0.5 text-xs text-muted-foreground">
+        <DanmakuEmojiText content={event.content} />
+      </div>
+    );
   }
 
   return (
@@ -39,19 +47,9 @@ const DanmakuRow = memo(function DanmakuRow({ line }: { line: DanmakuLine }) {
         className="mr-1.5 font-medium text-primary"
         style={event.color ? { color: event.color } : undefined}
       >
-        {event.user}
+        {event.user.trim() || "匿名"}：
       </span>
-      {event.kind === "super_chat" && (
-        <Badge variant="secondary" className="mr-1 align-middle">
-          SC
-        </Badge>
-      )}
-      {event.kind === "gift" && (
-        <Badge variant="outline" className="mr-1 align-middle">
-          礼物
-        </Badge>
-      )}
-      <span className="text-foreground/90">{event.content}</span>
+      <DanmakuEmojiText content={event.content} className="text-foreground/90" />
     </div>
   );
 });
@@ -62,20 +60,11 @@ type DanmakuPanelProps = {
   visible?: boolean;
   className?: string;
   statusText?: string | null;
-  siteId?: SiteId;
-  roomId?: string;
 };
 
-export function DanmakuPanel({
-  active,
-  visible = true,
-  className,
-  statusText,
-  siteId,
-  roomId,
-}: DanmakuPanelProps) {
+export function DanmakuPanel({ active, visible = true, className, statusText }: DanmakuPanelProps) {
   const [items, setItems] = useState<DanmakuLine[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRootRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
   const pendingRef = useRef<DanmakuLine[]>([]);
   const flushFrameRef = useRef<number | null>(null);
@@ -193,13 +182,49 @@ export function DanmakuPanel({
     };
   }, [active]);
 
+  useLayoutEffect(() => {
+    if (!visible || !autoScroll.current) return;
+
+    // Base UI owns a nested viewport, so scrolling a sentinel with
+    // `scrollIntoView` can select an outer ancestor instead of the chat
+    // viewport. Set the actual viewport position directly and repeat on the
+    // next frame after its scrollbar has measured the new batch.
+    const scrollToBottom = () => {
+      if (!autoScroll.current) return;
+      scrollDanmakuViewportToBottom(scrollRootRef.current);
+    };
+
+    scrollToBottom();
+    const frame = window.requestAnimationFrame(scrollToBottom);
+    return () => window.cancelAnimationFrame(frame);
+  }, [items, visible]);
+
   useEffect(() => {
-    if (autoScroll.current) {
-      // One non-animated scroll per rendered batch avoids stacking native
-      // smooth-scroll animations when a room is busy.
-      bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
-    }
-  }, [items]);
+    if (!visible || typeof ResizeObserver === "undefined") return;
+    const root = scrollRootRef.current;
+    const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+    if (!viewport) return;
+
+    // A tab switch or a side-panel/window resize can change the viewport
+    // after React's message-batch layout effect has run. Keep a live feed
+    // pinned in that case too; manual upward scrolling disables this path.
+    let frame: number | null = null;
+    const scrollIfPinned = () => {
+      if (!autoScroll.current || frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        if (autoScroll.current) scrollDanmakuViewportToBottom(root);
+      });
+    };
+    const observer = new ResizeObserver(scrollIfPinned);
+    observer.observe(viewport);
+    scrollIfPinned();
+
+    return () => {
+      observer.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [visible]);
 
   function onViewportScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.target;
@@ -210,30 +235,32 @@ export function DanmakuPanel({
 
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
-      <ScrollArea className="min-h-0 flex-1" onScrollCapture={onViewportScroll}>
-        <div
-          className="flex flex-col gap-0.5 px-2.5 py-2"
-          style={{
-            fontSize: Math.max(12, (fontSize || 16) - 4),
-            fontWeight,
-          }}
-        >
-          {statusText && <p className="px-1.5 py-1 text-xs text-muted-foreground">{statusText}</p>}
-          {!active && !statusText && (
-            <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-              进入直播间后显示弹幕
-            </p>
-          )}
-          {active && items.length === 0 && !statusText && (
-            <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
-          )}
-          {items.map((line) => (
-            <DanmakuRow key={line.id} line={line} />
-          ))}
-          <div ref={bottomRef} />
-        </div>
-      </ScrollArea>
-      <BilibiliDanmakuComposer siteId={siteId} roomId={roomId} />
+      <div ref={scrollRootRef} className="min-h-0 flex-1">
+        <ScrollArea className="h-full min-h-0" onScrollCapture={onViewportScroll}>
+          <div
+            className="flex flex-col gap-0.5 px-2.5 py-2"
+            style={{
+              fontSize: Math.max(12, (fontSize || 16) - 4),
+              fontWeight,
+            }}
+          >
+            {statusText && (
+              <p className="px-1.5 py-1 text-xs text-muted-foreground">{statusText}</p>
+            )}
+            {!active && !statusText && (
+              <p className="px-1 py-6 text-center text-xs text-muted-foreground">
+                进入直播间后显示弹幕
+              </p>
+            )}
+            {active && items.length === 0 && !statusText && (
+              <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
+            )}
+            {items.map((line) => (
+              <DanmakuRow key={line.id} line={line} />
+            ))}
+          </div>
+        </ScrollArea>
+      </div>
     </div>
   );
 }

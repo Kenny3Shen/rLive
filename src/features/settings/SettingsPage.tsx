@@ -66,6 +66,7 @@ function CookieField({
   description: string;
   placeholder: string;
 }) {
+  const markBilibiliCookieChanged = useSettingsStore((s) => s.markBilibiliCookieChanged);
   const [cookie, setCookie] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +107,9 @@ function CookieField({
         });
         setStatus("Cookie 已保存");
       }
+      // A room composer can remain mounted while the account UI updates its
+      // credentials. Notify it only after the backend mutation succeeds.
+      if (siteId === "bilibili") markBilibiliCookieChanged();
     } catch (e) {
       const message =
         typeof e === "object" && e && "message" in e

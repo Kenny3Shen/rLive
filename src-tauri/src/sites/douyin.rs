@@ -270,6 +270,11 @@ impl DouyinSite {
 
 #[async_trait::async_trait]
 impl LiveSite for DouyinSite {
+    fn danmaku_session_cookie(&self) -> AppResult<Option<String>> {
+        let cookie = self.cookie()?;
+        Ok((!cookie.is_empty()).then_some(cookie))
+    }
+
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
         self.ensure_web_session().await?;
         let html = self.get_text(LIVE_ROOT, &[], LIVE_ROOT, false).await?;
@@ -1194,6 +1199,23 @@ mod tests {
         assert!(merged.contains("sessionid=old"));
         assert!(merged.contains("ttwid=new"));
         assert!(merged.contains("msToken=token"));
+    }
+
+    #[test]
+    fn danmaku_session_cookie_keeps_transient_web_session_in_memory() {
+        let site = DouyinSite::new(http_client::default_client(), "sessionid=saved".into());
+        let mut headers = HeaderMap::new();
+        headers.append(
+            SET_COOKIE,
+            "ttwid=transient; Path=/; HttpOnly".parse().unwrap(),
+        );
+        headers.append(SET_COOKIE, "msToken=ephemeral; Path=/".parse().unwrap());
+        site.remember_response_cookies(&headers).unwrap();
+
+        let cookie = site.danmaku_session_cookie().unwrap().unwrap();
+        assert!(cookie.contains("sessionid=saved"));
+        assert!(cookie.contains("ttwid=transient"));
+        assert!(cookie.contains("msToken=ephemeral"));
     }
 
     #[test]

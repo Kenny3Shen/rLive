@@ -21,4 +21,16 @@ pub trait LiveSite: Send + Sync {
         quality: &LivePlayQuality,
     ) -> AppResult<Vec<PlayUrl>>;
     async fn get_live_status(&self, room_id: &str) -> AppResult<bool>;
+
+    /// Returns an in-memory session Cookie suitable for a site-owned danmaku
+    /// connection, when the site has one.
+    ///
+    /// Most platforms do not need this. Douyin may obtain transient browser
+    /// cookies such as `ttwid` while resolving the room, and its configured
+    /// signer must receive that same session to create a compatible WSS URL.
+    /// Callers must keep this value inside the backend; it is never part of a
+    /// serialised room detail or persisted account record.
+    fn danmaku_session_cookie(&self) -> AppResult<Option<String>> {
+        Ok(None)
+    }
 }

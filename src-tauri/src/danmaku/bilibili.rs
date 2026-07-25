@@ -143,7 +143,10 @@ pub async fn send_chat(
     }
 }
 
-fn normalize_outgoing_message(value: &str) -> AppResult<String> {
+/// Validate a plain, user-composed chat message before it consumes a manual
+/// send cooldown. The sender repeats this validation as a defence-in-depth
+/// check for any future caller outside the Tauri command.
+pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     let message = value.trim();
     if message.is_empty() {
         return Err(

@@ -152,6 +152,28 @@ function remapLane(lane: number, previousCount: number, nextCount: number): numb
   return Math.round(position * (nextCount - 1));
 }
 
+/** Keep a scrolling item at the same point along its right-to-left journey. */
+function remapScrollXForViewportWidth(
+  item: TrackItem,
+  previousWidth: number,
+  nextWidth: number,
+): number {
+  const oldStart = previousWidth + SPAWN_PADDING;
+  const newStart = nextWidth + SPAWN_PADDING;
+  const exit = -item.width - 20;
+  const oldDistance = oldStart - exit;
+  const progress = Math.max(0, Math.min(1, (oldStart - item.x) / oldDistance));
+  const mapped = newStart - progress * (newStart - exit);
+  const wasVisible = item.x < previousWidth && item.x + item.width > 0;
+
+  // A message that was already on screen must stay on screen after the
+  // viewport narrows. Its normal trajectory can otherwise leave it just to
+  // the right of the smaller canvas for a few frames, which reads as a
+  // premature disappearance during a window drag.
+  if (!wasVisible) return mapped;
+  return Math.min(nextWidth - 0.5, Math.max(-item.width + 0.5, mapped));
+}
+
 export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let fontSize = clampFontSize(opts.fontSize);
   let logicalSpeed = opts.speed;
@@ -372,7 +394,16 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   }
 
   function tick(dt: number, width: number, height: number): void {
-    if (Number.isFinite(width) && width > 0) viewportWidth = width;
+    if (Number.isFinite(width) && width > 0 && viewportWidth !== width) {
+      const previousWidth = viewportWidth;
+      viewportWidth = width;
+      if (previousWidth > 0) {
+        for (const item of items) {
+          if (item.kind !== "scroll") continue;
+          item.x = remapScrollXForViewportWidth(item, previousWidth, width);
+        }
+      }
+    }
     if (Number.isFinite(height) && height > 0 && viewportHeight !== height) {
       viewportHeight = height;
       layoutDirty = true;

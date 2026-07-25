@@ -20,7 +20,7 @@ rLive issues a JSON POST:
 }
 ```
 
-`roomId` is the internal room ID and `liveId` is the web room id. Empty Cookie is still represented by an empty string. Do not log this body, Cookie, a signed WSS URL, or signing parameters.
+`roomId` is the internal room ID and `liveId` is the web room id. `cookie` is the effective per-connection session: the saved account Cookie plus any transient `ttwid` / `msToken` obtained while entering the room. It may therefore contain an anonymous transient session even without a saved login Cookie; transient values stay in backend memory and are never written back to SQLite. Do not log this body, Cookie, a signed WSS URL, or signing parameters.
 
 ## Response
 

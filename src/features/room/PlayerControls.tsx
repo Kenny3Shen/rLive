@@ -41,6 +41,8 @@ export type PlayerControlsProps = {
   disabled?: boolean;
   /** Use when controls are rendered over the bottom edge of the video. */
   overlay?: boolean;
+  /** Optional compact content centered between transport and room controls. */
+  centerSlot?: ReactNode;
   /**
    * The menu content is portalled outside the player stage. Tell the stage
    * when one is open so its idle timer cannot fade out beneath a menu.
@@ -115,6 +117,7 @@ export function PlayerControls({
   fullscreen = false,
   disabled = false,
   overlay = false,
+  centerSlot,
   onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
@@ -182,7 +185,7 @@ export function PlayerControls({
         {onRefresh && (
           <ControlButton
             label="刷新播放"
-            className={overlayButtonClass}
+            className={cn(overlayButtonClass, "max-sm:hidden")}
             disabled={refreshDisabled}
             onClick={onRefresh}
           >
@@ -207,7 +210,7 @@ export function PlayerControls({
                 disabled={disabled}
                 aria-label={volumeLabel}
                 title={volumeLabel}
-                className={overlayButtonClass}
+                className={cn(overlayButtonClass, "max-sm:hidden")}
               />
             }
           >
@@ -259,6 +262,8 @@ export function PlayerControls({
           {loadError}
         </span>
       )}
+
+      <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
 
       <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto pl-2">
         {qualities.length > 0 && (
@@ -339,7 +344,7 @@ export function PlayerControls({
           <ControlButton
             label={osdOn ? "关闭弹幕" : "开启弹幕"}
             variant={overlay ? "ghost" : osdOn ? "secondary" : "ghost"}
-            className={overlayButtonClass}
+            className={cn(overlayButtonClass, "max-[360px]:hidden")}
             disabled={disabled}
             aria-pressed={osdOn}
             onClick={onToggleOsd}

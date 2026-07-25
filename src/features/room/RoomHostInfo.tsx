@@ -2,7 +2,7 @@ import { Flame } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import type { LiveRoomDetail } from "@/shared/types/live";
-import { formatOnline, normalizeImageUrl, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
+import { formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type RoomHostInfoProps = {
   detail: LiveRoomDetail;
@@ -14,7 +14,6 @@ export function RoomHostInfo({ detail }: RoomHostInfoProps) {
   const platformName = SITE_LABELS[detail.site_id] ?? detail.site_id;
   const onlineLabel =
     Number.isFinite(detail.online) && detail.online >= 0 ? formatOnline(detail.online) : "—";
-  const platformAccent = SITE_ACCENT[detail.site_id] ?? "var(--primary)";
   const avatarLabel = `${userName} 的头像`;
 
   return (
@@ -23,14 +22,7 @@ export function RoomHostInfo({ detail }: RoomHostInfoProps) {
       className="shrink-0 border-b border-border px-2.5 py-2"
       aria-label={`主播信息：${userName}，${platformName}，当前热度 ${onlineLabel}`}
     >
-      <div className="relative overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
-        {/* A narrow station-color cue keeps the source legible without turning the panel into badges. */}
-        <span
-          aria-hidden="true"
-          className="absolute inset-y-0 left-0 w-0.5"
-          style={{ backgroundColor: platformAccent }}
-        />
-
+      <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="relative shrink-0">
             <Avatar size="lg" className="size-11 ring-1 ring-border/80" aria-label={avatarLabel}>

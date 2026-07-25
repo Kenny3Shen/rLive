@@ -68,7 +68,13 @@ export function FollowPanel({ className }: { className?: string }) {
   function switchRoom(user: FollowUser) {
     const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
     if (isCurrentRoom) return;
-    navigate(`/room/${user.site_id}/${encodeURIComponent(user.room_id)}`);
+    // Shell deliberately keys room routes to restart the page transition and
+    // dispose the previous player. Carry the tab intent through that remount
+    // so the user can pick several followed rooms in succession without
+    // reopening this tab after every switch.
+    navigate(`/room/${user.site_id}/${encodeURIComponent(user.room_id)}`, {
+      state: { roomSideTab: "follow" },
+    });
   }
 
   return (
@@ -76,15 +82,8 @@ export function FollowPanel({ className }: { className?: string }) {
       className={cn("relative flex min-h-0 flex-1 flex-col", className)}
       aria-label="关注直播间"
     >
-      <div className="flex shrink-0 items-center gap-2 px-3 py-2">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">关注列表</p>
-          <p className="text-xs text-muted-foreground">选择直播间即可直接切换</p>
-        </div>
-      </div>
-
       {followsQuery.isLoading && (
-        <div className="flex flex-col gap-2 px-2 pb-14">
+        <div className="flex flex-col gap-2 px-2 pt-2 pb-14">
           {Array.from({ length: 5 }).map((_, index) => (
             <Skeleton key={index} className="h-14 w-full" />
           ))}
@@ -109,7 +108,7 @@ export function FollowPanel({ className }: { className?: string }) {
       )}
 
       {follows.length > 0 && (
-        <ScrollArea className="min-h-0 flex-1 px-2 pb-14">
+        <ScrollArea className="min-h-0 flex-1 px-2 pt-2 pb-14">
           <ul className="flex flex-col gap-1">
             {follows.map((user) => {
               const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
