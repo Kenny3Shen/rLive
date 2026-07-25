@@ -36,8 +36,8 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 | Area | Role |
 |------|------|
 | Sidebar | Home, follows, categories, history, settings |
-| Header | Site switcher, search (user / room ID / title); platform changes use a short accent-colour content transition; the Follows page uses the same centred selector with an extra All platforms option |
-| Room | Icon-only Back control, centred room title, player, host information, and side tabs in the order Danmaku / SC / Follow list / Settings |
+| Header | Site switcher, search (user / room ID / title); platform changes use a short content transition; the Follows page uses the same centred selector with an extra All platforms option |
+| Room | Icon-only Back control, room title, player, host information, and side tabs in the order Danmaku / SC / Follows / Settings |
 
 ## 4. Watching
 
@@ -59,7 +59,7 @@ Streams are fetched via a localhost proxy so the web player can attach with corr
 
 Entering a Bilibili, Huya, Douyu, or properly configured Douyin room connects that site's danmaku WebSocket. Chat appears in the side list; optional floating tracks overlay the video.
 
-- **Bilibili:** paste a browser cookie under Settings → 哔哩哔哩 Cookie.  
+- **Bilibili:** paste a browser cookie under Settings → 哔哩哔哩 Cookie. After an unexpected disconnect, rLive rotates gateways, refreshes the short-lived token, and reconnects; progress appears as a system message.
 - **Huya / Douyu:** usually no cookie. Douyu uses system TLS (`native-tls`) because its servers only offer RSA-AES-GCM suites.
 - **Douyin:** configure a full signing endpoint under Settings → Account for live chat. rLive supplies the transient session established while entering the room; a complete saved Cookie is still required for search and can improve room/signing reliability. The service returns a temporary WSS URL; use only an endpoint you operate or explicitly trust.
 - **Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection.
@@ -81,7 +81,7 @@ Open any room and select the **Settings** tab on the right; the tabs are ordered
 | Opacity | Floating text alpha (live preview on drag) |
 | Font size / weight | Canvas + list base size; weight improves readability over bright video |
 | Speed | Scroll speed (logical 1–10) |
-| Repeat filter | Hides consecutive identical chat lines from one user within 5 seconds |
+| Same-content grouping | Combines matching normal-chat content from every sender for 5 seconds and shows a count, such as `加油 ×100` |
 | Gift filter | Hides gift notices from Douyu and similar sites without affecting SC |
 | Shield words | One word per line; filtering applies while typing, shared by chat, SC, and canvas, and auto-saves |
 
@@ -89,11 +89,13 @@ Every display control applies live: sliders preview while dragged and persist on
 
 ### Super Chat (SC)
 
-Room side panel tab **SC** shows only Bilibili `super_chat` events. When the platform provides them, cards show the amount, currency, highlight duration, and safely validated colour gradient. Shield words apply to SC too; floating tracks emphasize it as a top-style message.
+Room side panel tab **SC** shows only Bilibili `super_chat` events. It uses compact neutral cards with no full-card border, colour treatment, or left stripe; the safely validated Bilibili amount-tier colour appears on the sender-label background, while amount, currency, and highlight duration remain visible. Shield words apply to SC too; floating tracks emphasize it as a top-style message.
+
+Bilibili image emotes in normal chat are delivered with the message itself. rLive loads only validated Bilibili CDN image URLs and preserves the original text/image order in the side list and floating tracks. Floating danmaku retains the original text as a fallback while a CDN image is loading or unavailable.
 
 ## 6. Follows & history
 
-Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follow list** tab places live rooms first and switches directly to a selected followed room without leaving the room page; it also provides a floating refresh button. Visited rooms are stored in history.
+Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follows** tab places live rooms first and switches directly to a selected followed room without leaving the room page; its Back action then returns home rather than a previous room. It also provides a floating refresh button. Visited rooms are stored in history.
 
 ## 7. Settings summary
 

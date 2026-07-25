@@ -316,6 +316,7 @@ fn emit_system(events: &DanmakuEventSender, content: &str) {
             user: "system".into(),
             content: content.into(),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },
@@ -650,6 +651,7 @@ fn event_if_content(
         },
         content,
         color,
+        spans: None,
         super_chat: None,
         ts: chrono::Utc::now().timestamp_millis(),
     }))

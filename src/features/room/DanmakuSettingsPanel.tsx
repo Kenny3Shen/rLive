@@ -293,8 +293,8 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
             </Field>
             <Field orientation="horizontal">
               <FieldContent>
-                <FieldTitle id="room-danmaku-repeat-filter">重复过滤</FieldTitle>
-                <FieldDescription>隐藏短时间内同一用户重复发送的聊天消息。</FieldDescription>
+                <FieldTitle id="room-danmaku-repeat-filter">相同内容合并</FieldTitle>
+                <FieldDescription>5 秒内合并所有用户的相同聊天内容，并显示次数。</FieldDescription>
               </FieldContent>
               <Switch
                 aria-labelledby="room-danmaku-repeat-filter"

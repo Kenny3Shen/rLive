@@ -73,11 +73,21 @@ export type SuperChatInfo = {
   duration?: number | null;
 };
 
+/**
+ * A safe, ordered rich-content fragment supplied by a live-chat protocol.
+ * Bilibili uses this for image emotes embedded in an otherwise text message.
+ */
+export type DanmakuContentSpan =
+  | { type: "text"; text: string }
+  | { type: "image"; image_url: string };
+
 export type DanmakuEvent = {
   kind: DanmakuKind;
   user: string;
   content: string;
   color: string | null;
+  /** Optional ordered text/image fragments for platform-hosted image emotes. */
+  spans?: DanmakuContentSpan[] | null;
   super_chat?: SuperChatInfo | null;
   ts: number;
 };

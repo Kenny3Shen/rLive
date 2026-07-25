@@ -7,6 +7,7 @@ import likeSrc from "@/assets/danmaku-emoji/like.svg";
 import partySrc from "@/assets/danmaku-emoji/party.svg";
 import smileSrc from "@/assets/danmaku-emoji/smile.svg";
 import wowSrc from "@/assets/danmaku-emoji/wow.svg";
+import { DANMAKU_IMAGE_SCALE, richDanmakuContent } from "./content";
 
 export type DanmakuEmoji = {
   /** Stable local identifier; never sent to an upstream service. */
@@ -107,6 +108,55 @@ export function DanmakuEmojiText({
               "mx-px inline-block size-[1.25em] select-none align-[-0.22em] object-contain",
               emojiClassName,
             )}
+          />
+        ),
+      )}
+    </span>
+  );
+}
+
+/**
+ * Renders protocol-provided Bilibili image emotes when the backend supplied
+ * validated rich spans. Plain text continues through the local emoji renderer
+ * so every supported site keeps the same lightweight fallback behaviour.
+ */
+export function DanmakuRichText({
+  content,
+  spans,
+  className,
+  emojiClassName,
+}: {
+  content: string;
+  spans?: unknown;
+  className?: string;
+  emojiClassName?: string;
+}) {
+  const richContent = richDanmakuContent(spans);
+  if (!richContent) {
+    return (
+      <DanmakuEmojiText content={content} className={className} emojiClassName={emojiClassName} />
+    );
+  }
+
+  return (
+    <span className={className}>
+      {richContent.map((span, index) =>
+        span.type === "text" ? (
+          <DanmakuEmojiText key={`text-${index}`} content={span.text} />
+        ) : (
+          <img
+            key={`image-${span.image_url}-${index}`}
+            src={span.image_url}
+            alt="表情"
+            draggable={false}
+            className={cn(
+              "mx-px inline-block select-none align-[-0.25em] object-contain",
+              emojiClassName,
+            )}
+            style={{
+              width: `${DANMAKU_IMAGE_SCALE}em`,
+              height: `${DANMAKU_IMAGE_SCALE}em`,
+            }}
           />
         ),
       )}

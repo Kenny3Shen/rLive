@@ -189,6 +189,7 @@ fn spawn_loop<F, Fut>(
                     user: "system".into(),
                     content: format!("弹幕连接断开: {e}"),
                     color: None,
+                    spans: None,
                     super_chat: None,
                     ts: chrono::Utc::now().timestamp_millis(),
                 },
@@ -359,6 +360,7 @@ mod tests {
             user: "viewer".into(),
             content: "hello".into(),
             color: None,
+            spans: None,
             super_chat: None,
             ts: 1,
         }];

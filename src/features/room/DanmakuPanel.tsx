@@ -4,11 +4,11 @@ import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  createRepeatMatcher,
+  createDanmakuContentAggregator,
   createShieldMatcher,
   shouldShowInDanmakuPanel,
 } from "./danmaku/filter";
-import { DanmakuEmojiText } from "./danmaku/emoji";
+import { DanmakuRichText } from "./danmaku/emoji";
 import { batchEvents, type DanmakuBatch } from "./danmaku/batch";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,8 @@ function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
 type DanmakuLine = {
   id: number;
   event: DanmakuEvent;
+  repeatCount: number;
+  aggregationKey?: string;
 };
 
 /**
@@ -42,12 +44,17 @@ type DanmakuLine = {
  * row therefore avoids reconciling up to 300 already-rendered messages for
  * each animation-frame flush in a busy room.
  */
-const DanmakuRow = memo(function DanmakuRow({ line }: { line: DanmakuLine }) {
-  const event = line.event;
+const DanmakuRow = memo(function DanmakuRow({
+  event,
+  repeatCount,
+}: {
+  event: DanmakuEvent;
+  repeatCount: number;
+}) {
   if (event.kind === "system") {
     return (
       <div className="px-1.5 py-0.5 text-xs text-muted-foreground">
-        <DanmakuEmojiText content={event.content} />
+        <DanmakuRichText content={event.content} spans={event.spans} />
       </div>
     );
   }
@@ -60,7 +67,15 @@ const DanmakuRow = memo(function DanmakuRow({ line }: { line: DanmakuLine }) {
       >
         {event.user.trim() || "匿名"}：
       </span>
-      <DanmakuEmojiText content={event.content} className="text-foreground/90" />
+      <DanmakuRichText content={event.content} spans={event.spans} className="text-foreground/90" />
+      {repeatCount > 1 && (
+        <span
+          className="font-medium text-primary tabular-nums"
+          title={`5 秒内合并 ${repeatCount} 条相同内容`}
+        >
+          {` ×${repeatCount}`}
+        </span>
+      )}
     </div>
   );
 });
@@ -91,15 +106,27 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
-  const repeatMatcher = useMemo(() => createRepeatMatcher(filterRepeats), [filterRepeats]);
-  const matchersRef = useRef({ shieldMatcher, repeatMatcher, filterGifts });
+  const contentAggregator = useMemo(
+    () => createDanmakuContentAggregator(filterRepeats),
+    [filterRepeats],
+  );
+  const matchersRef = useRef({ shieldMatcher, contentAggregator, filterGifts });
+  const aggregationLinesRef = useRef(new Map<string, DanmakuLine>());
+  const aggregationDirtyRef = useRef(false);
 
   // The event subscription stays stable while a setting changes. Besides
   // avoiding a short listener gap, this preserves the bounded hidden-tab
-  // queue and the repeat filter's history.
+  // queue and the content aggregation window.
   useLayoutEffect(() => {
-    matchersRef.current = { shieldMatcher, repeatMatcher, filterGifts };
-  }, [shieldMatcher, repeatMatcher, filterGifts]);
+    matchersRef.current = { shieldMatcher, contentAggregator, filterGifts };
+  }, [shieldMatcher, contentAggregator, filterGifts]);
+
+  useLayoutEffect(() => {
+    // A toggle starts a fresh grouping window. Existing rows remain visible,
+    // but no stale count can be carried into the new setting state.
+    aggregationLinesRef.current.clear();
+    aggregationDirtyRef.current = false;
+  }, [contentAggregator]);
 
   useLayoutEffect(() => {
     activeRef.current = active;
@@ -115,6 +142,13 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
 
   useEffect(() => {
     const pending = pendingRef.current;
+    const aggregationLines = aggregationLinesRef.current;
+    const forgetLine = (line: DanmakuLine) => {
+      const key = line.aggregationKey;
+      if (!key || aggregationLinesRef.current.get(key) !== line) return;
+      aggregationLinesRef.current.delete(key);
+      matchersRef.current.contentAggregator.forget(key);
+    };
     const cancelFlush = () => {
       if (flushFrameRef.current !== null) {
         cancelAnimationFrame(flushFrameRef.current);
@@ -131,6 +165,9 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       pending.clear();
       nextIdRef.current = 0;
       lastFlushAtRef.current = 0;
+      aggregationLinesRef.current.clear();
+      aggregationDirtyRef.current = false;
+      matchersRef.current.contentAggregator.clear();
       autoScroll.current = true;
       setItems([]);
       return;
@@ -146,12 +183,20 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       // chat traffic cannot reconcile hundreds of invisible React nodes.
       if (!activeRef.current || !visibleRef.current) return;
       const batch = pending.take(MAX_PER_FLUSH);
-      if (batch.length === 0) return;
+      const hasAggregationUpdate = aggregationDirtyRef.current;
+      if (batch.length === 0 && !hasAggregationUpdate) return;
+      aggregationDirtyRef.current = false;
       lastFlushAtRef.current = performance.now();
 
       setItems((previous) => {
-        const next = previous.concat(batch);
-        return next.length > MAX ? next.slice(next.length - MAX) : next;
+        // A count-only aggregation update mutates its retained line in place.
+        // Return a fresh array so React schedules the memoized row whose
+        // primitive `repeatCount` prop changed, even when no new row arrived.
+        const next = batch.length > 0 ? previous.concat(batch) : previous.slice();
+        if (next.length <= MAX) return next;
+        const discarded = next.slice(0, next.length - MAX);
+        for (const line of discarded) forgetLine(line);
+        return next.slice(next.length - MAX);
       });
 
       // A burst should not make every animation frame reconcile hundreds of
@@ -164,7 +209,7 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       if (
         !activeRef.current ||
         !visibleRef.current ||
-        pending.length === 0 ||
+        (pending.length === 0 && !aggregationDirtyRef.current) ||
         flushFrameRef.current !== null ||
         flushTimerRef.current !== null
       ) {
@@ -187,19 +232,42 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       if (cancelled || !activeRef.current) return;
       const {
         shieldMatcher: currentShieldMatcher,
-        repeatMatcher: currentRepeatMatcher,
+        contentAggregator: currentContentAggregator,
         filterGifts: currentFilterGifts,
       } = matchersRef.current;
       const accepted: DanmakuLine[] = [];
       for (const message of batchEvents(event.payload)) {
         if (!shouldShowInDanmakuPanel(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
-        if (currentRepeatMatcher(message)) continue;
-        accepted.push({ id: ++nextIdRef.current, event: message });
-      }
-      if (accepted.length === 0) return;
+        let aggregation = currentContentAggregator.aggregate(message);
+        const existing = aggregation.key
+          ? aggregationLinesRef.current.get(aggregation.key)
+          : undefined;
+        if (existing && aggregation.count > 1) {
+          existing.repeatCount = aggregation.count;
+          aggregationDirtyRef.current = true;
+          continue;
+        }
 
-      pending.pushAll(accepted);
+        // A bounded queue/list may have discarded the previous visible line.
+        // Restart its counter instead of silently updating an unreachable row.
+        if (aggregation.key && aggregation.count > 1) {
+          currentContentAggregator.forget(aggregation.key);
+          aggregation = currentContentAggregator.aggregate(message);
+        }
+
+        const line: DanmakuLine = {
+          id: ++nextIdRef.current,
+          event: message,
+          repeatCount: aggregation.count,
+          aggregationKey: aggregation.key ?? undefined,
+        };
+        if (aggregation.key) aggregationLinesRef.current.set(aggregation.key, line);
+        accepted.push(line);
+      }
+
+      for (const discarded of pending.pushAll(accepted)) forgetLine(discarded);
+      if (accepted.length === 0 && !aggregationDirtyRef.current) return;
       scheduleFlush();
     })
       .then((fn) => {
@@ -217,6 +285,9 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       cancelFlush();
       if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
       pending.clear();
+      aggregationLines.clear();
+      aggregationDirtyRef.current = false;
+      matchersRef.current.contentAggregator.clear();
     };
   }, [active]);
 
@@ -294,7 +365,7 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
             )}
             {items.map((line) => (
-              <DanmakuRow key={line.id} line={line} />
+              <DanmakuRow key={line.id} event={line.event} repeatCount={line.repeatCount} />
             ))}
           </div>
         </ScrollArea>

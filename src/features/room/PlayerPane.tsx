@@ -357,7 +357,7 @@ export function PlayerPane({
   }, [revealControls]);
 
   return (
-    <div className="relative flex h-full min-h-0 w-full">
+    <div className="relative flex h-full min-h-0 w-full bg-black">
       <div className="relative flex min-w-0 flex-1 flex-col bg-black">
         <div className="flex min-h-0 flex-1 flex-col">
           <div
@@ -422,10 +422,13 @@ export function PlayerPane({
               aria-hidden={!controlsVisible}
               inert={!controlsVisible}
               className={cn(
-                "absolute inset-x-0 bottom-0 z-30 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                // The player is busy with MSE + canvas danmaku. Keep this one
+                // transient layer composited: no layout property, blur, or
+                // gradient is animated when the controls auto-hide.
+                "absolute inset-x-0 bottom-0 z-30 px-3 pb-3 transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-200 motion-reduce:transition-none",
                 controlsVisible
-                  ? "translate-y-0 opacity-100"
-                  : "pointer-events-none translate-y-2 opacity-0",
+                  ? "translate-y-0 opacity-100 ease-out"
+                  : "pointer-events-none translate-y-2 opacity-0 ease-in",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={(event) => {
@@ -490,7 +493,7 @@ export function PlayerPane({
       <aside
         aria-hidden={!sidePanelOpen}
         className={cn(
-          "flex w-[300px] shrink-0 flex-col border-l border-border bg-sidebar lg:w-[320px]",
+          "flex w-[300px] shrink-0 flex-col border-l border-border/80 bg-sidebar lg:w-[320px]",
           "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-56 max-md:w-full max-md:border-t max-md:border-l-0",
           !sidePanelOpen && "hidden",
         )}
@@ -503,7 +506,7 @@ export function PlayerPane({
         >
           <TabsList
             variant="line"
-            className="h-12! w-full justify-start rounded-none border-b border-border bg-transparent px-2"
+            className="h-11! w-full justify-start rounded-none border-b border-border/80 bg-transparent px-2"
           >
             <TabsTrigger value="chat" className="px-3 text-sm">
               弹幕

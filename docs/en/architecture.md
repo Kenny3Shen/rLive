@@ -24,7 +24,7 @@ Rust LiveSite + danmaku + proxy + DB
 3. Frontend plays proxied FLV via MSE.  
 4. Leave room: stop player + proxy.
 
-The room player renders controls as a transparent bottom overlay. They auto-hide after playback is idle and reappear on pointer, click, or keyboard activity.
+Each player session owns a unique proxy session ID, so a delayed cleanup from a room that was just left cannot stop the newer proxy after a rapid re-entry. The room player renders controls as a transparent bottom overlay. They auto-hide after playback is idle and reappear on pointer, click, or keyboard activity.
 
 ## 3. Sites
 
@@ -52,17 +52,19 @@ Huya HTML stripping must not slice mid UTF-8 character (`panic = "abort"` in rel
 | `danmaku/huya.rs` | TARS join; chat uri 1400 |
 | `danmaku/tars.rs` | Minimal TARS |
 
-`DanmakuEvent` has optional `SuperChatInfo`. The Bilibili `SUPER_CHAT_MESSAGE` parser validates and forwards its ID, price, currency, primary/secondary card colours, and duration.
+`DanmakuEvent` has optional `SuperChatInfo` and ordered `DanmakuContentSpan` fragments. The Bilibili `SUPER_CHAT_MESSAGE` parser validates and forwards its ID, price, currency, duration, and colour metadata. The frontend keeps SC as a compact neutral card without a full-card border, colour treatment, or left strip; the validated Bilibili amount-tier colour is applied to the sender-label background (and amount emphasis). Normal Bilibili chat reads image-emote metadata from `info[0][13].url` and `info[0][15].extra.emots`; only HTTPS Bilibili CDN URLs reach the frontend and text/image order is retained.
+
+Bilibili reconnects after close, read failure, rejected authentication, or inbound-idle timeout. Retries rotate gateways, refresh short-lived token/host information, and report a reconnecting system message rather than leaving the room permanently disconnected.
 
 `danmaku/bilibili.rs` also owns the opt-in single-message Bilibili sender. The command rechecks the opt-in, `SESSDATA` / `bili_jct`, room/text validation, and a conservative per-room cooldown; it has no retry or optimistic echo. The MCP bridge is debug-only so release automation cannot bypass the UI's second confirmation.
 
 Frontend consumes Tauri event `danmaku` through a high-throughput path:
 
 - `useDanmakuConnection` connects Bilibili, Huya, Douyu, and Douyin; frontend and backend epochs prevent stale connect/disconnect work from taking over after a direct room switch. A missing Douyin signing endpoint produces clear setup guidance; Kuaishou remains unsupported.
-- `DanmakuPanel` and `SuperChatPanel` batch incoming events per animation frame with bounded queues; chat hides join notices, optional gifts, and consecutive repeats, while SC has bounded deduplication. Bilibili rooms additionally mount a Cookie/opt-in-aware composer.
-- `CanvasDanmaku` and `danmakuEngine` allocate tracks from top to bottom, stop requesting frames while no floating item is active, and resume on a message, setting change, or resize; area, line cap, and font weight apply live.
-- `DanmakuSettingsPanel` provides Simple Live-style room-side controls; `FollowPanel` ranks live follows first and changes rooms through the current route.
-- `superChat.ts` formats safe amounts/durations and only passes validated hexadecimal colours to inline styles; `danmaku/filter` precompiles shield/repeat matchers.
+- `DanmakuPanel` and `SuperChatPanel` batch incoming events per animation frame with bounded queues; chat hides join notices and optional gifts, and can group matching normal-chat content from every sender for five seconds, while SC has bounded deduplication. Bilibili rooms additionally mount a Cookie/opt-in-aware composer.
+- `CanvasDanmaku` and `danmakuEngine` allocate tracks from top to bottom, apply the same five-second content grouping to floating normal chat, render ordered Bilibili image emotes through bounded image/bitmap caches with a text fallback while loading, stop requesting frames while no floating item is active, and resume on a message, setting change, or resize; area, line cap, and font weight apply live.
+- `DanmakuSettingsPanel` provides Simple Live-style room-side controls; `FollowPanel` ranks live follows first and replaces the room route, so its Back action returns home instead of a previous live room.
+- `superChat.ts` formats safe amounts/durations and only passes validated hexadecimal colours to the sender label and amount emphasis, never a full SC card; `danmaku/filter` precompiles shield matchers and maintains bounded content aggregators.
 
 Persisted: `danmaku_area`, `danmaku_line_count`, `danmaku_opacity`, `danmaku_font_size`, `danmaku_font_weight`, `danmaku_speed`, `danmaku_filter_repeats`, `danmaku_filter_gifts`, `danmaku_shield_words`, `bilibili_danmaku_send_enabled`, `douyin_danmaku_sign_service`. Cookies stay in the separate local `cookies` table. Profile export also omits `bilibili_danmaku_send_enabled` and `douyin_danmaku_sign_service`; import preserves their local values so an untrusted profile cannot enable sending or choose a Cookie-receiving signer.
 

@@ -205,6 +205,7 @@ fn decode_message_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
         },
         content,
         color: color_hex(font_color),
+        spans: None,
         super_chat: None,
         ts: chrono::Utc::now().timestamp_millis(),
     });
@@ -228,6 +229,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
                 args.ayyuid, args.top_sid
             ),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },
@@ -262,6 +264,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
             user: "system".into(),
             content: "弹幕服务器连接成功".into(),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },
@@ -308,6 +311,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
             user: "system".into(),
             content: format!("弹幕连接结束（已收 {msg_count} 条）"),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },

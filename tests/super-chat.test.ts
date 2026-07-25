@@ -41,11 +41,22 @@ describe("Super Chat presentation", () => {
     expect(safeSuperChatColor("#abc")).toBe("#abc");
     expect(superChatPalette({ background_color: "url(bad)" })).toBeNull();
     expect(superChatPalette(superChat().super_chat)).toMatchObject({
-      headerBackground: "#2A60B2",
-      bodyBackground: "#1D4A92",
-      headerForeground: "#ffffff",
-      bodyForeground: "#ffffff",
+      senderBackground: "#2A60B2",
+      senderForeground: "#ffffff",
+      amountForeground: "#2A60B2",
     });
+    expect(superChatPalette({ background_color: "#ffcc33" })).toEqual({
+      senderBackground: "#ffcc33",
+      senderForeground: "#172033",
+      amountForeground: "#ffcc33",
+    });
+
+    // The Bilibili protocol supplies a tier-dependent background colour. The
+    // compact card applies it only to the sender label, so amount tiers remain
+    // distinguishable without a coloured strip down the card edge.
+    expect(superChatPalette({ background_color: "#2a60b2" })?.senderBackground).not.toBe(
+      superChatPalette({ background_color: "#e09443" })?.senderBackground,
+    );
   });
 });
 

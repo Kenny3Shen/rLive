@@ -1,22 +1,31 @@
+use std::collections::HashMap;
 use std::io::Read;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde_json::Value;
 use tokio::time;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
-use crate::models::live::{DanmakuEvent, DanmakuKind, SuperChatInfo};
+use crate::models::live::{DanmakuContentSpan, DanmakuEvent, DanmakuKind, SuperChatInfo};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BilibiliDanmakuArgs {
     pub room_id: i64,
     pub token: String,
     pub buvid: String,
     pub server_host: String,
+    /// All websocket hosts returned by `getDanmuInfo`, primary first.  Bilibili
+    /// regularly retires individual edge nodes, so keeping the whole list is
+    /// important when a long-lived room connection needs to recover.
+    pub server_hosts: Vec<String>,
+    /// The session used to obtain the original danmaku token.  It never leaves
+    /// the backend; reconnects use it only to refresh the ephemeral token and
+    /// host list from Bilibili.
+    session_cookie: String,
     /// Viewer mid (DedeUserID). Use 0 when anonymous.
     pub uid: i64,
 }
@@ -39,6 +48,10 @@ fn cookie_value(cookie: &str, key: &str) -> Option<String> {
 
 const SEND_CHAT_URL: &str = "https://api.live.bilibili.com/msg/send";
 const MAX_OUTGOING_CHAT_CHARS: usize = 80;
+const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 
 /// Whether a saved browser Cookie contains the two values required for the
 /// Bilibili live chat write endpoint.  This intentionally exposes only a
@@ -193,6 +206,11 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<BilibiliDanmakuArg
         .and_then(|v| v.as_str())
         .unwrap_or("broadcastlv.chat.bilibili.com")
         .to_string();
+    let mut server_hosts = collect_server_hosts(&danmaku);
+    // Older cached room details contain just `server_host`. Always keep that
+    // value as the first choice, even if a newer detail additionally carries
+    // `server_hosts`.
+    prepend_unique_host(&mut server_hosts, &server_host);
 
     // Join packet `uid` is the **viewer** mid, never the streamer's room uid.
     let uid = danmaku
@@ -223,8 +241,98 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<BilibiliDanmakuArg
         token,
         buvid,
         server_host,
+        server_hosts,
+        session_cookie: cookie,
         uid,
     })
+}
+
+fn prepend_unique_host(hosts: &mut Vec<String>, host: &str) {
+    let host = host.trim();
+    if host.is_empty() {
+        return;
+    }
+    hosts.retain(|candidate| !candidate.eq_ignore_ascii_case(host));
+    hosts.insert(0, host.to_string());
+}
+
+fn collect_server_hosts(data: &Value) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let Some(items) = data
+        .get("server_hosts")
+        .or_else(|| data.get("host_list"))
+        .and_then(Value::as_array)
+    else {
+        return hosts;
+    };
+
+    for item in items {
+        // `parse_room_detail_from_data` stores the initial endpoint list as
+        // strings in `raw.danmaku.server_hosts`, while Bilibili's refresh API
+        // returns `host_list` entries shaped as `{ "host": "…" }`.  Accept
+        // both representations so a reconnect can genuinely rotate across
+        // all originally supplied gateways before/if refresh succeeds.
+        let Some(host) = item
+            .as_str()
+            .or_else(|| item.get("host").and_then(Value::as_str))
+        else {
+            continue;
+        };
+        let host = host.trim();
+        if host.is_empty()
+            || hosts
+                .iter()
+                .any(|candidate: &String| candidate.eq_ignore_ascii_case(host))
+        {
+            continue;
+        }
+        hosts.push(host.to_string());
+    }
+    hosts
+}
+
+impl BilibiliDanmakuArgs {
+    fn host_for_attempt(&self, attempt: u32) -> &str {
+        if self.server_hosts.is_empty() {
+            return &self.server_host;
+        }
+        let index = (attempt as usize) % self.server_hosts.len();
+        &self.server_hosts[index]
+    }
+
+    fn refresh_cookie(&self) -> String {
+        if self.session_cookie.is_empty() {
+            return (!self.buvid.is_empty())
+                .then(|| format!("buvid3={};", self.buvid))
+                .unwrap_or_default();
+        }
+        if self.buvid.is_empty() || self.session_cookie.contains("buvid3=") {
+            return self.session_cookie.clone();
+        }
+        format!("{}; buvid3={};", self.session_cookie, self.buvid)
+    }
+
+    fn apply_refreshed_connection(&mut self, data: &Value) -> Result<(), &'static str> {
+        let token = data
+            .get("token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .ok_or("B站没有返回弹幕 token")?;
+
+        let mut hosts = collect_server_hosts(data);
+        if hosts.is_empty() {
+            // Keep a known-good host if an otherwise valid response omits the
+            // optional list. This is common on some CDN edge responses.
+            prepend_unique_host(&mut hosts, &self.server_host);
+        }
+        let primary = hosts.first().cloned().ok_or("B站没有返回弹幕服务器地址")?;
+
+        self.token = token.to_string();
+        self.server_host = primary;
+        self.server_hosts = hosts;
+        Ok(())
+    }
 }
 
 pub fn encode_packet(body: &[u8], operation: u32) -> Vec<u8> {
@@ -346,8 +454,13 @@ fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     }
 }
 
-/// Whether this buffer looks like a server auth-ok packet (op=8).
-pub fn packets_contain_auth_ok(data: &[u8]) -> bool {
+/// The outcome carried by Bilibili's auth reply packet (op=8).
+///
+/// A few edge nodes omit the JSON body, which older clients have always
+/// treated as a successful join. Preserve that compatibility while still
+/// surfacing an explicit non-zero auth code so reconnect can refresh its
+/// short-lived token instead of waiting for the server to close the socket.
+fn auth_reply_result(data: &[u8]) -> Option<Result<(), i64>> {
     let mut offset = 0usize;
     while offset + 16 <= data.len() {
         let packet_len = match read_u32(data, offset) {
@@ -359,11 +472,18 @@ pub fn packets_contain_auth_ok(data: &[u8]) -> bool {
         }
         let operation = read_u32(data, offset + 8).unwrap_or(0);
         if operation == 8 {
-            return true;
+            let body = &data[offset + 16..offset + packet_len];
+            let code = serde_json::from_slice::<Value>(body)
+                .ok()
+                .and_then(|value| value.get("code").and_then(Value::as_i64));
+            return Some(match code {
+                Some(0) | None => Ok(()),
+                Some(code) => Err(code),
+            });
         }
         offset += packet_len;
     }
-    false
+    None
 }
 
 fn parse_notify_body_with(body: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
@@ -397,6 +517,160 @@ fn json_stringish(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         _ => String::new(),
     }
+}
+
+// The Bilibili websocket carries image-emote metadata inline with a DANMU_MSG
+// rather than requiring a separate pack download. Keep the payload bounded
+// before it crosses the native/webview boundary.
+const MAX_DANMAKU_CONTENT_SPANS: usize = 32;
+const MAX_DANMAKU_EMOTE_TOKEN_BYTES: usize = 256;
+const MAX_DANMAKU_EMOTE_URL_BYTES: usize = 2_048;
+
+fn is_trusted_bilibili_image_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    ["hdslb.com", "bilibili.com", "biliimg.com"]
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+/// Convert Bilibili's protocol-relative/legacy HTTP emote URL to an HTTPS URL
+/// only after its hostname has been constrained to Bilibili's image CDNs.
+/// The frontend validates again before handing it to an `<img>` or canvas
+/// image loader, so a malformed upstream event simply remains plain text.
+fn safe_bilibili_image_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > MAX_DANMAKU_EMOTE_URL_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let source = if value.starts_with("//") {
+        format!("https:{value}")
+    } else {
+        value.to_string()
+    };
+    let mut url = Url::parse(&source).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !is_trusted_bilibili_image_host(url.host_str()?)
+    {
+        return None;
+    }
+    // Bilibili still sends HTTP in some legacy emote payloads. The trusted
+    // hostname check above makes an in-place HTTPS upgrade safe and avoids
+    // mixed-content failures in the desktop webview.
+    url.set_scheme("https").ok()?;
+    Some(url.into())
+}
+
+fn add_bilibili_emote(emotes: &mut HashMap<String, String>, key: &str, raw_url: Option<&Value>) {
+    let key = key.trim();
+    if key.is_empty()
+        || key.len() > MAX_DANMAKU_EMOTE_TOKEN_BYTES
+        || key.chars().any(char::is_control)
+    {
+        return;
+    }
+    let Some(url) = raw_url
+        .and_then(Value::as_str)
+        .and_then(safe_bilibili_image_url)
+    else {
+        return;
+    };
+    emotes.insert(key.to_string(), url);
+}
+
+fn add_bilibili_extra_emotes(emotes: &mut HashMap<String, String>, extra: &Value, message: &str) {
+    let Some(items) = extra.get("emots").and_then(Value::as_object) else {
+        return;
+    };
+    for (key, emot) in items {
+        // The map can contain the whole room's currently available pack. Only
+        // retain tokens that this particular comment actually references.
+        if message.contains(key) {
+            add_bilibili_emote(emotes, key, emot.get("url"));
+        }
+    }
+}
+
+/// Build ordered text/image spans following Simple Live's Bilibili decoder:
+/// a one-off whole-message emote may be at `info[0][13].url`, while inline
+/// emotes are keyed by token in JSON stored at `info[0][15].extra.emots`.
+fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuContentSpan>> {
+    let metadata = info.first()?.as_array()?;
+    let mut emotes = HashMap::<String, String>::new();
+
+    if message.starts_with('[') && message.ends_with(']') {
+        add_bilibili_emote(
+            &mut emotes,
+            message,
+            metadata.get(13).and_then(|value| value.get("url")),
+        );
+    }
+
+    if let Some(extra) = metadata.get(15).and_then(|value| value.get("extra")) {
+        match extra {
+            Value::String(serialized) if !serialized.is_empty() => {
+                if let Ok(extra) = serde_json::from_str::<Value>(serialized) {
+                    add_bilibili_extra_emotes(&mut emotes, &extra, message);
+                }
+            }
+            Value::Object(_) => add_bilibili_extra_emotes(&mut emotes, extra, message),
+            _ => {}
+        }
+    }
+
+    if emotes.is_empty() {
+        return None;
+    }
+    // Prefer the longest matching token so a future pack cannot make a
+    // shorter alias consume the prefix of a distinct emote.
+    let mut keys: Vec<&String> = emotes.keys().collect();
+    keys.sort_unstable_by(|left, right| {
+        right
+            .len()
+            .cmp(&left.len())
+            .then_with(|| left.as_str().cmp(right.as_str()))
+    });
+
+    let mut spans = Vec::new();
+    let mut text = String::new();
+    let mut remaining = message;
+    while !remaining.is_empty() {
+        let matched = keys
+            .iter()
+            .copied()
+            .find(|key| remaining.starts_with(key.as_str()));
+        if let Some(key) = matched {
+            if !text.is_empty() {
+                spans.push(DanmakuContentSpan::Text {
+                    text: std::mem::take(&mut text),
+                });
+            }
+            let image_url = emotes.get(key)?.clone();
+            spans.push(DanmakuContentSpan::Image { image_url });
+            if spans.len() > MAX_DANMAKU_CONTENT_SPANS {
+                return None;
+            }
+            remaining = &remaining[key.len()..];
+            continue;
+        }
+
+        let character = remaining.chars().next()?;
+        text.push(character);
+        remaining = &remaining[character.len_utf8()..];
+    }
+    if !text.is_empty() {
+        spans.push(DanmakuContentSpan::Text { text });
+    }
+
+    (spans
+        .iter()
+        .any(|span| matches!(span, DanmakuContentSpan::Image { .. }))
+        && spans.len() <= MAX_DANMAKU_CONTENT_SPANS)
+        .then_some(spans)
 }
 
 const MAX_SUPER_CHAT_PRICE: f64 = 1_000_000.0;
@@ -494,10 +768,6 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             .get(1)
             .map(json_stringish)
             .filter(|s| !s.is_empty())
-            .or_else(|| {
-                // Some variants nest text under info[0][15].extra JSON
-                None
-            })
             .unwrap_or_default();
         if message.is_empty() {
             return None;
@@ -519,11 +789,13 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
         } else {
             Some(format!("#{:06x}", color_num & 0x00ff_ffff))
         };
+        let spans = bilibili_content_spans(info, &message);
         return Some(DanmakuEvent {
             kind: DanmakuKind::Chat,
             user,
             content: message,
             color,
+            spans,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         });
@@ -549,6 +821,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user,
             content: message,
             color: None,
+            spans: None,
             super_chat: Some(parse_super_chat_info(data)),
             ts: chrono::Utc::now().timestamp_millis(),
         });
@@ -566,6 +839,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user: user.clone(),
             content: format!("{user} 进入直播间"),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         });
@@ -588,6 +862,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             user,
             content: format!("投喂 {gift} x{num}"),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         });
@@ -596,41 +871,116 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
     None
 }
 
-pub async fn run_loop(events: DanmakuEventSender, args: BilibiliDanmakuArgs) -> AppResult<()> {
-    if args.room_id <= 0 {
-        return Err(
-            AppError::new("danmaku_bad_room", "invalid room id for danmaku").with_site("bilibili"),
-        );
-    }
-    if args.token.is_empty() {
-        return Err(AppError::new(
-            "danmaku_missing_token",
-            "弹幕 token 为空（请在设置中保存有效 B 站 Cookie）",
-        )
-        .with_site("bilibili"));
-    }
+const INBOUND_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+const INBOUND_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+const CLOSE_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
-    let url = format!("wss://{}/sub", args.server_host);
+struct ConnectionEnd {
+    message_count: u64,
+    authenticated: bool,
+    reason: String,
+}
+
+fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
     emit_event(
-        &events,
+        events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
-            content: format!(
-                "正在连接弹幕服务器… room={} host={}",
-                args.room_id, args.server_host
-            ),
+            content: content.into(),
             color: None,
+            spans: None,
             super_chat: None,
             ts: chrono::Utc::now().timestamp_millis(),
         },
     );
+}
 
-    let (ws, _) = connect_async(&url).await.map_err(|e| {
-        AppError::new("danmaku_ws_error", format!("connect failed: {e}"))
-            .with_site("bilibili")
-            .retryable()
-    })?;
+fn reconnect_delay(attempt: u32) -> Duration {
+    let multiplier = 1_u64 << attempt.min(5);
+    let seconds = RECONNECT_INITIAL_DELAY
+        .as_secs()
+        .saturating_mul(multiplier)
+        .min(RECONNECT_MAX_DELAY.as_secs());
+    Duration::from_secs(seconds)
+}
+
+/// Advance gateway rotation on every reconnect while backing off only the
+/// consecutive failures that never completed websocket authentication.
+fn next_reconnect_state(
+    host_attempt: u32,
+    pre_auth_failures: u32,
+    authenticated: bool,
+) -> (u32, u32) {
+    (
+        host_attempt.wrapping_add(1),
+        if authenticated {
+            0
+        } else {
+            pre_auth_failures.saturating_add(1)
+        },
+    )
+}
+
+async fn refresh_connection_info(
+    client: &Client,
+    args: &mut BilibiliDanmakuArgs,
+) -> Result<(), String> {
+    let mut request = client
+        .get(DANMAKU_INFO_URL)
+        .query(&[("id", args.room_id.to_string()), ("type", "0".to_string())])
+        .header("user-agent", crate::sites::bilibili::DEFAULT_USER_AGENT)
+        .header("referer", crate::sites::bilibili::DEFAULT_REFERER)
+        .header("origin", "https://live.bilibili.com");
+    let cookie = args.refresh_cookie();
+    if !cookie.is_empty() {
+        request = request.header("cookie", cookie);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("请求 B站弹幕信息失败: {error}"))?;
+    let status = response.status();
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("解析 B站弹幕信息失败: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("B站弹幕信息 HTTP {status}"));
+    }
+    let code = body.get("code").and_then(Value::as_i64).unwrap_or(-1);
+    if code != 0 {
+        let message = body
+            .get("message")
+            .or_else(|| body.get("msg"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return Err(format!("B站弹幕信息返回 code={code}: {message}"));
+    }
+    let data = body
+        .get("data")
+        .ok_or_else(|| "B站弹幕信息缺少 data".to_string())?;
+    args.apply_refreshed_connection(data)
+        .map_err(str::to_string)
+}
+
+async fn run_connection(
+    events: &DanmakuEventSender,
+    args: &BilibiliDanmakuArgs,
+    host: &str,
+) -> ConnectionEnd {
+    let url = format!("wss://{host}/sub");
+    let (ws, _) = match connect_async(&url).await {
+        Ok(connection) => connection,
+        Err(error) => {
+            return ConnectionEnd {
+                message_count: 0,
+                authenticated: false,
+                reason: format!("连接失败: {error}"),
+            };
+        }
+    };
     let (mut write, mut read) = ws.split();
 
     // Auth / join. `uid` must be viewer mid (or 0).
@@ -645,95 +995,174 @@ pub async fn run_loop(events: DanmakuEventSender, args: BilibiliDanmakuArgs) -> 
     })
     .to_string();
     let join_pkt = encode_packet(join_body.as_bytes(), 7);
-    write
-        .send(Message::Binary(join_pkt.into()))
-        .await
-        .map_err(|e| AppError::new("danmaku_ws_error", format!("auth send: {e}")))?;
+    if let Err(error) = write.send(Message::Binary(join_pkt.into())).await {
+        return ConnectionEnd {
+            message_count: 0,
+            authenticated: false,
+            reason: format!("认证发送失败: {error}"),
+        };
+    }
 
-    let mut heartbeat = time::interval(Duration::from_secs(30));
+    let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
+    // When a busy frame takes longer than one interval to decode, the default
+    // `Burst` policy would send several heartbeats back-to-back. Bilibili can
+    // close such a connection as malformed/rate-limited, so skip missed ticks.
+    heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
+    let mut idle_check = time::interval(INBOUND_IDLE_CHECK_INTERVAL);
+    idle_check.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    idle_check.tick().await;
+
     let mut auth_ok = false;
     let mut msg_count: u64 = 0;
-
-    loop {
+    let mut last_inbound = time::Instant::now();
+    let reason = loop {
         tokio::select! {
             _ = heartbeat.tick() => {
                 let hb = encode_packet(b"", 2);
-                if write.send(Message::Binary(hb.into())).await.is_err() {
-                    break;
+                if let Err(error) = write.send(Message::Binary(hb.into())).await {
+                    break format!("心跳发送失败: {error}");
                 }
             }
-            msg = read.next() => {
-                match msg {
-                    Some(Ok(Message::Binary(bin))) => {
-                        if !auth_ok && packets_contain_auth_ok(&bin) {
-                            auth_ok = true;
-                            emit_event(
-                                &events,
-                                DanmakuEvent {
-                                    kind: DanmakuKind::System,
-                                    user: "system".into(),
-                                    content: "弹幕服务器连接成功".into(),
-                                    color: None,
-                                    super_chat: None,
-                                    ts: chrono::Utc::now().timestamp_millis(),
-                                },
-                            );
-                        }
-                        decode_packets_with(&bin, &mut |ev| {
-                            // First payload often arrives with/without an
-                            // operation-8 frame.  Announce success before
-                            // forwarding that first event, as before.
-                            if !auth_ok {
-                                auth_ok = true;
-                                emit_event(
-                                    &events,
-                                    DanmakuEvent {
-                                        kind: DanmakuKind::System,
-                                        user: "system".into(),
-                                        content: "弹幕服务器连接成功".into(),
-                                        color: None,
-                                        super_chat: None,
-                                        ts: chrono::Utc::now().timestamp_millis(),
-                                    },
-                                );
+            _ = idle_check.tick() => {
+                if last_inbound.elapsed() >= INBOUND_IDLE_TIMEOUT {
+                    break format!("超过 {} 秒未收到服务器数据", INBOUND_IDLE_TIMEOUT.as_secs());
+                }
+            }
+            message = read.next() => {
+                match message {
+                    Some(Ok(message)) => {
+                        last_inbound = time::Instant::now();
+                        match message {
+                            Message::Binary(bin) => {
+                                if !auth_ok {
+                                    match auth_reply_result(&bin) {
+                                        Some(Ok(())) => {
+                                            auth_ok = true;
+                                            emit_system(events, "弹幕服务器连接成功");
+                                        }
+                                        Some(Err(code)) => break format!("认证被 B站拒绝（code={code}）"),
+                                        None => {}
+                                    }
+                                }
+                                decode_packets_with(&bin, &mut |ev| {
+                                    // First payload can arrive before an op=8 reply.
+                                    // Treat it as a healthy connection and announce that
+                                    // state before forwarding the first chat event.
+                                    if !auth_ok {
+                                        auth_ok = true;
+                                        emit_system(events, "弹幕服务器连接成功");
+                                    }
+                                    msg_count += 1;
+                                    emit_event(events, ev);
+                                });
                             }
-                            msg_count += 1;
-                            emit_event(&events, ev);
-                        });
+                            Message::Text(text) => {
+                                decode_packets_with(text.as_bytes(), &mut |ev| {
+                                    if !auth_ok {
+                                        auth_ok = true;
+                                        emit_system(events, "弹幕服务器连接成功");
+                                    }
+                                    msg_count += 1;
+                                    emit_event(events, ev);
+                                });
+                            }
+                            Message::Ping(payload) => {
+                                if let Err(error) = write.send(Message::Pong(payload)).await {
+                                    break format!("Pong 发送失败: {error}");
+                                }
+                            }
+                            Message::Close(_) => break "服务器关闭连接".to_string(),
+                            _ => {}
+                        }
                     }
-                    Some(Ok(Message::Text(text))) => {
-                        decode_packets_with(text.as_bytes(), &mut |ev| {
-                            msg_count += 1;
-                            emit_event(&events, ev);
-                        });
-                    }
-                    Some(Ok(Message::Ping(p))) => {
-                        let _ = write.send(Message::Pong(p)).await;
-                    }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Err(e)) => {
-                        tracing::warn!(error = %e, msgs = msg_count, "danmaku ws read error");
-                        break;
-                    }
-                    _ => {}
+                    Some(Err(error)) => break format!("读取失败: {error}"),
+                    None => break "服务器已关闭连接".to_string(),
                 }
             }
         }
+    };
+
+    // Explicitly finish the local half as well; otherwise a sequence of
+    // reconnects can leave native TLS/WebSocket resources pending until their
+    // drop tasks get scheduled under load.
+    let _ = time::timeout(CLOSE_GRACE_PERIOD, write.close()).await;
+    ConnectionEnd {
+        message_count: msg_count,
+        authenticated: auth_ok,
+        reason,
+    }
+}
+
+pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs) -> AppResult<()> {
+    if args.room_id <= 0 {
+        return Err(
+            AppError::new("danmaku_bad_room", "invalid room id for danmaku").with_site("bilibili"),
+        );
+    }
+    if args.token.is_empty() {
+        return Err(AppError::new(
+            "danmaku_missing_token",
+            "弹幕 token 为空（请在设置中保存有效 B 站 Cookie）",
+        )
+        .with_site("bilibili"));
     }
 
-    emit_event(
-        &events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            content: format!("弹幕连接结束（已收 {msg_count} 条）"),
-            color: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
-    Ok(())
+    let refresh_client = crate::http_client::default_client();
+    // Keep host rotation separate from pre-auth backoff.  A healthy socket
+    // resets the latter, but it must not pin every later reconnect to the
+    // first backup gateway after the primary closes a long-lived connection.
+    let mut host_attempt = 0_u32;
+    let mut pre_auth_failures = 0_u32;
+    let mut total_messages = 0_u64;
+
+    loop {
+        let host = args.host_for_attempt(host_attempt).to_string();
+        if total_messages == 0 && host_attempt == 0 {
+            emit_system(
+                &events,
+                format!("正在连接弹幕服务器… room={} host={host}", args.room_id),
+            );
+        } else {
+            emit_system(&events, format!("正在重连弹幕服务器… host={host}"));
+        }
+
+        let ended = run_connection(&events, &args, &host).await;
+        total_messages = total_messages.saturating_add(ended.message_count);
+        tracing::warn!(
+            host = %host,
+            received = ended.message_count,
+            total_received = total_messages,
+            authenticated = ended.authenticated,
+            reason = %ended.reason,
+            "bilibili danmaku connection interrupted; scheduling reconnect"
+        );
+
+        // A socket that had authenticated is a fresh failure sequence: retry
+        // promptly. Consecutive failures before auth back off exponentially.
+        let delay = reconnect_delay(pre_auth_failures);
+        emit_system(
+            &events,
+            format!(
+                "弹幕连接中断，{} 秒后自动重连（已收 {total_messages} 条）",
+                delay.as_secs()
+            ),
+        );
+        time::sleep(delay).await;
+
+        // Tokens and edge hosts are short-lived. Refreshing before each retry
+        // handles token expiry and lets us leave an unhealthy gateway, while
+        // retaining the previous values if Bilibili's metadata endpoint is
+        // temporarily unavailable.
+        if let Err(error) = refresh_connection_info(&refresh_client, &mut args).await {
+            tracing::warn!(error = %error, room_id = args.room_id, "bilibili danmaku refresh failed; using previous connection info");
+        }
+        // Always advance independently of the backoff counter.  In
+        // particular, authenticated disconnects reset backoff but still need
+        // to try the next Bilibili edge rather than retrying one host forever.
+        (host_attempt, pre_auth_failures) =
+            next_reconnect_state(host_attempt, pre_auth_failures, ended.authenticated);
+    }
 }
 
 #[cfg(test)]
@@ -768,6 +1197,92 @@ mod tests {
         let ev = parse_message_json(json).unwrap();
         assert_eq!(ev.user, "bob");
         assert_eq!(ev.content, "hi");
+    }
+
+    #[test]
+    fn parse_danmu_msg_keeps_bilibili_image_emotes_in_order() {
+        let mut metadata = vec![Value::Null; 16];
+        metadata[3] = serde_json::json!(16777215);
+        metadata[15] = serde_json::json!({
+            "extra": serde_json::json!({
+                "emots": {
+                    "[鸣潮·共鸣与群星_问号]": {
+                        "url": "//i0.hdslb.com/bfs/emote/wuthering-question.png"
+                    },
+                    "[Ave Mujica_怎么突然]": {
+                        "url": "http://i0.hdslb.com/bfs/emote/ave-mujica.png"
+                    }
+                }
+            })
+            .to_string()
+        });
+        let payload = serde_json::json!({
+            "cmd": "DANMU_MSG",
+            "info": [
+                metadata,
+                "前缀[鸣潮·共鸣与群星_问号]中间[Ave Mujica_怎么突然]后缀",
+                [1, "alice", 0]
+            ]
+        });
+
+        let event = parse_message_json(&payload.to_string()).unwrap();
+        assert_eq!(
+            event.spans,
+            Some(vec![
+                DanmakuContentSpan::Text {
+                    text: "前缀".into()
+                },
+                DanmakuContentSpan::Image {
+                    image_url: "https://i0.hdslb.com/bfs/emote/wuthering-question.png".into()
+                },
+                DanmakuContentSpan::Text {
+                    text: "中间".into()
+                },
+                DanmakuContentSpan::Image {
+                    image_url: "https://i0.hdslb.com/bfs/emote/ave-mujica.png".into()
+                },
+                DanmakuContentSpan::Text {
+                    text: "后缀".into()
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_danmu_msg_reads_one_off_emote_metadata_and_rejects_untrusted_url() {
+        let mut metadata = vec![Value::Null; 14];
+        metadata[13] = serde_json::json!({
+            "url": "https://i0.hdslb.com/bfs/emote/one-off.png"
+        });
+        let payload = serde_json::json!({
+            "cmd": "DANMU_MSG",
+            "info": [metadata, "[单独表情]", [1, "alice", 0]]
+        });
+        let event = parse_message_json(&payload.to_string()).unwrap();
+        assert_eq!(
+            event.spans,
+            Some(vec![DanmakuContentSpan::Image {
+                image_url: "https://i0.hdslb.com/bfs/emote/one-off.png".into()
+            }])
+        );
+
+        let mut unsafe_metadata = vec![Value::Null; 16];
+        unsafe_metadata[15] = serde_json::json!({
+            "extra": serde_json::json!({
+                "emots": {"[单独表情]": {"url": "https://evil.example/emote.png"}}
+            })
+            .to_string()
+        });
+        let unsafe_payload = serde_json::json!({
+            "cmd": "DANMU_MSG",
+            "info": [unsafe_metadata, "[单独表情]", [1, "alice", 0]]
+        });
+        assert!(
+            parse_message_json(&unsafe_payload.to_string())
+                .unwrap()
+                .spans
+                .is_none()
+        );
     }
 
     #[test]
@@ -842,6 +1357,91 @@ mod tests {
         assert_eq!(args.token, "tok");
         assert_eq!(args.room_id, 12345);
         assert_eq!(args.uid, 1732227);
+        assert_eq!(args.server_hosts, ["broadcastlv.chat.bilibili.com"]);
+        assert_eq!(args.session_cookie, "DedeUserID=1732227; SESSDATA=x");
+    }
+
+    #[test]
+    fn args_keep_all_bilibili_hosts_for_reconnect_rotation() {
+        let raw = serde_json::json!({
+            "room_id": 12345,
+            "danmaku": {
+                "token": "tok",
+                "server_host": "primary.example",
+                "server_hosts": [
+                    "primary.example",
+                    "backup.example",
+                    "BACKUP.example",
+                    ""
+                ]
+            }
+        });
+        let args = args_from_raw("12345", &raw).unwrap();
+
+        assert_eq!(args.server_hosts, ["primary.example", "backup.example"]);
+        assert_eq!(args.host_for_attempt(0), "primary.example");
+        assert_eq!(args.host_for_attempt(1), "backup.example");
+        assert_eq!(args.host_for_attempt(2), "primary.example");
+    }
+
+    #[test]
+    fn refreshed_connection_replaces_token_and_hosts() {
+        let raw = serde_json::json!({
+            "room_id": 12345,
+            "danmaku": {
+                "token": "old-token",
+                "server_host": "old.example"
+            }
+        });
+        let mut args = args_from_raw("12345", &raw).unwrap();
+        let fresh = serde_json::json!({
+            "token": "fresh-token",
+            "host_list": [
+                {"host": "new-primary.example"},
+                {"host": "new-backup.example"}
+            ]
+        });
+
+        args.apply_refreshed_connection(&fresh).unwrap();
+
+        assert_eq!(args.token, "fresh-token");
+        assert_eq!(args.server_host, "new-primary.example");
+        assert_eq!(
+            args.server_hosts,
+            ["new-primary.example", "new-backup.example"]
+        );
+    }
+
+    #[test]
+    fn reconnect_backoff_is_bounded() {
+        assert_eq!(reconnect_delay(0), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(1), Duration::from_secs(2));
+        assert_eq!(reconnect_delay(5), Duration::from_secs(30));
+        assert_eq!(reconnect_delay(u32::MAX), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn authenticated_disconnects_rotate_hosts_without_carrying_backoff() {
+        let (next_host, next_failures) = next_reconnect_state(0, 4, true);
+        assert_eq!(next_host, 1);
+        assert_eq!(next_failures, 0);
+
+        let (third_host, next_failures) = next_reconnect_state(next_host, next_failures, true);
+        assert_eq!(third_host, 2);
+        assert_eq!(next_failures, 0);
+
+        let (after_failed_host, failures) = next_reconnect_state(third_host, next_failures, false);
+        assert_eq!(after_failed_host, 3);
+        assert_eq!(failures, 1);
+    }
+
+    #[test]
+    fn auth_reply_distinguishes_rejection_from_success() {
+        let success = encode_packet(br#"{"code":0}"#, 8);
+        let rejected = encode_packet(br#"{"code":-101}"#, 8);
+
+        assert!(matches!(auth_reply_result(&success), Some(Ok(()))));
+        assert!(matches!(auth_reply_result(&rejected), Some(Err(-101))));
     }
 
     #[test]

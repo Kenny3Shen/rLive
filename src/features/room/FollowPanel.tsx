@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { FOLLOW_ROOM_SWITCH_STATE } from "./roomNavigation";
 
 function sortFollows(follows: FollowUser[]): FollowUser[] {
   return [...follows].sort((a, b) => {
@@ -68,12 +69,14 @@ export function FollowPanel({ className }: { className?: string }) {
   function switchRoom(user: FollowUser) {
     const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
     if (isCurrentRoom) return;
-    // Shell deliberately keys room routes to restart the page transition and
-    // dispose the previous player. Carry the tab intent through that remount
-    // so the user can pick several followed rooms in succession without
-    // reopening this tab after every switch.
+    // A follow-sidebar switch is a replacement, not a new level in room
+    // navigation.  Keeping the old room in history made the room back button
+    // bounce between rooms instead of taking the user back to the home page.
+    // Carry the tab and explicit back target through the remount so multiple
+    // followed rooms can still be selected in succession.
     navigate(`/room/${user.site_id}/${encodeURIComponent(user.room_id)}`, {
-      state: { roomSideTab: "follow" },
+      replace: true,
+      state: FOLLOW_ROOM_SWITCH_STATE,
     });
   }
 
@@ -118,7 +121,12 @@ export function FollowPanel({ className }: { className?: string }) {
                   <Button
                     type="button"
                     variant={isCurrentRoom ? "secondary" : "ghost"}
-                    className="h-auto w-full justify-start gap-2 px-2 py-2 text-left"
+                    className={cn(
+                      "h-auto w-full justify-start gap-2 border border-transparent px-2 py-2 text-left",
+                      isCurrentRoom
+                        ? "border-primary/25 bg-primary/10 text-primary shadow-sm shadow-primary/10 hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-100 dark:bg-primary/20 dark:hover:bg-primary/20"
+                        : "hover:bg-muted/70",
+                    )}
                     disabled={isCurrentRoom}
                     aria-current={isCurrentRoom ? "page" : undefined}
                     onClick={() => switchRoom(user)}

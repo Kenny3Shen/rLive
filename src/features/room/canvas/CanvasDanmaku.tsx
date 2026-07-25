@@ -3,7 +3,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { batchEvents, type DanmakuBatch } from "../danmaku/batch";
-import { createRepeatMatcher, createShieldMatcher, shouldShowOnCanvas } from "../danmaku/filter";
+import { DANMAKU_IMAGE_HORIZONTAL_GAP, DANMAKU_IMAGE_SCALE } from "../danmaku/content";
+import { createShieldMatcher, shouldShowOnCanvas } from "../danmaku/filter";
 import { createEngine, type DanmakuEngine, type TrackItem } from "./danmakuEngine";
 import { cn } from "@/lib/utils";
 
@@ -23,14 +24,104 @@ type TextRaster = {
   lastUsedFrame: number;
 };
 
+type DanmakuImageAsset = {
+  image: HTMLImageElement;
+  state: "loading" | "ready" | "failed";
+  lastUsedFrame: number;
+};
+
 const DANMAKU_FONT_FAMILY = '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 const MAX_RASTER_CSS_WIDTH = 1600;
 const MAX_RASTER_DEVICE_PIXELS = 512_000;
 const MAX_RASTER_CACHE_PIXELS = 8_000_000;
 const MAX_RASTER_CACHE_ITEMS = 96;
+const MAX_IMAGE_CACHE_ITEMS = 128;
+const MAX_IMAGE_NATURAL_PIXELS = 1_048_576;
 
 function canvasFont(fontWeight: number, fontSize: number): string {
   return `${fontWeight} ${fontSize}px ${DANMAKU_FONT_FAMILY}`;
+}
+
+function richLineMetrics(
+  ctx: CanvasRenderingContext2D,
+  item: TrackItem,
+): { contentWidth: number; lineHeight: number; imageSize: number } | null {
+  const spans = item.richSpans;
+  if (!spans || spans.length === 0) return null;
+
+  const imageSize = item.fontSize * DANMAKU_IMAGE_SCALE;
+  let contentWidth = 0;
+  for (const span of spans) {
+    contentWidth +=
+      span.type === "image"
+        ? imageSize + DANMAKU_IMAGE_HORIZONTAL_GAP
+        : ctx.measureText(span.text).width;
+  }
+  return {
+    contentWidth,
+    lineHeight: Math.max(item.fontSize * 1.35, imageSize),
+    imageSize,
+  };
+}
+
+/** Draw ordered text/image spans after their CDN images have been resolved. */
+function drawRichDanmaku(
+  ctx: CanvasRenderingContext2D,
+  item: TrackItem,
+  x: number,
+  y: number,
+  fontWeight: number,
+  imageForUrl: (url: string) => HTMLImageElement | null,
+): boolean {
+  const spans = item.richSpans;
+  if (!spans) return false;
+
+  ctx.font = canvasFont(fontWeight, item.fontSize);
+  const metrics = richLineMetrics(ctx, item);
+  if (!metrics) return false;
+
+  const textY = y + Math.max(0, (metrics.lineHeight - item.fontSize * 1.35) / 2);
+  const imageY = y + (metrics.lineHeight - metrics.imageSize) / 2;
+  let cursor = x;
+  for (const span of spans) {
+    if (span.type === "text") {
+      ctx.strokeText(span.text, cursor, textY);
+      ctx.fillText(span.text, cursor, textY);
+      cursor += ctx.measureText(span.text).width;
+      continue;
+    }
+
+    const image = imageForUrl(span.image_url);
+    if (!image) return false;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0)";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.drawImage(
+      image,
+      cursor + DANMAKU_IMAGE_HORIZONTAL_GAP / 2,
+      imageY,
+      metrics.imageSize,
+      metrics.imageSize,
+    );
+    ctx.restore();
+    cursor += metrics.imageSize + DANMAKU_IMAGE_HORIZONTAL_GAP;
+  }
+  return true;
+}
+
+function richImagesReady(
+  item: TrackItem,
+  imageForUrl: (url: string) => HTMLImageElement | null,
+): boolean {
+  let foundImage = false;
+  for (const span of item.richSpans ?? []) {
+    if (span.type !== "image") continue;
+    foundImage = true;
+    if (!imageForUrl(span.image_url)) return false;
+  }
+  return foundImage;
 }
 
 /**
@@ -102,6 +193,72 @@ function createTextRaster(
   };
 }
 
+/**
+ * Rich comments are rasterized only after every image is available. Before
+ * that, the caller keeps the normal text bitmap as a visible fallback.
+ */
+function createRichRaster(
+  item: TrackItem,
+  fontWeight: number,
+  pixelRatio: number,
+  frame: number,
+  imageForUrl: (url: string) => HTMLImageElement | null,
+): TextRaster | null {
+  if (!item.richSpans) return null;
+  const scratch = document.createElement("canvas");
+  scratch.width = 1;
+  scratch.height = 1;
+  const scratchContext = scratch.getContext("2d");
+  if (!scratchContext) return null;
+
+  scratchContext.font = canvasFont(fontWeight, item.fontSize);
+  const metrics = richLineMetrics(scratchContext, item);
+  if (!metrics) return null;
+
+  const lineWidth = Math.max(2, item.fontSize * 0.13);
+  const offsetX = Math.ceil(lineWidth + 5);
+  const offsetY = Math.ceil(lineWidth + 5);
+  const width = Math.ceil(metrics.contentWidth) + offsetX * 2;
+  const height = Math.ceil(metrics.lineHeight) + offsetY * 2;
+  const deviceWidth = Math.ceil(width * pixelRatio);
+  const deviceHeight = Math.ceil(height * pixelRatio);
+  const pixelCount = deviceWidth * deviceHeight;
+
+  if (
+    width > MAX_RASTER_CSS_WIDTH ||
+    pixelCount > MAX_RASTER_DEVICE_PIXELS ||
+    !Number.isFinite(pixelCount)
+  ) {
+    return null;
+  }
+
+  scratch.width = deviceWidth;
+  scratch.height = deviceHeight;
+  scratchContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  scratchContext.textBaseline = "top";
+  scratchContext.lineJoin = "round";
+  scratchContext.shadowColor = "rgba(0,0,0,0.75)";
+  scratchContext.shadowBlur = 2;
+  scratchContext.shadowOffsetX = 1;
+  scratchContext.shadowOffsetY = 1;
+  scratchContext.strokeStyle = "rgba(0,0,0,0.82)";
+  scratchContext.lineWidth = lineWidth;
+  scratchContext.fillStyle = item.color || "#fff";
+  if (!drawRichDanmaku(scratchContext, item, offsetX, offsetY, fontWeight, imageForUrl)) {
+    return null;
+  }
+
+  return {
+    canvas: scratch,
+    width,
+    height,
+    offsetX,
+    offsetY,
+    pixelCount,
+    lastUsedFrame: frame,
+  };
+}
+
 export function CanvasDanmaku({ className, active = true, sessionKey = null }: CanvasDanmakuProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DanmakuEngine | null>(null);
@@ -117,12 +274,11 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
-  const repeatMatcher = useMemo(() => createRepeatMatcher(filterRepeats), [filterRepeats]);
-  const matchersRef = useRef({ shieldMatcher, repeatMatcher, filterGifts });
+  const matchersRef = useRef({ shieldMatcher, filterGifts });
 
   useLayoutEffect(() => {
-    matchersRef.current = { shieldMatcher, repeatMatcher, filterGifts };
-  }, [shieldMatcher, repeatMatcher, filterGifts]);
+    matchersRef.current = { shieldMatcher, filterGifts };
+  }, [shieldMatcher, filterGifts]);
 
   if (engineRef.current === null || engineSessionRef.current !== sessionKey) {
     engineSessionRef.current = sessionKey;
@@ -133,6 +289,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       area: area || 0.9,
       lineCount,
       fontWeight,
+      aggregateRepeats: filterRepeats,
     });
   }
 
@@ -144,9 +301,10 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       area: area || 0.9,
       lineCount,
       fontWeight,
+      aggregateRepeats: filterRepeats,
     });
     requestFrameRef.current();
-  }, [fontSize, speed, opacity, area, lineCount, fontWeight]);
+  }, [fontSize, speed, opacity, area, lineCount, fontWeight, filterRepeats]);
 
   useEffect(() => {
     if (!active) return;
@@ -155,16 +313,12 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
 
     void listen<DanmakuBatch>("danmaku-batch", (event) => {
       if (cancelled) return;
-      const {
-        shieldMatcher: currentShieldMatcher,
-        repeatMatcher: currentRepeatMatcher,
-        filterGifts: currentFilterGifts,
-      } = matchersRef.current;
+      const { shieldMatcher: currentShieldMatcher, filterGifts: currentFilterGifts } =
+        matchersRef.current;
       const accepted: DanmakuEvent[] = [];
       for (const message of batchEvents(event.payload)) {
         if (!shouldShowOnCanvas(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
-        if (currentRepeatMatcher(message)) continue;
         accepted.push(message);
       }
       if (accepted.length === 0) return;
@@ -209,6 +363,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     let rasterCachePixelRatio = 0;
     let rasterCacheFontWeight = 0;
     let paintFrame = 0;
+    const imageCache = new Map<string, DanmakuImageAsset>();
 
     const removeRaster = (id: string, raster: TextRaster) => {
       rasterCache.delete(id);
@@ -218,6 +373,75 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     const clearRasters = () => {
       rasterCache.clear();
       rasterCachePixels = 0;
+    };
+
+    const removeImage = (url: string, asset: DanmakuImageAsset) => {
+      if (imageCache.get(url) !== asset) return;
+      imageCache.delete(url);
+      asset.image.onload = null;
+      asset.image.onerror = null;
+    };
+
+    const evictImage = (): boolean => {
+      let oldestUrl: string | null = null;
+      let oldestAsset: DanmakuImageAsset | null = null;
+      for (const [url, asset] of imageCache) {
+        // Keep an in-flight image around until it settles. Evicting it would
+        // restart the same network request on every frame under a CDN delay.
+        if (asset.state === "loading") continue;
+        if (!oldestAsset || asset.lastUsedFrame < oldestAsset.lastUsedFrame) {
+          oldestUrl = url;
+          oldestAsset = asset;
+        }
+      }
+      if (!oldestUrl || !oldestAsset) return false;
+      removeImage(oldestUrl, oldestAsset);
+      return true;
+    };
+
+    const imageForUrl = (url: string): HTMLImageElement | null => {
+      const cached = imageCache.get(url);
+      if (cached) {
+        cached.lastUsedFrame = paintFrame;
+        return cached.state === "ready" ? cached.image : null;
+      }
+
+      while (imageCache.size >= MAX_IMAGE_CACHE_ITEMS) {
+        if (!evictImage()) return null;
+      }
+
+      const image = new Image();
+      const asset: DanmakuImageAsset = {
+        image,
+        state: "loading",
+        lastUsedFrame: paintFrame,
+      };
+      imageCache.set(url, asset);
+      image.decoding = "async";
+      image.onload = () => {
+        if (stopped || imageCache.get(url) !== asset) return;
+        const naturalPixels = image.naturalWidth * image.naturalHeight;
+        if (
+          !Number.isFinite(naturalPixels) ||
+          naturalPixels <= 0 ||
+          naturalPixels > MAX_IMAGE_NATURAL_PIXELS
+        ) {
+          asset.state = "failed";
+        } else {
+          asset.state = "ready";
+        }
+        requestFrame();
+      };
+      image.onerror = () => {
+        if (stopped || imageCache.get(url) !== asset) return;
+        asset.state = "failed";
+        requestFrame();
+      };
+      // These URLs are validated upstream to Bilibili's image hosts. Do not
+      // set crossOrigin here: some Bilibili CDNs omit CORS headers, while this
+      // canvas is never read back or exported and can safely draw the image.
+      image.src = url;
+      return null;
     };
 
     const ensureRasterStyle = (nextFontWeight: number) => {
@@ -240,9 +464,13 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       if (oldestId && oldestRaster) removeRaster(oldestId, oldestRaster);
     };
 
-    const getTextRaster = (item: TrackItem, currentFontWeight: number): TextRaster | null => {
+    const getTextRaster = (
+      key: string,
+      item: TrackItem,
+      currentFontWeight: number,
+    ): TextRaster | null => {
       ensureRasterStyle(currentFontWeight);
-      const cached = rasterCache.get(item.id);
+      const cached = rasterCache.get(key);
       if (cached) {
         cached.lastUsedFrame = paintFrame;
         return cached;
@@ -258,7 +486,34 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
         if (rasterCache.size === 0) return null;
         evictRaster();
       }
-      rasterCache.set(item.id, raster);
+      rasterCache.set(key, raster);
+      rasterCachePixels += raster.pixelCount;
+      return raster;
+    };
+
+    const getRichRaster = (
+      key: string,
+      item: TrackItem,
+      currentFontWeight: number,
+    ): TextRaster | null => {
+      ensureRasterStyle(currentFontWeight);
+      const cached = rasterCache.get(key);
+      if (cached) {
+        cached.lastUsedFrame = paintFrame;
+        return cached;
+      }
+
+      const raster = createRichRaster(item, currentFontWeight, pixelRatio, paintFrame, imageForUrl);
+      if (!raster || raster.pixelCount > MAX_RASTER_CACHE_PIXELS) return null;
+
+      while (
+        rasterCache.size >= MAX_RASTER_CACHE_ITEMS ||
+        rasterCachePixels + raster.pixelCount > MAX_RASTER_CACHE_PIXELS
+      ) {
+        if (rasterCache.size === 0) return null;
+        evictRaster();
+      }
+      rasterCache.set(key, raster);
       rasterCachePixels += raster.pixelCount;
       return raster;
     };
@@ -270,6 +525,14 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       const oldestAllowedFrame = paintFrame - 1;
       for (const [id, raster] of rasterCache) {
         if (raster.lastUsedFrame < oldestAllowedFrame) removeRaster(id, raster);
+      }
+    };
+
+    const sweepUnusedImages = () => {
+      if (paintFrame % 120 !== 0) return;
+      const oldestAllowedFrame = paintFrame - 1;
+      for (const [url, asset] of imageCache) {
+        if (asset.lastUsedFrame < oldestAllowedFrame) removeImage(url, asset);
       }
     };
 
@@ -355,12 +618,46 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
         let drawnFontSize = 0;
         let drawnColor = "";
         for (const it of visibleItems) {
-          const x = it.kind === "top" ? Math.max(0, (width - it.width) / 2) : it.x;
-          // The engine keeps offscreen items long enough to retain safe lane
-          // spacing. They still need no canvas work until a pixel can appear.
-          if (it.kind === "scroll" && (x >= width || x + it.width <= 0)) continue;
+          // The engine retains offscreen scrolling items for lane-spacing
+          // purposes. Do not start image requests or create a raster until
+          // one can actually contribute a pixel to this canvas. Besides
+          // avoiding hidden paint work, this keeps a burst of queued rich
+          // messages from filling the bounded image cache before they enter
+          // the viewport.
+          if (it.kind === "scroll" && (it.x >= width || it.x + it.width <= 0)) continue;
 
-          const raster = getTextRaster(it, currentFontWeight);
+          const richRasterKey = `${it.id}:rich`;
+          // A rich raster is self-contained, including its image pixels. Once
+          // one exists we can continue drawing it even if its source image was
+          // later evicted from the separate, bounded image-request cache.
+          // Otherwise a cache eviction would briefly regress a live emote to
+          // its raw-token fallback while the browser fetched the same URL
+          // again.
+          const cachedRichRaster = rasterCache.get(richRasterKey);
+          if (cachedRichRaster) cachedRichRaster.lastUsedFrame = paintFrame;
+          const richReady = Boolean(cachedRichRaster) || richImagesReady(it, imageForUrl);
+          const raster = cachedRichRaster
+            ? cachedRichRaster
+            : richReady
+              ? getRichRaster(richRasterKey, it, currentFontWeight)
+              : getTextRaster(`${it.id}:text`, it, currentFontWeight);
+          let x = it.x;
+          if (it.kind === "top") {
+            // The engine's width is a scheduling reservation: it can be wider
+            // than either the raw fallback text or the resolved rich content.
+            // Center against what this frame will actually draw instead.
+            let drawableWidth: number;
+            if (raster) {
+              drawableWidth = raster.width - raster.offsetX * 2;
+            } else {
+              ctx.font = canvasFont(currentFontWeight, it.fontSize);
+              drawableWidth = richReady
+                ? (richLineMetrics(ctx, it)?.contentWidth ?? ctx.measureText(it.text).width)
+                : ctx.measureText(it.text).width;
+            }
+            x = Math.max(0, (width - drawableWidth) / 2);
+          }
+
           if (raster) {
             if (directTextActive) {
               ctx.shadowColor = "rgba(0,0,0,0)";
@@ -377,6 +674,28 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
               raster.height,
             );
             continue;
+          }
+
+          if (richReady) {
+            // Very long rich comments bypass the bounded bitmap cache, but
+            // still retain their image emotes through this direct fallback.
+            ctx.save();
+            ctx.lineJoin = "round";
+            ctx.shadowColor = "rgba(0,0,0,0.75)";
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+            ctx.strokeStyle = "rgba(0,0,0,0.82)";
+            ctx.lineWidth = Math.max(2, it.fontSize * 0.13);
+            ctx.fillStyle = it.color || "#fff";
+            const drewRich = drawRichDanmaku(ctx, it, x, it.y, currentFontWeight, imageForUrl);
+            ctx.restore();
+            if (drewRich) {
+              directTextActive = false;
+              drawnFontSize = 0;
+              drawnColor = "";
+              continue;
+            }
           }
 
           // Long/invalid messages fall back to the previous direct path. It
@@ -406,6 +725,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
         }
         ctx.restore();
         sweepUnusedRasters();
+        sweepUnusedImages();
       }
 
       if (hasWork) scheduleFrame();
@@ -462,6 +782,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       document.removeEventListener("visibilitychange", resumeIfVisible);
       window.removeEventListener("focus", resumeIfVisible);
       window.clearInterval(watchdog);
+      for (const [url, asset] of imageCache) removeImage(url, asset);
     };
   }, [active, sessionKey]);
 

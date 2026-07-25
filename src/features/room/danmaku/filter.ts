@@ -1,4 +1,5 @@
 import type { DanmakuEvent, DanmakuKind } from "@/shared/types/live";
+import { hasValidDanmakuContentSpans } from "./content";
 
 function normalizedShieldWords(shieldWords: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -36,7 +37,8 @@ export function isDanmakuEvent(value: unknown): value is DanmakuEvent {
     typeof event.content === "string" &&
     typeof event.ts === "number" &&
     Number.isFinite(event.ts) &&
-    (event.color === null || typeof event.color === "string")
+    (event.color === null || typeof event.color === "string") &&
+    (event.spans === undefined || event.spans === null || hasValidDanmakuContentSpans(event.spans))
   );
 }
 
@@ -105,27 +107,80 @@ export function shouldShowInDanmakuPanel(
   );
 }
 
-/**
- * Returns a lightweight stateful matcher for immediately repeated chat lines.
- * It deliberately ignores gifts and SC, which carry their own semantic data
- * and have independent de-duplication rules.
- */
-export function createRepeatMatcher(
-  enabled: boolean,
-  windowMs = 5_000,
-): (event: DanmakuEvent) => boolean {
-  let previousKey = "";
-  let previousAt = 0;
+export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 5_000;
+const MAX_CONTENT_AGGREGATION_KEYS = 512;
 
-  return (event) => {
-    if (!enabled || event.kind !== "chat") return false;
-    const timestamp = Number.isFinite(event.ts) ? event.ts : Date.now();
-    const key = `${event.user}\u0000${event.content.trim()}`;
-    const isRepeat =
-      key === previousKey && timestamp - previousAt >= 0 && timestamp - previousAt <= windowMs;
-    previousKey = key;
-    previousAt = timestamp;
-    return isRepeat;
+export type DanmakuContentAggregation = {
+  /** Shared by every platform and sender; null means this event is not grouped. */
+  key: string | null;
+  count: number;
+};
+
+export type DanmakuContentAggregator = {
+  aggregate: (event: DanmakuEvent) => DanmakuContentAggregation;
+  /** Stop a count when its displayed item has fallen out of the bounded feed. */
+  forget: (key: string) => void;
+  clear: () => void;
+};
+
+/**
+ * Content-only key for normal chat. Sender and source platform are
+ * deliberately excluded: a room-wide "加油" burst should be one visible
+ * message regardless of where its viewers are watching from.
+ */
+export function danmakuContentAggregationKey(event: DanmakuEvent): string | null {
+  if (event.kind !== "chat") return null;
+  const content = event.content.trim();
+  return content || null;
+}
+
+export function aggregatedDanmakuText(content: string, count: number): string {
+  const normalized = content.trim();
+  return count > 1 ? `${normalized} ×${count}` : normalized;
+}
+
+/**
+ * Maintains a bounded, sliding five-second content window. It deliberately
+ * ignores gifts and SC because those messages carry independent semantics.
+ */
+export function createDanmakuContentAggregator(
+  enabled: boolean,
+  windowMs = DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
+): DanmakuContentAggregator {
+  const entries = new Map<string, { at: number; count: number }>();
+  const safeWindowMs = Math.max(0, Number.isFinite(windowMs) ? windowMs : 0);
+
+  const trimToCapacity = () => {
+    while (entries.size > MAX_CONTENT_AGGREGATION_KEYS) {
+      const oldestKey = entries.keys().next().value;
+      if (oldestKey === undefined) return;
+      entries.delete(oldestKey);
+    }
+  };
+
+  return {
+    aggregate: (event) => {
+      const key = enabled ? danmakuContentAggregationKey(event) : null;
+      if (!key) return { key: null, count: 1 };
+
+      const at = Number.isFinite(event.ts) ? event.ts : Date.now();
+      const previous = entries.get(key);
+      const count =
+        previous && at >= previous.at && at - previous.at <= safeWindowMs ? previous.count + 1 : 1;
+
+      // Map insertion order doubles as a small LRU queue. A burst containing
+      // many unique comments therefore cannot retain unbounded key history.
+      entries.delete(key);
+      entries.set(key, { at, count });
+      trimToCapacity();
+      return { key, count };
+    },
+    forget: (key) => {
+      entries.delete(key);
+    },
+    clear: () => {
+      entries.clear();
+    },
   };
 }
 

@@ -104,6 +104,16 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
 // listener room B has just opened.
 const proxyLifecycleQueue = createSerialTaskQueue();
 
+let nextPlayerInstanceId = 0;
+
+function createPlayerInstanceId(): string {
+  nextPlayerInstanceId = (nextPlayerInstanceId + 1) % Number.MAX_SAFE_INTEGER;
+  // Keep IDs unique across a WebView reload too: a delayed command from the
+  // prior JS context must not accidentally own a freshly opened proxy.
+  const entropy = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  return `web-player-${entropy}-${nextPlayerInstanceId}`;
+}
+
 /**
  * DOM/MSE live player (no mpv). Streams via localhost proxy so CDN headers work.
  *
@@ -123,6 +133,7 @@ export function useWebPlayer(opts: {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<MpegtsPlayer | null>(null);
+  const playerInstanceIdRef = useRef<string | null>(null);
   const genRef = useRef(0);
   const volumeRef = useRef(80);
   const mutedRef = useRef(false);
@@ -135,6 +146,10 @@ export function useWebPlayer(opts: {
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mediaKey, setMediaKey] = useState(0);
+
+  if (playerInstanceIdRef.current === null) {
+    playerInstanceIdRef.current = createPlayerInstanceId();
+  }
 
   volumeRef.current = volume;
   mutedRef.current = muted;
@@ -198,10 +213,11 @@ export function useWebPlayer(opts: {
   useEffect(() => {
     let cancelled = false;
     const gen = ++genRef.current;
+    const proxySessionId = `${playerInstanceIdRef.current}:${gen}`;
 
     const stopProxy = async () => {
       try {
-        await invokeCmd("stream_proxy_stop");
+        await invokeCmd("stream_proxy_stop", { sessionId: proxySessionId });
       } catch {
         /* ignore */
       }
@@ -235,9 +251,10 @@ export function useWebPlayer(opts: {
         }
 
         try {
-          // 1) Tear down previous MSE + proxy completely.
+          // 1) Tear down the previous MSE completely. The upcoming proxy
+          // start atomically replaces any previous listener; cleanup only
+          // ever stops the listener it owns (see proxySessionId above).
           destroyPlayer();
-          await stopProxy();
           // Let the OS release the previous listen socket / MediaSource settle.
           await sleep(50);
           if (cancelled || genRef.current !== gen) return;
@@ -269,6 +286,7 @@ export function useWebPlayer(opts: {
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
             url: playbackSource.url,
             headers: playbackSource.headers,
+            sessionId: proxySessionId,
           });
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
