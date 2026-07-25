@@ -1,32 +1,33 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Chip } from "@/shared/components/Chip";
 import { PageHeader } from "@/shared/components/PageHeader";
-import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
-import type { FollowUser, SiteId } from "@/shared/types/live";
+import type { FollowUser } from "@/shared/types/live";
+import { FOLLOW_PLATFORM_PARAM, followPlatformFromSearch } from "./followRoute";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type TagRecord = { id: string; name: string };
 type LiveFilter = "all" | "live" | "offline";
 type SortMode = "status" | "platform";
-type PlatformFilter = SiteId | "all";
 
 export function FollowPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const [tagFilter, setTagFilter] = useState<string | "all">("all");
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("status");
   const [onlyLiveChip, setOnlyLiveChip] = useState(false);
-  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all");
+  const platformFilter = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
 
   const followsQuery = useQuery({
     queryKey: ["follows"],
@@ -87,33 +88,8 @@ export function FollowPage() {
   }, [followsQuery.data, platformFilter, tagFilter, liveFilter, onlyLiveChip, sortMode]);
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4">
-      <PageHeader
-        title="关注用户"
-        actions={
-          <Button
-            variant="secondary"
-            size="icon"
-            disabled={refreshMutation.isPending}
-            onClick={() => refreshMutation.mutate()}
-            title="刷新开播状态"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", refreshMutation.isPending && "animate-spin-soft")}
-            />
-          </Button>
-        }
-      />
-
-      <div className="h-11 overflow-x-auto rounded-xl border border-border bg-card">
-        <SiteSwitcher
-          value={platformFilter}
-          onValueChange={setPlatformFilter}
-          includeAll
-          filterMode
-          className="min-w-max px-1"
-        />
-      </div>
+    <div className="mx-auto flex max-w-4xl flex-col gap-4 pb-16">
+      <PageHeader title="关注用户" />
 
       <div className="flex flex-wrap items-center gap-2">
         <Chip
@@ -270,6 +246,28 @@ export function FollowPage() {
           })}
         </ul>
       )}
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-lg"
+              className="fixed right-5 bottom-5 z-20 rounded-full shadow-lg shadow-primary/25"
+              disabled={refreshMutation.isPending}
+              aria-label="刷新关注列表"
+              title="刷新关注列表"
+              onClick={() => refreshMutation.mutate()}
+            />
+          }
+        >
+          <RefreshCw
+            data-icon="inline-start"
+            aria-hidden
+            className={cn(refreshMutation.isPending && "animate-spin-soft")}
+          />
+        </TooltipTrigger>
+        <TooltipContent>刷新关注列表</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

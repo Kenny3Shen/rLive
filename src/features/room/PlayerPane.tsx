@@ -1,4 +1,5 @@
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
@@ -24,6 +25,16 @@ export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const CONTROLS_HOVER_ZONE_PX = 64;
+const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
+
+function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(
+    target.closest(
+      'button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
+    ),
+  );
+}
 
 type PlayerPaneProps = {
   playUrl: PlayUrl | null;
@@ -85,7 +96,9 @@ export function PlayerPane({
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const controlsHideTimerRef = useRef<number | null>(null);
+  const overlayInteractionOpenRef = useRef(false);
 
   const player = useWebPlayer({
     playUrl,
@@ -107,7 +120,8 @@ export function PlayerPane({
   const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
-  const canAutoHideControls = showHost && !player.paused;
+  const canAutoHideControls =
+    showHost && player.running && !player.paused && !overlayInteractionOpen;
 
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current !== null) {
@@ -118,7 +132,7 @@ export function PlayerPane({
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsHideTimer();
-    if (!canAutoHideControls) {
+    if (!canAutoHideControls || overlayInteractionOpenRef.current) {
       setControlsVisible(true);
       return;
     }
@@ -138,8 +152,20 @@ export function PlayerPane({
     setControlsVisible(true);
   }, [clearControlsHideTimer]);
 
+  const handleOverlayInteractionChange = useCallback(
+    (open: boolean) => {
+      overlayInteractionOpenRef.current = open;
+      setOverlayInteractionOpen(open);
+      if (open) holdControlsVisible();
+    },
+    [holdControlsVisible],
+  );
+
   const handleStagePointerActivity = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.type === "pointerdown") {
+        event.currentTarget.focus({ preventScroll: true });
+      }
       // A pointer can enter the control area while it is still transparent and
       // pointer-events are disabled. Treat the bottom strip as interactive on
       // that first movement so it does not fade out underneath the cursor.
@@ -153,6 +179,41 @@ export function PlayerPane({
     [holdControlsVisible, revealControls],
   );
 
+  const handleStageKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.nativeEvent.isComposing ||
+        isPlayerInteractiveTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (event.key === "Tab") {
+        revealControls();
+        return;
+      }
+
+      if (event.repeat) return;
+      const key = event.key.toLowerCase();
+      if (key !== " " && key !== "k" && key !== "m" && key !== "f") return;
+
+      event.preventDefault();
+      revealControls();
+      if (key === " " || key === "k") {
+        player.togglePause();
+      } else if (key === "m") {
+        player.toggleMute();
+      } else {
+        void player.toggleFullscreen();
+      }
+    },
+    [player, revealControls],
+  );
+
   // Live playback stays unobstructed by default, while every pointer, touch
   // or keyboard interaction brings the bottom chrome back immediately.
   useEffect(() => {
@@ -161,6 +222,21 @@ export function PlayerPane({
     return clearControlsHideTimer;
   }, [roomSessionKey, scheduleControlsHide, clearControlsHideTimer]);
 
+  useEffect(() => {
+    if (overlayInteractionOpen) return;
+    // Base UI returns focus from a portalled Select/Popover to its trigger.
+    // Its exit transition is 100ms, so schedule after focus restoration rather
+    // than allowing that focus handler to clear the idle timer.
+    const timer = window.setTimeout(scheduleControlsHide, OVERLAY_FOCUS_RESTORE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [overlayInteractionOpen, scheduleControlsHide]);
+
+  useEffect(() => {
+    const onFullscreenChange = () => revealControls();
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, [revealControls]);
+
   return (
     <div className="flex h-full min-h-0 w-full">
       <div className="relative flex min-w-0 flex-1 flex-col bg-black">
@@ -168,10 +244,13 @@ export function PlayerPane({
           <div
             ref={player.stageRef}
             className="relative min-h-0 flex-1 overflow-hidden bg-black"
+            tabIndex={0}
+            aria-label="直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
+            aria-keyshortcuts="Space K M F"
             onPointerEnter={handleStagePointerActivity}
             onPointerMove={handleStagePointerActivity}
             onPointerDown={handleStagePointerActivity}
-            onKeyDownCapture={revealControls}
+            onKeyDown={handleStageKeyDown}
           >
             {loading && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -258,6 +337,7 @@ export function PlayerPane({
                 loadError={loadError}
                 disabled={transportDisabled}
                 overlay
+                onOverlayInteractionChange={handleOverlayInteractionChange}
                 refreshDisabled={refreshDisabled}
                 onRefresh={onRefresh}
                 onTogglePause={() => player.togglePause()}
@@ -299,7 +379,7 @@ export function PlayerPane({
               SC
             </TabsTrigger>
             <TabsTrigger value="follow" className="text-sm">
-              关注
+              关注列表
             </TabsTrigger>
             <TabsTrigger value="settings" className="text-sm">
               设置

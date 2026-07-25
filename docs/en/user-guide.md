@@ -32,15 +32,15 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 | Area | Role |
 |------|------|
 | Sidebar | Home, follows, categories, history, settings |
-| Header | Site switcher, search (user / room ID / title) |
-| Room | Centred room title, player, host information, and side tabs in the order Danmaku / SC / Follows / Settings |
+| Header | Site switcher, search (user / room ID / title); the Follows page uses the same centred selector with an extra All platforms option |
+| Room | Left-side Back control, centred room title, player, host information, and side tabs in the order Danmaku / SC / Follow list / Settings |
 
 ## 4. Watching
 
-1. Pick a site in the header.  
+1. A first launch opens Bilibili by default; pick another site in the header when needed.
 2. Selecting a category opens its own room-list page; search can target **all**, **user**, **room ID**, or **title**.
-3. The room header shows only the centred room title. The side-header shows the host avatar, name, platform, and current heat.
-4. The player controls are a transparent overlay at the bottom of the video. They hide after a short idle period during playback and reappear on pointer, click, or keyboard activity.
+3. The room header has a Back control on the left and keeps the title centred. It returns to the source page for in-app navigation, or Home for a directly opened room URL. The side-header shows the host avatar, name, platform, and current heat.
+4. The player controls are a transparent overlay at the bottom of the video. They hide after a short idle period during playback and reappear on pointer, click, or keyboard activity. They remain visible while a volume, quality, or line menu is open; with the picture focused, `Space` / `K` play or pause, `M` mutes, and `F` toggles fullscreen.
 5. The refresh control sits left of pause and refreshes stream metadata before rebuilding the playback session; the volume icon opens a vertical slider.
 6. **Quality** and **line** are separate selectors on the right and show only the active selection.
 7. The right sidebar, floating danmaku, and fullscreen use compact icon controls. Reopening the sidebar preserves chat and SC lists.
@@ -82,7 +82,7 @@ Room side panel tab **SC** shows only Bilibili `super_chat` events. When the pla
 
 ## 6. Follows & history
 
-Follow anchors (with tags) from the room page; refresh live status on the follow list. The room-side **关注** tab places live rooms first and switches directly to a selected followed room without leaving the room page. Visited rooms are stored in history.
+Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, and its floating refresh button updates live status. The room-side **Follow list** tab places live rooms first and switches directly to a selected followed room without leaving the room page; it also provides a floating refresh button. Visited rooms are stored in history.
 
 ## 7. Settings summary
 

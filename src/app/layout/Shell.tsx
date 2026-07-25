@@ -1,18 +1,29 @@
 import { useLayoutEffect, useRef } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { invokeCmd } from "@/shared/api/tauri";
+import {
+  FOLLOW_PLATFORM_PARAM,
+  followPlatformFromSearch,
+  withFollowPlatform,
+} from "@/features/follow/followRoute";
 import { Sidebar } from "./Sidebar";
 import { cn } from "@/lib/utils";
 
 export function Shell() {
   const { pathname } = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const isRoom = pathname.startsWith("/room/");
+  const isFollow = pathname === "/follow";
   const previousIsRoomRef = useRef(isRoom);
   const hasCommittedRef = useRef(false);
   const showSiteSwitcher =
-    pathname === "/" || pathname.startsWith("/category") || pathname.startsWith("/search");
+    pathname === "/" ||
+    pathname.startsWith("/category") ||
+    pathname.startsWith("/search") ||
+    isFollow;
+  const followPlatform = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
 
   useLayoutEffect(() => {
     const wasRoom = previousIsRoomRef.current;
@@ -36,7 +47,18 @@ export function Shell() {
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               {showSiteSwitcher && (
                 <div className="pointer-events-auto">
-                  <SiteSwitcher />
+                  {isFollow ? (
+                    <SiteSwitcher
+                      value={followPlatform}
+                      includeAll
+                      filterMode
+                      onValueChange={(platform) =>
+                        setSearchParams((current) => withFollowPlatform(current, platform))
+                      }
+                    />
+                  ) : (
+                    <SiteSwitcher />
+                  )}
                 </div>
               )}
             </div>
