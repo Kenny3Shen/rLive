@@ -174,6 +174,8 @@ export function RoomPage() {
           roomSessionKey={`${siteId}:${roomId}`}
           sideTab={sideTab}
           onSideTabChange={setSideTab}
+          siteId={siteId}
+          roomId={detail.room_id}
         />
       </div>
 

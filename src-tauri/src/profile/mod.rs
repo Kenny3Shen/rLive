@@ -35,8 +35,42 @@ impl ProfilePackage {
     }
 }
 
+/// These controls intentionally never leave the current device with a profile.
+///
+/// A Douyin signing endpoint is trusted to receive the local Douyin Cookie while
+/// creating a chat connection, and the Bilibili toggle is an explicit consent
+/// for a write action.  An imported profile must not be able to choose either.
+fn clear_local_only_settings(settings: &mut AppSettings) {
+    settings.bilibili_danmaku_send_enabled = false;
+    settings.douyin_danmaku_sign_service = None;
+}
+
+/// Convert a package into the portable on-disk representation.
+///
+/// Keep the defensive stripping here as well as in [`export_package`]: callers
+/// of `write_package` should not accidentally export local-only controls when
+/// they construct a `ProfilePackage` themselves.
+fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Value> {
+    let mut portable = package.clone();
+    clear_local_only_settings(&mut portable.settings);
+
+    let mut value = serde_json::to_value(portable)
+        .map_err(|e| AppError::new("profile_encode_error", format!("serialize: {e}")))?;
+    if let Some(settings) = value
+        .get_mut("settings")
+        .and_then(|value| value.as_object_mut())
+    {
+        // Omit rather than serialize safe-looking defaults so future import
+        // changes cannot mistake these device-local choices for portable data.
+        settings.remove("bilibili_danmaku_send_enabled");
+        settings.remove("douyin_danmaku_sign_service");
+    }
+    Ok(value)
+}
+
 pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
-    let settings = settings::get(conn)?;
+    let mut settings = settings::get(conn)?;
+    clear_local_only_settings(&mut settings);
     let shield = settings.danmaku_shield_words.clone();
     Ok(ProfilePackage {
         version: 1,
@@ -50,9 +84,9 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
 }
 
 pub fn write_package(path: &Path, package: &ProfilePackage) -> AppResult<()> {
-    // Ensure cookies never appear even if someone extends the model later.
-    let value = serde_json::to_value(package)
-        .map_err(|e| AppError::new("profile_encode_error", format!("serialize: {e}")))?;
+    // Ensure cookies and local-only controls never appear even if someone
+    // extends the model or invokes this helper with a hand-built package.
+    let value = portable_profile_value(package)?;
     if value.get("cookies").is_some() {
         return Err(AppError::new(
             "profile_security",
@@ -110,6 +144,10 @@ pub fn merge_into_db(
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.mpv_path = package.settings.mpv_path.clone();
+    // Do not copy `bilibili_danmaku_send_enabled` or
+    // `douyin_danmaku_sign_service`.  A profile is portable/untrusted input;
+    // importing it must not grant sending consent or pick a service that can
+    // receive this device's Douyin Cookie.  Existing local values are kept.
 
     let mut words: HashSet<String> = settings.danmaku_shield_words.into_iter().collect();
     for w in &package.danmaku_shield_words {
@@ -139,9 +177,31 @@ mod tests {
     use crate::db::schema::open_in_memory;
 
     #[test]
-    fn export_model_has_no_cookie_field() {
-        let v = serde_json::to_value(ProfilePackage::sample()).unwrap();
+    fn portable_export_omits_cookies_and_local_only_danmaku_controls() {
+        let mut package = ProfilePackage::sample();
+        package.settings.bilibili_danmaku_send_enabled = true;
+        package.settings.douyin_danmaku_sign_service =
+            Some("https://signer.example.invalid/sign".into());
+
+        let v = portable_profile_value(&package).unwrap();
         assert!(v.get("cookies").is_none());
+        let settings = v["settings"].as_object().unwrap();
+        assert!(!settings.contains_key("bilibili_danmaku_send_enabled"));
+        assert!(!settings.contains_key("douyin_danmaku_sign_service"));
+    }
+
+    #[test]
+    fn export_package_clears_local_only_danmaku_controls() {
+        let conn = open_in_memory().unwrap();
+        let mut local = AppSettings::default();
+        local.bilibili_danmaku_send_enabled = true;
+        local.douyin_danmaku_sign_service = Some("http://127.0.0.1:18080/sign".into());
+        settings::set(&conn, &local).unwrap();
+
+        let package = export_package(&conn).unwrap();
+
+        assert!(!package.settings.bilibili_danmaku_send_enabled);
+        assert!(package.settings.douyin_danmaku_sign_service.is_none());
     }
 
     #[test]
@@ -170,5 +230,28 @@ mod tests {
         merge_into_db(&conn, &package).unwrap();
 
         assert!(settings::get(&conn).unwrap().danmaku_filter_gifts);
+    }
+
+    #[test]
+    fn merge_preserves_local_only_danmaku_controls() {
+        let conn = open_in_memory().unwrap();
+        let mut local = AppSettings::default();
+        local.bilibili_danmaku_send_enabled = true;
+        local.douyin_danmaku_sign_service = Some("http://127.0.0.1:18080/sign".into());
+        settings::set(&conn, &local).unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.settings.bilibili_danmaku_send_enabled = false;
+        package.settings.douyin_danmaku_sign_service =
+            Some("https://untrusted.example.invalid/sign".into());
+
+        merge_into_db(&conn, &package).unwrap();
+
+        let after = settings::get(&conn).unwrap();
+        assert!(after.bilibili_danmaku_send_enabled);
+        assert_eq!(
+            after.douyin_danmaku_sign_service.as_deref(),
+            Some("http://127.0.0.1:18080/sign")
+        );
     }
 }

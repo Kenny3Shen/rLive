@@ -1,4 +1,5 @@
 pub mod bilibili;
+pub mod douyin;
 pub mod douyu;
 pub mod huya;
 pub mod tars;
@@ -153,6 +154,9 @@ pub async fn connect(
     site_id: SiteId,
     room_id: &str,
     detail_raw: &serde_json::Value,
+    douyin_sign_service: Option<&str>,
+    cookie: &str,
+    proxy: Option<&str>,
 ) -> AppResult<()> {
     if !manager.is_current(generation) {
         return Ok(());
@@ -195,6 +199,29 @@ pub async fn connect(
                 generation,
                 "huya",
                 huya::run_loop(app, args),
+            );
+            Ok(())
+        }
+        SiteId::Douyin => {
+            let args = douyin::request_signed_connection(
+                douyin_sign_service,
+                room_id,
+                detail_raw,
+                cookie,
+                proxy,
+            )
+            .await?;
+            // The signing request may take longer than a room transition.
+            // Do not let a stale result install itself after a new route won.
+            if !manager.is_current(generation) {
+                return Ok(());
+            }
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                "douyin",
+                douyin::run_loop(app, args),
             );
             Ok(())
         }

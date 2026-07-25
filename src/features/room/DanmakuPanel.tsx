@@ -10,6 +10,8 @@ import {
   shouldShowInDanmakuPanel,
 } from "./danmaku/filter";
 import { cn } from "@/lib/utils";
+import type { SiteId } from "@/shared/types/live";
+import { BilibiliDanmakuComposer } from "./BilibiliDanmakuComposer";
 
 const MAX = 400;
 const MAX_BUFFERED = 200;
@@ -60,9 +62,18 @@ type DanmakuPanelProps = {
   visible?: boolean;
   className?: string;
   statusText?: string | null;
+  siteId?: SiteId;
+  roomId?: string;
 };
 
-export function DanmakuPanel({ active, visible = true, className, statusText }: DanmakuPanelProps) {
+export function DanmakuPanel({
+  active,
+  visible = true,
+  className,
+  statusText,
+  siteId,
+  roomId,
+}: DanmakuPanelProps) {
   const [items, setItems] = useState<DanmakuLine[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
@@ -222,6 +233,7 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
+      <BilibiliDanmakuComposer siteId={siteId} roomId={roomId} />
     </div>
   );
 }

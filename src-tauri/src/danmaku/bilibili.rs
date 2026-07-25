@@ -2,6 +2,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde_json::Value;
 use tauri::AppHandle;
 use tokio::time;
@@ -35,6 +36,134 @@ fn cookie_value(cookie: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+const SEND_CHAT_URL: &str = "https://api.live.bilibili.com/msg/send";
+const MAX_OUTGOING_CHAT_CHARS: usize = 80;
+
+/// Whether a saved browser Cookie contains the two values required for the
+/// Bilibili live chat write endpoint.  This intentionally exposes only a
+/// boolean to callers; neither Cookie nor CSRF values leave the backend.
+pub fn has_send_credentials(cookie: &str) -> bool {
+    cookie_value(cookie, "SESSDATA").is_some() && cookie_value(cookie, "bili_jct").is_some()
+}
+
+/// Send one user-confirmed, plain scrolling Bilibili danmaku.
+///
+/// This intentionally has no retry and no optimistic local event.  A timeout
+/// could still mean that Bilibili accepted the message, while the normal room
+/// WebSocket is the source of truth for its eventual echo.
+pub async fn send_chat(
+    client: &Client,
+    cookie: &str,
+    room_id: &str,
+    message: &str,
+) -> AppResult<()> {
+    let room_id = room_id.trim();
+    if room_id.is_empty()
+        || room_id.len() > 32
+        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            AppError::new("bilibili_send_invalid_room", "B站直播间号无效").with_site("bilibili"),
+        );
+    }
+    if !has_send_credentials(cookie) {
+        return Err(AppError::new(
+            "bilibili_send_cookie_missing",
+            "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
+        )
+        .with_site("bilibili"));
+    }
+    let message = normalize_outgoing_message(message)?;
+    let csrf = cookie_value(cookie, "bili_jct").unwrap_or_default();
+    let rnd = chrono::Utc::now().timestamp().to_string();
+    let form = [
+        ("roomid", room_id.to_string()),
+        ("msg", message),
+        ("mode", "1".to_string()),
+        ("bubble", "0".to_string()),
+        ("rnd", rnd),
+        ("color", "16777215".to_string()),
+        ("fontsize", "25".to_string()),
+        ("csrf", csrf.clone()),
+        ("csrf_token", csrf),
+    ];
+    let response = client
+        .post(SEND_CHAT_URL)
+        .header("user-agent", crate::sites::bilibili::DEFAULT_USER_AGENT)
+        .header("referer", crate::sites::bilibili::DEFAULT_REFERER)
+        .header("origin", "https://live.bilibili.com")
+        .header("cookie", cookie)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "bilibili_send_unknown",
+                "发送状态未知，请到直播间确认是否已送达",
+            )
+            .with_site("bilibili")
+            .retryable()
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::new(
+            "bilibili_send_rejected",
+            "B站未接受此条弹幕，请检查账号状态或直播间限制",
+        )
+        .with_site("bilibili"));
+    }
+    let value = response.json::<Value>().await.map_err(|_| {
+        AppError::new(
+            "bilibili_send_unknown",
+            "发送状态未知，请到直播间确认是否已送达",
+        )
+        .with_site("bilibili")
+        .retryable()
+    })?;
+    let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
+    match code {
+        0 => Ok(()),
+        10030 | 10031 | 10039 => Err(AppError::new(
+            "bilibili_send_rate_limited",
+            "发送过快，请稍后再试",
+        )
+        .with_site("bilibili")
+        .retryable()),
+        -101 | -111 => Err(AppError::new(
+            "bilibili_send_login_expired",
+            "B站登录状态已失效，请更新 Cookie 后重试",
+        )
+        .with_site("bilibili")),
+        _ => Err(AppError::new(
+            "bilibili_send_rejected",
+            "B站未接受此条弹幕，请检查账号状态或直播间限制",
+        )
+        .with_site("bilibili")),
+    }
+}
+
+fn normalize_outgoing_message(value: &str) -> AppResult<String> {
+    let message = value.trim();
+    if message.is_empty() {
+        return Err(
+            AppError::new("bilibili_send_empty", "请输入要发送的弹幕内容").with_site("bilibili"),
+        );
+    }
+    if message.chars().count() > MAX_OUTGOING_CHAT_CHARS {
+        return Err(AppError::new(
+            "bilibili_send_too_long",
+            format!("单条弹幕最多 {MAX_OUTGOING_CHAT_CHARS} 个字符"),
+        )
+        .with_site("bilibili"));
+    }
+    if message.chars().any(char::is_control) {
+        return Err(
+            AppError::new("bilibili_send_invalid_text", "弹幕不能包含换行或控制字符")
+                .with_site("bilibili"),
+        );
+    }
+    Ok(message.to_string())
 }
 
 pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<BilibiliDanmakuArgs> {
@@ -717,6 +846,21 @@ mod tests {
     fn cookie_value_parses() {
         let c = "a=1; DedeUserID=42; b=2";
         assert_eq!(cookie_value(c, "DedeUserID").as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn outgoing_send_requires_complete_login_cookie() {
+        assert!(!has_send_credentials("SESSDATA=abc"));
+        assert!(!has_send_credentials("bili_jct=csrf"));
+        assert!(has_send_credentials("SESSDATA=abc; bili_jct=csrf"));
+    }
+
+    #[test]
+    fn outgoing_message_is_single_line_and_bounded() {
+        assert_eq!(normalize_outgoing_message("  你好  ").unwrap(), "你好");
+        assert!(normalize_outgoing_message("\n").is_err());
+        assert!(normalize_outgoing_message("hello\nworld").is_err());
+        assert!(normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_CHARS + 1)).is_err());
     }
 
     #[test]

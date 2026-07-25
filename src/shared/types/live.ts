@@ -117,4 +117,8 @@ export type AppSettings = {
   mpv_path: string | null;
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
   quality_level?: "high" | "mid" | "low";
+  /** Explicit opt-in for the experimental Bilibili single-message sender. */
+  bilibili_danmaku_send_enabled?: boolean;
+  /** User-operated endpoint that resolves a Douyin room into a signed WSS URL. */
+  douyin_danmaku_sign_service?: string | null;
 };

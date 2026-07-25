@@ -20,6 +20,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 
 type SettingsCategory = "playback" | "network" | "account" | "data";
 
@@ -140,6 +141,101 @@ function CookieField({
       </Field>
     </Section>
   );
+}
+
+function BilibiliDanmakuSendField() {
+  const enabled = useSettingsStore((s) => s.bilibiliDanmakuSendEnabled);
+  const setEnabled = useSettingsStore((s) => s.setBilibiliDanmakuSendEnabled);
+
+  return (
+    <Section
+      title="实验性：发送 B 站弹幕"
+      description="灰度功能，默认关闭。仅支持用户逐条确认后发送普通滚动文本，不会自动重试或发送礼物。"
+    >
+      <Field orientation="responsive">
+        <FieldContent>
+          <FieldTitle id="bilibili-send-title">启用单条弹幕发送</FieldTitle>
+          <FieldDescription>
+            启用后仍需在房间内保存含 SESSDATA 与 bili_jct 的 Cookie；Cookie
+            缺失或无效时发送框会保持禁用。
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          aria-labelledby="bilibili-send-title"
+          checked={enabled}
+          onCheckedChange={setEnabled}
+        />
+      </Field>
+    </Section>
+  );
+}
+
+function DouyinDanmakuSignServiceField() {
+  const signService = useSettingsStore((s) => s.douyinDanmakuSignService);
+  const setSignService = useSettingsStore((s) => s.setDouyinDanmakuSignService);
+  const [draft, setDraft] = useState(signService ?? "");
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(signService ?? "");
+  }, [signService]);
+
+  function save() {
+    const next = draft.trim();
+    if (next && !isAllowedDouyinSignServiceUrl(next)) {
+      setStatus("仅支持 HTTPS，或 localhost / 127.0.0.1 / ::1 的 HTTP 完整地址");
+      return;
+    }
+    setSignService(next || null);
+    setStatus(next ? "签名服务地址已保存" : "签名服务地址已清除");
+  }
+
+  return (
+    <Section
+      title="抖音实时弹幕"
+      description="抖音 WebSocket 需要短时签名地址。请配置你自行运行或信任的签名服务完整端点。"
+    >
+      <Field>
+        <FieldLabel htmlFor="douyin-danmaku-sign-service">签名服务地址</FieldLabel>
+        <FieldContent>
+          <div className="flex gap-2">
+            <Input
+              id="douyin-danmaku-sign-service"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="http://127.0.0.1:18080/sign"
+              spellCheck={false}
+              autoComplete="off"
+              className="font-mono text-xs"
+            />
+            <Button className="shrink-0" onClick={save}>
+              保存
+            </Button>
+          </div>
+          <FieldDescription>
+            为保护 Cookie，仅允许 HTTPS，或本机 localhost / 127.0.0.1 / ::1 的 HTTP
+            服务。连接时会把已保存的抖音 Cookie 交给该服务生成签名。
+          </FieldDescription>
+          {status && <FieldDescription>{status}</FieldDescription>}
+        </FieldContent>
+      </Field>
+    </Section>
+  );
+}
+
+/** Match the backend's Cookie-safe signer endpoint policy before saving. */
+function isAllowedDouyinSignServiceUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.hash) return false;
+    if (url.protocol === "https:") return true;
+    if (url.protocol !== "http:") return false;
+
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+  } catch {
+    return false;
+  }
 }
 
 export function SettingsPage() {
@@ -298,15 +394,17 @@ export function SettingsPage() {
                 <CookieField
                   siteId="bilibili"
                   title="哔哩哔哩"
-                  description="用于只读 API；清空后保存即可删除。"
+                  description="用于只读 API、接收弹幕和可选的实验性单条发送；清空后保存即可删除。"
                   placeholder="SESSDATA=…; bili_jct=…"
                 />
+                <BilibiliDanmakuSendField />
                 <CookieField
                   siteId="douyin"
                   title="抖音"
-                  description="含 ttwid 可提高解析与画质可用性。"
-                  placeholder="ttwid=…; msToken=…"
+                  description="完整网页登录 Cookie 可用于搜索、提高房间解析可用性，并作为实时弹幕签名服务的会话输入。"
+                  placeholder="sessionid=…; ttwid=…; msToken=…"
                 />
+                <DouyinDanmakuSignServiceField />
               </div>
             </SettingsContent>
           </TabsContent>
@@ -315,7 +413,7 @@ export function SettingsPage() {
             <SettingsContent title="数据">
               <Section
                 title="导入 / 导出"
-                description="设置、关注、标签、历史和屏蔽词；不含 Cookie。"
+                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、抖音签名服务或实验性发送开关。"
               >
                 <Field>
                   <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>

@@ -12,7 +12,9 @@ mod state;
 mod stream_proxy;
 
 use commands::account::{account_clear_cookie, account_get_cookie, account_set_cookie};
-use commands::danmaku::{danmaku_connect, danmaku_disconnect};
+use commands::danmaku::{
+    bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
+};
 use commands::follow::{
     follow_add, follow_list, follow_refresh, follow_remove, follow_set_tags, tag_list, tag_remove,
     tag_upsert,
@@ -30,14 +32,17 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // MCP Bridge (https://github.com/hypothesi/mcp-server-tauri): localhost only.
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(
-            tauri_plugin_mcp_bridge::Builder::new()
-                .bind_address("127.0.0.1")
-                .build(),
-        );
+    // The MCP bridge is useful for local development automation. It is never
+    // included in a release process: release commands can access local account
+    // data and the experimental Bilibili write command, which must remain
+    // behind the app's own UI confirmation flow.
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build(),
+    );
 
     builder
         .setup(|app| {
@@ -66,6 +71,8 @@ pub fn run() {
             stream_proxy_stop,
             danmaku_connect,
             danmaku_disconnect,
+            bilibili_danmaku_send_status,
+            bilibili_danmaku_send,
             follow_list,
             follow_add,
             follow_remove,
