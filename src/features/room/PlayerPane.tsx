@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { PlayUrl } from "@/shared/types/live";
+import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
@@ -24,7 +24,6 @@ import type { PlayerEvent } from "@/shared/types/player";
 export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
-const CONTROLS_HOVER_ZONE_PX = 64;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
 
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
@@ -62,6 +61,9 @@ type PlayerPaneProps = {
   /** Controlled by RoomPage so a follow-list room switch keeps this tab open. */
   sideTab?: RoomSideTab;
   onSideTabChange?: (tab: RoomSideTab) => void;
+  /** The canonical room identity for platform-specific chat controls. */
+  siteId?: SiteId;
+  roomId?: string;
 };
 
 /**
@@ -92,12 +94,15 @@ export function PlayerPane({
   roomSessionKey,
   sideTab,
   onSideTabChange,
+  siteId,
+  roomId,
 }: PlayerPaneProps) {
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const controlsHideTimerRef = useRef<number | null>(null);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
   const lastControlsActivityAtRef = useRef(Date.now());
   const overlayInteractionOpenRef = useRef(false);
@@ -206,18 +211,26 @@ export function PlayerPane({
       if (event.type === "pointerdown") {
         event.currentTarget.focus({ preventScroll: true });
       }
-      // A pointer can enter the control area while it is still transparent and
-      // pointer-events are disabled. Treat the bottom strip as interactive on
-      // that first movement so it does not fade out underneath the cursor.
-      const stage = event.currentTarget.getBoundingClientRect();
-      if (event.clientY >= stage.bottom - CONTROLS_HOVER_ZONE_PX) {
-        holdControlsVisible();
-        return;
-      }
+      // The hidden bar deliberately has no pointer events.  Revealing on the
+      // first stage movement makes its whole bottom edge immediately usable
+      // without querying layout on every pointer event.
       revealControls();
     },
-    [holdControlsVisible, revealControls],
+    [revealControls],
   );
+
+  const focusFirstControl = useCallback(() => {
+    // A hidden transparent bar must not be in the tab sequence.  After Tab
+    // reveals it, explicitly put focus on its first usable control instead of
+    // relying on an asynchronous React state update to affect this key's
+    // native tab traversal.
+    window.requestAnimationFrame(() => {
+      const target = controlsRef.current?.querySelector<HTMLElement>(
+        'button:not(:disabled), [role="combobox"]:not([aria-disabled="true"])',
+      );
+      target?.focus({ preventScroll: true });
+    });
+  }, []);
 
   const handleStageKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -233,7 +246,9 @@ export function PlayerPane({
       }
 
       if (event.key === "Tab") {
+        event.preventDefault();
         revealControls();
+        focusFirstControl();
         return;
       }
 
@@ -251,7 +266,7 @@ export function PlayerPane({
         void player.toggleFullscreen();
       }
     },
-    [player, revealControls],
+    [focusFirstControl, player, revealControls],
   );
 
   // Live playback stays unobstructed by default, while every pointer, touch
@@ -344,8 +359,11 @@ export function PlayerPane({
             )}
 
             <div
+              ref={controlsRef}
               data-player-controls
               data-visible={controlsVisible ? "true" : "false"}
+              aria-hidden={!controlsVisible}
+              inert={!controlsVisible}
               className={cn(
                 "absolute inset-x-0 bottom-0 z-30 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
                 controlsVisible
@@ -353,10 +371,6 @@ export function PlayerPane({
                   : "pointer-events-none translate-y-2 opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
-              onPointerMove={(event) => {
-                event.stopPropagation();
-                holdControlsVisible();
-              }}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 holdControlsVisible();
@@ -442,6 +456,8 @@ export function PlayerPane({
               active={danmakuActive}
               visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
               statusText={danmakuStatusText}
+              siteId={siteId}
+              roomId={roomId}
               className="h-full"
             />
           </TabsContent>

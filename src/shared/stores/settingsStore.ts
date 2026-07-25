@@ -11,6 +11,7 @@ export type ThemeMode = "system" | "light" | "dark";
 // controls (for example two slider commits) cannot resolve out of order and
 // restore an earlier snapshot over the newest setting.
 let settingsWriteQueue: Promise<void> = Promise.resolve();
+let bilibiliSendSettingEpoch = 0;
 
 type SettingsGetResponse = {
   settings: AppSettings;
@@ -47,6 +48,10 @@ type SettingsState = {
   danmakuShieldWords: string[];
   mpvPath: string | null;
   qualityLevel: QualityLevel;
+  bilibiliDanmakuSendEnabled: boolean;
+  /** True while the explicit Bilibili write opt-in is reaching the backend. */
+  bilibiliDanmakuSendPending: boolean;
+  douyinDanmakuSignService: string | null;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -54,6 +59,8 @@ type SettingsState = {
   setProxy: (proxy: string | null) => void;
   setMpvPath: (mpvPath: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
+  setBilibiliDanmakuSendEnabled: (enabled: boolean) => void;
+  setDouyinDanmakuSignService: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -76,6 +83,8 @@ const defaultSettings: AppSettings = {
   danmaku_shield_words: [],
   mpv_path: null,
   quality_level: "high",
+  bilibili_danmaku_send_enabled: false,
+  douyin_danmaku_sign_service: null,
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
@@ -94,6 +103,8 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_shield_words: state.danmakuShieldWords,
     mpv_path: state.mpvPath,
     quality_level: state.qualityLevel,
+    bilibili_danmaku_send_enabled: state.bilibiliDanmakuSendEnabled,
+    douyin_danmaku_sign_service: state.douyinDanmakuSignService,
   };
 }
 
@@ -114,6 +125,9 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuShieldWords: [],
       mpvPath: null,
       qualityLevel: "high",
+      bilibiliDanmakuSendEnabled: false,
+      bilibiliDanmakuSendPending: false,
+      douyinDanmakuSignService: null,
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
@@ -135,6 +149,24 @@ export const useSettingsStore = create<SettingsState>()(
         set({ qualityLevel });
         void get().persistToBackend({ quality_level: qualityLevel });
       },
+      setBilibiliDanmakuSendEnabled: (bilibiliDanmakuSendEnabled) => {
+        const epoch = ++bilibiliSendSettingEpoch;
+        set({ bilibiliDanmakuSendEnabled, bilibiliDanmakuSendPending: true });
+        void get()
+          .persistToBackend({ bilibili_danmaku_send_enabled: bilibiliDanmakuSendEnabled })
+          .finally(() => {
+            // Rapidly toggling on/off queues two whole-settings writes. Only
+            // the newest completion may clear the sync marker, otherwise the
+            // composer could query the old backend value in between them.
+            if (epoch === bilibiliSendSettingEpoch) {
+              set({ bilibiliDanmakuSendPending: false });
+            }
+          });
+      },
+      setDouyinDanmakuSignService: (douyinDanmakuSignService) => {
+        set({ douyinDanmakuSignService });
+        void get().persistToBackend({ douyin_danmaku_sign_service: douyinDanmakuSignService });
+      },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         set({
@@ -152,6 +184,9 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           mpvPath: settings.mpv_path,
           qualityLevel: parseQualityLevel(settings.quality_level),
+          bilibiliDanmakuSendEnabled: settings.bilibili_danmaku_send_enabled ?? false,
+          bilibiliDanmakuSendPending: false,
+          douyinDanmakuSignService: settings.douyin_danmaku_sign_service?.trim() || null,
           hydratedFromBackend: true,
         });
       },

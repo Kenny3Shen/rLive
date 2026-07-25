@@ -8,13 +8,15 @@ rLive is a desktop live-stream aggregator for browsing, searching, and watching 
 
 | Site | Lists / search | Playback | Danmaku |
 |------|----------------|----------|---------|
-| Bilibili | Yes | Yes | Yes (cookie recommended) |
+| Bilibili | Yes | Yes | Yes (cookie recommended; single-message sending is opt-in) |
 | Huya | Yes | Yes | Yes |
 | Douyu | Yes | Yes | Yes |
-| Douyin | First-page recommendations/categories; search needs a logged-in cookie | Yes | Not yet supported |
+| Douyin | First-page recommendations/categories; search needs a logged-in cookie | Yes | Yes (requires a signing service) |
 | Kuaishou | Recommendations / categories / game-category search | Yes | Not yet supported |
 
 Douyin's public server-rendered list is currently reliable only for its first page. rLive deliberately does not offer fake pagination that would repeat rooms. Live search becomes available after you save a complete logged-in browser cookie.
+
+Douyin's WSS endpoint requires a short-lived signed URL. rLive does not ship a reverse-engineered signer; configure the full endpoint of a service you operate or trust under **Settings → Account**. To protect the saved Cookie, the endpoint must be HTTPS or loopback HTTP. See [signing-service integration](douyin-danmaku-signing-service.md).
 
 Kuaishou uses public recommendation/category data and the room's initial state. Search intentionally matches game-category names only and returns that category's rooms; no match produces an empty list rather than pretending to search creators. The first version prefers H.264 playback URLs and has no real-time danmaku.
 
@@ -34,7 +36,7 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 | Area | Role |
 |------|------|
 | Sidebar | Home, follows, categories, history, settings |
-| Header | Site switcher, search (user / room ID / title); the Follows page uses the same centred selector with an extra All platforms option |
+| Header | Site switcher, search (user / room ID / title); platform changes use a short accent-colour content transition; the Follows page uses the same centred selector with an extra All platforms option |
 | Room | Icon-only Back control, centred room title, player, host information, and side tabs in the order Danmaku / SC / Follow list / Settings |
 
 ## 4. Watching
@@ -47,7 +49,7 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 6. **Quality** and **line** are separate selectors on the right and show only the active selection.
 7. The right sidebar, floating danmaku, and fullscreen use compact icon controls. Reopening the sidebar preserves chat and SC lists.
 8. Default quality preference: **Settings → Playback**.
-9. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie. Kuaishou supports recommendations, categories, game categories, rooms, and playback; its search is limited to game-category names.
+9. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie. For live chat, configure a signing-service endpoint as well; it decodes normal/emoji chat, gifts, likes, entries, and common social notices. Kuaishou supports recommendations, categories, game categories, rooms, and playback; its search is limited to game-category names.
 
 Streams are fetched via a localhost proxy so the web player can attach with correct headers.
 
@@ -55,11 +57,18 @@ Streams are fetched via a localhost proxy so the web player can attach with corr
 
 ### Connection
 
-Entering a Bilibili, Huya, or Douyu room connects that site's danmaku WebSocket. Chat appears in the side list; optional floating tracks overlay the video.
+Entering a Bilibili, Huya, Douyu, or properly configured Douyin room connects that site's danmaku WebSocket. Chat appears in the side list; optional floating tracks overlay the video.
 
 - **Bilibili:** paste a browser cookie under Settings → 哔哩哔哩 Cookie.  
 - **Huya / Douyu:** usually no cookie. Douyu uses system TLS (`native-tls`) because its servers only offer RSA-AES-GCM suites.
-- **Douyin / Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection. Supported browsing and playback remain available.
+- **Douyin:** save a complete Cookie and configure a full signing endpoint under Settings → Account. The service returns a temporary WSS URL; use only an endpoint you operate or explicitly trust.
+- **Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection.
+
+### Experimental Bilibili sending
+
+This is off by default. The room-side composer only enables when all of the following are true: the user explicitly enabled **实验性：发送 B 站弹幕**, the saved Bilibili Cookie includes `SESSDATA` and `bili_jct`, and the current room is Bilibili.
+
+It can send only one normal scrolling text message at a time. Every message receives a second confirmation; the backend validates text/room/Cookie, enforces an 80-character limit and a 3-second room cooldown, and never batch-sends, auto-retries, inserts an optimistic local message, or sends gifts.
 
 ### Room-side settings
 
@@ -88,9 +97,9 @@ Follow anchors (with tags) from the room page; the centred selector on the Follo
 
 ## 7. Settings summary
 
-Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, Bilibili cookie, optional Douyin cookie, and profile import/export (**cookies excluded**). Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
+Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, Bilibili cookie + experimental sending opt-in, optional Douyin cookie + signing endpoint, and profile import/export. Profiles exclude cookies, the Douyin signing-service endpoint, and the experimental Bilibili sending opt-in; importing never overwrites the latter two local-only choices. Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
 
-For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite.
+For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite. The configured chat signer receives it only while it creates a signed WSS connection.
 
 ## 8. FAQ
 
@@ -100,9 +109,10 @@ For Douyin, anonymous browsing creates a transient `ttwid` session automatically
 | Bilibili no chat | Valid cookie / token required for many rooms |
 | Huya crash on open | Use build with UTF-8-safe HTML parse |
 | Douyin search requests login | Save a complete logged-in browser cookie under 设置 → 抖音 Cookie; first-page browse and playback do not require it |
-| Douyin has no chat | Real-time Douyin danmaku is not implemented yet; this does not prevent browsing or playback |
+| Douyin chat asks for a signer | Configure a full trusted signing-service endpoint under Settings → Account; rLive does not embed a signing algorithm |
+| Bilibili composer is disabled | Enable the experimental setting and save a Cookie containing `SESSDATA` and `bili_jct` |
 | Black screen | Try another line/quality; re-enter room |
 
 ## 9. Compliance
 
-Read-only aggregation only. No send-chat, gifts, payments, recording, or official login write flows. Personal / educational use; respect platform ToS and local law.
+The app is primarily a read-only aggregator. Its Bilibili experiment allows only a user-confirmed single text message; there are no gifts, payments, batch/scheduled/automatic sends, recording, or official-login write flows. Personal / educational use; respect platform ToS and local law.

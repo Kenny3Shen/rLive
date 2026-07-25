@@ -32,6 +32,17 @@ pub struct AppSettings {
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
     pub quality_level: String,
+    /// Opt-in switch for the experimental, single-message Bilibili chat sender.
+    /// It remains disabled until the user explicitly enables it in Settings and
+    /// is device-local rather than profile-imported.
+    #[serde(default)]
+    pub bilibili_danmaku_send_enabled: bool,
+    /// Optional URL of a user-operated Douyin danmaku signing service.
+    ///
+    /// The service returns a short-lived signed WSS URL. Its address and the
+    /// user's Douyin Cookie are device-local and excluded from profile export.
+    #[serde(default)]
+    pub douyin_danmaku_sign_service: Option<String>,
 }
 
 fn default_quality_level() -> String {
@@ -67,6 +78,8 @@ impl Default for AppSettings {
             danmaku_shield_words: Vec::new(),
             mpv_path: None,
             quality_level: default_quality_level(),
+            bilibili_danmaku_send_enabled: false,
+            douyin_danmaku_sign_service: None,
         }
     }
 }
@@ -102,5 +115,7 @@ mod tests {
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
         assert!(!settings.danmaku_filter_gifts);
+        assert!(!settings.bilibili_danmaku_send_enabled);
+        assert!(settings.douyin_danmaku_sign_service.is_none());
     }
 }

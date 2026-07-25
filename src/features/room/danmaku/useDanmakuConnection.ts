@@ -3,7 +3,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
 import { nextDanmakuConnectionEpoch } from "./connectionEpoch";
 
-const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya"]);
+const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya", "douyin"]);
 
 function errMessage(e: unknown): string {
   if (typeof e === "object" && e && "message" in e) {
