@@ -86,7 +86,7 @@ Follow anchors (with tags) from the room page; refresh live status on the follow
 
 ## 7. Settings summary
 
-Use the appearance switcher above **设置** in the sidebar for the app theme. The global settings page contains default quality, HTTP proxy, Bilibili cookie, optional Douyin cookie, and profile import/export (**cookies excluded**). Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
+Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, Bilibili cookie, optional Douyin cookie, and profile import/export (**cookies excluded**). Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
 
 For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite.
 

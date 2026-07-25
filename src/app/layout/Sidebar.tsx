@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { Home, Heart, LayoutGrid, History, Moon, Settings, Sun } from "lucide-react";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 
@@ -59,35 +60,30 @@ function SidebarLink({
 function AppearanceToggle() {
   const theme = useSettingsStore((state) => state.theme);
   const setTheme = useSettingsStore((state) => state.setTheme);
-  const selectedTheme =
-    theme === "system"
-      ? document.documentElement.classList.contains("dark")
-        ? "dark"
-        : "light"
-      : theme;
+  const isDark =
+    theme === "dark" || (theme === "system" && document.documentElement.classList.contains("dark"));
+  const nextTheme = isDark ? "light" : "dark";
+  const label = isDark ? "切换为浅色模式" : "切换为深色模式";
+  const Icon = isDark ? Sun : Moon;
 
   return (
-    <ToggleGroup
-      aria-label="切换应用外观"
-      value={[selectedTheme]}
-      variant="default"
-      size="sm"
-      spacing={1}
-      orientation="vertical"
-      onValueChange={(values) => {
-        const next = values[0];
-        if (next === "light" || next === "dark") {
-          setTheme(next);
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-8"
+            aria-label={label}
+            title={label}
+            onClick={() => setTheme(nextTheme)}
+          />
         }
-      }}
-    >
-      <ToggleGroupItem value="light" className="size-8 px-0" aria-label="浅色模式" title="浅色模式">
-        <Sun aria-hidden />
-      </ToggleGroupItem>
-      <ToggleGroupItem value="dark" className="size-8 px-0" aria-label="深色模式" title="深色模式">
-        <Moon aria-hidden />
-      </ToggleGroupItem>
-    </ToggleGroup>
+      >
+        <Icon data-icon="inline-start" aria-hidden />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
