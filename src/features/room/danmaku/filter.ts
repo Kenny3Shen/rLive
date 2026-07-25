@@ -42,6 +42,15 @@ export function isDanmakuEvent(value: unknown): value is DanmakuEvent {
 
 const ROOM_ENTER_SUFFIXES = ["进入直播间", "进入了直播间", "进入直播间了"];
 
+function hasRoomEnterSuffix(content: string): boolean {
+  // Keep the common chat path allocation-free. The three supported notices
+  // only end in one of these two characters; importantly, `进入直播间了`
+  // ends in `了`, not `间`.
+  const finalCharacter = content.at(-1);
+  if (finalCharacter !== "间" && finalCharacter !== "了") return false;
+  return ROOM_ENTER_SUFFIXES.some((suffix) => content.endsWith(suffix));
+}
+
 /**
  * A few relays encode an entry notice as ordinary chat text instead of the
  * shared `enter` event. Normalize whitespace so both “小明进入直播间” and
@@ -50,14 +59,16 @@ const ROOM_ENTER_SUFFIXES = ["进入直播间", "进入了直播间", "进入直
 function isRoomEnterNotice(kind: DanmakuKind, content: string): boolean {
   if (kind === "enter") return true;
   // This runs for every chat line. Avoid allocating a whitespace-normalized
-  // copy for ordinary messages; all known notices end in this final character.
-  if (!content.endsWith("间")) return false;
-  if (ROOM_ENTER_SUFFIXES.some((suffix) => content.endsWith(suffix))) return true;
+  // copy for ordinary messages. `进入直播间了` is intentionally included in
+  // the fast path as it ends in `了` rather than `间`.
+  if (hasRoomEnterSuffix(content)) return true;
+  const finalCharacter = content.at(-1);
+  if (finalCharacter !== "间" && finalCharacter !== "了") return false;
   // Preserve support for relays which insert spaces inside the notice without
   // paying the replace-all cost in the normal high-frequency path.
   if (!/\s/.test(content)) return false;
   const compact = content.replaceAll(/\s+/g, "");
-  return ROOM_ENTER_SUFFIXES.some((suffix) => compact.endsWith(suffix));
+  return hasRoomEnterSuffix(compact);
 }
 
 /**

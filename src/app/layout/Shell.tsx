@@ -29,6 +29,12 @@ export function Shell() {
   const platformForMotion = isFollow ? followPlatform : selectedSiteId;
   const pageMotionKey = isRoom ? pathname : `${pathname}:${platformForMotion}`;
   const platformAccent = SITE_ACCENT[platformForMotion] ?? "#6c8cff";
+  // RoomPage and PlayerPane use h-full throughout their fixed player layout.
+  // `min-h-full` does not create a definite percentage-height containing
+  // block, which lets a growing danmaku list reflow the whole room on narrow
+  // viewports. Keep normal pages content-sized, but give room routes a fixed
+  // height chain all the way down to the Outlet.
+  const outletHeightClass = isRoom ? "h-full min-h-0" : "min-h-full";
 
   useLayoutEffect(() => {
     const wasRoom = previousIsRoomRef.current;
@@ -46,7 +52,7 @@ export function Shell() {
   return (
     <div className="flex h-full min-h-0">
       {!isRoom && <Sidebar />}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {!isRoom && (
           <header className="relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4">
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -74,14 +80,15 @@ export function Shell() {
         )}
         <main
           className={cn(
-            "min-w-0 flex-1",
+            "min-h-0 min-w-0 flex-1",
             isRoom ? "overflow-hidden p-0" : "overflow-auto p-4 md:p-5",
           )}
         >
           <div
             key={pageMotionKey}
             className={cn(
-              "relative min-h-full",
+              "relative",
+              outletHeightClass,
               !isRoom && "motion-safe:animate-platform-page-enter motion-reduce:animate-none",
             )}
           >
@@ -94,7 +101,7 @@ export function Shell() {
                 }}
               />
             )}
-            <div className="relative min-h-full">
+            <div className={cn("relative", outletHeightClass)}>
               <Outlet />
             </div>
           </div>

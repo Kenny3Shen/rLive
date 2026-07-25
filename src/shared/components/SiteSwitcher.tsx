@@ -7,11 +7,14 @@ import { SiteLogo } from "@/shared/components/SiteLogo";
 import { cn, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
 
 const FALLBACK_SITES: SiteInfo[] = [
-  { id: "bilibili", name: "Bilibili", ready: false },
-  { id: "douyu", name: "Douyu", ready: false },
-  { id: "huya", name: "Huya", ready: false },
-  { id: "douyin", name: "Douyin", ready: false },
-  { id: "kuaishou", name: "Kuaishou", ready: false },
+  // These are the shipped platforms. Keeping the fallback usable avoids a
+  // visibly disabled first frame while the lightweight `site_list` IPC call
+  // resolves, which is especially noticeable when switching platforms.
+  { id: "bilibili", name: "Bilibili", ready: true },
+  { id: "douyu", name: "Douyu", ready: true },
+  { id: "huya", name: "Huya", ready: true },
+  { id: "douyin", name: "Douyin", ready: true },
+  { id: "kuaishou", name: "Kuaishou", ready: true },
 ];
 
 const PLATFORM_ORDER: readonly SiteId[] = ["bilibili", "douyu", "huya", "douyin", "kuaishou"];

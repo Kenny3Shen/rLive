@@ -40,7 +40,12 @@ describe("Super Chat presentation", () => {
     expect(safeSuperChatColor("url(javascript:alert(1))")).toBeNull();
     expect(safeSuperChatColor("#abc")).toBe("#abc");
     expect(superChatPalette({ background_color: "url(bad)" })).toBeNull();
-    expect(superChatPalette(superChat().super_chat)?.background).toContain("linear-gradient");
+    expect(superChatPalette(superChat().super_chat)).toMatchObject({
+      headerBackground: "#2A60B2",
+      bodyBackground: "#1D4A92",
+      headerForeground: "#ffffff",
+      bodyForeground: "#ffffff",
+    });
   });
 });
 

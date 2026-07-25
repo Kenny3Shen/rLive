@@ -6,7 +6,7 @@ use crate::danmaku;
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::sites;
-use crate::state::AppState;
+use crate::state::{AppState, BilibiliDanmakuSendLimiter};
 
 #[derive(Debug, Serialize)]
 pub struct BilibiliDanmakuSendStatus {
@@ -18,6 +18,29 @@ pub struct BilibiliDanmakuSendStatus {
     pub available: bool,
     /// Safe user-facing guidance. It intentionally contains no credential data.
     pub message: String,
+}
+
+/// Complete all deterministic local validation before reserving the short
+/// manual-send cooldown. This keeps an invalid draft from behaving like a
+/// network attempt while still reserving every request that reaches the
+/// remote API (including ambiguous failures).
+fn validate_and_reserve_bilibili_send(
+    limiter: &BilibiliDanmakuSendLimiter,
+    room_id: &str,
+    message: &str,
+) -> AppResult<(String, String)> {
+    let room_id = room_id.trim();
+    if room_id.is_empty()
+        || room_id.len() > 32
+        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            AppError::new("bilibili_send_invalid_room", "B站直播间号无效").with_site("bilibili"),
+        );
+    }
+    let message = danmaku::bilibili::normalize_outgoing_message(message)?;
+    limiter.reserve(room_id)?;
+    Ok((room_id.to_string(), message))
 }
 
 #[tauri::command]
@@ -46,6 +69,12 @@ pub async fn danmaku_connect(
     };
     let site = sites::site(&site_id, cookie.clone())?;
     let detail = site.get_room_detail(&room_id).await?;
+    // Douyin may derive an anonymous `ttwid` / `msToken` while resolving the
+    // room. The signer needs that *same* in-memory browser session, but those
+    // transient values must neither reach the frontend nor be persisted.
+    let danmaku_cookie = site
+        .danmaku_session_cookie()?
+        .unwrap_or_else(|| cookie.clone().unwrap_or_default());
     danmaku::connect(
         app,
         &state.danmaku,
@@ -54,7 +83,7 @@ pub async fn danmaku_connect(
         &room_id,
         &detail.raw,
         settings.douyin_danmaku_sign_service.as_deref(),
-        cookie.as_deref().unwrap_or_default(),
+        &danmaku_cookie,
         settings.proxy.as_deref(),
     )
     .await
@@ -130,20 +159,29 @@ pub async fn bilibili_danmaku_send(
         )
         .with_site("bilibili"));
     }
-    let room_id = room_id.trim();
-    if room_id.is_empty()
-        || room_id.len() > 32
-        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(
-            AppError::new("bilibili_send_invalid_room", "B站直播间号无效").with_site("bilibili"),
-        );
-    }
-    state.bilibili_send_limiter.reserve(room_id)?;
+    let (room_id, message) =
+        validate_and_reserve_bilibili_send(&state.bilibili_send_limiter, &room_id, &message)?;
     let client = if settings.proxy.is_some() {
         crate::http_client::build_client(settings.proxy.as_deref())?
     } else {
         crate::http_client::default_client()
     };
-    danmaku::bilibili::send_chat(&client, &cookie, room_id, &message).await
+    danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_and_reserve_bilibili_send;
+    use crate::state::BilibiliDanmakuSendLimiter;
+
+    #[test]
+    fn invalid_bilibili_draft_does_not_consume_room_cooldown() {
+        let limiter = BilibiliDanmakuSendLimiter::new();
+
+        assert!(validate_and_reserve_bilibili_send(&limiter, "123", "\n").is_err());
+        // The following valid attempt has no reason to wait: no upstream send
+        // was attempted for the invalid draft above.
+        assert!(validate_and_reserve_bilibili_send(&limiter, "123", "你好").is_ok());
+        assert!(validate_and_reserve_bilibili_send(&limiter, "123", "第二条").is_err());
+    }
 }

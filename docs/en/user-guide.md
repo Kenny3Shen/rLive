@@ -61,7 +61,7 @@ Entering a Bilibili, Huya, Douyu, or properly configured Douyin room connects th
 
 - **Bilibili:** paste a browser cookie under Settings → 哔哩哔哩 Cookie.  
 - **Huya / Douyu:** usually no cookie. Douyu uses system TLS (`native-tls`) because its servers only offer RSA-AES-GCM suites.
-- **Douyin:** save a complete Cookie and configure a full signing endpoint under Settings → Account. The service returns a temporary WSS URL; use only an endpoint you operate or explicitly trust.
+- **Douyin:** configure a full signing endpoint under Settings → Account for live chat. rLive supplies the transient session established while entering the room; a complete saved Cookie is still required for search and can improve room/signing reliability. The service returns a temporary WSS URL; use only an endpoint you operate or explicitly trust.
 - **Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection.
 
 ### Experimental Bilibili sending
@@ -99,7 +99,7 @@ Follow anchors (with tags) from the room page; the centred selector on the Follo
 
 Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, Bilibili cookie + experimental sending opt-in, optional Douyin cookie + signing endpoint, and profile import/export. Profiles exclude cookies, the Douyin signing-service endpoint, and the experimental Bilibili sending opt-in; importing never overwrites the latter two local-only choices. Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
 
-For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite. The configured chat signer receives it only while it creates a signed WSS connection.
+For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite. The configured chat signer receives the effective connection session (the saved Cookie plus transient `ttwid` / `msToken`) only while it creates a signed WSS connection; transient values are never persisted.
 
 ## 8. FAQ
 

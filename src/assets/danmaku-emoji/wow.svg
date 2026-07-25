@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <defs>
+    <linearGradient id="wow-face" x1="17" y1="8" x2="49" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFEE9A" />
+      <stop offset="1" stop-color="#FFAD3E" />
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="27" fill="url(#wow-face)" />
+  <path d="M18 24c3-3 7-3 10 0M36 24c3-3 7-3 10 0" fill="none" stroke="#563B26" stroke-linecap="round" stroke-width="3" />
+  <circle cx="23" cy="31" r="3" fill="#563B26" />
+  <circle cx="41" cy="31" r="3" fill="#563B26" />
+  <ellipse cx="32" cy="43" rx="6.5" ry="8" fill="#563B26" />
+  <path d="M27 43c2-2 8-2 10 0" fill="none" stroke="#FF8491" stroke-linecap="round" stroke-width="2.5" />
+</svg>

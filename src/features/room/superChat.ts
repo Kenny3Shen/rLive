@@ -11,9 +11,12 @@ export type SuperChatLine = {
 };
 
 export type SuperChatPalette = {
-  background: string;
+  /** Bilibili supplies a darker title strip and a lighter message body. */
+  headerBackground: string;
+  bodyBackground: string;
   borderColor: string;
-  foreground: string;
+  headerForeground: string;
+  bodyForeground: string;
   mutedForeground: string;
 };
 
@@ -22,6 +25,16 @@ const SAFE_CURRENCY = /^[a-z]{3}$/i;
 const SUPER_CHAT_AMOUNT_FORMATTER = new Intl.NumberFormat("zh-CN", {
   maximumFractionDigits: 2,
 });
+
+/** Bilibili's standard blue tier when a platform omits colour metadata. */
+export const DEFAULT_SUPER_CHAT_PALETTE: SuperChatPalette = {
+  headerBackground: "#2A60B2",
+  bodyBackground: "#1D4A92",
+  borderColor: "#1D4A92",
+  headerForeground: "#ffffff",
+  bodyForeground: "#ffffff",
+  mutedForeground: "rgba(255, 255, 255, 0.78)",
+};
 
 export function safeSuperChatColor(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -45,16 +58,16 @@ function colorLuminance(color: string): number {
 export function superChatPalette(info: SuperChatInfo | null | undefined): SuperChatPalette | null {
   const primary = safeSuperChatColor(info?.background_color);
   if (!primary) return null;
-  const secondary = safeSuperChatColor(info?.background_bottom_color);
-  const foreground = colorLuminance(primary) > 0.62 ? "#172033" : "#ffffff";
+  const secondary = safeSuperChatColor(info?.background_bottom_color) ?? primary;
+  const headerForeground = colorLuminance(primary) > 0.62 ? "#172033" : "#ffffff";
+  const bodyForeground = colorLuminance(secondary) > 0.62 ? "#172033" : "#ffffff";
   return {
-    background:
-      secondary && secondary.toLowerCase() !== primary.toLowerCase()
-        ? `linear-gradient(135deg, ${primary}, ${secondary})`
-        : primary,
-    borderColor: primary,
-    foreground,
-    mutedForeground: foreground === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : "#465168",
+    headerBackground: primary,
+    bodyBackground: secondary,
+    borderColor: secondary,
+    headerForeground,
+    bodyForeground,
+    mutedForeground: bodyForeground === "#ffffff" ? "rgba(255, 255, 255, 0.78)" : "#465168",
   };
 }
 

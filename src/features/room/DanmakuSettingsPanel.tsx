@@ -209,8 +209,6 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
       <div className="flex flex-col gap-5 px-3 py-3">
         <FieldSet>
-          <FieldLegend variant="label">弹幕显示</FieldLegend>
-          <FieldDescription>对齐 Simple Live：拖动实时预览，松开后自动保存。</FieldDescription>
           <FieldGroup className="gap-4">
             <DanmakuSlider
               id="room-danmaku-area"

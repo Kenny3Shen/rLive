@@ -51,6 +51,12 @@ type SettingsState = {
   bilibiliDanmakuSendEnabled: boolean;
   /** True while the explicit Bilibili write opt-in is reaching the backend. */
   bilibiliDanmakuSendPending: boolean;
+  /**
+   * In-memory only revision for the Bilibili account cookie.  It deliberately
+   * carries no credential data; consumers use it solely to invalidate cached
+   * permission checks after a successful account update.
+   */
+  bilibiliCookieRevision: number;
   douyinDanmakuSignService: string | null;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
@@ -60,6 +66,7 @@ type SettingsState = {
   setMpvPath: (mpvPath: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setBilibiliDanmakuSendEnabled: (enabled: boolean) => void;
+  markBilibiliCookieChanged: () => void;
   setDouyinDanmakuSignService: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
@@ -127,6 +134,7 @@ export const useSettingsStore = create<SettingsState>()(
       qualityLevel: "high",
       bilibiliDanmakuSendEnabled: false,
       bilibiliDanmakuSendPending: false,
+      bilibiliCookieRevision: 0,
       douyinDanmakuSignService: null,
       hydratedFromBackend: false,
       setTheme: (theme) => {
@@ -162,6 +170,11 @@ export const useSettingsStore = create<SettingsState>()(
               set({ bilibiliDanmakuSendPending: false });
             }
           });
+      },
+      markBilibiliCookieChanged: () => {
+        // This is intentionally not persisted. It has no meaning across an
+        // app restart and must never contain the Cookie itself.
+        set((state) => ({ bilibiliCookieRevision: state.bilibiliCookieRevision + 1 }));
       },
       setDouyinDanmakuSignService: (douyinDanmakuSignService) => {
         set({ douyinDanmakuSignService });

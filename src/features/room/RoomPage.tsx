@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Heart, Share2, Link2 } from "lucide-react";
 import { gsap } from "gsap";
@@ -15,6 +15,12 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
+function sideTabFromNavigationState(state: unknown): RoomSideTab {
+  if (!state || typeof state !== "object" || !("roomSideTab" in state)) return "chat";
+  const tab = (state as { roomSideTab?: unknown }).roomSideTab;
+  return tab === "chat" || tab === "sc" || tab === "settings" || tab === "follow" ? tab : "chat";
+}
+
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
     siteId: string;
@@ -22,10 +28,19 @@ export function RoomPage() {
   }>();
   const siteId = siteParam as SiteId | undefined;
   const roomId = roomParam ? decodeURIComponent(roomParam) : undefined;
+  const location = useLocation();
   const qc = useQueryClient();
 
   const [followBusy, setFollowBusy] = useState(false);
-  const [sideTab, setSideTab] = useState<RoomSideTab>("chat");
+  const requestedSideTab = sideTabFromNavigationState(location.state);
+  const [sideTab, setSideTab] = useState<RoomSideTab>(requestedSideTab);
+
+  // A regular room navigation starts at chat, while a navigation initiated by
+  // FollowPanel keeps the follow picker open. This also covers a router setup
+  // that reuses RoomPage instead of remounting it for param-only changes.
+  useEffect(() => {
+    setSideTab(requestedSideTab);
+  }, [location.key, requestedSideTab]);
 
   const detailQuery = useQuery({
     queryKey: ["room_detail", siteId, roomId],
@@ -151,7 +166,7 @@ export function RoomPage() {
     <div className="flex h-full min-h-0 flex-col">
       <RoomTopBar title={detail.title || "直播间"} />
 
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
         <PlayerPane
           playUrl={playback.playUrl}
           loading={playback.loading}

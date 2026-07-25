@@ -92,6 +92,52 @@ describe("danmaku engine", () => {
     }
   });
 
+  test("keeps an on-screen comment visible when the viewport width narrows", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("调整窗口后继续从原位置飘过", 1));
+    engine.tick(0.2, 1280, 720);
+
+    const beforeResize = engine.visibleItems()[0];
+    const xBeforeResize = beforeResize?.x;
+    engine.tick(0, 720, 360);
+    const resized = engine.visibleItems()[0];
+
+    expect(resized?.x).not.toBe(xBeforeResize);
+    expect(resized?.x).toBeLessThan(720);
+    expect(resized?.x ?? -Infinity).toBeGreaterThan(-(resized?.width ?? 0));
+
+    const beforeProgress =
+      (1280 + 12 - (xBeforeResize ?? 0)) / (1280 + 12 + (beforeResize?.width ?? 0) + 20);
+    const afterProgress = (720 + 12 - (resized?.x ?? 0)) / (720 + 12 + (resized?.width ?? 0) + 20);
+    expect(afterProgress).toBeCloseTo(beforeProgress, 2);
+  });
+
+  test("continues a visible comment through repeated window-size changes", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("连续调整窗口时也不能提前消失", 1));
+    engine.tick(0.2, 1280, 720);
+
+    engine.tick(0, 480, 360);
+    const afterFirstResize = engine.visibleItems()[0];
+    expect(afterFirstResize).toBeDefined();
+    expect(afterFirstResize?.x).toBeLessThan(480);
+    expect((afterFirstResize?.x ?? -Infinity) + (afterFirstResize?.width ?? 0)).toBeGreaterThan(0);
+
+    engine.tick(0, 240, 180);
+    const afterSecondResize = engine.visibleItems()[0];
+    expect(afterSecondResize).toBeDefined();
+    expect(afterSecondResize?.x).toBeLessThan(240);
+    expect((afterSecondResize?.x ?? -Infinity) + (afterSecondResize?.width ?? 0)).toBeGreaterThan(
+      0,
+    );
+
+    const xBeforeMove = afterSecondResize?.x ?? Infinity;
+    engine.tick(0.2, 240, 180);
+    expect(engine.visibleItems()[0]?.x).toBeLessThan(xBeforeMove);
+  });
+
   test("limits scrolling lanes when the user selects a visible-line cap", () => {
     const engine = createEngine({
       fontSize: 18,

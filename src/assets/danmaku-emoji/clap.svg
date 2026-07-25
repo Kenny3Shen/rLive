@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <defs>
+    <linearGradient id="clap-skin" x1="13" y1="13" x2="52" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD9AF" />
+      <stop offset="1" stop-color="#F19A62" />
+    </linearGradient>
+  </defs>
+  <path d="M14 42c-3-8 3-12 8-8l6 5-8-18c-2-5 5-8 7-3l6 13-2-18c-1-5 7-6 8-1l3 18 3-12c1-5 8-3 7 2l-4 19c-2 10-10 17-20 17-7 0-12-4-14-12Z" fill="url(#clap-skin)" />
+  <path d="M21 15 18 8m13 4V4m13 11 5-6" fill="none" stroke="#FFB21E" stroke-linecap="round" stroke-width="3" />
+  <path d="M27 42c4 3 9 5 14 5" fill="none" stroke="#D97449" stroke-linecap="round" stroke-width="2.5" opacity=".7" />
+</svg>
