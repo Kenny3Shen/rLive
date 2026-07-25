@@ -32,4 +32,4 @@ src-tauri/target/
 *.log
 .DS_Store
 .playwright-cli/
-
+.grok
