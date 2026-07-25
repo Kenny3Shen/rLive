@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { Chip } from "@/shared/components/Chip";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import type { FollowUser } from "@/shared/types/live";
 import { FOLLOW_PLATFORM_PARAM, followPlatformFromSearch } from "./followRoute";
 import { Button } from "@/components/ui/button";
@@ -13,30 +13,22 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
-type TagRecord = { id: string; name: string };
 type LiveFilter = "all" | "live" | "offline";
-type SortMode = "status" | "platform";
 
 export function FollowPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const qc = useQueryClient();
-  const [tagFilter, setTagFilter] = useState<string | "all">("all");
+  const pageRef = useRef<HTMLDivElement>(null);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
-  const [sortMode, setSortMode] = useState<SortMode>("status");
-  const [onlyLiveChip, setOnlyLiveChip] = useState(false);
   const platformFilter = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
 
   const followsQuery = useQuery({
     queryKey: ["follows"],
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
-  });
-
-  const tagsQuery = useQuery({
-    queryKey: ["tags"],
-    queryFn: () => invokeCmd<TagRecord[]>("tag_list"),
   });
 
   const refreshMutation = useMutation({
@@ -62,83 +54,47 @@ export function FollowPage() {
     if (platformFilter !== "all") {
       list = list.filter((follow) => follow.site_id === platformFilter);
     }
-    if (tagFilter !== "all") {
-      list = list.filter((f) => f.tag_ids.includes(tagFilter));
-    }
-    const effectiveLive = onlyLiveChip ? "live" : liveFilter;
-    if (effectiveLive === "live") {
+    if (liveFilter === "live") {
       list = list.filter((f) => f.live_status === true);
-    } else if (effectiveLive === "offline") {
+    } else if (liveFilter === "offline") {
       list = list.filter((f) => f.live_status === false);
     }
-    if (sortMode === "status") {
-      list.sort((a, b) => {
-        const av = a.live_status === true ? 0 : a.live_status === false ? 1 : 2;
-        const bv = b.live_status === true ? 0 : b.live_status === false ? 1 : 2;
-        if (av !== bv) return av - bv;
-        return a.user_name.localeCompare(b.user_name, "zh");
-      });
-    } else {
-      list.sort((a, b) => {
-        if (a.site_id !== b.site_id) return a.site_id.localeCompare(b.site_id);
-        return a.user_name.localeCompare(b.user_name, "zh");
-      });
-    }
+    list.sort((a, b) => {
+      const av = a.live_status === true ? 0 : a.live_status === false ? 1 : 2;
+      const bv = b.live_status === true ? 0 : b.live_status === false ? 1 : 2;
+      if (av !== bv) return av - bv;
+      return a.user_name.localeCompare(b.user_name, "zh");
+    });
     return list;
-  }, [followsQuery.data, platformFilter, tagFilter, liveFilter, onlyLiveChip, sortMode]);
+  }, [followsQuery.data, platformFilter, liveFilter]);
+
+  usePageEntrance(pageRef, {
+    entryKey: `follow:${platformFilter}`,
+    ready: !followsQuery.isLoading,
+  });
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4 pb-16">
-      <PageHeader title="关注用户" />
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Chip
-          active={onlyLiveChip}
-          onClick={() => setOnlyLiveChip((v) => !v)}
-          onClear={onlyLiveChip ? () => setOnlyLiveChip(false) : undefined}
-        >
-          仅显示开播
-        </Chip>
-        <Chip active={sortMode === "status"} onClick={() => setSortMode("status")}>
-          按状态
-        </Chip>
-        <Chip active={sortMode === "platform"} onClick={() => setSortMode("platform")}>
-          按平台
-        </Chip>
+    <div ref={pageRef} className="mx-auto flex max-w-4xl flex-col gap-4 pb-16">
+      <div data-page-enter-heading>
+        <PageHeader title="关注用户" />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {(
-          [
-            ["all", "全部"],
-            ["live", "直播中"],
-            ["offline", "未开播"],
-          ] as const
-        ).map(([key, label]) => (
-          <Chip
-            key={key}
-            active={!onlyLiveChip && liveFilter === key}
-            onClick={() => {
-              setOnlyLiveChip(false);
-              setLiveFilter(key);
-            }}
-          >
-            {label}
-          </Chip>
-        ))}
-        {(tagsQuery.data?.length ?? 0) > 0 && (
-          <>
-            <span className="mx-1 h-4 w-px bg-border" />
-            <Chip active={tagFilter === "all"} onClick={() => setTagFilter("all")}>
-              全部标签
-            </Chip>
-            {tagsQuery.data?.map((t) => (
-              <Chip key={t.id} active={tagFilter === t.id} onClick={() => setTagFilter(t.id)}>
-                {t.name}
-              </Chip>
-            ))}
-          </>
-        )}
+      <div data-page-enter-controls>
+        <ToggleGroup
+          value={[liveFilter]}
+          variant="outline"
+          size="sm"
+          spacing={0}
+          aria-label="关注状态筛选"
+          onValueChange={(value) => {
+            const next = value[0] as LiveFilter | undefined;
+            if (next) setLiveFilter(next);
+          }}
+        >
+          <ToggleGroupItem value="all">全部</ToggleGroupItem>
+          <ToggleGroupItem value="live">直播中</ToggleGroupItem>
+          <ToggleGroupItem value="offline">未开播</ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       {followsQuery.isLoading && (
@@ -172,7 +128,7 @@ export function FollowPage() {
             const offline = u.live_status === false;
             const avatarSrc = normalizeImageUrl(u.face);
             return (
-              <li key={`${u.site_id}:${u.room_id}`}>
+              <li data-page-enter-item key={`${u.site_id}:${u.room_id}`}>
                 <div
                   className={cn(
                     "group flex items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-2.5 pr-3 transition-colors",

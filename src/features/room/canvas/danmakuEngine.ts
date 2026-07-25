@@ -20,7 +20,13 @@ export type TrackItem = {
 };
 
 export type DanmakuEngine = {
-  push: (ev: DanmakuEvent) => void;
+  /**
+   * `alreadyVisible` is used by the canvas listener after it has run the
+   * shared filter. Keeping the regular path defensive still makes direct
+   * engine callers safe, while avoiding duplicate validation on every IPC
+   * event in a busy room.
+   */
+  push: (ev: DanmakuEvent, alreadyVisible?: boolean) => void;
   tick: (dt: number, width: number, height: number) => void;
   /**
    * The engine owns this array. Consumers must only read it during a render
@@ -161,29 +167,50 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let layout: LaneLayout | null = null;
   let laneOrder: number[] = [];
   let laneCursor = 0;
+  // Layout is a function of the viewport height, active font sizes and the
+  // two layout settings. Recomputing it on every animation frame used to scan
+  // every item even when nothing had changed.
+  let layoutDirty = true;
+  let largestScrollFontSize = fontSize;
+  let largestScrollFontSizeNeedsRefresh = false;
 
-  function largestActiveScrollFontSize(): number {
+  function refreshLargestScrollFontSize(): number {
     let largest = fontSize;
     for (const item of items) {
       if (item.kind === "scroll" && item.fontSize > largest) {
         largest = item.fontSize;
       }
     }
-    return largest;
+    largestScrollFontSize = largest;
+    largestScrollFontSizeNeedsRefresh = false;
+    return largestScrollFontSize;
+  }
+
+  function noteRemovedItem(item: TrackItem | undefined): void {
+    if (item?.kind === "scroll" && item.fontSize >= largestScrollFontSize) {
+      // This is deliberately lazy: a scan is only needed if an item that may
+      // have determined the lane height actually leaves the screen.
+      largestScrollFontSizeNeedsRefresh = true;
+      layoutDirty = true;
+    }
   }
 
   function refreshLayout(): LaneLayout | null {
     if (viewportHeight <= 0) return null;
 
+    if (!layoutDirty && layout) return layout;
+
+    const largestFontSize = largestScrollFontSizeNeedsRefresh
+      ? refreshLargestScrollFontSize()
+      : largestScrollFontSize;
+
     // Existing messages retain the size they had at insertion. Keep enough
     // vertical room for them while a setting change is still on screen.
-    const nextLayout = layoutFor(
-      viewportHeight,
-      largestActiveScrollFontSize(),
-      scrollArea,
-      maxLineCount,
-    );
-    if (sameLayout(layout, nextLayout)) return layout;
+    const nextLayout = layoutFor(viewportHeight, largestFontSize, scrollArea, maxLineCount);
+    if (sameLayout(layout, nextLayout)) {
+      layoutDirty = false;
+      return layout;
+    }
 
     const previousLayout = layout;
     if (previousLayout) {
@@ -202,6 +229,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     layout = nextLayout;
     laneOrder = createTopDownLaneOrder(nextLayout.count);
     laneCursor %= laneOrder.length;
+    layoutDirty = false;
     return layout;
   }
 
@@ -254,16 +282,18 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     while (items.length >= MAX_ITEMS) {
       const scrollIndex = items.findIndex((item) => item.kind === "scroll");
       if (scrollIndex >= 0) {
-        items.splice(scrollIndex, 1);
+        const [removed] = items.splice(scrollIndex, 1);
+        noteRemovedItem(removed);
       } else {
-        items.shift();
+        noteRemovedItem(items.shift());
       }
     }
   }
 
   function schedulePending(): void {
-    const currentLayout = refreshLayout();
-    if (!currentLayout || viewportWidth <= 0) return;
+    // This runs after every paint while scrolling. Avoid a Date call, a
+    // layout lookup and collision checks when there is nothing waiting.
+    if (pending.length === 0) return;
 
     const now = Date.now();
     let firstFreshIndex = 0;
@@ -274,9 +304,19 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       firstFreshIndex += 1;
     }
     if (firstFreshIndex > 0) pending.splice(0, firstFreshIndex);
+    if (pending.length === 0) return;
+
+    let currentLayout = refreshLayout();
+    if (!currentLayout || viewportWidth <= 0) return;
 
     while (pending.length > 0) {
       const candidate = pending[0];
+      if (candidate.fontSize > largestScrollFontSize) {
+        largestScrollFontSize = candidate.fontSize;
+        layoutDirty = true;
+        currentLayout = refreshLayout();
+        if (!currentLayout) return;
+      }
       const lane = findSafeLane(candidate);
       if (lane === null) {
         // Preserving a small queue is preferable to deliberately overlapping
@@ -296,9 +336,9 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     }
   }
 
-  function push(ev: DanmakuEvent): void {
+  function push(ev: DanmakuEvent, alreadyVisible = false): void {
     // Simple Live canvas style: content-only floating text; skip system.
-    if (!shouldShowOnCanvas(ev)) return;
+    if (!alreadyVisible && !shouldShowOnCanvas(ev)) return;
 
     const text = floatingDanmakuText(ev);
     if (!text) return;
@@ -333,12 +373,16 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
 
   function tick(dt: number, width: number, height: number): void {
     if (Number.isFinite(width) && width > 0) viewportWidth = width;
-    if (Number.isFinite(height) && height > 0) viewportHeight = height;
+    if (Number.isFinite(height) && height > 0 && viewportHeight !== height) {
+      viewportHeight = height;
+      layoutDirty = true;
+    }
 
     refreshLayout();
     const now = Date.now();
     const elapsedSeconds = Math.max(0, Math.min(0.2, dt));
     let nextLength = 0;
+    let removedPotentialLargest = false;
     for (const item of items) {
       if (item.kind === "top") {
         if (item.expireAt && item.expireAt <= now) continue;
@@ -348,11 +392,18 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       }
 
       item.x -= item.speed * elapsedSeconds;
-      if (item.x + item.width < -20) continue;
+      if (item.x + item.width < -20) {
+        if (item.fontSize >= largestScrollFontSize) removedPotentialLargest = true;
+        continue;
+      }
       items[nextLength] = item;
       nextLength += 1;
     }
     items.length = nextLength;
+    if (removedPotentialLargest) {
+      largestScrollFontSizeNeedsRefresh = true;
+      layoutDirty = true;
+    }
     schedulePending();
   }
 
@@ -362,11 +413,25 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     visibleItems: () => items,
     hasWork: () => items.length > 0 || pending.length > 0,
     setOpts: (nextOpts) => {
-      fontSize = clampFontSize(nextOpts.fontSize);
+      const nextFontSize = clampFontSize(nextOpts.fontSize);
+      const nextScrollArea = clampArea(nextOpts.area);
+      const nextLineCount = clampLineCount(nextOpts.lineCount);
+      if (
+        nextFontSize !== fontSize ||
+        nextScrollArea !== scrollArea ||
+        nextLineCount !== maxLineCount
+      ) {
+        // `fontSize` also affects the layout while there are no items. When
+        // existing items remain, recompute their maximum only on this rare
+        // settings change rather than once per frame.
+        largestScrollFontSizeNeedsRefresh = true;
+        layoutDirty = true;
+      }
+      fontSize = nextFontSize;
       logicalSpeed = nextOpts.speed;
       currentOpacity = clampOpacity(nextOpts.opacity);
-      scrollArea = clampArea(nextOpts.area);
-      maxLineCount = clampLineCount(nextOpts.lineCount);
+      scrollArea = nextScrollArea;
+      maxLineCount = nextLineCount;
       currentFontWeight = clampFontWeight(nextOpts.fontWeight);
     },
     opacity: () => currentOpacity,

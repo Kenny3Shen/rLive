@@ -61,7 +61,10 @@ pub fn site(id: &SiteId, cookie: Option<String>) -> AppResult<Box<dyn LiveSite>>
             http_client::default_client(),
             cookie.unwrap_or_default(),
         ))),
-        SiteId::Kuaishou => Ok(Box::new(KuaishouSite)),
+        SiteId::Kuaishou => Ok(Box::new(KuaishouSite::new(
+            http_client::default_client(),
+            cookie.unwrap_or_default(),
+        ))),
     }
 }
 
@@ -69,7 +72,7 @@ pub fn site(id: &SiteId, cookie: Option<String>) -> AppResult<Box<dyn LiveSite>>
 pub fn is_ready(id: &SiteId) -> bool {
     matches!(
         id,
-        SiteId::Bilibili | SiteId::Huya | SiteId::Douyu | SiteId::Douyin
+        SiteId::Bilibili | SiteId::Huya | SiteId::Douyu | SiteId::Douyin | SiteId::Kuaishou
     )
 }
 
@@ -95,5 +98,6 @@ mod tests {
         assert!(is_ready(&SiteId::Huya));
         assert!(is_ready(&SiteId::Douyu));
         assert!(is_ready(&SiteId::Douyin));
+        assert!(is_ready(&SiteId::Kuaishou));
     }
 }

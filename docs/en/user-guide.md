@@ -12,9 +12,11 @@ rLive is a desktop live-stream aggregator for browsing, searching, and watching 
 | Huya | Yes | Yes | Yes |
 | Douyu | Yes | Yes | Yes |
 | Douyin | First-page recommendations/categories; search needs a logged-in cookie | Yes | Not yet supported |
-| Kuaishou | Stub | Stub | Stub |
+| Kuaishou | Recommendations / categories / game-category search | Yes | Not yet supported |
 
 Douyin's public server-rendered list is currently reliable only for its first page. rLive deliberately does not offer fake pagination that would repeat rooms. Live search becomes available after you save a complete logged-in browser cookie.
+
+Kuaishou uses public recommendation/category data and the room's initial state. Search intentionally matches game-category names only and returns that category's rooms; no match produces an empty list rather than pretending to search creators. The first version prefers H.264 playback URLs and has no real-time danmaku.
 
 ## 2. Install & run
 
@@ -33,19 +35,19 @@ See root `README.md`: `bun install` → `bun run tauri dev`.
 |------|------|
 | Sidebar | Home, follows, categories, history, settings |
 | Header | Site switcher, search (user / room ID / title); the Follows page uses the same centred selector with an extra All platforms option |
-| Room | Left-side Back control, centred room title, player, host information, and side tabs in the order Danmaku / SC / Follow list / Settings |
+| Room | Icon-only Back control, centred room title, player, host information, and side tabs in the order Danmaku / SC / Follow list / Settings |
 
 ## 4. Watching
 
 1. A first launch opens Bilibili by default; pick another site in the header when needed.
 2. Selecting a category opens its own room-list page; search can target **all**, **user**, **room ID**, or **title**.
-3. The room header has a Back control on the left and keeps the title centred. It returns to the source page for in-app navigation, or Home for a directly opened room URL. The side-header shows the host avatar, name, platform, and current heat.
+3. The room header has an icon-only Back control on the left and keeps the title centred. It returns to the source page for in-app navigation, or Home for a directly opened room URL. The side-header shows the host avatar, name, platform, and current heat.
 4. The player controls are a transparent overlay at the bottom of the video. They hide after a short idle period during playback and reappear on pointer, click, or keyboard activity. They remain visible while a volume, quality, or line menu is open; with the picture focused, `Space` / `K` play or pause, `M` mutes, and `F` toggles fullscreen.
 5. The refresh control sits left of pause and refreshes stream metadata before rebuilding the playback session; the volume icon opens a vertical slider.
 6. **Quality** and **line** are separate selectors on the right and show only the active selection.
 7. The right sidebar, floating danmaku, and fullscreen use compact icon controls. Reopening the sidebar preserves chat and SC lists.
 8. Default quality preference: **Settings → Playback**.
-9. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie.
+9. Douyin supports anonymous first-page browse and playback; search requires a saved logged-in browser cookie. Kuaishou supports recommendations, categories, game categories, rooms, and playback; its search is limited to game-category names.
 
 Streams are fetched via a localhost proxy so the web player can attach with correct headers.
 
@@ -57,7 +59,7 @@ Entering a Bilibili, Huya, or Douyu room connects that site's danmaku WebSocket.
 
 - **Bilibili:** paste a browser cookie under Settings → 哔哩哔哩 Cookie.  
 - **Huya / Douyu:** usually no cookie. Douyu uses system TLS (`native-tls`) because its servers only offer RSA-AES-GCM suites.
-- **Douyin / Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection. Douyin browsing and playback remain available.
+- **Douyin / Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection. Supported browsing and playback remain available.
 
 ### Room-side settings
 
@@ -82,7 +84,7 @@ Room side panel tab **SC** shows only Bilibili `super_chat` events. When the pla
 
 ## 6. Follows & history
 
-Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, and its floating refresh button updates live status. The room-side **Follow list** tab places live rooms first and switches directly to a selected followed room without leaving the room page; it also provides a floating refresh button. Visited rooms are stored in history.
+Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follow list** tab places live rooms first and switches directly to a selected followed room without leaving the room page; it also provides a floating refresh button. Visited rooms are stored in history.
 
 ## 7. Settings summary
 

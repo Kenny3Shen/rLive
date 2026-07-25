@@ -6,6 +6,7 @@
 |------|---------|
 | [用户指南](zh/用户指南.md) | [User guide](en/user-guide.md) |
 | [架构说明](zh/架构说明.md) | [Architecture](en/architecture.md) |
+| [B 站发送弹幕调研](zh/B站发送弹幕调研.md) | [Bilibili danmaku sending research](en/bilibili-danmaku-send-research.md) |
 
 仓库根目录 [README.md](../README.md) 含功能表、环境与构建速查。
 

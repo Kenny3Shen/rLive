@@ -275,7 +275,7 @@ function RoomTopBar({ title }: { title: string }) {
       <Button
         ref={backButtonRef}
         variant="ghost"
-        size="sm"
+        size="icon-sm"
         className="absolute left-2"
         aria-label="返回上一页"
         title="返回上一页"
@@ -284,7 +284,6 @@ function RoomTopBar({ title }: { title: string }) {
         onPointerLeave={() => animateBackButton(0)}
       >
         <ChevronLeft data-icon="inline-start" aria-hidden />
-        返回
       </Button>
       <p ref={titleRef} className="max-w-[calc(100%-6rem)] truncate text-sm font-medium">
         {title}

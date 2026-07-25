@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { PlayUrl } from "@/shared/types/live";
 import type { PlayerEvent, PlayerUiMode } from "@/shared/types/player";
@@ -71,14 +71,32 @@ function mediaType(url: string): string {
   return isHls(url) ? "mse" : "flv";
 }
 
-function playUrlKey(playUrl: PlayUrl | null): string {
+export function playUrlKey(playUrl: PlayUrl | null): string {
   if (!playUrl) return "";
   // Include a stable header fingerprint so cookie/referer changes also reload.
-  const headerKey = Object.entries(playUrl.headers ?? {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${v}`)
-    .join("&");
-  return `${playUrl.url}::${headerKey}`;
+  // JSON keeps separators in URLs/header values unambiguous and can be
+  // reconstructed into an immutable playback snapshot below.
+  return JSON.stringify([
+    playUrl.url,
+    Object.entries(playUrl.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+  ]);
+}
+
+function playbackSourceFromKey(key: string): PlayUrl | null {
+  if (!key) return null;
+  try {
+    const parsed: unknown = JSON.parse(key);
+    if (!Array.isArray(parsed) || typeof parsed[0] !== "string" || !Array.isArray(parsed[1])) {
+      return null;
+    }
+    const entries = parsed[1].filter(
+      (entry): entry is [string, string] =>
+        Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string",
+    );
+    return { url: parsed[0], headers: Object.fromEntries(entries) };
+  } catch {
+    return null;
+  }
 }
 
 // The native proxy has one process-global active listener. Queue the complete
@@ -165,7 +183,16 @@ export function useWebPlayer(opts: {
     setRunning(false);
   }, []);
 
-  const streamKey = `${sessionKey}::${playUrlKey(playUrl)}`;
+  const playbackSourceKey = playUrlKey(playUrl);
+  const streamKey = `${sessionKey}::${playbackSourceKey}`;
+  // Query results can replace an equivalent PlayUrl object while the player
+  // is running. Snapshot the semantic source by `streamKey` so that harmless
+  // object-identity churn does not tear down MSE, recreate the <video>, and
+  // restart the process-global proxy.
+  const playbackSource = useMemo(
+    () => playbackSourceFromKey(playbackSourceKey),
+    [playbackSourceKey],
+  );
 
   // Open / replace stream whenever the logical stream identity changes.
   useEffect(() => {
@@ -180,7 +207,7 @@ export function useWebPlayer(opts: {
       }
     };
 
-    if (!playUrl) {
+    if (!playbackSource) {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
       setLoadError(null);
@@ -240,8 +267,8 @@ export function useWebPlayer(opts: {
           // 3) Fresh proxy (new port) + cache-bust query so the browser never
           // reuses a closed keep-alive to the previous listener.
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
-            url: playUrl.url,
-            headers: playUrl.headers,
+            url: playbackSource.url,
+            headers: playbackSource.headers,
           });
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
@@ -272,7 +299,7 @@ export function useWebPlayer(opts: {
 
           const player = mpegts.createPlayer(
             {
-              type: mediaType(playUrl.url),
+              type: mediaType(playbackSource.url),
               isLive: true,
               url: playLocal,
               hasAudio: true,
@@ -391,7 +418,7 @@ export function useWebPlayer(opts: {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [streamKey, reloadToken, destroyPlayer, playUrl]);
+  }, [streamKey, reloadToken, destroyPlayer, playbackSource]);
 
   // Reflect transport controls onto the element.
   useEffect(() => {

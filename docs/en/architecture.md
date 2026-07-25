@@ -34,7 +34,7 @@ The room player renders controls as a transparent bottom overlay. They auto-hide
 | `sites/huya/` | Mobile init JSON, anticode FLV |
 | `sites/douyu/` | H5 enc sign (Boa + CryptoJS), H5 play |
 | `sites/douyin.rs` | SSR categories/first-page lists, cookie session, room/playback, logged-in search |
-| `sites/kuaishou.rs` | Stub |
+| `sites/kuaishou.rs` | Public recommendations/categories/game categories, room SSR initial state, H.264-first playback; no real-time danmaku |
 | `sites/registry.rs` | Meta + `is_ready` |
 
 Douyu sign needs browser polyfills in Boa (`escape` / `unescape` / `substr`) and CryptoJS on `globalThis`.  
@@ -75,5 +75,5 @@ See `AGENTS.md` for agent delivery rules.
 
 - **Douyin pagination:** only add the challenge-protected `partition/detail/room/v2` flow when a reliable, compliant browser-session/signing path exists; do not fake pagination with SSR offsets.  
 - **Douyin danmaku:** protobuf `PushFrame` / `WebcastChatMessage`.  
-- **Kuaishou:** implement `LiveSite` on the stub.  
+- **Kuaishou danmaku:** requires separate public-protocol research; no real-time connection is opened today.
 - **Richer SC:** extend `DanmakuEvent` + Bilibili SUPER_CHAT fields.

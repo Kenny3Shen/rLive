@@ -22,12 +22,3 @@ pub trait LiveSite: Send + Sync {
     ) -> AppResult<Vec<PlayUrl>>;
     async fn get_live_status(&self, room_id: &str) -> AppResult<bool>;
 }
-
-/// Shared stub error for sites not yet implemented.
-pub fn not_implemented(site: &str, method: &str) -> crate::error::AppError {
-    crate::error::AppError::new(
-        "not_implemented",
-        format!("{site}::{method} is not implemented yet"),
-    )
-    .with_site(site)
-}

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, LayoutGrid } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
+import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import type { LiveCategory, LiveSubCategory } from "@/shared/types/live";
 import { Skeleton } from "@/components/ui/skeleton";
 import { categoryRoomsPath } from "./categoryRoute";
@@ -82,6 +83,7 @@ function ExpandTile({ expanded, onClick }: ExpandTileProps) {
 export function CategoryPage() {
   const navigate = useNavigate();
   const siteId = useSiteId();
+  const pageRef = useRef<HTMLDivElement>(null);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set());
 
   const categoriesQuery = useQuery({
@@ -90,6 +92,12 @@ export function CategoryPage() {
   });
 
   const categories = categoriesQuery.data ?? [];
+
+  usePageEntrance(pageRef, {
+    entryKey: `category:${siteId}`,
+    ready: categories.length > 0,
+    maxItems: 8,
+  });
 
   useEffect(() => {
     setExpandedParents(new Set());
@@ -105,7 +113,7 @@ export function CategoryPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1600px] pb-6">
+    <div ref={pageRef} className="mx-auto max-w-[1600px] pb-6">
       <h1 className="sr-only">分类</h1>
       {categoriesQuery.isLoading && <CategorySkeleton />}
 
@@ -128,7 +136,11 @@ export function CategoryPage() {
             const canExpand = children.length > INITIAL_CATEGORY_COUNT;
 
             return (
-              <section key={parent.id} aria-labelledby={`category-${parent.id}`}>
+              <section
+                data-page-enter-item
+                key={parent.id}
+                aria-labelledby={`category-${parent.id}`}
+              >
                 <h2
                   id={`category-${parent.id}`}
                   className="mb-4 text-xl font-semibold tracking-tight text-foreground"
