@@ -553,10 +553,9 @@ fn is_trusted_bilibili_image_host(host: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
-/// Convert Bilibili's protocol-relative/legacy HTTP emote URL to an HTTPS URL
-/// only after its hostname has been constrained to Bilibili's image CDNs.
-/// The frontend validates again before handing it to an `<img>` or canvas
-/// image loader, so a malformed upstream event simply remains plain text.
+/// Convert Bilibili's protocol-relative/legacy HTTP image URL to HTTPS only
+/// after its hostname has been constrained to Bilibili's image CDNs. This
+/// applies to both message emotes and SC sender avatars.
 fn safe_bilibili_image_url(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty()
@@ -770,6 +769,11 @@ fn parse_super_chat_info(data: &Value) -> SuperChatInfo {
             data.get("background_bottom_color")
                 .or_else(|| data.get("background_color_end")),
         ),
+        avatar_url: data
+            .get("user_info")
+            .and_then(|user_info| user_info.get("face"))
+            .and_then(Value::as_str)
+            .and_then(safe_bilibili_image_url),
         duration: safe_super_chat_duration(data.get("time").or_else(|| data.get("duration"))),
     }
 }
@@ -1370,7 +1374,10 @@ mod tests {
             "background_color": "#2A60B2",
             "background_bottom_color": "#1D4A92",
             "time": 60,
-            "user_info": {"uname": "SC 用户"}
+            "user_info": {
+              "uname": "SC 用户",
+              "face": "//i0.hdslb.com/bfs/face/sc-user.jpg"
+            }
           }
         }"##;
         let ev = parse_message_json(json).unwrap();
@@ -1384,6 +1391,10 @@ mod tests {
         assert_eq!(info.currency.as_deref(), Some("CNY"));
         assert_eq!(info.background_color.as_deref(), Some("#2A60B2"));
         assert_eq!(info.background_bottom_color.as_deref(), Some("#1D4A92"));
+        assert_eq!(
+            info.avatar_url.as_deref(),
+            Some("https://i0.hdslb.com/bfs/face/sc-user.jpg")
+        );
         assert_eq!(info.duration, Some(60));
     }
 
@@ -1398,7 +1409,8 @@ mod tests {
             "currency": "CNY; color:red",
             "background_color": "url(javascript:alert(1))",
             "background_color_end": "#not-a-color",
-            "duration": 999999
+            "duration": 999999,
+            "user_info": {"face": "https://evil.example/avatar.jpg"}
           }
         }"##;
         let ev = parse_message_json(json).unwrap();

@@ -120,6 +120,8 @@ pub struct SuperChatInfo {
     pub background_color: Option<String>,
     /// Safe CSS hexadecimal secondary background colour, if supplied.
     pub background_bottom_color: Option<String>,
+    /// Validated Bilibili CDN avatar URL for the Super Chat sender.
+    pub avatar_url: Option<String>,
     /// Highlight duration in seconds.
     pub duration: Option<u32>,
 }

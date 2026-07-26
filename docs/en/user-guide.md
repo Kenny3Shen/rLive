@@ -89,7 +89,7 @@ Every display control applies live: sliders preview while dragged and persist on
 
 ### Super Chat (SC)
 
-Room side panel tab **SC** shows only Bilibili `super_chat` events. A compact paid-message card uses safely validated Bilibili tier colours for a short value header, keeping the amount, sender, and explicit highlight duration prominent while the full message remains readable. Shield words apply to SC too; floating tracks emphasize it as a top-style message. Bilibili rooms without entries say that no Super Chats have arrived, while other platforms explicitly report that SC is not yet available.
+Room side panel tab **SC** shows only Bilibili `super_chat` events. A compact paid-message card places the sender avatar, name, highlight duration, and amount in a light identity deck; the full message remains readable in the safely validated Bilibili tier-colour band below. Missing, blocked, or failed faces fall back to the sender initial, and the app does not fetch a user profile. Shield words apply to SC too; floating tracks emphasize it as a top-style message. Bilibili rooms without entries say that no Super Chats have arrived, while other platforms explicitly report that SC is not yet available.
 
 Bilibili image emotes in normal chat are delivered with the message itself. rLive loads only validated Bilibili CDN image URLs and preserves the original text/image order in the side list and floating tracks. Floating danmaku retains the original text as a fallback while a CDN image is loading or unavailable.
 
