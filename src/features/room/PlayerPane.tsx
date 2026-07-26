@@ -101,7 +101,6 @@ export function PlayerPane({
 }: PlayerPaneProps) {
   const [sidePanelOpen, setSidePanelOpen] = useState(true);
   const [osdOn, setOsdOn] = useState(true);
-  const [controlsVisible, setControlsVisible] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const [scUnreadCount, setScUnreadCount] = useState(0);
   const controlsHideTimerRef = useRef<number | null>(null);
@@ -151,7 +150,18 @@ export function PlayerPane({
   const setControlVisibility = useCallback((visible: boolean) => {
     if (controlsVisibleRef.current === visible) return;
     controlsVisibleRef.current = visible;
-    setControlsVisible(visible);
+
+    // Hiding controls used to update PlayerPane state. That re-rendered the
+    // live canvas and every keep-mounted side tab at the exact moment the
+    // animation started, which is perceptible during a busy danmaku stream.
+    // This small DOM-only state is deliberately isolated to the overlay: CSS
+    // still performs the composited fade, while the video, canvas and lists
+    // continue their existing work without a React reconciliation.
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.dataset.visible = visible ? "true" : "false";
+    controls.setAttribute("aria-hidden", String(!visible));
+    controls.toggleAttribute("inert", !visible);
   }, []);
 
   const markControlsActivity = useCallback(() => {
@@ -418,17 +428,14 @@ export function PlayerPane({
             <div
               ref={controlsRef}
               data-player-controls
-              data-visible={controlsVisible ? "true" : "false"}
-              aria-hidden={!controlsVisible}
-              inert={!controlsVisible}
+              data-visible="true"
               className={cn(
                 // The player is busy with MSE + canvas danmaku. Keep this one
                 // transient layer composited: no layout property, blur, or
-                // gradient is animated when the controls auto-hide.
-                "absolute inset-x-0 bottom-0 z-30 px-3 pb-3 transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-200 motion-reduce:transition-none",
-                controlsVisible
-                  ? "translate-y-0 opacity-100 ease-out"
-                  : "pointer-events-none translate-y-2 opacity-0 ease-in",
+                // gradient is animated when the controls auto-hide. The data
+                // attribute is changed imperatively above, avoiding a full
+                // PlayerPane reconciliation at the start of the fade.
+                "absolute inset-x-0 bottom-0 z-30 px-3 pb-3 transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={(event) => {

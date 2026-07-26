@@ -279,13 +279,13 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
   return (
     <header
       ref={topBarRef}
-      className="relative flex h-11 shrink-0 items-center border-b border-border/80 bg-sidebar/90 px-3"
+      className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3"
     >
       <Button
         ref={backButtonRef}
         variant="ghost"
         size="icon-sm"
-        className="rounded-lg hover:bg-muted/70"
+        className="absolute left-3 z-10 rounded-lg hover:bg-muted/70"
         aria-label="返回上一页"
         title="返回上一页"
         onClick={goBack}
@@ -296,7 +296,7 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
       </Button>
       <p
         ref={titleRef}
-        className="ml-2 min-w-0 max-w-[calc(100%-5rem)] truncate text-sm font-semibold tracking-tight text-foreground/90"
+        className="absolute inset-x-14 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
         title={title}
       >
         {title}

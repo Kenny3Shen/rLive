@@ -3,7 +3,11 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { batchEvents, type DanmakuBatch } from "../danmaku/batch";
-import { DANMAKU_IMAGE_HORIZONTAL_GAP, DANMAKU_IMAGE_SCALE } from "../danmaku/content";
+import {
+  BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
+  DANMAKU_IMAGE_HORIZONTAL_GAP,
+  DANMAKU_IMAGE_SCALE,
+} from "../danmaku/content";
 import { createShieldMatcher, shouldShowOnCanvas } from "../danmaku/filter";
 import { createEngine, type DanmakuEngine, type TrackItem } from "./danmakuEngine";
 import { cn } from "@/lib/utils";
@@ -440,6 +444,9 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       // These URLs are validated upstream to Bilibili's image hosts. Do not
       // set crossOrigin here: some Bilibili CDNs omit CORS headers, while this
       // canvas is never read back or exported and can safely draw the image.
+      // The Tauri page protocol is not an accepted Bilibili CDN Referer, so
+      // set this before `src` starts the request (matching the side-list img).
+      image.referrerPolicy = BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY;
       image.src = url;
       return null;
     };

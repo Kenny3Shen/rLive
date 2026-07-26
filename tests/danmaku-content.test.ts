@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
   hasValidDanmakuContentSpans,
   normalizeDanmakuImageUrl,
   richDanmakuContent,
@@ -7,6 +8,10 @@ import {
 } from "../src/features/room/danmaku/content";
 
 describe("rich danmaku content", () => {
+  test("omits the desktop app Referer for Bilibili CDN emotes", () => {
+    expect(BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY).toBe("no-referrer");
+  });
+
   test("normalizes trusted Bilibili CDN URLs to HTTPS", () => {
     expect(normalizeDanmakuImageUrl("//i0.hdslb.com/bfs/emote/question.png")).toBe(
       "https://i0.hdslb.com/bfs/emote/question.png",
@@ -14,6 +19,13 @@ describe("rich danmaku content", () => {
     expect(normalizeDanmakuImageUrl("http://i0.hdslb.com/bfs/emote/legacy.png")).toBe(
       "https://i0.hdslb.com/bfs/emote/legacy.png",
     );
+    // Bilibili live's one-off emotes use this same CDN with `/bfs/live/`
+    // paths rather than `/bfs/emote/`.
+    expect(
+      normalizeDanmakuImageUrl(
+        "http://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png",
+      ),
+    ).toBe("https://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png");
   });
 
   test("rejects image URLs outside Bilibili CDN hosts or with credentials", () => {

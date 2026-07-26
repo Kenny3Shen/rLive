@@ -7,7 +7,11 @@ import likeSrc from "@/assets/danmaku-emoji/like.svg";
 import partySrc from "@/assets/danmaku-emoji/party.svg";
 import smileSrc from "@/assets/danmaku-emoji/smile.svg";
 import wowSrc from "@/assets/danmaku-emoji/wow.svg";
-import { DANMAKU_IMAGE_SCALE, richDanmakuContent } from "./content";
+import {
+  BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
+  DANMAKU_IMAGE_SCALE,
+  richDanmakuContent,
+} from "./content";
 
 export type DanmakuEmoji = {
   /** Stable local identifier; never sent to an upstream service. */
@@ -149,6 +153,7 @@ export function DanmakuRichText({
             src={span.image_url}
             alt="表情"
             draggable={false}
+            referrerPolicy={BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY}
             className={cn(
               "mx-px inline-block select-none align-[-0.25em] object-contain",
               emojiClassName,

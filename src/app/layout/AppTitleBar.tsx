@@ -67,31 +67,37 @@ export function AppTitleBar() {
     void performWindowAction("toggleMaximize");
   }, [performWindowAction]);
 
+  // Tauri 2 only treats a bare drag-region attribute as draggable when the
+  // exact element is clicked. Most of this bar is made of descendants, so use
+  // `deep` and explicitly opt the window buttons out below.
   return (
     <header
-      data-tauri-drag-region
-      className="relative flex h-9 shrink-0 items-stretch border-b border-border-subtle bg-sidebar/95 text-xs select-none"
+      data-tauri-drag-region="deep"
+      className="relative isolate flex h-9 shrink-0 items-stretch border-b border-border-subtle bg-sidebar/95 text-xs select-none"
       aria-label="应用标题栏"
-      onDoubleClick={(event) => {
-        if (event.target instanceof Element && event.target.closest("button")) return;
-        toggleMaximize();
-      }}
     >
-      <div data-tauri-drag-region className="flex w-[68px] shrink-0 items-center justify-center">
+      <div className="relative z-10 flex min-w-0 flex-1 items-center px-3">
         <img src="/rlive.svg" alt="rLive" draggable={false} className="size-4.5 rounded-[5px]" />
       </div>
 
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2 px-1.5">
-        <span className="font-medium tracking-[0.01em] text-foreground/85">rLive</span>
-        <span aria-hidden="true" className="text-border-subtle">
-          /
-        </span>
-        <span className="truncate text-muted-foreground">直播桌面客户端</span>
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-40">
+        <span className="truncate font-medium tracking-[0.01em] text-foreground/85">rLive</span>
       </div>
 
       <div className="relative z-10 flex h-full items-stretch">
+        <span
+          className="pointer-events-none flex h-9 items-center gap-1.5 px-2.5 text-[10px] font-semibold tracking-[0.12em] text-accent"
+          aria-label="Live"
+        >
+          <span
+            aria-hidden="true"
+            className="size-1.5 rounded-full bg-accent shadow-[0_0_7px_currentColor]"
+          />
+          LIVE
+        </span>
         <button
           type="button"
+          data-tauri-drag-region="false"
           className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           aria-label="最小化"
           title="最小化"
@@ -103,6 +109,7 @@ export function AppTitleBar() {
         </button>
         <button
           type="button"
+          data-tauri-drag-region="false"
           className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           aria-label={maximized ? "还原窗口" : "最大化"}
           title={maximized ? "还原窗口" : "最大化"}
@@ -118,6 +125,7 @@ export function AppTitleBar() {
         </button>
         <button
           type="button"
+          data-tauri-drag-region="false"
           className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           aria-label="关闭"
           title="关闭"

@@ -4,6 +4,12 @@ import type { DanmakuContentSpan } from "@/shared/types/live";
 export const DANMAKU_IMAGE_SCALE = 1.35;
 /** Total inline breathing room around one image emote, in CSS pixels. */
 export const DANMAKU_IMAGE_HORIZONTAL_GAP = 2;
+/**
+ * Bilibili's CDN rejects the desktop webview's `tauri://…` Referer with 403.
+ * Explicitly omitting it keeps both DOM and canvas image requests compatible
+ * with the same CDN URLs that normal Bilibili pages use.
+ */
+export const BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY = "no-referrer" as const;
 
 const MAX_DANMAKU_CONTENT_SPANS = 32;
 const MAX_DANMAKU_IMAGE_URL_LENGTH = 2_048;

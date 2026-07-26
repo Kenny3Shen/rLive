@@ -1252,7 +1252,9 @@ mod tests {
     fn parse_danmu_msg_reads_one_off_emote_metadata_and_rejects_untrusted_url() {
         let mut metadata = vec![Value::Null; 14];
         metadata[13] = serde_json::json!({
-            "url": "https://i0.hdslb.com/bfs/emote/one-off.png"
+            // A real live-emote URL shape: unlike inline pack emotes, live
+            // messages can use `/bfs/live/` and legacy HTTP.
+            "url": "http://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png"
         });
         let payload = serde_json::json!({
             "cmd": "DANMU_MSG",
@@ -1262,7 +1264,9 @@ mod tests {
         assert_eq!(
             event.spans,
             Some(vec![DanmakuContentSpan::Image {
-                image_url: "https://i0.hdslb.com/bfs/emote/one-off.png".into()
+                image_url:
+                    "https://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png"
+                        .into()
             }])
         );
 
