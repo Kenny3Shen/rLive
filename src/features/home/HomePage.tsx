@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -10,6 +10,7 @@ import type { LiveRoomItem, RoomListPage } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SITE_LABELS } from "@/lib/utils";
+import { mergeRoomPages, nextRecommendPage } from "./pagination";
 
 type RoomGridProps = {
   rooms: readonly LiveRoomItem[];
@@ -30,6 +31,8 @@ const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
 export function HomePage() {
   const siteId = useSiteId();
   const pageRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const loadMoreInFlightRef = useRef(false);
 
   const query = useInfiniteQuery({
     queryKey: ["recommend", siteId],
@@ -39,12 +42,55 @@ export function HomePage() {
         page: pageParam,
       }),
     initialPageParam: 1,
-    getNextPageParam: (last, _pages, lastPageParam) =>
-      last.has_more ? lastPageParam + 1 : undefined,
+    getNextPageParam: nextRecommendPage,
   });
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
 
   const pages = query.data?.pages;
-  const rooms = useMemo(() => pages?.flatMap((page) => page.items) ?? [], [pages]);
+  const rooms = useMemo(() => mergeRoomPages(pages), [pages]);
+
+  const loadMore = useCallback(
+    (retry = false) => {
+      if (
+        loadMoreInFlightRef.current ||
+        !hasNextPage ||
+        isFetchingNextPage ||
+        (!retry && isFetchNextPageError)
+      ) {
+        return;
+      }
+      loadMoreInFlightRef.current = true;
+      void fetchNextPage().finally(() => {
+        loadMoreInFlightRef.current = false;
+      });
+    },
+    [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError],
+  );
+
+  useEffect(() => {
+    const target = loadMoreRef.current;
+    if (
+      !target ||
+      !hasNextPage ||
+      isFetchingNextPage ||
+      isFetchNextPageError ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore();
+      },
+      {
+        root: document.querySelector<HTMLElement>("main"),
+        rootMargin: "0px 0px 240px 0px",
+      },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, loadMore]);
 
   usePageEntrance(pageRef, {
     entryKey: `home:${siteId}`,
@@ -65,7 +111,7 @@ export function HomePage() {
         </div>
       )}
 
-      {query.isError && (
+      {query.isError && rooms.length === 0 && (
         <ErrorState
           error={query.error}
           title="推荐直播加载失败"
@@ -82,21 +128,29 @@ export function HomePage() {
       {rooms.length > 0 && <RoomGrid rooms={rooms} />}
 
       {query.hasNextPage && (
-        <div className="flex justify-center pt-3 pb-2">
-          <Button
-            variant="secondary"
-            disabled={query.isFetchingNextPage}
-            onClick={() => void query.fetchNextPage()}
-          >
-            {query.isFetchingNextPage ? (
-              <>
-                <Loader2 className="animate-spin-soft" />
-                加载中…
-              </>
-            ) : (
-              "加载更多"
+        <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
+          {query.isFetchingNextPage && (
+            <span
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Loader2 className="animate-spin-soft" data-icon="inline-start" />
+              加载中…
+            </span>
+          )}
+          {query.isFetchNextPageError && (
+            <Button variant="secondary" onClick={() => loadMore(true)}>
+              重试加载
+            </Button>
+          )}
+          {typeof IntersectionObserver === "undefined" &&
+            !query.isFetchingNextPage &&
+            !query.isFetchNextPageError && (
+              <Button variant="secondary" onClick={() => loadMore()}>
+                加载更多
+              </Button>
             )}
-          </Button>
         </div>
       )}
     </div>
