@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { AppSettings } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
@@ -100,7 +100,11 @@ function sameWords(left: readonly string[], right: readonly string[]): boolean {
  * Room-local Simple Live-style danmaku controls. Slider movement updates the
  * Zustand store immediately; persistence happens once the thumb is released.
  */
-export function DanmakuSettingsPanel({ className }: { className?: string }) {
+export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
+  className,
+}: {
+  className?: string;
+}) {
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const speed = useSettingsStore((s) => s.danmakuSpeed);
@@ -355,4 +359,4 @@ export function DanmakuSettingsPanel({ className }: { className?: string }) {
       </div>
     </ScrollArea>
   );
-}
+});

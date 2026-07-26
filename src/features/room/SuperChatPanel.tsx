@@ -1,10 +1,9 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createShieldMatcher, isDanmakuEvent } from "./danmaku/filter";
+import { createShieldMatcher } from "./danmaku/filter";
 import { DanmakuRichText } from "./danmaku/emoji";
-import { batchEvents, type DanmakuBatch } from "./danmaku/batch";
+import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import {
   formatSuperChatAmount,
@@ -82,7 +81,7 @@ type SuperChatPanelProps = {
   className?: string;
 };
 
-export function SuperChatPanel({
+export const SuperChatPanel = memo(function SuperChatPanel({
   active,
   visible = true,
   onUnreadCountChange,
@@ -184,9 +183,6 @@ export function SuperChatPanel({
       return;
     }
 
-    let unlisten: UnlistenFn | undefined;
-    let cancelled = false;
-
     const flush = () => {
       flushFrameRef.current = null;
       if (!activeRef.current || !visibleRef.current) return;
@@ -247,17 +243,14 @@ export function SuperChatPanel({
       return true;
     };
 
-    void listen<DanmakuBatch>("danmaku-batch", (event) => {
-      if (cancelled || !activeRef.current) return;
+    const unsubscribe = subscribeDanmakuBatches((events) => {
+      if (!activeRef.current) return;
       const accepted: SuperChatLine[] = [];
-      for (const message of batchEvents(event.payload)) {
+      for (const message of events) {
         // Most traffic is ordinary chat. Check the discriminator before the
-        // full native-payload validation to keep the hidden SC tab inexpensive.
+        // remaining SC-specific work to keep the hidden SC tab inexpensive.
         if (
-          !message ||
-          typeof message !== "object" ||
-          (message as { kind?: unknown }).kind !== "super_chat" ||
-          !isDanmakuEvent(message) ||
+          message.kind !== "super_chat" ||
           !message.content.trim() ||
           shieldMatcherRef.current(message)
         ) {
@@ -272,19 +265,10 @@ export function SuperChatPanel({
       pendingRef.current.pushAll(accepted);
       if (!visibleRef.current) setUnreadCount(unreadCountRef.current + accepted.length);
       scheduleFlush();
-    })
-      .then((fn) => {
-        if (cancelled) {
-          void fn();
-          return;
-        }
-        unlisten = fn;
-      })
-      .catch(() => {});
+    });
 
     return () => {
-      cancelled = true;
-      unlisten?.();
+      unsubscribe();
       // Session state is reset only when `active` becomes false. A live
       // setting change must not recycle row ids or discard a hidden-tab queue.
       cancelFlush();
@@ -381,4 +365,4 @@ export function SuperChatPanel({
       </div>
     </div>
   );
-}
+});

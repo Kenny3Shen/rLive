@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Share2, Link2 } from "lucide-react";
-import { gsap } from "gsap";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
@@ -24,6 +23,7 @@ export function RoomPage() {
   const roomId = roomParam ? decodeURIComponent(roomParam) : undefined;
   const location = useLocation();
   const qc = useQueryClient();
+  const recordedHistoryRoomRef = useRef<string | null>(null);
 
   const [followBusy, setFollowBusy] = useState(false);
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
@@ -50,6 +50,12 @@ export function RoomPage() {
   useEffect(() => {
     const detail = detailQuery.data;
     if (!detail) return;
+    const roomKey = `${detail.site_id}\u0000${detail.room_id}`;
+    // Detail queries can refresh after reconnects or cache invalidations. A
+    // revisit should update history once, not write SQLite on every payload
+    // replacement while the same room remains open.
+    if (recordedHistoryRoomRef.current === roomKey) return;
+    recordedHistoryRoomRef.current = roomKey;
     const item: HistoryItem = {
       site_id: detail.site_id,
       room_id: detail.room_id,
@@ -229,27 +235,40 @@ export function RoomPage() {
 
 function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHome?: boolean }) {
   const navigate = useNavigate();
-  const topBarRef = useRef<HTMLElement>(null);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const titleRef = useRef<HTMLParagraphElement>(null);
   const reduceMotion = useReducedMotionPreference();
 
   useLayoutEffect(() => {
-    const topBar = topBarRef.current;
     const backButton = backButtonRef.current;
     const roomTitle = titleRef.current;
-    if (reduceMotion || !topBar || !backButton || !roomTitle) return;
+    if (reduceMotion || !backButton || !roomTitle) return;
 
-    const context = gsap.context(() => {
-      gsap
-        .timeline({ defaults: { ease: "power3.out" } })
-        .from(backButton, { autoAlpha: 0, duration: 0.32, x: -12 })
-        .from(roomTitle, { autoAlpha: 0, duration: 0.28, y: -6 }, "-=0.16");
-    }, topBar);
+    const easing = "cubic-bezier(0.16, 1, 0.3, 1)";
+    const animations = [
+      backButton.animate(
+        [
+          { opacity: 0, transform: "translate3d(-12px, 0, 0)" },
+          { opacity: 1, transform: "translate3d(0, 0, 0)" },
+        ],
+        { duration: 320, easing, fill: "both" },
+      ),
+      roomTitle.animate(
+        [
+          { opacity: 0, transform: "translate3d(0, -6px, 0)" },
+          { opacity: 1, transform: "translate3d(0, 0, 0)" },
+        ],
+        { delay: 160, duration: 280, easing, fill: "both" },
+      ),
+    ];
+    // Let the regular hover transform control the back button after its
+    // entrance motion has finished.
+    animations.forEach((animation) => {
+      animation.addEventListener("finish", () => animation.cancel(), { once: true });
+    });
 
     return () => {
-      gsap.killTweensOf(backButton);
-      context.revert();
+      animations.forEach((animation) => animation.cancel());
     };
   }, [reduceMotion]);
 
@@ -266,31 +285,16 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
     navigate("/", { replace: true });
   }
 
-  function animateBackButton(offset: number) {
-    if (reduceMotion || !backButtonRef.current) return;
-    gsap.to(backButtonRef.current, {
-      duration: 0.18,
-      ease: "power2.out",
-      overwrite: "auto",
-      x: offset,
-    });
-  }
-
   return (
-    <header
-      ref={topBarRef}
-      className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3"
-    >
+    <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
       <Button
         ref={backButtonRef}
         variant="ghost"
         size="icon-sm"
-        className="absolute left-3 z-10 rounded-lg hover:bg-muted/70"
+        className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70"
         aria-label="返回上一页"
         title="返回上一页"
         onClick={goBack}
-        onPointerEnter={() => animateBackButton(-2)}
-        onPointerLeave={() => animateBackButton(0)}
       >
         <ChevronLeft data-icon="inline-start" aria-hidden />
       </Button>

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { batchEvents } from "../src/features/room/danmaku/batch";
+import {
+  batchEvents,
+  validatedDanmakuBatch,
+  validatedBatchEvents,
+} from "../src/features/room/danmaku/batch";
 import { BoundedQueue } from "../src/features/room/danmaku/boundedQueue";
 
 describe("batched danmaku queue", () => {
@@ -34,5 +38,24 @@ describe("danmaku batch envelope", () => {
     expect(batchEvents({ connection_epoch: 1, events })).toBe(events);
     expect(batchEvents({ connection_epoch: 1, events: "not-an-array" })).toEqual([]);
     expect(batchEvents(null)).toEqual([]);
+  });
+
+  test("validates each native event once before room views fan out", () => {
+    const valid = { kind: "chat", user: "观众", content: "你好", color: null, ts: 1 };
+    const malformed = { kind: "chat", user: "观众", content: null, color: null, ts: 2 };
+
+    expect(validatedBatchEvents({ events: [valid, malformed] })).toEqual([valid]);
+    expect(validatedBatchEvents({ events: "not-an-array" })).toEqual([]);
+  });
+
+  test("keeps the native connection fence with a validated batch", () => {
+    const event = { kind: "chat", user: "观众", content: "你好", color: null, ts: 1 };
+
+    expect(validatedDanmakuBatch({ connection_epoch: 42, events: [event] })).toEqual({
+      connectionEpoch: 42,
+      events: [event],
+    });
+    expect(validatedDanmakuBatch({ events: [event] })).toBeNull();
+    expect(validatedDanmakuBatch({ connection_epoch: 1.5, events: [event] })).toBeNull();
   });
 });

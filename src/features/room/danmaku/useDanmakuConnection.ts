@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
 import { nextDanmakuConnectionEpoch } from "./connectionEpoch";
+import { clearExpectedDanmakuConnectionEpoch, setExpectedDanmakuConnectionEpoch } from "./eventBus";
 
 const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya", "douyin"]);
 
@@ -33,18 +34,21 @@ export function useDanmakuConnection(opts: {
   // Fence every route change before waiting for the next room-detail query.
   // The backend compares this epoch before installing a websocket task, so a
   // slow command for the previous room cannot reconnect after a newer route.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const connectionEpoch = nextDanmakuConnectionEpoch();
     connectionEpochRef.current = connectionEpoch;
+    setExpectedDanmakuConnectionEpoch(connectionEpoch);
     setActive(false);
     setStatusText(null);
     void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
+    return () => clearExpectedDanmakuConnectionEpoch(connectionEpoch);
   }, [siteId, roomId]);
 
   // Leaving RoomPage also gets a newer epoch. This invalidates any in-flight
   // metadata fetch that reaches the backend after the component has gone.
   useEffect(() => {
     return () => {
+      clearExpectedDanmakuConnectionEpoch(connectionEpochRef.current);
       const connectionEpoch = nextDanmakuConnectionEpoch();
       connectionEpochRef.current = connectionEpoch;
       void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});

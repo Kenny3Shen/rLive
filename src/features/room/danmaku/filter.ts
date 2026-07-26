@@ -94,17 +94,23 @@ export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]):
  * Douyu additionally drops them before IPC, while this keeps other sites
  * consistent if they emit the shared `enter` event.
  */
-export function shouldShowInDanmakuPanel(
-  event: unknown,
+export function shouldShowValidatedInDanmakuPanel(
+  event: DanmakuEvent,
   filterGifts = false,
-): event is DanmakuEvent {
-  if (!isDanmakuEvent(event)) return false;
+): boolean {
   const content = event.content.trim();
   return (
     Boolean(content) &&
     !isRoomEnterNotice(event.kind, content) &&
     !(filterGifts && event.kind === "gift")
   );
+}
+
+export function shouldShowInDanmakuPanel(
+  event: unknown,
+  filterGifts = false,
+): event is DanmakuEvent {
+  return isDanmakuEvent(event) && shouldShowValidatedInDanmakuPanel(event, filterGifts);
 }
 
 export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 5_000;
@@ -200,8 +206,12 @@ export function floatingDanmakuText(event: DanmakuEvent): string {
   return content;
 }
 
-export function shouldShowOnCanvas(event: unknown, filterGifts = false): event is DanmakuEvent {
-  if (!shouldShowInDanmakuPanel(event, filterGifts)) return false;
+export function shouldShowValidatedOnCanvas(event: DanmakuEvent, filterGifts = false): boolean {
+  if (!shouldShowValidatedInDanmakuPanel(event, filterGifts)) return false;
   if (event.kind === "system") return false;
   return true;
+}
+
+export function shouldShowOnCanvas(event: unknown, filterGifts = false): event is DanmakuEvent {
+  return isDanmakuEvent(event) && shouldShowValidatedOnCanvas(event, filterGifts);
 }

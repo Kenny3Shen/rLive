@@ -1,11 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createShieldMatcher, shouldShowInDanmakuPanel } from "./danmaku/filter";
+import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmaku/filter";
 import { DanmakuRichText } from "./danmaku/emoji";
-import { batchEvents, type DanmakuBatch } from "./danmaku/batch";
+import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +15,8 @@ const MAX = 300;
 const MAX_BUFFERED = 200;
 const MAX_PER_FLUSH = 32;
 const MIN_FLUSH_INTERVAL_MS = 32;
+const BACKPRESSURE_FLUSH_INTERVAL_MS = 80;
+const BACKPRESSURE_PENDING_THRESHOLD = MAX_PER_FLUSH * 2;
 const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
 
 function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
@@ -68,7 +69,12 @@ type DanmakuPanelProps = {
   statusText?: string | null;
 };
 
-export function DanmakuPanel({ active, visible = true, className, statusText }: DanmakuPanelProps) {
+export const DanmakuPanel = memo(function DanmakuPanel({
+  active,
+  visible = true,
+  className,
+  statusText,
+}: DanmakuPanelProps) {
   const [items, setItems] = useState<DanmakuLine[]>([]);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
@@ -128,9 +134,6 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       return;
     }
 
-    let unlisten: UnlistenFn | undefined;
-    let cancelled = false;
-
     const flush = () => {
       flushFrameRef.current = null;
       // `keepMounted` makes tab changes preserve the current message list.
@@ -164,7 +167,14 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
         return;
       }
 
-      const remaining = MIN_FLUSH_INTERVAL_MS - (performance.now() - lastFlushAtRef.current);
+      // A fast list is useful at normal traffic, but a sustained burst does
+      // not need 31 React commits per second. Drain a larger bounded backlog
+      // at a calmer cadence and return to the low-latency path once caught up.
+      const minInterval =
+        pending.length >= BACKPRESSURE_PENDING_THRESHOLD
+          ? BACKPRESSURE_FLUSH_INTERVAL_MS
+          : MIN_FLUSH_INTERVAL_MS;
+      const remaining = minInterval - (performance.now() - lastFlushAtRef.current);
       if (remaining > 0) {
         flushTimerRef.current = window.setTimeout(() => {
           flushTimerRef.current = null;
@@ -176,13 +186,13 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
     };
     scheduleFlushRef.current = scheduleFlush;
 
-    void listen<DanmakuBatch>("danmaku-batch", (event) => {
-      if (cancelled || !activeRef.current) return;
+    const unsubscribe = subscribeDanmakuBatches((events) => {
+      if (!activeRef.current) return;
       const { shieldMatcher: currentShieldMatcher, filterGifts: currentFilterGifts } =
         matchersRef.current;
       const accepted: DanmakuLine[] = [];
-      for (const message of batchEvents(event.payload)) {
-        if (!shouldShowInDanmakuPanel(message, currentFilterGifts)) continue;
+      for (const message of events) {
+        if (!shouldShowValidatedInDanmakuPanel(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
         accepted.push({ id: ++nextIdRef.current, event: message });
       }
@@ -190,19 +200,10 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       pending.pushAll(accepted);
       if (accepted.length === 0) return;
       scheduleFlush();
-    })
-      .then((fn) => {
-        if (cancelled) {
-          void fn();
-          return;
-        }
-        unlisten = fn;
-      })
-      .catch(() => {});
+    });
 
     return () => {
-      cancelled = true;
-      unlisten?.();
+      unsubscribe();
       cancelFlush();
       if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
       pending.clear();
@@ -290,4 +291,4 @@ export function DanmakuPanel({ active, visible = true, className, statusText }: 
       </div>
     </div>
   );
-}
+});

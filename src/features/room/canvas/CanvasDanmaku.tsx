@@ -1,14 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { batchEvents, type DanmakuBatch } from "../danmaku/batch";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
   DANMAKU_IMAGE_HORIZONTAL_GAP,
   DANMAKU_IMAGE_SCALE,
 } from "../danmaku/content";
-import { createShieldMatcher, shouldShowOnCanvas } from "../danmaku/filter";
+import { subscribeDanmakuBatches } from "../danmaku/eventBus";
+import { createShieldMatcher, shouldShowValidatedOnCanvas } from "../danmaku/filter";
 import { createEngine, type DanmakuEngine, type TrackItem } from "./danmakuEngine";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +40,10 @@ const MAX_RASTER_CACHE_PIXELS = 8_000_000;
 const MAX_RASTER_CACHE_ITEMS = 96;
 const MAX_IMAGE_CACHE_ITEMS = 128;
 const MAX_IMAGE_NATURAL_PIXELS = 1_048_576;
+// Rendering at a native 2×/3× backing scale makes every full-canvas clear and
+// redraw substantially more expensive. Text remains crisp at this cap while
+// avoiding the quadratic pixel cost on high-DPI displays.
+const MAX_CANVAS_PIXEL_RATIO = 1.5;
 
 function canvasFont(fontWeight: number, fontSize: number): string {
   return `${fontWeight} ${fontSize}px ${DANMAKU_FONT_FAMILY}`;
@@ -263,7 +266,11 @@ function createRichRaster(
   };
 }
 
-export function CanvasDanmaku({ className, active = true, sessionKey = null }: CanvasDanmakuProps) {
+export const CanvasDanmaku = memo(function CanvasDanmaku({
+  className,
+  active = true,
+  sessionKey = null,
+}: CanvasDanmakuProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DanmakuEngine | null>(null);
   const engineSessionRef = useRef<number | string | null>(sessionKey);
@@ -312,16 +319,12 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
 
   useEffect(() => {
     if (!active) return;
-    let unlisten: UnlistenFn | undefined;
-    let cancelled = false;
-
-    void listen<DanmakuBatch>("danmaku-batch", (event) => {
-      if (cancelled) return;
+    return subscribeDanmakuBatches((events) => {
       const { shieldMatcher: currentShieldMatcher, filterGifts: currentFilterGifts } =
         matchersRef.current;
       const accepted: DanmakuEvent[] = [];
-      for (const message of batchEvents(event.payload)) {
-        if (!shouldShowOnCanvas(message, currentFilterGifts)) continue;
+      for (const message of events) {
+        if (!shouldShowValidatedOnCanvas(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
         accepted.push(message);
       }
@@ -331,20 +334,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       // not ask the engine to rerun its scheduler for every accepted event.
       engineRef.current?.pushBatch(accepted, true);
       requestFrameRef.current();
-    })
-      .then((fn) => {
-        if (cancelled) {
-          void fn();
-          return;
-        }
-        unlisten = fn;
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    });
   }, [active, sessionKey]);
 
   useEffect(() => {
@@ -357,6 +347,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     let last = performance.now();
     let lastFrameAt = last;
     let ro: ResizeObserver | null = null;
+    let resizeRaf: number | null = null;
     let stopped = false;
     let needsDraw = true;
     let width = 0;
@@ -547,7 +538,10 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       if (stopped) return;
       const parent = canvas.parentElement;
       if (!parent) return;
-      const nextPixelRatio = window.devicePixelRatio || 1;
+      const nextPixelRatio = Math.min(
+        Math.max(window.devicePixelRatio || 1, 1),
+        MAX_CANVAS_PIXEL_RATIO,
+      );
       const nextWidth = parent.clientWidth;
       const nextHeight = parent.clientHeight;
       const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
@@ -766,7 +760,17 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
 
     requestFrameRef.current = requestFrame;
     resize();
-    ro = new ResizeObserver(resize);
+    // Window resizing can deliver several ResizeObserver entries in one
+    // paint cycle. Coalesce them so the canvas bitmap is rebuilt at most once
+    // per animation frame rather than repeatedly clearing and reallocating it.
+    const requestResize = () => {
+      if (stopped || resizeRaf !== null) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null;
+        resize();
+      });
+    };
+    ro = new ResizeObserver(requestResize);
     if (canvas.parentElement) ro.observe(canvas.parentElement);
     document.addEventListener("visibilitychange", resumeIfVisible);
     window.addEventListener("focus", resumeIfVisible);
@@ -784,6 +788,7 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
     return () => {
       stopped = true;
       if (raf !== null) cancelAnimationFrame(raf);
+      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
       ro?.disconnect();
       if (requestFrameRef.current === requestFrame) requestFrameRef.current = () => {};
       document.removeEventListener("visibilitychange", resumeIfVisible);
@@ -800,4 +805,4 @@ export function CanvasDanmaku({ className, active = true, sessionKey = null }: C
       aria-hidden
     />
   );
-}
+});

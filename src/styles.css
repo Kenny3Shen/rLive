@@ -151,6 +151,14 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Room grids can retain many cards after infinite scrolling. Chromium can
+   skip offscreen layout/paint for each complete card while preserving a stable
+   placeholder size for scrolling. */
+.room-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 13rem;
+}
+
 /* The native danmaku window is transparent. Keep its top-level surface clear
    rather than inheriting the regular application background. */
 html.overlay-window,
@@ -229,7 +237,7 @@ html.overlay-window #root {
 @keyframes platform-page-enter {
   from {
     opacity: 0;
-    transform: translate3d(0, 8px, 0) scale(0.992);
+    transform: translate3d(0, 8px, 0);
   }
   to {
     opacity: 1;

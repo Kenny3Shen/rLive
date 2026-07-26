@@ -280,6 +280,15 @@ export function useWebPlayer(opts: {
     setMuted(false);
     mutedRef.current = false;
 
+    // Start fetching the vendored demuxer while the serialized proxy queue
+    // tears down the previous session and waits for the next video element.
+    // This removes a network round-trip from the critical first-frame path.
+    const mpegtsPromise = loadMpegts();
+    // If a fast room switch cancels the queued setup before it reaches the
+    // await below, retain a rejection handler so the speculative preload never
+    // becomes an unhandled promise rejection.
+    void mpegtsPromise.catch(() => {});
+
     void proxyLifecycleQueue
       .enqueue(async () => {
         // An earlier route's queued setup may be reached only after a newer
@@ -334,7 +343,7 @@ export function useWebPlayer(opts: {
           }
           const playLocal = `${localUrl}${localUrl.includes("?") ? "&" : "?"}t=${Date.now()}_${gen}`;
 
-          const mpegts = await loadMpegts();
+          const mpegts = await mpegtsPromise;
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
             return;
