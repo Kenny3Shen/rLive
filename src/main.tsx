@@ -7,7 +7,18 @@ import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
 import "./styles.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Browsing data changes far less frequently than video state. Keep it
+      // warm across route switches and do not fan out background IPC/network
+      // requests merely because the desktop window regained focus. Playback
+      // metadata overrides this with its own short-lived policy.
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 applyTheme(useSettingsStore.getState().theme);
 useSettingsStore.subscribe((s) => applyTheme(s.theme));
 void useSettingsStore.getState().loadFromBackend();

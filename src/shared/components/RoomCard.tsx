@@ -20,7 +20,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
       type="button"
       onClick={openRoom}
       className={cn(
-        "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring",
+        "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring",
         "hover:-translate-y-0.5",
       )}
     >

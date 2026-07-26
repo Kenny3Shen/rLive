@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Heart, Radio, RefreshCw } from "lucide-react";
@@ -40,7 +40,7 @@ function statusBadge(user: FollowUser) {
  * row changes the active route, so RoomPage tears down the previous player and
  * danmaku connection before opening the next room.
  */
-export function FollowPanel({ className }: { className?: string }) {
+export const FollowPanel = memo(function FollowPanel({ className }: { className?: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { siteId: routeSiteId, roomId: routeRoomId } = useParams<{
@@ -176,4 +176,4 @@ export function FollowPanel({ className }: { className?: string }) {
       </Tooltip>
     </section>
   );
-}
+});
