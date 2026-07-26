@@ -47,7 +47,8 @@ fn cookie_value(cookie: &str, key: &str) -> Option<String> {
 }
 
 const SEND_CHAT_URL: &str = "https://api.live.bilibili.com/msg/send";
-const MAX_OUTGOING_CHAT_CHARS: usize = 80;
+/// Current ordinary-web-composer default, measured in UTF-16 code units.
+const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 20;
 const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
@@ -184,10 +185,10 @@ pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
             AppError::new("bilibili_send_empty", "请输入要发送的弹幕内容").with_site("bilibili"),
         );
     }
-    if message.chars().count() > MAX_OUTGOING_CHAT_CHARS {
+    if message.encode_utf16().count() > MAX_OUTGOING_CHAT_UTF16_UNITS {
         return Err(AppError::new(
             "bilibili_send_too_long",
-            format!("单条弹幕最多 {MAX_OUTGOING_CHAT_CHARS} 个字符"),
+            format!("单条弹幕最多 {MAX_OUTGOING_CHAT_UTF16_UNITS} 个字符"),
         )
         .with_site("bilibili"));
     }
@@ -1534,7 +1535,15 @@ mod tests {
         assert_eq!(normalize_outgoing_message("  你好  ").unwrap(), "你好");
         assert!(normalize_outgoing_message("\n").is_err());
         assert!(normalize_outgoing_message("hello\nworld").is_err());
-        assert!(normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_CHARS + 1)).is_err());
+        assert!(normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_UTF16_UNITS)).is_ok());
+        assert!(
+            normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_UTF16_UNITS + 1)).is_err()
+        );
+        assert!(normalize_outgoing_message(&"😀".repeat(10)).is_ok());
+        assert!(normalize_outgoing_message(&"😀".repeat(11)).is_err());
+        assert!(normalize_outgoing_message(&"中".repeat(20)).is_ok());
+        assert!(normalize_outgoing_message(&"e\u{301}".repeat(10)).is_ok());
+        assert!(normalize_outgoing_message(&"e\u{301}".repeat(11)).is_err());
     }
 
     #[tokio::test]

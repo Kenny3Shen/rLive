@@ -516,7 +516,7 @@ export function PlayerPane({
         aria-hidden={!sidePanelOpen}
         className={cn(
           "flex w-[300px] shrink-0 flex-col border-l border-border/80 bg-sidebar lg:w-[320px]",
-          "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-56 max-md:w-full max-md:border-t max-md:border-l-0",
+          "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-[min(26rem,72dvh)] max-md:min-h-64 max-md:w-full max-md:border-t max-md:border-l-0",
           !sidePanelOpen && "hidden",
         )}
       >
@@ -546,7 +546,7 @@ export function PlayerPane({
               {scUnreadCount > 0 && (
                 <span
                   aria-hidden="true"
-                  className="rounded-full bg-destructive px-1.5 py-px text-[10px] leading-4 font-semibold text-black tabular-nums"
+                  className="rounded-full bg-primary px-1.5 py-px text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
                 >
                   {scUnreadCount > 99 ? "99+" : scUnreadCount}
                 </span>
@@ -576,6 +576,8 @@ export function PlayerPane({
             <SuperChatPanel
               key={`sc:${roomSessionKey ?? "room"}`}
               active={danmakuActive}
+              siteId={siteId}
+              danmakuStatusText={danmakuStatusText}
               visible={sidePanelOpen && (sideTab === undefined || sideTab === "sc")}
               onUnreadCountChange={handleScUnreadCountChange}
               className="h-full"
