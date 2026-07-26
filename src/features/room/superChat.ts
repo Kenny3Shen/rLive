@@ -11,11 +11,11 @@ export type SuperChatLine = {
 };
 
 export type SuperChatPalette = {
-  /** Bilibili's amount-tier colour, displayed on the sender label. */
-  senderBackground: string;
-  senderForeground: string;
-  /** Kept visible as the compact amount text beside the sender label. */
-  amountForeground: string;
+  /** Safe opaque endpoints for the compact paid-message header. */
+  headerStart: string;
+  headerEnd: string;
+  /** Chosen for the strongest available contrast across both header endpoints. */
+  headerForeground: string;
 };
 
 const HEX_COLOR = /^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i;
@@ -26,9 +26,9 @@ const SUPER_CHAT_AMOUNT_FORMATTER = new Intl.NumberFormat("zh-CN", {
 
 /** Bilibili's standard blue tier when a platform omits colour metadata. */
 export const DEFAULT_SUPER_CHAT_PALETTE: SuperChatPalette = {
-  senderBackground: "#2A60B2",
-  senderForeground: "#ffffff",
-  amountForeground: "#2A60B2",
+  headerStart: "#2A60B2",
+  headerEnd: "#1D4A92",
+  headerForeground: "#ffffff",
 };
 
 export function safeSuperChatColor(value: unknown): string | null {
@@ -37,13 +37,34 @@ export function safeSuperChatColor(value: unknown): string | null {
   return HEX_COLOR.test(color) ? color : null;
 }
 
-function colorLuminance(color: string): number {
+function opaqueColor(color: string): string {
   const hex = color.slice(1);
   const full = hex.length <= 4 ? [...hex].map((part) => `${part}${part}`).join("") : hex;
-  const red = Number.parseInt(full.slice(0, 2), 16);
-  const green = Number.parseInt(full.slice(2, 4), 16);
-  const blue = Number.parseInt(full.slice(4, 6), 16);
-  return (red * 0.2126 + green * 0.7152 + blue * 0.0722) / 255;
+  return `#${full.slice(0, 6)}`;
+}
+
+function colorLuminance(color: string): number {
+  const full = opaqueColor(color).slice(1);
+  const channel = (offset: number) => {
+    const value = Number.parseInt(full.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return channel(0) * 0.2126 + channel(2) * 0.7152 + channel(4) * 0.0722;
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const lighter = Math.max(colorLuminance(foreground), colorLuminance(background));
+  const darker = Math.min(colorLuminance(foreground), colorLuminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function paletteForeground(...colors: string[]): string {
+  const candidates = ["#ffffff", "#172033"] as const;
+  return candidates.reduce((best, candidate) => {
+    const candidateContrast = Math.min(...colors.map((color) => contrastRatio(candidate, color)));
+    const bestContrast = Math.min(...colors.map((color) => contrastRatio(best, color)));
+    return candidateContrast > bestContrast ? candidate : best;
+  });
 }
 
 /**
@@ -51,13 +72,15 @@ function colorLuminance(color: string): number {
  * websocket is external input, so do not pass its raw values to style props.
  */
 export function superChatPalette(info: SuperChatInfo | null | undefined): SuperChatPalette | null {
-  const primary = safeSuperChatColor(info?.background_color);
-  if (!primary) return null;
-  const senderForeground = colorLuminance(primary) > 0.62 ? "#172033" : "#ffffff";
+  const start = safeSuperChatColor(info?.background_color);
+  if (!start) return null;
+  const end = safeSuperChatColor(info?.background_bottom_color) ?? start;
+  const headerStart = opaqueColor(start);
+  const headerEnd = opaqueColor(end);
   return {
-    senderBackground: primary,
-    senderForeground,
-    amountForeground: primary,
+    headerStart,
+    headerEnd,
+    headerForeground: paletteForeground(headerStart, headerEnd),
   };
 }
 

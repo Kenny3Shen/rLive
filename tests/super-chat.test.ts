@@ -40,22 +40,32 @@ describe("Super Chat presentation", () => {
     expect(safeSuperChatColor("url(javascript:alert(1))")).toBeNull();
     expect(safeSuperChatColor("#abc")).toBe("#abc");
     expect(superChatPalette({ background_color: "url(bad)" })).toBeNull();
-    expect(superChatPalette(superChat().super_chat)).toMatchObject({
-      senderBackground: "#2A60B2",
-      senderForeground: "#ffffff",
-      amountForeground: "#2A60B2",
+    expect(superChatPalette(superChat().super_chat)).toEqual({
+      headerStart: "#2A60B2",
+      headerEnd: "#1D4A92",
+      headerForeground: "#ffffff",
     });
     expect(superChatPalette({ background_color: "#ffcc33" })).toEqual({
-      senderBackground: "#ffcc33",
-      senderForeground: "#172033",
-      amountForeground: "#ffcc33",
+      headerStart: "#ffcc33",
+      headerEnd: "#ffcc33",
+      headerForeground: "#172033",
+    });
+    expect(
+      superChatPalette({ background_color: "#2a60b2", background_bottom_color: "url(bad)" }),
+    ).toEqual({
+      headerStart: "#2a60b2",
+      headerEnd: "#2a60b2",
+      headerForeground: "#ffffff",
+    });
+    expect(superChatPalette({ background_color: "#2a60b280" })).toEqual({
+      headerStart: "#2a60b2",
+      headerEnd: "#2a60b2",
+      headerForeground: "#ffffff",
     });
 
-    // The Bilibili protocol supplies a tier-dependent background colour. The
-    // compact card applies it only to the sender label, so amount tiers remain
-    // distinguishable without a coloured strip down the card edge.
-    expect(superChatPalette({ background_color: "#2a60b2" })?.senderBackground).not.toBe(
-      superChatPalette({ background_color: "#e09443" })?.senderBackground,
+    // Validated tier colours become the compact SC header rather than a full-card fill.
+    expect(superChatPalette({ background_color: "#2a60b2" })?.headerStart).not.toBe(
+      superChatPalette({ background_color: "#e09443" })?.headerStart,
     );
   });
 });

@@ -14,6 +14,10 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
+import {
+  BILIBILI_LIVE_DANMAKU_MAX_UTF16_UNITS,
+  insertBilibiliDanmakuText,
+} from "./danmaku/outgoing";
 
 type SendStatus = {
   send_enabled: boolean;
@@ -128,8 +132,7 @@ export function BilibiliDanmakuComposer({
     const input = inputRef.current;
     const start = input?.selectionStart ?? draft.length;
     const end = input?.selectionEnd ?? draft.length;
-    const nextDraft = `${draft.slice(0, start)}${text}${draft.slice(end)}`.slice(0, 80);
-    const caret = Math.min(start + text.length, nextDraft.length);
+    const { draft: nextDraft, caret } = insertBilibiliDanmakuText(draft, text, start, end);
 
     setDraft(nextDraft);
     setEmojiOpen(false);
@@ -307,7 +310,7 @@ export function BilibiliDanmakuComposer({
           onKeyDown={onInputKeyDown}
           placeholder={inputPlaceholder}
           disabled={!ready || sending}
-          maxLength={80}
+          maxLength={BILIBILI_LIVE_DANMAKU_MAX_UTF16_UNITS}
           aria-label="B站弹幕内容"
           className={cn("min-w-0 text-sm", overlay && "text-white placeholder:text-white/60")}
         />

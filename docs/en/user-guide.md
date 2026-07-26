@@ -68,7 +68,7 @@ Entering a Bilibili, Huya, Douyu, or properly configured Douyin room connects th
 
 This supported feature is off by default to prevent accidental writes. The composer in the centre of the player control bar enables only when all of the following are true: the user explicitly enabled **B 站发送弹幕**, the saved Bilibili Cookie includes `SESSDATA` and `bili_jct`, and the current room is Bilibili.
 
-It can send only one normal scrolling text message at a time. Enter or the send button submits directly; the backend validates text/room/Cookie, enforces an 80-character limit and a 3-second room cooldown, never follows redirects with the Cookie, and never batch-sends, auto-retries, inserts an optimistic local message, or sends gifts. The composer visibly reports permission, success, and failure states; wait for the normal WebSocket echo to verify delivery.
+It can send only one normal scrolling text message at a time. Enter or the send button submits directly; the backend validates text/room/Cookie, enforces the current official-web default of 20 UTF-16 code units and a 3-second room cooldown, never follows redirects with the Cookie, and never batch-sends, auto-retries, inserts an optimistic local message, or sends gifts. The official client receives this limit per account/server; rLive enforces the researched default until a supported policy-read contract exists. The composer visibly reports permission, success, and failure states; wait for the normal WebSocket echo to verify delivery.
 
 ### Room-side settings
 
@@ -89,7 +89,7 @@ Every display control applies live: sliders preview while dragged and persist on
 
 ### Super Chat (SC)
 
-Room side panel tab **SC** shows only Bilibili `super_chat` events. It uses compact neutral cards with no full-card border, colour treatment, or left stripe; the safely validated Bilibili amount-tier colour appears on the sender-label background, while amount, currency, and highlight duration remain visible. Shield words apply to SC too; floating tracks emphasize it as a top-style message.
+Room side panel tab **SC** shows only Bilibili `super_chat` events. A compact paid-message card uses safely validated Bilibili tier colours for a short value header, keeping the amount, sender, and explicit highlight duration prominent while the full message remains readable. Shield words apply to SC too; floating tracks emphasize it as a top-style message. Bilibili rooms without entries say that no Super Chats have arrived, while other platforms explicitly report that SC is not yet available.
 
 Bilibili image emotes in normal chat are delivered with the message itself. rLive loads only validated Bilibili CDN image URLs and preserves the original text/image order in the side list and floating tracks. Floating danmaku retains the original text as a fallback while a CDN image is loading or unavailable.
 

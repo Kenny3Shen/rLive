@@ -27,7 +27,7 @@ rLive already retains the real room ID in `LiveRoomDetail.room_id` and has Bilib
 
 1. A separate device-local sending permission defaults to off; the composer additionally requires a saved Cookie containing both `SESSDATA` and `bili_jct`.
 2. It appears in the centre of the player control bar only in a Bilibili room, submits directly on Enter/click, and visibly reports success, failure, or permission state.
-3. Backend rechecks that permission, numeric room ID, text/controls/80-character limit, Cookie credentials, and a conservative 3-second per-room cooldown.
+3. Backend rechecks that permission, numeric room ID, text/controls/current official-web default of 20 UTF-16 code units, Cookie credentials, and a conservative 3-second per-room cooldown. The official client receives this as an account/server-supplied `danmakuLengthLimit`; rLive currently enforces the observed default because it has no supported read contract for the policy.
 4. Rate codes 10030 / 10031 / 10039 and HTTP 429 produce a clear cooldown message. Timeout/network failures are never retried and report unknown delivery.
 5. No optimistic local event is inserted; only normal WebSocket echo enters the list.
 6. The write request uses a no-redirect HTTP client, so a redirect target cannot receive its Cookie. Cookie, CSRF, message content, and raw upstream errors never enter logs or frontend responses.

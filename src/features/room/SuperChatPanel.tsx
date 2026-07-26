@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createShieldMatcher } from "./danmaku/filter";
@@ -36,44 +37,43 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
   const amount = formatSuperChatAmount(info);
   const duration = formatSuperChatDuration(info);
   const palette = superChatPalette(info) ?? DEFAULT_SUPER_CHAT_PALETTE;
+  const user = event.user.trim() || "匿名用户";
 
   return (
     <article
       data-slot="super-chat-card"
-      className="overflow-hidden rounded-md bg-card px-2.5 py-1.5 shadow-sm shadow-black/10"
+      className="overflow-hidden rounded-xl border border-border-subtle bg-card/85 shadow-sm shadow-black/10"
     >
-      <header className="flex min-w-0 items-center gap-2">
-        <p className="min-w-0 flex-1" title={event.user}>
-          <span
-            className="block max-w-full truncate rounded px-1.5 py-0.5 text-xs leading-4 font-semibold"
-            style={{
-              backgroundColor: palette.senderBackground,
-              color: palette.senderForeground,
-            }}
-          >
-            {event.user.trim() || "匿名用户"}
-          </span>
-        </p>
-        {duration && <span className="shrink-0 text-[11px] text-muted-foreground">{duration}</span>}
-        <span
-          className="shrink-0 text-sm leading-none font-bold tabular-nums"
-          style={{ color: palette.amountForeground }}
-        >
+      <header
+        className="flex min-w-0 items-center gap-3 px-3 py-2"
+        style={{
+          backgroundImage: `linear-gradient(112deg, ${palette.headerStart}, ${palette.headerEnd})`,
+          color: palette.headerForeground,
+        }}
+      >
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[0.9em] font-semibold" title={user}>
+            {user}
+          </p>
+          {duration && <p className="mt-0.5 text-[0.75em] opacity-80">置顶 {duration}</p>}
+        </div>
+        <span className="shrink-0 text-[1.45em] leading-none font-bold tabular-nums">
           {amount ?? "SC"}
         </span>
       </header>
-      <p
-        className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[13px] leading-5"
-        title={event.content}
-      >
-        <DanmakuRichText content={event.content} spans={event.spans} />
-      </p>
+      <div className="px-3 py-2.5">
+        <div className="whitespace-pre-wrap break-words leading-6">
+          <DanmakuRichText content={event.content} spans={event.spans} />
+        </div>
+      </div>
     </article>
   );
 });
 
 type SuperChatPanelProps = {
   active: boolean;
+  siteId?: SiteId;
+  danmakuStatusText?: string | null;
   /** Keep buffered SCs while this keep-mounted tab is hidden. */
   visible?: boolean;
   /** Reports validated SCs received while this tab is not visible. */
@@ -83,6 +83,8 @@ type SuperChatPanelProps = {
 
 export const SuperChatPanel = memo(function SuperChatPanel({
   active,
+  siteId,
+  danmakuStatusText,
   visible = true,
   onUnreadCountChange,
   className,
@@ -329,6 +331,11 @@ export const SuperChatPanel = memo(function SuperChatPanel({
     scrollSuperChatViewportToBottom(scrollRootRef.current);
   }
 
+  const emptyState =
+    siteId !== "bilibili"
+      ? "当前平台暂未接入 SC"
+      : (danmakuStatusText ?? (active ? "还没有醒目留言" : "进入直播间后显示 SC"));
+
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
@@ -340,12 +347,12 @@ export const SuperChatPanel = memo(function SuperChatPanel({
               fontWeight,
             }}
           >
-            {active && items.length === 0 && (
-              <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待醒目留言…</p>
-            )}
-            {!active && (
-              <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-                进入直播间后显示 SC
+            {items.length === 0 && (
+              <p
+                className="px-3 py-8 text-center text-[0.85em] text-muted-foreground"
+                role="status"
+              >
+                {emptyState}
               </p>
             )}
             {items.map((line) => (
