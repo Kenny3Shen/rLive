@@ -29,6 +29,11 @@ const HistoryPage = lazy(() =>
     default: HistoryPage,
   })),
 );
+const StatisticsPage = lazy(() =>
+  import("../features/statistics/StatisticsPage").then(({ StatisticsPage }) => ({
+    default: StatisticsPage,
+  })),
+);
 const SettingsPage = lazy(() =>
   import("../features/settings/SettingsPage").then(({ SettingsPage }) => ({
     default: SettingsPage,
@@ -88,6 +93,7 @@ export function App() {
             <Route path="search" element={<SearchPage />} />
             <Route path="follow" element={<FollowPage />} />
             <Route path="history" element={<HistoryPage />} />
+            <Route path="statistics" element={<StatisticsPage />} />
             <Route path="iptv/play" element={<IptvPlayerPage />} />
             <Route path="iptv" element={<IptvPage />} />
             <Route path="settings" element={<SettingsPage />} />

@@ -14,8 +14,13 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
+import { publishLocalPendingSubmission } from "./danmaku/localPendingSubmission";
 import { insertBilibiliDanmakuText } from "./danmaku/outgoing";
-import { getDanmakuSendConfig, type DanmakuSendStatus } from "./danmaku/sending";
+import {
+  getDanmakuSendConfig,
+  isDanmakuSendSite,
+  type DanmakuSendStatus,
+} from "./danmaku/sending";
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
@@ -55,8 +60,9 @@ type DanmakuComposerProps = {
 
 /**
  * One intentionally small, user-operated composer for platforms with a
- * verified local send endpoint. It never creates an optimistic chat row; the
- * live websocket remains responsible for displaying the server echo.
+ * verified local send endpoint. A resolved local write creates a visibly
+ * pending record; the live websocket remains responsible for the platform
+ * echo that confirms it.
  */
 export function DanmakuComposer({
   siteId,
@@ -64,9 +70,9 @@ export function DanmakuComposer({
   overlay = false,
   onOverlayInteractionChange,
 }: DanmakuComposerProps) {
-  const bilibiliSendEnabled = useSettingsStore((s) => s.bilibiliDanmakuSendEnabled);
-  const bilibiliSendSettingPending = useSettingsStore((s) => s.bilibiliDanmakuSendPending);
-  const bilibiliCookieRevision = useSettingsStore((s) => s.bilibiliCookieRevision);
+  const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
+  const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
+  const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
   const sendConfig = getDanmakuSendConfig(siteId);
   const [availability, setAvailability] = useState<DanmakuSendStatus | null>(null);
   const [draft, setDraft] = useState("");
@@ -85,9 +91,9 @@ export function DanmakuComposer({
     // queued for persistence. Once it settles this effect runs again,
     // preventing a stale disabled status from pinning the composer until the
     // user re-enters.
-    if (siteId === "bilibili" && bilibiliSendSettingPending) {
+    if (danmakuSendPending) {
       setAvailability({
-        send_enabled: bilibiliSendEnabled,
+        send_enabled: danmakuSendEnabled,
         cookie_ready: false,
         available: false,
         message: "正在同步发送权限…",
@@ -117,9 +123,9 @@ export function DanmakuComposer({
     siteId,
     roomId,
     sendConfig,
-    bilibiliSendEnabled,
-    bilibiliSendSettingPending,
-    bilibiliCookieRevision,
+    danmakuSendEnabled,
+    danmakuSendPending,
+    danmakuCookieRevision,
   ]);
 
   const overlayOpen = emojiOpen;
@@ -137,6 +143,9 @@ export function DanmakuComposer({
   if (!sendConfig || !roomId) return null;
 
   const config = sendConfig;
+  // Keep the narrowed room identity stable for async send callbacks. React
+  // may render a different room while an earlier request is still in flight.
+  const currentRoomId = roomId;
   const ready = availability?.available === true;
   const canSubmit = ready && draft.trim().length > 0 && !sending;
   const statusText = result ?? availability?.message ?? "正在检查发送权限…";
@@ -172,13 +181,21 @@ export function DanmakuComposer({
     sendInFlightRef.current = true;
     setSending(true);
     setResult(null);
+    const outgoingMessage = draft.trim();
     try {
       await invokeCmd<void>(config.sendCommand, {
-        roomId,
-        message: draft.trim(),
+        roomId: currentRoomId,
+        message: outgoingMessage,
       });
+      if (isDanmakuSendSite(siteId)) {
+        publishLocalPendingSubmission({
+          siteId,
+          roomId: currentRoomId,
+          content: outgoingMessage,
+        });
+      }
       setDraft("");
-      setResult("已提交，等待直播间回显。");
+      setResult("已提交，等待平台回显。");
     } catch (error) {
       setResult(`发送失败：${errorMessage(error)}`);
     } finally {

@@ -132,8 +132,8 @@ export type AppSettings = {
   mpv_path: string | null;
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
   quality_level?: "high" | "mid" | "low";
-  /** Device-local permission for the Bilibili single-message sender. */
-  bilibili_danmaku_send_enabled?: boolean;
+  /** Device-local permission for user-operated single-message senders. */
+  danmaku_send_enabled?: boolean;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;
   /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */

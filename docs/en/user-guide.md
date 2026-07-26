@@ -8,9 +8,9 @@ rLive is a desktop live-stream aggregator for browsing, searching, and watching 
 
 | Site | Lists / search | Playback | Danmaku |
 |------|----------------|----------|---------|
-| Bilibili | Yes | Yes | Yes (cookie recommended; supported single-message sending requires device-local permission) |
-| Huya | Yes | Yes | Yes; one user-initiated ordinary message with a manually saved local Cookie |
-| Douyu | Yes | Yes | Yes; one user-initiated ordinary message with a QR/manual local Cookie |
+| Bilibili | Yes | Yes | Yes (single-message sending requires the local shared send switch and a valid Cookie) |
+| Huya | Yes | Yes | Yes (single-message sending requires the local shared send switch and a valid Cookie) |
+| Douyu | Yes | Yes | Yes (single-message sending requires the local shared send switch and a valid Cookie) |
 | Douyin | First-page recommendations/categories; search needs a logged-in cookie | Yes | Yes (fixed local signer) |
 | Kuaishou | Recommendations / categories / game-category search | Yes | Not yet supported |
 | Twitch | First-page lists / categories / search | HLS | Yes (anonymous IRC) |
@@ -38,7 +38,7 @@ See the root [English README](../../README.en.md): `bun install` → `bun run ta
 
 | Area | Role |
 |------|------|
-| Sidebar | Home, follows, categories, history, IPTV, settings |
+| Sidebar | Home, follows, categories, history, statistics, IPTV, settings |
 | Header | Site switcher, search (user / room ID / title); platform changes use a short content transition; the Follows page uses the same centred selector with an extra All platforms option |
 | Room | Icon-only Back control, room title, player, host information, and side tabs in the order Danmaku / SC / Follows / Settings |
 
@@ -64,25 +64,28 @@ Streams are fetched via a localhost proxy so the web player can attach with corr
 Entering a Bilibili, Huya, Douyu, Douyin room with its local signer running, or Twitch room connects that site's danmaku service. Chat appears in the side list; optional floating tracks overlay the video.
 
 - **Bilibili:** under Settings → Account → 哔哩哔哩, either scan the official QR code in the mobile app or paste a browser cookie manually. A QR confirmation saves the Cookie locally only. After an unexpected disconnect, rLive rotates gateways, refreshes the short-lived token, and reconnects; progress appears as a system message.
-- **Huya / Douyu:** receiving danmaku usually does not need a Cookie. To send one ordinary message, however, Douyu needs the local account Cookie obtained by QR login or manual input, while Huya currently needs a manually entered local Cookie. Douyu uses system TLS (`native-tls`) because its servers only offer RSA-AES-GCM suites.
+- **Huya / Douyu:** receiving danmaku usually does not need a Cookie. To send one ordinary message, first turn on the shared **启用发送功能** switch at the top of **Settings → Account**, then save the local account Cookie for that platform. Douyu supports QR login or manual input; Huya currently requires manual input. Douyu uses system TLS (`native-tls`) because its servers only offer RSA-AES-GCM suites.
 - **Douyin:** under Settings → Account → 抖音, either scan the QR code in the Douyin app or paste a browser cookie manually. A complete saved Cookie is required for search and can improve room/signing reliability. For live chat, rLive supplies the transient room session to the fixed local `http://127.0.0.1:18080/sign` service, which returns a temporary WSS URL; the request bypasses the global proxy and never follows redirects.
 - **Twitch:** chat uses an anonymous IRC WebSocket connection.
 - **Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection.
 
-### Bilibili danmaku sending
+### Bilibili, Douyu, and Huya danmaku sending
 
-This supported feature is off by default to prevent accidental writes. The composer in the centre of the player control bar enables only when all of the following are true: the user explicitly enabled **B 站发送弹幕**, the saved Bilibili Cookie includes `SESSDATA` and `bili_jct`, and the current room is Bilibili.
+This device-local feature is off by default to prevent accidental writes. At the top of **Settings → Account**, turn on **启用发送功能** to enable one ordinary text-message send path for Bilibili, Douyu, and Huya together. The switch is stored only on this device and is omitted from profile export/import. It is not a login state: each platform still needs its own valid Cookie and must independently pass room, text, cooldown, and upstream validation. A platform's composer stays disabled until all of its prerequisites are ready.
 
-It can send only one normal scrolling text message at a time. Enter or the send button submits directly; the backend validates text/room/Cookie, enforces the current official-web default of 20 UTF-16 code units and a 3-second room cooldown, never follows redirects with the Cookie, and never batch-sends, auto-retries, inserts an optimistic local message, or sends gifts. The official client receives this limit per account/server; rLive enforces the researched default until a supported policy-read contract exists. The composer visibly reports permission, success, and failure states; wait for the normal WebSocket echo to verify delivery.
+The compact composer in the centre of the player control bar submits one ordinary text message per action. Pressing Enter, clicking Send, or using **+1** on a message submits that exact text; there is no bulk, loop, schedule, auto-reply, gift/payment, or automatic retry for an ambiguous write.
 
-### Douyu and Huya danmaku sending
-
-The same compact room composer is available in Douyu and Huya rooms only after its local account prerequisites are ready. It sends a single ordinary text message when the user presses Enter or Send; it never batch-sends, schedules, auto-replies, retries an ambiguous write, sends gifts/payments, or inserts an optimistic chat row. Wait for the normal room connection to echo the message before treating it as delivered.
-
+- **Bilibili:** requires a valid Cookie containing `SESSDATA` and `bili_jct`. It sends only ordinary scrolling white text; the backend validates the Cookie, room, control characters, the current official-web default of 20 UTF-16 code units, and a 3-second per-room cooldown. The official client receives that limit per account/server; rLive enforces the researched default until a supported policy-read contract exists. The Cookie-bearing request never follows redirects.
 - **Douyu:** under **Settings → Account → 斗鱼**, use QR login or manually save a Cookie containing `acf_username`, `acf_stk`, and `acf_ltkid` (the older `_acf_ltkid_` spelling is accepted). The sender validates a numeric room ID and a non-empty, single-line message of at most 100 UTF-16 code units, with a conservative 3-second per-room cooldown.
 - **Huya:** under **Settings → Account → 虎牙**, manually save a Cookie with a numeric account ID (`yyuid` or `udb_uid`) and an opaque login proof (`udb_n` or `udb_cred`); QR login is not currently available. The sender validates the resolved room, a non-empty, single-line message of at most 30 UTF-16 code units, and a short local cooldown.
 
-These are device-local Cookie-authenticated features, not a statement that either platform has granted rLive a public application write API. Cookies stay local and are not logged, exported, or uploaded to another service. A local send result is not a guarantee of platform acceptance: verify the result only in an account and room where you are allowed to speak, and comply with the current platform terms, moderation rules, and local law.
+These three device-local Cookie-authenticated paths do not state that a platform has granted rLive a public application write API. Cookies stay local and are not logged, exported, or uploaded to another service. A local send result is not a guarantee of platform acceptance: verify the result only in an account and room where you are allowed to speak, and comply with the current platform terms, moderation rules, and local law.
+
+### Local pending-platform-echo marker
+
+After a Bilibili, Douyu, or Huya send command succeeds locally, the right-side list adds a distinct local-colour row marked as **you** and **submitted locally, awaiting platform echo**. Floating danmaku uses an amber `【我·待平台回显】` prefix. This front-end-only marker exists only for the current session: it means the request reached the local sending path, **not that the platform accepted the chat**.
+
+A real platform echo retains its original platform appearance. rLive does not match identical text to merge, confirm, or remove the pending marker, so a local marker and an actual echo of the same content may coexist briefly. Treat a timeout or failure according to the live platform's real state.
 
 ### Room-side settings
 
@@ -111,13 +114,13 @@ Bilibili image emotes in normal chat are delivered with the message itself. rLiv
 
 `/iptv` is a channel-discovery homepage. It reads IPTV-org's official daily-updated Chinese-language, mainland-China, East-Asian, and general public playlists, and deliberately does not mount a player or start a stream on entry. A custom HTTP(S) M3U URL is saved only under **Settings → Network**; once configured, the homepage shows it as **Custom source** rather than providing a free-form address field. The address remains device-local and is omitted from routes, history, and profile import/export. It avoids the provider's oversized global index so every built-in source stays within rLive's bounded playlist loader. Multi-keyword search ranks exact and prefix channel matches first, popular groups are immediately available, and long results are expanded in pages. Selecting a channel opens the separate immersive `/iptv/play` page; its Back control returns to the source, category, and search-filtered list. The localhost proxy rewrites nested HLS manifests, segments, and keys for HLS playback; MPEG-TS and FLV use the existing MSE path. rLive hosts no programme content, bypasses no region restriction, and does not guarantee any third-party source. Only load channels you are allowed to watch.
 
-## 7. Follows & history
+## 7. Follows, history & statistics
 
-Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follows** tab places live rooms first and switches directly to a selected followed room without leaving the room page; its Back action then returns home rather than a previous room. It also provides a floating refresh button. Visited rooms are stored in history.
+Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follows** tab places live rooms first and switches directly to a selected followed room without leaving the room page; its Back action then returns home rather than a previous room. It also provides a floating refresh button. Visited rooms are stored in history. The sidebar **Statistics** page summarizes the currently stored room-entry records with a seven-day trend, platform distribution, and totals. A record keeps the latest entry time for one platform/room pair; it is not watch-duration data.
 
 ## 8. Settings summary
 
-Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, a device-local custom IPTV M3U address, Bilibili/Douyin/Douyu QR/manual Cookie login, Huya manual Cookie input, Bilibili's device-local sending permission, and profile import/export. Profiles exclude all cookies, the custom M3U URL, and the Bilibili sending permission; importing never overwrites those local-only choices. The Douyin signer endpoint is fixed in code and has no setting. Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page. Windows release builds keep sanitized failure diagnostics in `%APPDATA%\rlive\logs\rlive.log`, rotating after 2 MiB; successful progress is not written, and neither are Cookie values, tokens, or outgoing chat text.
+Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. At the top of **Settings → Account**, the default-off device-local **启用发送功能** switch jointly controls Bilibili, Douyu, and Huya sending; each platform still keeps its own Cookie and validation rules. The global settings page also contains default quality, HTTP proxy, a device-local custom IPTV M3U address, Bilibili/Douyin/Douyu QR/manual Cookie login, Huya manual Cookie input, and profile import/export. Profiles exclude all cookies, the custom M3U URL, and the shared sending permission; importing never overwrites those local-only choices. The Douyin signer endpoint is fixed in code and has no setting. Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page. Windows release builds keep sanitized failure diagnostics in `%APPDATA%\rlive\logs\rlive.log`, rotating after 2 MiB; successful progress is not written, and neither are Cookie values, tokens, or outgoing chat text.
 
 For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie, saved by QR login or manual input, is required for live search and can improve room parsing; it is stored only in local SQLite. The fixed local chat signer receives the effective connection session (the saved Cookie plus transient `ttwid` / `msToken`) only while it creates a signed WSS connection; transient values are never persisted.
 
@@ -131,12 +134,12 @@ For Douyin, anonymous browsing creates a transient `ttwid` session automatically
 | Huya crash on open | Use build with UTF-8-safe HTML parse |
 | Douyin search requests login | Scan the QR code or save a complete logged-in browser cookie under Settings → Account → 抖音; first-page browse and playback do not require it |
 | Douyin chat cannot reach the signer | Start the compatible local signer at `http://127.0.0.1:18080/sign`; its address cannot be changed in Settings |
-| Bilibili composer is disabled | Enable **B 站发送弹幕** and save a Cookie containing `SESSDATA` and `bili_jct` |
-| Douyu composer is disabled | Under Settings → Account → 斗鱼, scan the QR or save a valid Cookie containing `acf_username`, `acf_stk`, and `acf_ltkid` |
+| Bilibili composer is disabled | At the top of Settings → Account, enable **启用发送功能**, then save a Cookie containing `SESSDATA` and `bili_jct` |
+| Douyu composer is disabled | At the top of Settings → Account, enable **启用发送功能**, then under 斗鱼 scan the QR or save a valid Cookie containing `acf_username`, `acf_stk`, and `acf_ltkid` |
 | Douyu send needs diagnosis | Check `%APPDATA%\rlive\logs\rlive.log` for the failure entry and correlate safe stage/error-code records by `attempt_id`; Cookie values, tokens, chat text, and successful progress are not logged |
-| Huya composer is disabled | Under Settings → Account → 虎牙, manually save a valid Cookie with `yyuid` or `udb_uid`, plus `udb_n` or `udb_cred` |
+| Huya composer is disabled | At the top of Settings → Account, enable **启用发送功能**, then under 虎牙 manually save a valid Cookie with `yyuid` or `udb_uid`, plus `udb_n` or `udb_cred` |
 | Black screen | Try another line/quality; re-enter room |
 
 ## 10. Compliance
 
-The app is primarily a read-only aggregator. Bilibili, Douyin, and Douyu QR/manual logins, plus Huya manual Cookie input, are user initiated and store Cookie data locally. The supported Bilibili, Douyu, and Huya composers allow one ordinary text message for each direct user action. Douyu and Huya Cookie-authenticated sending does not establish a public platform API grant or guarantee delivery; users remain responsible for real-service verification and compliance with platform terms. There are no gifts, payments, batch/scheduled/automatic sends, or recording. Personal / educational use; respect platform ToS and local law.
+The app is primarily a read-only aggregator. Bilibili, Douyin, and Douyu QR/manual logins, plus Huya manual Cookie input, are user initiated and store Cookie data locally. With the shared local send switch enabled, the supported Bilibili, Douyu, and Huya composers allow one ordinary text message for each direct user action. A local pending-platform-echo marker is not delivery or platform authorisation. Douyu and Huya Cookie-authenticated sending does not establish a public platform API grant or guarantee delivery; users remain responsible for real-service verification and compliance with platform terms. There are no gifts, payments, batch/scheduled/automatic sends, or recording. Personal / educational use; respect platform ToS and local law.

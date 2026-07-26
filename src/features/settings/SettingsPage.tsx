@@ -59,6 +59,10 @@ const settingsCategories: {
   { value: "data", label: "数据", icon: Database },
 ];
 
+function isDanmakuSendCookieSite(siteId: SiteId): boolean {
+  return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
+}
+
 function Section({
   title,
   description,
@@ -219,7 +223,7 @@ function CookieField({
   placeholder: string;
   qrLogin?: boolean;
 }) {
-  const markBilibiliCookieChanged = useSettingsStore((s) => s.markBilibiliCookieChanged);
+  const markDanmakuCookieChanged = useSettingsStore((s) => s.markDanmakuCookieChanged);
   const [cookie, setCookie] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -263,7 +267,7 @@ function CookieField({
       }
       // A room composer can remain mounted while the account UI updates its
       // credentials. Notify it only after the backend mutation succeeds.
-      if (siteId === "bilibili") markBilibiliCookieChanged();
+      if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
     } catch (e) {
       const message =
         typeof e === "object" && e && "message" in e
@@ -278,13 +282,13 @@ function CookieField({
       const value = await invokeCmd<string | null>("account_get_cookie", { siteId });
       setCookie(value ?? "");
       setStatus("Cookie 已通过扫码登录更新");
-      if (siteId === "bilibili") markBilibiliCookieChanged();
+      if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
     } catch {
       // The QR command has already saved successfully. A later display refresh
       // should not make that login look failed.
-      if (siteId === "bilibili") markBilibiliCookieChanged();
+      if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
     }
-  }, [markBilibiliCookieChanged, siteId]);
+  }, [markDanmakuCookieChanged, siteId]);
 
   return (
     <Section title={title} description={description}>
@@ -346,25 +350,25 @@ function CookieField({
   );
 }
 
-function BilibiliDanmakuSendField() {
-  const enabled = useSettingsStore((s) => s.bilibiliDanmakuSendEnabled);
-  const setEnabled = useSettingsStore((s) => s.setBilibiliDanmakuSendEnabled);
+function DanmakuSendField() {
+  const enabled = useSettingsStore((s) => s.danmakuSendEnabled);
+  const setEnabled = useSettingsStore((s) => s.setDanmakuSendEnabled);
 
   return (
     <Section
-      title="B 站发送弹幕"
-      description="已正式支持。默认关闭；仅支持用户主动发送的单条普通滚动文本，不会自动重试或发送礼物。"
+      title="弹幕发送"
+      description="默认关闭；开启后可同时使用 B站、斗鱼和虎牙的单条普通文本发送，不会自动重试或发送礼物。"
     >
       <Field orientation="responsive">
         <FieldContent>
-          <FieldTitle id="bilibili-send-title">启用发送功能</FieldTitle>
+          <FieldTitle id="danmaku-send-title">启用发送功能</FieldTitle>
           <FieldDescription>
-            启用后仍需在房间内保存含 SESSDATA 与 bili_jct 的 Cookie；Cookie
-            缺失或无效时发送框会保持禁用。
+            启用后仍需为每个平台保存有效 Cookie，并通过该平台的房间、文本、冷却和服务端校验；
+            Cookie 缺失或无效时对应发送框会保持禁用。
           </FieldDescription>
         </FieldContent>
         <Switch
-          aria-labelledby="bilibili-send-title"
+          aria-labelledby="danmaku-send-title"
           checked={enabled}
           onCheckedChange={setEnabled}
         />
@@ -657,6 +661,7 @@ export function SettingsPage() {
           <TabsContent value="account" keepMounted className="mt-0 data-[hidden]:hidden">
             <SettingsContent title="账号">
               <div className="flex flex-col gap-4">
+                <DanmakuSendField />
                 <CookieField
                   siteId="bilibili"
                   title="哔哩哔哩"
@@ -664,7 +669,6 @@ export function SettingsPage() {
                   placeholder="SESSDATA=…; bili_jct=…"
                   qrLogin
                 />
-                <BilibiliDanmakuSendField />
                 <CookieField
                   siteId="douyu"
                   title="斗鱼"

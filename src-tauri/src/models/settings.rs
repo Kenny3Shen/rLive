@@ -38,11 +38,12 @@ pub struct AppSettings {
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
     pub quality_level: String,
-    /// Device-local permission for the single-message Bilibili chat sender.
+    /// Device-local permission for the user-operated single-message senders.
     /// It remains disabled until the user explicitly enables it in Settings and
-    /// is not profile-imported.
+    /// is not profile-imported. A Cookie and each platform's own validation
+    /// are still required after this global consent is enabled.
     #[serde(default)]
-    pub bilibili_danmaku_send_enabled: bool,
+    pub danmaku_send_enabled: bool,
     /// Optional custom IPTV M3U address for this device.
     ///
     /// A playlist URL can identify a private source or include an access token,
@@ -85,7 +86,7 @@ impl Default for AppSettings {
             danmaku_shield_words: Vec::new(),
             mpv_path: None,
             quality_level: default_quality_level(),
-            bilibili_danmaku_send_enabled: false,
+            danmaku_send_enabled: false,
             iptv_custom_m3u_url: None,
         }
     }
@@ -105,6 +106,8 @@ mod tests {
 
     #[test]
     fn legacy_settings_receive_new_danmaku_defaults() {
+        // A former Bilibili-only consent must not become the new shared
+        // Bilibili/Douyu/Huya write permission during deserialization.
         let legacy = r#"{
           "theme": "system",
           "default_site": "bilibili",
@@ -113,7 +116,8 @@ mod tests {
           "danmaku_font_size": 18,
           "danmaku_speed": 8,
           "danmaku_shield_words": [],
-          "mpv_path": null
+          "mpv_path": null,
+          "bilibili_danmaku_send_enabled": true
         }"#;
         let settings: AppSettings = serde_json::from_str(legacy).unwrap();
 
@@ -122,7 +126,7 @@ mod tests {
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
         assert!(!settings.danmaku_filter_gifts);
-        assert!(!settings.bilibili_danmaku_send_enabled);
+        assert!(!settings.danmaku_send_enabled);
         assert!(settings.iptv_custom_m3u_url.is_none());
         assert!(settings.disabled_site_ids.is_empty());
     }
