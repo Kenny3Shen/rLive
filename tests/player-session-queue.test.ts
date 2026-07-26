@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
-import { playUrlKey } from "../src/features/room/player/useWebPlayer";
+import { playUrlKey, requestPlayerAutoplay } from "../src/features/room/player/useWebPlayer";
 
 describe("player session queue", () => {
   test("does not start the replacement until the prior lifecycle has finished", async () => {
@@ -62,5 +62,38 @@ describe("player session queue", () => {
 
     expect(equivalent).toBe(first);
     expect(changed).not.toBe(first);
+  });
+
+  test("does not let a pending old autoplay block a replacement proxy session", async () => {
+    const queue = createSerialTaskQueue();
+    let resolveOldPlay: (() => void) | undefined;
+    const oldPlay = new Promise<void>((resolve) => {
+      resolveOldPlay = resolve;
+    });
+    let oldSessionCurrent = true;
+    let replacementStarted = false;
+    const video = { muted: false } as Pick<HTMLVideoElement, "muted">;
+
+    await queue.enqueue(() => {
+      requestPlayerAutoplay(
+        { play: () => oldPlay },
+        video,
+        () => oldSessionCurrent,
+        () => {},
+      );
+    });
+    await queue.enqueue(() => {
+      replacementStarted = true;
+    });
+
+    // A browser can leave `HTMLMediaElement.play()` pending until the live
+    // stream produces its first segment. That must not retain the serialized
+    // proxy queue after this room has been left.
+    expect(replacementStarted).toBe(true);
+
+    oldSessionCurrent = false;
+    resolveOldPlay?.();
+    await Promise.resolve();
+    expect(video.muted).toBe(false);
   });
 });

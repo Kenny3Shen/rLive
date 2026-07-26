@@ -17,7 +17,7 @@ pub struct AppState {
     pub stream_proxy: StreamProxy,
 }
 
-/// Conservative per-room write gate for the experimental Bilibili sender.
+/// Conservative per-room write gate for the Bilibili sender.
 /// It is deliberately process-local: this is a UX/safety cooldown, not an
 /// attempt to bypass or mirror Bilibili's own authoritative rate limits.
 pub struct BilibiliDanmakuSendLimiter {

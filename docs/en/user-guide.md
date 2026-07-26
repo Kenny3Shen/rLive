@@ -8,7 +8,7 @@ rLive is a desktop live-stream aggregator for browsing, searching, and watching 
 
 | Site | Lists / search | Playback | Danmaku |
 |------|----------------|----------|---------|
-| Bilibili | Yes | Yes | Yes (cookie recommended; single-message sending is opt-in) |
+| Bilibili | Yes | Yes | Yes (cookie recommended; supported single-message sending requires device-local permission) |
 | Huya | Yes | Yes | Yes |
 | Douyu | Yes | Yes | Yes |
 | Douyin | First-page recommendations/categories; search needs a logged-in cookie | Yes | Yes (requires a signing service) |
@@ -64,11 +64,11 @@ Entering a Bilibili, Huya, Douyu, or properly configured Douyin room connects th
 - **Douyin:** configure a full signing endpoint under Settings → Account for live chat. rLive supplies the transient session established while entering the room; a complete saved Cookie is still required for search and can improve room/signing reliability. The service returns a temporary WSS URL; use only an endpoint you operate or explicitly trust.
 - **Kuaishou:** the room explicitly reports that real-time danmaku is not supported instead of repeatedly attempting a failed connection.
 
-### Experimental Bilibili sending
+### Bilibili danmaku sending
 
-This is off by default. The room-side composer only enables when all of the following are true: the user explicitly enabled **实验性：发送 B 站弹幕**, the saved Bilibili Cookie includes `SESSDATA` and `bili_jct`, and the current room is Bilibili.
+This supported feature is off by default to prevent accidental writes. The composer in the centre of the player control bar enables only when all of the following are true: the user explicitly enabled **B 站发送弹幕**, the saved Bilibili Cookie includes `SESSDATA` and `bili_jct`, and the current room is Bilibili.
 
-It can send only one normal scrolling text message at a time. Every message receives a second confirmation; the backend validates text/room/Cookie, enforces an 80-character limit and a 3-second room cooldown, and never batch-sends, auto-retries, inserts an optimistic local message, or sends gifts.
+It can send only one normal scrolling text message at a time. Enter or the send button submits directly; the backend validates text/room/Cookie, enforces an 80-character limit and a 3-second room cooldown, never follows redirects with the Cookie, and never batch-sends, auto-retries, inserts an optimistic local message, or sends gifts. The composer visibly reports permission, success, and failure states; wait for the normal WebSocket echo to verify delivery.
 
 ### Room-side settings
 
@@ -81,7 +81,7 @@ Open any room and select the **Settings** tab on the right; the tabs are ordered
 | Opacity | Floating text alpha (live preview on drag) |
 | Font size / weight | Canvas + list base size; weight improves readability over bright video |
 | Speed | Scroll speed (logical 1–10) |
-| Same-content grouping | Combines matching normal-chat content from every sender for 5 seconds and shows a count, such as `加油 ×100` |
+| Same-content grouping | In floating tracks only, combines matching normal-chat content from every sender for 5 seconds and shows a count, such as `加油 ×100`; the right-side list keeps every message |
 | Gift filter | Hides gift notices from Douyu and similar sites without affecting SC |
 | Shield words | One word per line; filtering applies while typing, shared by chat, SC, and canvas, and auto-saves |
 
@@ -99,7 +99,7 @@ Follow anchors (with tags) from the room page; the centred selector on the Follo
 
 ## 7. Settings summary
 
-Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, Bilibili cookie + experimental sending opt-in, optional Douyin cookie + signing endpoint, and profile import/export. Profiles exclude cookies, the Douyin signing-service endpoint, and the experimental Bilibili sending opt-in; importing never overwrites the latter two local-only choices. Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
+Use the single sun / moon button above **设置** in the sidebar for the app theme; each click alternates between light and dark mode. The global settings page contains default quality, HTTP proxy, Bilibili cookie + device-local sending permission, optional Douyin cookie + signing endpoint, and profile import/export. Profiles exclude cookies, the Douyin signing-service endpoint, and the Bilibili sending permission; importing never overwrites the latter two local-only choices. Danmaku settings live in each room's **设置 (Settings)** tab rather than the global settings page.
 
 For Douyin, anonymous browsing creates a transient `ttwid` session automatically. A complete logged-in browser cookie is required for live search and can improve room parsing; it is stored only in local SQLite. The configured chat signer receives the effective connection session (the saved Cookie plus transient `ttwid` / `msToken`) only while it creates a signed WSS connection; transient values are never persisted.
 
@@ -112,9 +112,9 @@ For Douyin, anonymous browsing creates a transient `ttwid` session automatically
 | Huya crash on open | Use build with UTF-8-safe HTML parse |
 | Douyin search requests login | Save a complete logged-in browser cookie under 设置 → 抖音 Cookie; first-page browse and playback do not require it |
 | Douyin chat asks for a signer | Configure a full trusted signing-service endpoint under Settings → Account; rLive does not embed a signing algorithm |
-| Bilibili composer is disabled | Enable the experimental setting and save a Cookie containing `SESSDATA` and `bili_jct` |
+| Bilibili composer is disabled | Enable **B 站发送弹幕** and save a Cookie containing `SESSDATA` and `bili_jct` |
 | Black screen | Try another line/quality; re-enter room |
 
 ## 9. Compliance
 
-The app is primarily a read-only aggregator. Its Bilibili experiment allows only a user-confirmed single text message; there are no gifts, payments, batch/scheduled/automatic sends, recording, or official-login write flows. Personal / educational use; respect platform ToS and local law.
+The app is primarily a read-only aggregator. Its supported Bilibili sender allows only a user-initiated single text message; there are no gifts, payments, batch/scheduled/automatic sends, recording, or official-login write flows. Personal / educational use; respect platform ToS and local law.

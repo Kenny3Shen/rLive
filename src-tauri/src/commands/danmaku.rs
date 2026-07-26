@@ -10,8 +10,8 @@ use crate::state::{AppState, BilibiliDanmakuSendLimiter};
 
 #[derive(Debug, Serialize)]
 pub struct BilibiliDanmakuSendStatus {
-    /// The user has explicitly opted into this experimental write capability.
-    pub experimental_enabled: bool,
+    /// The user has enabled this device-local write capability.
+    pub send_enabled: bool,
     /// The local account has both required session/CSRF cookie values.
     pub cookie_ready: bool,
     /// Both checks passed; the composer may accept a message.
@@ -113,18 +113,18 @@ pub fn bilibili_danmaku_send_status(
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
     let cookie_ready = danmaku::bilibili::has_send_credentials(&cookie);
-    let experimental_enabled = settings.bilibili_danmaku_send_enabled;
-    let message = if !experimental_enabled {
-        "在设置中启用“实验性 B站发送弹幕”后可使用".into()
+    let send_enabled = settings.bilibili_danmaku_send_enabled;
+    let message = if !send_enabled {
+        "在设置中启用“B站发送弹幕”后可使用".into()
     } else if !cookie_ready {
         "请先保存含 SESSDATA 和 bili_jct 的 B站 Cookie".into()
     } else {
-        "发送前仍会二次确认；仅支持普通滚动文本。".into()
+        "可发送单条普通滚动文本。".into()
     };
     Ok(BilibiliDanmakuSendStatus {
-        experimental_enabled,
+        send_enabled,
         cookie_ready,
-        available: experimental_enabled && cookie_ready,
+        available: send_enabled && cookie_ready,
         message,
     })
 }
@@ -148,7 +148,7 @@ pub async fn bilibili_danmaku_send(
     if !settings.bilibili_danmaku_send_enabled {
         return Err(AppError::new(
             "bilibili_send_disabled",
-            "B站实验性发送弹幕尚未启用，请先在设置中确认开启",
+            "B站发送弹幕尚未启用，请先在设置中确认开启",
         )
         .with_site("bilibili"));
     }
@@ -161,11 +161,10 @@ pub async fn bilibili_danmaku_send(
     }
     let (room_id, message) =
         validate_and_reserve_bilibili_send(&state.bilibili_send_limiter, &room_id, &message)?;
-    let client = if settings.proxy.is_some() {
-        crate::http_client::build_client(settings.proxy.as_deref())?
-    } else {
-        crate::http_client::default_client()
-    };
+    // This request carries the user's browser Cookie. A redirect target must
+    // never receive it, so the write path deliberately opts out of redirect
+    // following for both proxied and direct requests.
+    let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
     danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await
 }
 

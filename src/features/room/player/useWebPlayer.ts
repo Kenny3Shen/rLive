@@ -45,6 +45,46 @@ function nextFrame(): Promise<void> {
   return new Promise((r) => requestAnimationFrame(() => r()));
 }
 
+/**
+ * Request autoplay without making the proxy lifecycle wait for the browser to
+ * resolve it. `HTMLMediaElement.play()` can remain pending while a live MSE
+ * stream is waiting for its first media segment. Awaiting that promise inside
+ * the serialized proxy queue meant that a quick leave/re-enter could leave
+ * the old proxy and MSE player ahead of every later room session.
+ *
+ * The caller must make the player reachable by its normal teardown before
+ * invoking this helper. Every continuation is fenced by `isCurrent`, so an
+ * old autoplay rejection can never mute or otherwise modify a newer session.
+ */
+export function requestPlayerAutoplay(
+  player: Pick<MpegtsPlayer, "play">,
+  video: Pick<HTMLVideoElement, "muted">,
+  isCurrent: () => boolean,
+  onMutedAutoplayRecovered: () => void,
+): void {
+  void (async () => {
+    try {
+      await player.play();
+      return;
+    } catch {
+      // Some WebView2 configurations reject unmuted autoplay even though the
+      // user just selected a room. Retry once muted, but never touch a player
+      // that has been torn down or superseded in the meantime.
+      if (!isCurrent()) return;
+      video.muted = true;
+      try {
+        await player.play();
+        await sleep(80);
+        if (!isCurrent()) return;
+        video.muted = false;
+        onMutedAutoplayRecovered();
+      } catch {
+        // mpegts.js emits the actionable media error through its event API.
+      }
+    }
+  })();
+}
+
 export type WebPlayerApi = {
   mode: PlayerUiMode;
   paused: boolean;
@@ -334,11 +374,16 @@ export function useWebPlayer(opts: {
             } as Parameters<MpegtsStatic["createPlayer"]>[1],
           );
 
-          player.attachMediaElement(video);
-          player.load();
+          // Register ownership before any MSE or autoplay work. In
+          // particular, `player.play()` may remain pending indefinitely while
+          // waiting for a live segment; route cleanup must still be able to
+          // destroy this provisional player immediately.
+          playerRef.current = player;
+          const isCurrentPlayer = () =>
+            !cancelled && genRef.current === gen && playerRef.current === player;
 
           player.on(mpegts.Events.ERROR, (...args: unknown[]) => {
-            if (cancelled || genRef.current !== gen) return;
+            if (!isCurrentPlayer()) return;
             const [type, detail, info] = args;
             const message =
               (info && typeof info === "object" && info !== null && "msg" in info
@@ -356,40 +401,21 @@ export function useWebPlayer(opts: {
             });
           });
 
+          player.attachMediaElement(video);
+          player.load();
+
           // Apply current transport prefs (unmuted after room re-entry).
           video.volume = Math.max(0, Math.min(1, volumeRef.current / 100));
           video.muted = mutedRef.current;
 
-          // User navigated into the room — treat as gesture-friendly autoplay.
-          try {
-            await player.play();
-          } catch {
-            // Last resort: brief muted start then unmute (WebView2 policy).
-            video.muted = true;
-            try {
-              await player.play();
-              await sleep(80);
-              if (!cancelled && genRef.current === gen) {
-                video.muted = false;
-                mutedRef.current = false;
-                setMuted(false);
-              }
-            } catch {
-              /* play() may still reject; error event will surface */
-            }
-          }
-
-          if (cancelled || genRef.current !== gen) {
-            try {
-              player.destroy();
-            } catch {
-              /* ignore */
-            }
-            await stopProxy();
-            return;
-          }
-
-          playerRef.current = player;
+          // Do not await this promise in `proxyLifecycleQueue`: it can stay
+          // pending until the first live media segment arrives. The queue must
+          // remain free so route cleanup can stop this proxy and a re-entered
+          // room can start its replacement session right away.
+          requestPlayerAutoplay(player, video, isCurrentPlayer, () => {
+            mutedRef.current = false;
+            setMuted(false);
+          });
 
           // If we already have frames, mark running; otherwise wait for play event.
           if (!video.paused && video.readyState >= 2) {

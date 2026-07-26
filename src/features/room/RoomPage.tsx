@@ -296,11 +296,21 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
       </Button>
       <p
         ref={titleRef}
-        className="absolute inset-x-14 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
+        className="absolute inset-x-20 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
         title={title}
       >
         {title}
       </p>
+      <span
+        className="pointer-events-none absolute right-3 flex h-5 items-center gap-1.5 text-[10px] font-semibold tracking-[0.12em] text-accent"
+        aria-label="Live"
+      >
+        <span
+          aria-hidden="true"
+          className="size-1.5 rounded-full bg-accent shadow-[0_0_7px_currentColor]"
+        />
+        LIVE
+      </span>
     </header>
   );
 }

@@ -32,9 +32,9 @@ pub struct AppSettings {
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
     pub quality_level: String,
-    /// Opt-in switch for the experimental, single-message Bilibili chat sender.
+    /// Device-local permission for the single-message Bilibili chat sender.
     /// It remains disabled until the user explicitly enables it in Settings and
-    /// is device-local rather than profile-imported.
+    /// is not profile-imported.
     #[serde(default)]
     pub bilibili_danmaku_send_enabled: bool,
     /// Optional URL of a user-operated Douyin danmaku signing service.

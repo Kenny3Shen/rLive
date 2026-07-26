@@ -34,8 +34,8 @@ use tauri::Manager;
 pub fn run() {
     // The MCP bridge is useful for local development automation. It is never
     // included in a release process: release commands can access local account
-    // data and the experimental Bilibili write command, which must remain
-    // behind the app's own UI confirmation flow.
+    // data and the Bilibili write command, which must remain behind the
+    // app's own local permission and user-operated UI entry.
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(debug_assertions)]
     let builder = builder.plugin(

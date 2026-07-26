@@ -1,10 +1,10 @@
 # Bilibili danmaku sending research
 
-Updated 2026-07-25. This records the safety boundary of rLive's gated implementation.
+Updated 2026-07-26. This records the implementation boundary and safety controls for rLive's supported Bilibili sender.
 
 ## Conclusion
 
-Sending a single Bilibili live-chat message is technically feasible, but it relies on a logged-in, non-public write endpoint. rLive now offers a **default-off experimental path** for one ordinary scrolling text message, with a per-message confirmation. It never sends gifts or supports bulk, loops, schedules, auto-replies, styling controls, or automatic retry.
+This capability relies on a logged-in, non-public write endpoint. rLive formally supports a **default-off device-local sending permission** for one user-initiated ordinary scrolling text message. Formal support does not turn it into automation or make the endpoint a public Bilibili third-party write API: it never sends gifts or supports bulk, loops, schedules, auto-replies, styling controls, or automatic retry.
 
 ## Confirmed request shape
 
@@ -23,20 +23,20 @@ It requires a real room ID and logged-in cookies:
 
 rLive already retains the real room ID in `LiveRoomDetail.room_id` and has Bilibili cookie, shared HTTP-client, and error-model paths. A send flow therefore does not need a fresh room-detail request for each message.
 
-## Current gated implementation
+## Current supported implementation
 
-1. A separate settings opt-in defaults to off; the composer additionally requires a saved Cookie containing both `SESSDATA` and `bili_jct`.
-2. It appears only in a Bilibili room and requests a second confirmation for every Enter/click submission.
-3. Backend rechecks opt-in, numeric room ID, text/controls/80-character limit, Cookie credentials, and a conservative 3-second per-room cooldown.
-4. Rate codes 10030 / 10031 / 10039 produce a clear cooldown message. Timeout/network failures are never retried and report unknown delivery.
+1. A separate device-local sending permission defaults to off; the composer additionally requires a saved Cookie containing both `SESSDATA` and `bili_jct`.
+2. It appears in the centre of the player control bar only in a Bilibili room, submits directly on Enter/click, and visibly reports success, failure, or permission state.
+3. Backend rechecks that permission, numeric room ID, text/controls/80-character limit, Cookie credentials, and a conservative 3-second per-room cooldown.
+4. Rate codes 10030 / 10031 / 10039 and HTTP 429 produce a clear cooldown message. Timeout/network failures are never retried and report unknown delivery.
 5. No optimistic local event is inserted; only normal WebSocket echo enters the list.
-6. Cookie, CSRF, message content, and raw upstream errors never enter logs or frontend responses.
+6. The write request uses a no-redirect HTTP client, so a redirect target cannot receive its Cookie. Cookie, CSRF, message content, and raw upstream errors never enter logs or frontend responses.
 
-Tests cover pure Cookie/text validation and the sender cooldown; live validation must use a controlled account/room and never automate public-room sends.
+Tests cover Cookie/text validation, the sender cooldown, and a local HTTP contract for form fields, Cookie/CSRF headers, success, and HTTP rate limiting. Release validation still requires a controlled account and permitted room to verify a real echo; never automate public-room sends.
 
 ## Security prerequisite
 
-`tauri-plugin-mcp-bridge` is now debug-only. Release builds therefore do not expose a local automation bridge that could bypass UI confirmation. The backend still independently enforces opt-in, credential, text, room, and cooldown checks; frontend disabling is only a UX layer.
+`tauri-plugin-mcp-bridge` is now debug-only. Release builds therefore do not expose a local automation bridge that could bypass local sending permission or the user-operated UI entry. The backend still independently enforces the device-local sending permission, credential, text, room, and cooldown checks; frontend disabling is only a UX layer.
 
 ## References
 
