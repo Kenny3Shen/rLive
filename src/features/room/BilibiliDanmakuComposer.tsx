@@ -11,8 +11,9 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { BILIBILI_NATIVE_TEXT_EMOJIS } from "./danmaku/emoji";
+import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
 
 type SendStatus = {
   send_enabled: boolean;
@@ -211,29 +212,88 @@ export function BilibiliDanmakuComposer({
                   overlay ? "text-white/70" : "text-muted-foreground",
                 )}
               >
-                B站原生表情
+                选择表情
               </PopoverTitle>
-              <div className="max-h-60 overflow-y-auto pr-1">
-                <div className="grid grid-cols-2 gap-1">
-                  {BILIBILI_NATIVE_TEXT_EMOJIS.map((emoji) => (
-                    <Button
-                      key={emoji}
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className={cn(
-                        "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
-                        overlay && "hover:bg-white/15 focus-visible:ring-white/70",
-                      )}
-                      aria-label={`插入 B站原生表情 ${emoji}`}
-                      title={emoji}
-                      onClick={() => insertEmoji(emoji)}
-                    >
-                      {emoji}
-                    </Button>
-                  ))}
-                </div>
-              </div>
+              <Tabs defaultValue="bilibili" className="gap-1">
+                <TabsList
+                  variant="line"
+                  aria-label="表情分类"
+                  className={cn(
+                    "h-7 w-full justify-start border-b border-border-subtle px-0",
+                    overlay && "border-white/15 text-white/70",
+                  )}
+                >
+                  <TabsTrigger
+                    value="bilibili"
+                    className={cn(
+                      "h-7 px-2 text-xs",
+                      overlay &&
+                        "text-white/70 hover:text-white data-active:text-white after:bg-white",
+                    )}
+                  >
+                    B站表情
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="emoji"
+                    className={cn(
+                      "h-7 px-2 text-xs",
+                      overlay &&
+                        "text-white/70 hover:text-white data-active:text-white after:bg-white",
+                    )}
+                  >
+                    Emoji
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="bilibili" className="mt-0 data-[hidden]:hidden">
+                  <div className="max-h-60 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-2 gap-1">
+                      {BILIBILI_NATIVE_TEXT_EMOJIS.map((emoji) => (
+                        <Button
+                          key={emoji}
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
+                            overlay && "hover:bg-white/15 focus-visible:ring-white/70",
+                          )}
+                          aria-label={`插入 B站表情 ${emoji}`}
+                          title={emoji}
+                          onClick={() => insertEmoji(emoji)}
+                        >
+                          {emoji}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </TabsContent>
+                <TabsContent value="emoji" className="mt-0 data-[hidden]:hidden">
+                  <div className="grid grid-cols-4 gap-1">
+                    {DANMAKU_EMOJIS.map((emoji) => (
+                      <Button
+                        key={emoji.id}
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "size-12",
+                          overlay && "hover:bg-white/15 focus-visible:ring-white/70",
+                        )}
+                        aria-label={`插入 Emoji ${emoji.label}`}
+                        title={emoji.label}
+                        onClick={() => insertEmoji(emoji.text)}
+                      >
+                        <img
+                          src={emoji.src}
+                          alt=""
+                          draggable={false}
+                          className="size-7 object-contain"
+                        />
+                      </Button>
+                    ))}
+                  </div>
+                </TabsContent>
+              </Tabs>
             </PopoverContent>
           </Popover>
         </InputGroupAddon>
