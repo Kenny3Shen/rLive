@@ -49,7 +49,7 @@ type SettingsState = {
   mpvPath: string | null;
   qualityLevel: QualityLevel;
   bilibiliDanmakuSendEnabled: boolean;
-  /** True while the explicit Bilibili write opt-in is reaching the backend. */
+  /** True while the local Bilibili sending permission is reaching the backend. */
   bilibiliDanmakuSendPending: boolean;
   /**
    * In-memory only revision for the Bilibili account cookie.  It deliberately

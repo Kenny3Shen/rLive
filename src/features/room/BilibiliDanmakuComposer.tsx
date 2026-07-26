@@ -6,21 +6,11 @@ import type { SiteId } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { DANMAKU_EMOJIS } from "./danmaku/emoji";
 
 type SendStatus = {
-  experimental_enabled: boolean;
+  send_enabled: boolean;
   cookie_ready: boolean;
   available: boolean;
   message: string;
@@ -38,7 +28,7 @@ type BilibiliDanmakuComposerProps = {
   roomId?: string;
   /** Compact transparent variant for the player-overlay control bar. */
   overlay?: boolean;
-  /** Keeps the player chrome visible while an emoji/confirmation overlay is open. */
+  /** Keeps the player chrome visible while the emoji picker is open. */
   onOverlayInteractionChange?: (open: boolean) => void;
 };
 
@@ -52,27 +42,28 @@ export function BilibiliDanmakuComposer({
   overlay = false,
   onOverlayInteractionChange,
 }: BilibiliDanmakuComposerProps) {
-  const experimentalEnabled = useSettingsStore((s) => s.bilibiliDanmakuSendEnabled);
+  const sendEnabled = useSettingsStore((s) => s.bilibiliDanmakuSendEnabled);
   const sendSettingPending = useSettingsStore((s) => s.bilibiliDanmakuSendPending);
   const bilibiliCookieRevision = useSettingsStore((s) => s.bilibiliCookieRevision);
   const [availability, setAvailability] = useState<SendStatus | null>(null);
   const [draft, setDraft] = useState("");
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const sendInFlightRef = useRef(false);
 
   useEffect(() => {
     if (siteId !== "bilibili") return;
     let cancelled = false;
     setAvailability(null);
-    // Do not ask the backend while the explicit opt-in is still queued for
-    // persistence. Once it settles this effect runs again, preventing a stale
-    // disabled status from pinning the composer until the user re-enters.
+    // Do not ask the backend while the explicit sending permission is still
+    // queued for persistence. Once it settles this effect runs again,
+    // preventing a stale disabled status from pinning the composer until the
+    // user re-enters.
     if (sendSettingPending) {
       setAvailability({
-        experimental_enabled: experimentalEnabled,
+        send_enabled: sendEnabled,
         cookie_ready: false,
         available: false,
         message: "正在同步发送权限…",
@@ -88,7 +79,7 @@ export function BilibiliDanmakuComposer({
       .catch(() => {
         if (!cancelled) {
           setAvailability({
-            experimental_enabled: false,
+            send_enabled: false,
             cookie_ready: false,
             available: false,
             message: "暂时无法确认 B站发送权限",
@@ -98,9 +89,9 @@ export function BilibiliDanmakuComposer({
     return () => {
       cancelled = true;
     };
-  }, [siteId, roomId, experimentalEnabled, sendSettingPending, bilibiliCookieRevision]);
+  }, [siteId, roomId, sendEnabled, sendSettingPending, bilibiliCookieRevision]);
 
-  const overlayOpen = emojiOpen || confirmOpen;
+  const overlayOpen = emojiOpen;
   useEffect(() => {
     onOverlayInteractionChange?.(overlayOpen);
   }, [onOverlayInteractionChange, overlayOpen]);
@@ -118,17 +109,10 @@ export function BilibiliDanmakuComposer({
   const canSubmit = ready && draft.trim().length > 0 && !sending;
   const statusText = result ?? availability?.message ?? "正在检查发送权限…";
 
-  function requestConfirmation() {
-    if (!canSubmit) return;
-    setResult(null);
-    setConfirmOpen(true);
-  }
-
   function onInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      requestConfirmation();
-    }
+    if (event.key !== "Enter" || event.nativeEvent.isComposing || event.repeat) return;
+    event.preventDefault();
+    void send();
   }
 
   function insertEmoji(text: string) {
@@ -148,7 +132,10 @@ export function BilibiliDanmakuComposer({
   }
 
   async function send() {
-    if (!canSubmit) return;
+    // State updates are asynchronous, so a ref closes the tiny gap in which
+    // repeated Enter/click events could otherwise submit the same draft twice.
+    if (!canSubmit || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
     setSending(true);
     setResult(null);
     try {
@@ -157,12 +144,11 @@ export function BilibiliDanmakuComposer({
         message: draft.trim(),
       });
       setDraft("");
-      setConfirmOpen(false);
       setResult("已提交，等待直播间回显。");
     } catch (error) {
-      setConfirmOpen(false);
       setResult(`发送失败：${errorMessage(error)}`);
     } finally {
+      sendInFlightRef.current = false;
       setSending(false);
     }
   }
@@ -175,7 +161,6 @@ export function BilibiliDanmakuComposer({
           ? "w-full max-w-xl"
           : "shrink-0 border-t border-border-subtle bg-sidebar/80 px-2.5 py-2",
       )}
-      title={overlay ? statusText : undefined}
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <Input
@@ -203,7 +188,6 @@ export function BilibiliDanmakuComposer({
                 size="icon-sm"
                 disabled={!ready || sending}
                 aria-label="选择表情"
-                title="选择表情"
                 className={cn(
                   overlay &&
                     "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
@@ -238,7 +222,6 @@ export function BilibiliDanmakuComposer({
                     overlay && "hover:bg-white/15 focus-visible:ring-white/70",
                   )}
                   aria-label={`插入${emoji.label}表情`}
-                  title={emoji.label}
                   onClick={() => insertEmoji(emoji.text)}
                 >
                   <img src={emoji.src} alt="" draggable={false} className="size-7 object-contain" />
@@ -251,9 +234,8 @@ export function BilibiliDanmakuComposer({
           type="button"
           size="icon"
           disabled={!canSubmit}
-          onClick={requestConfirmation}
+          onClick={() => void send()}
           aria-label="发送 B站弹幕"
-          title="发送（需确认）"
           className={cn(
             overlay && "bg-white/90 text-black hover:bg-white focus-visible:ring-white/70",
           )}
@@ -262,29 +244,26 @@ export function BilibiliDanmakuComposer({
         </Button>
       </div>
       {overlay ? (
-        <span className="sr-only" role="status" aria-live="polite">
+        <p
+          className={cn(
+            "mt-1 truncate text-center text-[11px] leading-4",
+            result?.startsWith("发送失败") ? "text-red-200" : "text-white/75",
+          )}
+          role="status"
+          aria-live="polite"
+        >
           {statusText}
-        </span>
+        </p>
       ) : (
-        <p className="mt-1.5 min-h-4 text-[11px] leading-4 text-muted-foreground">{statusText}</p>
+        <p
+          className={cn(
+            "mt-1.5 min-h-4 text-[11px] leading-4",
+            result?.startsWith("发送失败") ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {statusText}
+        </p>
       )}
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认发送弹幕？</AlertDialogTitle>
-            <AlertDialogDescription>
-              将向当前 B站直播间发送：{draft.trim() || "（空内容）"}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={sending}>取消</AlertDialogCancel>
-            <AlertDialogAction disabled={!canSubmit} onClick={() => void send()}>
-              {sending ? "发送中…" : "确认发送"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

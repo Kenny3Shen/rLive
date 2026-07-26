@@ -60,7 +60,7 @@ pub fn has_send_credentials(cookie: &str) -> bool {
     cookie_value(cookie, "SESSDATA").is_some() && cookie_value(cookie, "bili_jct").is_some()
 }
 
-/// Send one user-confirmed, plain scrolling Bilibili danmaku.
+/// Send one user-initiated, plain scrolling Bilibili danmaku.
 ///
 /// This intentionally has no retry and no optimistic local event.  A timeout
 /// could still mean that Bilibili accepted the message, while the normal room
@@ -70,6 +70,18 @@ pub async fn send_chat(
     cookie: &str,
     room_id: &str,
     message: &str,
+) -> AppResult<()> {
+    send_chat_to_url(client, cookie, room_id, message, SEND_CHAT_URL).await
+}
+
+/// Internal endpoint-injectable variant used by the HTTP contract tests. The
+/// public sender is intentionally pinned to Bilibili's live-chat endpoint.
+async fn send_chat_to_url(
+    client: &Client,
+    cookie: &str,
+    room_id: &str,
+    message: &str,
+    url: &str,
 ) -> AppResult<()> {
     let room_id = room_id.trim();
     if room_id.is_empty()
@@ -102,7 +114,7 @@ pub async fn send_chat(
         ("csrf_token", csrf),
     ];
     let response = client
-        .post(SEND_CHAT_URL)
+        .post(url)
         .header("user-agent", crate::sites::bilibili::DEFAULT_USER_AGENT)
         .header("referer", crate::sites::bilibili::DEFAULT_REFERER)
         .header("origin", "https://live.bilibili.com")
@@ -118,6 +130,13 @@ pub async fn send_chat(
             .with_site("bilibili")
             .retryable()
         })?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(
+            AppError::new("bilibili_send_rate_limited", "发送过快，请稍后再试")
+                .with_site("bilibili")
+                .retryable(),
+        );
+    }
     if !response.status().is_success() {
         return Err(AppError::new(
             "bilibili_send_rejected",
@@ -1167,7 +1186,56 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
     use super::*;
+
+    fn response_server(status: &str, body: &str) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let status = status.to_owned();
+        let body = body.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1_024];
+            let header_end = loop {
+                let read = stream.read(&mut buffer).unwrap();
+                assert!(read > 0, "request ended before headers");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(index) = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                {
+                    break index;
+                }
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let read = stream.read(&mut buffer).unwrap();
+                assert!(read > 0, "request ended before body");
+                request.extend_from_slice(&buffer[..read]);
+            }
+
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        (format!("http://{address}/msg/send"), server)
+    }
 
     #[test]
     fn encode_packet_header() {
@@ -1467,6 +1535,60 @@ mod tests {
         assert!(normalize_outgoing_message("\n").is_err());
         assert!(normalize_outgoing_message("hello\nworld").is_err());
         assert!(normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_CHARS + 1)).is_err());
+    }
+
+    #[tokio::test]
+    async fn outgoing_send_posts_authenticated_form() {
+        let (url, server) = response_server("200 OK", r#"{"code":0}"#);
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+
+        send_chat_to_url(
+            &client,
+            "SESSDATA=session; bili_jct=csrf-token",
+            "123",
+            "hello",
+            &url,
+        )
+        .await
+        .unwrap();
+
+        let request = server.join().unwrap();
+        let headers = request.to_ascii_lowercase();
+        assert!(headers.starts_with("post /msg/send http/1.1\r\n"));
+        assert!(headers.contains("cookie: sessdata=session; bili_jct=csrf-token"));
+        assert!(headers.contains("origin: https://live.bilibili.com"));
+        assert!(headers.contains("referer: https://live.bilibili.com"));
+        assert!(request.contains("roomid=123"));
+        assert!(request.contains("msg=hello"));
+        assert!(request.contains("mode=1"));
+        assert!(request.contains("csrf=csrf-token"));
+        assert!(request.contains("csrf_token=csrf-token"));
+    }
+
+    #[tokio::test]
+    async fn outgoing_send_maps_http_rate_limit() {
+        let (url, server) = response_server("429 Too Many Requests", r#"{"code":-1}"#);
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+
+        let error = send_chat_to_url(
+            &client,
+            "SESSDATA=session; bili_jct=csrf-token",
+            "123",
+            "hello",
+            &url,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "bilibili_send_rate_limited");
+        assert!(error.retryable);
+        server.join().unwrap();
     }
 
     #[test]

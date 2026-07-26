@@ -153,12 +153,12 @@ function BilibiliDanmakuSendField() {
 
   return (
     <Section
-      title="实验性：发送 B 站弹幕"
-      description="灰度功能，默认关闭。仅支持用户逐条确认后发送普通滚动文本，不会自动重试或发送礼物。"
+      title="B 站发送弹幕"
+      description="已正式支持。默认关闭；仅支持用户主动发送的单条普通滚动文本，不会自动重试或发送礼物。"
     >
       <Field orientation="responsive">
         <FieldContent>
-          <FieldTitle id="bilibili-send-title">启用单条弹幕发送</FieldTitle>
+          <FieldTitle id="bilibili-send-title">启用发送功能</FieldTitle>
           <FieldDescription>
             启用后仍需在房间内保存含 SESSDATA 与 bili_jct 的 Cookie；Cookie
             缺失或无效时发送框会保持禁用。
@@ -398,7 +398,7 @@ export function SettingsPage() {
                 <CookieField
                   siteId="bilibili"
                   title="哔哩哔哩"
-                  description="用于只读 API、接收弹幕和可选的实验性单条发送；清空后保存即可删除。"
+                  description="用于只读 API、接收弹幕和已启用的单条弹幕发送；清空后保存即可删除。"
                   placeholder="SESSDATA=…; bili_jct=…"
                 />
                 <BilibiliDanmakuSendField />
@@ -417,7 +417,7 @@ export function SettingsPage() {
             <SettingsContent title="数据">
               <Section
                 title="导入 / 导出"
-                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、抖音签名服务或实验性发送开关。"
+                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、抖音签名服务或本机发送授权。"
               >
                 <Field>
                   <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>

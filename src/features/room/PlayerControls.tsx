@@ -23,7 +23,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
 
@@ -77,30 +76,12 @@ function ControlButton({
   ...props
 }: ControlButtonProps) {
   const button = (
-    <Button
-      {...props}
-      variant={variant}
-      size="icon-sm"
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-    >
+    <Button {...props} variant={variant} size="icon-sm" disabled={disabled} aria-label={label}>
       {children}
     </Button>
   );
 
-  if (disabled) return button;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<Button {...props} variant={variant} size="icon-sm" aria-label={label} />}
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
+  return button;
 }
 
 /** Compact controls kept separate from the MSE player implementation. */
@@ -209,7 +190,6 @@ export function PlayerControls({
                 size="icon-sm"
                 disabled={disabled}
                 aria-label={volumeLabel}
-                title={volumeLabel}
                 className={cn(overlayButtonClass, "max-sm:hidden")}
               />
             }
@@ -257,7 +237,6 @@ export function PlayerControls({
             "min-w-0 max-w-28 truncate px-1 text-xs",
             overlay ? "text-red-200" : "text-destructive",
           )}
-          title={loadError}
         >
           {loadError}
         </span>
@@ -279,7 +258,6 @@ export function PlayerControls({
               size="sm"
               className={cn("w-auto max-w-24 shrink-0", overlaySelectTriggerClass)}
               aria-label="清晰度"
-              title={`清晰度：${qualityLabel(qualityIndex)}`}
             >
               <SelectValue>
                 {(value) => {
@@ -317,7 +295,6 @@ export function PlayerControls({
               size="sm"
               className={cn("w-auto max-w-24 shrink-0", overlaySelectTriggerClass)}
               aria-label="线路"
-              title={`线路：${lineIndex >= 0 && lines[lineIndex] ? lineLabel(lines[lineIndex].url, lineIndex) : "未选择"}`}
             >
               <SelectValue>
                 {(value) => {

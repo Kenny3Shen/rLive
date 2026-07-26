@@ -76,25 +76,12 @@ export function AppTitleBar() {
       className="relative isolate flex h-9 shrink-0 items-stretch border-b border-border-subtle bg-sidebar/95 text-xs select-none"
       aria-label="应用标题栏"
     >
-      <div className="relative z-10 flex min-w-0 flex-1 items-center px-3">
+      <div className="relative z-10 flex min-w-0 flex-1 items-center gap-2 px-3">
         <img src="/rlive.svg" alt="rLive" draggable={false} className="size-4.5 rounded-[5px]" />
-      </div>
-
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-40">
         <span className="truncate font-medium tracking-[0.01em] text-foreground/85">rLive</span>
       </div>
 
       <div className="relative z-10 flex h-full items-stretch">
-        <span
-          className="pointer-events-none flex h-9 items-center gap-1.5 px-2.5 text-[10px] font-semibold tracking-[0.12em] text-accent"
-          aria-label="Live"
-        >
-          <span
-            aria-hidden="true"
-            className="size-1.5 rounded-full bg-accent shadow-[0_0_7px_currentColor]"
-          />
-          LIVE
-        </span>
         <button
           type="button"
           data-tauri-drag-region="false"
