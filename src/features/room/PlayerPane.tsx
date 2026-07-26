@@ -531,7 +531,7 @@ export function PlayerPane({
               {scUnreadCount > 0 && (
                 <span
                   aria-hidden="true"
-                  className="rounded-full bg-destructive px-1.5 py-px text-[10px] leading-4 font-semibold text-destructive-foreground tabular-nums"
+                  className="rounded-full bg-destructive px-1.5 py-px text-[10px] leading-4 font-semibold text-black tabular-nums"
                 >
                   {scUnreadCount > 99 ? "99+" : scUnreadCount}
                 </span>

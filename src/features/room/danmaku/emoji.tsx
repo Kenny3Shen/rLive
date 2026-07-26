@@ -25,10 +25,9 @@ export type DanmakuEmoji = {
 };
 
 /**
- * A deliberately small, local palette. It keeps the composer usable offline
- * and avoids importing/rehosting platform-owned emote packs. The Unicode text
- * is portable across the supported chat protocols; Bilibili-style aliases are
- * display-only fallbacks for incoming plain-text messages.
+ * A deliberately small, local fallback palette for incoming plain-text
+ * messages. It avoids importing/rehosting platform-owned emote packs while
+ * still rendering portable Unicode and common Bilibili-style aliases.
  */
 export const DANMAKU_EMOJIS: readonly DanmakuEmoji[] = [
   { id: "smile", text: "😀", label: "微笑", src: smileSrc, aliases: ["[微笑]"] },
@@ -40,6 +39,55 @@ export const DANMAKU_EMOJIS: readonly DanmakuEmoji[] = [
   { id: "clap", text: "👏", label: "鼓掌", src: clapSrc, aliases: ["[鼓掌]"] },
   { id: "doge", text: "🐶", label: "Doge", src: dogeSrc, aliases: ["[doge]"] },
 ];
+
+/**
+ * Bilibili Live's built-in text faces from its web client's `EMOJI_LIST`.
+ * These are ordinary danmaku text, so selecting one does not rely on a
+ * platform-owned image pack or a user-specific emote entitlement.
+ */
+export const BILIBILI_NATIVE_TEXT_EMOJIS = [
+  "(⌒▽⌒)",
+  "（￣▽￣）",
+  "(=・ω・=)",
+  "(｀・ω・´)",
+  "(〜￣△￣)〜",
+  "(･∀･)",
+  "(°∀°)ﾉ",
+  "(￣3￣)",
+  "╮(￣▽￣)╭",
+  "_(:3」∠)_",
+  "( ´_ゝ｀)",
+  "←_←",
+  "→_→",
+  "(<_<)",
+  "(>_>)",
+  "(;¬_¬)",
+  '("▔□▔)/',
+  "(ﾟДﾟ≡ﾟдﾟ)!?",
+  "Σ(ﾟдﾟ;)",
+  "Σ( ￣□￣||)",
+  "(´；ω；`)",
+  "（/TДT)/",
+  "(^・ω・^ )",
+  "(｡･ω･｡)",
+  "(●￣(ｴ)￣●)",
+  "ε=ε=(ノ≧∇≦)ノ",
+  "(´･_･`)",
+  "(-_-#)",
+  "（￣へ￣）",
+  "(￣ε(#￣) Σ",
+  "ヽ(`Д´)ﾉ",
+  "（#-_-)┯━┯",
+  "(╯°口°)╯(┴—┴",
+  "←◡←",
+  "( ♥д♥)",
+  "Σ>―(〃°ω°〃)♡→",
+  "⁄(⁄ ⁄•⁄ω⁄•⁄ ⁄)⁄",
+  "(╬ﾟдﾟ)▄︻┻┳═一",
+  "･*･:≡(　ε:)",
+  "(汗)",
+  "(苦笑)",
+] as const;
 
 export type DanmakuContentSegment =
   | { type: "text"; value: string }

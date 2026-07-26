@@ -1,13 +1,18 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { SendHorizontal, SmilePlus } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { SiteId } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { DANMAKU_EMOJIS } from "./danmaku/emoji";
+import { BILIBILI_NATIVE_TEXT_EMOJIS } from "./danmaku/emoji";
 
 type SendStatus = {
   send_enabled: boolean;
@@ -52,6 +57,7 @@ export function BilibiliDanmakuComposer({
   const [result, setResult] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sendInFlightRef = useRef(false);
+  const emojiPickerTitleId = useId();
 
   useEffect(() => {
     if (siteId !== "bilibili") return;
@@ -163,8 +169,75 @@ export function BilibiliDanmakuComposer({
           : "shrink-0 border-t border-border-subtle bg-sidebar/80 px-2.5 py-2",
       )}
     >
-      <div className="flex min-w-0 items-center gap-1.5">
-        <Input
+      <InputGroup
+        className={cn(
+          "h-8 min-w-0",
+          overlay &&
+            "border-white/25 bg-black/30 text-white has-[[data-slot=input-group-control]:focus-visible]:border-white/70 has-[[data-slot=input-group-control]:focus-visible]:ring-white/30 has-[>input:disabled]:bg-black/20 dark:bg-black/30",
+          result?.startsWith("发送失败") && "border-destructive/80",
+        )}
+      >
+        <InputGroupAddon align="inline-start" className="py-0">
+          <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
+            <PopoverTrigger
+              render={
+                <InputGroupButton
+                  type="button"
+                  size="icon-sm"
+                  disabled={!ready || sending}
+                  aria-label="选择 B站原生表情"
+                  className={cn(
+                    overlay &&
+                      "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
+                  )}
+                />
+              }
+            >
+              <SmilePlus aria-hidden />
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="start"
+              aria-labelledby={emojiPickerTitleId}
+              className={cn(
+                "w-80 gap-2 p-2",
+                overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
+              )}
+            >
+              <PopoverTitle
+                id={emojiPickerTitleId}
+                className={cn(
+                  "px-0.5 text-xs",
+                  overlay ? "text-white/70" : "text-muted-foreground",
+                )}
+              >
+                B站原生表情
+              </PopoverTitle>
+              <div className="max-h-60 overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-1">
+                  {BILIBILI_NATIVE_TEXT_EMOJIS.map((emoji) => (
+                    <Button
+                      key={emoji}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
+                        overlay && "hover:bg-white/15 focus-visible:ring-white/70",
+                      )}
+                      aria-label={`插入 B站原生表情 ${emoji}`}
+                      title={emoji}
+                      onClick={() => insertEmoji(emoji)}
+                    >
+                      {emoji}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </InputGroupAddon>
+        <InputGroupInput
           ref={inputRef}
           value={draft}
           onChange={(event) => {
@@ -176,77 +249,24 @@ export function BilibiliDanmakuComposer({
           disabled={!ready || sending}
           maxLength={80}
           aria-label="B站弹幕内容"
-          className={cn(
-            "h-8 min-w-0 text-sm",
-            overlay &&
-              "border-white/25 bg-black/30 text-white placeholder:text-white/60 focus-visible:border-white/70 focus-visible:ring-white/30 disabled:bg-black/20 dark:bg-black/30",
-            result?.startsWith("发送失败") && "border-destructive/80",
-          )}
+          className={cn("min-w-0 text-sm", overlay && "text-white placeholder:text-white/60")}
         />
-        <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
-          <PopoverTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={!ready || sending}
-                aria-label="选择表情"
-                className={cn(
-                  overlay &&
-                    "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
-                )}
-              />
-            }
-          >
-            <SmilePlus aria-hidden />
-          </PopoverTrigger>
-          <PopoverContent
-            side="top"
-            align="center"
+        <InputGroupAddon align="inline-end" className="py-0">
+          <InputGroupButton
+            type="button"
+            variant="default"
+            size="icon-sm"
+            disabled={!canSubmit}
+            onClick={() => void send()}
+            aria-label="发送 B站弹幕"
             className={cn(
-              "w-[13.5rem] gap-1.5 p-2",
-              overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
+              overlay && "bg-white/90 text-black hover:bg-white focus-visible:ring-white/70",
             )}
           >
-            <p
-              className={cn("px-0.5 text-xs", overlay ? "text-white/70" : "text-muted-foreground")}
-            >
-              选择表情
-            </p>
-            <div className="grid grid-cols-4 gap-1" role="grid" aria-label="弹幕表情">
-              {DANMAKU_EMOJIS.map((emoji) => (
-                <Button
-                  key={emoji.id}
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className={cn(
-                    "size-9 p-1",
-                    overlay && "hover:bg-white/15 focus-visible:ring-white/70",
-                  )}
-                  aria-label={`插入${emoji.label}表情`}
-                  onClick={() => insertEmoji(emoji.text)}
-                >
-                  <img src={emoji.src} alt="" draggable={false} className="size-7 object-contain" />
-                </Button>
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
-        <Button
-          type="button"
-          size="icon"
-          disabled={!canSubmit}
-          onClick={() => void send()}
-          aria-label="发送 B站弹幕"
-          className={cn(
-            overlay && "bg-white/90 text-black hover:bg-white focus-visible:ring-white/70",
-          )}
-        >
-          <SendHorizontal />
-        </Button>
-      </div>
+            <SendHorizontal />
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
       <span className="sr-only" role="status" aria-live="polite">
         {statusText}
       </span>
