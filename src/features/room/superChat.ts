@@ -1,4 +1,5 @@
 import type { DanmakuEvent, SuperChatInfo } from "@/shared/types/live";
+import { normalizeDanmakuImageUrl } from "./danmaku/content";
 
 export const MAX_SUPER_CHAT_ITEMS = 80;
 export const MAX_BUFFERED_SUPER_CHATS = 160;
@@ -11,11 +12,11 @@ export type SuperChatLine = {
 };
 
 export type SuperChatPalette = {
-  /** Safe opaque endpoints for the compact paid-message header. */
-  headerStart: string;
-  headerEnd: string;
-  /** Chosen for the strongest available contrast across both header endpoints. */
-  headerForeground: string;
+  /** Safe opaque endpoints for the paid-message band. */
+  messageStart: string;
+  messageEnd: string;
+  /** Chosen for the strongest available contrast across both message endpoints. */
+  messageForeground: string;
 };
 
 const HEX_COLOR = /^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i;
@@ -26,9 +27,9 @@ const SUPER_CHAT_AMOUNT_FORMATTER = new Intl.NumberFormat("zh-CN", {
 
 /** Bilibili's standard blue tier when a platform omits colour metadata. */
 export const DEFAULT_SUPER_CHAT_PALETTE: SuperChatPalette = {
-  headerStart: "#2A60B2",
-  headerEnd: "#1D4A92",
-  headerForeground: "#ffffff",
+  messageStart: "#2A60B2",
+  messageEnd: "#1D4A92",
+  messageForeground: "#ffffff",
 };
 
 export function safeSuperChatColor(value: unknown): string | null {
@@ -75,13 +76,17 @@ export function superChatPalette(info: SuperChatInfo | null | undefined): SuperC
   const start = safeSuperChatColor(info?.background_color);
   if (!start) return null;
   const end = safeSuperChatColor(info?.background_bottom_color) ?? start;
-  const headerStart = opaqueColor(start);
-  const headerEnd = opaqueColor(end);
+  const messageStart = opaqueColor(start);
+  const messageEnd = opaqueColor(end);
   return {
-    headerStart,
-    headerEnd,
-    headerForeground: paletteForeground(headerStart, headerEnd),
+    messageStart,
+    messageEnd,
+    messageForeground: paletteForeground(messageStart, messageEnd),
   };
+}
+
+export function superChatAvatarUrl(info: SuperChatInfo | null | undefined): string | null {
+  return normalizeDanmakuImageUrl(info?.avatar_url);
 }
 
 export function formatSuperChatAmount(info: SuperChatInfo | null | undefined): string | null {

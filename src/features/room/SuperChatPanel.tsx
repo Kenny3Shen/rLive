@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createShieldMatcher } from "./danmaku/filter";
 import { DanmakuRichText } from "./danmaku/emoji";
@@ -14,6 +15,7 @@ import {
   MAX_SUPER_CHAT_DEDUPE_KEYS,
   MAX_SUPER_CHATS_PER_FRAME,
   retainSuperChatItems,
+  superChatAvatarUrl,
   superChatDedupeKey,
   superChatPalette,
   type SuperChatLine,
@@ -38,30 +40,50 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
   const duration = formatSuperChatDuration(info);
   const palette = superChatPalette(info) ?? DEFAULT_SUPER_CHAT_PALETTE;
   const user = event.user.trim() || "匿名用户";
+  const avatarUrl = superChatAvatarUrl(info);
+  const avatarInitial = Array.from(user)[0] ?? "?";
 
   return (
     <article
       data-slot="super-chat-card"
-      className="overflow-hidden rounded-xl border border-border-subtle bg-card/85 shadow-sm shadow-black/10"
+      className="overflow-hidden rounded-xl border border-border-subtle bg-card shadow-sm shadow-black/10"
     >
-      <header
-        className="flex min-w-0 items-center gap-3 px-3 py-2"
-        style={{
-          backgroundImage: `linear-gradient(112deg, ${palette.headerStart}, ${palette.headerEnd})`,
-          color: palette.headerForeground,
-        }}
-      >
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[0.9em] font-semibold" title={user}>
+      <header className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-x-2.5 bg-[#f7faff] px-3 py-2.5 text-[#172033]">
+        <Avatar className="size-12 ring-1 ring-black/10">
+          {avatarUrl && (
+            <AvatarImage
+              src={avatarUrl}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+            />
+          )}
+          <AvatarFallback className="bg-slate-200 font-semibold text-slate-600">
+            {avatarInitial}
+          </AvatarFallback>
+        </Avatar>
+        <div className="min-w-0">
+          <p className="truncate text-[0.95em] font-semibold" title={user}>
             {user}
           </p>
-          {duration && <p className="mt-0.5 text-[0.75em] opacity-80">置顶 {duration}</p>}
+          {duration && <p className="mt-0.5 text-[0.75em] text-[#61718a]">置顶 {duration}</p>}
         </div>
-        <span className="shrink-0 text-[1.45em] leading-none font-bold tabular-nums">
+        <span
+          className="shrink-0 whitespace-nowrap text-[1.45em] leading-none font-bold tabular-nums"
+          style={{ color: palette.messageStart }}
+        >
           {amount ?? "SC"}
         </span>
       </header>
-      <div className="px-3 py-2.5">
+      <div
+        className="px-3 py-2.5"
+        style={{
+          backgroundImage: `linear-gradient(112deg, ${palette.messageStart}, ${palette.messageEnd})`,
+          color: palette.messageForeground,
+        }}
+      >
         <div className="whitespace-pre-wrap break-words leading-6">
           <DanmakuRichText content={event.content} spans={event.spans} />
         </div>

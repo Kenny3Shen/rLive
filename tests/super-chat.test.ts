@@ -5,6 +5,7 @@ import {
   formatSuperChatDuration,
   retainSuperChatItems,
   safeSuperChatColor,
+  superChatAvatarUrl,
   superChatDedupeKey,
   superChatPalette,
   type SuperChatLine,
@@ -30,6 +31,17 @@ function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
 }
 
 describe("Super Chat presentation", () => {
+  test("normalizes only trusted Bilibili sender avatar URLs", () => {
+    expect(superChatAvatarUrl({ avatar_url: "//i0.hdslb.com/bfs/face/sc-user.jpg" })).toBe(
+      "https://i0.hdslb.com/bfs/face/sc-user.jpg",
+    );
+    expect(
+      superChatAvatarUrl({ avatar_url: "https://user:pass@i0.hdslb.com/face.jpg" }),
+    ).toBeNull();
+    expect(superChatAvatarUrl({ avatar_url: "https://evil.example/face.jpg" })).toBeNull();
+    expect(superChatAvatarUrl({ avatar_url: "javascript:alert(1)" })).toBeNull();
+  });
+
   test("formats validated price and duration", () => {
     const event = superChat();
     expect(formatSuperChatAmount(event.super_chat)).toBe("¥30");
@@ -41,31 +53,31 @@ describe("Super Chat presentation", () => {
     expect(safeSuperChatColor("#abc")).toBe("#abc");
     expect(superChatPalette({ background_color: "url(bad)" })).toBeNull();
     expect(superChatPalette(superChat().super_chat)).toEqual({
-      headerStart: "#2A60B2",
-      headerEnd: "#1D4A92",
-      headerForeground: "#ffffff",
+      messageStart: "#2A60B2",
+      messageEnd: "#1D4A92",
+      messageForeground: "#ffffff",
     });
     expect(superChatPalette({ background_color: "#ffcc33" })).toEqual({
-      headerStart: "#ffcc33",
-      headerEnd: "#ffcc33",
-      headerForeground: "#172033",
+      messageStart: "#ffcc33",
+      messageEnd: "#ffcc33",
+      messageForeground: "#172033",
     });
     expect(
       superChatPalette({ background_color: "#2a60b2", background_bottom_color: "url(bad)" }),
     ).toEqual({
-      headerStart: "#2a60b2",
-      headerEnd: "#2a60b2",
-      headerForeground: "#ffffff",
+      messageStart: "#2a60b2",
+      messageEnd: "#2a60b2",
+      messageForeground: "#ffffff",
     });
     expect(superChatPalette({ background_color: "#2a60b280" })).toEqual({
-      headerStart: "#2a60b2",
-      headerEnd: "#2a60b2",
-      headerForeground: "#ffffff",
+      messageStart: "#2a60b2",
+      messageEnd: "#2a60b2",
+      messageForeground: "#ffffff",
     });
 
-    // Validated tier colours become the compact SC header rather than a full-card fill.
-    expect(superChatPalette({ background_color: "#2a60b2" })?.headerStart).not.toBe(
-      superChatPalette({ background_color: "#e09443" })?.headerStart,
+    // Validated tier colours remain visibly distinct in the message band.
+    expect(superChatPalette({ background_color: "#2a60b2" })?.messageStart).not.toBe(
+      superChatPalette({ background_color: "#e09443" })?.messageStart,
     );
   });
 });

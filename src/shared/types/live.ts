@@ -70,6 +70,7 @@ export type SuperChatInfo = {
   currency?: string | null;
   background_color?: string | null;
   background_bottom_color?: string | null;
+  avatar_url?: string | null;
   duration?: number | null;
 };
 
