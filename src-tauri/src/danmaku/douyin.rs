@@ -1,14 +1,13 @@
 //! Douyin live danmaku transport.
 //!
-//! Douyin's web IM endpoint requires a short-lived, signed WSS URL.  The
-//! signing algorithm deliberately is not embedded in rLive.  Instead, users
-//! may point the app at a service they operate (normally a local one).  Once a
-//! signed URL is obtained, this module owns the standard WebSocket, gzip and
-//! protobuf framing path and emits the common `DanmakuEvent` model.
+//! Douyin's web IM endpoint requires a short-lived, signed WSS URL. rLive
+//! talks only to its fixed loopback signer endpoint; it never sends a saved
+//! Cookie to a user-configurable remote service. Once a signed URL is
+//! obtained, this module owns the standard WebSocket, gzip and protobuf
+//! framing path and emits the common `DanmakuEvent` model.
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::IpAddr;
 use std::time::Duration;
 
 use flate2::read::GzDecoder;
@@ -37,6 +36,12 @@ const MAX_HEARTBEAT_MS: u64 = 60_000;
 const MAX_DECOMPRESSED_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT_CHARS: usize = 500;
 const MAX_USER_NAME_CHARS: usize = 128;
+/// The companion signer is intentionally reachable only on this device.
+///
+/// Keeping the endpoint fixed removes a credential-bearing remote URL from
+/// Settings. The signing request uses a direct, no-redirect client below, so
+/// a configured HTTP proxy cannot accidentally receive the local Cookie.
+const LOCAL_SIGN_SERVICE_URL: &str = "http://127.0.0.1:18080/sign";
 
 /// This is a valid `PushFrame` containing protobuf field 7 = "hb".
 const HEARTBEAT: &[u8] = &[0x3a, 0x02, b'h', b'b'];
@@ -66,17 +71,15 @@ struct HeartbeatResponse {
 
 /// Resolve the app's room metadata into a short-lived WSS connection.
 ///
-/// `sign_service_url` is intentionally a full endpoint (for example
-/// `http://127.0.0.1:18080/sign`), rather than a hidden vendor endpoint.  We
-/// only submit a saved Cookie to HTTPS or loopback HTTP endpoints.
+/// The local signer is fixed to a loopback endpoint. It may receive the
+/// effective short-lived session for this connection, and the signing request
+/// stays on loopback without using the user's configured proxy.
 pub async fn request_signed_connection(
-    sign_service_url: Option<&str>,
     room_id: &str,
     raw: &serde_json::Value,
     cookie: &str,
-    proxy: Option<&str>,
 ) -> AppResult<DouyinDanmakuArgs> {
-    let endpoint = validate_sign_service_url(sign_service_url)?;
+    let endpoint = local_sign_service_url()?;
     let actual_room_id = numeric_field(raw.get("room_id")).unwrap_or_else(|| room_id.to_string());
     let live_id = numeric_field(raw.get("web_rid")).unwrap_or_else(|| room_id.to_string());
     validate_numeric_id(&actual_room_id, "房间号")?;
@@ -84,12 +87,13 @@ pub async fn request_signed_connection(
 
     // Never follow a signer-selected redirect: the JSON body contains the
     // local Douyin Cookie, and a 307/308 would otherwise replay it to an
-    // arbitrary destination. A fresh, no-redirect client is intentional here.
-    let client = http_client::build_no_redirect_client(proxy)?;
+    // arbitrary destination. Do not apply the user's proxy either: this
+    // endpoint is fixed to loopback and credentials must remain local.
+    let client = http_client::build_no_redirect_client(None)?;
 
-    // Never place Cookie data in logs or error strings.  The configured
-    // signing service receives it only because it is needed to create a WSS
-    // session with the user's own Douyin account state.
+    // Never place Cookie data in logs or error strings. The local signer
+    // receives it only because it is needed to create a WSS session with the
+    // user's own Douyin account state.
     let response = client
         .post(endpoint)
         .header("accept", "application/json")
@@ -103,7 +107,7 @@ pub async fn request_signed_connection(
         .map_err(|_| {
             AppError::new(
                 "douyin_sign_request_failed",
-                "抖音弹幕签名服务请求失败，请检查地址或网络后重试",
+                "无法连接本地抖音弹幕签名服务，请确认 127.0.0.1:18080 已启动",
             )
             .with_site("douyin")
             .retryable()
@@ -112,7 +116,7 @@ pub async fn request_signed_connection(
     if !status.is_success() {
         return Err(AppError::new(
             "douyin_sign_service_error",
-            format!("抖音弹幕签名服务返回 HTTP {status}"),
+            format!("本地抖音弹幕签名服务返回 HTTP {status}"),
         )
         .with_site("douyin")
         .retryable());
@@ -120,7 +124,7 @@ pub async fn request_signed_connection(
     let signed = response.json::<SignResponse>().await.map_err(|_| {
         AppError::new(
             "douyin_sign_response_invalid",
-            "抖音弹幕签名服务响应无效，请检查服务返回格式",
+            "本地抖音弹幕签名服务响应无效，请检查服务返回格式",
         )
         .with_site("douyin")
     })?;
@@ -157,46 +161,22 @@ fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_sign_service_url(value: Option<&str>) -> AppResult<Url> {
-    let value = value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::new(
-                "douyin_sign_service_missing",
-                "请先在设置 → 账号 → 抖音中配置弹幕签名服务地址",
-            )
-            .with_site("douyin")
-        })?;
-    let url = Url::parse(value).map_err(|_| {
-        AppError::new("douyin_sign_service_invalid", "抖音弹幕签名服务地址无效").with_site("douyin")
-    })?;
-    if url.username() != "" || url.password().is_some() || url.fragment().is_some() {
-        return Err(AppError::new(
-            "douyin_sign_service_invalid",
-            "抖音弹幕签名服务地址不能包含账号、密码或片段",
+fn local_sign_service_url() -> AppResult<Url> {
+    let url = Url::parse(LOCAL_SIGN_SERVICE_URL).map_err(|_| {
+        AppError::new(
+            "douyin_local_signer_invalid",
+            "本地抖音弹幕签名服务地址无效",
         )
-        .with_site("douyin"));
-    }
-    let host = url.host_str().unwrap_or_default();
-    let secure = url.scheme() == "https";
-    let loopback_http = url.scheme() == "http" && is_loopback_host(host);
-    if !secure && !loopback_http {
+        .with_site("douyin")
+    })?;
+    if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") || url.port() != Some(18080) {
         return Err(AppError::new(
-            "douyin_sign_service_insecure",
-            "签名服务必须使用 HTTPS，或使用本机回环地址的 HTTP",
+            "douyin_local_signer_invalid",
+            "本地抖音弹幕签名服务必须绑定到 127.0.0.1:18080",
         )
         .with_site("douyin"));
     }
     Ok(url)
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<IpAddr>()
-            .map(|address| address.is_loopback())
-            .unwrap_or(false)
 }
 
 fn validate_signed_wss_url(value: &str) -> AppResult<String> {
@@ -779,12 +759,13 @@ mod tests {
     }
 
     #[test]
-    fn only_allows_https_or_loopback_sign_services() {
-        assert!(validate_sign_service_url(Some("https://example.com/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://127.0.0.1:18080/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://localhost:18080/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://example.com/sign")).is_err());
-        assert!(validate_sign_service_url(Some("ftp://example.com/sign")).is_err());
+    fn uses_fixed_loopback_sign_service_url() {
+        let url = local_sign_service_url().unwrap();
+        assert_eq!(url.as_str(), "http://127.0.0.1:18080/sign");
+        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        assert_eq!(url.port(), Some(18080));
+        assert_eq!(url.path(), "/sign");
     }
 
     #[test]

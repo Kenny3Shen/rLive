@@ -24,7 +24,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         "hover:-translate-y-0.5",
       )}
     >
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-white/5">
+      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
         {room.cover ? (
           <img
             src={room.cover}

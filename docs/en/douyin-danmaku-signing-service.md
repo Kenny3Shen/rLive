@@ -1,16 +1,22 @@
 # Douyin danmaku signing-service integration
 
-Douyin chat WSS URLs are short-lived and signed. rLive intentionally does not bundle a signer; configure a service that you operate or explicitly trust so Cookie and signing logic stay within a boundary you chose.
+Douyin chat WSS URLs are short-lived and signed. rLive intentionally does not bundle a signer. Instead, it always calls a companion service on the local machine, so the Cookie-bearing signing request cannot be redirected to a user-configured remote endpoint.
 
 ## Endpoint and safety
 
-Enter a full endpoint under **Settings → Account → Douyin live chat**, for example `http://127.0.0.1:18080/sign`. rLive accepts only HTTPS endpoints or loopback HTTP (`localhost`, `127.0.0.1`, `::1`) and rejects public plain HTTP so a saved Cookie is never sent in cleartext across the network.
+The endpoint is fixed; it is not a setting:
 
-rLive does not follow redirects from this request: the configured endpoint itself must return the response. This prevents a 307/308 from replaying the Cookie-bearing body to another address.
+```text
+http://127.0.0.1:18080/sign
+```
+
+Start a compatible signer on that exact loopback address before entering a Douyin room. rLive sends the request directly to `127.0.0.1`, bypasses the global HTTP proxy, and never offers a remote endpoint field. Users can obtain the saved Douyin Cookie under **Settings → Account → 抖音** through QR login or manual input.
+
+rLive does not follow redirects from this request: the local endpoint itself must return the response. This prevents a 307/308 from replaying the Cookie-bearing body to another address.
 
 ## Request
 
-rLive issues a JSON POST:
+rLive issues a JSON `POST` to the fixed local endpoint:
 
 ```json
 {

@@ -1,5 +1,5 @@
 /** Mirrors Rust `SiteId` serde snake_case values. */
-export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "kuaishou";
+export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "kuaishou" | "twitch";
 
 /** Mirrors Rust `commands::site::SiteInfo`. */
 export type SiteInfo = {
@@ -39,6 +39,8 @@ export type LiveRoomDetail = {
   user_avatar: string;
   online: number;
   status: boolean;
+  /** Unix timestamp in milliseconds for the current session, when supplied by the platform. */
+  live_started_at?: number | null;
   notice: string;
   url: string;
   /** Opaque site-specific payload needed for play-url requests. */
@@ -100,6 +102,8 @@ export type FollowUser = {
   face: string;
   tag_ids: string[];
   live_status: boolean | null;
+  /** Unix timestamp in milliseconds for the current live session, if known. */
+  live_started_at?: number | null;
   updated_at: number;
 };
 
@@ -130,6 +134,8 @@ export type AppSettings = {
   quality_level?: "high" | "mid" | "low";
   /** Device-local permission for the Bilibili single-message sender. */
   bilibili_danmaku_send_enabled?: boolean;
-  /** User-operated endpoint that resolves a Douyin room into a signed WSS URL. */
-  douyin_danmaku_sign_service?: string | null;
+  /** Device-local custom IPTV M3U address; excluded from profile import/export. */
+  iptv_custom_m3u_url?: string | null;
+  /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */
+  disabled_site_ids?: SiteId[];
 };

@@ -6,6 +6,12 @@ pub struct AppSettings {
     /// `system` | `light` | `dark`
     pub theme: String,
     pub default_site: String,
+    /// Platform ids hidden from discovery and room navigation.
+    ///
+    /// Legacy settings omit this field, which intentionally means every
+    /// bundled platform remains enabled.
+    #[serde(default)]
+    pub disabled_site_ids: Vec<String>,
     /// e.g. `http://127.0.0.1:7890`
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
@@ -37,12 +43,12 @@ pub struct AppSettings {
     /// is not profile-imported.
     #[serde(default)]
     pub bilibili_danmaku_send_enabled: bool,
-    /// Optional URL of a user-operated Douyin danmaku signing service.
+    /// Optional custom IPTV M3U address for this device.
     ///
-    /// The service returns a short-lived signed WSS URL. Its address and the
-    /// user's Douyin Cookie are device-local and excluded from profile export.
+    /// A playlist URL can identify a private source or include an access token,
+    /// so it is intentionally excluded from profile export and import.
     #[serde(default)]
-    pub douyin_danmaku_sign_service: Option<String>,
+    pub iptv_custom_m3u_url: Option<String>,
 }
 
 fn default_quality_level() -> String {
@@ -66,6 +72,7 @@ impl Default for AppSettings {
         Self {
             theme: "system".into(),
             default_site: "bilibili".into(),
+            disabled_site_ids: Vec::new(),
             proxy: None,
             danmaku_opacity: 1.0,
             danmaku_font_size: 18,
@@ -79,7 +86,7 @@ impl Default for AppSettings {
             mpv_path: None,
             quality_level: default_quality_level(),
             bilibili_danmaku_send_enabled: false,
-            douyin_danmaku_sign_service: None,
+            iptv_custom_m3u_url: None,
         }
     }
 }
@@ -116,6 +123,7 @@ mod tests {
         assert!(settings.danmaku_filter_repeats);
         assert!(!settings.danmaku_filter_gifts);
         assert!(!settings.bilibili_danmaku_send_enabled);
-        assert!(settings.douyin_danmaku_sign_service.is_none());
+        assert!(settings.iptv_custom_m3u_url.is_none());
+        assert!(settings.disabled_site_ids.is_empty());
     }
 }

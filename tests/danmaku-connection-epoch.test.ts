@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { nextDanmakuConnectionEpoch } from "../src/features/room/danmaku/connectionEpoch";
+import {
+  nextDanmakuConnectionEpoch,
+  nextDanmakuConnectionFence,
+} from "../src/features/room/danmaku/connectionEpoch";
 
 describe("danmaku connection epochs", () => {
   test("stay strictly ordered for rapid route changes", () => {
@@ -9,5 +12,13 @@ describe("danmaku connection epochs", () => {
 
     expect(second).toBeGreaterThan(first);
     expect(third).toBeGreaterThan(second);
+  });
+
+  test("uses a lower stop fence than its replacement connection", () => {
+    const { disconnectEpoch, connectionEpoch } = nextDanmakuConnectionFence(2_000);
+    const later = nextDanmakuConnectionEpoch(2_000);
+
+    expect(connectionEpoch).toBeGreaterThan(disconnectEpoch);
+    expect(later).toBeGreaterThan(connectionEpoch);
   });
 });

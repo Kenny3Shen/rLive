@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Outlet, useLocation, useSearchParams } from "react-router-dom";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
@@ -15,30 +16,45 @@ export function Shell() {
   const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const isRoom = pathname.startsWith("/room/");
+  const isIptvPlayer = pathname === "/iptv/play";
+  const isImmersivePlayer = isRoom || isIptvPlayer;
   const isFollow = pathname === "/follow";
   const selectedSiteId = useSettingsStore((state) => state.siteId);
+  const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const showSiteSwitcher =
     pathname === "/" ||
     pathname.startsWith("/category") ||
     pathname.startsWith("/search") ||
     isFollow;
-  const followPlatform = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
+  const rawFollowPlatform = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
+  const followPlatform = followPlatformFromSearch(
+    searchParams.get(FOLLOW_PLATFORM_PARAM),
+    disabledSiteIds,
+  );
   const platformForMotion = isFollow ? followPlatform : selectedSiteId;
-  const pageMotionKey = isRoom ? pathname : `${pathname}:${platformForMotion}`;
-  // RoomPage and PlayerPane use h-full throughout their fixed player layout.
+  const pageMotionKey = isImmersivePlayer ? pathname : `${pathname}:${platformForMotion}`;
+  // Player routes use h-full throughout their fixed player layout.
   // `min-h-full` does not create a definite percentage-height containing
   // block, which lets a growing danmaku list reflow the whole room on narrow
-  // viewports. Keep normal pages content-sized, but give room routes a fixed
+  // viewports. Keep normal pages content-sized, but give player routes a fixed
   // height chain all the way down to the Outlet.
-  const outletHeightClass = isRoom ? "h-full min-h-0" : "min-h-full";
+  const outletHeightClass = isImmersivePlayer ? "h-full min-h-0" : "min-h-full";
+
+  // A manually opened URL may name a platform that has since been disabled.
+  // Keep the page usable on its first render, then remove that stale filter
+  // from the address bar without adding a history entry.
+  useEffect(() => {
+    if (!isFollow || rawFollowPlatform === followPlatform) return;
+    setSearchParams((current) => withFollowPlatform(current, followPlatform), { replace: true });
+  }, [followPlatform, isFollow, rawFollowPlatform, setSearchParams]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <AppTitleBar />
       <div className="flex min-h-0 min-w-0 flex-1">
-        {!isRoom && <Sidebar />}
+        {!isImmersivePlayer && <Sidebar />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {!isRoom && (
+          {!isImmersivePlayer && (
             <header className="relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4">
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 {showSiteSwitcher && (
@@ -66,7 +82,7 @@ export function Shell() {
           <main
             className={cn(
               "min-h-0 min-w-0 flex-1",
-              isRoom ? "overflow-hidden p-0" : "overflow-auto p-4 md:p-5",
+              isImmersivePlayer ? "overflow-hidden p-0" : "overflow-auto p-4 md:p-5",
             )}
           >
             <div
@@ -74,7 +90,8 @@ export function Shell() {
               className={cn(
                 "relative",
                 outletHeightClass,
-                !isRoom && "motion-safe:animate-platform-page-enter motion-reduce:animate-none",
+                !isImmersivePlayer &&
+                  "motion-safe:animate-platform-page-enter motion-reduce:animate-none",
               )}
             >
               <div className={cn("relative", outletHeightClass)}>

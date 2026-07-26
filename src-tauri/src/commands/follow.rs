@@ -23,6 +23,8 @@ pub struct FollowUserDto {
     pub face: String,
     pub tag_ids: Vec<String>,
     pub live_status: Option<bool>,
+    #[serde(default)]
+    pub live_started_at: Option<i64>,
     pub updated_at: i64,
 }
 
@@ -35,6 +37,7 @@ impl From<FollowRecord> for FollowUserDto {
             face: r.face,
             tag_ids: r.tag_ids,
             live_status: r.live_status.map(|v| v != 0),
+            live_started_at: r.live_started_at,
             updated_at: r.updated_at,
         }
     }
@@ -49,6 +52,7 @@ impl From<FollowUserDto> for FollowRecord {
             face: d.face,
             tag_ids: d.tag_ids,
             live_status: d.live_status.map(|b| if b { 1 } else { 0 }),
+            live_started_at: d.live_started_at,
             updated_at: d.updated_at,
         }
     }
@@ -123,9 +127,9 @@ pub fn tag_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowUserDto>> {
-    let follows = {
+    let (follows, proxy) = {
         let conn = lock_db(&state)?;
-        follow::list(&conn)?
+        (follow::list(&conn)?, crate::settings::get(&conn)?.proxy)
     };
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
@@ -147,23 +151,27 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
                 None => None,
             }
         };
+        let proxy = proxy.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = permit;
-            let live_status = match SiteId::from_str_loose(&site_id) {
-                Some(sid) => match sites::site(&sid, cookie) {
-                    Ok(site) => site.get_live_status(&room_id).await.ok(),
-                    Err(_) => None,
+            let live_info = match SiteId::from_str_loose(&site_id) {
+                Some(sid) => match sites::site_with_proxy(&sid, cookie, proxy.as_deref()) {
+                    Ok(site) => match site.get_room_detail(&room_id).await {
+                        Ok(detail) => (Some(detail.status), detail.live_started_at),
+                        Err(_) => (None, None),
+                    },
+                    Err(_) => (None, None),
                 },
-                None => None,
+                None => (None, None),
             };
-            (site_id, room_id, live_status)
+            (site_id, room_id, live_info)
         }));
     }
 
     let mut status_map = std::collections::HashMap::new();
     for t in tasks {
-        if let Ok((site_id, room_id, st)) = t.await {
-            status_map.insert((site_id, room_id), st);
+        if let Ok((site_id, room_id, live_info)) = t.await {
+            status_map.insert((site_id, room_id), live_info);
         }
     }
 
@@ -173,8 +181,17 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
         let mut list = follow::list(&conn)?;
         let now = chrono::Utc::now().timestamp_millis();
         for rec in &mut list {
-            if let Some(st) = status_map.get(&(rec.site_id.clone(), rec.room_id.clone())) {
-                rec.live_status = st.map(|b| if b { 1 } else { 0 });
+            if let Some((status, live_started_at)) =
+                status_map.get(&(rec.site_id.clone(), rec.room_id.clone()))
+            {
+                rec.live_status = status.map(|b| if b { 1 } else { 0 });
+                rec.live_started_at = match status {
+                    Some(true) => live_started_at.or(rec.live_started_at),
+                    Some(false) => None,
+                    // Preserve the last verified timestamp during a transient
+                    // refresh failure, while showing the state itself as unknown.
+                    None => rec.live_started_at,
+                };
                 rec.updated_at = now;
                 let _ = follow::upsert(&conn, rec.clone());
             }

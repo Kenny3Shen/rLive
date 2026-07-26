@@ -37,7 +37,7 @@ function CategoryTile({ category, onClick }: CategoryTileProps) {
       onClick={onClick}
       className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-foreground transition-colors hover:bg-muted/65 focus-ring"
     >
-      <span className="relative flex size-10 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-white/5">
+      <span className="relative flex size-10 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border-subtle">
         <LayoutGrid className="size-5 text-muted-foreground" aria-hidden />
         {iconSrc && (
           <img
@@ -70,7 +70,7 @@ function ExpandTile({ expanded, onClick }: ExpandTileProps) {
       onClick={onClick}
       className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/65 hover:text-foreground focus-ring"
     >
-      <span className="flex size-10 items-center justify-center rounded-lg bg-muted ring-1 ring-white/5 transition-colors group-hover:bg-sidebar-active">
+      <span className="flex size-10 items-center justify-center rounded-lg bg-muted ring-1 ring-border-subtle transition-colors group-hover:bg-sidebar-active">
         <Icon className="size-5" aria-hidden />
       </span>
       <span className="min-h-8 text-xs leading-4 font-medium">

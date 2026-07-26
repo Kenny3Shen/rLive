@@ -13,6 +13,7 @@ pub async fn stream_proxy_start(
     url: String,
     headers: HashMap<String, String>,
     session_id: String,
+    hls: Option<bool>,
 ) -> AppResult<String> {
     if url.trim().is_empty() {
         return Err(crate::error::AppError::new(
@@ -26,7 +27,26 @@ pub async fn stream_proxy_start(
             "playback session is empty",
         ));
     }
-    state.stream_proxy.start(url, headers, session_id).await
+    // The browser only ever connects to this loopback listener. Its upstream
+    // reqwest client must therefore receive the saved proxy explicitly; the
+    // WebView's own networking configuration cannot route HLS subresources.
+    let proxy = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| crate::error::AppError::new("db_lock_error", "database mutex poisoned"))?;
+        crate::settings::get(&conn)?.proxy
+    };
+    state
+        .stream_proxy
+        .start(
+            url,
+            headers,
+            session_id,
+            hls.unwrap_or(false),
+            proxy.as_deref(),
+        )
+        .await
 }
 
 #[tauri::command]

@@ -1,8 +1,14 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { invokeCmd } from "../api/tauri";
-import { DEFAULT_SITE_ID, isSiteId, normalizeSiteId, resolveStartupSiteId } from "../siteId";
-import type { AppSettings } from "../types/live";
+import {
+  DEFAULT_SITE_ID,
+  normalizeDisabledSiteIds,
+  resolveEnabledSiteId,
+  resolveStartupSiteId,
+  updateDisabledSiteIds,
+} from "../siteId";
+import type { AppSettings, SiteId } from "../types/live";
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -36,6 +42,8 @@ function parseQualityLevel(value: unknown): QualityLevel {
 type SettingsState = {
   theme: ThemeMode;
   siteId: string;
+  /** Platform opt-outs. An absent legacy setting means every platform is enabled. */
+  disabledSiteIds: SiteId[];
   proxy: string | null;
   danmakuOpacity: number;
   danmakuFontSize: number;
@@ -57,17 +65,19 @@ type SettingsState = {
    * permission checks after a successful account update.
    */
   bilibiliCookieRevision: number;
-  douyinDanmakuSignService: string | null;
+  /** Device-local custom IPTV M3U address; never included in profile packages. */
+  iptvCustomM3uUrl: string | null;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
   setSiteId: (siteId: string) => void;
+  setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setProxy: (proxy: string | null) => void;
   setMpvPath: (mpvPath: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setBilibiliDanmakuSendEnabled: (enabled: boolean) => void;
   markBilibiliCookieChanged: () => void;
-  setDouyinDanmakuSignService: (url: string | null) => void;
+  setIptvCustomM3uUrl: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -78,6 +88,7 @@ type SettingsState = {
 const defaultSettings: AppSettings = {
   theme: "system",
   default_site: DEFAULT_SITE_ID,
+  disabled_site_ids: [],
   proxy: null,
   danmaku_opacity: 1,
   danmaku_font_size: 18,
@@ -91,13 +102,14 @@ const defaultSettings: AppSettings = {
   mpv_path: null,
   quality_level: "high",
   bilibili_danmaku_send_enabled: false,
-  douyin_danmaku_sign_service: null,
+  iptv_custom_m3u_url: null,
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
   return {
     theme: state.theme,
     default_site: state.siteId,
+    disabled_site_ids: state.disabledSiteIds,
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_size: state.danmakuFontSize,
@@ -111,7 +123,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     mpv_path: state.mpvPath,
     quality_level: state.qualityLevel,
     bilibili_danmaku_send_enabled: state.bilibiliDanmakuSendEnabled,
-    douyin_danmaku_sign_service: state.douyinDanmakuSignService,
+    iptv_custom_m3u_url: state.iptvCustomM3uUrl,
   };
 }
 
@@ -120,6 +132,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set, get) => ({
       theme: "system",
       siteId: DEFAULT_SITE_ID,
+      disabledSiteIds: [],
       proxy: null,
       danmakuOpacity: 1,
       danmakuFontSize: 18,
@@ -135,15 +148,25 @@ export const useSettingsStore = create<SettingsState>()(
       bilibiliDanmakuSendEnabled: false,
       bilibiliDanmakuSendPending: false,
       bilibiliCookieRevision: 0,
-      douyinDanmakuSignService: null,
+      iptvCustomM3uUrl: null,
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
         void get().persistToBackend({ theme });
       },
       setSiteId: (siteId) => {
-        set({ siteId });
-        void get().persistToBackend({ default_site: siteId });
+        const nextSiteId = resolveEnabledSiteId(siteId, get().disabledSiteIds);
+        set({ siteId: nextSiteId });
+        void get().persistToBackend({ default_site: nextSiteId });
+      },
+      setSiteEnabled: (siteId, enabled) => {
+        const disabledSiteIds = updateDisabledSiteIds(get().disabledSiteIds, siteId, enabled);
+        const nextSiteId = resolveEnabledSiteId(get().siteId, disabledSiteIds);
+        set({ disabledSiteIds, siteId: nextSiteId });
+        void get().persistToBackend({
+          default_site: nextSiteId,
+          disabled_site_ids: disabledSiteIds,
+        });
       },
       setProxy: (proxy) => {
         set({ proxy });
@@ -176,15 +199,18 @@ export const useSettingsStore = create<SettingsState>()(
         // app restart and must never contain the Cookie itself.
         set((state) => ({ bilibiliCookieRevision: state.bilibiliCookieRevision + 1 }));
       },
-      setDouyinDanmakuSignService: (douyinDanmakuSignService) => {
-        set({ douyinDanmakuSignService });
-        void get().persistToBackend({ douyin_danmaku_sign_service: douyinDanmakuSignService });
+      setIptvCustomM3uUrl: (iptvCustomM3uUrl) => {
+        const next = iptvCustomM3uUrl?.trim() || null;
+        set({ iptvCustomM3uUrl: next });
+        void get().persistToBackend({ iptv_custom_m3u_url: next });
       },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
+        const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
         set({
           theme,
-          siteId: normalizeSiteId(settings.default_site),
+          siteId: resolveEnabledSiteId(settings.default_site, disabledSiteIds),
+          disabledSiteIds,
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontSize: settings.danmaku_font_size,
@@ -199,7 +225,7 @@ export const useSettingsStore = create<SettingsState>()(
           qualityLevel: parseQualityLevel(settings.quality_level),
           bilibiliDanmakuSendEnabled: settings.bilibili_danmaku_send_enabled ?? false,
           bilibiliDanmakuSendPending: false,
-          douyinDanmakuSignService: settings.douyin_danmaku_sign_service?.trim() || null,
+          iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
           hydratedFromBackend: true,
         });
       },
@@ -215,14 +241,30 @@ export const useSettingsStore = create<SettingsState>()(
               }
             : { settings: result, hasSavedSettings: true };
           const localSiteId = get().siteId;
-          const siteId = resolveStartupSiteId(settings.default_site, hasSavedSettings, localSiteId);
+          const localDisabledSiteIds = get().disabledSiteIds;
+          const disabledSiteIds = normalizeDisabledSiteIds(
+            hasSavedSettings ? settings.disabled_site_ids : localDisabledSiteIds,
+          );
+          const siteId = resolveStartupSiteId(
+            settings.default_site,
+            hasSavedSettings,
+            localSiteId,
+            disabledSiteIds,
+          );
 
-          get().applyFromBackend({ ...settings, default_site: siteId });
+          get().applyFromBackend({
+            ...settings,
+            default_site: siteId,
+            disabled_site_ids: disabledSiteIds,
+          });
 
           // Migrate a pre-backend local platform choice once. This makes the
           // choice durable without changing the first-run Bilibili default.
-          if (!hasSavedSettings && isSiteId(localSiteId) && siteId !== DEFAULT_SITE_ID) {
-            await get().persistToBackend({ default_site: siteId });
+          if (!hasSavedSettings && (siteId !== DEFAULT_SITE_ID || disabledSiteIds.length > 0)) {
+            await get().persistToBackend({
+              default_site: siteId,
+              disabled_site_ids: disabledSiteIds,
+            });
           }
         } catch {
           // Outside Tauri (vite-only) or backend unavailable: keep local defaults.
@@ -255,6 +297,7 @@ export const useSettingsStore = create<SettingsState>()(
       partialize: (s) => ({
         theme: s.theme,
         siteId: s.siteId,
+        disabledSiteIds: s.disabledSiteIds,
       }),
     },
   ),

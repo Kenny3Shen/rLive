@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { categoryNameFromSearch, categoryRoomsPath } from "../src/features/category/categoryRoute";
 import {
+  canSearchNavigateBack,
   parseSearchScope,
   prepareSearchResults,
   searchMatch,
@@ -41,6 +42,13 @@ describe("search routes and result fields", () => {
     expect(searchPath("", "title")).toBe("/search");
     expect(parseSearchScope("room")).toBe("room");
     expect(parseSearchScope("unknown")).toBe("all");
+  });
+
+  test("returns to the preceding in-app page and safely falls back for direct links", () => {
+    expect(canSearchNavigateBack({ idx: 1 })).toBe(true);
+    expect(canSearchNavigateBack({ idx: 0 })).toBe(false);
+    expect(canSearchNavigateBack({ idx: "1" })).toBe(false);
+    expect(canSearchNavigateBack(null)).toBe(false);
   });
 
   test("filters a broad site response by user, room number, or title", () => {

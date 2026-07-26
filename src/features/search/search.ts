@@ -23,6 +23,21 @@ export function searchPath(keyword: string, scope: SearchScope = "all"): string 
   return `/search?${params.toString()}`;
 }
 
+/**
+ * React Router records its in-app position in the browser history state.
+ * Only use a browser Back navigation when that state proves there is an
+ * earlier in-app page; direct links otherwise return safely to discovery.
+ */
+export function canSearchNavigateBack(historyState: unknown): boolean {
+  return (
+    !!historyState &&
+    typeof historyState === "object" &&
+    "idx" in historyState &&
+    typeof historyState.idx === "number" &&
+    historyState.idx > 0
+  );
+}
+
 export function searchScopeLabel(scope: SearchScope): string {
   return SEARCH_SCOPES.find((item) => item.value === scope)?.label ?? "全部";
 }

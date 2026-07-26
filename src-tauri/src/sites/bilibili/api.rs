@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId,
+    RoomListPage, SiteId, parse_live_started_at,
 };
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
@@ -343,6 +343,7 @@ pub fn parse_room_detail_from_data(
         user_avatar,
         online: as_i64(room.get("online").unwrap_or(&Value::Null)),
         status: as_i64(room.get("live_status").unwrap_or(&Value::Null)) == 1,
+        live_started_at: parse_live_started_at(room.get("live_start_time")),
         notice: String::new(),
         url: format!("https://live.bilibili.com/{real_room_id}"),
         raw,
@@ -462,6 +463,7 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
 }
 
 /// Parse live status from `Room/get_info`.
+#[cfg(test)]
 pub fn parse_live_status(raw: &str) -> AppResult<bool> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("live status: {e}")))?;
@@ -651,6 +653,7 @@ mod tests {
         let detail = parse_room_detail(raw, None, "b3", "SESSDATA=x").unwrap();
         assert_eq!(detail.room_id, "23058");
         assert!(detail.status);
+        assert_eq!(detail.live_started_at, Some(1_700_000_000_000));
         assert_eq!(detail.user_name, "详情主播");
         assert!(detail.user_avatar.contains("@100w_100h.webp"));
         assert_eq!(detail.raw["danmaku"]["buvid"], "b3");

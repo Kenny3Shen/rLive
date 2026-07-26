@@ -7,6 +7,7 @@ use crate::sites::douyu::DouyuSite;
 use crate::sites::huya::HuyaSite;
 use crate::sites::kuaishou::KuaishouSite;
 use crate::sites::traits::LiveSite;
+use crate::sites::twitch::TwitchSite;
 
 /// Metadata for site list UI (no cookie / HTTP session).
 pub struct SiteMeta {
@@ -37,6 +38,10 @@ pub fn all_meta() -> Vec<SiteMeta> {
             id: SiteId::Kuaishou,
             name: "Kuaishou",
         },
+        SiteMeta {
+            id: SiteId::Twitch,
+            name: "Twitch",
+        },
     ]
 }
 
@@ -45,26 +50,39 @@ pub fn all() -> Vec<SiteMeta> {
     all_meta()
 }
 
-/// Build a site instance. For Bilibili, `cookie` is applied (from account store).
-pub fn site(id: &SiteId, cookie: Option<String>) -> AppResult<Box<dyn LiveSite>> {
+/// Build a site client using the currently selected HTTP(S) proxy when one is
+/// configured.  Each proxy policy owns a separate reqwest client, preventing
+/// a cached direct connection from bypassing a later settings change.
+pub fn site_with_proxy(
+    id: &SiteId,
+    cookie: Option<String>,
+    proxy: Option<&str>,
+) -> AppResult<Box<dyn LiveSite>> {
+    let client = http_client::client_for_proxy(proxy)?;
+    site_with_client(id, cookie, client)
+}
+
+fn site_with_client(
+    id: &SiteId,
+    cookie: Option<String>,
+    client: reqwest::Client,
+) -> AppResult<Box<dyn LiveSite>> {
     match id {
         SiteId::Bilibili => {
             let cookie = cookie.unwrap_or_default();
-            Ok(Box::new(BilibiliSite::new(
-                http_client::default_client(),
-                cookie,
-            )))
+            Ok(Box::new(BilibiliSite::new(client, cookie)))
         }
-        SiteId::Huya => Ok(Box::new(HuyaSite::new(http_client::default_client()))),
-        SiteId::Douyu => Ok(Box::new(DouyuSite::new(http_client::default_client()))),
+        SiteId::Huya => Ok(Box::new(HuyaSite::new(client))),
+        SiteId::Douyu => Ok(Box::new(DouyuSite::new(client))),
         SiteId::Douyin => Ok(Box::new(DouyinSite::new(
-            http_client::default_client(),
+            client,
             cookie.unwrap_or_default(),
         ))),
         SiteId::Kuaishou => Ok(Box::new(KuaishouSite::new(
-            http_client::default_client(),
+            client,
             cookie.unwrap_or_default(),
         ))),
+        SiteId::Twitch => Ok(Box::new(TwitchSite::new(client))),
     }
 }
 
@@ -72,7 +90,12 @@ pub fn site(id: &SiteId, cookie: Option<String>) -> AppResult<Box<dyn LiveSite>>
 pub fn is_ready(id: &SiteId) -> bool {
     matches!(
         id,
-        SiteId::Bilibili | SiteId::Huya | SiteId::Douyu | SiteId::Douyin | SiteId::Kuaishou
+        SiteId::Bilibili
+            | SiteId::Huya
+            | SiteId::Douyu
+            | SiteId::Douyin
+            | SiteId::Kuaishou
+            | SiteId::Twitch
     )
 }
 
@@ -81,14 +104,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_five_sites() {
-        assert_eq!(all().len(), 5);
+    fn registry_has_six_sites() {
+        assert_eq!(all().len(), 6);
     }
 
     #[test]
     fn site_lookup_roundtrip() {
         for m in all() {
-            site(&m.id, None).expect("site must resolve");
+            site_with_proxy(&m.id, None, None).expect("site must resolve");
         }
     }
 
@@ -99,5 +122,6 @@ mod tests {
         assert!(is_ready(&SiteId::Douyu));
         assert!(is_ready(&SiteId::Douyin));
         assert!(is_ready(&SiteId::Kuaishou));
+        assert!(is_ready(&SiteId::Twitch));
     }
 }

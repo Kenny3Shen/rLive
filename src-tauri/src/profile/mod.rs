@@ -37,12 +37,12 @@ impl ProfilePackage {
 
 /// These controls intentionally never leave the current device with a profile.
 ///
-/// A Douyin signing endpoint is trusted to receive the local Douyin Cookie while
-/// creating a chat connection, and the Bilibili toggle is an explicit consent
-/// for a write action.  An imported profile must not be able to choose either.
+/// The Bilibili toggle is an explicit consent for a write action, and a custom
+/// M3U URL can identify a private playlist or carry an access token. An
+/// imported profile must not be able to choose either of them.
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.bilibili_danmaku_send_enabled = false;
-    settings.douyin_danmaku_sign_service = None;
+    settings.iptv_custom_m3u_url = None;
 }
 
 /// Convert a package into the portable on-disk representation.
@@ -63,7 +63,7 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
         // Omit rather than serialize safe-looking defaults so future import
         // changes cannot mistake these device-local choices for portable data.
         settings.remove("bilibili_danmaku_send_enabled");
-        settings.remove("douyin_danmaku_sign_service");
+        settings.remove("iptv_custom_m3u_url");
     }
     Ok(value)
 }
@@ -134,6 +134,7 @@ pub fn merge_into_db(
     // Merge non-secret settings fields from package
     settings.theme = package.settings.theme.clone();
     settings.default_site = package.settings.default_site.clone();
+    settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
     settings.proxy = package.settings.proxy.clone();
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_size = package.settings.danmaku_font_size;
@@ -144,10 +145,10 @@ pub fn merge_into_db(
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.mpv_path = package.settings.mpv_path.clone();
-    // Do not copy `bilibili_danmaku_send_enabled` or
-    // `douyin_danmaku_sign_service`.  A profile is portable/untrusted input;
-    // importing it must not grant sending consent or pick a service that can
-    // receive this device's Douyin Cookie.  Existing local values are kept.
+    // Do not copy `bilibili_danmaku_send_enabled` or `iptv_custom_m3u_url`.
+    // A profile is portable/untrusted input; importing it must not grant
+    // sending consent or replace this device's private playlist address.
+    // Existing local values are kept.
 
     let mut words: HashSet<String> = settings.danmaku_shield_words.into_iter().collect();
     for w in &package.danmaku_shield_words {
@@ -177,31 +178,30 @@ mod tests {
     use crate::db::schema::open_in_memory;
 
     #[test]
-    fn portable_export_omits_cookies_and_local_only_danmaku_controls() {
+    fn portable_export_omits_cookies_and_local_only_settings() {
         let mut package = ProfilePackage::sample();
         package.settings.bilibili_danmaku_send_enabled = true;
-        package.settings.douyin_danmaku_sign_service =
-            Some("https://signer.example.invalid/sign".into());
+        package.settings.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
 
         let v = portable_profile_value(&package).unwrap();
         assert!(v.get("cookies").is_none());
         let settings = v["settings"].as_object().unwrap();
         assert!(!settings.contains_key("bilibili_danmaku_send_enabled"));
-        assert!(!settings.contains_key("douyin_danmaku_sign_service"));
+        assert!(!settings.contains_key("iptv_custom_m3u_url"));
     }
 
     #[test]
-    fn export_package_clears_local_only_danmaku_controls() {
+    fn export_package_clears_local_only_settings() {
         let conn = open_in_memory().unwrap();
         let mut local = AppSettings::default();
         local.bilibili_danmaku_send_enabled = true;
-        local.douyin_danmaku_sign_service = Some("http://127.0.0.1:18080/sign".into());
+        local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
 
         let package = export_package(&conn).unwrap();
 
         assert!(!package.settings.bilibili_danmaku_send_enabled);
-        assert!(package.settings.douyin_danmaku_sign_service.is_none());
+        assert!(package.settings.iptv_custom_m3u_url.is_none());
     }
 
     #[test]
@@ -215,6 +215,7 @@ mod tests {
             face: "".into(),
             tag_ids: vec![],
             live_status: None,
+            live_started_at: None,
             updated_at: 1,
         });
         merge_into_db(&conn, &package).unwrap();
@@ -233,25 +234,39 @@ mod tests {
     }
 
     #[test]
-    fn merge_preserves_local_only_danmaku_controls() {
+    fn merge_carries_platform_visibility_preferences() {
+        let conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.settings.disabled_site_ids = vec!["kuaishou".into(), "douyin".into()];
+        package.settings.default_site = "douyu".into();
+
+        merge_into_db(&conn, &package).unwrap();
+
+        let settings = settings::get(&conn).unwrap();
+        assert_eq!(settings.disabled_site_ids, vec!["kuaishou", "douyin"]);
+        assert_eq!(settings.default_site, "douyu");
+    }
+
+    #[test]
+    fn merge_preserves_local_only_settings() {
         let conn = open_in_memory().unwrap();
         let mut local = AppSettings::default();
         local.bilibili_danmaku_send_enabled = true;
-        local.douyin_danmaku_sign_service = Some("http://127.0.0.1:18080/sign".into());
+        local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
 
         let mut package = ProfilePackage::sample();
         package.settings.bilibili_danmaku_send_enabled = false;
-        package.settings.douyin_danmaku_sign_service =
-            Some("https://untrusted.example.invalid/sign".into());
+        package.settings.iptv_custom_m3u_url =
+            Some("https://untrusted.example.invalid/playlist.m3u".into());
 
         merge_into_db(&conn, &package).unwrap();
 
         let after = settings::get(&conn).unwrap();
         assert!(after.bilibili_danmaku_send_enabled);
         assert_eq!(
-            after.douyin_danmaku_sign_service.as_deref(),
-            Some("http://127.0.0.1:18080/sign")
+            after.iptv_custom_m3u_url.as_deref(),
+            Some("https://example.invalid/local.m3u")
         );
     }
 }

@@ -10,6 +10,7 @@ import { nextFailoverAction } from "./failover";
 
 const EMPTY_QUALITIES: LivePlayQuality[] = [];
 const EMPTY_PLAY_URLS: PlayUrl[] = [];
+const MAX_TWITCH_PLAY_URL_RENEWALS = 3;
 
 export type PlaybackController = {
   qualities: LivePlayQuality[];
@@ -47,6 +48,7 @@ export function usePlaybackController(opts: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const retryCountRef = useRef(0);
+  const twitchPlayUrlRenewalCountRef = useRef(0);
   const failoverTimerRef = useRef<number | null>(null);
   const appliedQualitiesKeyRef = useRef<string | null>(null);
   const lineIndexRef = useRef(0);
@@ -70,6 +72,7 @@ export function usePlaybackController(opts: {
     clearFailoverTimer();
     appliedQualitiesKeyRef.current = null;
     retryCountRef.current = 0;
+    twitchPlayUrlRenewalCountRef.current = 0;
     setQualityIndex(0);
     setLineIndex(0);
     setLoadError(null);
@@ -104,6 +107,7 @@ export function usePlaybackController(opts: {
     setQualityIndex(idx);
     setLineIndex(0);
     retryCountRef.current = 0;
+    twitchPlayUrlRenewalCountRef.current = 0;
     setLoadError(null);
   }, [qualitiesKey, qualities.length, qualityLevel]);
 
@@ -115,6 +119,7 @@ export function usePlaybackController(opts: {
   useEffect(() => {
     setLineIndex(0);
     retryCountRef.current = 0;
+    twitchPlayUrlRenewalCountRef.current = 0;
   }, [selectedQuality?.quality, selectedQuality?.data]);
 
   const playUrlQuery = useQuery({
@@ -144,6 +149,7 @@ export function usePlaybackController(opts: {
     (index: number) => {
       clearFailoverTimer();
       retryCountRef.current = 0;
+      twitchPlayUrlRenewalCountRef.current = 0;
       setLoadError(null);
       setQualityIndex(index);
       setLineIndex(0);
@@ -155,6 +161,7 @@ export function usePlaybackController(opts: {
     (index: number) => {
       clearFailoverTimer();
       retryCountRef.current = 0;
+      twitchPlayUrlRenewalCountRef.current = 0;
       setLoadError(null);
       setLineIndex(index);
     },
@@ -164,6 +171,7 @@ export function usePlaybackController(opts: {
   const retryPlay = useCallback(() => {
     clearFailoverTimer();
     retryCountRef.current = 0;
+    twitchPlayUrlRenewalCountRef.current = 0;
     setLoadError(null);
     // A metadata refetch alone does not recreate an already-attached MSE
     // player when the CDN returns the same URL. Bump the session token first
@@ -174,6 +182,7 @@ export function usePlaybackController(opts: {
 
   const onPlayerPlaying = useCallback(() => {
     retryCountRef.current = 0;
+    twitchPlayUrlRenewalCountRef.current = 0;
     setLoadError(null);
   }, []);
 
@@ -181,6 +190,47 @@ export function usePlaybackController(opts: {
     (event: PlayerEvent) => {
       if (event.kind !== "error" && event.kind !== "eof") return;
       clearFailoverTimer();
+
+      if (event.refreshPlayUrl && siteId === "twitch") {
+        if (twitchPlayUrlRenewalCountRef.current >= MAX_TWITCH_PLAY_URL_RENEWALS) {
+          setLoadError("Twitch 播放地址多次更新失败，请点击刷新后重试");
+          return;
+        }
+
+        const renewalAttempt = ++twitchPlayUrlRenewalCountRef.current;
+        const requestedDelay =
+          typeof event.retryAfterMs === "number" && Number.isFinite(event.retryAfterMs)
+            ? Math.max(0, Math.min(event.retryAfterMs, 60_000))
+          : 0;
+        // Keep retries measured when Twitch is changing a playlist during a
+        // normal commercial break, while avoiding a tight token-refresh loop.
+        const delayMs = Math.max(requestedDelay, (renewalAttempt - 1) * 1_000);
+        const renewPlayUrl = () => {
+          failoverTimerRef.current = null;
+          void playUrlQuery.refetch().then((result) => {
+            if (result.isError) {
+              const message =
+                result.error && typeof result.error === "object" && "message" in result.error
+                  ? String(result.error.message)
+                  : "Twitch 播放地址更新失败，请点击刷新后重试";
+              setLoadError(message);
+              return;
+            }
+            // The newly issued Twitch URL normally changes the stream key.
+            // Bump the token as well for the rare case where it is identical,
+            // so a stuck HLS instance is still replaced.
+            setReloadToken((token) => token + 1);
+          });
+        };
+
+        if (delayMs > 0) {
+          failoverTimerRef.current = window.setTimeout(renewPlayUrl, delayMs);
+        } else {
+          renewPlayUrl();
+        }
+        return;
+      }
+
       const action = nextFailoverAction({
         retryCount: retryCountRef.current,
         lineIndex: lineIndexRef.current,
@@ -208,7 +258,7 @@ export function usePlaybackController(opts: {
         apply();
       }
     },
-    [clearFailoverTimer],
+    [clearFailoverTimer, playUrlQuery, siteId],
   );
 
   const loading = qualitiesQuery.isLoading || (qualitiesQuery.isSuccess && playUrlQuery.isLoading);

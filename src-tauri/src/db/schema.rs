@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::{AppError, AppResult};
 
@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS follows (
   face TEXT NOT NULL DEFAULT '',
   tag_ids TEXT NOT NULL DEFAULT '[]',
   live_status INTEGER,
+  live_started_at INTEGER,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (site_id, room_id)
 );
@@ -70,9 +71,62 @@ pub fn open_in_memory() -> AppResult<Connection> {
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA)
-        .map_err(|e| AppError::new("db_migrate_error", e.to_string()))
+        .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+
+    // `CREATE TABLE IF NOT EXISTS` does not evolve installations created by
+    // older releases. Keep this migration idempotent so an existing follow
+    // list gains the cached live-session start timestamp safely.
+    let has_live_started_at = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('follows') WHERE name = ?1 LIMIT 1",
+            ["live_started_at"],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?
+        .is_some();
+    if !has_live_started_at {
+        conn.execute("ALTER TABLE follows ADD COLUMN live_started_at INTEGER", [])
+            .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+    }
+    Ok(())
 }
 
 pub fn map_db_err(err: rusqlite::Error) -> AppError {
     AppError::new("db_error", err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_adds_live_started_at_to_existing_follows_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE follows (
+                site_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                user_name TEXT NOT NULL,
+                face TEXT NOT NULL DEFAULT '',
+                tag_ids TEXT NOT NULL DEFAULT '[]',
+                live_status INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (site_id, room_id)
+            );",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let column: Option<String> = conn
+            .query_row(
+                "SELECT name FROM pragma_table_info('follows') WHERE name = ?1",
+                ["live_started_at"],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(column.as_deref(), Some("live_started_at"));
+    }
 }

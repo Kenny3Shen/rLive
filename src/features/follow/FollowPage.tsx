@@ -1,13 +1,19 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
+import { Clock3, RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
+import { isSiteEnabled } from "@/shared/siteId";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
-import { FOLLOW_PLATFORM_PARAM, followPlatformFromSearch } from "./followRoute";
+import {
+  FOLLOW_PLATFORM_PARAM,
+  followPlatformFromSearch,
+  formatFollowLiveDuration,
+} from "./followRoute";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -24,7 +30,11 @@ export function FollowPage() {
   const qc = useQueryClient();
   const pageRef = useRef<HTMLDivElement>(null);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
-  const platformFilter = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
+  const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+  const platformFilter = followPlatformFromSearch(
+    searchParams.get(FOLLOW_PLATFORM_PARAM),
+    disabledSiteIds,
+  );
 
   const followsQuery = useQuery({
     queryKey: ["follows"],
@@ -50,7 +60,9 @@ export function FollowPage() {
   });
 
   const items = useMemo(() => {
-    let list = [...(followsQuery.data ?? [])];
+    let list = (followsQuery.data ?? []).filter((follow) =>
+      isSiteEnabled(follow.site_id, disabledSiteIds),
+    );
     if (platformFilter !== "all") {
       list = list.filter((follow) => follow.site_id === platformFilter);
     }
@@ -66,7 +78,30 @@ export function FollowPage() {
       return a.user_name.localeCompare(b.user_name, "zh");
     });
     return list;
-  }, [followsQuery.data, platformFilter, liveFilter]);
+  }, [disabledSiteIds, followsQuery.data, platformFilter, liveFilter]);
+
+  const hasLiveDuration = items.some(
+    (follow) => follow.live_status === true && follow.live_started_at != null,
+  );
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!hasLiveDuration) return;
+
+    let interval: number | undefined;
+    const updateClock = () => setNow(Date.now());
+    updateClock();
+    const untilNextMinute = 60_000 - (Date.now() % 60_000) + 50;
+    const timeout = window.setTimeout(() => {
+      updateClock();
+      interval = window.setInterval(updateClock, 60_000);
+    }, untilNextMinute);
+
+    return () => {
+      window.clearTimeout(timeout);
+      if (interval != null) window.clearInterval(interval);
+    };
+  }, [hasLiveDuration]);
 
   usePageEntrance(pageRef, {
     entryKey: `follow:${platformFilter}`,
@@ -126,6 +161,7 @@ export function FollowPage() {
           {items.map((u) => {
             const live = u.live_status === true;
             const offline = u.live_status === false;
+            const liveDuration = live ? formatFollowLiveDuration(u.live_started_at, now) : null;
             const avatarSrc = normalizeImageUrl(u.face);
             return (
               <li data-page-enter-item key={`${u.site_id}:${u.room_id}`}>
@@ -181,6 +217,12 @@ export function FollowPage() {
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         <Badge variant="outline">{SITE_LABELS[u.site_id] ?? u.site_id}</Badge>
                         {live && <Badge className="bg-success/15 text-success">直播中</Badge>}
+                        {liveDuration && (
+                          <Badge variant="outline" title={`开播时长：${liveDuration}`}>
+                            <Clock3 aria-hidden />
+                            开播 {liveDuration}
+                          </Badge>
+                        )}
                         {offline && <Badge>未开播</Badge>}
                         {u.live_status == null && <Badge>未知</Badge>}
                       </div>

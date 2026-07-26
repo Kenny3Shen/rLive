@@ -112,6 +112,19 @@ export function SiteLogo({ siteId, className }: SiteLogoProps) {
           <circle cx="30" cy="31" r="4" fill="white" />
         </svg>
       );
+    case "twitch":
+      return (
+        <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">
+          <path
+            d="M8 6h32v23L29 40H19l-5 5v-5H8V6Z"
+            fill="#9146FF"
+            stroke="#9146FF"
+            strokeLinejoin="round"
+            strokeWidth="3"
+          />
+          <path d="M18 15v11m8-11v11" stroke="white" strokeWidth="4" />
+        </svg>
+      );
     default:
       return (
         <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">

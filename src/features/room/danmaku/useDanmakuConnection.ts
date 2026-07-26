@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { SiteId } from "@/shared/types/live";
-import { nextDanmakuConnectionEpoch } from "./connectionEpoch";
+import { nextDanmakuConnectionEpoch, nextDanmakuConnectionFence } from "./connectionEpoch";
 import { clearExpectedDanmakuConnectionEpoch, setExpectedDanmakuConnectionEpoch } from "./eventBus";
 
-const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya", "douyin"]);
+const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya", "douyin", "twitch"]);
 
 function errMessage(e: unknown): string {
   if (typeof e === "object" && e && "message" in e) {
@@ -32,43 +32,37 @@ export function useDanmakuConnection(opts: {
   const connectionEpochRef = useRef(0);
 
   // Fence every route change before waiting for the next room-detail query.
-  // The backend compares this epoch before installing a websocket task, so a
-  // slow command for the previous room cannot reconnect after a newer route.
+  // The stop and the replacement connection deliberately use *different*
+  // epochs: Tauri IPC is asynchronous, so a delayed same-epoch stop could
+  // otherwise arrive after the new websocket was installed and abort it.
   useLayoutEffect(() => {
-    const connectionEpoch = nextDanmakuConnectionEpoch();
+    const { disconnectEpoch, connectionEpoch } = nextDanmakuConnectionFence();
     connectionEpochRef.current = connectionEpoch;
     setExpectedDanmakuConnectionEpoch(connectionEpoch);
     setActive(false);
     setStatusText(null);
-    void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
-    return () => clearExpectedDanmakuConnectionEpoch(connectionEpoch);
-  }, [siteId, roomId]);
-
-  // Leaving RoomPage also gets a newer epoch. This invalidates any in-flight
-  // metadata fetch that reaches the backend after the component has gone.
-  useEffect(() => {
+    void invokeCmd("danmaku_disconnect", { connectionEpoch: disconnectEpoch }).catch(() => {});
     return () => {
-      clearExpectedDanmakuConnectionEpoch(connectionEpochRef.current);
-      const connectionEpoch = nextDanmakuConnectionEpoch();
-      connectionEpochRef.current = connectionEpoch;
-      void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
+      clearExpectedDanmakuConnectionEpoch(connectionEpoch);
+      // A layout cleanup runs before a replacement RoomPage's layout effect.
+      // Its newer epoch also fences an in-flight room-detail fetch on final
+      // unmount, without ever sharing the replacement connection's epoch.
+      const closingEpoch = nextDanmakuConnectionEpoch();
+      connectionEpochRef.current = closingEpoch;
+      void invokeCmd("danmaku_disconnect", { connectionEpoch: closingEpoch }).catch(() => {});
     };
-  }, []);
+  }, [siteId, roomId]);
 
   useEffect(() => {
     const connectionEpoch = connectionEpochRef.current;
     if (!enabled || !siteId || !roomId || !detailRoomId) {
       setActive(false);
       setStatusText(null);
-      if (!enabled || !siteId || !roomId) {
-        void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
-      }
       return;
     }
     if (!DANMAKU_ENABLED_SITES.has(siteId)) {
       setActive(false);
       setStatusText("当前平台暂不支持实时弹幕");
-      void invokeCmd("danmaku_disconnect", { connectionEpoch }).catch(() => {});
       return;
     }
     let cancelled = false;
@@ -76,13 +70,13 @@ export function useDanmakuConnection(opts: {
     setActive(false);
     void invokeCmd("danmaku_connect", { siteId, roomId, connectionEpoch })
       .then(() => {
-        if (!cancelled) {
+        if (!cancelled && connectionEpochRef.current === connectionEpoch) {
           setStatusText(null);
           setActive(true);
         }
       })
       .catch((e) => {
-        if (!cancelled) {
+        if (!cancelled && connectionEpochRef.current === connectionEpoch) {
           setStatusText(`弹幕连接失败：${errMessage(e)}`);
           setActive(false);
         }

@@ -12,6 +12,8 @@ pub struct FollowRecord {
     pub face: String,
     pub tag_ids: Vec<String>,
     pub live_status: Option<i32>,
+    #[serde(default)]
+    pub live_started_at: Option<i64>,
     pub updated_at: i64,
 }
 
@@ -37,7 +39,7 @@ fn decode_tag_ids(raw: &str) -> AppResult<Vec<String>> {
 pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT site_id, room_id, user_name, face, tag_ids, live_status, updated_at
+            "SELECT site_id, room_id, user_name, face, tag_ids, live_status, live_started_at, updated_at
              FROM follows
              ORDER BY updated_at DESC",
         )
@@ -51,15 +53,24 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<i32>>(5)?,
-                row.get::<_, i64>(6)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, i64>(7)?,
             ))
         })
         .map_err(map_db_err)?;
 
     let mut out = Vec::new();
     for row in rows {
-        let (site_id, room_id, user_name, face, tag_ids_raw, live_status, updated_at) =
-            row.map_err(map_db_err)?;
+        let (
+            site_id,
+            room_id,
+            user_name,
+            face,
+            tag_ids_raw,
+            live_status,
+            live_started_at,
+            updated_at,
+        ) = row.map_err(map_db_err)?;
         out.push(FollowRecord {
             site_id,
             room_id,
@@ -67,6 +78,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
             face,
             tag_ids: decode_tag_ids(&tag_ids_raw)?,
             live_status,
+            live_started_at,
             updated_at,
         });
     }
@@ -76,13 +88,14 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
 pub fn upsert(conn: &Connection, record: FollowRecord) -> AppResult<()> {
     let tag_ids = encode_tag_ids(&record.tag_ids)?;
     conn.execute(
-        "INSERT INTO follows (site_id, room_id, user_name, face, tag_ids, live_status, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO follows (site_id, room_id, user_name, face, tag_ids, live_status, live_started_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(site_id, room_id) DO UPDATE SET
            user_name = excluded.user_name,
            face = excluded.face,
            tag_ids = excluded.tag_ids,
            live_status = excluded.live_status,
+           live_started_at = excluded.live_started_at,
            updated_at = excluded.updated_at",
         params![
             record.site_id,
@@ -91,6 +104,7 @@ pub fn upsert(conn: &Connection, record: FollowRecord) -> AppResult<()> {
             record.face,
             tag_ids,
             record.live_status,
+            record.live_started_at,
             record.updated_at,
         ],
     )
@@ -176,6 +190,7 @@ mod tests {
                 face: "".into(),
                 tag_ids: vec![],
                 live_status: None,
+                live_started_at: None,
                 updated_at: 1,
             },
         )
@@ -197,6 +212,7 @@ mod tests {
                 face: "".into(),
                 tag_ids: vec![],
                 live_status: None,
+                live_started_at: None,
                 updated_at: 1,
             },
         )
@@ -210,6 +226,7 @@ mod tests {
                 face: "f".into(),
                 tag_ids: vec!["t1".into()],
                 live_status: Some(1),
+                live_started_at: Some(1_704_067_200_000),
                 updated_at: 2,
             },
         )
@@ -220,6 +237,7 @@ mod tests {
         assert_eq!(rows[0].face, "f");
         assert_eq!(rows[0].tag_ids, vec!["t1".to_string()]);
         assert_eq!(rows[0].live_status, Some(1));
+        assert_eq!(rows[0].live_started_at, Some(1_704_067_200_000));
         assert_eq!(rows[0].updated_at, 2);
     }
 
@@ -235,6 +253,7 @@ mod tests {
                 face: "".into(),
                 tag_ids: vec![],
                 live_status: None,
+                live_started_at: None,
                 updated_at: 1,
             },
         )
@@ -255,6 +274,7 @@ mod tests {
                 face: "".into(),
                 tag_ids: vec![],
                 live_status: None,
+                live_started_at: None,
                 updated_at: 1,
             },
         )

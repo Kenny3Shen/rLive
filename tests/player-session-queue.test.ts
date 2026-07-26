@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
-import { playUrlKey, requestPlayerAutoplay } from "../src/features/room/player/useWebPlayer";
+import {
+  hlsResponseStatus,
+  isHlsStream,
+  isTwitchCommercialBreak,
+  nextHlsFatalRecoveryAction,
+  playUrlKey,
+  requestPlayerAutoplay,
+} from "../src/features/room/player/useWebPlayer";
 
 describe("player session queue", () => {
   test("does not start the replacement until the prior lifecycle has finished", async () => {
@@ -62,6 +69,37 @@ describe("player session queue", () => {
 
     expect(equivalent).toBe(first);
     expect(changed).not.toBe(first);
+  });
+
+  test("routes Twitch-style HLS manifests to the HLS player path", () => {
+    expect(isHlsStream("https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one")).toBe(true);
+    expect(isHlsStream("https://cdn.example.test/live.flv")).toBe(false);
+  });
+
+  test("renews a Twitch HLS URL after one exhausted in-place recovery", () => {
+    expect(nextHlsFatalRecoveryAction(1)).toEqual({ type: "restart" });
+    expect(nextHlsFatalRecoveryAction(2)).toEqual({
+      type: "refresh_play_url",
+      retryAfterMs: 0,
+    });
+    expect(hlsResponseStatus({ response: { code: 403 } })).toBe(403);
+    expect(nextHlsFatalRecoveryAction(1, false, true)).toEqual({
+      type: "refresh_play_url",
+      retryAfterMs: 0,
+    });
+  });
+
+  test("treats a Twitch commercial response as temporary platform content", () => {
+    expect(
+      isTwitchCommercialBreak({
+        response: { data: "Commercial break in progress. Please wait." },
+      }),
+    ).toBe(true);
+    expect(nextHlsFatalRecoveryAction(2, true)).toEqual({
+      type: "refresh_play_url",
+      retryAfterMs: 8_000,
+    });
+    expect(isTwitchCommercialBreak("normal HLS manifest error")).toBe(false);
   });
 
   test("does not let a pending old autoplay block a replacement proxy session", async () => {

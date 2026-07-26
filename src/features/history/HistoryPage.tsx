@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, CirclePlay, Clock3, Hash, Trash2 } from "lucide-react";
@@ -6,6 +6,8 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
+import { isSiteEnabled } from "@/shared/siteId";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { HistoryItem } from "@/shared/types/live";
 import {
   AlertDialog,
@@ -96,6 +98,7 @@ export function HistoryPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [clearOpen, setClearOpen] = useState(false);
+  const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
 
   const query = useQuery({
     queryKey: ["history"],
@@ -111,7 +114,10 @@ export function HistoryPage() {
     },
   });
 
-  const items = query.data ?? [];
+  const items = useMemo(
+    () => (query.data ?? []).filter((item) => isSiteEnabled(item.site_id, disabledSiteIds)),
+    [disabledSiteIds, query.data],
+  );
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
@@ -145,7 +151,7 @@ export function HistoryPage() {
                 </AlertDialogMedia>
                 <AlertDialogTitle>清空观看历史？</AlertDialogTitle>
                 <AlertDialogDescription>
-                  将删除全部 {items.length} 条记录，此操作无法恢复。
+                  将删除全部观看记录，此操作无法恢复。
                 </AlertDialogDescription>
               </AlertDialogHeader>
               {clearMutation.isError && (
