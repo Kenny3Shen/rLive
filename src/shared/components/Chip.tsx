@@ -31,7 +31,7 @@ export function Chip({ active, onClick, onClear, children, className }: ChipProp
             e.stopPropagation();
             onClear();
           }}
-          className="rounded-full p-0.5 hover:bg-white/10"
+          className="rounded-full p-0.5 hover:bg-primary/15"
           aria-label="清除"
         >
           <X className="h-3 w-3" />

@@ -1,20 +1,20 @@
 # Other-platform danmaku sending feasibility
 
-Updated 2026-07-26. This review concerns a viewer sending one ordinary text chat message with their own authorised account. It excludes gifts, payments, automated replies, and bulk or scheduled messages.
+Updated 2026-07-27. This review concerns a viewer sending one ordinary text chat message with their own account. It excludes gifts, payments, automated replies, and bulk or scheduled messages.
 
 ## Summary
 
 | Platform | Current conclusion | rLive decision |
 |----------|--------------------|----------------|
 | Bilibili | **Implemented; controlled-account acceptance pending** | The only direct send path with an end-to-end code implementation and local HTTP-contract tests. Release still needs a permitted-room echo check with a controlled account. |
-| Douyu | **Official authorisation required** | Public material supports receiving chat; rLive will not treat undocumented browser or persistent-connection packets as a sending API. Schedule work only after an explicit ordinary-viewer-chat write permission, documentation, and test environment are provided. |
-| Huya | **Official authorisation required** | The current receive connection is an anonymous subscription path. Publicly visible material centres on partner SDKs; no ordinary-text contract suitable for a direct desktop client was confirmed. |
+| Douyu | **Implemented with local Cookie authentication** | A user can send one ordinary text message after saving their own local account Cookie through QR login or manual input. This is not a claim that Douyu provides rLive a public write API; real-service acceptance and terms compliance remain the user's responsibility. |
+| Huya | **Implemented with local Cookie authentication** | A user can send one ordinary text message after manually saving their own local account Cookie. This is not a claim that Huya provides rLive a public write API; real-service acceptance and terms compliance remain the user's responsibility. |
 | Douyin | **Official authorisation required** | The signing service is for receiving live messages only and does not imply send permission. Any route must use an authorised live-SDK/interaction capability and first establish desktop suitability. |
 | Kuaishou | **Not recommended** | rLive has no Kuaishou real-time receive path yet. A send-only feature has no verifiable product or technical loop until an official bidirectional interaction contract is available. Reclassify it as “Official authorisation required” if that contract is obtained. |
 
-**Implemented; controlled-account acceptance pending** means that rLive has completed code and local HTTP-contract validation, but still needs a real-service echo check in a permitted room. **Official authorisation required** means that corresponding write scope must be granted in a contract or developer console before implementation can be scheduled. **Not recommended** is the current project decision, not a claim that the capability is impossible under every condition.
+**Implemented; controlled-account acceptance pending** means that rLive has completed code and local HTTP-contract validation, but still needs a real-service echo check in a permitted room. **Implemented with local Cookie authentication** means that rLive has a local, user-operated send flow which validates the saved account Cookie, text, and a short cooldown; it does **not** establish that a platform has granted rLive a public application write scope or that any particular account or room will accept a message. **Official authorisation required** means that corresponding write scope must be granted in a contract or developer console before implementation can be scheduled. **Not recommended** is the current project decision, not a claim that the capability is impossible under every condition.
 
-There is one shared conclusion for every platform: **replaying private web endpoints, WebSocket packets, browser fingerprints, or bypassing signing is not recommended.** Those paths have no stable contract, risk account enforcement, and must not become an rLive implementation promise.
+The Douyu and Huya senders are deliberately narrow local-account features, not a general packet-replay or automation facility: rLive never uploads the saved Cookie, accepts arbitrary packet/fingerprint input, batch-sends, schedules, auto-replies, retries ambiguous writes, or creates an optimistic local echo. A successful local write still needs normal room-chat echo and real-service verification. Users must independently confirm that their own account, room, and use comply with the platform terms and applicable law.
 
 ## Evidence and viable routes
 
@@ -24,32 +24,32 @@ rLive already has a real-room-ID path, local cookie storage, backend send valida
 
 This implementation does not turn into automation: it remains user-initiated ordinary text, with server-side validation and rate limits, no blind retries, and no gifts or payments.
 
-### Douyu: Official authorisation required
+### Douyu: Implemented with local Cookie authentication
 
-Douyu's public Open Platform API directory labels room chat as “pull danmaku” and “connect danmaku”, and manages “obtain danmaku information for a specified room” as an application permission. The reviewed directory does not list an ordinary viewer live-text send API.
+The user-operated Douyu composer now opens a short-lived authenticated danmaku session and submits one ordinary text message. In **Settings → Account → 斗鱼**, users can obtain the local account Cookie with QR login or enter it manually. The sender requires `acf_username`, `acf_stk`, and `acf_ltkid` (the legacy `_acf_ltkid_` spelling is also accepted). Cookie data remains in the device-local account store and is never shown in logs or sent to a third-party signer.
 
-- Evidence: [Douyu Open Platform API directory](https://open.douyu.com/source/). Detailed endpoint contents can require a developer login.
-- Current rLive integration: `src-tauri/src/danmaku/douyu.rs` implements room login, group join, heartbeat, and inbound events such as `chatmsg`; it has no authorised speaking identity or send capability.
-- Preconditions: an explicit write scope, OAuth/application-credential flow, rate/error documentation, and a controlled room or account supplied for testing.
+- Current rLive integration: `src-tauri/src/danmaku/douyu.rs` implements room login, group join, heartbeat, inbound `chatmsg` events, and the authenticated one-message sender. Before a network write it validates a numeric room ID, a non-empty single-line message of at most 100 UTF-16 code units, and a conservative 3-second per-room cooldown. It does not retry or invent a local echo; the normal room connection is the delivery signal.
+- Public-material limitation: [Douyu's Open Platform API directory](https://open.douyu.com/source/) labels room chat as “pull danmaku” and “connect danmaku”; the reviewed directory does not document a public ordinary-viewer write API. The implementation must therefore not be described as an officially granted API integration.
+- User responsibility: a socket write or later room echo is not a substitute for real-service verification. Test only with an account and room where you are permitted to speak, follow server-side moderation/rate limits, and comply with Douyu's current terms.
 
-Until then, message types visible in a receive protocol or historical community packets must not be treated as a write API.
+The implementation sends only when the user presses Send. It does not add gifts, payments, bulk/scheduled sending, auto-replies, automatic retries, or Cookie export.
 
-### Huya: Official authorisation required
+### Huya: Implemented with local Cookie authentication
 
-rLive's Huya connection is an anonymous TARS/WebSocket push subscription. It carries neither an auditable user authorisation identity nor a product contract for ordinary text chat.
+rLive now resolves the current Huya room and uses the user's manually stored Cookie to establish an authenticated send session for one ordinary text message. In **Settings → Account → 虎牙**, paste a Cookie with a numeric account ID (`yyuid` or `udb_uid`) and opaque login proof (`udb_n` or `udb_cred`). Huya QR login is not currently offered, so manual Cookie input is required. The Cookie stays in the device-local account store and is never logged or uploaded to another service.
 
-- Evidence: [Huya Open Platform](https://open.huya.com/) and [Huya game-distribution SDK documentation](https://dev.huya.com/docs/live-sdk/). The publicly visible material describes partner integration and SDK capabilities such as account, payment, watching, and starting a stream; the entry also includes Android integration material. This review did not confirm a plain-text writer API that a Tauri desktop client can directly use.
-- Current rLive integration: `src-tauri/src/danmaku/huya.rs` constructs join/heartbeat packets and consumes push messages only.
-- Preconditions: a Huya-confirmed desktop-capable SDK or API, authorisation method, write scope, moderation/rate limits, and shipping approval.
+- Current rLive integration: `src-tauri/src/danmaku/huya.rs` handles TARS/WebSocket room traffic and the authenticated one-message sender. The sender validates room metadata, Cookie fields, a non-empty single-line message of at most 30 UTF-16 code units, and a short local cooldown before sending. It does not retry ambiguous writes or create an optimistic local echo; normal room chat remains the delivery signal.
+- Public-material limitation: [Huya Open Platform](https://open.huya.com/) and its [game-distribution SDK documentation](https://dev.huya.com/docs/live-sdk/) describe partner/SDK capabilities, but this review did not confirm a public ordinary-text writer API suitable for a Tauri desktop client. The local-Cookie sender is not an assertion of a platform-issued application write contract.
+- User responsibility: real-service verification, moderation/rate limits, room eligibility, and compliance with Huya's terms remain with the user. A local send result alone does not guarantee that Huya accepted or displayed the message.
 
-Even when a partner SDK can render native interaction, that does not imply that rLive may replace it with a custom HTTP or WebSocket composer.
+The feature remains strictly user initiated. It does not support gifts, payments, batch/scheduled sends, auto-replies, automatic retries, or Cookie export.
 
 ### Douyin: Official authorisation required
 
 The current Douyin live-chat flow first obtains a temporary signed WSS URL and then consumes push events. A signing result proves only that a receive connection can be created; it does not grant authority to write chat as a user.
 
 - Evidence: [Douyin SDK live-capability solution](https://developer.open-douyin.com/docs/resource/zh-CN/dop/ability/douyin-live-sdk/solution). The official material describes a complete live-interaction experience in a third-party app after user authorisation. That is an authorised SDK product, not a standalone desktop send API that can be inferred from rLive's receiving connection.
-- Current rLive integration: `src-tauri/src/danmaku/douyin.rs` requests a trusted signer, establishes WSS, sends heartbeats/acks, and decodes inbound messages only. See [Douyin danmaku signing-service integration](douyin-danmaku-signing-service.md).
+- Current rLive integration: `src-tauri/src/danmaku/douyin.rs` calls the fixed local signer at `http://127.0.0.1:18080/sign`, establishes WSS, sends heartbeats/acks, and decodes inbound messages only. See [Douyin danmaku signing-service integration](douyin-danmaku-signing-service.md).
 - Preconditions: confirmation of a desktop-compatible product form, application and user interaction-write permission, plus moderation, enforcement, rate-limit, and error-handling requirements.
 
 Do not treat a browser Cookie, temporary signed URL, or web behavioural parameter as portable send credentials.
@@ -62,17 +62,17 @@ rLive's Kuaishou adapter currently uses public recommendation, category, and roo
 - Current decision: do not reverse engineer web requests, login state, or message signatures, and do not add a sender-only UI before receiving chat works.
 - Reassessment: obtain an official real-time interaction/write capability first, then complete receiving, identity state, sending, echo, rate limiting, and failure recovery as one flow.
 
-## Shared admission bar
+## Safety and responsibility boundary
 
-Before any platform changes from “Official authorisation required” to “Implemented; controlled-account acceptance pending”, all of the following must be true:
+The implemented Douyu and Huya flows, and any future sender, must retain all of the following:
 
-1. A formal platform agreement, developer-console scope, or official document explicitly permits an app to send **ordinary live-room chat** for a user. Read-only chat, gifts, direct messages, host tools, or an embedded native page are not enough.
-2. The platform-approved OAuth, SDK, or application credentials are used. The flow must not require copying browser cookies, tokens, or fingerprint values, nor give credentials to an unknown third party.
-3. Backend support exists for testable identity state, room identity, text validation, deduplication/cooldown, rate limits, readable error codes, and authorisation revocation.
-4. A composer is shown only after the permission is ready. Every transmission is user-initiated; there is no bulk, loop, schedule, auto-reply, automatic retry, gift, or payment capability.
-5. Sending, echo, rejection, expired authorisation, network loss, and rate limiting have been tested with controlled accounts and permitted rooms. Logs and UI errors must not expose cookies, signatures, content, or raw upstream responses.
-6. Product, legal, and platform-terms review has passed, and the feature can be disabled immediately if permission is revoked, an API is retired, or enforcement changes.
+1. A composer is available only for a locally authenticated account and only sends a single ordinary live-room text message after a direct user action. There is no bulk, loop, schedule, auto-reply, automatic retry, gift, or payment capability.
+2. Cookie values remain in the local SQLite account store. They must not be logged, exported in a profile, displayed back to the user, or transmitted to an unrelated service.
+3. Backend code validates account readiness, room identity, text, and a conservative local cooldown before attempting a network write. The platform's own moderation and rate limits remain authoritative.
+4. The application does not create an optimistic local chat entry. Users should wait for the normal room connection to echo a message and treat an ambiguous network result as unknown rather than resending automatically.
+5. Each user is responsible for real-service verification with an account and room where they are allowed to speak, and for complying with the current platform terms, moderation rules, and local law. A browser Cookie is not proof of an official application write entitlement.
+6. If a platform publishes an official OAuth/SDK/write contract, changes its rules, rejects the flow, or revokes access, reassess and disable the feature as appropriate before representing it as supported.
 
 ## Scope of this review
 
-Public documentation can change, and some platform material is available only to enrolled partners. This page records the intersection of material publicly accessible on 2026-07-26 and rLive's existing integrations. Not finding an endpoint in a public directory does not prove that one cannot exist; it means rLive must not promise or build an unauthorised sending feature from that absence. Update this page and repeat controlled validation when a new official agreement, permission page, or SDK document becomes available.
+Public documentation can change, and some platform material is available only to enrolled partners. This page records the intersection of material publicly accessible on 2026-07-27 and rLive's existing integrations. Not finding an endpoint in a public directory does not prove that one cannot exist, and implementing a local-Cookie flow does not prove official application authorisation or durable real-service acceptance. Update this page and repeat controlled validation when a new official agreement, permission page, SDK document, or platform behaviour change becomes available.

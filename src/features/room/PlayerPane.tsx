@@ -13,7 +13,7 @@ import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
 import { SuperChatPanel } from "./SuperChatPanel";
-import { BilibiliDanmakuComposer } from "./BilibiliDanmakuComposer";
+import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useWebPlayer } from "./player/useWebPlayer";
@@ -119,6 +119,7 @@ export function PlayerPane({
 
   const player = useWebPlayer({
     playUrl,
+    siteId,
     sessionKey: roomSessionKey,
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
@@ -488,7 +489,7 @@ export function PlayerPane({
                 disabled={transportDisabled}
                 overlay
                 centerSlot={
-                  <BilibiliDanmakuComposer
+                  <DanmakuComposer
                     siteId={siteId}
                     roomId={roomId}
                     overlay
@@ -567,6 +568,8 @@ export function PlayerPane({
             <DanmakuPanel
               key={`chat:${roomSessionKey ?? "room"}`}
               active={danmakuActive}
+              siteId={siteId}
+              roomId={roomId}
               visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
               statusText={danmakuStatusText}
               className="h-full"

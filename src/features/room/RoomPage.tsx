@@ -105,6 +105,7 @@ export function RoomPage() {
           face: detail.user_avatar,
           tag_ids: [],
           live_status: detail.status,
+          live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
           updated_at: Date.now(),
         };
         await invokeCmd("follow_add", { user });
@@ -305,16 +306,6 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
       >
         {title}
       </p>
-      <span
-        className="pointer-events-none absolute right-3 flex h-5 items-center gap-1.5 text-[10px] font-semibold tracking-[0.12em] text-accent"
-        aria-label="Live"
-      >
-        <span
-          aria-hidden="true"
-          className="size-1.5 rounded-full bg-accent shadow-[0_0_7px_currentColor]"
-        />
-        LIVE
-      </span>
     </header>
   );
 }

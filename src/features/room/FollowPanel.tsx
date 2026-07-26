@@ -11,6 +11,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { isSiteEnabled } from "@/shared/siteId";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { FOLLOW_ROOM_SWITCH_STATE } from "./roomNavigation";
 
 function sortFollows(follows: FollowUser[]): FollowUser[] {
@@ -48,6 +50,7 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
     roomId: string;
   }>();
   const currentRoomId = routeRoomId ? decodeURIComponent(routeRoomId) : undefined;
+  const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
 
   const followsQuery = useQuery({
     queryKey: ["follows"],
@@ -64,7 +67,15 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
     },
   });
 
-  const follows = useMemo(() => sortFollows(followsQuery.data ?? []), [followsQuery.data]);
+  const follows = useMemo(
+    () =>
+      sortFollows(
+        (followsQuery.data ?? []).filter((follow) =>
+          isSiteEnabled(follow.site_id, disabledSiteIds),
+        ),
+      ),
+    [disabledSiteIds, followsQuery.data],
+  );
 
   function switchRoom(user: FollowUser) {
     const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
@@ -124,7 +135,7 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
                     className={cn(
                       "h-auto w-full justify-start gap-2 border border-transparent px-2 py-2 text-left",
                       isCurrentRoom
-                        ? "border-primary/25 bg-primary/10 text-primary shadow-sm shadow-primary/10 hover:bg-primary/10 disabled:pointer-events-none disabled:opacity-100 dark:bg-primary/20 dark:hover:bg-primary/20"
+                        ? "border-primary/25 bg-primary/15 text-primary shadow-sm shadow-primary/10 hover:bg-primary/15 disabled:pointer-events-none disabled:opacity-100"
                         : "hover:bg-muted/70",
                     )}
                     disabled={isCurrentRoom}

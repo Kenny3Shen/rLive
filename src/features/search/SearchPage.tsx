@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Loader2, Search } from "lucide-react";
+import { ArrowLeft, Loader2, Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   parseSearchScope,
+  canSearchNavigateBack,
   prepareSearchResults,
   roomFromDetail,
   SEARCH_SCOPES,
@@ -112,6 +113,14 @@ export function SearchPage() {
     if (keyword) navigate(searchPath(keyword, next));
   }
 
+  function goBack() {
+    if (canSearchNavigateBack(window.history.state)) {
+      navigate(-1);
+      return;
+    }
+    navigate("/", { replace: true });
+  }
+
   function retry() {
     if (scope === "room") {
       void roomLookup.refetch();
@@ -125,7 +134,23 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-5 pb-6">
-      <PageHeader title="搜索" description="主播、房间号、标题" />
+      <PageHeader
+        title="搜索"
+        description="主播、房间号、标题"
+        actions={
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-label="返回上一页"
+            title="返回上一页"
+            onClick={goBack}
+          >
+            <ArrowLeft data-icon="inline-start" aria-hidden />
+            返回
+          </Button>
+        }
+      />
 
       <form onSubmit={submit} className="max-w-2xl">
         <FieldGroup>

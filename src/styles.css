@@ -11,7 +11,7 @@
   shadcn tokens live in :root / .dark; @theme maps them for Tailwind.
 */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --radius: 0.75rem;
   /* light (rarely used — app defaults to dark) */
   --background: oklch(0.985 0.002 260);
@@ -49,6 +49,9 @@
   --card-elevated: oklch(0.98 0.002 260);
   --border-subtle: oklch(0.92 0.01 260);
   --sidebar-active: oklch(0.93 0.015 260);
+  /* A physical dimming layer: it stays neutral while every surface beneath it
+     continues to come from the active light/dark token set. */
+  --overlay: oklch(0 0 0 / 0.44);
 }
 
 .dark {
@@ -133,6 +136,7 @@
   --color-foreground: var(--foreground);
   --color-background: var(--background);
   --color-success: var(--success);
+  --color-overlay: var(--overlay);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);

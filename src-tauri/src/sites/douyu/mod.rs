@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId,
+    RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -285,6 +285,33 @@ impl LiveSite for DouyuSite {
         let root = self.room_info(room_id).await?;
         let room = root.get("room").cloned().unwrap_or_else(|| root.clone());
 
+        // `betard` is sufficient for playback metadata but does not reliably
+        // keep the live-session start time. The lightweight H5 room endpoint
+        // exposes `data.show_time`; treat it as optional so a transient
+        // auxiliary failure never prevents entering the room.
+        let live_started_at = self
+            .get_json(
+                &format!("https://www.douyu.com/swf_api/h5room/{room_id}"),
+                &format!("https://www.douyu.com/{room_id}"),
+            )
+            .await
+            .ok()
+            .as_ref()
+            .and_then(|response| {
+                parse_live_started_at(
+                    response
+                        .pointer("/data/show_time")
+                        .or_else(|| response.pointer("/data/live_start_time")),
+                )
+            })
+            .or_else(|| {
+                parse_live_started_at(
+                    room.get("show_time")
+                        .or_else(|| room.get("live_start_time"))
+                        .or_else(|| room.get("start_time")),
+                )
+            });
+
         let enc = self
             .get_json(
                 &format!("https://www.douyu.com/swf_api/homeH5Enc?rids={room_id}"),
@@ -317,6 +344,7 @@ impl LiveSite for DouyuSite {
             user_avatar: json_str(room.get("owner_avatar").unwrap_or(&Value::Null)),
             online: hot,
             status: show_status == 1 && video_loop != 1,
+            live_started_at,
             notice: json_str(room.get("show_details").unwrap_or(&Value::Null)),
             url: format!("https://www.douyu.com/{room_id}"),
             raw: serde_json::json!({
@@ -431,10 +459,6 @@ impl LiveSite for DouyuSite {
             return Err(Self::err("no douyu play urls"));
         }
         Ok(urls)
-    }
-
-    async fn get_live_status(&self, room_id: &str) -> AppResult<bool> {
-        Ok(self.get_room_detail(room_id).await?.status)
     }
 }
 

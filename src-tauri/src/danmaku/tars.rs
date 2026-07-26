@@ -121,6 +121,44 @@ impl TarsWriter {
         self.write_i64(data.len() as i64, 0);
         self.buf.extend_from_slice(data);
     }
+
+    /// Write a nested TARS struct. The struct body owns the same writer so
+    /// callers can use the ordinary scalar helpers for its fields.
+    pub fn write_struct(&mut self, tag: u8, write_body: impl FnOnce(&mut Self)) {
+        self.write_head(ty::STRUCT_BEGIN, tag);
+        write_body(self);
+        self.write_head(ty::STRUCT_END, 0);
+    }
+
+    /// Write an empty vector. Huya's send request includes a couple of
+    /// optional vector fields which must still be present in the web client
+    /// packet, even when no one is mentioned or tagged.
+    pub fn write_empty_list(&mut self, tag: u8) {
+        self.write_head(ty::LIST, tag);
+        self.write_i64(0, 0);
+    }
+
+    /// Write `map<string, string>`, used by Huya websocket connection and
+    /// WUP envelopes. The entry key/value tags are prescribed by TARS.
+    pub fn write_map_string_string(&mut self, tag: u8, entries: &[(&str, &str)]) {
+        self.write_head(ty::MAP, tag);
+        self.write_i64(entries.len() as i64, 0);
+        for (key, value) in entries {
+            self.write_string(key, 0);
+            self.write_string(value, 1);
+        }
+    }
+
+    /// Write `map<string, bytes>`. WUP v3's `newdata` map stores every
+    /// request/response field as one independently serialized byte buffer.
+    pub fn write_map_string_bytes(&mut self, tag: u8, entries: &[(&str, &[u8])]) {
+        self.write_head(ty::MAP, tag);
+        self.write_i64(entries.len() as i64, 0);
+        for (key, value) in entries {
+            self.write_string(key, 0);
+            self.write_bytes(value, 1);
+        }
+    }
 }
 
 // ─── Reader ───────────────────────────────────────────────────────────────────
@@ -363,6 +401,79 @@ impl<'a> TarsReader<'a> {
         Ok(self.read_bytes_cow(tag, required)?.into_owned())
     }
 
+    pub fn read_map_string_string(
+        &mut self,
+        tag: u8,
+        required: bool,
+    ) -> Result<Vec<(String, String)>> {
+        if !self.skip_to_tag(tag)? {
+            if required {
+                return Err(err(format!("required map tag {tag} missing")));
+            }
+            return Ok(Vec::new());
+        }
+        let hd = self.read_head()?;
+        if hd.typ != ty::MAP {
+            return Err(err(format!("map type mismatch {}", hd.typ)));
+        }
+        let size = self.read_i64(0, true)?;
+        if size < 0 || size > 16_384 {
+            return Err(err(format!("invalid map size {size}")));
+        }
+        let mut out = Vec::with_capacity(size as usize);
+        for _ in 0..size {
+            out.push((self.read_string(0, true)?, self.read_string(1, true)?));
+        }
+        Ok(out)
+    }
+
+    pub fn read_map_string_bytes(
+        &mut self,
+        tag: u8,
+        required: bool,
+    ) -> Result<Vec<(String, Vec<u8>)>> {
+        if !self.skip_to_tag(tag)? {
+            if required {
+                return Err(err(format!("required map tag {tag} missing")));
+            }
+            return Ok(Vec::new());
+        }
+        let hd = self.read_head()?;
+        if hd.typ != ty::MAP {
+            return Err(err(format!("map type mismatch {}", hd.typ)));
+        }
+        let size = self.read_i64(0, true)?;
+        if size < 0 || size > 16_384 {
+            return Err(err(format!("invalid map size {size}")));
+        }
+        let mut out = Vec::with_capacity(size as usize);
+        for _ in 0..size {
+            out.push((self.read_string(0, true)?, self.read_bytes(1, true)?));
+        }
+        Ok(out)
+    }
+
+    /// Read a vector length and leave the reader positioned at its first
+    /// element. This is enough for callers that need to skip or validate an
+    /// empty optional vector before continuing with following struct fields.
+    pub fn read_list_len(&mut self, tag: u8, required: bool) -> Result<usize> {
+        if !self.skip_to_tag(tag)? {
+            if required {
+                return Err(err(format!("required list tag {tag} missing")));
+            }
+            return Ok(0);
+        }
+        let hd = self.read_head()?;
+        if hd.typ != ty::LIST {
+            return Err(err(format!("list type mismatch {}", hd.typ)));
+        }
+        let size = self.read_i64(0, true)?;
+        if size < 0 || size > 65_536 {
+            return Err(err(format!("invalid list size {size}")));
+        }
+        Ok(size as usize)
+    }
+
     pub fn read_struct_begin(&mut self, tag: u8, required: bool) -> Result<bool> {
         if !self.skip_to_tag(tag)? {
             if required {
@@ -380,6 +491,88 @@ impl<'a> TarsReader<'a> {
     pub fn read_struct_end(&mut self) -> Result<()> {
         self.skip_to_struct_end()
     }
+}
+
+/// The small portion of a TARS WUP v3 response required by Huya's live-chat
+/// `sendMessage` endpoint. Keeping it here makes the protocol framing easy to
+/// test separately from the websocket transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WupV3Response {
+    pub request_id: i64,
+    pub servant: String,
+    pub function: String,
+    pub data: Vec<(String, Vec<u8>)>,
+}
+
+/// Encode a WUP v3 packet. `fields` are already serialized TARS values (for
+/// example a `HUYA.SendMessageReq` struct at key `tReq`).
+pub fn encode_wup_v3(
+    servant: &str,
+    function: &str,
+    request_id: i64,
+    fields: &[(&str, &[u8])],
+) -> Vec<u8> {
+    let mut field_map = TarsWriter::new();
+    field_map.write_map_string_bytes(0, fields);
+    let field_map = field_map.into_bytes();
+
+    let mut envelope = TarsWriter::new();
+    // Tars WUP RequestPacket fields start at tag 1, not zero.
+    envelope.write_i64(3, 1); // iVersion = WUP v3
+    envelope.write_i64(0, 2); // cPacketType
+    envelope.write_i64(0, 3); // iMessageType
+    envelope.write_i64(request_id, 4);
+    envelope.write_string(servant, 5);
+    envelope.write_string(function, 6);
+    envelope.write_bytes(&field_map, 7);
+    envelope.write_i64(0, 8); // iTimeout
+    envelope.write_map_string_string(9, &[]); // context
+    envelope.write_map_string_string(10, &[]); // status
+    let envelope = envelope.into_bytes();
+
+    let total = envelope.len().saturating_add(4);
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&(total as u32).to_be_bytes());
+    out.extend_from_slice(&envelope);
+    out
+}
+
+/// Decode a WUP v3 response packet received inside a Huya websocket command.
+pub fn decode_wup_v3(packet: &[u8]) -> Result<WupV3Response> {
+    if packet.len() < 4 {
+        return Err(err("wup packet shorter than length prefix"));
+    }
+    let total = u32::from_be_bytes([packet[0], packet[1], packet[2], packet[3]]) as usize;
+    if total != packet.len() || total < 4 {
+        return Err(err(format!(
+            "wup length mismatch: declared {total}, got {}",
+            packet.len()
+        )));
+    }
+
+    let mut envelope = TarsReader::new(&packet[4..]);
+    let version = envelope.read_i64(1, true)?;
+    if version != 3 {
+        return Err(err(format!("unsupported wup version {version}")));
+    }
+    let _packet_type = envelope.read_i64(2, true)?;
+    let _message_type = envelope.read_i64(3, true)?;
+    let request_id = envelope.read_i64(4, true)?;
+    let servant = envelope.read_string(5, true)?;
+    let function = envelope.read_string(6, true)?;
+    let buffer = envelope.read_bytes(7, true)?;
+    let _timeout = envelope.read_i64(8, true)?;
+    let _context = envelope.read_map_string_string(9, true)?;
+    let _status = envelope.read_map_string_string(10, true)?;
+
+    let mut fields = TarsReader::new(&buffer);
+    let data = fields.read_map_string_bytes(0, true)?;
+    Ok(WupV3Response {
+        request_id,
+        servant,
+        function,
+        data,
+    })
 }
 
 #[cfg(test)]
@@ -425,6 +618,29 @@ mod tests {
         let bytes = reader.read_bytes_cow(1, true).unwrap();
         assert!(matches!(bytes, std::borrow::Cow::Borrowed(_)));
         assert_eq!(bytes.as_ref(), b"huya-push");
+    }
+
+    #[test]
+    fn wup_v3_round_trip_preserves_request_metadata_and_struct_bytes() {
+        let mut request = TarsWriter::new();
+        request.write_struct(0, |writer| {
+            writer.write_string("hello", 3);
+        });
+        let request = request.into_bytes();
+        let encoded = encode_wup_v3("liveui", "sendMessage", 42, &[("tReq", &request)]);
+
+        let decoded = decode_wup_v3(&encoded).unwrap();
+        assert_eq!(decoded.request_id, 42);
+        assert_eq!(decoded.servant, "liveui");
+        assert_eq!(decoded.function, "sendMessage");
+        assert_eq!(decoded.data, vec![("tReq".into(), request)]);
+    }
+
+    #[test]
+    fn wup_v3_rejects_a_tampered_length_prefix() {
+        let mut packet = encode_wup_v3("liveui", "sendMessage", 1, &[]);
+        packet[3] = packet[3].saturating_sub(1);
+        assert!(decode_wup_v3(&packet).is_err());
     }
 
     #[test]

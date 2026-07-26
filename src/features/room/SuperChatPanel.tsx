@@ -48,8 +48,14 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
       data-slot="super-chat-card"
       className="overflow-hidden rounded-xl border border-border-subtle bg-card shadow-sm shadow-black/10"
     >
-      <header className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-x-2.5 bg-[#f7faff] px-3 py-2.5 text-[#172033]">
-        <Avatar className="size-12 ring-1 ring-black/10">
+      <header
+        className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2.5"
+        style={{
+          backgroundImage: `linear-gradient(112deg, ${palette.messageStart}, ${palette.messageEnd})`,
+          color: palette.messageForeground,
+        }}
+      >
+        <Avatar className="size-12 ring-1 ring-border/70">
           {avatarUrl && (
             <AvatarImage
               src={avatarUrl}
@@ -60,7 +66,7 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
               referrerPolicy="no-referrer"
             />
           )}
-          <AvatarFallback className="bg-slate-200 font-semibold text-slate-600">
+          <AvatarFallback className="bg-muted font-semibold text-muted-foreground">
             {avatarInitial}
           </AvatarFallback>
         </Avatar>
@@ -68,22 +74,13 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
           <p className="truncate text-[0.95em] font-semibold" title={user}>
             {user}
           </p>
-          {duration && <p className="mt-0.5 text-[0.75em] text-[#61718a]">置顶 {duration}</p>}
+          {duration && <p className="mt-0.5 text-[0.75em] opacity-80">置顶 {duration}</p>}
         </div>
-        <span
-          className="shrink-0 whitespace-nowrap text-[1.45em] leading-none font-bold tabular-nums"
-          style={{ color: palette.messageStart }}
-        >
+        <span className="shrink-0 whitespace-nowrap text-[1.45em] leading-none font-bold tabular-nums">
           {amount ?? "SC"}
         </span>
       </header>
-      <div
-        className="px-3 py-2.5"
-        style={{
-          backgroundImage: `linear-gradient(112deg, ${palette.messageStart}, ${palette.messageEnd})`,
-          color: palette.messageForeground,
-        }}
-      >
+      <div className="bg-card px-3 py-2.5 text-foreground">
         <div className="whitespace-pre-wrap break-words leading-6">
           <DanmakuRichText content={event.content} spans={event.spans} />
         </div>

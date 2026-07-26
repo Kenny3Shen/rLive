@@ -1,3 +1,7 @@
+pub mod bilibili_qr;
+pub mod douyin_qr;
+pub mod douyu_qr;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::schema::map_db_err;

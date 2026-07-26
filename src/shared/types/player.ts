@@ -8,6 +8,10 @@ export type PlayerEvent = {
   generation: number;
   kind: PlayerEventKind;
   message?: string | null;
+  /** Ask the controller to obtain a fresh, short-lived playback URL. */
+  refreshPlayUrl?: boolean;
+  /** Optional delay before refreshing a source that is temporarily unavailable. */
+  retryAfterMs?: number;
 };
 
 /** Preferred starting clarity when a room opens (Simple Live qualityLevel). */

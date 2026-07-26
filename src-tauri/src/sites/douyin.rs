@@ -17,7 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId,
+    RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -430,10 +430,6 @@ impl LiveSite for DouyinSite {
             return Err(Self::err("抖音播放地址为空或已失效，请刷新直播间后重试"));
         }
         Ok(urls)
-    }
-
-    async fn get_live_status(&self, room_id: &str) -> AppResult<bool> {
-        Ok(self.get_room_detail(room_id).await?.status)
     }
 }
 
@@ -976,6 +972,11 @@ fn parse_room_detail(
             0
         },
         status,
+        live_started_at: parse_live_started_at(
+            room.get("live_start_time")
+                .or_else(|| room.get("start_time"))
+                .or_else(|| room.get("room_start_time")),
+        ),
         notice: first_non_empty([
             json_str(owner.get("signature").unwrap_or(&Value::Null)),
             json_str(fallback_user.get("signature").unwrap_or(&Value::Null)),

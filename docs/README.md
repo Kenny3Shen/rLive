@@ -11,6 +11,6 @@
 | [抖音弹幕签名服务接入](zh/抖音弹幕签名服务.md) | [Douyin danmaku signing-service integration](en/douyin-danmaku-signing-service.md) |
 | [播放器性能调研](zh/播放器性能调研.md) | [Player performance research](en/player-performance-research.md) |
 
-仓库根目录 [README.md](../README.md) 含功能表、环境与构建速查。
+仓库根目录提供 [中文 README](../README.md) 和 [English README](../README.en.md)，包含功能表、环境与构建速查。
 
 Agent / 交付规则：[`AGENTS.md`](../AGENTS.md)（英文为主，面向自动化）。

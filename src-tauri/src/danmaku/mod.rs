@@ -3,6 +3,7 @@ pub mod douyin;
 pub mod douyu;
 pub mod huya;
 pub mod tars;
+pub mod twitch;
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -260,7 +261,6 @@ pub async fn connect(
     site_id: SiteId,
     room_id: &str,
     detail_raw: &serde_json::Value,
-    douyin_sign_service: Option<&str>,
     cookie: &str,
     proxy: Option<&str>,
 ) -> AppResult<()> {
@@ -300,15 +300,16 @@ pub async fn connect(
             });
             Ok(())
         }
+        SiteId::Twitch => {
+            let args = twitch::args_from_raw(room_id, detail_raw)?;
+            let proxy = proxy.map(str::to_owned);
+            spawn_loop(app.clone(), manager, generation, "twitch", move |events| {
+                twitch::run_loop(events, args, proxy)
+            });
+            Ok(())
+        }
         SiteId::Douyin => {
-            let args = douyin::request_signed_connection(
-                douyin_sign_service,
-                room_id,
-                detail_raw,
-                cookie,
-                proxy,
-            )
-            .await?;
+            let args = douyin::request_signed_connection(room_id, detail_raw, cookie).await?;
             // The signing request may take longer than a room transition.
             // Do not let a stale result install itself after a new route won.
             if !manager.is_current(generation) {
@@ -351,6 +352,13 @@ mod tests {
 
         assert!(manager.disconnect_for_generation(102));
         assert!(manager.is_current(102));
+
+        // The frontend uses a lower stop fence followed by a higher connect
+        // epoch. If the stop IPC arrives late, it must not tear down the
+        // newer connection that has already claimed the manager.
+        assert!(manager.begin_connect(103));
+        assert!(!manager.disconnect_for_generation(102));
+        assert!(manager.is_current(103));
     }
 
     #[test]

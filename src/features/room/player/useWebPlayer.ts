@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import { invokeCmd } from "@/shared/api/tauri";
-import type { PlayUrl } from "@/shared/types/live";
+import type { PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, PlayerUiMode } from "@/shared/types/player";
 import type { AppError } from "@/shared/types/error";
 import type { MpegtsStatic, Player as MpegtsPlayer } from "@/vendor/mpegts";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 
 /** Load vendored UMD from /mpegts.js (public/) — no npm github deps on Windows. */
-async function loadMpegts(): Promise<MpegtsStatic> {
+export async function loadMpegts(): Promise<MpegtsStatic> {
   const w = window as unknown as { mpegts?: MpegtsStatic };
   if (w.mpegts?.createPlayer) return w.mpegts;
   await new Promise<void>((resolve, reject) => {
@@ -103,12 +104,65 @@ export type WebPlayerApi = {
   toggleFullscreen: () => Promise<void>;
 };
 
-function isHls(url: string): boolean {
+/** Whether a live URL requires an HLS manifest player rather than mpegts.js. */
+export function isHlsStream(url: string): boolean {
   return /\.m3u8(?:[?#]|$)/i.test(url) || /[/?&=_-]hls(?:[/?&=_-]|$)/i.test(url);
 }
 
-function mediaType(url: string): string {
-  return isHls(url) ? "mse" : "flv";
+const TWITCH_COMMERCIAL_RETRY_DELAY_MS = 8_000;
+
+export type HlsFatalRecoveryAction =
+  | { type: "restart" }
+  | { type: "refresh_play_url"; retryAfterMs: number };
+
+/**
+ * hls.js has already exhausted its own request policy before exposing a fatal
+ * error. Retry the loaded playlist once, then ask Twitch for a fresh signed
+ * playlist instead of repeatedly loading an expired URL forever.
+ */
+export function nextHlsFatalRecoveryAction(
+  failureCount: number,
+  commercialBreak = false,
+  authorizationFailed = false,
+): HlsFatalRecoveryAction {
+  // A 401/403 on a Twitch media playlist is normally a short-lived signed
+  // URL expiring. Restarting hls.js against the same URL only repeats it.
+  if (authorizationFailed && !commercialBreak) {
+    return { type: "refresh_play_url", retryAfterMs: 0 };
+  }
+  if (failureCount <= 1) return { type: "restart" };
+  return {
+    type: "refresh_play_url",
+    retryAfterMs: commercialBreak ? TWITCH_COMMERCIAL_RETRY_DELAY_MS : 0,
+  };
+}
+
+/**
+ * A commercial break is platform-delivered content, not an error to bypass.
+ * Some transient playlist responses include this text instead of a manifest;
+ * recognizing it lets us wait and refresh normally once the break changes.
+ */
+export function isTwitchCommercialBreak(error: unknown): boolean {
+  if (typeof error === "string") {
+    return /commercial\s+break\s+in\s+progress/i.test(error);
+  }
+  if (!error || typeof error !== "object") return false;
+  const value = error as {
+    reason?: unknown;
+    error?: { message?: unknown };
+    response?: { data?: unknown };
+  };
+  const candidates = [value.reason, value.error?.message, value.response?.data];
+  return candidates.some(
+    (candidate) =>
+      typeof candidate === "string" && /commercial\s+break\s+in\s+progress/i.test(candidate),
+  );
+}
+
+export function hlsResponseStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const code = (error as { response?: { code?: unknown } }).response?.code;
+  return typeof code === "number" && Number.isFinite(code) ? code : null;
 }
 
 export function playUrlKey(playUrl: PlayUrl | null): string {
@@ -155,7 +209,8 @@ function createPlayerInstanceId(): string {
 }
 
 /**
- * DOM/MSE live player (no mpv). Streams via localhost proxy so CDN headers work.
+ * DOM live player (HLS / MSE, no mpv). Streams through the localhost proxy so
+ * CDN headers and nested HLS resources work consistently.
  *
  * Re-entry fix: each open bumps `mediaKey` (new <video>), stops proxy, waits a
  * tick, then starts a fresh proxy URL with cache-bust. Avoids black screen from
@@ -163,15 +218,17 @@ function createPlayerInstanceId(): string {
  */
 export function useWebPlayer(opts: {
   playUrl: PlayUrl | null;
+  siteId?: SiteId;
   /** Rebuild even when two rooms happen to resolve to the same stream URL. */
   sessionKey?: string;
   reloadToken?: number;
   onMediaFailure?: (event: PlayerEvent) => void;
   onPlaying?: () => void;
 }): WebPlayerApi {
-  const { playUrl, sessionKey = "", reloadToken = 0, onMediaFailure, onPlaying } = opts;
+  const { playUrl, siteId, sessionKey = "", reloadToken = 0, onMediaFailure, onPlaying } = opts;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const playerRef = useRef<MpegtsPlayer | null>(null);
   const playerInstanceIdRef = useRef<string | null>(null);
   const genRef = useRef(0);
@@ -200,6 +257,16 @@ export function useWebPlayer(opts: {
   onPlayingRef.current = onPlaying;
 
   const destroyPlayer = useCallback(() => {
+    const hls = hlsRef.current;
+    hlsRef.current = null;
+    if (hls) {
+      try {
+        hls.destroy();
+      } catch {
+        /* A partly initialized HLS instance is still safe to discard. */
+      }
+    }
+
     const p = playerRef.current;
     playerRef.current = null;
     if (p) {
@@ -280,14 +347,15 @@ export function useWebPlayer(opts: {
     setMuted(false);
     mutedRef.current = false;
 
-    // Start fetching the vendored demuxer while the serialized proxy queue
-    // tears down the previous session and waits for the next video element.
-    // This removes a network round-trip from the critical first-frame path.
-    const mpegtsPromise = loadMpegts();
+    const hlsSource = isHlsStream(playbackSource.url);
+    // Start fetching the vendored MPEG-TS/FLV demuxer while the serialized
+    // proxy queue tears down the previous session. HLS uses hls.js instead;
+    // giving its manifest to mpegts.js would try to demux playlist text.
+    const mpegtsPromise = hlsSource ? null : loadMpegts();
     // If a fast room switch cancels the queued setup before it reaches the
     // await below, retain a rejection handler so the speculative preload never
     // becomes an unhandled promise rejection.
-    void mpegtsPromise.catch(() => {});
+    void mpegtsPromise?.catch(() => {});
 
     void proxyLifecycleQueue
       .enqueue(async () => {
@@ -336,6 +404,9 @@ export function useWebPlayer(opts: {
             url: playbackSource.url,
             headers: playbackSource.headers,
             sessionId: proxySessionId,
+            // Twitch and other HLS sites need the proxy to rewrite child
+            // playlists, keys and segments to the same local session.
+            hls: hlsSource,
           });
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
@@ -343,6 +414,152 @@ export function useWebPlayer(opts: {
           }
           const playLocal = `${localUrl}${localUrl.includes("?") ? "&" : "?"}t=${Date.now()}_${gen}`;
 
+          // Hard-reset the element before either MSE player attaches. This is
+          // also required for native HLS fallback after a previous MSE room.
+          video.pause();
+          video.removeAttribute("src");
+          video.srcObject = null;
+          video.load();
+          video.volume = Math.max(0, Math.min(1, volumeRef.current / 100));
+          video.muted = mutedRef.current;
+
+          const recoverMutedAutoplay = () => {
+            mutedRef.current = false;
+            setMuted(false);
+          };
+
+          if (hlsSource) {
+            if (Hls.isSupported()) {
+              const hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: true,
+                backBufferLength: 30,
+              });
+              hlsRef.current = hls;
+              const isCurrentHls = () =>
+                !cancelled && genRef.current === gen && hlsRef.current === hls;
+              // hls.js has already applied its own request retry policy when
+              // it reports a fatal error. Keep one in-place retry for a short
+              // network hiccup, then renew Twitch's short-lived signed HLS URL
+              // instead of retrying the same expired child playlist forever.
+              let hlsFatalFailureCount = 0;
+
+              hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (!isCurrentHls()) return;
+                requestPlayerAutoplay(
+                  { play: () => video.play() },
+                  video,
+                  isCurrentHls,
+                  recoverMutedAutoplay,
+                );
+              });
+              hls.on(Hls.Events.FRAG_BUFFERED, () => {
+                if (isCurrentHls()) hlsFatalFailureCount = 0;
+              });
+              hls.on(Hls.Events.ERROR, (_event, data) => {
+                if (!isCurrentHls() || !data.fatal) return;
+
+                if (siteId === "twitch") {
+                  const commercialBreak = isTwitchCommercialBreak(data);
+                  const responseStatus = hlsResponseStatus(data);
+                  const action = nextHlsFatalRecoveryAction(
+                    ++hlsFatalFailureCount,
+                    commercialBreak,
+                    responseStatus === 401 || responseStatus === 403,
+                  );
+                  if (action.type === "restart") {
+                    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                      hls.recoverMediaError();
+                    } else {
+                      hls.startLoad();
+                    }
+                    return;
+                  }
+
+                  // A commercial break remains Twitch-delivered content. We
+                  // only wait for the normal playlist transition and request a
+                  // new token afterwards; no playlist or media segment is
+                  // filtered, skipped, or replaced here.
+                  const message = commercialBreak
+                    ? "Twitch 正在播放广告，广告结束后将自动恢复"
+                    : `Twitch HLS 连接中断（${data.details}），正在更新播放地址…`;
+                  if (hlsRef.current === hls) hlsRef.current = null;
+                  try {
+                    hls.destroy();
+                  } catch {
+                    /* A fatal HLS error can already have released internals. */
+                  }
+                  setLoadError(null);
+                  setRunning(false);
+                  onMediaFailureRef.current?.({
+                    epoch: gen,
+                    generation: gen,
+                    kind: "error",
+                    message,
+                    refreshPlayUrl: true,
+                    retryAfterMs: action.retryAfterMs,
+                  });
+                  return;
+                }
+
+                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                  hls.startLoad();
+                  return;
+                }
+                if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                  hls.recoverMediaError();
+                  return;
+                }
+                const message = `HLS 播放失败：${data.details}`;
+                setLoadError(message);
+                setRunning(false);
+                try {
+                  hls.destroy();
+                } catch {
+                  /* A fatal HLS error can already have released internals. */
+                }
+                if (hlsRef.current === hls) hlsRef.current = null;
+                onMediaFailureRef.current?.({
+                  epoch: gen,
+                  generation: gen,
+                  kind: "error",
+                  message,
+                });
+              });
+              hls.loadSource(playLocal);
+              hls.attachMedia(video);
+              return;
+            }
+
+            if (video.canPlayType("application/vnd.apple.mpegurl")) {
+              const isCurrentNativeHls = () => !cancelled && genRef.current === gen;
+              video.src = playLocal;
+              video.load();
+              requestPlayerAutoplay(
+                { play: () => video.play() },
+                video,
+                isCurrentNativeHls,
+                recoverMutedAutoplay,
+              );
+              return;
+            }
+
+            throw {
+              code: "web_player_no_hls",
+              message: "当前环境不支持 HLS 直播播放",
+              site: null,
+              retryable: false,
+            } satisfies AppError;
+          }
+
+          if (!mpegtsPromise) {
+            throw {
+              code: "web_player_no_mpegts",
+              message: "MPEG-TS 播放器尚未准备好",
+              site: null,
+              retryable: true,
+            } satisfies AppError;
+          }
           const mpegts = await mpegtsPromise;
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
@@ -358,15 +575,9 @@ export function useWebPlayer(opts: {
             } satisfies AppError;
           }
 
-          // Hard-reset the element before attach.
-          video.pause();
-          video.removeAttribute("src");
-          video.srcObject = null;
-          video.load();
-
           const player = mpegts.createPlayer(
             {
-              type: mediaType(playbackSource.url),
+              type: "flv",
               isLive: true,
               url: playLocal,
               hasAudio: true,
@@ -413,18 +624,11 @@ export function useWebPlayer(opts: {
           player.attachMediaElement(video);
           player.load();
 
-          // Apply current transport prefs (unmuted after room re-entry).
-          video.volume = Math.max(0, Math.min(1, volumeRef.current / 100));
-          video.muted = mutedRef.current;
-
           // Do not await this promise in `proxyLifecycleQueue`: it can stay
           // pending until the first live media segment arrives. The queue must
           // remain free so route cleanup can stop this proxy and a re-entered
           // room can start its replacement session right away.
-          requestPlayerAutoplay(player, video, isCurrentPlayer, () => {
-            mutedRef.current = false;
-            setMuted(false);
-          });
+          requestPlayerAutoplay(player, video, isCurrentPlayer, recoverMutedAutoplay);
 
           // If we already have frames, mark running; otherwise wait for play event.
           if (!video.paused && video.readyState >= 2) {
@@ -471,7 +675,7 @@ export function useWebPlayer(opts: {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [streamKey, reloadToken, destroyPlayer, playbackSource]);
+  }, [streamKey, reloadToken, destroyPlayer, playbackSource, siteId]);
 
   // Reflect transport controls onto the element.
   useEffect(() => {
@@ -543,7 +747,7 @@ export function useWebPlayer(opts: {
     setMuted(vol === 0);
     // Nudge playback if demuxer is up but element stayed paused after re-entry.
     const video = videoRef.current;
-    if (video && video.paused && playerRef.current) {
+    if (video && video.paused && (playerRef.current || hlsRef.current)) {
       void video.play().catch(() => {});
     }
   }, []);

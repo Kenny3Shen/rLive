@@ -45,6 +45,7 @@ export const SITE_LABELS: Record<string, string> = {
   huya: "虎牙直播",
   douyin: "抖音直播",
   kuaishou: "快手直播",
+  twitch: "Twitch",
 };
 
 export const SITE_ACCENT: Record<string, string> = {
@@ -53,4 +54,5 @@ export const SITE_ACCENT: Record<string, string> = {
   huya: "#FF9A00",
   douyin: "#25F4EE",
   kuaishou: "#FF4906",
+  twitch: "#9146FF",
 };

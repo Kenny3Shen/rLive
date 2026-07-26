@@ -3954,6 +3954,7 @@ name = "rlive"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "boa_engine",
  "brotli 7.0.0",
  "chrono",
@@ -3972,6 +3973,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-native-tls",
  "tokio-tungstenite 0.26.2",
  "tracing",
  "tracing-subscriber",

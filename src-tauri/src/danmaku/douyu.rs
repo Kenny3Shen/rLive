@@ -6,14 +6,18 @@
 //! Note: Douyu's TLS stack only offers RSA-AES-GCM ciphers. Connections must
 //! use the system TLS backend (`native-tls`), not rustls.
 
-use std::time::Duration;
+use std::collections::BTreeSet;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::{SinkExt, StreamExt};
+use md5::{Digest, Md5};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use uuid::Uuid;
 
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
@@ -24,6 +28,18 @@ const SERVER_PORTS: &[u16] = &[8506, 8505, 8504, 8503, 8502, 8501];
 const CLIENT_TO_SERVER: u16 = 689;
 const SERVER_TO_CLIENT: u16 = 690;
 const HEARTBEAT_SECS: u64 = 45;
+/// The live site's web client uses this protocol version while authenticating
+/// the websocket session used to submit a normal chat message.
+const LOGIN_PROTOCOL_VERSION: &str = "20150929";
+const LOGIN_APP_VERSION: &str = "H5_2018021001beta";
+const LOGIN_VK_SALT: &str = r#"r5*^5;}2#${XF[h+;'./.Q'1;,-]f'p["#;
+const SEND_LOGIN_TIMEOUT: Duration = Duration::from_secs(8);
+/// A room may impose a shorter account-level limit. This client-side bound is
+/// only a defensive ceiling for a manually composed plain-text message.
+const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 100;
+const SEND_PROXY_DISCOVERY_URL: &str = "https://www.douyu.com/swf_api/getProxyServer";
+const SEND_PROXY_HOST: &str = "wsproxy.douyu.com";
+const SEND_PROXY_PORTS: &[u16] = &[6671, 6672, 6673, 6674, 6675];
 
 // A Douyu packet has a four-byte outer length followed by this fixed header:
 // duplicate length (4), message type (2), encryption/reserved (2).  The
@@ -45,6 +61,57 @@ pub struct DouyuDanmakuArgs {
     pub room_id: String,
 }
 
+/// The browser-cookie values that authenticate a Douyu STT chat session.
+///
+/// Do not derive `Debug`: callers must never accidentally put these values in
+/// logs or a Tauri error payload. They are copied out of the local account
+/// store only for the lifetime of an explicitly user-initiated send.
+#[derive(Clone)]
+struct DouyuSendCredentials {
+    username: String,
+    stk: String,
+    ltkid: String,
+    did: String,
+    biz: String,
+}
+
+/// The documented public discovery response for the authenticated business
+/// websocket. It is deliberately separate from the danmaku read servers:
+/// sending a Cookie-derived STT login packet to the read gateway can neither
+/// authenticate correctly nor be safely retried.
+#[derive(Debug, Deserialize)]
+struct SendProxyDiscoveryResponse {
+    #[serde(default)]
+    error: i64,
+    #[serde(default)]
+    servers: Vec<SendProxyServer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SendProxyServer {
+    ip: String,
+    port: SendProxyPort,
+}
+
+/// The endpoint has returned both JSON numbers and decimal strings for ports.
+/// Accept both shapes, then constrain the final value to the fixed allowlist
+/// before opening a WebSocket.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SendProxyPort {
+    Number(u16),
+    Text(String),
+}
+
+impl SendProxyPort {
+    fn parse(self) -> Option<u16> {
+        match self {
+            Self::Number(port) => Some(port),
+            Self::Text(port) => port.parse().ok(),
+        }
+    }
+}
+
 pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<DouyuDanmakuArgs> {
     let rid = raw
         .get("room_id")
@@ -62,6 +129,159 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<DouyuDanmakuArgs> 
         return Err(AppError::new("danmaku_bad_room", "empty douyu room id").with_site("douyu"));
     }
     Ok(DouyuDanmakuArgs { room_id: rid })
+}
+
+/// Read a named value from a browser-style Cookie header without logging it.
+fn cookie_value<'a>(cookie: &'a str, key: &str) -> Option<&'a str> {
+    let cookie = cookie
+        .trim()
+        .strip_prefix("Cookie:")
+        .unwrap_or(cookie)
+        .trim();
+    cookie.split(';').find_map(|part| {
+        let (candidate, value) = part.trim().split_once('=')?;
+        (candidate.trim() == key)
+            .then_some(value.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn cookie_value_any(cookie: &str, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        cookie_value(cookie, key)
+            // Cookie fields used by the STT gateway are short opaque tokens.
+            // Reject pathological manual input before it becomes a websocket
+            // frame, while keeping the actual value local.
+            .filter(|value| value.len() <= 4_096)
+            .map(str::to_owned)
+    })
+}
+
+fn credentials_from_cookie(cookie: &str) -> Option<DouyuSendCredentials> {
+    let username = cookie_value_any(cookie, &["acf_username"])?;
+    let stk = cookie_value_any(cookie, &["acf_stk"])?;
+    // Older browser sessions and some QR flows use an underscore-wrapped
+    // spelling. Accept both forms so users can paste their complete Cookie
+    // header without having to edit a token by hand.
+    let ltkid = cookie_value_any(cookie, &["acf_ltkid", "_acf_ltkid_", "acf_ltkid_"])?;
+    let did = cookie_value_any(cookie, &["acf_did", "dy_did"]).unwrap_or_else(|| {
+        // The device id participates in the protocol's vk checksum. A fresh
+        // UUID is compatible with a complete authenticated session when an
+        // older cookie export omitted this non-session field.
+        Uuid::new_v4()
+            .to_string()
+            .replace('-', "")
+            .to_ascii_uppercase()
+    });
+    let biz = cookie_value_any(cookie, &["acf_biz"]).unwrap_or_default();
+    Some(DouyuSendCredentials {
+        username,
+        stk,
+        ltkid,
+        did,
+        biz,
+    })
+}
+
+/// Whether a saved browser Cookie has the session fields needed to authenticate
+/// a user-initiated normal chat submission.
+pub fn has_send_credentials(cookie: &str) -> bool {
+    credentials_from_cookie(cookie).is_some()
+}
+
+/// Validate a manually composed regular chat message before the command
+/// reserves its short cooldown. Douyu applies account/room-specific limits on
+/// top of this conservative local safety bound.
+pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
+    let message = value.trim();
+    if message.is_empty() {
+        return Err(AppError::new("douyu_send_empty", "请输入要发送的弹幕内容").with_site("douyu"));
+    }
+    if message.encode_utf16().count() > MAX_OUTGOING_CHAT_UTF16_UNITS {
+        return Err(AppError::new(
+            "douyu_send_too_long",
+            format!("单条弹幕最多 {MAX_OUTGOING_CHAT_UTF16_UNITS} 个字符"),
+        )
+        .with_site("douyu"));
+    }
+    if message.chars().any(char::is_control) {
+        return Err(
+            AppError::new("douyu_send_invalid_text", "弹幕不能包含换行或控制字符")
+                .with_site("douyu"),
+        );
+    }
+    Ok(message.to_string())
+}
+
+/// Escape one STT field value. The protocol uses `@=` and `/` as structural
+/// separators, so outgoing user text and opaque Cookie values must be encoded
+/// before they are placed into a packet.
+fn escape_stt(value: &str) -> String {
+    value.replace('@', "@A").replace('/', "@S")
+}
+
+fn encode_stt_fields(fields: &[(&str, &str)]) -> String {
+    let mut body = String::new();
+    for (key, value) in fields {
+        body.push_str(key);
+        body.push_str("@=");
+        body.push_str(&escape_stt(value));
+        body.push('/');
+    }
+    body
+}
+
+fn current_unix_seconds() -> AppResult<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| {
+            AppError::new("douyu_send_clock", "系统时间异常，无法验证斗鱼登录状态")
+                .with_site("douyu")
+        })
+}
+
+fn login_request_body(room_id: &str, credentials: &DouyuSendCredentials, now: u64) -> String {
+    let now = now.to_string();
+    let vk_input = format!("{now}{LOGIN_VK_SALT}{}", credentials.did);
+    let vk = format!("{:x}", Md5::digest(vk_input.as_bytes()));
+    encode_stt_fields(&[
+        ("type", "loginreq"),
+        ("username", credentials.username.as_str()),
+        ("ct", "0"),
+        ("password", ""),
+        ("roomid", room_id),
+        ("devid", credentials.did.as_str()),
+        ("rt", now.as_str()),
+        ("pt", "2"),
+        ("vk", vk.as_str()),
+        ("ver", LOGIN_PROTOCOL_VERSION),
+        ("aver", LOGIN_APP_VERSION),
+        ("biz", credentials.biz.as_str()),
+        ("stk", credentials.stk.as_str()),
+        ("ltkid", credentials.ltkid.as_str()),
+    ])
+}
+
+fn chat_request_body(message: &str) -> String {
+    // This is the ordinary-text payload used by the web room client. It has no
+    // gift, payment, scheduling, or repeat fields; every call sends one text
+    // message explicitly supplied by the user.
+    encode_stt_fields(&[
+        ("type", "chatmessage"),
+        ("receiver", "0"),
+        ("content", message),
+        ("scope", ""),
+        ("col", "0"),
+        ("pid", ""),
+        ("p2p", "0"),
+        ("nc", "0"),
+        ("rev", "0"),
+        ("hg", "0"),
+        ("ifs", "0"),
+        ("sid", ""),
+        ("lid", "0"),
+    ])
 }
 
 /// Frame a STT body for Douyu binary protocol.
@@ -386,6 +606,163 @@ fn decode_binary(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
+/// Keep the Cookie-derived login packet on the endpoint class that Douyu
+/// publishes for business websocket traffic. The discovery payload is treated
+/// as untrusted input even though it comes from a trusted HTTPS origin: only
+/// the expected host and small known port set can ever receive the packet.
+fn parse_send_proxy_urls(payload: SendProxyDiscoveryResponse) -> AppResult<Vec<String>> {
+    if payload.error != 0 {
+        return Err(AppError::new(
+            "douyu_send_server_discovery",
+            "斗鱼发送服务器暂时不可用，请稍后重试",
+        )
+        .with_site("douyu")
+        .retryable());
+    }
+
+    let ports = payload
+        .servers
+        .into_iter()
+        .filter_map(|server| {
+            let port = server.port.parse()?;
+            (server.ip.eq_ignore_ascii_case(SEND_PROXY_HOST) && SEND_PROXY_PORTS.contains(&port))
+                .then_some(port)
+        })
+        .collect::<BTreeSet<_>>();
+    if ports.is_empty() {
+        return Err(AppError::new(
+            "douyu_send_server_discovery",
+            "斗鱼发送服务器地址无效，请稍后重试",
+        )
+        .with_site("douyu")
+        .retryable());
+    }
+
+    Ok(ports
+        .into_iter()
+        .map(|port| format!("wss://{SEND_PROXY_HOST}:{port}/"))
+        .collect())
+}
+
+async fn discover_send_proxy_urls(
+    proxy: Option<&str>,
+    room_id: &str,
+    attempt_id: &Uuid,
+) -> AppResult<Vec<String>> {
+    let client = crate::http_client::build_no_redirect_client(proxy)?;
+    let response = client
+        .get(SEND_PROXY_DISCOVERY_URL)
+        .header("Referer", "https://www.douyu.com/")
+        .send()
+        .await
+        .map_err(|error| {
+            // The request URL is fixed and contains no account data. Do not
+            // include the configured proxy URL, Cookie, or raw response body.
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "server_discovery_request",
+                error = %error,
+                "douyu send server discovery request failed"
+            );
+            AppError::new(
+                "douyu_send_server_discovery",
+                "无法获取斗鱼发送服务器，请稍后重试",
+            )
+            .with_site("douyu")
+            .retryable()
+        })?;
+    if !response.status().is_success() {
+        tracing::warn!(
+            %attempt_id,
+            room_id,
+            stage = "server_discovery_response",
+            status = response.status().as_u16(),
+            "douyu send server discovery returned a non-success status"
+        );
+        return Err(AppError::new(
+            "douyu_send_server_discovery",
+            "无法获取斗鱼发送服务器，请稍后重试",
+        )
+        .with_site("douyu")
+        .retryable());
+    }
+    let payload = response
+        .json::<SendProxyDiscoveryResponse>()
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "server_discovery_parse",
+                error = %error,
+                "douyu send server discovery response could not be parsed"
+            );
+            AppError::new(
+                "douyu_send_server_discovery",
+                "斗鱼发送服务器返回无效数据，请稍后重试",
+            )
+            .with_site("douyu")
+            .retryable()
+        })?;
+    let urls = parse_send_proxy_urls(payload).map_err(|error| {
+        tracing::warn!(
+            %attempt_id,
+            room_id,
+            stage = "server_discovery_validate",
+            error_code = %error.code,
+            "douyu send server discovery response was rejected"
+        );
+        error
+    })?;
+    Ok(urls)
+}
+
+async fn connect_douyu_send_ws(
+    proxy: Option<&str>,
+    room_id: &str,
+    attempt_id: &Uuid,
+) -> AppResult<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
+    let urls = discover_send_proxy_urls(proxy, room_id, attempt_id).await?;
+    for url in urls {
+        let mut request = match url.as_str().into_client_request() {
+            Ok(request) => request,
+            Err(_) => {
+                continue;
+            }
+        };
+        let headers = request.headers_mut();
+        if let Ok(value) = HeaderValue::from_str("https://www.douyu.com/") {
+            headers.insert("Origin", value);
+        }
+        if let Ok(value) = HeaderValue::from_str(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        ) {
+            headers.insert("User-Agent", value);
+        }
+        match connect_async(request).await {
+            Ok((ws, _)) => return Ok(ws),
+            Err(error) => {
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    endpoint = %url,
+                    stage = "server_connect",
+                    error = %error,
+                    "douyu send websocket connect failed"
+                );
+            }
+        }
+    }
+    Err(
+        AppError::new("douyu_send_network", "无法连接斗鱼发送服务器，请稍后重试")
+            .with_site("douyu")
+            .retryable(),
+    )
+}
+
 async fn connect_douyu_ws() -> AppResult<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 > {
@@ -423,6 +800,236 @@ async fn connect_douyu_ws() -> AppResult<
     )
     .with_site("douyu")
     .retryable())
+}
+
+fn stt_field<'a>(stt: &'a str, expected_key: &str) -> Option<&'a str> {
+    stt.split('/').find_map(|field| {
+        let (key, value) = field.split_once("@=")?;
+        (key == expected_key).then_some(value)
+    })
+}
+
+/// A successful authenticated login reply includes the account nickname. An
+/// anonymous `loginres` has an empty nickname and must never be allowed to
+/// proceed to the write packet.
+fn login_reply_from_stt(stt: &str) -> Option<bool> {
+    (stt_type(stt)? == "loginres").then(|| {
+        stt_field(stt, "nickname")
+            .map(str::trim)
+            .is_some_and(|nickname| !nickname.is_empty())
+    })
+}
+
+fn login_reply_from_binary(data: &[u8]) -> Option<bool> {
+    let mut reply = None;
+    for_each_packet(data, |stt| {
+        if reply.is_none() {
+            reply = login_reply_from_stt(stt);
+        }
+    });
+    reply
+}
+
+/// Authenticate a short-lived websocket session and submit one ordinary
+/// Douyu chat message.
+///
+/// There is intentionally no automatic retry and no optimistic local event:
+/// once the final WebSocket write succeeds, the remote side may already have
+/// accepted the message even if a subsequent network error occurs. The normal
+/// room danmaku connection remains the source of truth for the eventual echo.
+pub async fn send_chat(
+    cookie: &str,
+    room_id: &str,
+    message: &str,
+    proxy: Option<&str>,
+) -> AppResult<()> {
+    let room_id = room_id.trim();
+    if room_id.is_empty()
+        || room_id.len() > 32
+        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(AppError::new("douyu_send_invalid_room", "斗鱼直播间号无效").with_site("douyu"));
+    }
+    let message = normalize_outgoing_message(message)?;
+    let credentials = credentials_from_cookie(cookie).ok_or_else(|| {
+        AppError::new(
+            "douyu_send_cookie_missing",
+            "请先在设置中扫码登录或保存含 acf_username、acf_stk、acf_ltkid 的斗鱼 Cookie",
+        )
+        .with_site("douyu")
+    })?;
+    // Failure diagnostics use this id to correlate stages. Neither Cookie
+    // fields nor outgoing text may reach the persistent log.
+    let attempt_id = Uuid::new_v4();
+    let login = login_request_body(room_id, &credentials, current_unix_seconds()?);
+
+    let ws = match connect_douyu_send_ws(proxy, room_id, &attempt_id).await {
+        Ok(ws) => ws,
+        Err(error) => {
+            // `connect_douyu_ws` logs the individual port failures. Retain the
+            // final safe error code here to tie them to this send attempt.
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "connect",
+                error_code = %error.code,
+                retryable = error.retryable,
+                "douyu send websocket connection failed"
+            );
+            return Err(
+                AppError::new("douyu_send_network", "无法连接斗鱼弹幕服务器，请稍后重试")
+                    .with_site("douyu")
+                    .retryable(),
+            );
+        }
+    };
+    let (mut write, mut read) = ws.split();
+    write
+        .send(Message::Binary(serialize_packet(&login).into()))
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "login_write",
+                error = %error,
+                "douyu send login packet write failed"
+            );
+            AppError::new("douyu_send_network", "斗鱼弹幕服务器连接中断，请稍后重试")
+                .with_site("douyu")
+                .retryable()
+        })?;
+    let login_result = time::timeout(SEND_LOGIN_TIMEOUT, async {
+        loop {
+            let frame = match read.next().await {
+                Some(Ok(frame)) => frame,
+                Some(Err(error)) => {
+                    tracing::warn!(
+                        %attempt_id,
+                        room_id,
+                        stage = "login_read",
+                        error = %error,
+                        "douyu send login response read failed"
+                    );
+                    return Err(AppError::new(
+                        "douyu_send_network",
+                        "斗鱼登录连接中断，请稍后重试",
+                    )
+                    .with_site("douyu")
+                    .retryable());
+                }
+                None => {
+                    tracing::warn!(
+                        %attempt_id,
+                        room_id,
+                        stage = "login_read",
+                        "douyu send login websocket closed before a response"
+                    );
+                    return Err(AppError::new(
+                        "douyu_send_login_expired",
+                        "斗鱼登录会话已关闭，请更新 Cookie 后重试",
+                    )
+                    .with_site("douyu"));
+                }
+            };
+            let reply = match frame {
+                Message::Binary(data) => login_reply_from_binary(&data),
+                Message::Text(text) => login_reply_from_stt(text.as_str()),
+                Message::Ping(payload) => {
+                    write.send(Message::Pong(payload)).await.map_err(|error| {
+                        tracing::warn!(
+                            %attempt_id,
+                            room_id,
+                            stage = "login_pong",
+                            error = %error,
+                            "douyu send login ping response failed"
+                        );
+                        AppError::new("douyu_send_network", "斗鱼登录连接中断，请稍后重试")
+                            .with_site("douyu")
+                            .retryable()
+                    })?;
+                    None
+                }
+                Message::Close(frame) => {
+                    tracing::warn!(
+                        %attempt_id,
+                        room_id,
+                        stage = "login_close",
+                        close_frame = frame.is_some(),
+                        "douyu send login websocket closed"
+                    );
+                    return Err(AppError::new(
+                        "douyu_send_login_expired",
+                        "斗鱼登录会话已关闭，请更新 Cookie 后重试",
+                    )
+                    .with_site("douyu"));
+                }
+                _ => None,
+            };
+            if let Some(authenticated) = reply {
+                if authenticated {
+                    return Ok(());
+                }
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    stage = "login_response",
+                    error_code = "douyu_send_login_expired",
+                    "douyu send login was rejected"
+                );
+                return Err(AppError::new(
+                    "douyu_send_login_expired",
+                    "斗鱼登录状态已失效，请重新扫码或更新 Cookie 后重试",
+                )
+                .with_site("douyu"));
+            }
+        }
+    })
+    .await;
+    match login_result {
+        Ok(result) => result?,
+        Err(_) => {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "login_timeout",
+                timeout_seconds = SEND_LOGIN_TIMEOUT.as_secs(),
+                "douyu send login confirmation timed out"
+            );
+            return Err(AppError::new(
+                "douyu_send_login_timeout",
+                "斗鱼登录确认超时，请检查 Cookie 后重试",
+            )
+            .with_site("douyu")
+            .retryable());
+        }
+    }
+
+    // `send` flushes the complete WebSocket frame. Do not wait for or retry an
+    // undocumented response packet here: server-side filtering can be
+    // asynchronous, and the live room connection is responsible for showing a
+    // confirmed echo.
+    write
+        .send(Message::Binary(
+            serialize_packet(&chat_request_body(&message)).into(),
+        ))
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "chat_write",
+                error = %error,
+                "douyu send chat packet write failed"
+            );
+            AppError::new(
+                "douyu_send_unknown",
+                "发送状态未知，请到直播间确认是否已送达",
+            )
+            .with_site("douyu")
+            .retryable()
+        })?;
+    Ok(())
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> AppResult<()> {
@@ -538,6 +1145,93 @@ mod tests {
         let decoded = deserialize_packets(&pkt);
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0], body);
+    }
+
+    #[test]
+    fn outgoing_send_requires_the_authenticated_cookie_fields() {
+        assert!(!has_send_credentials("acf_username=viewer"));
+        assert!(!has_send_credentials("acf_stk=session; acf_ltkid=login"));
+        assert!(has_send_credentials(
+            "acf_username=viewer; acf_stk=session; acf_ltkid=login; acf_did=device; acf_biz=1"
+        ));
+        assert!(has_send_credentials(
+            "Cookie: acf_username=viewer; acf_stk=session; _acf_ltkid_=legacy-login"
+        ));
+    }
+
+    #[test]
+    fn send_proxy_discovery_only_accepts_the_trusted_business_websocket_hosts() {
+        let response: SendProxyDiscoveryResponse = serde_json::from_value(serde_json::json!({
+            "error": 0,
+            "servers": [
+                { "ip": "wsproxy.douyu.com", "port": "6675" },
+                { "ip": "WSPROXY.DOUYU.COM", "port": 6671 },
+                { "ip": "wsproxy.douyu.com", "port": 6671 },
+                { "ip": "wsproxy.douyu.com", "port": 8506 },
+                { "ip": "untrusted.example", "port": 6672 }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            parse_send_proxy_urls(response).unwrap(),
+            vec![
+                "wss://wsproxy.douyu.com:6671/".to_string(),
+                "wss://wsproxy.douyu.com:6675/".to_string(),
+            ]
+        );
+
+        let invalid: SendProxyDiscoveryResponse = serde_json::from_value(serde_json::json!({
+            "error": 0,
+            "servers": [{ "ip": "127.0.0.1", "port": 6671 }]
+        }))
+        .unwrap();
+        assert_eq!(
+            parse_send_proxy_urls(invalid).unwrap_err().code,
+            "douyu_send_server_discovery"
+        );
+    }
+
+    #[test]
+    fn outgoing_message_is_single_line_and_bounded() {
+        assert_eq!(normalize_outgoing_message("  你好  ").unwrap(), "你好");
+        assert!(normalize_outgoing_message("\n").is_err());
+        assert!(normalize_outgoing_message("hello\nworld").is_err());
+        assert!(normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_UTF16_UNITS)).is_ok());
+        assert!(
+            normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_UTF16_UNITS + 1)).is_err()
+        );
+        assert!(normalize_outgoing_message(&"😀".repeat(50)).is_ok());
+        assert!(normalize_outgoing_message(&"😀".repeat(51)).is_err());
+    }
+
+    #[test]
+    fn outgoing_stt_body_escapes_user_text_and_cookie_values() {
+        let body = chat_request_body("@主播/冲啊");
+        assert!(body.starts_with("type@=chatmessage/receiver@=0/"));
+        assert!(body.contains("content@=@A主播@S冲啊/"));
+
+        let credentials = DouyuSendCredentials {
+            username: "u/name@site".into(),
+            stk: "stk/value".into(),
+            ltkid: "login@key".into(),
+            did: "device".into(),
+            biz: "1".into(),
+        };
+        let login = login_request_body("123", &credentials, 1_700_000_000);
+        assert!(login.starts_with("type@=loginreq/username@=u@Sname@Asite/"));
+        assert!(login.contains("stk@=stk@Svalue/"));
+        assert!(login.contains("ltkid@=login@Akey/"));
+        assert!(login.contains("vk@="));
+    }
+
+    #[test]
+    fn authenticated_login_reply_requires_a_nickname() {
+        let success =
+            serialize_packet("type@=loginres/userid@=42/username@=viewer/nickname@=热心观众/");
+        let anonymous = serialize_packet("type@=loginres/userid@=0/username@=/nickname@=/");
+        assert_eq!(login_reply_from_binary(&success), Some(true));
+        assert_eq!(login_reply_from_binary(&anonymous), Some(false));
+        assert_eq!(login_reply_from_stt("type@=chatmsg/txt@=ignored/"), None);
     }
 
     #[test]

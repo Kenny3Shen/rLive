@@ -18,7 +18,7 @@ use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId,
+    RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -325,10 +325,6 @@ impl LiveSite for KuaishouSite {
             return Err(Self::parse_err("播放清晰度缺少可用的快手流地址"));
         }
         Ok(urls)
-    }
-
-    async fn get_live_status(&self, room_id: &str) -> AppResult<bool> {
-        Ok(self.get_room_detail(room_id).await?.status)
     }
 }
 
@@ -773,6 +769,13 @@ fn parse_room_detail_html(html: &str, requested_room_id: &str) -> AppResult<Live
             item.get("watchingCountText"),
         ]),
         status,
+        live_started_at: parse_live_started_at(
+            live_stream
+                .get("startTime")
+                .or_else(|| live_stream.get("start_time"))
+                .or_else(|| item.get("startTime"))
+                .or_else(|| item.get("start_time")),
+        ),
         notice: first_non_empty([
             json_str(author.get("description").unwrap_or(&Value::Null)),
             json_str(item.get("notice").unwrap_or(&Value::Null)),

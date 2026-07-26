@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { SiteId, SiteInfo } from "@/shared/types/live";
 import { SiteLogo } from "@/shared/components/SiteLogo";
@@ -15,9 +16,17 @@ const FALLBACK_SITES: SiteInfo[] = [
   { id: "huya", name: "Huya", ready: true },
   { id: "douyin", name: "Douyin", ready: true },
   { id: "kuaishou", name: "Kuaishou", ready: true },
+  { id: "twitch", name: "Twitch", ready: true },
 ];
 
-const PLATFORM_ORDER: readonly SiteId[] = ["bilibili", "douyu", "huya", "douyin", "kuaishou"];
+const PLATFORM_ORDER: readonly SiteId[] = [
+  "bilibili",
+  "douyu",
+  "huya",
+  "douyin",
+  "kuaishou",
+  "twitch",
+];
 
 const platformOrderIndex = new Map<SiteId, number>(
   PLATFORM_ORDER.map((siteId, index) => [siteId, index]),
@@ -39,7 +48,7 @@ type SiteSwitcherProps = {
   onValueChange?: (value: SiteSwitcherValue) => void;
   /** Adds an all-platform option before the regular platform tabs. */
   includeAll?: boolean;
-  /** Historical follows remain selectable even for a currently unavailable site. */
+  /** Renders a controlled platform filter rather than the homepage selector. */
   filterMode?: boolean;
   className?: string;
 };
@@ -52,13 +61,18 @@ export function SiteSwitcher({
   className,
 }: SiteSwitcherProps) {
   const siteId = useSettingsStore((s) => s.siteId);
+  const disabledSiteIds = useSettingsStore((s) => s.disabledSiteIds);
   const setSiteId = useSettingsStore((s) => s.setSiteId);
   const [sites, setSites] = useState<SiteInfo[]>(FALLBACK_SITES);
   const selectedValue = value ?? siteId;
+  const visibleSites = useMemo(
+    () => sites.filter((site) => isSiteEnabled(site.id, disabledSiteIds)),
+    [disabledSiteIds, sites],
+  );
 
   const entries: Array<SiteInfo | { id: "all"; name: string; ready: true }> = includeAll
-    ? [{ id: "all", name: "全部平台", ready: true }, ...sites]
-    : sites;
+    ? [{ id: "all", name: "全部平台", ready: true }, ...visibleSites]
+    : visibleSites;
 
   useEffect(() => {
     let cancelled = false;

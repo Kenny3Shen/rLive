@@ -1,11 +1,16 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { DanmakuEvent } from "@/shared/types/live";
+import { Copy, SendHorizontal } from "lucide-react";
+import { invokeCmd } from "@/shared/api/tauri";
+import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmaku/filter";
 import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
+import { getDanmakuSendConfig } from "./danmaku/sending";
 import { cn } from "@/lib/utils";
 
 // Keep the rendered DOM deliberately small even when a room is producing
@@ -35,11 +40,117 @@ type DanmakuLine = {
 };
 
 /**
+ * Normalise text before it enters the clipboard or a user-triggered repeat
+ * request. The repeat action transmits this exact content; it does not append
+ * a literal “+1”.
+ */
+export function formatDanmakuClipboardText(content: string): string {
+  return content.trim();
+}
+
+/**
+ * The async Clipboard API can be unavailable in older WebViews, in insecure
+ * origins, or when its permission is denied. Fall back to the legacy command
+ * while preserving the user's active selection and focus as much as possible.
+ */
+export async function copyDanmakuText(text: string): Promise<boolean> {
+  if (!text || typeof document === "undefined") return false;
+
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // A rejected native clipboard request can still succeed through the
+    // WebView-compatible fallback below.
+  }
+
+  const selection = document.getSelection();
+  const ranges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, index) =>
+        selection.getRangeAt(index).cloneRange(),
+      )
+    : [];
+  const activeElement = document.activeElement as HTMLElement | null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.position = "fixed";
+  textarea.style.inset = "0";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+
+  try {
+    document.body.appendChild(textarea);
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    try {
+      textarea.remove();
+    } catch {
+      // The fallback is already complete or failed; cleanup should not turn
+      // that outcome into an unhandled action error.
+    }
+    try {
+      if (selection) {
+        selection.removeAllRanges();
+        for (const range of ranges) selection.addRange(range);
+      }
+    } catch {
+      // A selection can become detached while the clipboard request is open.
+    }
+    try {
+      if (activeElement?.isConnected) activeElement.focus({ preventScroll: true });
+    } catch {
+      // Older WebViews may not support the focus options object.
+      try {
+        activeElement?.focus();
+      } catch {
+        // Focus restoration is best-effort only.
+      }
+    }
+  }
+}
+
+type ActionStatus = "copied" | "copy-failed" | "sent" | "send-failed" | null;
+
+function actionStatusMessage(status: ActionStatus): string | null {
+  switch (status) {
+    case "copied":
+      return "已复制弹幕内容";
+    case "copy-failed":
+      return "复制失败，请手动选择内容";
+    case "sent":
+      return "已发送相同的弹幕";
+    case "send-failed":
+      return "发送失败，请检查账号登录状态或直播间限制";
+    default:
+      return null;
+  }
+}
+
+/**
  * Appending a batch keeps prior `DanmakuLine` references intact. Memoizing a
  * row therefore avoids reconciling up to 300 already-rendered messages for
  * each animation-frame flush in a busy room.
  */
-const DanmakuRow = memo(function DanmakuRow({ event }: { event: DanmakuEvent }) {
+const DanmakuRow = memo(function DanmakuRow({
+  event,
+  siteId,
+  roomId,
+}: {
+  event: DanmakuEvent;
+  siteId?: SiteId;
+  roomId?: string;
+}) {
   if (event.kind === "system") {
     return (
       <div className="px-1.5 py-0.5 text-xs text-muted-foreground">
@@ -48,21 +159,145 @@ const DanmakuRow = memo(function DanmakuRow({ event }: { event: DanmakuEvent }) 
     );
   }
 
+  return <SelectableDanmakuRow event={event} siteId={siteId} roomId={roomId} />;
+});
+
+/**
+ * This state intentionally lives below the memoized list row. Opening one
+ * action menu therefore never invalidates the high-frequency parent list or
+ * its other 299 rendered messages.
+ */
+const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
+  event,
+  siteId,
+  roomId,
+}: {
+  event: DanmakuEvent;
+  siteId?: SiteId;
+  roomId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [actionStatus, setActionStatus] = useState<ActionStatus>(null);
+  const [sending, setSending] = useState(false);
+  const message = formatDanmakuClipboardText(event.content);
+  const user = event.user.trim() || "匿名";
+  const sendConfig = getDanmakuSendConfig(siteId);
+  const canRepeat = event.kind === "chat" && Boolean(sendConfig && roomId);
+  const statusMessage = actionStatusMessage(actionStatus);
+  const actionFailed = actionStatus === "copy-failed" || actionStatus === "send-failed";
+
+  if (!message) {
+    return (
+      <div className="rounded-md px-1.5 py-1 leading-relaxed">
+        <span
+          className="mr-1.5 font-medium text-primary"
+          style={event.color ? { color: event.color } : undefined}
+        >
+          {user}：
+        </span>
+        <DanmakuRichText
+          content={event.content}
+          spans={event.spans}
+          className="text-foreground/90"
+        />
+      </div>
+    );
+  }
+
+  async function copy() {
+    const copied = await copyDanmakuText(message);
+    setActionStatus(copied ? "copied" : "copy-failed");
+  }
+
+  async function repeat() {
+    if (!sendConfig || !roomId || sending) return;
+    setSending(true);
+    setActionStatus(null);
+    try {
+      await invokeCmd<void>(sendConfig.sendCommand, { roomId, message });
+      setActionStatus("sent");
+    } catch {
+      setActionStatus("send-failed");
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
-    <div className="rounded-md px-1.5 py-1 leading-relaxed hover:bg-muted/50">
-      <span
-        className="mr-1.5 font-medium text-primary"
-        style={event.color ? { color: event.color } : undefined}
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setActionStatus(null);
+      }}
+    >
+      <PopoverTrigger
+        type="button"
+        aria-label={`选择 ${user} 的弹幕`}
+        className="block w-full cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        {event.user.trim() || "匿名"}：
-      </span>
-      <DanmakuRichText content={event.content} spans={event.spans} className="text-foreground/90" />
-    </div>
+        <span
+          className="mr-1.5 font-medium text-primary"
+          style={event.color ? { color: event.color } : undefined}
+        >
+          {user}：
+        </span>
+        <DanmakuRichText
+          content={event.content}
+          spans={event.spans}
+          className="text-foreground/90"
+        />
+      </PopoverTrigger>
+      <PopoverContent
+        side="left"
+        align="start"
+        className="w-36 p-1"
+      >
+        <div className="flex flex-col items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="复制弹幕"
+            title="复制弹幕"
+            onClick={() => void copy()}
+          >
+            <Copy aria-hidden />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={!canRepeat || sending}
+            aria-label={canRepeat ? "发送相同的弹幕（+1）" : "当前平台暂不支持发送弹幕"}
+            title={canRepeat ? "发送相同的弹幕（+1）" : "当前平台暂不支持发送弹幕"}
+            onClick={() => void repeat()}
+          >
+            <SendHorizontal aria-hidden />
+          </Button>
+        </div>
+        {statusMessage && (
+          <p
+            role="status"
+            aria-live="polite"
+            className={cn(
+              "px-1 py-1 text-center text-xs leading-snug",
+              actionFailed ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {statusMessage}
+          </p>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 });
 
 type DanmakuPanelProps = {
   active: boolean;
+  /** Current room identity used only by the explicit “+1” send action. */
+  siteId?: SiteId;
+  roomId?: string;
   /** Keep collecting while another room-side tab is open, without repainting it. */
   visible?: boolean;
   className?: string;
@@ -71,6 +306,8 @@ type DanmakuPanelProps = {
 
 export const DanmakuPanel = memo(function DanmakuPanel({
   active,
+  siteId,
+  roomId,
   visible = true,
   className,
   statusText,
@@ -284,7 +521,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
             )}
             {items.map((line) => (
-              <DanmakuRow key={line.id} event={line.event} />
+              <DanmakuRow key={line.id} event={line.event} siteId={siteId} roomId={roomId} />
             ))}
           </div>
         </ScrollArea>

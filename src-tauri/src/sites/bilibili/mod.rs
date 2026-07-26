@@ -3,7 +3,7 @@
 mod api;
 
 pub use api::{
-    DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_categories, parse_category_rooms, parse_live_status,
+    DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_categories, parse_category_rooms,
     parse_play_qualities, parse_play_urls, parse_recommend_rooms, parse_search_rooms,
 };
 
@@ -538,16 +538,6 @@ impl LiveSite for BilibiliSite {
         q.insert("qn".into(), qn);
         let text = self.get_room_play_info(q).await?;
         parse_play_urls(&text)
-    }
-
-    async fn get_live_status(&self, room_id: &str) -> AppResult<bool> {
-        let text = self
-            .get_json(
-                "https://api.live.bilibili.com/room/v1/Room/get_info",
-                &[("room_id", room_id.into())],
-            )
-            .await?;
-        parse_live_status(&text)
     }
 }
 

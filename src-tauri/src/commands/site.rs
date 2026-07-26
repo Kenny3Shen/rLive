@@ -16,17 +16,21 @@ pub struct SiteInfo {
     pub ready: bool,
 }
 
-fn load_cookie(state: &AppState, site_id: &SiteId) -> AppResult<Option<String>> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
-    account::get_cookie(&conn, site_id)
-}
-
 fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::LiveSite>> {
-    let cookie = load_cookie(state, site_id)?;
-    sites::site(site_id, cookie)
+    // A site instance can make several dependent requests (Twitch bootstrap,
+    // GraphQL, room data, then its HLS master playlist). Snapshot the cookie
+    // and proxy together so every request in that chain follows the setting.
+    let (cookie, proxy) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        (
+            account::get_cookie(&conn, site_id)?,
+            crate::settings::get(&conn)?.proxy,
+        )
+    };
+    sites::site_with_proxy(site_id, cookie, proxy.as_deref())
 }
 
 #[tauri::command]

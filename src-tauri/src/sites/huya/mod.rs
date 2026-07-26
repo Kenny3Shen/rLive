@@ -12,7 +12,7 @@ use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId,
+    RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -466,7 +466,17 @@ impl LiveSite for HuyaSite {
         if sub_sid == 0 {
             sub_sid = top_sid;
         }
-        let presenter = if top_sid > 0 { top_sid } else { sub_sid };
+        // Channel ids identify a room's message stream, whereas `lPid` for a
+        // chat send identifies the presenter. Keep both rather than silently
+        // substituting one for the other when a channel happens to work.
+        let presenter = [
+            json_i64(profile.get("lUid").unwrap_or(&Value::Null)),
+            json_i64(live_info.get("lPresenterUid").unwrap_or(&Value::Null)),
+            json_i64(live_info.get("lUid").unwrap_or(&Value::Null)),
+        ]
+        .into_iter()
+        .find(|value| *value > 0)
+        .unwrap_or_else(|| if top_sid > 0 { top_sid } else { sub_sid });
         let ayyuid = {
             let y = json_i64(live_info.get("lYyid").unwrap_or(&Value::Null));
             if y != 0 {
@@ -496,6 +506,8 @@ impl LiveSite for HuyaSite {
                     "flvAntiCode": json_str(item.get("sFlvAntiCode").unwrap_or(&Value::Null)),
                     "streamName": json_str(item.get("sStreamName").unwrap_or(&Value::Null)),
                     "cdnType": json_str(item.get("sCdnType").unwrap_or(&Value::Null)),
+                    "topSid": top_sid,
+                    "subSid": sub_sid,
                     "presenterUid": presenter,
                 }));
             }
@@ -551,6 +563,15 @@ impl LiveSite for HuyaSite {
             user_avatar: json_str(profile.get("sAvatar180").unwrap_or(&Value::Null)),
             online: json_i64(live_info.get("lTotalCount").unwrap_or(&Value::Null)),
             status,
+            live_started_at: parse_live_started_at(
+                live_info
+                    .get("iLiveStartTime")
+                    .or_else(|| live_info.get("lLiveStartTime"))
+                    .or_else(|| live_info.get("iStartTime"))
+                    .or_else(|| live_info.get("lStartTime"))
+                    .or_else(|| live_info.get("startTime"))
+                    .or_else(|| info.pointer("/roomInfo/iStartTime")),
+            ),
             notice: json_str(info.get("welcomeText").unwrap_or(&Value::Null)),
             url: format!("https://www.huya.com/{room_id}"),
             raw: serde_json::json!({
@@ -559,6 +580,8 @@ impl LiveSite for HuyaSite {
                 "bitRates": bit_rates,
                 "topSid": top_sid,
                 "subSid": sub_sid,
+                "presenterUid": presenter,
+                "lp": presenter,
                 // Danmaku join needs yyuid + channel sids (simple_live HuyaDanmakuArgs).
                 "ayyuid": ayyuid,
                 "lYyid": ayyuid,
@@ -658,10 +681,6 @@ impl LiveSite for HuyaSite {
             return Err(Self::err("no huya play urls"));
         }
         Ok(urls)
-    }
-
-    async fn get_live_status(&self, room_id: &str) -> AppResult<bool> {
-        Ok(self.get_room_detail(room_id).await?.status)
     }
 }
 

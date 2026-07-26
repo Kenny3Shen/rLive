@@ -1,3 +1,4 @@
+use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -8,6 +9,7 @@ pub enum SiteId {
     Douyu,
     Douyin,
     Kuaishou,
+    Twitch,
 }
 
 impl SiteId {
@@ -18,6 +20,7 @@ impl SiteId {
             SiteId::Douyu => "douyu",
             SiteId::Douyin => "douyin",
             SiteId::Kuaishou => "kuaishou",
+            SiteId::Twitch => "twitch",
         }
     }
 
@@ -28,6 +31,7 @@ impl SiteId {
             "douyu" => Some(SiteId::Douyu),
             "douyin" => Some(SiteId::Douyin),
             "kuaishou" => Some(SiteId::Kuaishou),
+            "twitch" => Some(SiteId::Twitch),
             _ => None,
         }
     }
@@ -68,10 +72,80 @@ pub struct LiveRoomDetail {
     pub user_avatar: String,
     pub online: i64,
     pub status: bool,
+    /// Unix timestamp in milliseconds when the current live session started.
+    /// Platforms do not all expose this value, so callers must handle `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_started_at: Option<i64>,
     pub notice: String,
     pub url: String,
     /// Opaque site-specific payload needed for play-url requests (JSON string ok).
     pub raw: serde_json::Value,
+}
+
+/// Convert the varied start-time representations used by live platforms into
+/// a safe Unix timestamp in milliseconds.
+///
+/// Chinese platforms commonly send a China Standard Time string while other
+/// services send an epoch timestamp or RFC3339 value. Values outside a
+/// plausible live-service range are intentionally discarded instead of
+/// displaying a misleading duration.
+pub fn parse_live_started_at(value: Option<&serde_json::Value>) -> Option<i64> {
+    let value = value?;
+    let parsed = match value {
+        serde_json::Value::Number(number) => number.as_i64().and_then(normalize_epoch_millis),
+        serde_json::Value::String(raw) => parse_live_started_at_string(raw),
+        _ => None,
+    }?;
+    is_plausible_live_started_at(parsed).then_some(parsed)
+}
+
+fn normalize_epoch_millis(value: i64) -> Option<i64> {
+    if value <= 0 {
+        return None;
+    }
+    match value {
+        // Nanoseconds, microseconds, milliseconds, then seconds.
+        value if value >= 1_000_000_000_000_000_000 => value.checked_div(1_000_000),
+        value if value >= 1_000_000_000_000_000 => value.checked_div(1_000),
+        value if value >= 1_000_000_000_000 => Some(value),
+        value if value >= 946_684_800 => value.checked_mul(1_000),
+        _ => None,
+    }
+}
+
+fn parse_live_started_at_string(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(epoch) = raw.parse::<i64>() {
+        return normalize_epoch_millis(epoch);
+    }
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(raw) {
+        return Some(datetime.timestamp_millis());
+    }
+
+    // Bilibili and Douyu use wall-clock strings without an explicit offset.
+    // Their public APIs define these as China Standard Time (UTC+08:00).
+    let china_standard_time = FixedOffset::east_opt(8 * 60 * 60)?;
+    ["%Y-%m-%d %H:%M:%S%.f", "%Y/%m/%d %H:%M:%S%.f"]
+        .iter()
+        .find_map(|format| {
+            NaiveDateTime::parse_from_str(raw, format)
+                .ok()
+                .and_then(|datetime| china_standard_time.from_local_datetime(&datetime).single())
+                .map(|datetime| datetime.timestamp_millis())
+        })
+}
+
+fn is_plausible_live_started_at(value: i64) -> bool {
+    const EARLIEST_PLAUSIBLE_TIMESTAMP: i64 = 946_684_800_000; // 2000-01-01 UTC
+    const FUTURE_GRACE_MILLIS: i64 = 5 * 60 * 1_000;
+    value >= EARLIEST_PLAUSIBLE_TIMESTAMP
+        && value
+            <= Utc::now()
+                .timestamp_millis()
+                .saturating_add(FUTURE_GRACE_MILLIS)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,5 +235,33 @@ mod tests {
     fn site_id_serializes_snake() {
         let s = serde_json::to_string(&SiteId::Bilibili).unwrap();
         assert_eq!(s, "\"bilibili\"");
+    }
+
+    #[test]
+    fn parses_platform_live_start_times_into_millis() {
+        assert_eq!(
+            parse_live_started_at(Some(&serde_json::json!(1_704_067_200))),
+            Some(1_704_067_200_000)
+        );
+        assert_eq!(
+            parse_live_started_at(Some(&serde_json::json!("2024-01-01 08:00:00"))),
+            Some(1_704_067_200_000)
+        );
+        assert_eq!(
+            parse_live_started_at(Some(&serde_json::json!("2024-01-01T00:00:00Z"))),
+            Some(1_704_067_200_000)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_future_live_start_times() {
+        assert_eq!(parse_live_started_at(Some(&serde_json::json!("bad"))), None);
+        assert_eq!(parse_live_started_at(Some(&serde_json::json!(1234))), None);
+        assert_eq!(
+            parse_live_started_at(Some(&serde_json::json!(
+                Utc::now().timestamp_millis() + 10 * 60 * 1_000
+            ))),
+            None
+        );
     }
 }
