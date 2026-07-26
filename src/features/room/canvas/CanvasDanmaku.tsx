@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import type { DanmakuEvent } from "@/shared/types/live";
+import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
@@ -7,6 +7,7 @@ import {
   DANMAKU_IMAGE_SCALE,
 } from "../danmaku/content";
 import { subscribeDanmakuBatches } from "../danmaku/eventBus";
+import { subscribeLocalPendingSubmissions } from "../danmaku/localPendingSubmission";
 import { createShieldMatcher, shouldShowValidatedOnCanvas } from "../danmaku/filter";
 import { createEngine, type DanmakuEngine, type TrackItem } from "./danmakuEngine";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,9 @@ type CanvasDanmakuProps = {
   className?: string;
   active?: boolean;
   sessionKey?: number | string | null;
+  /** Canonical room identity for local pending-submission routing. */
+  siteId?: SiteId;
+  roomId?: string;
 };
 
 type TextRaster = {
@@ -270,6 +274,8 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   className,
   active = true,
   sessionKey = null,
+  siteId,
+  roomId,
 }: CanvasDanmakuProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DanmakuEngine | null>(null);
@@ -336,6 +342,16 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       requestFrameRef.current();
     });
   }, [active, sessionKey]);
+
+  useEffect(() => {
+    if (!active) return;
+    return subscribeLocalPendingSubmissions(siteId, roomId, (submission) => {
+      // `pushLocalPending` preserves source, marker, and amber colour instead
+      // of allowing a local write result to aggregate with real chat traffic.
+      engineRef.current?.pushLocalPending(submission);
+      requestFrameRef.current();
+    });
+  }, [active, roomId, sessionKey, siteId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

@@ -1,5 +1,15 @@
 import { NavLink } from "react-router-dom";
-import { Home, Heart, LayoutGrid, History, Moon, Settings, Sun, Tv } from "lucide-react";
+import {
+  ChartNoAxesCombined,
+  Heart,
+  History,
+  Home,
+  LayoutGrid,
+  Moon,
+  Settings,
+  Sun,
+  Tv,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -15,6 +25,7 @@ const navItems: {
   { to: "/follow", label: "关注", icon: Heart },
   { to: "/category", label: "分类", icon: LayoutGrid },
   { to: "/history", label: "历史", icon: History },
+  { to: "/statistics", label: "统计", icon: ChartNoAxesCombined },
   { to: "/iptv", label: "IPTV", icon: Tv },
 ];
 

@@ -437,6 +437,8 @@ export function PlayerPane({
               <CanvasDanmaku
                 active={danmakuActive && osdOn}
                 sessionKey={danmakuSessionKey}
+                siteId={siteId}
+                roomId={roomId}
                 className="z-10"
               />
             )}

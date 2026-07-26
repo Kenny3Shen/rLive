@@ -1,5 +1,7 @@
 import type { SiteId } from "@/shared/types/live";
 
+export type DanmakuSendSiteId = "bilibili" | "douyu" | "huya";
+
 export type DanmakuSendStatus = {
   send_enabled: boolean;
   cookie_ready: boolean;
@@ -18,7 +20,7 @@ export type DanmakuSendConfig = {
   supportsNativeBilibiliEmoji?: boolean;
 };
 
-const SEND_CONFIGS: Partial<Record<SiteId, DanmakuSendConfig>> = {
+const SEND_CONFIGS: Record<DanmakuSendSiteId, DanmakuSendConfig> = {
   bilibili: {
     statusCommand: "bilibili_danmaku_send_status",
     sendCommand: "bilibili_danmaku_send",
@@ -41,9 +43,9 @@ const SEND_CONFIGS: Partial<Record<SiteId, DanmakuSendConfig>> = {
 };
 
 export function getDanmakuSendConfig(siteId?: SiteId): DanmakuSendConfig | null {
-  return siteId ? (SEND_CONFIGS[siteId] ?? null) : null;
+  return isDanmakuSendSite(siteId) ? SEND_CONFIGS[siteId] : null;
 }
 
-export function isDanmakuSendSite(siteId?: SiteId): boolean {
-  return getDanmakuSendConfig(siteId) !== null;
+export function isDanmakuSendSite(siteId?: SiteId): siteId is DanmakuSendSiteId {
+  return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
 }

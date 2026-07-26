@@ -23,9 +23,8 @@ pub struct BilibiliDanmakuSendStatus {
 }
 
 /// Availability of the locally stored Douyu account for one user-initiated
-/// ordinary text message. `send_enabled` is always true because this sender
-/// has no background or automated mode; the authenticated Cookie is the only
-/// prerequisite after the user explicitly presses send.
+/// ordinary text message. The shared device-local sending permission and the
+/// authenticated Cookie are both required before the user can submit it.
 #[derive(Debug, Serialize)]
 pub struct DouyuDanmakuSendStatus {
     pub send_enabled: bool,
@@ -189,9 +188,9 @@ pub fn bilibili_danmaku_send_status(
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
     let cookie_ready = danmaku::bilibili::has_send_credentials(&cookie);
-    let send_enabled = settings.bilibili_danmaku_send_enabled;
+    let send_enabled = settings.danmaku_send_enabled;
     let message = if !send_enabled {
-        "在设置中启用“B站发送弹幕”后可使用".into()
+        "在设置中启用“弹幕发送功能”后可使用".into()
     } else if !cookie_ready {
         "请先保存含 SESSDATA 和 bili_jct 的 B站 Cookie".into()
     } else {
@@ -221,10 +220,10 @@ pub async fn bilibili_danmaku_send(
             account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
         )
     };
-    if !settings.bilibili_danmaku_send_enabled {
+    if !settings.danmaku_send_enabled {
         return Err(AppError::new(
             "bilibili_send_disabled",
-            "B站发送弹幕尚未启用，请先在设置中确认开启",
+            "弹幕发送功能尚未启用，请先在设置中确认开启",
         )
         .with_site("bilibili"));
     }
@@ -250,17 +249,21 @@ pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DouyuD
         .db
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+    let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default();
     let cookie_ready = danmaku::douyu::has_send_credentials(&cookie);
-    let message = if cookie_ready {
+    let send_enabled = settings.danmaku_send_enabled;
+    let message = if !send_enabled {
+        "在设置中启用“弹幕发送功能”后可使用".into()
+    } else if cookie_ready {
         "可发送单条普通文本。".into()
     } else {
         "请先在设置中扫码登录或保存含 acf_username、acf_stk、acf_ltkid 的斗鱼 Cookie".into()
     };
     Ok(DouyuDanmakuSendStatus {
-        send_enabled: true,
+        send_enabled,
         cookie_ready,
-        available: cookie_ready,
+        available: send_enabled && cookie_ready,
         message,
     })
 }
@@ -271,16 +274,25 @@ pub async fn douyu_danmaku_send(
     room_id: String,
     message: String,
 ) -> AppResult<()> {
-    let (cookie, proxy) = {
+    let (send_enabled, cookie, proxy) = {
         let conn = state
             .db
             .lock()
             .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let settings = crate::settings::get(&conn)?;
         (
+            settings.danmaku_send_enabled,
             account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default(),
-            crate::settings::get(&conn)?.proxy,
+            settings.proxy,
         )
     };
+    if !send_enabled {
+        return Err(AppError::new(
+            "douyu_send_disabled",
+            "弹幕发送功能尚未启用，请先在设置中确认开启",
+        )
+        .with_site("douyu"));
+    }
     if !danmaku::douyu::has_send_credentials(&cookie) {
         tracing::warn!(
             room_id = %room_id.trim(),
@@ -314,17 +326,21 @@ pub fn huya_danmaku_send_status(state: State<'_, AppState>) -> AppResult<HuyaDan
         .db
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+    let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default();
     let cookie_ready = danmaku::huya::has_send_credentials(&cookie);
-    let message = if cookie_ready {
+    let send_enabled = settings.danmaku_send_enabled;
+    let message = if !send_enabled {
+        "在设置中启用“弹幕发送功能”后可使用".into()
+    } else if cookie_ready {
         "可发送单条普通文本。".into()
     } else {
         "请先在设置中保存含 yyuid 或 udb_uid，且含 udb_n 或 udb_cred 的完整虎牙 Cookie".into()
     };
     Ok(HuyaDanmakuSendStatus {
-        send_enabled: true,
+        send_enabled,
         cookie_ready,
-        available: cookie_ready,
+        available: send_enabled && cookie_ready,
         message,
     })
 }
@@ -335,16 +351,25 @@ pub async fn huya_danmaku_send(
     room_id: String,
     message: String,
 ) -> AppResult<()> {
-    let (cookie, proxy) = {
+    let (send_enabled, cookie, proxy) = {
         let conn = state
             .db
             .lock()
             .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let settings = crate::settings::get(&conn)?;
         (
+            settings.danmaku_send_enabled,
             account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default(),
-            crate::settings::get(&conn)?.proxy,
+            settings.proxy,
         )
     };
+    if !send_enabled {
+        return Err(AppError::new(
+            "huya_send_disabled",
+            "弹幕发送功能尚未启用，请先在设置中确认开启",
+        )
+        .with_site("huya"));
+    }
     if !danmaku::huya::has_send_credentials(&cookie) {
         tracing::warn!(
             room_id = %room_id.trim(),

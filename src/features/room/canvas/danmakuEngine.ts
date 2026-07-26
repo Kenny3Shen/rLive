@@ -10,9 +10,12 @@ import {
   richDanmakuContent,
   withDanmakuContentSuffix,
 } from "../danmaku/content";
+import type { LocalPendingSubmission } from "../danmaku/localPendingSubmission";
 
 export type TrackItem = {
   id: string;
+  /** Platform traffic and local pending submissions stay visibly distinct. */
+  source: "platform" | "local-pending";
   text: string;
   /**
    * Ordered Bilibili image-emote fragments. The canvas uses `text` until all
@@ -45,6 +48,8 @@ export type DanmakuEngine = {
   push: (ev: DanmakuEvent, alreadyVisible?: boolean) => void;
   /** Enqueues a transport batch and schedules it only once. */
   pushBatch: (events: readonly DanmakuEvent[], alreadyVisible?: boolean) => void;
+  /** Enqueues a locally completed write without treating it as platform chat. */
+  pushLocalPending: (submission: LocalPendingSubmission) => void;
   tick: (dt: number, width: number, height: number) => void;
   /**
    * The engine owns this array. Consumers must only read it during a render
@@ -138,6 +143,7 @@ const TOP_PADDING = 12;
 // without moving into either neighbour on its lane. The cap is far beyond a
 // practical five-second burst; pathological counts use the `+` form.
 const MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
+const LOCAL_PENDING_COLOR = "#ffb020";
 
 function measureTextAdvance(text: string, fontSize: number): number {
   // Approximate CJK-friendly width without a canvas context.
@@ -684,6 +690,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       makeRoomForItem();
       const item: EngineTrackItem = {
         id: candidate.id,
+        source: candidate.source,
         text: candidate.text,
         richSpans: candidate.richSpans,
         color: candidate.color,
@@ -714,6 +721,21 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       return;
     }
     schedulePending();
+  }
+
+  function enqueuePendingItem(pendingItem: PendingScroll): void {
+    pending.push(pendingItem);
+    if (pendingCount() <= MAX_PENDING_ITEMS) return;
+
+    // Drop the oldest waiting comment under sustained overload. The head
+    // changed, so defer one fresh collision check to the next render tick
+    // instead of repeating it for every event in this burst.
+    forgetAggregationTarget(pending[pendingHead]);
+    pendingHead += 1;
+    compactPending();
+    pendingBlocked = true;
+    pendingRetrySeconds = 0;
+    pendingRetryOnNextTick = true;
   }
 
   function enqueue(ev: DanmakuEvent, alreadyVisible: boolean): boolean {
@@ -761,6 +783,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       makeRoomForItem();
       appendItem({
         id,
+        source: "platform",
         text,
         richSpans,
         color,
@@ -779,6 +802,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
 
     const pendingItem: PendingScroll = {
       id,
+      source: "platform",
       text,
       richSpans,
       color,
@@ -793,18 +817,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       aggregationBaseRichSpans: aggregation.key ? baseRichSpans : undefined,
     };
     if (aggregation.key) aggregationTargets.set(aggregation.key, pendingItem);
-    pending.push(pendingItem);
-    if (pendingCount() > MAX_PENDING_ITEMS) {
-      // Drop the oldest waiting comment under sustained overload. The head
-      // changed, so defer one fresh collision check to the next render tick
-      // instead of repeating it for every event in this burst.
-      forgetAggregationTarget(pending[pendingHead]);
-      pendingHead += 1;
-      compactPending();
-      pendingBlocked = true;
-      pendingRetrySeconds = 0;
-      pendingRetryOnNextTick = true;
-    }
+    enqueuePendingItem(pendingItem);
     return true;
   }
 
@@ -824,6 +837,26 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     // run exactly one fresh pass now. The single-message path still defers to
     // the next animation tick so an IPC burst cannot create N retry scans.
     if (pendingRetryOnNextTick) resetPendingScheduling();
+    trySchedulePending();
+  }
+
+  function pushLocalPending(submission: LocalPendingSubmission): void {
+    const content = submission.content.trim();
+    if (!content) return;
+
+    const itemFontSize = fontSize;
+    const text = `【我·待平台回显】${content}`;
+    enqueuePendingItem({
+      id: `local-${++sequence}-${submission.id}`,
+      source: "local-pending",
+      text,
+      color: LOCAL_PENDING_COLOR,
+      width: measureTrackWidth(text, undefined, itemFontSize),
+      speed: speedPx(logicalSpeed, itemFontSize),
+      fontSize: itemFontSize,
+      queuedAt: Date.now(),
+      active: true,
+    });
     trySchedulePending();
   }
 
@@ -891,6 +924,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   return {
     push,
     pushBatch,
+    pushLocalPending,
     tick,
     visibleItems: () => items,
     hasWork: () => items.length > 0 || pendingCount() > 0,

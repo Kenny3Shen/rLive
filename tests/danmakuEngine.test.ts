@@ -123,6 +123,49 @@ describe("danmaku engine", () => {
     expect(engine.visibleItems()[1]?.text).toBe("加油");
   });
 
+  test("keeps a local pending submission amber and separate from an identical platform echo", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+    });
+    engine.tick(0, 1280, 720);
+
+    engine.pushLocalPending({
+      source: "local-pending",
+      siteId: "douyu",
+      roomId: "6979222",
+      id: "local-send-1",
+      content: "同一条弹幕",
+      submittedAt: 1_000,
+    });
+    engine.push(chat("同一条弹幕", 1_001, "平台用户"));
+
+    const localPending = engine.visibleItems().find((item) => item.source === "local-pending");
+    const platform = engine.visibleItems().find((item) => item.source === "platform");
+    expect(engine.visibleItems()).toHaveLength(2);
+    expect(localPending).toMatchObject({
+      source: "local-pending",
+      text: "【我·待平台回显】同一条弹幕",
+      color: "#ffb020",
+    });
+    expect(platform).toMatchObject({
+      source: "platform",
+      text: "同一条弹幕",
+    });
+
+    // Platform messages may aggregate with one another, but never with the
+    // local marker that is intentionally outside the platform event stream.
+    engine.push(chat("同一条弹幕", 1_002, "另一位平台用户"));
+    expect(engine.visibleItems().find((item) => item.source === "local-pending")?.text).toBe(
+      "【我·待平台回显】同一条弹幕",
+    );
+    expect(engine.visibleItems().find((item) => item.source === "platform")?.text).toBe(
+      "同一条弹幕 ×2",
+    );
+  });
+
   test("keeps a growing aggregate clear of its leading lane item", () => {
     const engine = createEngine({
       fontSize: 18,

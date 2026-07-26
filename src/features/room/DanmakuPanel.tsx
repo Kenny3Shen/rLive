@@ -3,6 +3,7 @@ import { Copy, SendHorizontal } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -10,7 +11,12 @@ import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmak
 import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
-import { getDanmakuSendConfig } from "./danmaku/sending";
+import {
+  publishLocalPendingSubmission,
+  subscribeLocalPendingSubmissions,
+  type LocalPendingSubmission,
+} from "./danmaku/localPendingSubmission";
+import { getDanmakuSendConfig, isDanmakuSendSite } from "./danmaku/sending";
 import { cn } from "@/lib/utils";
 
 // Keep the rendered DOM deliberately small even when a room is producing
@@ -34,10 +40,9 @@ function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
   if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
 }
 
-type DanmakuLine = {
-  id: number;
-  event: DanmakuEvent;
-};
+type DanmakuLine =
+  | { id: number; source: "platform"; event: DanmakuEvent }
+  | { id: number; source: "local-pending"; submission: LocalPendingSubmission };
 
 /**
  * Normalise text before it enters the clipboard or a user-triggered repeat
@@ -120,7 +125,7 @@ export async function copyDanmakuText(text: string): Promise<boolean> {
   }
 }
 
-type ActionStatus = "copied" | "copy-failed" | "sent" | "send-failed" | null;
+type ActionStatus = "copied" | "copy-failed" | "submitted" | "sent" | "send-failed" | null;
 
 function actionStatusMessage(status: ActionStatus): string | null {
   switch (status) {
@@ -128,6 +133,8 @@ function actionStatusMessage(status: ActionStatus): string | null {
       return "已复制弹幕内容";
     case "copy-failed":
       return "复制失败，请手动选择内容";
+    case "submitted":
+      return "已提交，等待平台回显";
     case "sent":
       return "已发送相同的弹幕";
     case "send-failed":
@@ -143,14 +150,19 @@ function actionStatusMessage(status: ActionStatus): string | null {
  * each animation-frame flush in a busy room.
  */
 const DanmakuRow = memo(function DanmakuRow({
-  event,
+  line,
   siteId,
   roomId,
 }: {
-  event: DanmakuEvent;
+  line: DanmakuLine;
   siteId?: SiteId;
   roomId?: string;
 }) {
+  if (line.source === "local-pending") {
+    return <LocalPendingDanmakuRow submission={line.submission} />;
+  }
+
+  const { event } = line;
   if (event.kind === "system") {
     return (
       <div className="px-1.5 py-0.5 text-xs text-muted-foreground">
@@ -160,6 +172,23 @@ const DanmakuRow = memo(function DanmakuRow({
   }
 
   return <SelectableDanmakuRow event={event} siteId={siteId} roomId={roomId} />;
+});
+
+/** Local write completion is feedback, never a replacement for a chat echo. */
+const LocalPendingDanmakuRow = memo(function LocalPendingDanmakuRow({
+  submission,
+}: {
+  submission: LocalPendingSubmission;
+}) {
+  return (
+    <div className="rounded-md border border-border-subtle bg-muted/40 px-1.5 py-1 leading-relaxed">
+      <span className="mr-1.5 font-medium text-primary">我：</span>
+      <DanmakuRichText content={submission.content} className="text-foreground/90" />
+      <Badge className="ml-1.5 align-middle">
+        本地已提交，待平台回显
+      </Badge>
+    </div>
+  );
 });
 
 /**
@@ -182,7 +211,18 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   const message = formatDanmakuClipboardText(event.content);
   const user = event.user.trim() || "匿名";
   const sendConfig = getDanmakuSendConfig(siteId);
-  const canRepeat = event.kind === "chat" && Boolean(sendConfig && roomId);
+  const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
+  const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
+  const canRepeat =
+    event.kind === "chat" &&
+    Boolean(sendConfig && roomId && danmakuSendEnabled && !danmakuSendPending);
+  const repeatUnavailableLabel = !sendConfig
+    ? "当前平台暂不支持发送弹幕"
+    : danmakuSendPending
+      ? "正在同步发送权限…"
+    : !danmakuSendEnabled
+      ? "请先在账号设置启用发送功能"
+      : "发送相同的弹幕（+1）";
   const statusMessage = actionStatusMessage(actionStatus);
   const actionFailed = actionStatus === "copy-failed" || actionStatus === "send-failed";
 
@@ -215,7 +255,12 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     setActionStatus(null);
     try {
       await invokeCmd<void>(sendConfig.sendCommand, { roomId, message });
-      setActionStatus("sent");
+      if (isDanmakuSendSite(siteId)) {
+        publishLocalPendingSubmission({ siteId, roomId, content: message });
+        setActionStatus("submitted");
+      } else {
+        setActionStatus("sent");
+      }
     } catch {
       setActionStatus("send-failed");
     } finally {
@@ -269,8 +314,8 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             variant="ghost"
             size="icon-sm"
             disabled={!canRepeat || sending}
-            aria-label={canRepeat ? "发送相同的弹幕（+1）" : "当前平台暂不支持发送弹幕"}
-            title={canRepeat ? "发送相同的弹幕（+1）" : "当前平台暂不支持发送弹幕"}
+            aria-label={canRepeat ? "发送相同的弹幕（+1）" : repeatUnavailableLabel}
+            title={canRepeat ? "发送相同的弹幕（+1）" : repeatUnavailableLabel}
             onClick={() => void repeat()}
           >
             <SendHorizontal aria-hidden />
@@ -431,21 +476,29 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       for (const message of events) {
         if (!shouldShowValidatedInDanmakuPanel(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
-        accepted.push({ id: ++nextIdRef.current, event: message });
+        accepted.push({ id: ++nextIdRef.current, source: "platform", event: message });
       }
 
       pending.pushAll(accepted);
       if (accepted.length === 0) return;
       scheduleFlush();
     });
+    const unsubscribeLocalPending = subscribeLocalPendingSubmissions(siteId, roomId, (submission) => {
+      if (!activeRef.current) return;
+      // Local submission feedback is intentionally independent of the
+      // viewer's shield-word preferences and has its own visible marker.
+      pending.push({ id: ++nextIdRef.current, source: "local-pending", submission });
+      scheduleFlush();
+    });
 
     return () => {
       unsubscribe();
+      unsubscribeLocalPending();
       cancelFlush();
       if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
       pending.clear();
     };
-  }, [active]);
+  }, [active, roomId, siteId]);
 
   useLayoutEffect(() => {
     if (!visible || !autoScroll.current) return;
@@ -521,7 +574,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
             )}
             {items.map((line) => (
-              <DanmakuRow key={line.id} event={line.event} siteId={siteId} roomId={roomId} />
+              <DanmakuRow key={line.id} line={line} siteId={siteId} roomId={roomId} />
             ))}
           </div>
         </ScrollArea>

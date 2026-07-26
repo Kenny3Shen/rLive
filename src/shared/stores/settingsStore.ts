@@ -17,7 +17,7 @@ export type ThemeMode = "system" | "light" | "dark";
 // controls (for example two slider commits) cannot resolve out of order and
 // restore an earlier snapshot over the newest setting.
 let settingsWriteQueue: Promise<void> = Promise.resolve();
-let bilibiliSendSettingEpoch = 0;
+let danmakuSendSettingEpoch = 0;
 
 type SettingsGetResponse = {
   settings: AppSettings;
@@ -56,15 +56,15 @@ type SettingsState = {
   danmakuShieldWords: string[];
   mpvPath: string | null;
   qualityLevel: QualityLevel;
-  bilibiliDanmakuSendEnabled: boolean;
-  /** True while the local Bilibili sending permission is reaching the backend. */
-  bilibiliDanmakuSendPending: boolean;
+  danmakuSendEnabled: boolean;
+  /** True while the local multi-platform sending permission reaches the backend. */
+  danmakuSendPending: boolean;
   /**
-   * In-memory only revision for the Bilibili account cookie.  It deliberately
+   * In-memory only revision for a send-capable account cookie. It deliberately
    * carries no credential data; consumers use it solely to invalidate cached
    * permission checks after a successful account update.
    */
-  bilibiliCookieRevision: number;
+  danmakuCookieRevision: number;
   /** Device-local custom IPTV M3U address; never included in profile packages. */
   iptvCustomM3uUrl: string | null;
   /** True after first successful backend load. */
@@ -75,8 +75,8 @@ type SettingsState = {
   setProxy: (proxy: string | null) => void;
   setMpvPath: (mpvPath: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
-  setBilibiliDanmakuSendEnabled: (enabled: boolean) => void;
-  markBilibiliCookieChanged: () => void;
+  setDanmakuSendEnabled: (enabled: boolean) => void;
+  markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
@@ -101,7 +101,7 @@ const defaultSettings: AppSettings = {
   danmaku_shield_words: [],
   mpv_path: null,
   quality_level: "high",
-  bilibili_danmaku_send_enabled: false,
+  danmaku_send_enabled: false,
   iptv_custom_m3u_url: null,
 };
 
@@ -122,7 +122,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_shield_words: state.danmakuShieldWords,
     mpv_path: state.mpvPath,
     quality_level: state.qualityLevel,
-    bilibili_danmaku_send_enabled: state.bilibiliDanmakuSendEnabled,
+    danmaku_send_enabled: state.danmakuSendEnabled,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
   };
 }
@@ -145,9 +145,9 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuShieldWords: [],
       mpvPath: null,
       qualityLevel: "high",
-      bilibiliDanmakuSendEnabled: false,
-      bilibiliDanmakuSendPending: false,
-      bilibiliCookieRevision: 0,
+      danmakuSendEnabled: false,
+      danmakuSendPending: false,
+      danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
       hydratedFromBackend: false,
       setTheme: (theme) => {
@@ -180,24 +180,24 @@ export const useSettingsStore = create<SettingsState>()(
         set({ qualityLevel });
         void get().persistToBackend({ quality_level: qualityLevel });
       },
-      setBilibiliDanmakuSendEnabled: (bilibiliDanmakuSendEnabled) => {
-        const epoch = ++bilibiliSendSettingEpoch;
-        set({ bilibiliDanmakuSendEnabled, bilibiliDanmakuSendPending: true });
+      setDanmakuSendEnabled: (danmakuSendEnabled) => {
+        const epoch = ++danmakuSendSettingEpoch;
+        set({ danmakuSendEnabled, danmakuSendPending: true });
         void get()
-          .persistToBackend({ bilibili_danmaku_send_enabled: bilibiliDanmakuSendEnabled })
+          .persistToBackend({ danmaku_send_enabled: danmakuSendEnabled })
           .finally(() => {
             // Rapidly toggling on/off queues two whole-settings writes. Only
             // the newest completion may clear the sync marker, otherwise the
             // composer could query the old backend value in between them.
-            if (epoch === bilibiliSendSettingEpoch) {
-              set({ bilibiliDanmakuSendPending: false });
+            if (epoch === danmakuSendSettingEpoch) {
+              set({ danmakuSendPending: false });
             }
           });
       },
-      markBilibiliCookieChanged: () => {
+      markDanmakuCookieChanged: () => {
         // This is intentionally not persisted. It has no meaning across an
         // app restart and must never contain the Cookie itself.
-        set((state) => ({ bilibiliCookieRevision: state.bilibiliCookieRevision + 1 }));
+        set((state) => ({ danmakuCookieRevision: state.danmakuCookieRevision + 1 }));
       },
       setIptvCustomM3uUrl: (iptvCustomM3uUrl) => {
         const next = iptvCustomM3uUrl?.trim() || null;
@@ -223,8 +223,8 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           mpvPath: settings.mpv_path,
           qualityLevel: parseQualityLevel(settings.quality_level),
-          bilibiliDanmakuSendEnabled: settings.bilibili_danmaku_send_enabled ?? false,
-          bilibiliDanmakuSendPending: false,
+          danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
+          danmakuSendPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
           hydratedFromBackend: true,
         });

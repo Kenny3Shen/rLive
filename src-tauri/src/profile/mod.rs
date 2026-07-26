@@ -37,11 +37,11 @@ impl ProfilePackage {
 
 /// These controls intentionally never leave the current device with a profile.
 ///
-/// The Bilibili toggle is an explicit consent for a write action, and a custom
-/// M3U URL can identify a private playlist or carry an access token. An
+/// The danmaku-send toggle is an explicit consent for a write action, and a
+/// custom M3U URL can identify a private playlist or carry an access token. An
 /// imported profile must not be able to choose either of them.
 fn clear_local_only_settings(settings: &mut AppSettings) {
-    settings.bilibili_danmaku_send_enabled = false;
+    settings.danmaku_send_enabled = false;
     settings.iptv_custom_m3u_url = None;
 }
 
@@ -62,7 +62,7 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
     {
         // Omit rather than serialize safe-looking defaults so future import
         // changes cannot mistake these device-local choices for portable data.
-        settings.remove("bilibili_danmaku_send_enabled");
+        settings.remove("danmaku_send_enabled");
         settings.remove("iptv_custom_m3u_url");
     }
     Ok(value)
@@ -145,7 +145,7 @@ pub fn merge_into_db(
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.mpv_path = package.settings.mpv_path.clone();
-    // Do not copy `bilibili_danmaku_send_enabled` or `iptv_custom_m3u_url`.
+    // Do not copy `danmaku_send_enabled` or `iptv_custom_m3u_url`.
     // A profile is portable/untrusted input; importing it must not grant
     // sending consent or replace this device's private playlist address.
     // Existing local values are kept.
@@ -180,13 +180,13 @@ mod tests {
     #[test]
     fn portable_export_omits_cookies_and_local_only_settings() {
         let mut package = ProfilePackage::sample();
-        package.settings.bilibili_danmaku_send_enabled = true;
+        package.settings.danmaku_send_enabled = true;
         package.settings.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
 
         let v = portable_profile_value(&package).unwrap();
         assert!(v.get("cookies").is_none());
         let settings = v["settings"].as_object().unwrap();
-        assert!(!settings.contains_key("bilibili_danmaku_send_enabled"));
+        assert!(!settings.contains_key("danmaku_send_enabled"));
         assert!(!settings.contains_key("iptv_custom_m3u_url"));
     }
 
@@ -194,13 +194,13 @@ mod tests {
     fn export_package_clears_local_only_settings() {
         let conn = open_in_memory().unwrap();
         let mut local = AppSettings::default();
-        local.bilibili_danmaku_send_enabled = true;
+        local.danmaku_send_enabled = true;
         local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
 
         let package = export_package(&conn).unwrap();
 
-        assert!(!package.settings.bilibili_danmaku_send_enabled);
+        assert!(!package.settings.danmaku_send_enabled);
         assert!(package.settings.iptv_custom_m3u_url.is_none());
     }
 
@@ -251,22 +251,37 @@ mod tests {
     fn merge_preserves_local_only_settings() {
         let conn = open_in_memory().unwrap();
         let mut local = AppSettings::default();
-        local.bilibili_danmaku_send_enabled = true;
+        local.danmaku_send_enabled = true;
         local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
 
         let mut package = ProfilePackage::sample();
-        package.settings.bilibili_danmaku_send_enabled = false;
+        package.settings.danmaku_send_enabled = false;
         package.settings.iptv_custom_m3u_url =
             Some("https://untrusted.example.invalid/playlist.m3u".into());
 
         merge_into_db(&conn, &package).unwrap();
 
         let after = settings::get(&conn).unwrap();
-        assert!(after.bilibili_danmaku_send_enabled);
+        assert!(after.danmaku_send_enabled);
         assert_eq!(
             after.iptv_custom_m3u_url.as_deref(),
             Some("https://example.invalid/local.m3u")
         );
+    }
+
+    #[test]
+    fn merge_cannot_grant_shared_send_permission_from_profile() {
+        let conn = open_in_memory().unwrap();
+        let local = AppSettings::default();
+        assert!(!local.danmaku_send_enabled);
+        settings::set(&conn, &local).unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.settings.danmaku_send_enabled = true;
+
+        merge_into_db(&conn, &package).unwrap();
+
+        assert!(!settings::get(&conn).unwrap().danmaku_send_enabled);
     }
 }
