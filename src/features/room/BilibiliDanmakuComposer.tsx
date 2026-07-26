@@ -108,6 +108,7 @@ export function BilibiliDanmakuComposer({
   const ready = availability?.available === true;
   const canSubmit = ready && draft.trim().length > 0 && !sending;
   const statusText = result ?? availability?.message ?? "正在检查发送权限…";
+  const inputPlaceholder = ready ? (result ?? "输入弹幕…") : statusText;
 
   function onInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter" || event.nativeEvent.isComposing || event.repeat) return;
@@ -166,9 +167,12 @@ export function BilibiliDanmakuComposer({
         <Input
           ref={inputRef}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setResult(null);
+          }}
           onKeyDown={onInputKeyDown}
-          placeholder={availability?.message ?? "正在检查发送权限…"}
+          placeholder={inputPlaceholder}
           disabled={!ready || sending}
           maxLength={80}
           aria-label="B站弹幕内容"
@@ -243,27 +247,9 @@ export function BilibiliDanmakuComposer({
           <SendHorizontal />
         </Button>
       </div>
-      {overlay ? (
-        <p
-          className={cn(
-            "mt-1 truncate text-center text-[11px] leading-4",
-            result?.startsWith("发送失败") ? "text-red-200" : "text-white/75",
-          )}
-          role="status"
-          aria-live="polite"
-        >
-          {statusText}
-        </p>
-      ) : (
-        <p
-          className={cn(
-            "mt-1.5 min-h-4 text-[11px] leading-4",
-            result?.startsWith("发送失败") ? "text-destructive" : "text-muted-foreground",
-          )}
-        >
-          {statusText}
-        </p>
-      )}
+      <span className="sr-only" role="status" aria-live="polite">
+        {statusText}
+      </span>
     </div>
   );
 }
