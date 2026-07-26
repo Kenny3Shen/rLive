@@ -106,9 +106,9 @@ export function PlayerPane({
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
-  // Keep the bottom chrome present for keyboard users.  A pointer may leave
-  // the control bar while an input retains focus, so pointer leave alone must
-  // never restart the idle fade timer.
+  // Track focus inside the bottom chrome. A clicked button also takes DOM
+  // focus, so the idle guard below additionally checks :focus-visible before
+  // treating that focus as a keyboard interaction that must keep it present.
   const controlsFocusWithinRef = useRef(false);
   const lastControlsActivityAtRef = useRef(Date.now());
   const overlayInteractionOpenRef = useRef(false);
@@ -168,12 +168,22 @@ export function PlayerPane({
     lastControlsActivityAtRef.current = Date.now();
   }, []);
 
+  const hasKeyboardFocusWithinControls = useCallback(() => {
+    if (!controlsFocusWithinRef.current) return false;
+    const activeElement = document.activeElement;
+    return (
+      activeElement instanceof HTMLElement &&
+      controlsRef.current?.contains(activeElement) === true &&
+      activeElement.matches(":focus-visible")
+    );
+  }, []);
+
   const scheduleControlsHide = useCallback(() => {
     clearControlsHideTimer();
     if (
       !canAutoHideControls ||
       overlayInteractionOpenRef.current ||
-      controlsFocusWithinRef.current
+      hasKeyboardFocusWithinControls()
     ) {
       setControlVisibility(true);
       return;
@@ -194,7 +204,7 @@ export function PlayerPane({
       if (
         !canAutoHideControls ||
         overlayInteractionOpenRef.current ||
-        controlsFocusWithinRef.current
+        hasKeyboardFocusWithinControls()
       ) {
         setControlVisibility(true);
         return;
@@ -207,7 +217,12 @@ export function PlayerPane({
       CONTROLS_HIDE_DELAY_MS - (Date.now() - lastControlsActivityAtRef.current),
     );
     controlsHideTimerRef.current = window.setTimeout(hideWhenIdle, initialDelay);
-  }, [canAutoHideControls, clearControlsHideTimer, setControlVisibility]);
+  }, [
+    canAutoHideControls,
+    clearControlsHideTimer,
+    hasKeyboardFocusWithinControls,
+    setControlVisibility,
+  ]);
 
   const revealControls = useCallback(() => {
     markControlsActivity();
