@@ -258,7 +258,7 @@ pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DouyuD
     } else if cookie_ready {
         "可发送单条普通文本。".into()
     } else {
-        "请先在设置中扫码登录或保存含 acf_username、acf_stk、acf_ltkid 的斗鱼 Cookie".into()
+        "请先在设置中扫码登录，或保存含账号、设备和弹幕令牌字段的完整斗鱼 Cookie".into()
     };
     Ok(DouyuDanmakuSendStatus {
         send_enabled,
@@ -301,7 +301,7 @@ pub async fn douyu_danmaku_send(
         );
         return Err(AppError::new(
             "douyu_send_cookie_missing",
-            "请先在设置中扫码登录或保存含 acf_username、acf_stk、acf_ltkid 的斗鱼 Cookie",
+            "请先在设置中扫码登录，或保存含账号、设备和弹幕令牌字段的完整斗鱼 Cookie",
         )
         .with_site("douyu"));
     }
