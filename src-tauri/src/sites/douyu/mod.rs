@@ -4,7 +4,7 @@ mod sign;
 
 use std::collections::HashMap;
 
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
@@ -16,22 +16,31 @@ use crate::models::live::{
 use crate::sites::traits::LiveSite;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43";
+const RECOMMEND_PAGE_SIZE: usize = 40;
+const DIRECTORY_PAGE_SIZE: usize = 20;
 
 pub struct DouyuSite {
     client: Client,
+    /// User-supplied account Cookie. It is passed to each applicable Douyu
+    /// request but never logged or persisted by this site client.
+    cookie: String,
 }
 
 impl Default for DouyuSite {
     fn default() -> Self {
         Self {
             client: http_client::default_client(),
+            cookie: String::new(),
         }
     }
 }
 
 impl DouyuSite {
-    pub fn new(client: Client) -> Self {
-        Self { client }
+    pub fn new_with_cookie(client: Client, cookie: String) -> Self {
+        Self {
+            client,
+            cookie: normalize_cookie(&cookie),
+        }
     }
 
     fn err(msg: impl Into<String>) -> AppError {
@@ -41,11 +50,15 @@ impl DouyuSite {
     }
 
     async fn get_json(&self, url: &str, referer: &str) -> AppResult<Value> {
-        let text = self
+        let mut request = self
             .client
             .get(url)
             .header("user-agent", UA)
-            .header("referer", referer)
+            .header("referer", referer);
+        if !self.cookie.is_empty() && is_douyu_cookie_url(url) {
+            request = request.header("cookie", &self.cookie);
+        }
+        let text = request
             .send()
             .await
             .map_err(|e| Self::err(format!("http: {e}")))?
@@ -56,13 +69,17 @@ impl DouyuSite {
     }
 
     async fn post_form(&self, url: &str, body: &str, referer: &str) -> AppResult<Value> {
-        let text = self
+        let mut request = self
             .client
             .post(url)
             .header("user-agent", UA)
             .header("referer", referer)
             .header("content-type", "application/x-www-form-urlencoded")
-            .body(body.to_string())
+            .body(body.to_string());
+        if !self.cookie.is_empty() && is_douyu_cookie_url(url) {
+            request = request.header("cookie", &self.cookie);
+        }
+        let text = request
             .send()
             .await
             .map_err(|e| Self::err(format!("http post: {e}")))?
@@ -86,6 +103,76 @@ impl DouyuSite {
         } else {
             Ok(serde_json::json!({ "room": v }))
         }
+    }
+
+    /// Search requires Douyu's anonymous device identifiers. Preserve any
+    /// saved account values and add stable fallbacks only when they are absent.
+    fn search_cookie(&self) -> String {
+        let did = "10000000000000000000000000001501";
+        merge_cookie_values(&format!("dy_did={did}; acf_did={did}"), &self.cookie)
+    }
+}
+
+fn normalize_cookie(value: &str) -> String {
+    merge_cookie_values(
+        "",
+        value.trim().strip_prefix("Cookie:").unwrap_or(value).trim(),
+    )
+}
+
+/// Account Cookies are scoped to Douyu's HTTPS web hosts. Keeping this
+/// explicit prevents a future call site from replaying a saved Cookie to an
+/// arbitrary URL merely because it reuses the JSON helper.
+fn is_douyu_cookie_url(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host == "douyu.com" || host.ends_with(".douyu.com"))
+}
+
+fn cookie_pairs(value: &str) -> Vec<(String, String)> {
+    value
+        .split(';')
+        .filter_map(|part| {
+            let (key, value) = part.trim().split_once('=')?;
+            let key = key.trim();
+            (!key.is_empty()).then(|| (key.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn merge_cookie_values(base: &str, updates: &str) -> String {
+    let mut merged = cookie_pairs(base);
+    for (key, value) in cookie_pairs(updates) {
+        if let Some((_, previous)) = merged
+            .iter_mut()
+            .find(|(previous_key, _)| previous_key.eq_ignore_ascii_case(&key))
+        {
+            *previous = value;
+        } else {
+            merged.push((key, value));
+        }
+    }
+    merged
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn has_more_page(
+    page: u32,
+    upstream_page_count: i64,
+    item_count: usize,
+    expected_page_size: usize,
+) -> bool {
+    if upstream_page_count > 0 {
+        i64::from(page) < upstream_page_count
+    } else {
+        item_count >= expected_page_size
     }
 }
 
@@ -133,13 +220,9 @@ fn parse_mix_list(v: &Value) -> AppResult<RoomListPage> {
             });
         }
     }
-    let page = json_i64(
-        // callers pass page externally; pgcnt is total pages
-        data.get("pgcnt").unwrap_or(&Value::Null),
-    );
     Ok(RoomListPage {
-        // has_more decided by caller when page known; use rl length heuristic
-        has_more: page > 1 || items.len() >= 20,
+        // The endpoint-specific caller supplies a reliable pagination policy.
+        has_more: false,
         items,
     })
 }
@@ -193,7 +276,10 @@ impl LiveSite for DouyuSite {
         let v = self.get_json(&url, "https://www.douyu.com/").await?;
         let mut page_data = parse_mix_list(&v)?;
         let pgcnt = json_i64(v.pointer("/data/pgcnt").unwrap_or(&Value::Null));
-        page_data.has_more = (page as i64) < pgcnt;
+        // This public endpoint currently reports `pgcnt: 0` even while it
+        // returns full 40-room pages. Fall back to its documented page size;
+        // the frontend also stops if a later page adds no new rooms.
+        page_data.has_more = has_more_page(page, pgcnt, page_data.items.len(), RECOMMEND_PAGE_SIZE);
         Ok(page_data)
     }
 
@@ -210,23 +296,26 @@ impl LiveSite for DouyuSite {
         let v = self.get_json(&url, "https://www.douyu.com/").await?;
         let mut page_data = parse_mix_list(&v)?;
         let pgcnt = json_i64(v.pointer("/data/pgcnt").unwrap_or(&Value::Null));
-        page_data.has_more = (page as i64) < pgcnt;
+        page_data.has_more = has_more_page(page, pgcnt, page_data.items.len(), DIRECTORY_PAGE_SIZE);
         Ok(page_data)
     }
 
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        let did = "10000000000000000000000000001501";
         let url = format!(
             "https://www.douyu.com/japi/search/api/searchShow?kw={}&page={page}&pageSize=20",
             urlencoding_encode(keyword)
         );
-        let text = self
+        let mut request = self
             .client
             .get(&url)
             .header("user-agent", UA)
-            .header("referer", "https://www.douyu.com/search/")
-            .header("cookie", format!("dy_did={did};acf_did={did}"))
+            .header("referer", "https://www.douyu.com/search/");
+        let cookie = self.search_cookie();
+        if !cookie.is_empty() {
+            request = request.header("cookie", cookie);
+        }
+        let text = request
             .send()
             .await
             .map_err(|e| Self::err(format!("http: {e}")))?
@@ -473,4 +562,87 @@ fn urlencoding_encode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use super::*;
+
+    #[test]
+    fn recommendation_pagination_uses_full_page_fallback_when_pgcnt_is_zero() {
+        assert!(has_more_page(
+            1,
+            0,
+            RECOMMEND_PAGE_SIZE,
+            RECOMMEND_PAGE_SIZE
+        ));
+        assert!(!has_more_page(
+            1,
+            0,
+            RECOMMEND_PAGE_SIZE - 1,
+            RECOMMEND_PAGE_SIZE
+        ));
+        assert!(has_more_page(1, 2, 1, RECOMMEND_PAGE_SIZE));
+        assert!(!has_more_page(
+            2,
+            2,
+            RECOMMEND_PAGE_SIZE,
+            RECOMMEND_PAGE_SIZE
+        ));
+    }
+
+    #[test]
+    fn search_cookie_preserves_saved_device_values() {
+        let site = DouyuSite::new_with_cookie(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            "Cookie: auth=fixture; dy_did=custom-did".into(),
+        );
+
+        let cookie = site.search_cookie();
+        assert!(cookie.contains("auth=fixture"));
+        assert!(cookie.contains("dy_did=custom-did"));
+        assert!(cookie.contains("acf_did=10000000000000000000000000001501"));
+    }
+
+    #[test]
+    fn scopes_saved_cookies_to_douyu_https_hosts() {
+        assert!(is_douyu_cookie_url("https://www.douyu.com/japi/weblist"));
+        assert!(is_douyu_cookie_url("https://m.douyu.com/api/cate/list"));
+        assert!(!is_douyu_cookie_url("http://www.douyu.com/japi/weblist"));
+        assert!(!is_douyu_cookie_url("https://douyu.com.example.test/api"));
+        assert!(!is_douyu_cookie_url("https://webcast.amemv.com/api"));
+    }
+
+    #[tokio::test]
+    async fn saved_cookie_is_not_attached_to_non_douyu_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]).to_ascii_lowercase();
+            assert!(!request.contains("cookie: sessionid=fixture-session"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+        });
+
+        let site = DouyuSite::new_with_cookie(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            "sessionid=fixture-session".into(),
+        );
+        let response = site
+            .get_json(&format!("http://{address}/api"), "https://www.douyu.com/")
+            .await
+            .unwrap();
+
+        assert!(response.is_object());
+        server.join().unwrap();
+    }
 }

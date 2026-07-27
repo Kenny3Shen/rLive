@@ -21,19 +21,33 @@ const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 pub struct HuyaSite {
     client: Client,
+    /// A manually saved web session is needed when resolving the canonical
+    /// room/channel relationship for an authenticated send.  It stays inside
+    /// this short-lived backend site instance and is never serialised into a
+    /// room detail.
+    cookie: String,
 }
 
 impl Default for HuyaSite {
     fn default() -> Self {
         Self {
             client: http_client::default_client(),
+            cookie: String::new(),
         }
     }
 }
 
 impl HuyaSite {
-    pub fn new(client: Client) -> Self {
-        Self { client }
+    pub fn new(client: Client, cookie: String) -> Self {
+        Self {
+            client,
+            cookie: cookie
+                .trim()
+                .strip_prefix("Cookie:")
+                .unwrap_or(cookie.trim())
+                .trim()
+                .to_owned(),
+        }
     }
 
     fn err(msg: impl Into<String>) -> AppError {
@@ -43,9 +57,14 @@ impl HuyaSite {
     }
 
     async fn get_text(&self, url: &str, ua: &str) -> AppResult<String> {
-        self.client
-            .get(url)
-            .header("user-agent", ua)
+        let mut request = self.client.get(url).header("user-agent", ua);
+        // Room bootstrap pages may need the browser session to expose the
+        // canonical internal channel relationship.  Do not replay a private
+        // Cookie to public CDN/list/search hosts.
+        if !self.cookie.is_empty() && is_room_page_url(url) {
+            request = request.header("cookie", self.cookie.as_str());
+        }
+        request
             .send()
             .await
             .map_err(|e| Self::err(format!("http: {e}")))?
@@ -84,14 +103,101 @@ impl HuyaSite {
         let mut obj: Value =
             serde_json::from_str(&json_text).map_err(|e| Self::err(format!("parse init: {e}")))?;
 
-        let top = extract_i64_near(&html, "lChannelId").unwrap_or(0);
-        let sub = extract_i64_near(&html, "lSubChannelId").unwrap_or(0);
+        let mut top = extract_i64_near(&html, "lChannelId").unwrap_or(0);
+        let mut sub = extract_i64_near(&html, "lSubChannelId").unwrap_or(0);
+        let mobile_presenter = [
+            obj.pointer("/roomInfo/tProfileInfo/lUid"),
+            obj.pointer("/roomInfo/tLiveInfo/lPresenterUid"),
+            obj.pointer("/roomInfo/tLiveInfo/lUid"),
+            obj.get("presenterUid"),
+        ]
+        .into_iter()
+        .filter_map(|value| value.map(json_i64))
+        .find(|value| *value > 0)
+        .unwrap_or(0);
+
+        // Offline rooms do not always expose lChannelId/lSubChannelId in the
+        // mobile bootstrap.  The desktop room payload still has the profile
+        // uid used by the first-party player as its signal channel fallback.
+        // Never fall back to the public short room id: it is not lTid/lSid.
+        let mut desktop_presenter = 0;
+        let mut desktop_ayyuid = 0;
+        if top == 0 || sub == 0 {
+            if let Ok(desktop_html) = self
+                .get_text(&format!("https://www.huya.com/{room_id}"), DESKTOP_UA)
+                .await
+            {
+                let room_data = parse_js_json_assignment(&desktop_html, "TT_ROOM_DATA");
+                let profile_data = parse_js_json_assignment(&desktop_html, "TT_PROFILE_INFO");
+                let (desktop_channel, presenter, ayyuid) =
+                    desktop_room_ids(room_data.as_ref(), profile_data.as_ref(), mobile_presenter);
+                desktop_presenter = presenter;
+                desktop_ayyuid = ayyuid;
+                if top == 0 {
+                    top = desktop_channel;
+                }
+                if sub == 0 {
+                    sub = desktop_channel;
+                }
+            }
+        }
         if let Some(map) = obj.as_object_mut() {
             map.insert("topSid".into(), Value::from(top));
             map.insert("subSid".into(), Value::from(sub));
+            if desktop_presenter > 0 {
+                map.insert("presenterUid".into(), Value::from(desktop_presenter));
+            } else if mobile_presenter > 0 {
+                map.insert("presenterUid".into(), Value::from(mobile_presenter));
+            }
+            if desktop_ayyuid > 0 {
+                map.insert("ayyuid".into(), Value::from(desktop_ayyuid));
+            }
         }
         Ok(obj)
     }
+}
+
+fn is_room_page_url(url: &str) -> bool {
+    url.starts_with("https://m.huya.com/") || url.starts_with("https://www.huya.com/")
+}
+
+/// Extract the only desktop fields that are meaningful to the signal layer.
+/// The public profile room number is deliberately absent: it is not a TARS
+/// channel ID. Offline pages commonly set both desktop channel fields to zero
+/// and use the broadcaster (`lp`) as the web-player fallback instead.
+fn desktop_room_ids(
+    room_data: Option<&Value>,
+    profile_data: Option<&Value>,
+    mobile_presenter: i64,
+) -> (i64, i64, i64) {
+    let presenter = profile_data
+        .and_then(|value| value.get("lp").or_else(|| value.get("uid")))
+        .map(json_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(0);
+    let channel = room_data
+        .and_then(|value| {
+            [value.get("liveChannel"), value.get("channel")]
+                .into_iter()
+                .flatten()
+                .map(json_i64)
+                .find(|value| *value > 0)
+        })
+        .or_else(|| (presenter > 0).then_some(presenter))
+        .or_else(|| (mobile_presenter > 0).then_some(mobile_presenter))
+        .unwrap_or(0);
+    let ayyuid = room_data
+        .and_then(|value| value.get("privateHost"))
+        .map(json_i64)
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            profile_data
+                .and_then(|value| value.get("yyid"))
+                .map(json_i64)
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(0);
+    (channel, presenter, ayyuid)
 }
 
 fn find_matching_brace(s: &str) -> Option<usize> {
@@ -167,6 +273,21 @@ fn extract_i64_near(html: &str, key: &str) -> Option<i64> {
     let rest = after[colon + 1..].trim_start();
     let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     num.parse().ok()
+}
+
+/// Parse a static desktop room assignment such as
+/// `var TT_PROFILE_INFO = {"uid": ...};`.  Only the structured JSON object
+/// is returned, so callers can select the few public room identifiers they
+/// need without retaining the document or a user session.
+fn parse_js_json_assignment(html: &str, marker: &str) -> Option<Value> {
+    let start = html.find(marker)?;
+    let after = &html[start + marker.len()..];
+    let eq = after.find('=')?;
+    let rest = after[eq + 1..].trim_start();
+    let brace = rest.find('{')?;
+    let source = &rest[brace..];
+    let end = find_matching_brace(source)?;
+    serde_json::from_str(&source[..=end]).ok()
 }
 
 fn process_anticode(anticode: &str, uid: &str, stream_name: &str) -> String {
@@ -470,6 +591,7 @@ impl LiveSite for HuyaSite {
         // chat send identifies the presenter. Keep both rather than silently
         // substituting one for the other when a channel happens to work.
         let presenter = [
+            json_i64(info.get("presenterUid").unwrap_or(&Value::Null)),
             json_i64(profile.get("lUid").unwrap_or(&Value::Null)),
             json_i64(live_info.get("lPresenterUid").unwrap_or(&Value::Null)),
             json_i64(live_info.get("lUid").unwrap_or(&Value::Null)),
@@ -482,7 +604,12 @@ impl LiveSite for HuyaSite {
             if y != 0 {
                 y
             } else {
-                json_i64(profile.get("lYyid").unwrap_or(&Value::Null))
+                let y = json_i64(profile.get("lYyid").unwrap_or(&Value::Null));
+                if y != 0 {
+                    y
+                } else {
+                    json_i64(info.get("ayyuid").unwrap_or(&Value::Null))
+                }
             }
         };
 
@@ -699,6 +826,43 @@ mod tests {
         let v: Value = serde_json::from_str(&out).expect("valid json");
         assert_eq!(v["sNick"], "虎牙英雄联盟赛事");
         assert_eq!(v["ok"], 1);
+    }
+
+    #[test]
+    fn parses_offline_desktop_room_assignments_without_using_short_room_id() {
+        let html = r#"
+            <script>
+              var TT_ROOM_DATA = {"channel":0,"liveChannel":0,"privateHost":35184476588085};
+              var TT_PROFILE_INFO = {"lp":1199554147512,"yyid":35184476588085,"profileRoom":31339681,"nick":"主播"};
+            </script>
+        "#;
+        let room = parse_js_json_assignment(html, "TT_ROOM_DATA").unwrap();
+        let profile = parse_js_json_assignment(html, "TT_PROFILE_INFO").unwrap();
+        assert_eq!(json_i64(profile.get("profileRoom").unwrap()), 31339681);
+        assert_eq!(
+            desktop_room_ids(Some(&room), Some(&profile), 0),
+            (1199554147512, 1199554147512, 35184476588085)
+        );
+    }
+
+    #[test]
+    fn desktop_channel_uses_nonzero_channel_before_presenter_fallback() {
+        let room = serde_json::json!({"liveChannel": 0, "channel": 456, "privateHost": 789});
+        let profile = serde_json::json!({"lp": 123, "yyid": 999});
+        assert_eq!(
+            desktop_room_ids(Some(&room), Some(&profile), 321),
+            (456, 123, 789)
+        );
+    }
+
+    #[test]
+    fn cookie_is_limited_to_huya_room_pages() {
+        assert!(is_room_page_url("https://m.huya.com/31339681"));
+        assert!(is_room_page_url("https://www.huya.com/31339681"));
+        assert!(!is_room_page_url(
+            "https://live.cdn.huya.com/liveconfig/game/bussLive"
+        ));
+        assert!(!is_room_page_url("https://search.cdn.huya.com/?q=test"));
     }
 
     #[test]

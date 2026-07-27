@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use reqwest::Client;
 use reqwest::header::{COOKIE, HeaderMap, REFERER, SET_COOKIE, USER_AGENT};
+use reqwest::{Client, Url};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
@@ -23,10 +23,9 @@ use crate::sites::traits::LiveSite;
 
 /// Browser UA used by Douyin's web live endpoints.  Keeping this stable is
 /// important: `ttwid` is bound to the browser family by some edge nodes.
-pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.97 Safari/537.36 Core/1.116.567.400 QQBrowser/19.7.6764.400";
+pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 const LIVE_ROOT: &str = "https://live.douyin.com/";
-const ROOM_ENTER_URL: &str = "https://live.douyin.com/webcast/room/web/enter/";
 const ROOM_REFLOW_URL: &str = "https://webcast.amemv.com/webcast/room/reflow/info/";
 const LIVE_SEARCH_URL: &str = "https://www.douyin.com/aweme/v1/web/live/search/";
 
@@ -36,6 +35,10 @@ const LIVE_SEARCH_URL: &str = "https://www.douyin.com/aweme/v1/web/live/search/"
 pub struct DouyinSite {
     client: Client,
     cookie: Mutex<String>,
+    /// Each site instance starts by visiting the public live home once, even
+    /// when a saved Cookie already contains `ttwid`. This refreshes the
+    /// transient browser session for the requests made by that instance.
+    web_session_initialized: Mutex<bool>,
 }
 
 impl Default for DouyinSite {
@@ -46,9 +49,11 @@ impl Default for DouyinSite {
 
 impl DouyinSite {
     pub fn new(client: Client, cookie: String) -> Self {
+        let cookie = normalize_cookie(&cookie);
         Self {
             client,
-            cookie: Mutex::new(normalize_cookie(&cookie)),
+            cookie: Mutex::new(cookie),
+            web_session_initialized: Mutex::new(false),
         }
     }
 
@@ -82,7 +87,24 @@ impl DouyinSite {
     fn has_cookie(&self, key: &str) -> AppResult<bool> {
         Ok(cookie_pairs(&self.cookie()?)
             .iter()
-            .any(|(candidate, _)| candidate.eq_ignore_ascii_case(key)))
+            .any(|(candidate, value)| candidate.eq_ignore_ascii_case(key) && !value.is_empty()))
+    }
+
+    fn web_session_is_initialized(&self) -> AppResult<bool> {
+        self.web_session_initialized
+            .lock()
+            .map(|state| *state)
+            .map_err(|_| {
+                AppError::new("douyin_lock", "Douyin session mutex poisoned").with_site("douyin")
+            })
+    }
+
+    fn mark_web_session_initialized(&self) -> AppResult<()> {
+        let mut state = self.web_session_initialized.lock().map_err(|_| {
+            AppError::new("douyin_lock", "Douyin session mutex poisoned").with_site("douyin")
+        })?;
+        *state = true;
+        Ok(())
     }
 
     fn remember_response_cookies(&self, headers: &HeaderMap) -> AppResult<()> {
@@ -95,6 +117,20 @@ impl DouyinSite {
             if first.contains('=') {
                 received.push(first.to_string());
             }
+        }
+        // The live home currently returns a short-lived `x-ms-token` header
+        // instead of (or in addition to) an `msToken` Set-Cookie. Keep it in
+        // the same in-memory session because room endpoints accept it as the
+        // `msToken` query parameter. Do not accept delimiters/control bytes:
+        // this value is later placed in a Cookie header for the local session.
+        if let Some(ms_token) = headers
+            .get_all("x-ms-token")
+            .iter()
+            .filter_map(|header| header.to_str().ok())
+            .map(str::trim)
+            .find(|value| is_safe_session_value(value))
+        {
+            received.push(format!("msToken={ms_token}"));
         }
         if received.is_empty() {
             return Ok(());
@@ -129,7 +165,10 @@ impl DouyinSite {
                     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
                 },
             );
-        if !cookie.is_empty() {
+        // A manually saved `.douyin.com` Cookie must never be replayed to a
+        // different registrable domain such as `webcast.amemv.com`.
+        let sends_douyin_cookie = is_douyin_cookie_url(url);
+        if sends_douyin_cookie && !cookie.is_empty() {
             request = request.header(COOKIE, cookie);
         }
         for (key, value) in params {
@@ -139,18 +178,24 @@ impl DouyinSite {
         let response = request
             .send()
             .await
-            .map_err(|error| Self::err(format!("HTTP request failed: {error}")))?;
+            // `reqwest::Error` can include the complete request URL, including
+            // query parameters such as msToken. Keep that detail out of the
+            // user-facing error and tracing output.
+            .map_err(|_| Self::err("HTTP request failed"))?;
         let status = response.status();
         let headers = response.headers().clone();
         let text = response
             .text()
             .await
-            .map_err(|error| Self::err(format!("HTTP response body failed: {error}")))?;
-        self.remember_response_cookies(&headers)?;
+            .map_err(|_| Self::err("HTTP response body failed"))?;
+        if sends_douyin_cookie {
+            self.remember_response_cookies(&headers)?;
+        }
 
         if !status.is_success() {
-            let preview = text.chars().take(180).collect::<String>();
-            return Err(Self::err(format!("HTTP {status}: {preview}")));
+            // Response bodies may be edge-generated and can reflect request
+            // values. Status is sufficient for a safe diagnostic here.
+            return Err(Self::err(format!("HTTP {status}")));
         }
         if text.trim() == "blocked" {
             return Err(Self::err("请求被抖音风控拦截，请稍后重试或更新 Cookie"));
@@ -190,21 +235,27 @@ impl DouyinSite {
                 .or_else(|| value.get("message"))
                 .unwrap_or(&Value::Null),
         );
-        if code == 444 || message.contains("验证") {
-            return Err(Self::err(
-                "请求需要通过抖音访问验证，请稍后重试或更新 Cookie",
-            ));
+        if code == 101 || code == 444 || message.contains("验证") {
+            return Err(AppError::new(
+                "douyin_browser_verification",
+                "抖音当前要求网页访问验证，应用无法自动完成；请稍后重试或在官方网页观看",
+            )
+            .with_site("douyin")
+            .retryable());
         }
-        Err(Self::err(format!("抖音接口错误 code={code}: {message}")))
+        // Do not surface arbitrary server text: some gateways reflect query
+        // parameters, which could disclose a short-lived msToken.
+        Err(Self::err(format!("抖音接口错误 code={code}")))
     }
 
     /// Fetches the live home once to obtain the anonymous `ttwid` cookie.
     async fn ensure_web_session(&self) -> AppResult<()> {
-        if self.has_cookie("ttwid")? {
+        if self.web_session_is_initialized()? {
             return Ok(());
         }
         let _ = self.get_text(LIVE_ROOT, &[], LIVE_ROOT, false).await?;
         if self.has_cookie("ttwid")? {
+            self.mark_web_session_initialized()?;
             Ok(())
         } else {
             Err(Self::err(
@@ -219,31 +270,9 @@ impl DouyinSite {
         self.get_text(&url, &[], LIVE_ROOT, false).await
     }
 
-    async fn get_web_room(&self, web_rid: &str) -> AppResult<Value> {
-        self.ensure_web_session().await?;
-        let params = vec![
-            ("aid".into(), "6383".into()),
-            ("app_name".into(), "douyin_web".into()),
-            ("live_id".into(), "1".into()),
-            ("device_platform".into(), "web".into()),
-            ("language".into(), "zh-CN".into()),
-            ("browser_language".into(), "zh-CN".into()),
-            ("browser_platform".into(), "Win32".into()),
-            ("browser_name".into(), "Chrome".into()),
-            ("browser_version".into(), "125.0.0.0".into()),
-            ("web_rid".into(), web_rid.to_string()),
-            ("msToken".into(), String::new()),
-        ];
-        self.get_json(
-            ROOM_ENTER_URL,
-            &params,
-            &format!("https://live.douyin.com/{web_rid}"),
-        )
-        .await
-    }
-
     async fn get_reflow_room(&self, room_id: &str) -> AppResult<Value> {
-        self.ensure_web_session().await?;
+        // This official reflow endpoint works with the public room id and is
+        // intentionally requested without the `.douyin.com` Cookie/session.
         let params = vec![
             ("type_id".into(), "0".into()),
             ("live_id".into(), "1".into()),
@@ -255,7 +284,19 @@ impl DouyinSite {
         self.get_json(ROOM_REFLOW_URL, &params, LIVE_ROOT).await
     }
 
+    async fn get_reflow_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
+        let root = self.get_reflow_room(room_id).await?;
+        let detail = parse_reflow_room_detail(&root, room_id)?;
+        if detail.status && !has_playable_stream(&detail) {
+            return Err(Self::err(
+                "抖音房间未返回可播放数据，会话可能已失效，请刷新后重试",
+            ));
+        }
+        Ok(detail)
+    }
+
     async fn get_room_detail_from_html(&self, web_rid: &str) -> AppResult<LiveRoomDetail> {
+        self.ensure_web_session().await?;
         let html = self
             .get_text(
                 &format!("https://live.douyin.com/{web_rid}"),
@@ -265,6 +306,23 @@ impl DouyinSite {
             )
             .await?;
         parse_room_detail_html(&html, web_rid)
+    }
+
+    /// Avoid the browser-signed web-enter endpoint for a public web room id.
+    /// The SSR page supplies the internal room id, and the official reflow
+    /// endpoint can provide stream metadata without replaying login Cookies.
+    async fn get_ssr_room_detail_or_reflow(&self, web_rid: &str) -> AppResult<LiveRoomDetail> {
+        let ssr_detail = self.get_room_detail_from_html(web_rid).await?;
+        if !ssr_detail.status || has_playable_stream(&ssr_detail) {
+            return Ok(ssr_detail);
+        }
+
+        // A live SSR payload without a stream cannot be played. Preserve the
+        // reflow failure instead of returning unusable metadata and later
+        // masking a useful diagnostic (for example browser verification) as
+        // a generic "no stream" error.
+        let internal_room_id = reflow_room_id(&ssr_detail)?;
+        self.get_reflow_room_detail(&internal_room_id).await
     }
 }
 
@@ -282,9 +340,9 @@ impl LiveSite for DouyinSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
-        // Current public SSR has only the first 15 rooms.  It does not honour
-        // `offset`, so exposing a fake next page would make the UI duplicate
-        // rooms.  The private paginated endpoint is challenge-protected.
+        // The public SSR payload exposes only its first page. The subsequent
+        // cursor API is browser-signed and cannot be safely reproduced from a
+        // saved Cookie, so never advertise a non-functional next page.
         if page.max(1) > 1 {
             return Ok(RoomListPage {
                 has_more: false,
@@ -371,16 +429,9 @@ impl LiveSite for DouyinSite {
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
         let room_id = normalize_room_id(room_id)?;
         if room_id.len() <= 16 {
-            match self.get_web_room(&room_id).await {
-                Ok(root) => parse_web_room_detail(&root, &room_id),
-                Err(error) => {
-                    tracing::debug!(error = %error, "Douyin room API failed; trying SSR room page");
-                    self.get_room_detail_from_html(&room_id).await
-                }
-            }
+            self.get_ssr_room_detail_or_reflow(&room_id).await
         } else {
-            let root = self.get_reflow_room(&room_id).await?;
-            parse_reflow_room_detail(&root, &room_id)
+            self.get_reflow_room_detail(&room_id).await
         }
     }
 
@@ -463,6 +514,15 @@ fn normalize_cookie(value: &str) -> String {
     )
 }
 
+/// Saved account cookies are scoped to Douyin-owned web hosts. Keep that
+/// boundary explicit because the room reflow API is hosted on amemv.com.
+fn is_douyin_cookie_url(value: &str) -> bool {
+    Url::parse(value)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "douyin.com" || host.ends_with(".douyin.com"))
+}
+
 fn cookie_pairs(value: &str) -> Vec<(String, String)> {
     value
         .split(';')
@@ -495,6 +555,14 @@ fn merge_cookie_values(base: &str, updates: &str) -> String {
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn is_safe_session_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4_096
+        && !value
+            .bytes()
+            .any(|byte| byte == b';' || byte.is_ascii_control())
 }
 
 fn json_i64_opt(value: &Value) -> Option<i64> {
@@ -868,18 +936,6 @@ fn first_non_empty_i64<'a>(values: impl IntoIterator<Item = Option<&'a Value>>) 
         .unwrap_or(0)
 }
 
-fn parse_web_room_detail(root: &Value, requested_web_rid: &str) -> AppResult<LiveRoomDetail> {
-    let data = root
-        .get("data")
-        .ok_or_else(|| DouyinSite::parse_err("抖音房间接口缺少 data"))?;
-    let room = data
-        .get("data")
-        .and_then(Value::as_array)
-        .and_then(|rooms| rooms.first())
-        .ok_or_else(|| DouyinSite::parse_err("抖音房间接口未返回房间数据"))?;
-    parse_room_detail(room, data.get("user"), requested_web_rid)
-}
-
 fn parse_reflow_room_detail(root: &Value, requested_room_id: &str) -> AppResult<LiveRoomDetail> {
     let data = root
         .get("data")
@@ -988,6 +1044,23 @@ fn parse_room_detail(
             "stream_url": stream_url,
         }),
     })
+}
+
+fn reflow_room_id(detail: &LiveRoomDetail) -> AppResult<String> {
+    let room_id = detail.raw.get("room_id").map(json_str).unwrap_or_default();
+    let room_id = numeric_id(&room_id, "内部房间号")?;
+    if room_id.len() <= 16 {
+        return Err(DouyinSite::parse_err("抖音房间接口未返回内部房间号"));
+    }
+    Ok(room_id.to_string())
+}
+
+fn has_playable_stream(detail: &LiveRoomDetail) -> bool {
+    detail
+        .raw
+        .get("stream_url")
+        .or_else(|| detail.raw.get("streamUrl"))
+        .is_some_and(|stream_url| parse_play_qualities(stream_url).is_ok())
 }
 
 fn parse_play_qualities(stream_url: &Value) -> AppResult<Vec<LivePlayQuality>> {
@@ -1189,6 +1262,9 @@ fn quality_name(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
     use super::*;
 
     #[test]
@@ -1200,6 +1276,39 @@ mod tests {
         assert!(merged.contains("sessionid=old"));
         assert!(merged.contains("ttwid=new"));
         assert!(merged.contains("msToken=token"));
+    }
+
+    #[test]
+    fn empty_ttwid_does_not_count_as_an_initialized_web_session() {
+        let site = DouyinSite::new(
+            http_client::default_client(),
+            "sessionid=fixture-session; ttwid=; msToken=fixture-ms-token".into(),
+        );
+
+        assert!(!site.has_cookie("ttwid").unwrap());
+        assert!(!site.web_session_is_initialized().unwrap());
+    }
+
+    #[test]
+    fn saved_cookie_still_requires_a_live_home_bootstrap() {
+        let saved = DouyinSite::new(http_client::default_client(), "sessionid=fixture".into());
+
+        assert!(!saved.web_session_is_initialized().unwrap());
+    }
+
+    #[test]
+    fn api_error_does_not_echo_untrusted_status_message() {
+        let site = DouyinSite::default();
+        let error = site
+            .ensure_api_success(&serde_json::json!({
+                "status_code": 101,
+                "status_msg": "fixture-ms-token-must-not-be-exposed"
+            }))
+            .unwrap_err();
+
+        assert_eq!(error.code, "douyin_browser_verification");
+        assert!(error.message.contains("网页访问验证"));
+        assert!(!error.message.contains("fixture-ms-token"));
     }
 
     #[test]
@@ -1217,6 +1326,65 @@ mod tests {
         assert!(cookie.contains("sessionid=saved"));
         assert!(cookie.contains("ttwid=transient"));
         assert!(cookie.contains("msToken=ephemeral"));
+    }
+
+    #[test]
+    fn response_ms_token_header_updates_only_the_in_memory_session() {
+        let site = DouyinSite::new(
+            http_client::default_client(),
+            "sessionid=saved; msToken=stale-token".into(),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ms-token", "fresh-token".parse().unwrap());
+        site.remember_response_cookies(&headers).unwrap();
+
+        assert!(site.cookie().unwrap().contains("msToken=fresh-token"));
+        assert!(site.cookie().unwrap().contains("sessionid=saved"));
+    }
+
+    #[test]
+    fn sends_cookies_only_to_douyin_owned_web_hosts() {
+        assert!(is_douyin_cookie_url("https://live.douyin.com/123"));
+        assert!(is_douyin_cookie_url("https://www.douyin.com/"));
+        assert!(!is_douyin_cookie_url(
+            "https://webcast.amemv.com/webcast/room/reflow/info/"
+        ));
+        assert!(!is_douyin_cookie_url("https://douyin.com.example.test/"));
+    }
+
+    #[tokio::test]
+    async fn cross_domain_room_request_does_not_replay_saved_cookie() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]).to_ascii_lowercase();
+            assert!(!request.contains("cookie:"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+        });
+
+        let site = DouyinSite::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            "sessionid=fixture-session; msToken=fixture-token".into(),
+        );
+        let body = site
+            .get_text(
+                &format!("http://{address}/webcast/room/reflow/info/"),
+                &[],
+                LIVE_ROOT,
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(body, "{}");
+        server.join().unwrap();
     }
 
     #[test]
@@ -1245,6 +1413,16 @@ mod tests {
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].room_id, "522864404974");
         assert_eq!(page.items[0].online, 42);
+    }
+
+    #[test]
+    fn ssr_room_metadata_uses_its_internal_id_for_reflow() {
+        let html = r#"<script>roomInfo\":{\"room\":{\"id_str\":\"7666175273884879635\",\"status\":2,\"title\":\"轻量房间数据\",\"owner\":{\"web_rid\":\"522864404974\",\"nickname\":\"主播\"},\"stream_url\":{}},\"anchor\":{\"nickname\":\"主播\"}}</script>"#;
+        let detail = parse_room_detail_html(html, "522864404974").expect("SSR room detail");
+
+        assert!(detail.status);
+        assert!(!has_playable_stream(&detail));
+        assert_eq!(reflow_room_id(&detail).unwrap(), "7666175273884879635");
     }
 
     #[test]
@@ -1278,9 +1456,19 @@ mod tests {
                 }
             }
         });
-        let detail = parse_room_detail(&room, None, "522864404974").expect("detail");
+        let detail = parse_reflow_room_detail(
+            &serde_json::json!({
+                "data": {
+                    "room": room,
+                    "user": {"nickname": "主播"}
+                }
+            }),
+            "522864404974",
+        )
+        .expect("reflow detail");
         assert!(detail.status);
         assert_eq!(detail.room_id, "522864404974");
+        assert!(has_playable_stream(&detail));
         let qualities =
             parse_play_qualities(detail.raw.get("stream_url").unwrap()).expect("qualities");
         assert_eq!(qualities[0].quality, "蓝光");
@@ -1297,5 +1485,12 @@ mod tests {
         let detail = parse_room_detail_html(html, "522864404974").expect("fallback detail");
         assert!(detail.status);
         assert_eq!(detail.title, "回退直播");
+    }
+
+    #[test]
+    fn ssr_detail_remains_usable_without_a_web_enter_payload() {
+        let html = r#"<script>roomInfo\":{\"room\":{\"id_str\":\"7666175273884879635\",\"status\":2,\"title\":\"SSR 直播\",\"owner\":{\"web_rid\":\"522864404974\",\"nickname\":\"主播\"},\"stream_url\":{}},\"anchor\":{\"nickname\":\"主播\"}}</script>"#;
+        let detail = parse_room_detail_html(html, "522864404974").expect("SSR fallback detail");
+        assert_eq!(detail.title, "SSR 直播");
     }
 }
