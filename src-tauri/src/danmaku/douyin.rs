@@ -713,11 +713,25 @@ mod tests {
         assert_eq!(url.scheme(), "wss");
         assert!(url.as_str().contains("webcast3-ws-web-lq.douyin.com"));
         let pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(pairs.get("room_id").map(String::as_str), Some("1234567890123456789"));
+        assert_eq!(
+            pairs.get("room_id").map(String::as_str),
+            Some("1234567890123456789")
+        );
         assert_eq!(pairs.get("aid").map(String::as_str), Some("6383"));
-        assert!(pairs.get("signature").is_some_and(|value| !value.is_empty()));
-        assert!(pairs.get("user_unique_id").is_some_and(|value| value.len() == 12));
-        assert_eq!(args.headers.get("Cookie").map(String::as_str), Some("ttwid=fixture"));
+        assert!(
+            pairs
+                .get("signature")
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            pairs
+                .get("user_unique_id")
+                .is_some_and(|value| value.len() == 12)
+        );
+        assert_eq!(
+            args.headers.get("Cookie").map(String::as_str),
+            Some("ttwid=fixture")
+        );
         assert_eq!(
             args.headers.get("Origin").map(String::as_str),
             Some("https://live.douyin.com")
