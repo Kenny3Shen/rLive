@@ -44,11 +44,21 @@
 | [docs/README.md](docs/README.md) | 文档目录（中 / 英） |
 | [docs/zh/用户指南.md](docs/zh/用户指南.md) | 中文用户指南（优先） |
 | [docs/zh/架构说明.md](docs/zh/架构说明.md) | 中文架构说明 |
-| [docs/zh/B站发送弹幕调研.md](docs/zh/B站发送弹幕调研.md) | B 站发送弹幕可行性与安全前置 |
+| [docs/zh/B站平台API文档.md](docs/zh/B站平台API文档.md) | 哔哩哔哩平台接入、播放与弹幕 |
+| [docs/zh/斗鱼平台API文档.md](docs/zh/斗鱼平台API文档.md) | 斗鱼平台接入、发送修复与验证 |
+| [docs/zh/虎牙平台API文档.md](docs/zh/虎牙平台API文档.md) | 虎牙平台接入、播放与弹幕 |
+| [docs/zh/抖音平台API文档.md](docs/zh/抖音平台API文档.md) | 抖音平台接入、本机签名与边界 |
+| [docs/zh/快手平台API文档.md](docs/zh/快手平台API文档.md) | 快手平台接入与当前范围 |
+| [docs/zh/Twitch平台API文档.md](docs/zh/Twitch平台API文档.md) | Twitch 平台接入、HLS 与 IRC |
 | [docs/zh/播放器性能调研.md](docs/zh/播放器性能调研.md) | mpegts.js / Rust 播放性能路线 |
 | [docs/en/user-guide.md](docs/en/user-guide.md) | English user guide |
 | [docs/en/architecture.md](docs/en/architecture.md) | English architecture |
-| [docs/en/bilibili-danmaku-send-research.md](docs/en/bilibili-danmaku-send-research.md) | Bilibili send-chat research |
+| [docs/en/bilibili-platform-api.md](docs/en/bilibili-platform-api.md) | Bilibili platform API |
+| [docs/en/douyu-platform-api.md](docs/en/douyu-platform-api.md) | Douyu platform API |
+| [docs/en/huya-platform-api.md](docs/en/huya-platform-api.md) | Huya platform API |
+| [docs/en/douyin-platform-api.md](docs/en/douyin-platform-api.md) | Douyin platform API |
+| [docs/en/kuaishou-platform-api.md](docs/en/kuaishou-platform-api.md) | Kuaishou platform API |
+| [docs/en/twitch-platform-api.md](docs/en/twitch-platform-api.md) | Twitch platform API |
 | [docs/en/player-performance-research.md](docs/en/player-performance-research.md) | Player performance research |
 
 界面文案以**中文**为主；代码注释与提交说明可使用中英文。

@@ -9,14 +9,23 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use futures_util::{SinkExt, StreamExt};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
 use md5::{Digest, Md5};
+use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
+};
 use uuid::Uuid;
 
 use crate::danmaku::{DanmakuEventSender, emit_event};
@@ -28,18 +37,30 @@ const SERVER_PORTS: &[u16] = &[8506, 8505, 8504, 8503, 8502, 8501];
 const CLIENT_TO_SERVER: u16 = 689;
 const SERVER_TO_CLIENT: u16 = 690;
 const HEARTBEAT_SECS: u64 = 45;
-/// The live site's web client uses this protocol version while authenticating
-/// the websocket session used to submit a normal chat message.
-const LOGIN_PROTOCOL_VERSION: &str = "20150929";
-const LOGIN_APP_VERSION: &str = "H5_2018021001beta";
+/// Values observed from the current first-party web room client. They are
+/// protocol identifiers, not an rLive release version.
+const LOGIN_PROTOCOL_VERSION: &str = "20220825";
+const LOGIN_APP_VERSION: &str = "218101901";
 const LOGIN_VK_SALT: &str = r#"r5*^5;}2#${XF[h+;'./.Q'1;,-]f'p["#;
 const SEND_LOGIN_TIMEOUT: Duration = Duration::from_secs(8);
+const SEND_RESULT_OBSERVE_TIMEOUT: Duration = Duration::from_secs(3);
+const SEND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_PROXY_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_SEND_ENCRYPTION_TOKEN_BYTES: usize = 256;
+const MAX_SEND_ENCRYPTION_KEY_VERSION_BYTES: usize = 64;
+// The first-party client receives this number from a network response and
+// performs one MD5 operation for every value. Keep an ample ceiling for a
+// legitimate rotation while preventing a malformed response from turning an
+// explicit one-message send into an unbounded CPU task.
+const MAX_SEND_ENCRYPTION_ITERATIONS: u32 = 10_000;
 /// A room may impose a shorter account-level limit. This client-side bound is
 /// only a defensive ceiling for a manually composed plain-text message.
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 100;
 const SEND_PROXY_DISCOVERY_URL: &str = "https://www.douyu.com/swf_api/getProxyServer";
+const SEND_ENCRYPTION_URL: &str = "https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption";
 const SEND_PROXY_HOST: &str = "wsproxy.douyu.com";
 const SEND_PROXY_PORTS: &[u16] = &[6671, 6672, 6673, 6674, 6675];
+const SEND_BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 // A Douyu packet has a four-byte outer length followed by this fixed header:
 // duplicate length (4), message type (2), encryption/reserved (2).  The
@@ -61,7 +82,11 @@ pub struct DouyuDanmakuArgs {
     pub room_id: String,
 }
 
-/// The browser-cookie values that authenticate a Douyu STT chat session.
+/// The browser-cookie values that authenticate a current Douyu STT chat
+/// session. The web client supplies both its account identity and its device
+/// identity in the normal-chat packet; accepting only the historical login
+/// trio makes a local preflight look ready while producing a packet the
+/// gateway silently drops.
 ///
 /// Do not derive `Debug`: callers must never accidentally put these values in
 /// logs or a Tauri error payload. They are copied out of the local account
@@ -69,10 +94,18 @@ pub struct DouyuDanmakuArgs {
 #[derive(Clone)]
 struct DouyuSendCredentials {
     username: String,
+    uid: String,
     stk: String,
     ltkid: String,
     did: String,
     biz: String,
+    dmjwt: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DouyuSendTimestamp {
+    seconds: u64,
+    milliseconds: u128,
 }
 
 /// The documented public discovery response for the authenticated business
@@ -91,6 +124,55 @@ struct SendProxyDiscoveryResponse {
 struct SendProxyServer {
     ip: String,
     port: SendProxyPort,
+}
+
+/// Public key material used only for the short-lived gateway challenge. It
+/// never contains the user's Cookie or JWT, but should still remain local:
+/// exposing it would make future protocol changes unnecessarily easy to
+/// fingerprint.
+#[derive(Deserialize)]
+struct SendEncryptionResponse {
+    #[serde(default)]
+    error: i64,
+    #[serde(default)]
+    data: Option<SendEncryptionData>,
+}
+
+#[derive(Deserialize)]
+struct SendEncryptionData {
+    rand_str: String,
+    enc_time: u32,
+    cpp: SendEncryptionCpp,
+}
+
+#[derive(Deserialize)]
+struct SendEncryptionCpp {
+    danmu: SendEncryptionDanmu,
+}
+
+#[derive(Deserialize)]
+struct SendEncryptionDanmu {
+    key_ver: String,
+    key: String,
+}
+
+struct SendEncryptionKey {
+    key_version: String,
+    key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SendGatewayChallenge {
+    nonce: String,
+    iterations: u32,
+}
+
+/// Sanitised HTTP CONNECT configuration. Do not retain the source URL, which
+/// might include proxy credentials and must never reach tracing output.
+struct SendHttpProxy {
+    host: String,
+    port: u16,
+    authorization: Option<String>,
 }
 
 /// The endpoint has returned both JSON numbers and decimal strings for ports.
@@ -157,29 +239,44 @@ fn cookie_value_any(cookie: &str, keys: &[&str]) -> Option<String> {
     })
 }
 
+fn numeric_cookie_value(value: String) -> Option<String> {
+    (!value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then_some(value)
+}
+
 fn credentials_from_cookie(cookie: &str) -> Option<DouyuSendCredentials> {
     let username = cookie_value_any(cookie, &["acf_username"])?;
+    let uid = cookie_value_any(cookie, &["acf_uid", "uid"])
+        .or_else(|| {
+            username
+                .clone()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+                .then_some(username.clone())
+        })
+        .and_then(numeric_cookie_value)?;
     let stk = cookie_value_any(cookie, &["acf_stk"])?;
     // Older browser sessions and some QR flows use an underscore-wrapped
     // spelling. Accept both forms so users can paste their complete Cookie
     // header without having to edit a token by hand.
     let ltkid = cookie_value_any(cookie, &["acf_ltkid", "_acf_ltkid_", "acf_ltkid_"])?;
-    let did = cookie_value_any(cookie, &["acf_did", "dy_did"]).unwrap_or_else(|| {
-        // The device id participates in the protocol's vk checksum. A fresh
-        // UUID is compatible with a complete authenticated session when an
-        // older cookie export omitted this non-session field.
-        Uuid::new_v4()
-            .to_string()
-            .replace('-', "")
-            .to_ascii_uppercase()
-    });
-    let biz = cookie_value_any(cookie, &["acf_biz"]).unwrap_or_default();
+    // Do not invent a device id. It is used by both the login checksum and
+    // the outgoing `dy` field, and a per-request random value breaks the
+    // browser session binding. `acf_devid` appears in newer exported Cookies;
+    // `acf_did` / `dy_did` are produced by the web client itself.
+    let did = cookie_value_any(cookie, &["acf_did", "dy_did", "acf_devid"])?;
+    let biz = cookie_value_any(cookie, &["acf_biz"])?;
+    // The normal chat session uses the DM-scoped token, not the general web
+    // JWT. Do not fall back to `acf_jwt_token`: its audience differs.
+    let dmjwt = cookie_value_any(cookie, &["acf_dmjwt_token", "dmjwt_token"])?;
     Some(DouyuSendCredentials {
         username,
+        uid,
         stk,
         ltkid,
         did,
         biz,
+        dmjwt,
     })
 }
 
@@ -232,9 +329,16 @@ fn encode_stt_fields(fields: &[(&str, &str)]) -> String {
 }
 
 fn current_unix_seconds() -> AppResult<u64> {
+    current_send_timestamp().map(|timestamp| timestamp.seconds)
+}
+
+fn current_send_timestamp() -> AppResult<DouyuSendTimestamp> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|duration| DouyuSendTimestamp {
+            seconds: duration.as_secs(),
+            milliseconds: duration.as_millis(),
+        })
         .map_err(|_| {
             AppError::new("douyu_send_clock", "系统时间异常，无法验证斗鱼登录状态")
                 .with_site("douyu")
@@ -245,42 +349,62 @@ fn login_request_body(room_id: &str, credentials: &DouyuSendCredentials, now: u6
     let now = now.to_string();
     let vk_input = format!("{now}{LOGIN_VK_SALT}{}", credentials.did);
     let vk = format!("{:x}", Md5::digest(vk_input.as_bytes()));
+    // Field order mirrors the current browser room client. The gateway is
+    // tolerant of ordering in most cases, but preserving it keeps the
+    // captured protocol contract reviewable and avoids relying on legacy
+    // parser behaviour.
     encode_stt_fields(&[
         ("type", "loginreq"),
-        ("username", credentials.username.as_str()),
-        ("ct", "0"),
-        ("password", ""),
         ("roomid", room_id),
+        ("dfl", ""),
+        ("username", credentials.username.as_str()),
+        ("password", ""),
+        ("ltkid", credentials.ltkid.as_str()),
+        ("biz", credentials.biz.as_str()),
+        ("stk", credentials.stk.as_str()),
         ("devid", credentials.did.as_str()),
-        ("rt", now.as_str()),
+        ("ct", "0"),
         ("pt", "2"),
+        ("cvr", "0"),
+        ("tvr", "7"),
+        ("apd", ""),
+        ("jwt", credentials.dmjwt.as_str()),
+        ("rt", now.as_str()),
         ("vk", vk.as_str()),
         ("ver", LOGIN_PROTOCOL_VERSION),
         ("aver", LOGIN_APP_VERSION),
-        ("biz", credentials.biz.as_str()),
-        ("stk", credentials.stk.as_str()),
-        ("ltkid", credentials.ltkid.as_str()),
+        // Keep the advertised browser fields coherent with the User-Agent
+        // header set below. They are not user-controlled fingerprint input.
+        ("dmbt", "chrome"),
+        ("dmbv", "126"),
     ])
 }
 
-fn chat_request_body(message: &str) -> String {
-    // This is the ordinary-text payload used by the web room client. It has no
-    // gift, payment, scheduling, or repeat fields; every call sends one text
-    // message explicitly supplied by the user.
+fn chat_request_body(
+    message: &str,
+    credentials: &DouyuSendCredentials,
+    timestamp: DouyuSendTimestamp,
+) -> String {
+    // This is the ordinary-text payload observed from the current web room
+    // client. In particular, `dy`, `sender`, `tts`, and `cst` are part of the
+    // account/device context for a normal message; the old receiver/scope/pid
+    // shape is accepted at the TCP layer but may be silently discarded.
+    let seconds = timestamp.seconds.to_string();
+    let milliseconds = timestamp.milliseconds.to_string();
     encode_stt_fields(&[
-        ("type", "chatmessage"),
-        ("receiver", "0"),
+        ("pe", "0"),
         ("content", message),
-        ("scope", ""),
         ("col", "0"),
-        ("pid", ""),
-        ("p2p", "0"),
-        ("nc", "0"),
-        ("rev", "0"),
-        ("hg", "0"),
+        ("type", "chatmessage"),
+        ("dy", credentials.did.as_str()),
+        ("sender", credentials.uid.as_str()),
         ("ifs", "0"),
-        ("sid", ""),
-        ("lid", "0"),
+        ("nc", "0"),
+        ("dat", "0"),
+        ("rev", "0"),
+        ("tts", seconds.as_str()),
+        ("admzq", "0"),
+        ("cst", milliseconds.as_str()),
     ])
 }
 
@@ -718,6 +842,417 @@ async fn discover_send_proxy_urls(
     Ok(urls)
 }
 
+fn encryption_token(value: &str, max_len: usize) -> Option<String> {
+    (!value.is_empty()
+        && value.len() <= max_len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')))
+    .then(|| value.to_owned())
+}
+
+fn encryption_key(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value.len() <= MAX_SEND_ENCRYPTION_TOKEN_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'/' && byte != b'@'))
+    .then(|| value.to_owned())
+}
+
+fn validate_encryption_iterations(iterations: u32) -> Option<u32> {
+    (iterations <= MAX_SEND_ENCRYPTION_ITERATIONS).then_some(iterations)
+}
+
+fn encryption_key_from_response(response: SendEncryptionResponse) -> AppResult<SendEncryptionKey> {
+    if response.error != 0 {
+        return Err(AppError::new(
+            "douyu_send_encryption",
+            "斗鱼弹幕认证参数暂时不可用，请稍后重试",
+        )
+        .with_site("douyu")
+        .retryable());
+    }
+    let data = response.data.ok_or_else(|| {
+        AppError::new("douyu_send_encryption", "斗鱼弹幕认证参数无效，请稍后重试")
+            .with_site("douyu")
+            .retryable()
+    })?;
+
+    // The first-party client primes its key cache by calculating a signature
+    // with these two values before sending `livreq`. The initial signature is
+    // not sent, but validating both values ensures this response has the same
+    // bounded shape before we use its `cpp.danmu` key in the server challenge.
+    if encryption_token(&data.rand_str, MAX_SEND_ENCRYPTION_TOKEN_BYTES).is_none()
+        || validate_encryption_iterations(data.enc_time).is_none()
+    {
+        return Err(
+            AppError::new("douyu_send_encryption", "斗鱼弹幕认证参数无效，请稍后重试")
+                .with_site("douyu")
+                .retryable(),
+        );
+    }
+
+    let key_version = encryption_token(
+        &data.cpp.danmu.key_ver,
+        MAX_SEND_ENCRYPTION_KEY_VERSION_BYTES,
+    )
+    .ok_or_else(|| {
+        AppError::new("douyu_send_encryption", "斗鱼弹幕认证参数无效，请稍后重试")
+            .with_site("douyu")
+            .retryable()
+    })?;
+    let key = encryption_key(&data.cpp.danmu.key).ok_or_else(|| {
+        AppError::new("douyu_send_encryption", "斗鱼弹幕认证参数无效，请稍后重试")
+            .with_site("douyu")
+            .retryable()
+    })?;
+    Ok(SendEncryptionKey { key_version, key })
+}
+
+/// Obtain only the public, short-lived gateway challenge key. This endpoint
+/// is deliberately requested without the user's Cookie: the official web
+/// protocol derives it from the browser device id, while account
+/// authentication remains inside the STT `loginreq` packet.
+async fn fetch_send_encryption_key(
+    proxy: Option<&str>,
+    did: &str,
+    room_id: &str,
+    attempt_id: &Uuid,
+) -> AppResult<SendEncryptionKey> {
+    let mut url = Url::parse(SEND_ENCRYPTION_URL).expect("fixed Douyu encryption URL");
+    url.query_pairs_mut().append_pair("did", did);
+    let client = crate::http_client::build_no_redirect_client(proxy)?;
+    let response = client
+        .get(url)
+        .header("Referer", "https://www.douyu.com/")
+        .header("User-Agent", SEND_BROWSER_USER_AGENT)
+        .send()
+        .await
+        .map_err(|_| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "encryption_request",
+                "douyu send encryption request failed"
+            );
+            AppError::new(
+                "douyu_send_encryption",
+                "无法获取斗鱼弹幕认证参数，请稍后重试",
+            )
+            .with_site("douyu")
+            .retryable()
+        })?;
+    if !response.status().is_success() {
+        tracing::warn!(
+            %attempt_id,
+            room_id,
+            stage = "encryption_response",
+            status = response.status().as_u16(),
+            "douyu send encryption endpoint returned a non-success status"
+        );
+        return Err(AppError::new(
+            "douyu_send_encryption",
+            "无法获取斗鱼弹幕认证参数，请稍后重试",
+        )
+        .with_site("douyu")
+        .retryable());
+    }
+    let response = response
+        .json::<SendEncryptionResponse>()
+        .await
+        .map_err(|_| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "encryption_parse",
+                "douyu send encryption response could not be parsed"
+            );
+            AppError::new("douyu_send_encryption", "斗鱼弹幕认证参数无效，请稍后重试")
+                .with_site("douyu")
+                .retryable()
+        })?;
+    encryption_key_from_response(response).map_err(|error| {
+        tracing::warn!(
+            %attempt_id,
+            room_id,
+            stage = "encryption_validate",
+            error_code = %error.code,
+            "douyu send encryption response was rejected"
+        );
+        error
+    })
+}
+
+fn md5_hex(value: impl AsRef<[u8]>) -> String {
+    format!("{:x}", Md5::digest(value.as_ref()))
+}
+
+fn gateway_signature(
+    room_id: &str,
+    did: &str,
+    timestamp_seconds: u64,
+    challenge: &SendGatewayChallenge,
+    key: &SendEncryptionKey,
+) -> String {
+    let mut value = challenge.nonce.clone();
+    for _ in 0..challenge.iterations {
+        value = md5_hex(format!("{value}{}", key.key));
+    }
+    md5_hex(format!(
+        "{value}{}{room_id}{did}{timestamp_seconds}",
+        key.key
+    ))
+}
+
+fn gateway_challenge_request_body(key_version: &str) -> String {
+    encode_stt_fields(&[
+        ("type", "livreq"),
+        ("alg_ver", "1.0"),
+        ("key_ver", key_version),
+    ])
+}
+
+fn gateway_signature_request_body(signature: &str, timestamp_seconds: u64) -> String {
+    let timestamp_seconds = timestamp_seconds.to_string();
+    encode_stt_fields(&[
+        ("type", "lsigreq"),
+        ("sig", signature),
+        ("ts", timestamp_seconds.as_str()),
+    ])
+}
+
+fn endpoint_host_and_port(url: &str) -> AppResult<(String, u16)> {
+    let endpoint = Url::parse(url).map_err(|_| {
+        AppError::new("douyu_send_network", "斗鱼发送服务器地址无效，请稍后重试")
+            .with_site("douyu")
+            .retryable()
+    })?;
+    let host = endpoint.host_str().ok_or_else(|| {
+        AppError::new("douyu_send_network", "斗鱼发送服务器地址无效，请稍后重试")
+            .with_site("douyu")
+            .retryable()
+    })?;
+    let port = endpoint.port_or_known_default().ok_or_else(|| {
+        AppError::new("douyu_send_network", "斗鱼发送服务器地址无效，请稍后重试")
+            .with_site("douyu")
+            .retryable()
+    })?;
+    Ok((host.to_owned(), port))
+}
+
+fn socket_address(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+fn proxy_error(message: impl Into<String>) -> AppError {
+    AppError::new("douyu_send_proxy", message).with_site("douyu")
+}
+
+fn proxy_connection_error(message: impl Into<String>) -> AppError {
+    proxy_error(message).retryable()
+}
+
+/// Decode URL user-info without treating `+` as a space. Proxy credentials
+/// belong to URL components rather than form data, and Basic authentication
+/// below safely re-encodes the resulting bytes.
+fn percent_decode_proxy_credential(value: &str) -> AppResult<Vec<u8>> {
+    fn hex(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let Some(high) = bytes.get(index + 1).and_then(|byte| hex(*byte)) else {
+            return Err(proxy_error("斗鱼弹幕代理账号编码无效"));
+        };
+        let Some(low) = bytes.get(index + 2).and_then(|byte| hex(*byte)) else {
+            return Err(proxy_error("斗鱼弹幕代理账号编码无效"));
+        };
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+    Ok(decoded)
+}
+
+fn proxy_authorization(proxy: &Url) -> AppResult<Option<String>> {
+    let username = proxy.username();
+    let password = proxy.password();
+    if username.is_empty() && password.is_none() {
+        return Ok(None);
+    }
+    let password = password
+        .ok_or_else(|| proxy_error("斗鱼弹幕代理账号需同时提供用户名和密码，或移除账号信息"))?;
+
+    let mut credential = percent_decode_proxy_credential(username)?;
+    credential.push(b':');
+    credential.extend(percent_decode_proxy_credential(password)?);
+    Ok(Some(STANDARD.encode(credential)))
+}
+
+/// Parse the same user-facing proxy setting as normal HTTP requests. The
+/// websocket transport is an HTTP CONNECT tunnel, so SOCKS and HTTPS proxy
+/// endpoints are rejected explicitly instead of silently bypassing the
+/// setting. A scheme-less legacy `127.0.0.1:7890` value remains HTTP.
+fn configured_http_proxy(proxy: Option<&str>) -> AppResult<Option<SendHttpProxy>> {
+    let Some(raw) = proxy.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let normalized = if raw.contains("://") {
+        raw.to_owned()
+    } else {
+        format!("http://{raw}")
+    };
+    let proxy = Url::parse(&normalized).map_err(|_| {
+        AppError::new(
+            "douyu_send_proxy_invalid",
+            "斗鱼弹幕代理地址无效，请使用 HTTP 地址",
+        )
+        .with_site("douyu")
+    })?;
+    if proxy.scheme() != "http" {
+        return Err(AppError::new(
+            "douyu_send_proxy_unsupported",
+            "斗鱼弹幕发送目前仅支持 HTTP 代理，请调整代理地址后重试",
+        )
+        .with_site("douyu"));
+    }
+    let host = proxy
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| {
+            AppError::new("douyu_send_proxy_invalid", "斗鱼弹幕代理地址缺少主机名")
+                .with_site("douyu")
+        })?
+        .to_owned();
+    if !matches!(proxy.path(), "" | "/") || proxy.query().is_some() || proxy.fragment().is_some() {
+        return Err(AppError::new(
+            "douyu_send_proxy_invalid",
+            "斗鱼弹幕代理地址不能包含路径、查询参数或片段",
+        )
+        .with_site("douyu"));
+    }
+    let port = proxy.port_or_known_default().ok_or_else(|| {
+        AppError::new("douyu_send_proxy_invalid", "斗鱼弹幕代理地址缺少端口").with_site("douyu")
+    })?;
+    Ok(Some(SendHttpProxy {
+        host,
+        port,
+        authorization: proxy_authorization(&proxy)?,
+    }))
+}
+
+async fn open_send_tcp(address: String) -> AppResult<TcpStream> {
+    let stream = time::timeout(SEND_CONNECT_TIMEOUT, TcpStream::connect(address))
+        .await
+        .map_err(|_| {
+            AppError::new("douyu_send_network", "连接斗鱼发送服务器超时，请稍后重试")
+                .with_site("douyu")
+                .retryable()
+        })?
+        .map_err(|_| {
+            AppError::new("douyu_send_network", "无法连接斗鱼发送服务器，请稍后重试")
+                .with_site("douyu")
+                .retryable()
+        })?;
+    let _ = stream.set_nodelay(true);
+    Ok(stream)
+}
+
+fn http_connect_request(proxy: &SendHttpProxy, target: &str) -> Vec<u8> {
+    let mut request =
+        format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Connection: Keep-Alive\r\n");
+    if let Some(credential) = &proxy.authorization {
+        request.push_str("Proxy-Authorization: Basic ");
+        request.push_str(credential);
+        request.push_str("\r\n");
+    }
+    request.push_str("\r\n");
+    request.into_bytes()
+}
+
+fn parse_http_connect_response(response: &[u8]) -> AppResult<()> {
+    let response = std::str::from_utf8(response).map_err(|_| {
+        AppError::new("douyu_send_proxy", "代理返回了无效响应")
+            .with_site("douyu")
+            .retryable()
+    })?;
+    let status = response.lines().next().unwrap_or_default();
+    let code = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok());
+    if !status.starts_with("HTTP/") || code != Some(200) {
+        return Err(AppError::new(
+            "douyu_send_proxy",
+            "代理拒绝连接斗鱼弹幕服务器，请检查代理设置",
+        )
+        .with_site("douyu")
+        .retryable());
+    }
+    Ok(())
+}
+
+async fn connect_via_http_proxy(
+    proxy: &SendHttpProxy,
+    target_host: &str,
+    target_port: u16,
+) -> AppResult<TcpStream> {
+    let mut stream = open_send_tcp(socket_address(&proxy.host, proxy.port)).await?;
+    let target = socket_address(target_host, target_port);
+    stream
+        .write_all(&http_connect_request(proxy, &target))
+        .await
+        .map_err(|_| proxy_connection_error("无法向代理建立斗鱼弹幕连接"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|_| proxy_connection_error("无法向代理建立斗鱼弹幕连接"))?;
+
+    let mut response = Vec::with_capacity(1024);
+    let mut buffer = [0_u8; 1024];
+    let header_end = loop {
+        if response.len() >= MAX_PROXY_RESPONSE_BYTES {
+            return Err(proxy_connection_error("代理响应过长，无法建立弹幕连接"));
+        }
+        let read = time::timeout(SEND_CONNECT_TIMEOUT, stream.read(&mut buffer))
+            .await
+            .map_err(|_| proxy_connection_error("等待代理连接响应超时"))?
+            .map_err(|_| proxy_connection_error("读取代理连接响应失败"))?;
+        if read == 0 {
+            return Err(proxy_connection_error("代理在建立连接前关闭"));
+        }
+        response.extend_from_slice(&buffer[..read]);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    // A CONNECT peer cannot legitimately send tunneled TLS data before this
+    // client starts the TLS handshake. Refuse an ambiguous response instead
+    // of silently dropping bytes that TLS would need to inspect.
+    if response.len() != header_end {
+        return Err(proxy_connection_error("代理连接响应格式异常"));
+    }
+    parse_http_connect_response(&response)?;
+    Ok(stream)
+}
+
 async fn connect_douyu_send_ws(
     proxy: Option<&str>,
     room_id: &str,
@@ -725,6 +1260,7 @@ async fn connect_douyu_send_ws(
 ) -> AppResult<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 > {
+    let proxy_config = configured_http_proxy(proxy)?;
     let urls = discover_send_proxy_urls(proxy, room_id, attempt_id).await?;
     for url in urls {
         let mut request = match url.as_str().into_client_request() {
@@ -737,12 +1273,42 @@ async fn connect_douyu_send_ws(
         if let Ok(value) = HeaderValue::from_str("https://www.douyu.com/") {
             headers.insert("Origin", value);
         }
-        if let Ok(value) = HeaderValue::from_str(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        ) {
+        if let Ok(value) = HeaderValue::from_str(SEND_BROWSER_USER_AGENT) {
             headers.insert("User-Agent", value);
         }
-        match connect_async(request).await {
+        let (host, port) = match endpoint_host_and_port(&url) {
+            Ok(target) => target,
+            Err(error) => {
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    endpoint = %url,
+                    stage = "server_target",
+                    error_code = %error.code,
+                    "douyu send websocket target was invalid"
+                );
+                continue;
+            }
+        };
+        let socket = match proxy_config.as_ref() {
+            Some(proxy) => connect_via_http_proxy(proxy, &host, port).await,
+            None => open_send_tcp(socket_address(&host, port)).await,
+        };
+        let socket = match socket {
+            Ok(socket) => socket,
+            Err(error) => {
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    endpoint = %url,
+                    stage = "server_transport",
+                    error_code = %error.code,
+                    "douyu send websocket transport connect failed"
+                );
+                continue;
+            }
+        };
+        match client_async_tls_with_config(request, socket, None, None).await {
             Ok((ws, _)) => return Ok(ws),
             Err(error) => {
                 tracing::warn!(
@@ -781,9 +1347,7 @@ async fn connect_douyu_ws() -> AppResult<
         if let Ok(v) = HeaderValue::from_str("https://www.douyu.com/") {
             headers.insert("Origin", v);
         }
-        if let Ok(v) = HeaderValue::from_str(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        ) {
+        if let Ok(v) = HeaderValue::from_str(SEND_BROWSER_USER_AGENT) {
             headers.insert("User-Agent", v);
         }
         match connect_async(req).await {
@@ -809,34 +1373,240 @@ fn stt_field<'a>(stt: &'a str, expected_key: &str) -> Option<&'a str> {
     })
 }
 
-/// A successful authenticated login reply includes the account nickname. An
-/// anonymous `loginres` has an empty nickname and must never be allowed to
-/// proceed to the write packet.
-fn login_reply_from_stt(stt: &str) -> Option<bool> {
-    (stt_type(stt)? == "loginres").then(|| {
-        stt_field(stt, "nickname")
-            .map(str::trim)
-            .is_some_and(|nickname| !nickname.is_empty())
-    })
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SendGatewayReply {
+    Login { user_id: Option<String> },
+    EncryptionChallenge(SendGatewayChallenge),
+    EncryptionChallengeInvalid,
+    ChatAccepted,
+    ChatSubmitted,
+    Rejected(Option<String>),
 }
 
-fn login_reply_from_binary(data: &[u8]) -> Option<bool> {
+fn safe_gateway_code(stt: &str) -> Option<String> {
+    // `chatres` reports its result in `res`; `error` packets normally use
+    // `code`. Keep `res` first so a bundled rejection cannot be mistaken for
+    // a successful chat acknowledgement merely because it has no `code`.
+    ["res", "code", "ec", "err"]
+        .iter()
+        .find_map(|key| stt_field(stt, key))
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        })
+        .map(str::to_owned)
+}
+
+fn gateway_login_user_id(stt: &str) -> Option<String> {
+    stt_field(stt, "userid")
+        .or_else(|| stt_field(stt, "uid"))
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 32
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .map(str::to_owned)
+}
+
+fn gateway_challenge_from_stt(stt: &str) -> Option<SendGatewayChallenge> {
+    let nonce = encryption_token(stt_field(stt, "nonce")?, MAX_SEND_ENCRYPTION_TOKEN_BYTES)?;
+    let iterations = stt_field(stt, "its")?
+        .parse::<u32>()
+        .ok()
+        .and_then(validate_encryption_iterations)?;
+    Some(SendGatewayChallenge { nonce, iterations })
+}
+
+fn send_gateway_reply_from_stt(stt: &str) -> Option<SendGatewayReply> {
+    match stt_type(stt)? {
+        "loginres" => Some(SendGatewayReply::Login {
+            user_id: gateway_login_user_id(stt),
+        }),
+        "livres" => Some(
+            gateway_challenge_from_stt(stt)
+                .map(SendGatewayReply::EncryptionChallenge)
+                .unwrap_or(SendGatewayReply::EncryptionChallengeInvalid),
+        ),
+        "error" => Some(SendGatewayReply::Rejected(safe_gateway_code(stt))),
+        // The business gateway confirms an ordinary-text submission with a
+        // `chatres` packet. Only `res=0` is a positive confirmation. A
+        // packet that omits `res` means the socket has seen a related update,
+        // not that the platform accepted the message.
+        "chatres" => match stt_field(stt, "res").map(str::trim) {
+            Some("0") => Some(SendGatewayReply::ChatAccepted),
+            Some(_) => Some(SendGatewayReply::Rejected(safe_gateway_code(stt))),
+            None => Some(SendGatewayReply::ChatSubmitted),
+        },
+        _ => None,
+    }
+}
+
+fn send_gateway_reply_from_binary(data: &[u8]) -> Option<SendGatewayReply> {
     let mut reply = None;
     for_each_packet(data, |stt| {
-        if reply.is_none() {
-            reply = login_reply_from_stt(stt);
+        let Some(candidate) = send_gateway_reply_from_stt(stt) else {
+            return;
+        };
+        // The proxy can bundle several STT packets into one WebSocket frame.
+        // A terminal rejection must win over an earlier positive-looking
+        // packet in the same frame so the client never reports a false send.
+        let terminal = matches!(
+            &candidate,
+            SendGatewayReply::Rejected(_) | SendGatewayReply::EncryptionChallengeInvalid
+        );
+        if terminal {
+            reply = Some(candidate);
+        } else if reply.is_none() {
+            reply = Some(candidate);
         }
     });
     reply
 }
 
+async fn next_send_gateway_reply<S>(
+    write: &mut SplitSink<WebSocketStream<S>, Message>,
+    read: &mut SplitStream<WebSocketStream<S>>,
+    room_id: &str,
+    attempt_id: &Uuid,
+    stage: &'static str,
+) -> AppResult<SendGatewayReply>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    loop {
+        let frame = match read.next().await {
+            Some(Ok(frame)) => frame,
+            Some(Err(error)) => {
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    stage,
+                    error = %error,
+                    "douyu send gateway response read failed"
+                );
+                return Err(AppError::new(
+                    "douyu_send_network",
+                    "斗鱼弹幕服务器连接中断，请稍后重试",
+                )
+                .with_site("douyu")
+                .retryable());
+            }
+            None => {
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    stage,
+                    "douyu send gateway websocket closed before a response"
+                );
+                return Err(AppError::new(
+                    "douyu_send_network",
+                    "斗鱼弹幕服务器连接中断，请稍后重试",
+                )
+                .with_site("douyu")
+                .retryable());
+            }
+        };
+        let reply = match frame {
+            Message::Binary(data) => send_gateway_reply_from_binary(&data),
+            Message::Text(text) => send_gateway_reply_from_stt(text.as_str()),
+            Message::Ping(payload) => {
+                write.send(Message::Pong(payload)).await.map_err(|error| {
+                    tracing::warn!(
+                        %attempt_id,
+                        room_id,
+                        stage,
+                        error = %error,
+                        "douyu send gateway ping response failed"
+                    );
+                    AppError::new("douyu_send_network", "斗鱼弹幕服务器连接中断，请稍后重试")
+                        .with_site("douyu")
+                        .retryable()
+                })?;
+                None
+            }
+            Message::Close(frame) => {
+                tracing::warn!(
+                    %attempt_id,
+                    room_id,
+                    stage,
+                    close_frame = frame.is_some(),
+                    "douyu send gateway websocket closed"
+                );
+                return Err(AppError::new(
+                    "douyu_send_network",
+                    "斗鱼弹幕服务器连接中断，请稍后重试",
+                )
+                .with_site("douyu")
+                .retryable());
+            }
+            _ => None,
+        };
+        if let Some(reply) = reply {
+            return Ok(reply);
+        }
+    }
+}
+
+async fn wait_for_send_gateway_reply<S, F>(
+    write: &mut SplitSink<WebSocketStream<S>, Message>,
+    read: &mut SplitStream<WebSocketStream<S>>,
+    room_id: &str,
+    attempt_id: &Uuid,
+    stage: &'static str,
+    mut matches_stage: F,
+) -> AppResult<SendGatewayReply>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnMut(&SendGatewayReply) -> bool,
+{
+    loop {
+        let reply = next_send_gateway_reply(write, read, room_id, attempt_id, stage).await?;
+        let terminal = matches!(
+            &reply,
+            SendGatewayReply::Rejected(_) | SendGatewayReply::EncryptionChallengeInvalid
+        );
+        if terminal || matches_stage(&reply) {
+            return Ok(reply);
+        }
+    }
+}
+
+fn authentication_rejected_error(stage: &'static str) -> AppError {
+    let (code, message) = match stage {
+        "login" => (
+            "douyu_send_login_rejected",
+            "斗鱼登录状态已失效，请重新扫码或更新 Cookie 后重试",
+        ),
+        _ => (
+            "douyu_send_auth_rejected",
+            "斗鱼弹幕认证被拒绝，请更新 Cookie 后重试",
+        ),
+    };
+    AppError::new(code, message).with_site("douyu")
+}
+
+fn send_unknown_error() -> AppError {
+    // Do not mark this retryable. The WebSocket write may already have
+    // reached Douyu, so automatic or reflexive retry would risk duplicates.
+    AppError::new(
+        "douyu_send_unknown",
+        "发送请求已提交，但未收到斗鱼确认；请到直播间确认是否显示",
+    )
+    .with_site("douyu")
+}
+
 /// Authenticate a short-lived websocket session and submit one ordinary
 /// Douyu chat message.
 ///
-/// There is intentionally no automatic retry and no optimistic local event:
-/// once the final WebSocket write succeeds, the remote side may already have
-/// accepted the message even if a subsequent network error occurs. The normal
-/// room danmaku connection remains the source of truth for the eventual echo.
+/// There is intentionally no automatic retry and no optimistic local event.
+/// A write is only reported as successful after `chatres(res=0)`; after any
+/// post-write uncertainty the caller receives an explicit unknown state so it
+/// cannot accidentally duplicate a message by retrying in the background.
 pub async fn send_chat(
     cookie: &str,
     room_id: &str,
@@ -854,7 +1624,7 @@ pub async fn send_chat(
     let credentials = credentials_from_cookie(cookie).ok_or_else(|| {
         AppError::new(
             "douyu_send_cookie_missing",
-            "请先在设置中扫码登录或保存含 acf_username、acf_stk、acf_ltkid 的斗鱼 Cookie",
+            "请先在设置中扫码登录或保存包含账号、设备和弹幕令牌字段的斗鱼 Cookie",
         )
         .with_site("douyu")
     })?;
@@ -876,11 +1646,7 @@ pub async fn send_chat(
                 retryable = error.retryable,
                 "douyu send websocket connection failed"
             );
-            return Err(
-                AppError::new("douyu_send_network", "无法连接斗鱼弹幕服务器，请稍后重试")
-                    .with_site("douyu")
-                    .retryable(),
-            );
+            return Err(error);
         }
     };
     let (mut write, mut read) = ws.split();
@@ -899,94 +1665,19 @@ pub async fn send_chat(
                 .with_site("douyu")
                 .retryable()
         })?;
-    let login_result = time::timeout(SEND_LOGIN_TIMEOUT, async {
-        loop {
-            let frame = match read.next().await {
-                Some(Ok(frame)) => frame,
-                Some(Err(error)) => {
-                    tracing::warn!(
-                        %attempt_id,
-                        room_id,
-                        stage = "login_read",
-                        error = %error,
-                        "douyu send login response read failed"
-                    );
-                    return Err(AppError::new(
-                        "douyu_send_network",
-                        "斗鱼登录连接中断，请稍后重试",
-                    )
-                    .with_site("douyu")
-                    .retryable());
-                }
-                None => {
-                    tracing::warn!(
-                        %attempt_id,
-                        room_id,
-                        stage = "login_read",
-                        "douyu send login websocket closed before a response"
-                    );
-                    return Err(AppError::new(
-                        "douyu_send_login_expired",
-                        "斗鱼登录会话已关闭，请更新 Cookie 后重试",
-                    )
-                    .with_site("douyu"));
-                }
-            };
-            let reply = match frame {
-                Message::Binary(data) => login_reply_from_binary(&data),
-                Message::Text(text) => login_reply_from_stt(text.as_str()),
-                Message::Ping(payload) => {
-                    write.send(Message::Pong(payload)).await.map_err(|error| {
-                        tracing::warn!(
-                            %attempt_id,
-                            room_id,
-                            stage = "login_pong",
-                            error = %error,
-                            "douyu send login ping response failed"
-                        );
-                        AppError::new("douyu_send_network", "斗鱼登录连接中断，请稍后重试")
-                            .with_site("douyu")
-                            .retryable()
-                    })?;
-                    None
-                }
-                Message::Close(frame) => {
-                    tracing::warn!(
-                        %attempt_id,
-                        room_id,
-                        stage = "login_close",
-                        close_frame = frame.is_some(),
-                        "douyu send login websocket closed"
-                    );
-                    return Err(AppError::new(
-                        "douyu_send_login_expired",
-                        "斗鱼登录会话已关闭，请更新 Cookie 后重试",
-                    )
-                    .with_site("douyu"));
-                }
-                _ => None,
-            };
-            if let Some(authenticated) = reply {
-                if authenticated {
-                    return Ok(());
-                }
-                tracing::warn!(
-                    %attempt_id,
-                    room_id,
-                    stage = "login_response",
-                    error_code = "douyu_send_login_expired",
-                    "douyu send login was rejected"
-                );
-                return Err(AppError::new(
-                    "douyu_send_login_expired",
-                    "斗鱼登录状态已失效，请重新扫码或更新 Cookie 后重试",
-                )
-                .with_site("douyu"));
-            }
-        }
-    })
-    .await;
-    match login_result {
+    let login_reply = match time::timeout(
+        SEND_LOGIN_TIMEOUT,
+        wait_for_send_gateway_reply(
+            &mut write,
+            &mut read,
+            room_id,
+            &attempt_id,
+            "login",
+            |reply| matches!(reply, SendGatewayReply::Login { .. }),
+        ),
+    )
+    .await
+    {
         Ok(result) => result?,
         Err(_) => {
             tracing::warn!(
@@ -1003,15 +1694,158 @@ pub async fn send_chat(
             .with_site("douyu")
             .retryable());
         }
+    };
+    match &login_reply {
+        SendGatewayReply::Login {
+            user_id: Some(user_id),
+        } if user_id == &credentials.uid => {}
+        SendGatewayReply::Login { .. } | SendGatewayReply::Rejected(_) => {
+            let gateway_code = match &login_reply {
+                SendGatewayReply::Rejected(Some(code)) => code.as_str(),
+                _ => "unknown",
+            };
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "login_response",
+                gateway_code,
+                "douyu send login was not authenticated as the Cookie account"
+            );
+            return Err(authentication_rejected_error("login"));
+        }
+        SendGatewayReply::EncryptionChallengeInvalid => {
+            return Err(
+                AppError::new("douyu_send_encryption", "斗鱼弹幕认证挑战无效，请稍后重试")
+                    .with_site("douyu")
+                    .retryable(),
+            );
+        }
+        _ => {
+            return Err(AppError::new(
+                "douyu_send_login_timeout",
+                "斗鱼登录确认异常，请检查 Cookie 后重试",
+            )
+            .with_site("douyu")
+            .retryable());
+        }
     }
 
-    // `send` flushes the complete WebSocket frame. Do not wait for or retry an
-    // undocumented response packet here: server-side filtering can be
-    // asynchronous, and the live room connection is responsible for showing a
-    // confirmed echo.
+    // Current web rooms require this challenge after `loginres`. Fetching the
+    // public key intentionally omits Cookie headers; the account session has
+    // already been authenticated inside the STT login packet above.
+    let encryption =
+        fetch_send_encryption_key(proxy, &credentials.did, room_id, &attempt_id).await?;
     write
         .send(Message::Binary(
-            serialize_packet(&chat_request_body(&message)).into(),
+            serialize_packet(&gateway_challenge_request_body(&encryption.key_version)).into(),
+        ))
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "livreq_write",
+                error = %error,
+                "douyu send encryption challenge request write failed"
+            );
+            AppError::new("douyu_send_network", "斗鱼弹幕认证连接中断，请稍后重试")
+                .with_site("douyu")
+                .retryable()
+        })?;
+    let challenge_reply = match time::timeout(
+        SEND_LOGIN_TIMEOUT,
+        wait_for_send_gateway_reply(
+            &mut write,
+            &mut read,
+            room_id,
+            &attempt_id,
+            "encryption_challenge",
+            |reply| matches!(reply, SendGatewayReply::EncryptionChallenge(_)),
+        ),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "encryption_challenge_timeout",
+                timeout_seconds = SEND_LOGIN_TIMEOUT.as_secs(),
+                "douyu send encryption challenge timed out"
+            );
+            return Err(AppError::new(
+                "douyu_send_encryption_timeout",
+                "斗鱼弹幕认证确认超时，请稍后重试",
+            )
+            .with_site("douyu")
+            .retryable());
+        }
+    };
+    let challenge = match challenge_reply {
+        SendGatewayReply::EncryptionChallenge(challenge) => challenge,
+        SendGatewayReply::Rejected(code) => {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "encryption_challenge_response",
+                gateway_code = code.as_deref().unwrap_or("unknown"),
+                "douyu send encryption challenge was rejected"
+            );
+            return Err(authentication_rejected_error("encryption"));
+        }
+        SendGatewayReply::EncryptionChallengeInvalid => {
+            return Err(
+                AppError::new("douyu_send_encryption", "斗鱼弹幕认证挑战无效，请稍后重试")
+                    .with_site("douyu")
+                    .retryable(),
+            );
+        }
+        _ => {
+            return Err(
+                AppError::new("douyu_send_encryption", "斗鱼弹幕认证确认异常，请稍后重试")
+                    .with_site("douyu")
+                    .retryable(),
+            );
+        }
+    };
+    let signature_timestamp = current_unix_seconds()?;
+    let signature = gateway_signature(
+        room_id,
+        &credentials.did,
+        signature_timestamp,
+        &challenge,
+        &encryption,
+    );
+    write
+        .send(Message::Binary(
+            serialize_packet(&gateway_signature_request_body(
+                &signature,
+                signature_timestamp,
+            ))
+            .into(),
+        ))
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "lsigreq_write",
+                error = %error,
+                "douyu send encryption signature write failed"
+            );
+            AppError::new("douyu_send_network", "斗鱼弹幕认证连接中断，请稍后重试")
+                .with_site("douyu")
+                .retryable()
+        })?;
+
+    // `send` flushes the complete WebSocket frame. Do not automatically retry
+    // after this point: the platform may have accepted the message even if a
+    // later read fails.
+    let chat_timestamp = current_send_timestamp()?;
+    write
+        .send(Message::Binary(
+            serialize_packet(&chat_request_body(&message, &credentials, chat_timestamp)).into(),
         ))
         .await
         .map_err(|error| {
@@ -1022,14 +1856,48 @@ pub async fn send_chat(
                 error = %error,
                 "douyu send chat packet write failed"
             );
-            AppError::new(
-                "douyu_send_unknown",
-                "发送状态未知，请到直播间确认是否已送达",
-            )
-            .with_site("douyu")
-            .retryable()
+            send_unknown_error()
         })?;
-    Ok(())
+
+    match time::timeout(
+        SEND_RESULT_OBSERVE_TIMEOUT,
+        wait_for_send_gateway_reply(
+            &mut write,
+            &mut read,
+            room_id,
+            &attempt_id,
+            "chat_result",
+            |reply| matches!(reply, SendGatewayReply::ChatAccepted),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(SendGatewayReply::ChatAccepted)) => Ok(()),
+        Ok(Ok(SendGatewayReply::Rejected(code))) => {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "chat_result",
+                gateway_code = code.as_deref().unwrap_or("unknown"),
+                "douyu rejected a chat submission"
+            );
+            Err(AppError::new(
+                "douyu_send_rejected",
+                "斗鱼拒绝了该弹幕，可能受禁言、频率或直播间限制",
+            )
+            .with_site("douyu"))
+        }
+        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
+            tracing::warn!(
+                %attempt_id,
+                room_id,
+                stage = "chat_result_unknown",
+                timeout_millis = SEND_RESULT_OBSERVE_TIMEOUT.as_millis(),
+                "douyu chat submission was written without a confirmed result"
+            );
+            Err(send_unknown_error())
+        }
+    }
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> AppResult<()> {
@@ -1151,12 +2019,21 @@ mod tests {
     fn outgoing_send_requires_the_authenticated_cookie_fields() {
         assert!(!has_send_credentials("acf_username=viewer"));
         assert!(!has_send_credentials("acf_stk=session; acf_ltkid=login"));
-        assert!(has_send_credentials(
-            "acf_username=viewer; acf_stk=session; acf_ltkid=login; acf_did=device; acf_biz=1"
+        assert!(!has_send_credentials(
+            "acf_username=viewer; acf_uid=42; acf_stk=session; acf_ltkid=login; acf_devid=device; acf_biz=1"
+        ));
+        assert!(!has_send_credentials(
+            "acf_username=viewer; acf_stk=session; acf_ltkid=login; acf_devid=device; acf_biz=1; acf_dmjwt_token=token"
         ));
         assert!(has_send_credentials(
-            "Cookie: acf_username=viewer; acf_stk=session; _acf_ltkid_=legacy-login"
+            "acf_username=viewer; acf_uid=42; acf_stk=session; acf_ltkid=login; acf_devid=device; acf_dmjwt_token=token; acf_biz=1"
         ));
+        let credentials = credentials_from_cookie(
+            "Cookie: acf_username=42; acf_stk=session; _acf_ltkid_=legacy-login; acf_did=device; acf_dmjwt_token=token; acf_biz=1",
+        )
+        .expect("complete legacy cookie");
+        assert_eq!(credentials.uid, "42");
+        assert_eq!(credentials.did, "device");
     }
 
     #[test]
@@ -1206,32 +2083,160 @@ mod tests {
 
     #[test]
     fn outgoing_stt_body_escapes_user_text_and_cookie_values() {
-        let body = chat_request_body("@主播/冲啊");
-        assert!(body.starts_with("type@=chatmessage/receiver@=0/"));
-        assert!(body.contains("content@=@A主播@S冲啊/"));
-
         let credentials = DouyuSendCredentials {
             username: "u/name@site".into(),
+            uid: "42".into(),
             stk: "stk/value".into(),
             ltkid: "login@key".into(),
             did: "device".into(),
             biz: "1".into(),
+            dmjwt: "dm/jwt".into(),
         };
+        let body = chat_request_body(
+            "@主播/冲啊",
+            &credentials,
+            DouyuSendTimestamp {
+                seconds: 1_700_000_000,
+                milliseconds: 1_700_000_000_123,
+            },
+        );
+        assert!(body.starts_with("pe@=0/content@=@A主播@S冲啊/col@=0/type@=chatmessage/"));
+        assert!(body.contains("dy@=device/"));
+        assert!(body.contains("sender@=42/"));
+        assert!(body.contains("tts@=1700000000/"));
+        assert!(body.contains("cst@=1700000000123/"));
+
         let login = login_request_body("123", &credentials, 1_700_000_000);
-        assert!(login.starts_with("type@=loginreq/username@=u@Sname@Asite/"));
+        assert!(login.starts_with("type@=loginreq/roomid@=123/dfl@=/username@=u@Sname@Asite/"));
         assert!(login.contains("stk@=stk@Svalue/"));
         assert!(login.contains("ltkid@=login@Akey/"));
+        assert!(login.contains("jwt@=dm@Sjwt/"));
         assert!(login.contains("vk@="));
     }
 
     #[test]
-    fn authenticated_login_reply_requires_a_nickname() {
-        let success =
-            serialize_packet("type@=loginres/userid@=42/username@=viewer/nickname@=热心观众/");
-        let anonymous = serialize_packet("type@=loginres/userid@=0/username@=/nickname@=/");
-        assert_eq!(login_reply_from_binary(&success), Some(true));
-        assert_eq!(login_reply_from_binary(&anonymous), Some(false));
-        assert_eq!(login_reply_from_stt("type@=chatmsg/txt@=ignored/"), None);
+    fn gateway_replies_require_the_cookie_account_and_chatres_res_zero() {
+        let login = serialize_packet("type@=loginres/userid@=42/username@=viewer/");
+        assert_eq!(
+            send_gateway_reply_from_binary(&login),
+            Some(SendGatewayReply::Login {
+                user_id: Some("42".into())
+            })
+        );
+        assert_eq!(
+            send_gateway_reply_from_stt("type@=loginres/userid@=anonymous/"),
+            Some(SendGatewayReply::Login { user_id: None })
+        );
+        assert_eq!(
+            send_gateway_reply_from_stt("type@=chatres/res@=0/cd@=1/"),
+            Some(SendGatewayReply::ChatAccepted)
+        );
+        assert_eq!(
+            send_gateway_reply_from_stt("type@=chatres/res@=308/cd@=1/"),
+            Some(SendGatewayReply::Rejected(Some("308".into())))
+        );
+        assert_eq!(
+            send_gateway_reply_from_stt("type@=chatres/cd@=1/"),
+            Some(SendGatewayReply::ChatSubmitted)
+        );
+    }
+
+    #[test]
+    fn gateway_challenge_and_rejections_are_parsed_without_raw_packet_data() {
+        assert_eq!(
+            send_gateway_reply_from_stt("type@=livres/nonce@=nonce_123/its@=2/"),
+            Some(SendGatewayReply::EncryptionChallenge(
+                SendGatewayChallenge {
+                    nonce: "nonce_123".into(),
+                    iterations: 2,
+                }
+            ))
+        );
+        assert_eq!(
+            send_gateway_reply_from_stt("type@=livres/nonce@=nonce/its@=10001/"),
+            Some(SendGatewayReply::EncryptionChallengeInvalid)
+        );
+
+        let accepted = serialize_packet("type@=chatres/res@=0/");
+        let rejected = serialize_packet("type@=error/code@=59/");
+        let mut bundled = accepted;
+        bundled.extend(rejected);
+        assert_eq!(
+            send_gateway_reply_from_binary(&bundled),
+            Some(SendGatewayReply::Rejected(Some("59".into())))
+        );
+    }
+
+    #[test]
+    fn gateway_signature_matches_the_web_client_algorithm() {
+        let signature = gateway_signature(
+            "123",
+            "device",
+            1_700_000_000,
+            &SendGatewayChallenge {
+                nonce: "nonce".into(),
+                iterations: 2,
+            },
+            &SendEncryptionKey {
+                key_version: "1.0".into(),
+                key: "key".into(),
+            },
+        );
+        assert_eq!(signature, "6d1bb79d38efa8dbb401e167f9cafaa3");
+        assert_eq!(
+            gateway_challenge_request_body("1.0"),
+            "type@=livreq/alg_ver@=1.0/key_ver@=1.0/"
+        );
+        assert_eq!(
+            gateway_signature_request_body("abc", 1_700_000_000),
+            "type@=lsigreq/sig@=abc/ts@=1700000000/"
+        );
+    }
+
+    #[test]
+    fn encryption_response_is_validated_before_the_gateway_challenge() {
+        let response: SendEncryptionResponse = serde_json::from_value(serde_json::json!({
+            "error": 0,
+            "data": {
+                "rand_str": "seed",
+                "enc_time": 1,
+                "cpp": { "danmu": { "key_ver": "1.0", "key": "key" } }
+            }
+        }))
+        .unwrap();
+        let key = encryption_key_from_response(response).unwrap();
+        assert_eq!(key.key_version, "1.0");
+        assert_eq!(key.key, "key");
+
+        let invalid: SendEncryptionResponse = serde_json::from_value(serde_json::json!({
+            "error": 0,
+            "data": {
+                "rand_str": "seed",
+                "enc_time": 10001,
+                "cpp": { "danmu": { "key_ver": "1.0", "key": "key" } }
+            }
+        }))
+        .unwrap();
+        let error = match encryption_key_from_response(invalid) {
+            Err(error) => error,
+            Ok(_) => panic!("oversized encryption iteration count must be rejected"),
+        };
+        assert_eq!(error.code, "douyu_send_encryption");
+    }
+
+    #[test]
+    fn send_proxy_accepts_legacy_http_settings_without_leaking_credentials() {
+        let proxy = configured_http_proxy(Some("user:pa%3Ass@127.0.0.1:7890"))
+            .unwrap()
+            .expect("proxy");
+        assert_eq!(proxy.host, "127.0.0.1");
+        assert_eq!(proxy.port, 7890);
+        let request =
+            String::from_utf8(http_connect_request(&proxy, "wsproxy.douyu.com:6671")).unwrap();
+        assert!(request.starts_with("CONNECT wsproxy.douyu.com:6671 HTTP/1.1\r\n"));
+        assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYTpzcw==\r\n"));
+        assert!(configured_http_proxy(Some("https://127.0.0.1:7890")).is_err());
+        assert!(configured_http_proxy(Some("http://127.0.0.1:7890/path")).is_err());
     }
 
     #[test]

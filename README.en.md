@@ -38,7 +38,12 @@ Not currently in scope: TV UI, multiple simultaneous rooms, recording/downloads,
 | Documentation index, including Chinese counterparts | [docs/README.md](docs/README.md) |
 | User guide | [docs/en/user-guide.md](docs/en/user-guide.md) |
 | Architecture | [docs/en/architecture.md](docs/en/architecture.md) |
-| Bilibili danmaku sending research | [docs/en/bilibili-danmaku-send-research.md](docs/en/bilibili-danmaku-send-research.md) |
+| Bilibili platform API | [docs/en/bilibili-platform-api.md](docs/en/bilibili-platform-api.md) |
+| Douyu platform API | [docs/en/douyu-platform-api.md](docs/en/douyu-platform-api.md) |
+| Huya platform API | [docs/en/huya-platform-api.md](docs/en/huya-platform-api.md) |
+| Douyin platform API | [docs/en/douyin-platform-api.md](docs/en/douyin-platform-api.md) |
+| Kuaishou platform API | [docs/en/kuaishou-platform-api.md](docs/en/kuaishou-platform-api.md) |
+| Twitch platform API | [docs/en/twitch-platform-api.md](docs/en/twitch-platform-api.md) |
 | Player performance research | [docs/en/player-performance-research.md](docs/en/player-performance-research.md) |
 
 The primary product chrome is Chinese. Source comments and contribution material may use English or Chinese.

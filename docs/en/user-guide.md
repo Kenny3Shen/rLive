@@ -17,7 +17,7 @@ rLive is a desktop live-stream aggregator for browsing, searching, and watching 
 
 Douyin's public server-rendered list is currently reliable only for its first page. rLive deliberately does not offer fake pagination that would repeat rooms. Live search becomes available after you save a complete logged-in browser cookie through QR login or manual input.
 
-Douyin's WSS endpoint requires a short-lived signed URL. rLive does not ship a reverse-engineered signer and always calls the fixed local `http://127.0.0.1:18080/sign` endpoint. Start a compatible signer on that loopback address before entering a chat-enabled room; there is no remote signer setting. See [signing-service integration](douyin-danmaku-signing-service.md).
+Douyin's WSS endpoint requires a short-lived signed URL. rLive does not ship a reverse-engineered signer and always calls the fixed local `http://127.0.0.1:18080/sign` endpoint. Start a compatible signer on that loopback address before entering a chat-enabled room; there is no remote signer setting. See [Douyin platform API documentation](douyin-platform-api.md).
 
 Kuaishou uses public recommendation/category data and the room's initial state. Search intentionally matches game-category names only and returns that category's rooms; no match produces an empty list rather than pretending to search creators. The first version prefers H.264 playback URLs and has no real-time danmaku.
 
