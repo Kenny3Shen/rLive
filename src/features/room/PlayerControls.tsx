@@ -19,8 +19,16 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+import { Spinner } from "@/components/ui/spinner";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
+
+export type LocalCaptionControls = {
+  enabled: boolean;
+  pending: boolean;
+  ready: boolean;
+  onToggle: () => void;
+};
 
 export type PlayerControlsProps = {
   paused: boolean;
@@ -41,6 +49,8 @@ export type PlayerControlsProps = {
   overlay?: boolean;
   /** Optional compact content centered between transport and room controls. */
   centerSlot?: ReactNode;
+  /** Local Whisper caption controls, available for a live room player. */
+  captions?: LocalCaptionControls;
   /**
    * The menu content is portalled outside the player stage. Tell the stage
    * when one is open so its idle timer cannot fade out beneath a menu.
@@ -102,6 +112,7 @@ export function PlayerControls({
   disabled = false,
   overlay = false,
   centerSlot,
+  captions,
   onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
@@ -164,7 +175,13 @@ export function PlayerControls({
     .filter(Boolean)
     .join("，");
   const closeStreamSettings = () => setStreamSettingsOpen(false);
-
+  const captionButtonLabel = captions?.pending
+    ? "正在启动本地字幕"
+    : captions?.enabled
+      ? "关闭本地字幕"
+      : captions?.ready
+        ? "开启本地字幕"
+        : "开启本地字幕（等待播放器音频）";
   return (
     <div
       className={cn(
@@ -366,6 +383,30 @@ export function PlayerControls({
               )}
             </PopoverContent>
           </Popover>
+        )}
+
+        {captions && (
+          <ControlButton
+            label={captionButtonLabel}
+            variant={overlay ? "ghost" : captions.enabled ? "secondary" : "ghost"}
+            className={cn(
+              overlayButtonClass,
+              overlay && captions.enabled && "bg-white/12 text-white",
+            )}
+            disabled={disabled || captions.pending}
+            aria-pressed={captions.enabled}
+            aria-busy={captions.pending}
+            title={captionButtonLabel}
+            onClick={captions.onToggle}
+          >
+            {captions.pending ? (
+              <Spinner data-icon="inline-start" aria-hidden />
+            ) : captions.enabled ? (
+              <Captions data-icon="inline-start" aria-hidden />
+            ) : (
+              <CaptionsOff data-icon="inline-start" aria-hidden />
+            )}
+          </ControlButton>
         )}
 
         {onToggleOsd && (

@@ -13,6 +13,12 @@ import {
   FieldSet,
   FieldTitle,
 } from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -26,6 +32,18 @@ const FONT_WEIGHTS = [
   { value: 600, label: "加粗" },
   { value: 700, label: "粗体" },
 ] as const;
+
+export type LocalCaptionSettings = {
+  enabled: boolean;
+  pending: boolean;
+  ready: boolean;
+  state: "off" | "starting" | "active" | "error";
+  message: string | null;
+  modelPath: string | null;
+  fontSize: number;
+  onModelPathChange: (path: string | null) => void;
+  onFontSizeChange: (size: number) => void;
+};
 
 type DanmakuSliderProps = {
   id: string;
@@ -78,6 +96,129 @@ function DanmakuSlider({
   );
 }
 
+function captionStatusLabel(captions: LocalCaptionSettings): string {
+  if (captions.pending || captions.state === "starting") return "准备中";
+  if (captions.enabled) return "正在识别";
+  if (captions.state === "error") return "需要重试";
+  return "已关闭";
+}
+
+function captionStatusDescription(captions: LocalCaptionSettings): string {
+  if (captions.message) return captions.message;
+  if (captions.pending || captions.state === "starting") {
+    return "正在加载模型并连接播放器音频。";
+  }
+  if (captions.enabled) return "正在通过本机 CPU 实时识别直播声音。";
+  if (!captions.ready) return "等待直播声音就绪后，可从播放器底栏开启。";
+  return "功能默认关闭；从播放器底栏的字幕按钮开启。";
+}
+
+function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSettings }) {
+  const [modelDraft, setModelDraft] = useState(captions.modelPath ?? "");
+  const statusLabel = captionStatusLabel(captions);
+  const statusDescription = captionStatusDescription(captions);
+
+  useEffect(() => {
+    setModelDraft(captions.modelPath ?? "");
+  }, [captions.modelPath]);
+
+  return (
+    <FieldSet>
+      <FieldLegend variant="label">本地字幕</FieldLegend>
+      <FieldDescription>
+        Whisper 在本机 CPU 上实时识别直播声音，不会上传音频；自动识别语言，中文字幕以简体显示。
+      </FieldDescription>
+      <FieldGroup className="gap-3">
+        <Field orientation="horizontal">
+          <FieldContent>
+            <FieldTitle>运行状态</FieldTitle>
+            <FieldDescription>{statusDescription}</FieldDescription>
+          </FieldContent>
+          <Badge variant={captions.state === "error" ? "destructive" : "secondary"}>
+            {statusLabel}
+          </Badge>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldContent>
+            <FieldTitle>识别模型</FieldTitle>
+            <FieldDescription>
+              {captions.modelPath
+                ? "已选择自定义 GGML .bin 模型。"
+                : "使用应用内置的 Whisper tiny Q5_1 多语言模型。"}
+            </FieldDescription>
+          </FieldContent>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!captions.modelPath && !modelDraft.trim()}
+            onClick={() => {
+              setModelDraft("");
+              captions.onModelPathChange(null);
+            }}
+          >
+            使用内置模型
+          </Button>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="room-local-caption-model-path">自定义模型路径</FieldLabel>
+          <FieldContent>
+            <form
+              className="w-full"
+              onSubmit={(event) => {
+                event.preventDefault();
+                captions.onModelPathChange(modelDraft);
+              }}
+            >
+              <InputGroup>
+                <InputGroupInput
+                  id="room-local-caption-model-path"
+                  value={modelDraft}
+                  onChange={(event) => setModelDraft(event.target.value)}
+                  placeholder="D:\\models\\ggml-base.bin"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton type="submit" variant="secondary" size="sm">
+                    保存
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            </form>
+            <FieldDescription>
+              仅支持 GGML `.bin`
+              文件。保存后会在下次开启字幕时加载；若正在识别，请先关闭再开启字幕。
+            </FieldDescription>
+          </FieldContent>
+        </Field>
+
+        <Field>
+          <FieldContent>
+            <FieldTitle id="room-local-caption-font-size">字幕字号</FieldTitle>
+            <FieldDescription>仅作用于当前直播间，不影响弹幕显示。</FieldDescription>
+          </FieldContent>
+          <div className="flex items-center gap-3">
+            <Slider
+              aria-labelledby="room-local-caption-font-size"
+              value={captions.fontSize}
+              min={16}
+              max={36}
+              step={1}
+              onValueChange={(value) => captions.onFontSizeChange(Number(value))}
+            />
+            <Badge variant="secondary" className="min-w-12 justify-center">
+              {captions.fontSize}px
+            </Badge>
+          </div>
+        </Field>
+      </FieldGroup>
+    </FieldSet>
+  );
+}
+
 function normalizeShieldWords(value: string): string[] {
   const seen = new Set<string>();
   return value
@@ -102,8 +243,10 @@ function sameWords(left: readonly string[], right: readonly string[]): boolean {
  */
 export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   className,
+  captions,
 }: {
   className?: string;
+  captions?: LocalCaptionSettings;
 }) {
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
@@ -212,6 +355,8 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
       <div className="flex flex-col gap-5 px-3 py-3">
+        {captions && <LocalCaptionSettingsSection captions={captions} />}
+
         <FieldSet>
           <FieldGroup className="gap-4">
             <DanmakuSlider
