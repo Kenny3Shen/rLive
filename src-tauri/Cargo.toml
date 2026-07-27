@@ -40,6 +40,25 @@ flate2 = "1"
 brotli = "7"
 uuid = { version = "1", features = ["v4"] }
 boa_engine = "0.20"
+# Local, CPU-only Whisper.cpp bindings used by the opt-in live caption worker.
+# `whisper-rs` has no default GPU feature; keep it explicit so Windows release
+# builds remain portable and do not acquire a CUDA/Metal dependency.
+# 0.11 keeps a bundled FFI snapshot, so a Windows release does not require a
+# separate host libclang install. Its loader accepts Whisper GGML `.bin`
+# models; the tiny local patch below aligns one fallback enum with the
+# snapshot's u32 ABI.
+whisper-rs = { version = "=0.11.1", default-features = false }
+# Pure-Rust OpenCC conversion for displaying Chinese ASR results in Simplified
+# Chinese. It has no native dependency, model, or runtime data files.
+ferrous-opencc = { version = "0.4", default-features = false, features = ["t2s-conversion"] }
+
+[patch.crates-io]
+# `WHISPER_DONT_GENERATE_BINDINGS=1` makes whisper-rs-sys use its checked-in
+# Linux-generated binding snapshot. On Windows MSVC that snapshot exposes
+# `whisper_gretype` as u32, whereas whisper-rs 0.11.1 assumes a native i32
+# bindgen result. The vendored wrapper keeps the enum representation aligned
+# with the actual fallback binding without changing the native C ABI.
+whisper-rs = { path = "vendor/whisper-rs" }
 
 # Desktop release: smaller + faster binary (web player + sites + proxy).
 [profile.release]
