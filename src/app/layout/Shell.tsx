@@ -1,7 +1,8 @@
 import { useEffect } from "react";
-import { Outlet, useLocation, useSearchParams } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
+import { categoryHomePathAfterSiteChange } from "@/features/category/categoryRoute";
 import {
   FOLLOW_PLATFORM_PARAM,
   followPlatformFromSearch,
@@ -14,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 export function Shell() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const isRoom = pathname.startsWith("/room/");
   const isIptvPlayer = pathname === "/iptv/play";
@@ -33,6 +35,7 @@ export function Shell() {
   );
   const platformForMotion = isFollow ? followPlatform : selectedSiteId;
   const pageMotionKey = isImmersivePlayer ? pathname : `${pathname}:${platformForMotion}`;
+  const categoryHomePath = categoryHomePathAfterSiteChange(pathname);
   // Player routes use h-full throughout their fixed player layout.
   // `min-h-full` does not create a definite percentage-height containing
   // block, which lets a growing danmaku list reflow the whole room on narrow
@@ -69,7 +72,13 @@ export function Shell() {
                         }
                       />
                     ) : (
-                      <SiteSwitcher />
+                      <SiteSwitcher
+                        onValueChange={(nextSiteId) => {
+                          if (nextSiteId !== selectedSiteId && categoryHomePath) {
+                            navigate(categoryHomePath, { replace: true });
+                          }
+                        }}
+                      />
                     )}
                   </div>
                 )}

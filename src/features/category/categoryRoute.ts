@@ -14,3 +14,13 @@ export function categoryRoomsPath(category: LiveSubCategory): string {
 export function categoryNameFromSearch(value: string | null): string {
   return value?.trim() ?? "";
 }
+
+/**
+ * Category IDs belong to a platform.  A category-room URL therefore cannot
+ * safely survive a platform switch: the same IDs may resolve to an unrelated
+ * category (or no category) on the newly selected platform.
+ */
+export function categoryHomePathAfterSiteChange(pathname: string): string | null {
+  const parts = pathname.split("/").filter(Boolean);
+  return parts.length === 3 && parts[0] === "category" ? "/category" : null;
+}

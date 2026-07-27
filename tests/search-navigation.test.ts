@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { categoryNameFromSearch, categoryRoomsPath } from "../src/features/category/categoryRoute";
+import {
+  categoryHomePathAfterSiteChange,
+  categoryNameFromSearch,
+  categoryRoomsPath,
+} from "../src/features/category/categoryRoute";
 import {
   canSearchNavigateBack,
   parseSearchScope,
@@ -87,5 +91,12 @@ describe("category route", () => {
     expect(url.pathname).toBe("/category/7/101%2C2");
     expect(url.searchParams.get("name")).toBe("和平 精英");
     expect(categoryNameFromSearch("  和平精英  ")).toBe("和平精英");
+  });
+
+  test("returns to the category browser when a platform changes from a child page", () => {
+    expect(categoryHomePathAfterSiteChange("/category/7/101%2C2")).toBe("/category");
+    expect(categoryHomePathAfterSiteChange("/category/7/101%2C2/")).toBe("/category");
+    expect(categoryHomePathAfterSiteChange("/category")).toBeNull();
+    expect(categoryHomePathAfterSiteChange("/search")).toBeNull();
   });
 });
