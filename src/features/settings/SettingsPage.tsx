@@ -698,7 +698,7 @@ export function SettingsPage() {
                 <CookieField
                   siteId="douyin"
                   title="抖音"
-                  description="支持扫码登录和手动 Cookie 输入；可用于搜索、提高房间解析可用性，并在抖音接口确认可用时开启列表加载更多，还可供固定本机实时弹幕签名服务创建会话。"
+                  description="支持扫码登录和手动 Cookie 输入；可用于登录态搜索和本机实时弹幕签名会话。推荐和分类当前仅支持首屏，抖音仍可能要求网页访问验证。"
                   placeholder="sessionid=…; ttwid=…; msToken=…"
                   qrLogin
                 />

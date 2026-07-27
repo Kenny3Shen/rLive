@@ -58,9 +58,9 @@ fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
 }
 
 /// Create a QR payload with Douyin's public web SSO API.
-pub async fn start() -> AppResult<QrLoginStart> {
+pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(Arc::clone(&jar))?;
+    let client = build_login_client(Arc::clone(&jar), proxy)?;
     let response = client
         .get(QR_GENERATE_URL)
         .query(&web_sso_params())
@@ -149,14 +149,14 @@ fn web_sso_params() -> Vec<(&'static str, String)> {
     ]
 }
 
-fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
-    Client::builder()
+fn build_login_client(jar: Arc<Jar>, proxy: Option<&str>) -> AppResult<Client> {
+    // Use only the application's explicit proxy setting.  This keeps a QR
+    // session from accidentally inheriting an unrelated HTTP(S)_PROXY process
+    // variable, while still allowing users whose network requires a proxy to
+    // reach Douyin's SSO service.
+    let builder = Client::builder()
         .use_rustls_tls()
         .cookie_provider(jar)
-        // QR authentication carries a temporary login session.  Do not pick
-        // up HTTP(S)_PROXY from the process environment and accidentally
-        // route it through an unrelated proxy. The user-facing application
-        // proxy is intentionally not used by this credential flow either.
         .no_proxy()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
@@ -169,7 +169,8 @@ fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
             } else {
                 attempt.stop()
             }
-        }))
+        }));
+    crate::http_client::with_proxy(builder, proxy)?
         .build()
         .map_err(|_| {
             AppError::new("douyin_qr_client", "二维码登录网络客户端初始化失败").with_site("douyin")
@@ -185,11 +186,35 @@ async fn parse_json_response(response: reqwest::Response, code: &str) -> AppResu
                 .retryable(),
         );
     }
-    response.json::<Value>().await.map_err(|_| {
-        AppError::new(code, "抖音二维码登录服务返回了无法识别的数据")
+    let body = response.text().await.map_err(|_| {
+        AppError::new(code, "抖音二维码登录服务返回了无法读取的数据")
             .with_site("douyin")
             .retryable()
+    })?;
+    parse_json_body(&body, code)
+}
+
+fn parse_json_body(body: &str, code: &str) -> AppResult<Value> {
+    serde_json::from_str(body).map_err(|_| {
+        // The public SSO endpoints can return a 200 HTML page when the edge
+        // requires an interactive browser verification.  The native client
+        // must not try to imitate or solve that challenge; provide a useful
+        // recovery path instead of reporting an opaque JSON parse failure.
+        let message = if looks_like_html_document(body) {
+            "抖音当前要求在浏览器完成访问验证，应用内无法取得二维码。请检查应用代理后重试，或使用手动 Cookie 登录"
+        } else {
+            "抖音二维码登录服务返回了无法识别的数据"
+        };
+        AppError::new(code, message).with_site("douyin").retryable()
     })
+}
+
+fn looks_like_html_document(body: &str) -> bool {
+    let body = body.trim_start();
+    body.starts_with("<!DOCTYPE html")
+        || body.starts_with("<!doctype html")
+        || body.starts_with("<html")
+        || body.starts_with("<HTML")
 }
 
 fn parse_start_response(response: &Value) -> AppResult<(String, String)> {
@@ -448,6 +473,8 @@ fn qr_network_error(code: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::Arc;
 
     use reqwest::Url;
@@ -455,9 +482,51 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PollState, can_follow_redirect, cookie_from_jar, is_trusted_douyin_url,
-        is_valid_session_key, parse_poll_response, parse_start_response,
+        PollState, build_login_client, can_follow_redirect, cookie_from_jar, is_trusted_douyin_url,
+        is_valid_session_key, parse_json_body, parse_poll_response, parse_start_response,
     };
+
+    #[test]
+    fn reports_a_browser_verification_page_without_echoing_its_contents() {
+        let error = parse_json_body(
+            "<!doctype html><html><body>browser verification</body></html>",
+            "douyin_qr_generate",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "douyin_qr_generate");
+        assert!(error.message.contains("浏览器完成访问验证"));
+        assert!(!error.message.contains("browser verification"));
+    }
+
+    #[tokio::test]
+    async fn configured_proxy_receives_qr_client_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.starts_with("GET http://sso.douyin.invalid/get_qrcode/ HTTP/1.1"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+        });
+
+        let proxy = format!("http://{address}");
+        let client = build_login_client(Arc::new(Jar::default()), Some(&proxy)).unwrap();
+        let response = client
+            .get("http://sso.douyin.invalid/get_qrcode/")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        server.join().unwrap();
+    }
 
     #[test]
     fn parses_public_web_qr_payload() {

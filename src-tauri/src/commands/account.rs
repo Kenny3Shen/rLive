@@ -69,7 +69,10 @@ pub fn account_clear_cookie(state: State<'_, AppState>, site_id: SiteId) -> AppR
 }
 
 #[tauri::command(async)]
-pub async fn account_qr_login_start(site_id: SiteId) -> AppResult<AccountQrLoginStart> {
+pub async fn account_qr_login_start(
+    state: State<'_, AppState>,
+    site_id: SiteId,
+) -> AppResult<AccountQrLoginStart> {
     match &site_id {
         SiteId::Bilibili => {
             let session = bilibili_qr::start().await?;
@@ -79,7 +82,19 @@ pub async fn account_qr_login_start(site_id: SiteId) -> AppResult<AccountQrLogin
             })
         }
         SiteId::Douyin => {
-            let session = douyin_qr::start().await?;
+            // QR login uses the same explicit application proxy as other
+            // Douyin requests. Read it before awaiting the network request so
+            // the database mutex is never held across an await point.
+            let proxy = {
+                let conn = state.db.lock().map_err(|e| {
+                    crate::error::AppError::new(
+                        "db_lock_error",
+                        format!("account_qr_login_start: {e}"),
+                    )
+                })?;
+                crate::settings::get(&conn)?.proxy
+            };
+            let session = douyin_qr::start(proxy.as_deref()).await?;
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,

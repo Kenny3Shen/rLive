@@ -36,7 +36,11 @@ const MAX_COOKIE_LEN: usize = 16 * 1024;
 const HUYA_APP_SOURCE: &str = "HUYA&ZH&2052";
 // This is Huya Signal's protocol UA, not the HTTP User-Agent header. The web
 // client carries it in `WSConnectParaInfo`, `WSVerifyCookieReq`, and `UserId`.
-const HUYA_SIGNAL_UA: &str = "webh5&2.26.0&websocket";
+// The official web player currently advertises its H5-player build here.
+// `webh5&2.26.0&websocket` was retired long ago; the signal gateway uses
+// this value together with the Cookie carried in WSConnectParaInfo to decide
+// whether a browser session may issue write requests.
+const HUYA_SIGNAL_UA: &str = "webh5&2607101000&websocket";
 const HUYA_HTTP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const WS_CMD_WUP_REQUEST: i64 = 3;
 const WS_CMD_WUP_RESPONSE: i64 = 4;
@@ -58,7 +62,7 @@ fn json_i64(v: &Value) -> Option<i64> {
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
-pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> {
+pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> {
     let ayyuid = raw
         .get("ayyuid")
         .and_then(json_i64)
@@ -104,18 +108,14 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> {
             sub_sid = top_sid;
         }
     }
-    // Last resort: try parse room_id as numeric channel
-    if top_sid == 0 {
-        if let Ok(n) = room_id.parse::<i64>() {
-            top_sid = n;
-            sub_sid = n;
-        }
-    }
-
-    if ayyuid == 0 && top_sid == 0 {
+    // A public profile/short room id is not a signal channel id.  Sending it
+    // as lTid/lSid can target a different room while appearing locally valid.
+    // The room resolver is responsible for supplying canonical IDs (including
+    // the documented offline-room presenter fallback) before we reach here.
+    if top_sid <= 0 || sub_sid <= 0 {
         return Err(AppError::new(
             "danmaku_bad_room",
-            "huya danmaku missing ayyuid/topSid (room raw incomplete)",
+            "huya danmaku missing canonical channel ids (room raw incomplete)",
         )
         .with_site("huya"));
     }
@@ -306,7 +306,14 @@ fn percent_encode_query(value: &[u8]) -> String {
     out
 }
 
-fn build_send_baseinfo(credentials: &HuyaSendCredentials) -> String {
+/// Serialize HUYA.WSConnectParaInfo exactly as the first-party H5 player
+/// does for an authenticated signal connection.
+///
+/// Its `sCookie` field is part of the websocket URL's `baseinfo` descriptor
+/// (tag 8), not merely an Upgrade header.  Leaving it blank lets a socket
+/// connect but makes its later VerifyCookie / sendMessage frames an
+/// unauthenticated write path.
+fn encode_send_baseinfo(credentials: &HuyaSendCredentials) -> Vec<u8> {
     let mut writer = TarsWriter::new();
     // HUYA.WSConnectParaInfo
     writer.write_i64(credentials.uid, 0);
@@ -317,10 +324,15 @@ fn build_send_baseinfo(credentials: &HuyaSendCredentials) -> String {
     writer.write_string("", 5);
     writer.write_i64(0, 6);
     writer.write_string("", 7);
-    writer.write_string("", 8);
+    writer.write_string(&credentials.cookie, 8);
     writer.write_string("", 9);
     writer.write_map_string_string(10, &[("HUYA_NET", "0"), ("HUYA_VSDKUA", HUYA_SIGNAL_UA)]);
-    let encoded = base64::engine::general_purpose::STANDARD.encode(writer.into_bytes());
+    writer.into_bytes()
+}
+
+fn build_send_baseinfo(credentials: &HuyaSendCredentials) -> String {
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(encode_send_baseinfo(credentials));
     percent_encode_query(encoded.as_bytes())
 }
 
@@ -612,7 +624,15 @@ fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
                 .retryable(),
         );
     };
+    // WUP v3 stores a serialized `SendMessageRsp` struct at `tRsp`.
+    // The first field is the outer struct wrapper at tag 0; treating it as
+    // `iStatus` made a successful server response look malformed.
     let mut reader = TarsReader::new(response_body);
+    reader.read_struct_begin(0, true).map_err(|_| {
+        AppError::new("huya_send_response", "虎牙弹幕响应格式异常，请稍后重试")
+            .with_site("huya")
+            .retryable()
+    })?;
     let status = reader.read_i64(0, false).map_err(|_| {
         AppError::new("huya_send_response", "虎牙弹幕响应格式异常，请稍后重试")
             .with_site("huya")
@@ -632,6 +652,11 @@ fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
         })?;
     }
     let toast = reader.read_string(2, false).unwrap_or_default();
+    reader.read_struct_end().map_err(|_| {
+        AppError::new("huya_send_response", "虎牙弹幕响应格式异常，请稍后重试")
+            .with_site("huya")
+            .retryable()
+    })?;
     Ok((status, toast))
 }
 
@@ -940,6 +965,31 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_baseinfo_carries_cookie_at_protocol_tag_eight() {
+        let credentials = credentials_from_cookie(
+            "yyuid=12345; udb_uid=12345; udb_cred=opaque-session-proof; guid=test-guid",
+        )
+        .unwrap();
+        let bytes = encode_send_baseinfo(&credentials);
+        let mut reader = TarsReader::new(&bytes);
+        assert_eq!(reader.read_i64(0, true).unwrap(), 12345);
+        assert_eq!(reader.read_string(1, true).unwrap(), "test-guid");
+        assert_eq!(reader.read_string(2, true).unwrap(), HUYA_SIGNAL_UA);
+        assert_eq!(reader.read_string(3, true).unwrap(), HUYA_APP_SOURCE);
+        assert_eq!(reader.read_string(4, true).unwrap(), "");
+        assert_eq!(reader.read_string(5, true).unwrap(), "");
+        assert_eq!(reader.read_i64(6, true).unwrap(), 0);
+        assert_eq!(reader.read_string(7, true).unwrap(), "");
+        assert_eq!(reader.read_string(8, true).unwrap(), credentials.cookie);
+    }
+
+    #[test]
+    fn numeric_profile_room_is_not_used_as_a_signal_channel() {
+        let raw = serde_json::json!({"ayyuid": 99});
+        assert!(args_from_raw("31339681", &raw).is_err());
+    }
+
+    #[test]
     fn huya_sender_validates_plain_text_and_length() {
         assert_eq!(normalize_outgoing_message("  你好  ").unwrap(), "你好");
         assert!(normalize_outgoing_message("\n").is_err());
@@ -993,9 +1043,11 @@ mod tests {
     #[test]
     fn send_response_parses_status_and_safe_toast() {
         let mut rsp = TarsWriter::new();
-        rsp.write_i64(905, 0);
-        rsp.write_struct(1, |_| {});
-        rsp.write_string("请绑定手机", 2);
+        rsp.write_struct(0, |writer| {
+            writer.write_i64(905, 0);
+            writer.write_struct(1, |_| {});
+            writer.write_string("请绑定手机", 2);
+        });
         let rsp = rsp.into_bytes();
         let packet = encode_wup_v3("liveui", "sendMessage", 1, &[("tRsp", &rsp)]);
         assert_eq!(

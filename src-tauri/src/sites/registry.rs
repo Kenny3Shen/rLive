@@ -72,8 +72,11 @@ fn site_with_client(
             let cookie = cookie.unwrap_or_default();
             Ok(Box::new(BilibiliSite::new(client, cookie)))
         }
-        SiteId::Huya => Ok(Box::new(HuyaSite::new(client))),
-        SiteId::Douyu => Ok(Box::new(DouyuSite::new(client))),
+        SiteId::Huya => Ok(Box::new(HuyaSite::new(client, cookie.unwrap_or_default()))),
+        SiteId::Douyu => Ok(Box::new(DouyuSite::new_with_cookie(
+            client,
+            cookie.unwrap_or_default(),
+        ))),
         SiteId::Douyin => Ok(Box::new(DouyinSite::new(
             client,
             cookie.unwrap_or_default(),
