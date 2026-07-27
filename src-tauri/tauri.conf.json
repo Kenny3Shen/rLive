@@ -27,6 +27,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "resources/models/ggml-tiny-q5_1.bin": "models/ggml-tiny-q5_1.bin",
+      "resources/models/NOTICE.md": "models/NOTICE.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

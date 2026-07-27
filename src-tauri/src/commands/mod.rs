@@ -1,4 +1,5 @@
 pub mod account;
+pub mod asr;
 pub mod danmaku;
 pub mod follow;
 pub mod history;
