@@ -8,6 +8,7 @@ import {
   Info,
   MonitorPlay,
   Network,
+  Power,
   QrCode,
   Radio,
   RefreshCw,
@@ -24,6 +25,7 @@ import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Field,
@@ -46,6 +48,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
+import { Spinner } from "@/components/ui/spinner";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -70,6 +73,19 @@ type AccountQrLoginStart = {
 type AccountQrLoginPoll = {
   status: "pending" | "scanned" | "expired" | "success";
   message: string;
+};
+
+type AsrModelStatus = {
+  loaded: boolean;
+  loading: boolean;
+  bundled: boolean;
+  path: string | null;
+  active_session_id: string | null;
+  queue_depth: number;
+  queue_capacity: number;
+  sample_rate_hz: number;
+  backend: string;
+  cpu_only: boolean;
 };
 
 const settingsCategories: {
@@ -487,6 +503,241 @@ function IptvCustomM3uUrlField() {
   );
 }
 
+function LocalWhisperModelField() {
+  const asrModelPath = useSettingsStore((s) => s.asrModelPath);
+  const setAsrModelPath = useSettingsStore((s) => s.setAsrModelPath);
+  const [draft, setDraft] = useState(asrModelPath ?? "");
+  const [modelStatus, setModelStatus] = useState<AsrModelStatus | null>(null);
+  const [action, setAction] = useState<"status" | "load" | "default" | "unload" | null>(
+    null,
+  );
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(asrModelPath ?? "");
+  }, [asrModelPath]);
+
+  const refreshStatus = useCallback(async () => {
+    setAction("status");
+    setError(null);
+    try {
+      const next = await invokeCmd<AsrModelStatus>("asr_model_status");
+      setModelStatus(next);
+      setNotice(null);
+    } catch (cause) {
+      const message =
+        typeof cause === "object" && cause && "message" in cause
+          ? String((cause as { message: string }).message)
+          : String(cause);
+      setError(`无法读取本地字幕模型状态：${message}`);
+    } finally {
+      setAction(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+
+  function savePath() {
+    const next = draft.trim() || null;
+    setAsrModelPath(next);
+    setError(null);
+    setNotice(next ? "本地模型路径已保存" : "本地模型路径已清除");
+  }
+
+  async function loadModel() {
+    const path = draft.trim();
+    if (!path) {
+      setNotice(null);
+      setError("请先填写本地 Whisper 模型文件路径");
+      return;
+    }
+
+    setAction("load");
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await invokeCmd<AsrModelStatus>("asr_model_load", { path });
+      const loadedPath = next.path?.trim() || path;
+      setModelStatus(next);
+      setDraft(loadedPath);
+      setAsrModelPath(loadedPath);
+      setNotice("本地 Whisper 模型已加载，可在直播间开启实时字幕");
+    } catch (cause) {
+      const message =
+        typeof cause === "object" && cause && "message" in cause
+          ? String((cause as { message: string }).message)
+          : String(cause);
+      setError(`加载模型失败：${message}`);
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function loadDefaultModel() {
+    setAction("default");
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await invokeCmd<AsrModelStatus>("asr_model_load_default");
+      setModelStatus(next);
+      setNotice("内置 Whisper 模型已加载，可在直播间开启实时字幕");
+    } catch (cause) {
+      const message =
+        typeof cause === "object" && cause && "message" in cause
+          ? String((cause as { message: string }).message)
+          : String(cause);
+      setError(`加载内置模型失败：${message}`);
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function unloadModel() {
+    setAction("unload");
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await invokeCmd<AsrModelStatus>("asr_model_unload");
+      setModelStatus(next);
+      setNotice("本地 Whisper 模型已卸载；已保存的路径仍可下次直接加载");
+    } catch (cause) {
+      const message =
+        typeof cause === "object" && cause && "message" in cause
+          ? String((cause as { message: string }).message)
+          : String(cause);
+      setError(`卸载模型失败：${message}`);
+    } finally {
+      setAction(null);
+    }
+  }
+
+  const loading = action === "load" || action === "default" || modelStatus?.loading === true;
+  const statusLabel = modelStatus?.loading
+    ? "正在加载"
+    : modelStatus?.loaded
+      ? modelStatus.bundled
+        ? "内置模型已加载"
+        : "自定义模型已加载"
+      : "未加载";
+
+  return (
+    <Section
+      title="本地 Whisper 字幕模型"
+      description="仅用于直播间实时字幕，识别在本机 CPU 上通过 whisper-rs 完成，不会上传音频。默认模型已随安装包提供，按需加载。"
+    >
+      <Field>
+        <FieldContent>
+          <div className="flex flex-wrap items-start gap-2">
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <FieldTitle>内置默认模型</FieldTitle>
+              <FieldDescription>
+                Whisper tiny Q5_1 · 多语言 · 约 31 MB。适合 CPU 优先的直播间实时字幕。
+              </FieldDescription>
+            </div>
+            <Badge variant="secondary">随应用提供</Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => void loadDefaultModel()}
+              disabled={
+                loading ||
+                action === "status" ||
+                (modelStatus?.loaded === true && modelStatus.bundled)
+              }
+            >
+              {action === "default" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <MonitorPlay data-icon="inline-start" aria-hidden />
+              )}
+              {action === "default" ? "正在加载…" : "加载内置模型"}
+            </Button>
+            <Badge variant={modelStatus?.loaded ? "secondary" : "outline"}>{statusLabel}</Badge>
+          </div>
+        </FieldContent>
+      </Field>
+      <Field data-invalid={error ? true : undefined}>
+        <FieldLabel htmlFor="asr-model-path">自定义模型路径（可选）</FieldLabel>
+        <FieldContent>
+          <form
+            className="w-full"
+            onSubmit={(event) => {
+              event.preventDefault();
+              savePath();
+            }}
+          >
+            <InputGroup>
+              <InputGroupInput
+                id="asr-model-path"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="D:\\models\\ggml-base.bin"
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={error ? true : undefined}
+                disabled={loading}
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton type="submit" variant="secondary" size="sm" disabled={loading}>
+                  保存路径
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          </form>
+          <FieldDescription>
+            可替换为本机的 Whisper GGML `.bin` 模型。路径仅保存在当前设备，不会随配置导入或导出。
+          </FieldDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => void loadModel()} disabled={loading || action === "status"}>
+              {action === "load" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <MonitorPlay data-icon="inline-start" aria-hidden />
+              )}
+              {action === "load" ? "正在加载…" : "加载自定义模型"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void unloadModel()}
+              disabled={action !== null || !modelStatus?.loaded}
+            >
+              {action === "unload" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Power data-icon="inline-start" aria-hidden />
+              )}
+              {action === "unload" ? "正在卸载…" : "卸载模型"}
+            </Button>
+            <Button variant="ghost" onClick={() => void refreshStatus()} disabled={action !== null}>
+              {action === "status" ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <RefreshCw data-icon="inline-start" aria-hidden />
+              )}
+              刷新状态
+            </Button>
+          </div>
+          {modelStatus?.loaded && (
+            <FieldDescription>
+              当前加载：
+              {modelStatus.bundled ? "内置 Whisper tiny Q5_1（多语言）" : modelStatus.path}
+            </FieldDescription>
+          )}
+          {notice && (
+            <FieldDescription role="status" aria-live="polite">
+              {notice}
+            </FieldDescription>
+          )}
+          {error && <FieldError>{error}</FieldError>}
+        </FieldContent>
+      </Field>
+    </Section>
+  );
+}
+
 function isHttpM3uUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -736,6 +987,7 @@ export function SettingsPage() {
                   </ToggleGroup>
                 </Field>
               </Section>
+              <LocalWhisperModelField />
             </SettingsContent>
           </TabsContent>
 
@@ -809,7 +1061,7 @@ export function SettingsPage() {
             <SettingsContent title="数据">
               <Section
                 title="导入 / 导出"
-                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址或本机发送授权。"
+                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址、本机 Whisper 模型路径或本机发送授权。"
               >
                 <Field>
                   <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>
