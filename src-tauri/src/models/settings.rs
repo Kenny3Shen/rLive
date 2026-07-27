@@ -50,6 +50,14 @@ pub struct AppSettings {
     /// so it is intentionally excluded from profile export and import.
     #[serde(default)]
     pub iptv_custom_m3u_url: Option<String>,
+    /// Optional endpoint of a signer the user operates for Douyin live chat.
+    ///
+    /// A signer can receive the effective Douyin web session while creating a
+    /// short-lived chat connection, so it is device-local and deliberately
+    /// excluded from profile export/import.  The transport accepts only HTTPS
+    /// endpoints or HTTP endpoints bound to loopback.
+    #[serde(default)]
+    pub douyin_danmaku_sign_service: Option<String>,
 }
 
 fn default_quality_level() -> String {
@@ -88,6 +96,7 @@ impl Default for AppSettings {
             quality_level: default_quality_level(),
             danmaku_send_enabled: false,
             iptv_custom_m3u_url: None,
+            douyin_danmaku_sign_service: None,
         }
     }
 }
@@ -128,6 +137,7 @@ mod tests {
         assert!(!settings.danmaku_filter_gifts);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.iptv_custom_m3u_url.is_none());
+        assert!(settings.douyin_danmaku_sign_service.is_none());
         assert!(settings.disabled_site_ids.is_empty());
     }
 }

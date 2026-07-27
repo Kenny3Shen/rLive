@@ -2,6 +2,7 @@ import { useEffect, useState, type ComponentProps, type ReactNode } from "react"
 import {
   Captions,
   CaptionsOff,
+  Check,
   Maximize2,
   Minimize2,
   PanelRightClose,
@@ -9,19 +10,13 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Settings,
   Volume2,
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
@@ -113,24 +108,20 @@ export function PlayerControls({
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [qualityOpen, setQualityOpen] = useState(false);
-  const [lineOpen, setLineOpen] = useState(false);
+  const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
   const isMuted = muted || volume === 0;
   const volumeLabel = "调节音量";
   const muteLabel = isMuted ? "取消静音" : "静音";
   const overlayButtonClass = overlay
     ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/14 aria-expanded:text-white focus-visible:ring-white/70"
     : undefined;
-  const overlaySelectTriggerClass = overlay
-    ? "rounded-lg border border-white/10 bg-white/[0.055] px-2 text-xs font-medium text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/14 aria-expanded:text-white data-placeholder:text-white/70 focus-visible:ring-white/70 [&_svg]:text-white/75"
-    : undefined;
-  const overlaySelectContentClass = overlay
+  const overlayStreamSettingsContentClass = overlay
     ? "border border-white/10 bg-black/90 text-white shadow-xl"
     : undefined;
-  const overlaySelectItemClass = overlay
+  const overlayStreamSettingsOptionClass = overlay
     ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
     : undefined;
-  const overlayInteractionOpen = volumeOpen || qualityOpen || lineOpen;
+  const overlayInteractionOpen = volumeOpen || streamSettingsOpen;
 
   useEffect(() => {
     onOverlayInteractionChange?.(overlayInteractionOpen);
@@ -152,6 +143,18 @@ export function PlayerControls({
     }
     return label;
   };
+
+  const hasStreamSettings = qualities.length > 0 || lines.length > 0;
+  const streamSettingsDisabled = disabled || (qualities.length <= 1 && lines.length <= 1);
+  const streamSettingsLabel = [
+    qualities.length > 0 ? `清晰度 ${qualityLabel(qualityIndex)}` : null,
+    lines.length > 0 && lines[lineIndex]
+      ? `线路 ${lineLabel(lines[lineIndex].url, lineIndex)}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("，");
+  const closeStreamSettings = () => setStreamSettingsOpen(false);
 
   return (
     <div
@@ -245,78 +248,115 @@ export function PlayerControls({
       <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
 
       <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1">
-        {qualities.length > 0 && (
-          <Select
-            value={String(qualityIndex)}
-            disabled={disabled || qualities.length <= 1}
-            onOpenChange={(open) => setQualityOpen(open)}
-            onValueChange={(value) => {
-              if (value != null) onQualityChange(Number(value));
-            }}
-          >
-            <SelectTrigger
-              size="sm"
-              className={cn("w-auto max-w-24 shrink-0", overlaySelectTriggerClass)}
-              aria-label="清晰度"
+        {hasStreamSettings && (
+          <Popover open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
+            <PopoverTrigger
+              openOnHover
+              delay={120}
+              closeDelay={180}
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={streamSettingsDisabled}
+                  aria-label={streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : "播放设置"}
+                  className={overlayButtonClass}
+                />
+              }
             >
-              <SelectValue>
-                {(value) => {
-                  const index = typeof value === "string" ? Number(value) : -1;
-                  return index >= 0 ? qualityLabel(index) : "清晰度";
-                }}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent side="top" align="end" className={overlaySelectContentClass}>
-              <SelectGroup>
-                {qualities.map((quality, index) => (
-                  <SelectItem
-                    key={`${quality.quality}-${index}`}
-                    value={String(index)}
-                    className={overlaySelectItemClass}
-                  >
-                    {qualityLabel(index)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        )}
+              <Settings data-icon="inline-start" aria-hidden />
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="end"
+              className={cn("w-56 gap-0 p-1.5", overlayStreamSettingsContentClass)}
+            >
+              <PopoverTitle
+                className={cn(
+                  "px-2 py-1 text-xs font-medium text-muted-foreground",
+                  overlay && "text-white/60",
+                )}
+              >
+                播放设置
+              </PopoverTitle>
 
-        {lines.length > 0 && (
-          <Select
-            value={String(lineIndex)}
-            disabled={disabled || lines.length <= 1}
-            onOpenChange={(open) => setLineOpen(open)}
-            onValueChange={(value) => {
-              if (value != null) onLineChange(Number(value));
-            }}
-          >
-            <SelectTrigger
-              size="sm"
-              className={cn("w-auto max-w-24 shrink-0", overlaySelectTriggerClass)}
-              aria-label="线路"
-            >
-              <SelectValue>
-                {(value) => {
-                  const index = typeof value === "string" ? Number(value) : -1;
-                  return index >= 0 && lines[index] ? lineLabel(lines[index].url, index) : "线路";
-                }}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent side="top" align="end" className={overlaySelectContentClass}>
-              <SelectGroup>
-                {lines.map((line, index) => (
-                  <SelectItem
-                    key={`${line.url}-${index}`}
-                    value={String(index)}
-                    className={overlaySelectItemClass}
+              {qualities.length > 0 && (
+                <div className="flex flex-col gap-0.5">
+                  <span
+                    className={cn(
+                      "px-2 pt-1 text-xs text-muted-foreground",
+                      overlay && "text-white/60",
+                    )}
                   >
-                    {lineLabel(line.url, index)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+                    清晰度
+                  </span>
+                  {qualities.map((quality, index) => {
+                    const selected = index === qualityIndex;
+                    return (
+                      <Button
+                        key={`${quality.quality}-${index}`}
+                        variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
+                        size="sm"
+                        className={cn(
+                          "w-full justify-between",
+                          overlayStreamSettingsOptionClass,
+                          overlay && selected && "bg-white/18 text-white",
+                        )}
+                        aria-pressed={selected}
+                        onClick={() => {
+                          onQualityChange(index);
+                          closeStreamSettings();
+                        }}
+                      >
+                        <span className="truncate">{qualityLabel(index)}</span>
+                        {selected && <Check data-icon="inline-end" aria-hidden />}
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {qualities.length > 0 && lines.length > 0 && (
+                <Separator className={cn("my-1", overlay && "bg-white/10")} />
+              )}
+
+              {lines.length > 0 && (
+                <div className="flex flex-col gap-0.5">
+                  <span
+                    className={cn(
+                      "px-2 pt-1 text-xs text-muted-foreground",
+                      overlay && "text-white/60",
+                    )}
+                  >
+                    线路
+                  </span>
+                  {lines.map((line, index) => {
+                    const selected = index === lineIndex;
+                    return (
+                      <Button
+                        key={`${line.url}-${index}`}
+                        variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
+                        size="sm"
+                        className={cn(
+                          "w-full justify-between",
+                          overlayStreamSettingsOptionClass,
+                          overlay && selected && "bg-white/18 text-white",
+                        )}
+                        aria-pressed={selected}
+                        onClick={() => {
+                          onLineChange(index);
+                          closeStreamSettings();
+                        }}
+                      >
+                        <span className="truncate">{lineLabel(line.url, index)}</span>
+                        {selected && <Check data-icon="inline-end" aria-hidden />}
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
         )}
 
         {onToggleOsd && (

@@ -145,7 +145,7 @@ pub async fn danmaku_connect(
     let site = sites::site_with_proxy(&site_id, cookie.clone(), settings.proxy.as_deref())?;
     let detail = site.get_room_detail(&room_id).await?;
     // Douyin may derive an anonymous `ttwid` / `msToken` while resolving the
-    // room. The fixed loopback signer needs that same in-memory browser
+    // room. The user-configured signer needs that same in-memory browser
     // session, but transient values must neither reach the frontend nor be
     // persisted.
     let danmaku_cookie = site
@@ -158,6 +158,7 @@ pub async fn danmaku_connect(
         site_id,
         &room_id,
         &detail.raw,
+        settings.douyin_danmaku_sign_service.as_deref(),
         &danmaku_cookie,
         settings.proxy.as_deref(),
     )
