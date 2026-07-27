@@ -86,12 +86,99 @@ export function requestPlayerAutoplay(
   })();
 }
 
+export type PictureInPictureDocument = {
+  pictureInPictureEnabled?: boolean;
+  pictureInPictureElement?: Element | null;
+  exitPictureInPicture?: () => Promise<void>;
+};
+
+/**
+ * Keep the capability check separate from the DOM lifecycle so the control
+ * can disappear cleanly in WebViews that do not expose native video PiP.
+ */
+export function canUsePictureInPicture(
+  documentRef: Pick<PictureInPictureDocument, "pictureInPictureEnabled"> | null | undefined,
+  video:
+    | Pick<HTMLVideoElement, "disablePictureInPicture" | "requestPictureInPicture">
+    | null
+    | undefined,
+): boolean {
+  return Boolean(
+    documentRef?.pictureInPictureEnabled &&
+    video &&
+    !video.disablePictureInPicture &&
+    typeof video.requestPictureInPicture === "function",
+  );
+}
+
+function getPictureInPictureDocument(): PictureInPictureDocument | null {
+  return typeof document === "undefined" ? null : (document as PictureInPictureDocument);
+}
+
+async function exitPictureInPictureForVideo(
+  documentRef: PictureInPictureDocument | null,
+  video: HTMLVideoElement | null,
+): Promise<void> {
+  if (
+    !documentRef ||
+    !video ||
+    documentRef.pictureInPictureElement !== video ||
+    typeof documentRef.exitPictureInPicture !== "function"
+  ) {
+    return;
+  }
+
+  try {
+    await documentRef.exitPictureInPicture();
+  } catch {
+    // The native window can already be closing while a route is changing.
+  }
+}
+
+/**
+ * Toggle native video PiP without assuming the embedding WebView implements
+ * it. Kept DOM-argument driven so the compatibility behavior stays unit-testable
+ * without a browser DOM.
+ */
+export async function toggleVideoPictureInPicture(
+  documentRef: PictureInPictureDocument | null | undefined,
+  video:
+    | Pick<HTMLVideoElement, "disablePictureInPicture" | "requestPictureInPicture">
+    | null
+    | undefined,
+): Promise<boolean> {
+  if (!documentRef || !video || !canUsePictureInPicture(documentRef, video)) return false;
+
+  try {
+    if (documentRef.pictureInPictureElement === (video as unknown as Element)) {
+      if (typeof documentRef.exitPictureInPicture !== "function") return false;
+      await documentRef.exitPictureInPicture();
+      return true;
+    }
+
+    if (documentRef.pictureInPictureElement) {
+      if (typeof documentRef.exitPictureInPicture !== "function") return false;
+      await documentRef.exitPictureInPicture();
+      // A different native PiP window still owns the document, so asking the
+      // browser to open ours would just fail and produce a noisy rejection.
+      if (documentRef.pictureInPictureElement) return false;
+    }
+
+    await video.requestPictureInPicture();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export type WebPlayerApi = {
   mode: PlayerUiMode;
   paused: boolean;
   volume: number;
   muted: boolean;
   running: boolean;
+  pictureInPictureSupported: boolean;
+  pictureInPictureActive: boolean;
   loadError: string | null;
   setLoadError: (msg: string | null) => void;
   /** Bump forces a brand-new <video> node (clears stuck MediaSource). */
@@ -101,6 +188,7 @@ export type WebPlayerApi = {
   togglePause: () => void;
   changeVolume: (v: number) => void;
   toggleMute: () => void;
+  togglePictureInPicture: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
 };
 
@@ -232,6 +320,7 @@ export function useWebPlayer(opts: {
   const playerRef = useRef<MpegtsPlayer | null>(null);
   const playerInstanceIdRef = useRef<string | null>(null);
   const genRef = useRef(0);
+  const mediaLifecycleVersionRef = useRef(0);
   const volumeRef = useRef(80);
   const mutedRef = useRef(false);
 
@@ -241,6 +330,8 @@ export function useWebPlayer(opts: {
   const [muted, setMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(80);
   const [running, setRunning] = useState(false);
+  const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
+  const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mediaKey, setMediaKey] = useState(0);
 
@@ -257,6 +348,15 @@ export function useWebPlayer(opts: {
   onPlayingRef.current = onPlaying;
 
   const destroyPlayer = useCallback(() => {
+    // A PiP request is asynchronous. Bumping the version here lets its
+    // continuation detect a room switch and close any stale native window.
+    mediaLifecycleVersionRef.current += 1;
+
+    const video = videoRef.current;
+    void exitPictureInPictureForVideo(getPictureInPictureDocument(), video);
+    setPictureInPictureActive(false);
+    setPictureInPictureSupported(false);
+
     const hls = hlsRef.current;
     hlsRef.current = null;
     if (hls) {
@@ -291,7 +391,6 @@ export function useWebPlayer(opts: {
         /* ignore */
       }
     }
-    const video = videoRef.current;
     if (video) {
       try {
         video.pause();
@@ -687,7 +786,21 @@ export function useWebPlayer(opts: {
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) {
+      setPictureInPictureSupported(false);
+      setPictureInPictureActive(false);
+      return;
+    }
+
+    const pictureInPictureDocument = getPictureInPictureDocument();
+    const syncPictureInPicture = () => {
+      // A leave event from the <video> that was just replaced must never
+      // overwrite the state of the new MediaSource node.
+      if (videoRef.current !== video) return;
+      setPictureInPictureSupported(canUsePictureInPicture(pictureInPictureDocument, video));
+      setPictureInPictureActive(pictureInPictureDocument?.pictureInPictureElement === video);
+    };
+
     const onPlay = () => {
       setPaused(false);
       setRunning(true);
@@ -701,6 +814,8 @@ export function useWebPlayer(opts: {
       onPlayingRef.current?.();
     };
     const onPause = () => setPaused(true);
+    const onEnterPictureInPicture = () => syncPictureInPicture();
+    const onLeavePictureInPicture = () => syncPictureInPicture();
     const onEnded = () => {
       onMediaFailureRef.current?.({
         epoch: genRef.current,
@@ -709,15 +824,20 @@ export function useWebPlayer(opts: {
         message: "stream ended",
       });
     };
+    syncPictureInPicture();
     video.addEventListener("play", onPlay);
     video.addEventListener("playing", onPlaying);
     video.addEventListener("pause", onPause);
     video.addEventListener("ended", onEnded);
+    video.addEventListener("enterpictureinpicture", onEnterPictureInPicture);
+    video.addEventListener("leavepictureinpicture", onLeavePictureInPicture);
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("ended", onEnded);
+      video.removeEventListener("enterpictureinpicture", onEnterPictureInPicture);
+      video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
     };
   }, [mediaKey, streamKey]);
 
@@ -763,6 +883,24 @@ export function useWebPlayer(opts: {
     }
   }, [muted, volume, prevVolume]);
 
+  const togglePictureInPicture = useCallback(async () => {
+    const video = videoRef.current;
+    const pictureInPictureDocument = getPictureInPictureDocument();
+    if (!video || !canUsePictureInPicture(pictureInPictureDocument, video)) return;
+
+    const lifecycleVersion = mediaLifecycleVersionRef.current;
+    const changed = await toggleVideoPictureInPicture(pictureInPictureDocument, video);
+
+    // A request can resolve after a quality/line/room switch has replaced the
+    // video node. Do not leave that detached source in a native PiP window.
+    if (
+      changed &&
+      (lifecycleVersion !== mediaLifecycleVersionRef.current || videoRef.current !== video)
+    ) {
+      await exitPictureInPictureForVideo(pictureInPictureDocument, video);
+    }
+  }, []);
+
   const toggleFullscreen = useCallback(async () => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -798,6 +936,8 @@ export function useWebPlayer(opts: {
     volume,
     muted,
     running,
+    pictureInPictureSupported,
+    pictureInPictureActive,
     loadError,
     setLoadError,
     mediaKey,
@@ -806,6 +946,7 @@ export function useWebPlayer(opts: {
     togglePause,
     changeVolume,
     toggleMute,
+    togglePictureInPicture,
     toggleFullscreen,
   };
 }

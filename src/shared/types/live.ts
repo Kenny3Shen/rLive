@@ -136,11 +136,6 @@ export type AppSettings = {
   danmaku_send_enabled?: boolean;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;
-  /**
-   * Device-local endpoint operated by the user to resolve a Douyin room into
-   * a short-lived signed chat WSS URL. Excluded from profile import/export.
-   */
-  douyin_danmaku_sign_service?: string | null;
   /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */
   disabled_site_ids?: SiteId[];
 };

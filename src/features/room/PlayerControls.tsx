@@ -8,6 +8,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pause,
+  PictureInPicture2,
   Play,
   RefreshCw,
   Settings,
@@ -32,6 +33,9 @@ export type PlayerControlsProps = {
   lines: { url: string }[];
   lineIndex: number;
   fullscreen?: boolean;
+  pictureInPictureSupported?: boolean;
+  pictureInPictureActive?: boolean;
+  pictureInPictureDisabled?: boolean;
   disabled?: boolean;
   /** Use when controls are rendered over the bottom edge of the video. */
   overlay?: boolean;
@@ -52,6 +56,7 @@ export type PlayerControlsProps = {
   onToggleOsd?: () => void;
   onQualityChange: (index: number) => void;
   onLineChange: (index: number) => void;
+  onTogglePictureInPicture?: () => void;
   onToggleFullscreen: () => void;
 };
 
@@ -91,6 +96,9 @@ export function PlayerControls({
   lines,
   lineIndex,
   fullscreen = false,
+  pictureInPictureSupported = false,
+  pictureInPictureActive = false,
+  pictureInPictureDisabled = false,
   disabled = false,
   overlay = false,
   centerSlot,
@@ -105,6 +113,7 @@ export function PlayerControls({
   onToggleOsd,
   onQualityChange,
   onLineChange,
+  onTogglePictureInPicture,
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
@@ -385,6 +394,20 @@ export function PlayerControls({
         >
           {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
         </ControlButton>
+        {pictureInPictureSupported && onTogglePictureInPicture && (
+          <ControlButton
+            label={pictureInPictureActive ? "退出画中画" : "画中画"}
+            className={cn(
+              overlayButtonClass,
+              overlay && pictureInPictureActive && "bg-white/16 text-white",
+            )}
+            disabled={disabled || pictureInPictureDisabled}
+            aria-pressed={pictureInPictureActive}
+            onClick={onTogglePictureInPicture}
+          >
+            <PictureInPicture2 />
+          </ControlButton>
+        )}
         <ControlButton
           label={fullscreen ? "退出全屏" : "全屏"}
           className={cn(overlayButtonClass, overlay && fullscreen && "bg-white/16 text-white")}

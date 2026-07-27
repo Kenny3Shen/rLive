@@ -485,6 +485,9 @@ export function PlayerPane({
                 lines={lines}
                 lineIndex={lineIndex}
                 fullscreen={player.mode === "fullscreen"}
+                pictureInPictureSupported={showHost && player.pictureInPictureSupported}
+                pictureInPictureActive={player.pictureInPictureActive}
+                pictureInPictureDisabled={!player.running || player.mode === "fullscreen"}
                 loadError={loadError}
                 disabled={transportDisabled}
                 overlay
@@ -506,6 +509,7 @@ export function PlayerPane({
                 onToggleOsd={() => setOsdOn((v) => !v)}
                 onQualityChange={onQualityChange ?? (() => {})}
                 onLineChange={onLineChange ?? (() => {})}
+                onTogglePictureInPicture={() => void player.togglePictureInPicture()}
                 onToggleFullscreen={() => void player.toggleFullscreen()}
               />
             </div>

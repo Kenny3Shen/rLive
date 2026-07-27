@@ -389,100 +389,6 @@ function CookieField({
   );
 }
 
-function DouyinDanmakuSignServiceField() {
-  const signService = useSettingsStore((s) => s.douyinDanmakuSignService);
-  const setSignService = useSettingsStore((s) => s.setDouyinDanmakuSignService);
-  const [draft, setDraft] = useState(signService ?? "");
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraft(signService ?? "");
-  }, [signService]);
-
-  function save() {
-    const next = draft.trim();
-    if (next && !isAllowedDouyinSignServiceUrl(next)) {
-      setStatus(null);
-      setError("仅支持 HTTPS，或 localhost / 127.0.0.1 / ::1 的 HTTP 完整地址");
-      return;
-    }
-    setError(null);
-    setSignService(next || null);
-    setStatus(next ? "抖音弹幕签名服务地址已保存" : "抖音弹幕签名服务地址已清除");
-  }
-
-  return (
-    <Section
-      title="抖音实时弹幕"
-      description="抖音实时弹幕需要由你自行运行或信任的签名服务生成短时连接地址。"
-    >
-      <Field data-invalid={error ? true : undefined}>
-        <FieldLabel htmlFor="douyin-danmaku-sign-service">签名服务地址</FieldLabel>
-        <FieldContent>
-          <form
-            className="w-full"
-            onSubmit={(event) => {
-              event.preventDefault();
-              save();
-            }}
-          >
-            <InputGroup>
-              <InputGroupInput
-                id="douyin-danmaku-sign-service"
-                type="url"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="http://127.0.0.1:18080/sign"
-                spellCheck={false}
-                autoComplete="off"
-                aria-invalid={error ? true : undefined}
-              />
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton type="submit" variant="secondary" size="sm">
-                  保存
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
-          </form>
-          <FieldDescription>
-            仅允许 HTTPS，或本机 localhost / 127.0.0.1 / ::1 的 HTTP
-            服务。连接时会将本次抖音网页会话交给该服务生成签名；地址和 Cookie
-            只保存在本机，且不随配置导入或导出。
-          </FieldDescription>
-          {error ? (
-            <FieldError>{error}</FieldError>
-          ) : (
-            status && <FieldDescription>{status}</FieldDescription>
-          )}
-        </FieldContent>
-      </Field>
-    </Section>
-  );
-}
-
-/** Keep the UI aligned with the backend's Cookie-safe signer endpoint policy. */
-function isAllowedDouyinSignServiceUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.username || url.password || url.hash) return false;
-    if (!url.hostname) return false;
-    if (url.protocol === "https:") return true;
-    if (url.protocol !== "http:") return false;
-
-    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    if (host === "localhost" || host === "::1") return true;
-    const parts = host.split(".");
-    return (
-      parts.length === 4 &&
-      parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255) &&
-      parts[0] === "127"
-    );
-  } catch {
-    return false;
-  }
-}
-
 function DanmakuSendField() {
   const enabled = useSettingsStore((s) => s.danmakuSendEnabled);
   const setEnabled = useSettingsStore((s) => s.setDanmakuSendEnabled);
@@ -891,11 +797,10 @@ export function SettingsPage() {
                 <CookieField
                   siteId="douyin"
                   title="抖音"
-                  description="支持扫码登录和手动 Cookie 输入；可用于登录态搜索和实时弹幕签名会话。推荐和分类当前仅支持首屏，抖音仍可能要求网页访问验证。"
+                  description="支持扫码登录和手动 Cookie 输入；可用于登录态搜索和实时弹幕连接。推荐和分类当前仅支持首屏，抖音仍可能要求网页访问验证。"
                   placeholder="sessionid=…; ttwid=…; msToken=…"
                   qrLogin
                 />
-                <DouyinDanmakuSignServiceField />
               </div>
             </SettingsContent>
           </TabsContent>
@@ -904,7 +809,7 @@ export function SettingsPage() {
             <SettingsContent title="数据">
               <Section
                 title="导入 / 导出"
-                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址、抖音签名服务地址或本机发送授权。"
+                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址或本机发送授权。"
               >
                 <Field>
                   <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>

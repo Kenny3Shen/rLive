@@ -1,5 +1,6 @@
 pub mod bilibili;
 pub mod douyin;
+pub mod douyin_sign;
 pub mod douyu;
 pub mod huya;
 pub mod tars;
@@ -261,7 +262,6 @@ pub async fn connect(
     site_id: SiteId,
     room_id: &str,
     detail_raw: &serde_json::Value,
-    douyin_sign_service: Option<&str>,
     cookie: &str,
     proxy: Option<&str>,
 ) -> AppResult<()> {
@@ -310,16 +310,9 @@ pub async fn connect(
             Ok(())
         }
         SiteId::Douyin => {
-            let args = douyin::request_signed_connection(
-                douyin_sign_service,
-                room_id,
-                detail_raw,
-                cookie,
-                proxy,
-            )
-            .await?;
-            // The signing request may take longer than a room transition.
-            // Do not let a stale result install itself after a new route won.
+            // Local MSSDK signing is CPU-bound JS eval; keep it off the hot
+            // path relative to room transitions by checking generation after.
+            let args = douyin::build_connection(room_id, detail_raw, cookie)?;
             if !manager.is_current(generation) {
                 return Ok(());
             }

@@ -67,11 +67,6 @@ type SettingsState = {
   danmakuCookieRevision: number;
   /** Device-local custom IPTV M3U address; never included in profile packages. */
   iptvCustomM3uUrl: string | null;
-  /**
-   * Device-local, user-operated Douyin signer endpoint. Its value never enters
-   * profile packages because the signer receives the current web session.
-   */
-  douyinDanmakuSignService: string | null;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -83,7 +78,6 @@ type SettingsState = {
   setDanmakuSendEnabled: (enabled: boolean) => void;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
-  setDouyinDanmakuSignService: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -109,7 +103,6 @@ const defaultSettings: AppSettings = {
   quality_level: "high",
   danmaku_send_enabled: false,
   iptv_custom_m3u_url: null,
-  douyin_danmaku_sign_service: null,
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
@@ -131,7 +124,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     quality_level: state.qualityLevel,
     danmaku_send_enabled: state.danmakuSendEnabled,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
-    douyin_danmaku_sign_service: state.douyinDanmakuSignService,
   };
 }
 
@@ -157,7 +149,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSendPending: false,
       danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
-      douyinDanmakuSignService: null,
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
@@ -213,11 +204,6 @@ export const useSettingsStore = create<SettingsState>()(
         set({ iptvCustomM3uUrl: next });
         void get().persistToBackend({ iptv_custom_m3u_url: next });
       },
-      setDouyinDanmakuSignService: (douyinDanmakuSignService) => {
-        const next = douyinDanmakuSignService?.trim() || null;
-        set({ douyinDanmakuSignService: next });
-        void get().persistToBackend({ douyin_danmaku_sign_service: next });
-      },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
@@ -240,7 +226,6 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
-          douyinDanmakuSignService: settings.douyin_danmaku_sign_service?.trim() || null,
           hydratedFromBackend: true,
         });
       },

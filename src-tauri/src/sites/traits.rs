@@ -24,9 +24,8 @@ pub trait LiveSite: Send + Sync {
     /// connection, when the site has one.
     ///
     /// Most platforms do not need this. Douyin may obtain transient browser
-    /// cookies such as `ttwid` while resolving the room, and its explicitly
-    /// configured signer needs that same session to create a compatible WSS
-    /// URL.
+    /// cookies such as `ttwid` while resolving the room; the WSS handshake
+    /// needs that same session on the Cookie header.
     /// Callers must keep this value inside the backend; it is never part of a
     /// serialised room detail or persisted account record.
     fn danmaku_session_cookie(&self) -> AppResult<Option<String>> {
