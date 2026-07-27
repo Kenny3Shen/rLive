@@ -3,7 +3,6 @@ import { Copy, SendHorizontal } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,17 +10,12 @@ import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmak
 import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
-import {
-  publishLocalPendingSubmission,
-  subscribeLocalPendingSubmissions,
-  type LocalPendingSubmission,
-} from "./danmaku/localPendingSubmission";
-import { getDanmakuSendConfig, isDanmakuSendSite } from "./danmaku/sending";
+import { getDanmakuSendConfig } from "./danmaku/sending";
 import { cn } from "@/lib/utils";
 
 // Keep the rendered DOM deliberately small even when a room is producing
-// thousands of comments per minute. The native and pending queues preserve
-// recent traffic without asking React to retain an ever-growing chat tree.
+// thousands of comments per minute. The bounded queue preserves recent
+// traffic without asking React to retain an ever-growing chat tree.
 const MAX = 300;
 const MAX_BUFFERED = 200;
 const MAX_PER_FLUSH = 32;
@@ -40,9 +34,7 @@ function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
   if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
 }
 
-type DanmakuLine =
-  | { id: number; source: "platform"; event: DanmakuEvent }
-  | { id: number; source: "local-pending"; submission: LocalPendingSubmission };
+type DanmakuLine = { id: number; event: DanmakuEvent };
 
 /**
  * Normalise text before it enters the clipboard or a user-triggered repeat
@@ -125,7 +117,7 @@ export async function copyDanmakuText(text: string): Promise<boolean> {
   }
 }
 
-type ActionStatus = "copied" | "copy-failed" | "submitted" | "sent" | "send-failed" | null;
+type ActionStatus = "copied" | "copy-failed" | "sent" | "send-failed" | null;
 
 function actionStatusMessage(status: ActionStatus): string | null {
   switch (status) {
@@ -133,8 +125,6 @@ function actionStatusMessage(status: ActionStatus): string | null {
       return "已复制弹幕内容";
     case "copy-failed":
       return "复制失败，请手动选择内容";
-    case "submitted":
-      return "已提交，等待平台回显";
     case "sent":
       return "已发送相同的弹幕";
     case "send-failed":
@@ -158,10 +148,6 @@ const DanmakuRow = memo(function DanmakuRow({
   siteId?: SiteId;
   roomId?: string;
 }) {
-  if (line.source === "local-pending") {
-    return <LocalPendingDanmakuRow submission={line.submission} />;
-  }
-
   const { event } = line;
   if (event.kind === "system") {
     return (
@@ -172,23 +158,6 @@ const DanmakuRow = memo(function DanmakuRow({
   }
 
   return <SelectableDanmakuRow event={event} siteId={siteId} roomId={roomId} />;
-});
-
-/** Local write completion is feedback, never a replacement for a chat echo. */
-const LocalPendingDanmakuRow = memo(function LocalPendingDanmakuRow({
-  submission,
-}: {
-  submission: LocalPendingSubmission;
-}) {
-  return (
-    <div className="rounded-md border border-border-subtle bg-muted/40 px-1.5 py-1 leading-relaxed">
-      <span className="mr-1.5 font-medium text-primary">我：</span>
-      <DanmakuRichText content={submission.content} className="text-foreground/90" />
-      <Badge className="ml-1.5 align-middle">
-        本地已提交，待平台回显
-      </Badge>
-    </div>
-  );
 });
 
 /**
@@ -255,12 +224,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     setActionStatus(null);
     try {
       await invokeCmd<void>(sendConfig.sendCommand, { roomId, message });
-      if (isDanmakuSendSite(siteId)) {
-        publishLocalPendingSubmission({ siteId, roomId, content: message });
-        setActionStatus("submitted");
-      } else {
-        setActionStatus("sent");
-      }
+      setActionStatus("sent");
     } catch {
       setActionStatus("send-failed");
     } finally {
@@ -296,29 +260,32 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
       <PopoverContent
         side="left"
         align="start"
-        className="w-36 p-1"
+        className="w-40 p-1"
       >
-        <div className="flex flex-col items-center gap-1">
+        <div className="flex flex-col gap-1">
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
-            aria-label="复制弹幕"
+            size="sm"
+            className="w-full justify-start"
             title="复制弹幕"
             onClick={() => void copy()}
           >
-            <Copy aria-hidden />
+            <Copy data-icon="inline-start" aria-hidden />
+            复制
           </Button>
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
+            size="sm"
+            className="w-full justify-start"
             disabled={!canRepeat || sending}
             aria-label={canRepeat ? "发送相同的弹幕（+1）" : repeatUnavailableLabel}
             title={canRepeat ? "发送相同的弹幕（+1）" : repeatUnavailableLabel}
             onClick={() => void repeat()}
           >
-            <SendHorizontal aria-hidden />
+            <SendHorizontal data-icon="inline-start" aria-hidden />
+            +1
           </Button>
         </div>
         {statusMessage && (
@@ -476,29 +443,20 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       for (const message of events) {
         if (!shouldShowValidatedInDanmakuPanel(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
-        accepted.push({ id: ++nextIdRef.current, source: "platform", event: message });
+        accepted.push({ id: ++nextIdRef.current, event: message });
       }
 
       pending.pushAll(accepted);
       if (accepted.length === 0) return;
       scheduleFlush();
     });
-    const unsubscribeLocalPending = subscribeLocalPendingSubmissions(siteId, roomId, (submission) => {
-      if (!activeRef.current) return;
-      // Local submission feedback is intentionally independent of the
-      // viewer's shield-word preferences and has its own visible marker.
-      pending.push({ id: ++nextIdRef.current, source: "local-pending", submission });
-      scheduleFlush();
-    });
-
     return () => {
       unsubscribe();
-      unsubscribeLocalPending();
       cancelFlush();
       if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
       pending.clear();
     };
-  }, [active, roomId, siteId]);
+  }, [active]);
 
   useLayoutEffect(() => {
     if (!visible || !autoScroll.current) return;
