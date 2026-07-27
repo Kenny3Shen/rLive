@@ -30,6 +30,15 @@ export type LocalCaptionControls = {
   onToggle: () => void;
 };
 
+export function danmakuControlPresentation(osdOn: boolean | undefined) {
+  const enabled = Boolean(osdOn);
+  return {
+    enabled,
+    label: enabled ? "关闭弹幕" : "开启弹幕",
+    icon: enabled ? "captions" : "captions-off",
+  } as const;
+}
+
 export type PlayerControlsProps = {
   paused: boolean;
   volume: number;
@@ -182,6 +191,9 @@ export function PlayerControls({
       : captions?.ready
         ? "开启本地字幕"
         : "开启本地字幕（等待播放器音频）";
+  const danmakuControl = danmakuControlPresentation(osdOn);
+  const DanmakuControlIcon =
+    danmakuControl.icon === "captions" ? Captions : CaptionsOff;
   return (
     <div
       className={cn(
@@ -411,18 +423,14 @@ export function PlayerControls({
 
         {onToggleOsd && (
           <ControlButton
-            label={osdOn ? "关闭弹幕" : "开启弹幕"}
-            variant={overlay ? "ghost" : osdOn ? "secondary" : "ghost"}
-            className={cn(
-              overlayButtonClass,
-              overlay && osdOn && "bg-white/12 text-white",
-              "max-[360px]:hidden",
-            )}
+            label={danmakuControl.label}
+            variant="ghost"
+            className={cn(overlayButtonClass, "max-[360px]:hidden")}
             disabled={disabled}
-            aria-pressed={osdOn}
+            aria-pressed={danmakuControl.enabled}
             onClick={onToggleOsd}
           >
-            {osdOn ? <CaptionsOff /> : <Captions />}
+            <DanmakuControlIcon data-icon="inline-start" aria-hidden />
           </ControlButton>
         )}
         <ControlButton
@@ -451,12 +459,16 @@ export function PlayerControls({
         )}
         <ControlButton
           label={fullscreen ? "退出全屏" : "全屏"}
-          className={cn(overlayButtonClass, overlay && fullscreen && "bg-white/16 text-white")}
+          className={overlayButtonClass}
           disabled={disabled}
           aria-pressed={fullscreen}
           onClick={onToggleFullscreen}
         >
-          {fullscreen ? <Minimize2 /> : <Maximize2 />}
+          {fullscreen ? (
+            <Minimize2 data-icon="inline-start" aria-hidden />
+          ) : (
+            <Maximize2 data-icon="inline-start" aria-hidden />
+          )}
         </ControlButton>
       </div>
     </div>
