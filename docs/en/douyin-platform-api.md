@@ -1,50 +1,35 @@
-# Douyin platform API documentation
+# Douyin platform API notes
 
-Updated 2026-07-27. This page documents rLive's Douyin live-web browse, playback, and real-time-chat boundary. It is not official Douyin Open Platform or Live SDK documentation.
+Updated: 2026-07-28. This page describes rLive's Douyin live browse, playback, and real-time chat boundaries. It is not official Douyin Open Platform or live SDK documentation.
 
-## Capability matrix
+## Capability overview
 
 | Capability | Status | rLive behaviour |
 | --- | --- | --- |
-| Categories and recommendations | Supported | Anonymous SSR is reliable for the first page only; later browser-signed pages are not exposed as Load more. |
-| Search | Supported | Requires a complete logged-in Cookie. |
-| Room details and playback | Supported | Parses web/reflow data and offers actually supplied qualities and stream URLs. |
-| Account | Supported | QR or manual Cookie storage; anonymous browsing establishes a transient web session. |
-| Real-time chat receive | Supported | A user-configured signer returns a temporary WSS address for chat, gifts, likes, entries, and similar events. |
-| Chat sending | Not supported | Receiving credentials do not establish a write permission. |
+| Categories / recommendations | Supported | Anonymous SSR first page only; no fabricated "load more". |
+| Search | Supported | Requires a complete logged-in Cookie; shows results only when the upstream succeeds. |
+| Room detail and playback | Supported | Parses web/reflow data and exposes upstream qualities and play URLs. |
+| Account | Supported | QR login or manual Cookie; anonymous browse creates a transient web session. |
+| Real-time chat receive | Supported | Local MSSDK signature, direct official WSS; chat, gifts, likes, entries, and similar events. |
+| Chat send | Not supported | The signature authorises a receiving connection only. |
 
-## Adapter surface
+## Local signature and chat
 
-The adapter implements rLive's shared browse, room, quality, and playback methods. SSR browse does not reliably expose an iterable cursor, while the later web endpoint requires browser verification, so rLive never fakes offset paging or uses a saved Cookie to bypass it. **Load more** is therefore not exposed for Douyin browse pages.
+Douyin chat WSS addresses require a short-lived signature. rLive follows the Simple Live flow on-device:
 
-For a short room id, the adapter first parses the SSR room page for its internal id and then requests the public reflow API. The reflow request does not replay a `.douyin.com` Cookie or `msToken` to `amemv.com`, avoiding the browser-signed web-enter path that can return code 101. Stream URLs are short-lived web data and should be refreshed after a room/playback failure.
+1. Read the internal `room_id` from room detail.
+2. Generate an anonymous 12-digit `user_unique_id`.
+3. MD5 the fixed webcast client parameters, then evaluate embedded `webmssdk` with Boa to obtain `signature`.
+4. Attach the signature to `wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/`.
+5. Connect with Cookie / Origin / UA; handle gzip / protobuf frames, heartbeat, and ACK.
 
-## Signer and chat
+No external signer configuration is required. Cookies, short-lived WSS URLs, and signatures are never logged or exported.
 
-Douyin chat WSS addresses require a short-lived signature. rLive does not ship a reverse-engineered signer or bundle a signer service. Under **Settings → Account → Douyin real-time danmaku**, enter the complete endpoint of a service you operate or explicitly trust, for example:
+## Limits and security
 
-```text
-http://127.0.0.1:18080/sign
-```
+Browser verification pages, Cookie expiry, region limits, and platform risk controls can still break search, rooms, playback, or chat. rLive keeps verified first-page results rather than inventing pagination.
 
-To protect the effective web session, rLive accepts HTTPS endpoints or HTTP endpoints on `localhost`, `127.0.0.1`, or `::1`; URLs with credentials or a fragment are rejected. It never follows redirects. A loopback HTTP signer bypasses the app proxy, while an HTTPS signer follows the user's explicitly configured proxy. A compatible signer returns a temporary WSS URL; rLive then sends heartbeat/ack frames and decodes inbound events.
-
-A complete Cookie can improve the signing session. For the connection only, rLive supplies the effective session to the signer the user configured; it does not log or frontend-cache the Cookie or short-lived WSS URL. The signer endpoint is device-local, excluded from profile export, and preserved when a profile is imported.
-
-### Signer contract
-
-The app sends a JSON `POST` request with `roomId`, `liveId`, and `cookie`. A compatible service responds with `wssUrl` (or `wss_url`) and may include a `headers` object plus `heartbeat.intervalMs` (or `heartbeat.interval_ms`). The returned URL must be a secure `wss://` URL. Values are used only for the connection and are never surfaced in the UI or logs.
-
-### Diagnosis record
-
-The previous implementation forced `127.0.0.1:18080/sign`, even though rLive did not bundle that companion service or expose a setting for it. A room therefore failed immediately unless a separate process happened to be listening on that exact port. The configuration is now visible and validated before the request; missing, unsafe, unreachable, and invalid-response cases are reported separately. This transport contract does not distribute or emulate a signing or anti-bot bypass.
-
-The signer authorises a receiving connection only. rLive has no Douyin chat sender. Reconsider that only if the platform provides desktop-suitable formal interaction authorisation, moderation, and rate-limit contracts.
-
-## Limits and source locations
-
-Cookies, signed URLs, and raw upstream payloads are not logged or kept in frontend caches. QR login and search may receive a browser-verification page; QR requests use the explicit application HTTP(S) proxy when configured, but rLive does not imitate or solve browser verification. Website verification, Cookie expiry, region, and risk controls can affect browsing, search, room lookup, and playback; rLive preserves a verified first page rather than fabricating data.
-
-- Site and playback: `src-tauri/src/sites/douyin.rs`
-- Chat protocol: `src-tauri/src/danmaku/douyin.rs`
-- Signer call: `src-tauri/src/commands/danmaku.rs`
+- Site / playback: `src-tauri/src/sites/douyin.rs`
+- Chat transport: `src-tauri/src/danmaku/douyin.rs`
+- Local signature: `src-tauri/src/danmaku/douyin_sign.rs`
+- MSSDK script: `src-tauri/assets/douyin_webmssdk.js`

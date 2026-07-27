@@ -1,21 +1,17 @@
 //! Douyin live danmaku transport.
 //!
 //! Douyin's web IM endpoint requires a short-lived, signed WSS URL. rLive
-//! sends the effective session only to a user-configured signer that is either
-//! HTTPS or bound to loopback HTTP. Once a signed URL is obtained, this module
-//! owns the standard WebSocket, gzip and protobuf framing path and emits the
-//! common `DanmakuEvent` model.
+//! builds that URL locally: room metadata + anonymous user id, MSSDK
+//! signature via Boa, then a direct WebSocket with gzip / protobuf framing,
+//! heartbeat and ACK.
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::IpAddr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
-use serde::Deserialize;
-use serde_json::json;
 use tokio::time;
 use tokio_tungstenite::{
     connect_async,
@@ -26,17 +22,17 @@ use tokio_tungstenite::{
     },
 };
 
+use crate::danmaku::douyin_sign;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
-use crate::http_client;
 use crate::models::live::{DanmakuEvent, DanmakuKind};
+use crate::sites::douyin::DEFAULT_USER_AGENT;
 
 const DEFAULT_HEARTBEAT_MS: u64 = 10_000;
-const MIN_HEARTBEAT_MS: u64 = 3_000;
-const MAX_HEARTBEAT_MS: u64 = 60_000;
 const MAX_DECOMPRESSED_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT_CHARS: usize = 500;
 const MAX_USER_NAME_CHARS: usize = 128;
+const WSS_PUSH_URL: &str = "wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/";
 /// This is a valid `PushFrame` containing protobuf field 7 = "hb".
 const HEARTBEAT: &[u8] = &[0x3a, 0x02, b'h', b'b'];
 
@@ -47,103 +43,95 @@ pub struct DouyinDanmakuArgs {
     pub heartbeat_interval: Duration,
 }
 
-#[derive(Debug, Deserialize)]
-struct SignResponse {
-    #[serde(rename = "wssUrl", alias = "wss_url")]
-    wss_url: String,
-    #[serde(default)]
-    headers: HashMap<String, String>,
-    #[serde(default)]
-    heartbeat: Option<HeartbeatResponse>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HeartbeatResponse {
-    #[serde(rename = "intervalMs", alias = "interval_ms")]
-    interval_ms: Option<u64>,
-}
-
-/// Resolve the app's room metadata into a short-lived WSS connection.
+/// Resolve room metadata into a short-lived signed WSS connection.
 ///
-/// The signer is selected explicitly by the user. It receives the effective
-/// short-lived session for this connection and returns one WSS connection
-/// address. A Cookie-bearing request is allowed only to an HTTPS service or a
-/// loopback HTTP service; redirects are always disabled.
-pub async fn request_signed_connection(
-    sign_service_url: Option<&str>,
+/// Flow matches Simple Live: internal room id + anonymous user id → local
+/// MSSDK signature → WSS query string, then Cookie / Origin headers for the
+/// direct WebSocket.
+pub fn build_connection(
     room_id: &str,
     raw: &serde_json::Value,
     cookie: &str,
-    proxy: Option<&str>,
 ) -> AppResult<DouyinDanmakuArgs> {
-    let endpoint = validate_sign_service_url(sign_service_url)?;
     let actual_room_id = numeric_field(raw.get("room_id")).unwrap_or_else(|| room_id.to_string());
-    let live_id = numeric_field(raw.get("web_rid")).unwrap_or_else(|| room_id.to_string());
     validate_numeric_id(&actual_room_id, "房间号")?;
-    validate_numeric_id(&live_id, "直播间号")?;
+    let user_unique_id = generate_user_unique_id();
+    let signature = douyin_sign::get_signature(&actual_room_id, &user_unique_id)?;
+    let wss_url = build_wss_url(&actual_room_id, &user_unique_id, &signature)?;
 
-    // Never follow a signer-selected redirect: the JSON body contains the
-    // local Douyin Cookie, and a 307/308 would otherwise replay it to an
-    // arbitrary destination. A loopback HTTP endpoint also bypasses the
-    // application's proxy, ensuring the local Cookie cannot leave the device
-    // over an unencrypted proxy connection. HTTPS signers follow the user's
-    // explicit app proxy setting like the other HTTPS platform requests.
-    let signer_proxy = if is_loopback_http(&endpoint) {
-        None
-    } else {
-        proxy
-    };
-    let client = http_client::build_no_redirect_client(signer_proxy)?;
-
-    // Never place Cookie data in logs or error strings. The configured signer
-    // receives it only because it is needed to create a WSS session with the
-    // user's own Douyin account state.
-    let response = client
-        .post(endpoint)
-        .header("accept", "application/json")
-        .json(&json!({
-            "roomId": actual_room_id,
-            "liveId": live_id,
-            "cookie": cookie.trim(),
-        }))
-        .send()
-        .await
-        .map_err(|_| {
-            AppError::new(
-                "douyin_sign_request_failed",
-                "抖音弹幕签名服务请求失败，请检查设置的地址或网络后重试",
-            )
-            .with_site("douyin")
-            .retryable()
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(AppError::new(
-            "douyin_sign_service_error",
-            format!("抖音弹幕签名服务返回 HTTP {status}"),
-        )
-        .with_site("douyin")
-        .retryable());
+    let mut headers = HashMap::new();
+    headers.insert("User-Agent".into(), DEFAULT_USER_AGENT.into());
+    headers.insert("Origin".into(), "https://live.douyin.com".into());
+    let cookie = cookie.trim();
+    if !cookie.is_empty() {
+        headers.insert("Cookie".into(), cookie.to_string());
     }
-    let signed = response.json::<SignResponse>().await.map_err(|_| {
-        AppError::new(
-            "douyin_sign_response_invalid",
-            "抖音弹幕签名服务响应无效，请检查服务返回格式",
-        )
-        .with_site("douyin")
-    })?;
-    let wss_url = validate_signed_wss_url(&signed.wss_url)?;
-    let heartbeat_ms = signed
-        .heartbeat
-        .and_then(|heartbeat| heartbeat.interval_ms)
-        .unwrap_or(DEFAULT_HEARTBEAT_MS)
-        .clamp(MIN_HEARTBEAT_MS, MAX_HEARTBEAT_MS);
 
     Ok(DouyinDanmakuArgs {
         wss_url,
-        headers: sanitize_ws_headers(signed.headers),
-        heartbeat_interval: Duration::from_millis(heartbeat_ms),
+        headers,
+        heartbeat_interval: Duration::from_millis(DEFAULT_HEARTBEAT_MS),
     })
+}
+
+fn build_wss_url(room_id: &str, user_unique_id: &str, signature: &str) -> AppResult<String> {
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let browser_version = DEFAULT_USER_AGENT
+        .strip_prefix("Mozilla/")
+        .unwrap_or(DEFAULT_USER_AGENT);
+
+    let mut url = Url::parse(WSS_PUSH_URL).map_err(|_| {
+        AppError::new("douyin_wss_build_failed", "抖音弹幕连接地址构建失败").with_site("douyin")
+    })?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.clear();
+        query.append_pair("app_name", "douyin_web");
+        query.append_pair("version_code", "180800");
+        query.append_pair("webcast_sdk_version", "1.3.0");
+        query.append_pair("update_version_code", "1.3.0");
+        query.append_pair("compress", "gzip");
+        query.append_pair("cursor", &format!("h-1_t-{ts_ms}_r-1_d-1_u-1"));
+        query.append_pair("host", "https://live.douyin.com");
+        query.append_pair("aid", "6383");
+        query.append_pair("live_id", "1");
+        query.append_pair("did_rule", "3");
+        query.append_pair("debug", "false");
+        query.append_pair("maxCacheMessageNumber", "20");
+        query.append_pair("endpoint", "live_pc");
+        query.append_pair("support_wrds", "1");
+        query.append_pair("im_path", "/webcast/im/fetch/");
+        query.append_pair("user_unique_id", user_unique_id);
+        query.append_pair("device_platform", "web");
+        query.append_pair("cookie_enabled", "true");
+        query.append_pair("screen_width", "1920");
+        query.append_pair("screen_height", "1080");
+        query.append_pair("browser_language", "zh-CN");
+        query.append_pair("browser_platform", "Win32");
+        query.append_pair("browser_name", "Mozilla");
+        query.append_pair("browser_version", browser_version);
+        query.append_pair("browser_online", "true");
+        query.append_pair("tz_name", "Asia/Shanghai");
+        query.append_pair("identity", "audience");
+        query.append_pair("room_id", room_id);
+        query.append_pair("heartbeatDuration", "0");
+        query.append_pair("signature", signature);
+    }
+    Ok(url.to_string())
+}
+
+/// Anonymous 12-digit web uid (Simple Live `generateRandomNumber(12)`).
+fn generate_user_unique_id() -> String {
+    let bytes = uuid::Uuid::new_v4().into_bytes();
+    let mut value = 0u128;
+    for byte in bytes {
+        value = (value << 8) | u128::from(byte);
+    }
+    // Produce 12 decimal digits without leading-zero collapse.
+    format!("{:012}", value % 1_000_000_000_000)
 }
 
 fn numeric_field(value: Option<&serde_json::Value>) -> Option<String> {
@@ -163,92 +151,6 @@ fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
         );
     }
     Ok(())
-}
-
-fn validate_sign_service_url(value: Option<&str>) -> AppResult<Url> {
-    let value = value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::new(
-                "douyin_sign_service_missing",
-                "请先在设置 → 账号 → 抖音中配置弹幕签名服务地址",
-            )
-            .with_site("douyin")
-        })?;
-    let url = Url::parse(value).map_err(|_| {
-        AppError::new("douyin_sign_service_invalid", "抖音弹幕签名服务地址无效").with_site("douyin")
-    })?;
-    if url.host_str().is_none() {
-        return Err(AppError::new(
-            "douyin_sign_service_invalid",
-            "抖音弹幕签名服务地址缺少主机名",
-        )
-        .with_site("douyin"));
-    }
-    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
-        return Err(AppError::new(
-            "douyin_sign_service_invalid",
-            "抖音弹幕签名服务地址不能包含账号、密码或片段",
-        )
-        .with_site("douyin"));
-    }
-    if url.scheme() != "https" && !is_loopback_http(&url) {
-        return Err(AppError::new(
-            "douyin_sign_service_insecure",
-            "抖音弹幕签名服务必须使用 HTTPS，或使用本机回环地址的 HTTP",
-        )
-        .with_site("douyin"));
-    }
-    Ok(url)
-}
-
-fn is_loopback_http(url: &Url) -> bool {
-    if url.scheme() != "http" {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<IpAddr>()
-            .map(|address| address.is_loopback())
-            .unwrap_or(false)
-}
-
-fn validate_signed_wss_url(value: &str) -> AppResult<String> {
-    let url = Url::parse(value.trim()).map_err(|_| {
-        AppError::new("douyin_signed_wss_invalid", "签名服务未返回有效的 WSS 地址")
-            .with_site("douyin")
-    })?;
-    if url.scheme() != "wss" || url.host_str().is_none() {
-        return Err(
-            AppError::new("douyin_signed_wss_invalid", "签名服务未返回安全的 WSS 地址")
-                .with_site("douyin"),
-        );
-    }
-    Ok(url.to_string())
-}
-
-fn sanitize_ws_headers(headers: HashMap<String, String>) -> HashMap<String, String> {
-    headers
-        .into_iter()
-        .filter(|(name, value)| {
-            let name = name.trim().to_ascii_lowercase();
-            let allowed = matches!(
-                name.as_str(),
-                "cookie" | "user-agent" | "origin" | "referer"
-            ) || name.starts_with("x-");
-            allowed
-                && HeaderName::from_bytes(name.as_bytes()).is_ok()
-                && HeaderValue::from_str(value.trim()).is_ok()
-        })
-        .collect()
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> AppResult<()> {
@@ -801,47 +703,31 @@ mod tests {
     }
 
     #[test]
-    fn only_allows_https_or_loopback_sign_services() {
-        assert!(validate_sign_service_url(Some("https://signer.example.invalid/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://127.0.0.1:18080/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://localhost:18080/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://[::1]:18080/sign")).is_ok());
-        assert!(validate_sign_service_url(Some("http://example.invalid/sign")).is_err());
-        assert!(validate_sign_service_url(Some("ftp://example.invalid/sign")).is_err());
-        assert!(validate_sign_service_url(Some("https:")).is_err());
-        assert!(validate_sign_service_url(Some("https://user:pass@example.invalid/sign")).is_err());
-        assert!(validate_sign_service_url(Some("https://example.invalid/sign#fragment")).is_err());
-        assert!(validate_sign_service_url(None).is_err());
+    fn builds_signed_wss_url_with_room_and_signature() {
+        let raw = serde_json::json!({
+            "room_id": "1234567890123456789",
+            "web_rid": "522864404974",
+        });
+        let args = build_connection("522864404974", &raw, "ttwid=fixture").unwrap();
+        let url = Url::parse(&args.wss_url).unwrap();
+        assert_eq!(url.scheme(), "wss");
+        assert!(url.as_str().contains("webcast3-ws-web-lq.douyin.com"));
+        let pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("room_id").map(String::as_str), Some("1234567890123456789"));
+        assert_eq!(pairs.get("aid").map(String::as_str), Some("6383"));
+        assert!(pairs.get("signature").is_some_and(|value| !value.is_empty()));
+        assert!(pairs.get("user_unique_id").is_some_and(|value| value.len() == 12));
+        assert_eq!(args.headers.get("Cookie").map(String::as_str), Some("ttwid=fixture"));
+        assert_eq!(
+            args.headers.get("Origin").map(String::as_str),
+            Some("https://live.douyin.com")
+        );
     }
 
     #[test]
-    fn loopback_detection_only_accepts_http_loopback() {
-        assert!(is_loopback_http(
-            &Url::parse("http://127.0.0.1:18080/sign").unwrap()
-        ));
-        assert!(is_loopback_http(
-            &Url::parse("http://[::1]:18080/sign").unwrap()
-        ));
-        assert!(!is_loopback_http(
-            &Url::parse("https://127.0.0.1:18080/sign").unwrap()
-        ));
-        assert!(!is_loopback_http(
-            &Url::parse("http://signer.example.invalid/sign").unwrap()
-        ));
-    }
-
-    #[test]
-    fn keeps_only_safe_ws_headers() {
-        let headers = HashMap::from([
-            ("Cookie".into(), "ttwid=abc".into()),
-            ("X-TT-Logid".into(), "log".into()),
-            ("Host".into(), "attacker.example".into()),
-            ("Connection".into(), "close".into()),
-        ]);
-        let safe = sanitize_ws_headers(headers);
-        assert!(safe.contains_key("Cookie"));
-        assert!(safe.contains_key("X-TT-Logid"));
-        assert!(!safe.contains_key("Host"));
-        assert!(!safe.contains_key("Connection"));
+    fn generate_user_unique_id_is_twelve_digits() {
+        let uid = generate_user_unique_id();
+        assert_eq!(uid.len(), 12);
+        assert!(uid.bytes().all(|byte| byte.is_ascii_digit()));
     }
 }
