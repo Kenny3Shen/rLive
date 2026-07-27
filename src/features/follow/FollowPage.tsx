@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock3, RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
@@ -17,12 +18,46 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type LiveFilter = "all" | "live" | "offline";
+
+function FollowRefreshButton({ pending, onRefresh }: { pending: boolean; onRefresh: () => void }) {
+  // The page entrance animation applies a CSS transform to the route shell.
+  // A fixed descendant of that shell would use it as its containing block and
+  // scroll with the page. Portal the control to the document body so it stays
+  // at the same viewport position throughout the follow list.
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-lg"
+            className="fixed right-5 bottom-5 z-20 rounded-full shadow-lg shadow-primary/25"
+            disabled={pending}
+            aria-label="刷新关注列表"
+            title="刷新关注列表"
+            onClick={onRefresh}
+          />
+        }
+      >
+        {pending ? (
+          <Spinner data-icon="inline-start" aria-hidden />
+        ) : (
+          <RefreshCw data-icon="inline-start" aria-hidden />
+        )}
+      </TooltipTrigger>
+      <TooltipContent>刷新关注列表</TooltipContent>
+    </Tooltip>,
+    document.body,
+  );
+}
 
 export function FollowPage() {
   const navigate = useNavigate();
@@ -245,27 +280,10 @@ export function FollowPage() {
         </ul>
       )}
 
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              size="icon-lg"
-              className="fixed right-5 bottom-5 z-20 rounded-full shadow-lg shadow-primary/25"
-              disabled={refreshMutation.isPending}
-              aria-label="刷新关注列表"
-              title="刷新关注列表"
-              onClick={() => refreshMutation.mutate()}
-            />
-          }
-        >
-          <RefreshCw
-            data-icon="inline-start"
-            aria-hidden
-            className={cn(refreshMutation.isPending && "animate-spin-soft")}
-          />
-        </TooltipTrigger>
-        <TooltipContent>刷新关注列表</TooltipContent>
-      </Tooltip>
+      <FollowRefreshButton
+        pending={refreshMutation.isPending}
+        onRefresh={() => refreshMutation.mutate()}
+      />
     </div>
   );
 }

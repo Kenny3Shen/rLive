@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import { Database, MonitorPlay, Network, QrCode, Radio, RefreshCw, UserRound } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -223,12 +225,20 @@ function CookieField({
   placeholder: string;
   qrLogin?: boolean;
 }) {
+  const queryClient = useQueryClient();
   const markDanmakuCookieChanged = useSettingsStore((s) => s.markDanmakuCookieChanged);
   const [cookie, setCookie] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [method, setMethod] = useState<CookieMethod>("manual");
   const inputId = `${siteId}-cookie`;
+
+  const refreshCookieDependentQueries = useCallback(() => {
+    // The Cookie write has already succeeded at this point. A failed network
+    // refresh must not turn that successful account update into a UI error;
+    // the affected query keeps its own error state and remains stale to retry.
+    void invalidateCookieDependentSiteQueries(queryClient, siteId).catch(() => {});
+  }, [queryClient, siteId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,6 +278,7 @@ function CookieField({
       // A room composer can remain mounted while the account UI updates its
       // credentials. Notify it only after the backend mutation succeeds.
       if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
+      refreshCookieDependentQueries();
     } catch (e) {
       const message =
         typeof e === "object" && e && "message" in e
@@ -283,12 +294,14 @@ function CookieField({
       setCookie(value ?? "");
       setStatus("Cookie 已通过扫码登录更新");
       if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
+      refreshCookieDependentQueries();
     } catch {
       // The QR command has already saved successfully. A later display refresh
       // should not make that login look failed.
       if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
+      refreshCookieDependentQueries();
     }
-  }, [markDanmakuCookieChanged, siteId]);
+  }, [markDanmakuCookieChanged, refreshCookieDependentQueries, siteId]);
 
   return (
     <Section title={title} description={description}>
@@ -685,7 +698,7 @@ export function SettingsPage() {
                 <CookieField
                   siteId="douyin"
                   title="抖音"
-                  description="支持扫码登录和手动 Cookie 输入；可用于搜索、提高房间解析可用性，并供固定本机实时弹幕签名服务创建会话。"
+                  description="支持扫码登录和手动 Cookie 输入；可用于搜索、提高房间解析可用性，并在抖音接口确认可用时开启列表加载更多，还可供固定本机实时弹幕签名服务创建会话。"
                   placeholder="sessionid=…; ttwid=…; msToken=…"
                   qrLogin
                 />

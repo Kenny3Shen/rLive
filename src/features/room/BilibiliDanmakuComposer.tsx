@@ -14,13 +14,8 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
-import { publishLocalPendingSubmission } from "./danmaku/localPendingSubmission";
 import { insertBilibiliDanmakuText } from "./danmaku/outgoing";
-import {
-  getDanmakuSendConfig,
-  isDanmakuSendSite,
-  type DanmakuSendStatus,
-} from "./danmaku/sending";
+import { getDanmakuSendConfig, type DanmakuSendStatus } from "./danmaku/sending";
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
@@ -60,9 +55,8 @@ type DanmakuComposerProps = {
 
 /**
  * One intentionally small, user-operated composer for platforms with a
- * verified local send endpoint. A resolved local write creates a visibly
- * pending record; the live websocket remains responsible for the platform
- * echo that confirms it.
+ * verified local send endpoint. Platform chat is shown only when it arrives
+ * through the normal live websocket stream.
  */
 export function DanmakuComposer({
   siteId,
@@ -187,15 +181,8 @@ export function DanmakuComposer({
         roomId: currentRoomId,
         message: outgoingMessage,
       });
-      if (isDanmakuSendSite(siteId)) {
-        publishLocalPendingSubmission({
-          siteId,
-          roomId: currentRoomId,
-          content: outgoingMessage,
-        });
-      }
       setDraft("");
-      setResult("已提交，等待平台回显。");
+      setResult("发送请求已提交。");
     } catch (error) {
       setResult(`发送失败：${errorMessage(error)}`);
     } finally {
