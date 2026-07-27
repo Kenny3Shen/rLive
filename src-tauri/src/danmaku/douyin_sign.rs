@@ -70,12 +70,11 @@ fn evaluate_signature(stub: &str) -> AppResult<String> {
         }
     }
 
-    Err(AppError::new(
-        "douyin_sign_invalid",
-        "抖音弹幕签名生成失败，请稍后重试",
+    Err(
+        AppError::new("douyin_sign_invalid", "抖音弹幕签名生成失败，请稍后重试")
+            .with_site("douyin")
+            .retryable(),
     )
-    .with_site("douyin")
-    .retryable())
 }
 
 fn call_get_mssdk_signature(ctx: &mut Context, stub: &str) -> AppResult<String> {
@@ -92,11 +91,7 @@ fn call_get_mssdk_signature(ctx: &mut Context, stub: &str) -> AppResult<String> 
             .with_site("douyin")
         })?;
     let Some(function) = function.as_callable() else {
-        return Err(AppError::new(
-            "douyin_sign_eval",
-            "抖音弹幕签名函数不可用",
-        )
-        .with_site("douyin"));
+        return Err(AppError::new("douyin_sign_eval", "抖音弹幕签名函数不可用").with_site("douyin"));
     };
 
     let stub_value = JsString::from(stub).into();
@@ -104,23 +99,17 @@ fn call_get_mssdk_signature(ctx: &mut Context, stub: &str) -> AppResult<String> 
     let value = function
         .call(&function.clone().into(), &[stub_value, ua_value], ctx)
         .map_err(|error| {
-            AppError::new(
-                "douyin_sign_eval",
-                format!("抖音弹幕签名计算失败: {error}"),
-            )
-            .with_site("douyin")
-            .retryable()
+            AppError::new("douyin_sign_eval", format!("抖音弹幕签名计算失败: {error}"))
+                .with_site("douyin")
+                .retryable()
         })?;
     value
         .to_string(ctx)
         .map(|js| js.to_std_string_escaped())
         .map_err(|error| {
-            AppError::new(
-                "douyin_sign_eval",
-                format!("抖音弹幕签名结果无效: {error}"),
-            )
-            .with_site("douyin")
-            .retryable()
+            AppError::new("douyin_sign_eval", format!("抖音弹幕签名结果无效: {error}"))
+                .with_site("douyin")
+                .retryable()
         })
 }
 
