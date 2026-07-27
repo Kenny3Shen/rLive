@@ -7,7 +7,7 @@ export function HeaderSearch() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  if (pathname === "/search") return null;
+  if (pathname !== "/") return null;
 
   return (
     <Button
