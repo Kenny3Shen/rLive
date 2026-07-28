@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { RotateCcw } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
@@ -60,6 +61,14 @@ type DanmakuSliderProps = {
   onCommit: (value: number) => void;
 };
 
+function ControlCard({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <Card size="sm" className={cn("gap-0 bg-muted/35 py-0 shadow-none", className)}>
+      <CardContent className="p-3">{children}</CardContent>
+    </Card>
+  );
+}
+
 function DanmakuSlider({
   id,
   title,
@@ -75,26 +84,28 @@ function DanmakuSlider({
   const labelId = `${id}-label`;
 
   return (
-    <Field>
-      <FieldContent>
-        <FieldTitle id={labelId}>{title}</FieldTitle>
-        {description && <FieldDescription>{description}</FieldDescription>}
-      </FieldContent>
-      <div className="flex items-center gap-3">
-        <Slider
-          aria-labelledby={labelId}
-          value={value}
-          min={min}
-          max={max}
-          step={step}
-          onValueChange={(next) => onPreview(Number(next))}
-          onValueCommitted={(next) => onCommit(Number(next))}
-        />
-        <Badge variant="secondary" className="min-w-12 justify-center">
-          {displayValue}
-        </Badge>
-      </div>
-    </Field>
+    <ControlCard>
+      <Field className="gap-2">
+        <FieldContent>
+          <FieldTitle id={labelId}>{title}</FieldTitle>
+          {description && <FieldDescription>{description}</FieldDescription>}
+        </FieldContent>
+        <div className="flex items-center gap-3">
+          <Slider
+            aria-labelledby={labelId}
+            value={value}
+            min={min}
+            max={max}
+            step={step}
+            onValueChange={(next) => onPreview(Number(next))}
+            onValueCommitted={(next) => onCommit(Number(next))}
+          />
+          <Badge variant="secondary" className="min-w-12 justify-center">
+            {displayValue}
+          </Badge>
+        </div>
+      </Field>
+    </ControlCard>
   );
 }
 
@@ -108,11 +119,11 @@ function captionStatusLabel(captions: LocalCaptionSettings): string {
 function captionStatusDescription(captions: LocalCaptionSettings): string {
   if (captions.message) return captions.message;
   if (captions.pending || captions.state === "starting") {
-    return "正在加载模型并连接播放器音频。";
+    return "正在加载并连接直播音频。";
   }
-  if (captions.enabled) return "正在通过本机 CPU 实时识别直播声音。";
-  if (!captions.ready) return "等待直播声音就绪后，可从播放器底栏开启。";
-  return "功能默认关闭；从播放器底栏的字幕按钮开启。";
+  if (captions.enabled) return "正在本机识别直播声音。";
+  if (!captions.ready) return "等待直播声音就绪。";
+  return "从播放器底栏的字幕按钮开启。";
 }
 
 function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSettings }) {
@@ -123,7 +134,7 @@ function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSetti
     <Card>
       <CardHeader>
         <CardTitle>本地字幕</CardTitle>
-        <CardDescription>音频仅在本机处理。</CardDescription>
+        <CardDescription>内置 tiny · 音频仅在本机处理</CardDescription>
         <CardAction>
           <Badge variant={captions.state === "error" ? "destructive" : "secondary"}>
             {statusLabel}
@@ -141,33 +152,26 @@ function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSetti
               </FieldContent>
             </Field>
 
-            <Field orientation="horizontal">
-              <FieldContent>
-                <FieldTitle>识别模型</FieldTitle>
-                <FieldDescription>内置多语言模型，按需加载。</FieldDescription>
-              </FieldContent>
-              <Badge variant="outline">内置 tiny</Badge>
-            </Field>
-
-            <Field>
-              <FieldContent>
-                <FieldTitle id="room-local-caption-font-size">字幕字号</FieldTitle>
-                <FieldDescription>16–36 px</FieldDescription>
-              </FieldContent>
-              <div className="flex items-center gap-3">
-                <Slider
-                  aria-labelledby="room-local-caption-font-size"
-                  value={captions.fontSize}
-                  min={16}
-                  max={36}
-                  step={1}
-                  onValueChange={(value) => captions.onFontSizeChange(Number(value))}
-                />
-                <Badge variant="secondary" className="min-w-12 justify-center">
-                  {captions.fontSize}px
-                </Badge>
-              </div>
-            </Field>
+            <ControlCard>
+              <Field className="gap-2">
+                <FieldContent>
+                  <FieldTitle id="room-local-caption-font-size">字幕字号</FieldTitle>
+                </FieldContent>
+                <div className="flex items-center gap-3">
+                  <Slider
+                    aria-labelledby="room-local-caption-font-size"
+                    value={captions.fontSize}
+                    min={16}
+                    max={36}
+                    step={1}
+                    onValueChange={(value) => captions.onFontSizeChange(Number(value))}
+                  />
+                  <Badge variant="secondary" className="min-w-12 justify-center">
+                    {captions.fontSize}px
+                  </Badge>
+                </div>
+              </Field>
+            </ControlCard>
           </FieldGroup>
         </FieldSet>
       </CardContent>
@@ -199,7 +203,7 @@ function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendControl
     <Card>
       <CardHeader>
         <CardTitle>自动发送弹幕</CardTitle>
-        <CardDescription>在本次直播间循环发送。</CardDescription>
+        <CardDescription>仅在当前直播间循环发送。</CardDescription>
         <CardAction>
           <Badge variant={statusIsError ? "destructive" : "secondary"}>
             {autoSendStatusLabel(autoSend)}
@@ -392,80 +396,101 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
     });
   }
 
+  const trackSummary = `${Math.round(area * 100)}% · ${lineCount === 0 ? "自动" : `${lineCount} 行`}`;
+  const appearanceSummary = `${fontSize}px · ${speed}/10`;
+  const activeFilterCount = Number(filterRepeats) + Number(filterGifts);
+  const filterSummary =
+    shieldWords.length > 0
+      ? `${activeFilterCount} 项开启 · ${shieldWords.length} 词`
+      : activeFilterCount > 0
+        ? `${activeFilterCount} 项开启`
+        : "未开启";
+
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
-      <div className="flex flex-col gap-5 px-3 py-3">
+      <div className="flex flex-col gap-4 px-3 py-3">
         {captions && <LocalCaptionSettingsSection captions={captions} />}
         {autoSend && <AutoDanmakuSendSection autoSend={autoSend} />}
 
         <Card>
-          <CardHeader>
-            <CardTitle>弹幕显示</CardTitle>
-            <CardDescription>调整飘屏的轨道与外观。</CardDescription>
+          <CardHeader className="border-b">
+            <CardTitle>弹幕轨道</CardTitle>
+            <CardDescription>控制画面中的弹幕占用。</CardDescription>
+            <CardAction>
+              <Badge variant="outline">{trackSummary}</Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <FieldSet>
-              <FieldLegend className="sr-only">弹幕显示</FieldLegend>
-              <FieldGroup className="gap-4">
-                <DanmakuSlider
-                  id="room-danmaku-area"
-                  title="显示区域"
-                  description="飘屏占用的视频高度"
-                  value={Math.round(area * 100)}
-                  min={10}
-                  max={100}
-                  step={5}
-                  displayValue={`${Math.round(area * 100)}%`}
-                  onPreview={(value) => preview({ danmakuArea: value / 100 })}
-                  onCommit={(value) => persist({ danmaku_area: value / 100 })}
-                />
-                <DanmakuSlider
-                  id="room-danmaku-lines"
-                  title="显示行数"
-                  description="自动或固定 1–20 行"
-                  value={lineCount}
-                  min={0}
-                  max={20}
-                  displayValue={lineCount === 0 ? "自动" : `${lineCount} 行`}
-                  onPreview={(value) => preview({ danmakuLineCount: value })}
-                  onCommit={(value) => persist({ danmaku_line_count: value })}
-                />
-                <DanmakuSlider
-                  id="room-danmaku-opacity"
-                  title="不透明度"
-                  value={Math.round(opacity * 100)}
-                  min={0}
-                  max={100}
-                  displayValue={`${Math.round(opacity * 100)}%`}
-                  onPreview={(value) => preview({ danmakuOpacity: value / 100 })}
-                  onCommit={(value) => persist({ danmaku_opacity: value / 100 })}
-                />
-                <DanmakuSlider
-                  id="room-danmaku-font-size"
-                  title="字号"
-                  description="飘屏与消息列表字号"
-                  value={fontSize}
-                  min={12}
-                  max={36}
-                  displayValue={`${fontSize}px`}
-                  onPreview={(value) => preview({ danmakuFontSize: value })}
-                  onCommit={(value) => persist({ danmaku_font_size: value })}
-                />
-                <DanmakuSlider
-                  id="room-danmaku-speed"
-                  title="滚动速度"
-                  description="数值越高，滚动越快"
-                  value={speed}
-                  min={1}
-                  max={10}
-                  displayValue={`${speed} / 10`}
-                  onPreview={(value) => preview({ danmakuSpeed: value })}
-                  onCommit={(value) => persist({ danmaku_speed: value })}
-                />
-                <Field>
+          <CardContent className="pt-4">
+            <div className="grid gap-2">
+              <DanmakuSlider
+                id="room-danmaku-area"
+                title="显示区域"
+                value={Math.round(area * 100)}
+                min={10}
+                max={100}
+                step={5}
+                displayValue={`${Math.round(area * 100)}%`}
+                onPreview={(value) => preview({ danmakuArea: value / 100 })}
+                onCommit={(value) => persist({ danmaku_area: value / 100 })}
+              />
+              <DanmakuSlider
+                id="room-danmaku-lines"
+                title="显示行数"
+                value={lineCount}
+                min={0}
+                max={20}
+                displayValue={lineCount === 0 ? "自动" : `${lineCount} 行`}
+                onPreview={(value) => preview({ danmakuLineCount: value })}
+                onCommit={(value) => persist({ danmaku_line_count: value })}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>文字与节奏</CardTitle>
+            <CardDescription>拖动预览，松手后保存。</CardDescription>
+            <CardAction>
+              <Badge variant="outline">{appearanceSummary}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <div className="grid gap-2">
+              <DanmakuSlider
+                id="room-danmaku-opacity"
+                title="不透明度"
+                value={Math.round(opacity * 100)}
+                min={0}
+                max={100}
+                displayValue={`${Math.round(opacity * 100)}%`}
+                onPreview={(value) => preview({ danmakuOpacity: value / 100 })}
+                onCommit={(value) => persist({ danmaku_opacity: value / 100 })}
+              />
+              <DanmakuSlider
+                id="room-danmaku-font-size"
+                title="字号"
+                value={fontSize}
+                min={12}
+                max={36}
+                displayValue={`${fontSize}px`}
+                onPreview={(value) => preview({ danmakuFontSize: value })}
+                onCommit={(value) => persist({ danmaku_font_size: value })}
+              />
+              <DanmakuSlider
+                id="room-danmaku-speed"
+                title="滚动速度"
+                value={speed}
+                min={1}
+                max={10}
+                displayValue={`${speed} / 10`}
+                onPreview={(value) => preview({ danmakuSpeed: value })}
+                onCommit={(value) => persist({ danmaku_speed: value })}
+              />
+              <ControlCard>
+                <Field className="gap-2">
                   <FieldContent>
                     <FieldTitle id="room-danmaku-font-weight">字重</FieldTitle>
-                    <FieldDescription>提升亮色画面的可读性</FieldDescription>
                   </FieldContent>
                   <ToggleGroup
                     aria-labelledby="room-danmaku-font-weight"
@@ -487,29 +512,37 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                     ))}
                   </ToggleGroup>
                 </Field>
-              </FieldGroup>
-            </FieldSet>
+              </ControlCard>
+            </div>
           </CardContent>
-          <CardFooter className="justify-end">
+          <CardFooter className="justify-between gap-3">
+            <span className="text-xs text-muted-foreground">恢复默认不会影响屏蔽词。</span>
             <Button type="button" variant="outline" size="sm" onClick={resetAppearance}>
-              恢复默认值
+              <RotateCcw data-icon="inline-start" aria-hidden />
+              恢复默认
             </Button>
           </CardFooter>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>弹幕过滤</CardTitle>
-            <CardDescription>屏蔽词同时作用于聊天、SC 与飘屏。</CardDescription>
+          <CardHeader className="border-b">
+            <CardTitle>消息过滤</CardTitle>
+            <CardDescription>新的消息会立即按规则处理。</CardDescription>
+            <CardAction>
+              <Badge
+                variant={activeFilterCount > 0 || shieldWords.length > 0 ? "secondary" : "outline"}
+              >
+                {filterSummary}
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <FieldSet>
-              <FieldLegend className="sr-only">弹幕过滤</FieldLegend>
-              <FieldGroup className="gap-3">
+          <CardContent className="pt-4">
+            <div className="grid gap-2">
+              <ControlCard>
                 <Field orientation="horizontal">
                   <FieldContent>
-                    <FieldTitle id="room-danmaku-repeat-filter">合并重复飘屏</FieldTitle>
-                    <FieldDescription>5 秒内相同内容显示为次数</FieldDescription>
+                    <FieldTitle id="room-danmaku-repeat-filter">合并重复消息</FieldTitle>
+                    <FieldDescription>5 秒内相同文本合并显示。</FieldDescription>
                   </FieldContent>
                   <Switch
                     aria-labelledby="room-danmaku-repeat-filter"
@@ -520,10 +553,12 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                     }}
                   />
                 </Field>
+              </ControlCard>
+              <ControlCard>
                 <Field orientation="horizontal">
                   <FieldContent>
-                    <FieldTitle id="room-danmaku-gift-filter">屏蔽礼物消息</FieldTitle>
-                    <FieldDescription>隐藏礼物通知，不影响 SC</FieldDescription>
+                    <FieldTitle id="room-danmaku-gift-filter">隐藏礼物消息</FieldTitle>
+                    <FieldDescription>不影响 SC。</FieldDescription>
                   </FieldContent>
                   <Switch
                     aria-labelledby="room-danmaku-gift-filter"
@@ -534,6 +569,8 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                     }}
                   />
                 </Field>
+              </ControlCard>
+              <ControlCard>
                 <Field>
                   <FieldLabel htmlFor="room-danmaku-shield-words">屏蔽词</FieldLabel>
                   <FieldContent>
@@ -543,15 +580,19 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                       onChange={(event) => {
                         updateShieldWords(event.target.value);
                       }}
-                      rows={5}
+                      rows={4}
                       placeholder="每行一个词，也可用逗号分隔"
                       className="resize-y"
                     />
-                    {shieldStatus && <FieldDescription>{shieldStatus}</FieldDescription>}
+                    {shieldStatus ? (
+                      <FieldDescription role="status">{shieldStatus}</FieldDescription>
+                    ) : (
+                      <FieldDescription>支持换行或逗号分隔。</FieldDescription>
+                    )}
                   </FieldContent>
                 </Field>
-              </FieldGroup>
-            </FieldSet>
+              </ControlCard>
+            </div>
           </CardContent>
         </Card>
       </div>
