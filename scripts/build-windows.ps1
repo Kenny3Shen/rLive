@@ -80,7 +80,22 @@ if (-not $vcvars) {
 
 $rustc = Get-Command rustc -ErrorAction SilentlyContinue
 if ($rustc) {
-    Write-Host (& rustc -vV | Select-String "^host:").ToString()
+    # rustup can emit first-install progress on stderr. Treat this as a
+    # diagnostic query only: a transient version-report failure must not stop
+    # the actual Tauri build before cargo has a chance to run.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $rustcInfo = & rustc -vV 2>&1
+    $rustcCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($rustcCode -eq 0) {
+        $rustcHost = $rustcInfo | Select-String "^host:" | Select-Object -First 1
+        if ($rustcHost) {
+            Write-Host $rustcHost.ToString()
+        }
+    } else {
+        Write-Warning "rustc could not report its host before the build (exit $rustcCode)."
+    }
 } else {
     Write-Warning "rustc not on PATH (expected under $env:CARGO_HOME\bin)"
 }
@@ -116,7 +131,11 @@ Write-Host $cmd
 # a terminating NativeCommandError and aborts before the build finishes.
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-cmd.exe /c $cmd
+# Tauri, Bun, and Cargo use stderr for normal progress. Let cmd.exe merge the
+# streams before PowerShell sees them; a PowerShell-side `2>&1` still creates
+# a NativeCommandError record in Windows PowerShell 5.
+$cmdWithMergedStderr = "$cmd 2>&1"
+cmd.exe /c $cmdWithMergedStderr
 $buildCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 if ($buildCode -ne 0) { throw "tauri build failed: $buildCode" }

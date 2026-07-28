@@ -50,6 +50,10 @@ fi
 # Wrapper avoids Stop + native stderr aborting build-windows.ps1 early.
 WRAPPER="/mnt/d/dev/run-rlive-build.ps1"
 cat > "$WRAPPER" << 'EOF'
+param(
+    [switch]$BundleNsis
+)
+
 $ErrorActionPreference = "Continue"
 $env:CARGO_HOME = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "D:\dev\rust\cargo" }
 $env:RUSTUP_HOME = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { "D:\dev\rust\rustup" }
@@ -57,21 +61,26 @@ $env:TEMP = "D:\Temp\build"
 $env:TMP = "D:\Temp\build"
 New-Item -ItemType Directory -Force -Path "D:\dev\logs","D:\Temp\build" | Out-Null
 Set-Location "D:\dev\rLive"
-$buildArgs = @()
-if ($env:RLIVE_BUNDLE_NSIS -eq "1") {
-  $buildArgs += "-BundleNsis"
+if ($BundleNsis) {
+  & ".\scripts\build-windows.ps1" -BundleNsis *>&1 | Tee-Object -FilePath "D:\dev\logs\build-windows.txt"
+} else {
+  & ".\scripts\build-windows.ps1" *>&1 | Tee-Object -FilePath "D:\dev\logs\build-windows.txt"
 }
-& ".\scripts\build-windows.ps1" @buildArgs *>&1 | Tee-Object -FilePath "D:\dev\logs\build-windows.txt"
 $code = $LASTEXITCODE
 if ($null -eq $code) { $code = 0 }
 Write-Host "BUILD_EXIT=$code"
 exit $code
 EOF
 
+ps_build_args=()
+if [[ "$BUNDLE_NSIS" == "1" ]]; then
+  ps_build_args=(-BundleNsis)
+fi
+
 if [[ -x "$INIT" || -f "$INIT" ]]; then
-  RLIVE_BUNDLE_NSIS="$BUNDLE_NSIS" "$INIT" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1"
+  "$INIT" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1" "${ps_build_args[@]}"
 else
-  RLIVE_BUNDLE_NSIS="$BUNDLE_NSIS" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1"
+  "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1" "${ps_build_args[@]}"
 fi
 
 code=$?
