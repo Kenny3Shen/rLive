@@ -50,13 +50,6 @@ pub struct AppSettings {
     /// so it is intentionally excluded from profile export and import.
     #[serde(default)]
     pub iptv_custom_m3u_url: Option<String>,
-    /// Optional path to the local Whisper GGML/GGUF model selected on this
-    /// device. The model file itself is never copied into application data.
-    ///
-    /// It is intentionally excluded from portable profile packages because a
-    /// filesystem path only has meaning on the current device.
-    #[serde(default)]
-    pub asr_model_path: Option<String>,
 }
 
 fn default_quality_level() -> String {
@@ -95,7 +88,6 @@ impl Default for AppSettings {
             quality_level: default_quality_level(),
             danmaku_send_enabled: false,
             iptv_custom_m3u_url: None,
-            asr_model_path: None,
         }
     }
 }
@@ -136,7 +128,19 @@ mod tests {
         assert!(!settings.danmaku_filter_gifts);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.iptv_custom_m3u_url.is_none());
-        assert!(settings.asr_model_path.is_none());
         assert!(settings.disabled_site_ids.is_empty());
+    }
+
+    #[test]
+    fn legacy_custom_model_path_is_ignored() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "asr_model_path".into(),
+            serde_json::json!("C:\\models\\old.bin"),
+        );
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert_eq!(settings, AppSettings::default());
     }
 }

@@ -17,12 +17,18 @@ echo "== sync =="
 echo "  from: $SRC"
 echo "  to:   $DEST_MNT  ($DEST_WIN)"
 
-# Exclude build caches and VCS noise; keep source + configs.
+# Exclude build caches and VCS noise; keep source + configs. Android's Gradle
+# intermediates can contain multi-gigabyte APKs and are regenerated locally.
 rsync -a --delete \
   --exclude '.git/' \
   --exclude 'node_modules/' \
   --exclude 'dist/' \
   --exclude 'src-tauri/target/' \
+  --exclude 'src-tauri/gen/android/.gradle/' \
+  --exclude 'src-tauri/gen/android/build/' \
+  --exclude 'src-tauri/gen/android/app/.cxx/' \
+  --exclude 'src-tauri/gen/android/app/build/' \
+  --exclude 'src-tauri/gen/android/app/src/main/assets/' \
   --exclude '.playwright-cli/' \
   --exclude '.superpowers/' \
   --exclude '.worktrees/' \

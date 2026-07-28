@@ -1,5 +1,8 @@
 /src/main/**/generated
 /src/main/jniLibs/**/*.so
+# Tauri copies bundle resources here for Android builds. The source of truth
+# lives under src-tauri/resources and these files are regenerated on demand.
+/src/main/assets/models/
 /src/main/assets/tauri.conf.json
 /tauri.build.gradle.kts
 /proguard-tauri.pro

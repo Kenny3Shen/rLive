@@ -10,14 +10,6 @@
 #   linker = "clang"
 #   rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
-# Slightly better codegen for typical desktop CPUs without breaking older machines.
-[env]
-# whisper-rs-sys ships a bundled FFI binding snapshot. Using it avoids a
-# libclang installation solely for bindgen; CMake and the native C++ compiler
-# are still required to build whisper.cpp itself on Windows. The pinned
-# whisper-rs wrapper normalizes its enum ABI for this fallback on Windows.
-WHISPER_DONT_GENERATE_BINDINGS = "1"
-
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-cpu=x86-64-v2"]
 

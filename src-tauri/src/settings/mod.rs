@@ -133,7 +133,6 @@ mod tests {
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
         assert!(s.mpv_path.is_none());
-        assert!(s.asr_model_path.is_none());
     }
 
     #[test]
@@ -143,7 +142,6 @@ mod tests {
         s.theme = "dark".into();
         s.proxy = Some("http://127.0.0.1:7890".into());
         s.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
-        s.asr_model_path = Some("C:\\models\\ggml-base.bin".into());
         s.danmaku_font_size = 22;
         set(&conn, &s).unwrap();
         let (back, has_saved_settings) = get_with_status(&conn).unwrap();

@@ -23,8 +23,8 @@ use commands::account::{
     account_set_cookie,
 };
 use commands::asr::{
-    asr_audio_push, asr_model_load, asr_model_load_default, asr_model_status, asr_model_unload,
-    asr_session_start, asr_session_stop, asr_status,
+    asr_audio_push, asr_model_load_default, asr_model_status, asr_model_unload, asr_session_start,
+    asr_session_stop, asr_status,
 };
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
@@ -137,7 +137,10 @@ pub fn run() {
     // included in a release process: release commands can access local account
     // data and the Bilibili write command, which must remain behind the
     // app's own local permission and user-operated UI entry.
-    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init());
     #[cfg(debug_assertions)]
     let builder = builder.plugin(
         tauri_plugin_mcp_bridge::Builder::new()
@@ -156,7 +159,6 @@ pub fn run() {
             settings_set,
             asr_model_status,
             asr_status,
-            asr_model_load,
             asr_model_load_default,
             asr_model_unload,
             asr_session_start,
