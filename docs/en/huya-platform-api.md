@@ -11,19 +11,19 @@ Updated 2026-07-27. This page documents rLive's Huya browse, playback, account, 
 | Playback and qualities | Supported | Handles available lines, bitrates, and anti-leech parameters. |
 | Real-time chat receive | Supported | Decodes TARS/WebSocket room traffic. |
 | Account | Supported | Manual device-local Cookie storage; no built-in QR login. |
-| One normal chat message | Supported | Needs the local send switch, account Cookie, and room metadata. |
+| Normal chat sending and room-session auto-send | Supported | Both need the local send switch, account Cookie, and room metadata; auto-send is session-only. |
 
 ## Adapter surface
 
 Huya implements the shared category, room-list, search, room-detail, quality, and playback-URL methods. Its playback adapter extracts lines and bitrates from room data and processes anti-leech fields at use time; stream URLs are not a durable external API.
 
-`danmaku_connect` receives room events. `huya_danmaku_send_status` and `huya_danmaku_send` are internal, user-operated one-message commands. The sender resolves room metadata again before writing so it can derive required internal room arguments.
+`danmaku_connect` receives room events. `huya_danmaku_send_status` and `huya_danmaku_send` are internal one-message-fragment commands used by both the manual composer and room-session auto-send. The sender resolves room metadata again before writing so it can derive required internal room arguments.
 
 ## Account and sending boundary
 
 Under **Settings → Account → 虎牙**, manually save the local Cookie. Sending requires a numeric account ID (`yyuid` or `udb_uid`) and an opaque login proof (`udb_n` or `udb_cred`), the default-off `danmaku_send_enabled` switch, a valid room, a non-empty single-line message, and a three-second per-room cooldown.
 
-The feature sends one user-initiated ordinary text message only: no bulk, loop, schedule, auto-reply, gift, payment, or retry of ambiguous results. A completed write does not manufacture a chat row; the list and floating layer wait for the normal room connection's real echo.
+The manual composer sends one ordinary text message per action. Bilibili, Douyu, and Huya rooms also expose a default-off, non-persistent room-session **Auto-send danmaku** control in the right-side **Settings** tab. It is available only while the shared permission, current Cookie/send status, and text validation are valid. It waits 10 seconds before the first send, collapses line breaks and consecutive whitespace to one space, and splits text by grapheme into fragments of at most 15 user-visible characters without exceeding Huya's UTF-16 limit. Fragments are sent in order and loop after the last; requests do not overlap and their start times remain at least 10 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or a send failure disables the session; failures are not retried automatically. A single grapheme over the platform limit is a validation error. rLive does not support bulk sending, auto-replies, gifts, payments, or retry of ambiguous results. A completed write does not manufacture a chat row; the list and floating layer wait for the normal room connection's real echo.
 
 ## 2026-07-27 send diagnosis and verification
 

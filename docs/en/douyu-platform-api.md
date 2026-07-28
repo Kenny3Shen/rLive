@@ -11,13 +11,13 @@ Updated 2026-07-27. This page documents rLive's Douyu browse, playback, account,
 | Playback and qualities | Supported | Uses web-issued encrypted playback parameters to obtain lines and qualities. |
 | Real-time chat receive | Supported | Joins the Douyu chat gateway and filters noisy entry events. |
 | Account | Supported | QR or manual complete-Cookie storage on the device only. |
-| One normal chat message | Verified | Successfully sent from a personal room; each send still waits for platform semantics and real echo. |
+| Normal chat sending and room-session auto-send | Verified | Successfully sent from a personal room; each fragment still waits for platform semantics and real echo. |
 
 ## Adapter surface
 
 The site adapter implements the shared category, room-list, search, room-detail, quality, and playback-URL methods. A room lookup derives the temporary web playback signature; it remains in memory only while fetching usable CDN lines and qualities.
 
-`danmaku_connect` receives room events. `douyu_danmaku_send_status` and `douyu_danmaku_send` use the account sender. Receive and send use different gateway responsibilities and both honour the configured proxy policy.
+`danmaku_connect` receives room events. `douyu_danmaku_send_status` and `douyu_danmaku_send` are the account sender's one-fragment commands, reused by both the manual composer and room-session auto-send. Receive and send use different gateway responsibilities and both honour the configured proxy policy.
 
 ## Sender repair and verification record
 
@@ -35,7 +35,7 @@ The repaired path has successfully sent in a personal live room. That verifies t
 
 ## Prerequisites and result semantics
 
-Sending requires the default-off local `danmaku_send_enabled` switch, a complete saved account Cookie, a numeric room ID, a non-empty single-line message, and a three-second per-room cooldown. It supports no bulk, loop, schedule, auto-reply, gift, payment, or automatic retry.
+Sending requires the default-off local `danmaku_send_enabled` switch, a complete saved account Cookie, a numeric room ID, a non-empty single-line message, and a three-second per-room cooldown. The right-side **Settings** tab in Bilibili, Douyu, and Huya rooms additionally offers a default-off, non-persistent room-session **Auto-send danmaku** control. It can turn on only when the shared permission, current Cookie/send status, and text validation are valid. It waits 10 seconds before the first send, normalises line breaks and consecutive whitespace to one space, then splits by grapheme into ordered fragments of at most 15 user-visible characters without exceeding Douyu's UTF-16 limit. It loops from the first fragment after the last, never overlaps requests, and keeps send start times at least 10 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or any send failure disables it; it never retries a failed or ambiguous write. A single grapheme that cannot fit the platform limit is a validation error. rLive supports no bulk sending, auto-replies, gifts, payments, or automatic retry.
 
 | Stage | Meaning |
 | --- | --- |
