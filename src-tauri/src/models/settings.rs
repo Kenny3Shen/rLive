@@ -34,7 +34,6 @@ pub struct AppSettings {
     #[serde(default)]
     pub danmaku_filter_gifts: bool,
     pub danmaku_shield_words: Vec<String>,
-    pub mpv_path: Option<String>,
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
     pub quality_level: String,
@@ -84,7 +83,6 @@ impl Default for AppSettings {
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
             danmaku_filter_gifts: false,
             danmaku_shield_words: Vec::new(),
-            mpv_path: None,
             quality_level: default_quality_level(),
             danmaku_send_enabled: false,
             iptv_custom_m3u_url: None,
@@ -116,7 +114,7 @@ mod tests {
           "danmaku_font_size": 18,
           "danmaku_speed": 8,
           "danmaku_shield_words": [],
-          "mpv_path": null,
+          "mpv_path": "/legacy/mpv",
           "bilibili_danmaku_send_enabled": true
         }"#;
         let settings: AppSettings = serde_json::from_str(legacy).unwrap();

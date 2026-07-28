@@ -189,7 +189,6 @@ pub fn merge_into_db(
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
-    settings.mpv_path = package.settings.mpv_path.clone();
     // Do not copy `danmaku_send_enabled` or `iptv_custom_m3u_url`.
     // A profile is portable/untrusted input; importing it must not grant
     // sending consent, replace this device's private playlist address, or
