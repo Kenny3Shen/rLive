@@ -29,6 +29,8 @@ rsync -a --delete \
   --exclude 'src-tauri/gen/android/app/.cxx/' \
   --exclude 'src-tauri/gen/android/app/build/' \
   --exclude 'src-tauri/gen/android/app/src/main/assets/' \
+  --exclude 'src-tauri/gen/android/app/key.properties' \
+  --exclude 'src-tauri/gen/android/app/keystore.properties' \
   --exclude '.playwright-cli/' \
   --exclude '.superpowers/' \
   --exclude '.worktrees/' \
