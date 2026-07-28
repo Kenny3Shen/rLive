@@ -13,6 +13,7 @@
 | [快手平台 API 文档](zh/快手平台API文档.md) | [Kuaishou platform API documentation](en/kuaishou-platform-api.md) |
 | [Twitch 平台 API 文档](zh/Twitch平台API文档.md) | [Twitch platform API documentation](en/twitch-platform-api.md) |
 | [播放器性能调研](zh/播放器性能调研.md) | [Player performance research](en/player-performance-research.md) |
+| [发布流程](zh/发布流程.md) | [Release process](en/release-process.md) |
 
 仓库根目录提供 [中文 README](../README.md) 和 [English README](../README.en.md)，包含功能表、环境与构建速查。
 

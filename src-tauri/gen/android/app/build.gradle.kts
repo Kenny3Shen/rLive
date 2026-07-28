@@ -13,6 +13,19 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// This ignored file is created only by the protected release workflow (or a
+// developer's local signing setup). Keeping it outside version control makes
+// an unsigned local release possible while preventing a release tag from
+// accidentally publishing a debug-signed Android artifact.
+val releaseKeystorePropertiesFile = file("keystore.properties")
+val releaseKeystoreProperties = Properties().apply {
+    if (releaseKeystorePropertiesFile.exists()) {
+        releaseKeystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseSigningConfig = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    .all { key -> !releaseKeystoreProperties.getProperty(key).isNullOrBlank() }
+
 android {
     compileSdk = 36
     namespace = "com.shenss.rlive"
@@ -23,6 +36,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            create("release") {
+                storeFile = project.file(releaseKeystoreProperties.getProperty("storeFile"))
+                storePassword = releaseKeystoreProperties.getProperty("storePassword")
+                keyAlias = releaseKeystoreProperties.getProperty("keyAlias")
+                keyPassword = releaseKeystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -38,6 +61,9 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

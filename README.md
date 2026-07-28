@@ -50,6 +50,7 @@
 | [docs/zh/快手平台API文档.md](docs/zh/快手平台API文档.md)                                 | 快手平台接入与当前范围        |
 | [docs/zh/Twitch平台API文档.md](docs/zh/Twitch平台API文档.md)                             | Twitch 平台接入、HLS 与 IRC   |
 | [docs/zh/播放器性能调研.md](docs/zh/播放器性能调研.md)                                 | mpegts.js / Rust 播放性能路线 |
+| [docs/zh/发布流程.md](docs/zh/发布流程.md)                                             | Windows / Android 正式发布流程 |
 | [docs/en/user-guide.md](docs/en/user-guide.md)                                         | English user guide            |
 | [docs/en/architecture.md](docs/en/architecture.md)                                     | English architecture          |
 | [docs/en/bilibili-platform-api.md](docs/en/bilibili-platform-api.md)                   | Bilibili platform API         |
@@ -119,6 +120,10 @@ D:\dev\rLive\src-tauri\target\release\rlive.exe
 ```
 
 规则见 [AGENTS.md](AGENTS.md) 与 `.grok/rules/windows-delivery.md`。
+
+### 正式发布
+
+推送与三处版本一致的 `vX.Y.Z` 标签会触发签名发布流程：生成 Windows x64 NSIS 安装包、Android arm64-v8a APK / AAB，以及 `SHA256SUMS.txt`，并创建待人工审核的 GitHub draft Release。签名材料只从受保护的 GitHub `release` Environment 注入；未配置密钥时工作流会失败，不会发布未签名的正式产物。配置步骤见[发布流程](docs/zh/发布流程.md)。
 
 ---
 

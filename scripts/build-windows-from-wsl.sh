@@ -7,8 +7,19 @@ DEST_MNT="${DEST_MNT:-/mnt/d/dev/rLive}"
 DEST_WIN="${DEST_WIN:-D:\\dev\\rLive}"
 LOG_WIN="${LOG_WIN:-D:\\dev\\logs\\build-windows.txt}"
 
-# Optional: pass -BundleNsis to the PS script
+# Optional: pass -BundleNsis to the PS script.
 EXTRA_PS_ARGS="${EXTRA_PS_ARGS:-}"
+BUNDLE_NSIS="${BUNDLE_NSIS:-0}"
+if [[ "$EXTRA_PS_ARGS" == *"-BundleNsis"* ]]; then
+  BUNDLE_NSIS=1
+fi
+case "$BUNDLE_NSIS" in
+  0 | 1) ;;
+  *)
+    echo "error: BUNDLE_NSIS must be 0 or 1" >&2
+    exit 1
+    ;;
+esac
 
 if [[ ! -d /mnt/d ]]; then
   echo "error: /mnt/d not found (is D: mounted in WSL?)" >&2
@@ -46,7 +57,11 @@ $env:TEMP = "D:\Temp\build"
 $env:TMP = "D:\Temp\build"
 New-Item -ItemType Directory -Force -Path "D:\dev\logs","D:\Temp\build" | Out-Null
 Set-Location "D:\dev\rLive"
-& ".\scripts\build-windows.ps1" *>&1 | Tee-Object -FilePath "D:\dev\logs\build-windows.txt"
+$buildArgs = @()
+if ($env:RLIVE_BUNDLE_NSIS -eq "1") {
+  $buildArgs += "-BundleNsis"
+}
+& ".\scripts\build-windows.ps1" @buildArgs *>&1 | Tee-Object -FilePath "D:\dev\logs\build-windows.txt"
 $code = $LASTEXITCODE
 if ($null -eq $code) { $code = 0 }
 Write-Host "BUILD_EXIT=$code"
@@ -54,9 +69,9 @@ exit $code
 EOF
 
 if [[ -x "$INIT" || -f "$INIT" ]]; then
-  "$INIT" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1"
+  RLIVE_BUNDLE_NSIS="$BUNDLE_NSIS" "$INIT" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1"
 else
-  "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1"
+  RLIVE_BUNDLE_NSIS="$BUNDLE_NSIS" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1"
 fi
 
 code=$?
