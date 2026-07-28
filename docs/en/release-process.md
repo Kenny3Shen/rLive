@@ -39,6 +39,46 @@ base64 -w 0 rlive-release.jks
 
 Save that Base64 output as `ANDROID_KEYSTORE_BASE64`. Never commit the `.jks`, `keystore.properties`, passwords, or Base64 text. The workflow restores the keystore in a temporary directory, writes ignored Gradle properties, builds arm64, verifies the APK/AAB with `apksigner` and `jarsigner`, then removes the signing files.
 
+### Local signed build
+
+Keep the keystore outside the repository, restrict its permissions, and inspect its alias and certificate fingerprint locally. `keytool` prompts for the password, so do not pass it through chat or shell history:
+
+```bash
+chmod 600 /home/shenss/upload-keystore.jks
+keytool -list -v -keystore /home/shenss/upload-keystore.jks
+```
+
+Create `src-tauri/gen/android/app/keystore.properties` with mode `600` (it is already Git-ignored) and fill in the actual values:
+
+```properties
+storeFile=/home/shenss/upload-keystore.jks
+storePassword=<keystore password>
+keyAlias=<Alias name from keytool>
+keyPassword=<private-key password>
+```
+
+Then build and verify the artifacts:
+
+```bash
+bun run tauri -- android build --ci --target aarch64 --apk --aab
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs \
+  src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+jarsigner -verify -strict \
+  src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
+```
+
+The local `keystore.properties` file is excluded from the Windows mirror so plaintext passwords do not persist in `D:\\dev\\rLive`.
+
+### GitHub Environment setup
+
+1. Open `Settings → Environments → New environment` and create the environment named exactly `release`.
+2. Add any required reviewers and restrict deployment branches/tags to `v*` tags.
+3. Add `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` as **Environment secrets**. In a private WSL terminal, `base64 -w 0 /home/shenss/upload-keystore.jks | clip.exe` copies the one-line Base64 value for the first secret; never paste it into chat or the repository.
+4. Add the SHA-256 fingerprint printed by `keytool` as the `ANDROID_CERT_SHA256` **Environment variable**. This is recommended so the release verifies the signing certificate it actually used.
+5. Under `Settings → Actions → General → Workflow permissions`, allow `GITHUB_TOKEN` to read and write repository contents; otherwise the final job cannot create the draft Release.
+
+A formal tag builds both Windows and Android. Before pushing a `v*` tag, configure the Windows secrets and timestamp variable described below too; an Android JKS cannot replace a Windows Authenticode certificate.
+
 - `rLive_<version>_android-arm64-v8a.apk` is for direct installation on arm64-v8a devices (minimum Android API 24).
 - `rLive_<version>_android-arm64-v8a.aab` is for Play Console or another store; it is not directly installable.
 

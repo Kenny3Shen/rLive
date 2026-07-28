@@ -33,3 +33,13 @@ src-tauri/target/
 .DS_Store
 .playwright-cli/
 .grok
+
+# Local release-signing material. Keep private keys and their Gradle
+# configuration outside version control even if they are placed in the repo by
+# mistake.
+*.jks
+*.keystore
+*.p12
+*.pfx
+key.properties
+keystore.properties
