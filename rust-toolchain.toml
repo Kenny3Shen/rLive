@@ -1,5 +1,6 @@
-# Pin the exact Rust release used by agents and CI. Update intentionally.
+# Keep local Windows/WSL development on the installed stable channel. Release
+# workflows pin their exact compiler version independently for reproducibility.
 [toolchain]
-channel = "1.97.1"
+channel = "stable"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
