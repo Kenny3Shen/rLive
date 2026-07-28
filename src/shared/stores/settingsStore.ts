@@ -54,7 +54,6 @@ type SettingsState = {
   danmakuFilterRepeats: boolean;
   danmakuFilterGifts: boolean;
   danmakuShieldWords: string[];
-  mpvPath: string | null;
   qualityLevel: QualityLevel;
   danmakuSendEnabled: boolean;
   /** True while the local multi-platform sending permission reaches the backend. */
@@ -73,7 +72,6 @@ type SettingsState = {
   setSiteId: (siteId: string) => void;
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setProxy: (proxy: string | null) => void;
-  setMpvPath: (mpvPath: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   markDanmakuCookieChanged: () => void;
@@ -99,7 +97,6 @@ const defaultSettings: AppSettings = {
   danmaku_filter_repeats: true,
   danmaku_filter_gifts: false,
   danmaku_shield_words: [],
-  mpv_path: null,
   quality_level: "high",
   danmaku_send_enabled: false,
   iptv_custom_m3u_url: null,
@@ -120,7 +117,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_filter_repeats: state.danmakuFilterRepeats,
     danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_shield_words: state.danmakuShieldWords,
-    mpv_path: state.mpvPath,
     quality_level: state.qualityLevel,
     danmaku_send_enabled: state.danmakuSendEnabled,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
@@ -143,7 +139,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuFilterRepeats: true,
       danmakuFilterGifts: false,
       danmakuShieldWords: [],
-      mpvPath: null,
       qualityLevel: "high",
       danmakuSendEnabled: false,
       danmakuSendPending: false,
@@ -171,10 +166,6 @@ export const useSettingsStore = create<SettingsState>()(
       setProxy: (proxy) => {
         set({ proxy });
         void get().persistToBackend({ proxy });
-      },
-      setMpvPath: (mpvPath) => {
-        set({ mpvPath });
-        void get().persistToBackend({ mpv_path: mpvPath });
       },
       setQualityLevel: (qualityLevel) => {
         set({ qualityLevel });
@@ -221,7 +212,6 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuFilterRepeats: settings.danmaku_filter_repeats,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? false,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
-          mpvPath: settings.mpv_path,
           qualityLevel: parseQualityLevel(settings.quality_level),
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
@@ -272,7 +262,7 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       persistToBackend: async (patch) => {
-        // Avoid clobbering backend fields (proxy, danmaku_*, mpv_path) with
+        // Avoid clobbering backend fields (proxy, danmaku_*) with
         // local defaults before loadFromBackend / applyFromBackend finishes.
         if (!get().hydratedFromBackend) {
           return;

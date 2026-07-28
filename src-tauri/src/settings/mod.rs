@@ -132,7 +132,6 @@ mod tests {
         assert!(!s.danmaku_filter_gifts);
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
-        assert!(s.mpv_path.is_none());
     }
 
     #[test]
