@@ -16,6 +16,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
@@ -44,6 +45,8 @@ export type PlayerControlsProps = {
   volume: number;
   muted?: boolean;
   sidePanelOpen: boolean;
+  /** Changes with the responsive side-panel presentation (rail vs. drawer). */
+  sidePanelLabel?: string;
   osdOn?: boolean;
   qualities: { quality: string }[];
   qualityIndex: number;
@@ -92,10 +95,18 @@ function ControlButton({
   children,
   disabled,
   variant = "ghost",
+  className,
   ...props
 }: ControlButtonProps) {
   const button = (
-    <Button {...props} variant={variant} size="icon-sm" disabled={disabled} aria-label={label}>
+    <Button
+      {...props}
+      variant={variant}
+      size="icon-sm"
+      disabled={disabled}
+      aria-label={label}
+      className={cn("max-md:size-11 max-md:touch-manipulation", className)}
+    >
       {children}
     </Button>
   );
@@ -109,6 +120,7 @@ export function PlayerControls({
   volume,
   muted = false,
   sidePanelOpen,
+  sidePanelLabel,
   osdOn,
   qualities,
   qualityIndex,
@@ -142,7 +154,7 @@ export function PlayerControls({
   const volumeLabel = "调节音量";
   const muteLabel = isMuted ? "取消静音" : "静音";
   const overlayButtonClass = overlay
-    ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/14 aria-expanded:text-white focus-visible:ring-white/70"
+    ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70"
     : undefined;
   const overlayStreamSettingsContentClass = overlay
     ? "border border-white/10 bg-black/90 text-white shadow-xl"
@@ -162,6 +174,17 @@ export function PlayerControls({
     },
     [onOverlayInteractionChange],
   );
+
+  useEffect(() => {
+    if (!volumeOpen && !streamSettingsOpen) return;
+    const closeOnAndroidBack = (event: Event) => {
+      event.preventDefault();
+      setVolumeOpen(false);
+      setStreamSettingsOpen(false);
+    };
+    window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
+    return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
+  }, [streamSettingsOpen, volumeOpen]);
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
@@ -192,8 +215,8 @@ export function PlayerControls({
         ? "开启本地字幕"
         : "开启本地字幕（等待播放器音频）";
   const danmakuControl = danmakuControlPresentation(osdOn);
-  const DanmakuControlIcon =
-    danmakuControl.icon === "captions" ? Captions : CaptionsOff;
+  const DanmakuControlIcon = danmakuControl.icon === "captions" ? Captions : CaptionsOff;
+  const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
   return (
     <div
       className={cn(
@@ -231,7 +254,10 @@ export function PlayerControls({
                 size="icon-sm"
                 disabled={disabled}
                 aria-label={volumeLabel}
-                className={cn(overlayButtonClass, "max-sm:hidden")}
+                className={cn(
+                  "max-md:size-11 max-md:touch-manipulation max-sm:hidden",
+                  overlayButtonClass,
+                )}
               />
             }
           >
@@ -298,7 +324,7 @@ export function PlayerControls({
                   size="icon-sm"
                   disabled={streamSettingsDisabled}
                   aria-label={streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : "播放设置"}
-                  className={overlayButtonClass}
+                  className={cn("max-md:size-11 max-md:touch-manipulation", overlayButtonClass)}
                 />
               }
             >
@@ -336,7 +362,7 @@ export function PlayerControls({
                         variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
                         size="sm"
                         className={cn(
-                          "w-full justify-between",
+                          "w-full justify-between max-md:h-11",
                           overlayStreamSettingsOptionClass,
                           overlay && selected && "bg-white/18 text-white",
                         )}
@@ -376,7 +402,7 @@ export function PlayerControls({
                         variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
                         size="sm"
                         className={cn(
-                          "w-full justify-between",
+                          "w-full justify-between max-md:h-11",
                           overlayStreamSettingsOptionClass,
                           overlay && selected && "bg-white/18 text-white",
                         )}
@@ -401,14 +427,10 @@ export function PlayerControls({
           <ControlButton
             label={captionButtonLabel}
             variant={overlay ? "ghost" : captions.enabled ? "secondary" : "ghost"}
-            className={cn(
-              overlayButtonClass,
-              overlay && captions.enabled && "bg-white/12 text-white",
-            )}
+            className={overlayButtonClass}
             disabled={disabled || captions.pending}
             aria-pressed={captions.enabled}
             aria-busy={captions.pending}
-            title={captionButtonLabel}
             onClick={captions.onToggle}
           >
             {captions.pending ? (
@@ -434,10 +456,9 @@ export function PlayerControls({
           </ControlButton>
         )}
         <ControlButton
-          label={sidePanelOpen ? "收起右侧栏" : "展开右侧栏"}
+          label={resolvedSidePanelLabel}
           variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
-          className={cn(overlayButtonClass, overlay && sidePanelOpen && "bg-white/12 text-white")}
-          disabled={disabled}
+          className={overlayButtonClass}
           aria-pressed={sidePanelOpen}
           onClick={onToggleSidePanel}
         >
@@ -446,10 +467,7 @@ export function PlayerControls({
         {pictureInPictureSupported && onTogglePictureInPicture && (
           <ControlButton
             label={pictureInPictureActive ? "退出画中画" : "画中画"}
-            className={cn(
-              overlayButtonClass,
-              overlay && pictureInPictureActive && "bg-white/16 text-white",
-            )}
+            className={overlayButtonClass}
             disabled={disabled || pictureInPictureDisabled}
             aria-pressed={pictureInPictureActive}
             onClick={onTogglePictureInPicture}

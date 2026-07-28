@@ -7,6 +7,10 @@ import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
 import "./styles.css";
 
+if (typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent)) {
+  document.documentElement.dataset.platform = "android";
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

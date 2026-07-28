@@ -8,6 +8,7 @@ import {
   superChatAvatarUrl,
   superChatDedupeKey,
   superChatPalette,
+  superChatRemainingSeconds,
   type SuperChatLine,
 } from "../src/features/room/superChat";
 
@@ -55,30 +56,51 @@ describe("Super Chat presentation", () => {
     expect(superChatPalette(superChat().super_chat)).toEqual({
       messageStart: "#2A60B2",
       messageEnd: "#1D4A92",
-      messageForeground: "#ffffff",
+      headerForeground: "#ffffff",
+      contentForeground: "#ffffff",
     });
     expect(superChatPalette({ background_color: "#ffcc33" })).toEqual({
       messageStart: "#ffcc33",
       messageEnd: "#ffcc33",
-      messageForeground: "#172033",
+      headerForeground: "#172033",
+      contentForeground: "#172033",
     });
     expect(
       superChatPalette({ background_color: "#2a60b2", background_bottom_color: "url(bad)" }),
     ).toEqual({
       messageStart: "#2a60b2",
       messageEnd: "#2a60b2",
-      messageForeground: "#ffffff",
+      headerForeground: "#ffffff",
+      contentForeground: "#ffffff",
     });
     expect(superChatPalette({ background_color: "#2a60b280" })).toEqual({
       messageStart: "#2a60b2",
       messageEnd: "#2a60b2",
-      messageForeground: "#ffffff",
+      headerForeground: "#ffffff",
+      contentForeground: "#ffffff",
     });
 
     // Validated tier colours remain visibly distinct in the message band.
     expect(superChatPalette({ background_color: "#2a60b2" })?.messageStart).not.toBe(
       superChatPalette({ background_color: "#e09443" })?.messageStart,
     );
+  });
+
+  test("uses per-band contrast and counts down from the receive timestamp", () => {
+    expect(
+      superChatPalette({ background_color: "#ffcccc", background_bottom_color: "#b81830" }),
+    ).toEqual({
+      messageStart: "#ffcccc",
+      messageEnd: "#b81830",
+      headerForeground: "#172033",
+      contentForeground: "#ffffff",
+    });
+
+    const info = { duration: 105 };
+    expect(superChatRemainingSeconds(info, 1_000_000, 1_000_000)).toBe(105);
+    expect(superChatRemainingSeconds(info, 1_000_000, 1_001_900)).toBe(104);
+    expect(superChatRemainingSeconds(info, 1_000_000, 1_105_000)).toBe(0);
+    expect(superChatRemainingSeconds(info, Number.NaN, 1_001_900)).toBe(105);
   });
 });
 

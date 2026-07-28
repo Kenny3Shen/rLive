@@ -52,16 +52,21 @@ export function Shell() {
   }, [followPlatform, isFollow, rawFollowPlatform, setSearchParams]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
       <AppTitleBar />
       <div className="flex min-h-0 min-w-0 flex-1">
         {!isImmersivePlayer && <Sidebar />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {!isImmersivePlayer && (
-            <header className="relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4">
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <header
+              className={cn(
+                "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
+                !showSiteSwitcher && "max-md:hidden",
+              )}
+            >
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden">
                 {showSiteSwitcher && (
-                  <div className="pointer-events-auto">
+                  <div className="pointer-events-auto max-md:min-w-max">
                     {isFollow ? (
                       <SiteSwitcher
                         value={followPlatform}
@@ -91,7 +96,9 @@ export function Shell() {
           <main
             className={cn(
               "min-h-0 min-w-0 flex-1",
-              isImmersivePlayer ? "overflow-hidden p-0" : "overflow-auto p-4 md:p-5",
+              isImmersivePlayer
+                ? "overflow-hidden p-0"
+                : "overflow-auto p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] md:p-5 md:pb-5",
             )}
           >
             <div
