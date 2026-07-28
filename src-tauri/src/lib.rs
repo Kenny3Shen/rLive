@@ -93,8 +93,8 @@ fn app_log_directory() -> PathBuf {
 /// console window. Deliberately log structured error state only: Cookie
 /// values, tokens, outgoing chat text, and successful operation progress must
 /// never be written to disk.
-fn init_logging() {
-    let directory = app_log_directory();
+fn init_logging(directory: Option<PathBuf>) {
+    let directory = directory.unwrap_or_else(app_log_directory);
     if let Err(error) = fs::create_dir_all(&directory) {
         eprintln!("rLive log directory unavailable: {error}");
         return;
@@ -132,7 +132,6 @@ fn init_logging() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_logging();
     // The MCP bridge is useful for local development automation. It is never
     // included in a release process: release commands can access local account
     // data and the Bilibili write command, which must remain behind the
@@ -150,7 +149,26 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let state = AppState::init()?;
+            // `dirs` has no Android app-sandbox resolver and can resolve to
+            // an unwritable relative path there. Ask the Tauri mobile host
+            // for Android's private data directory before any startup I/O.
+            #[cfg(target_os = "android")]
+            let app_data_dir = app.path().app_data_dir().map_err(|error| {
+                error::AppError::new(
+                    "app_data_dir_error",
+                    format!("resolve Android app data directory: {error}"),
+                )
+            })?;
+
+            #[cfg(target_os = "android")]
+            init_logging(Some(app_data_dir.join("rlive").join("logs")));
+            #[cfg(not(target_os = "android"))]
+            init_logging(None);
+
+            #[cfg(target_os = "android")]
+            let state = AppState::init(Some(&app_data_dir))?;
+            #[cfg(not(target_os = "android"))]
+            let state = AppState::init(None)?;
             app.manage(state);
             Ok(())
         })
