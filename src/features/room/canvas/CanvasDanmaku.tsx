@@ -44,6 +44,16 @@ const MAX_IMAGE_NATURAL_PIXELS = 1_048_576;
 // redraw substantially more expensive. Text remains crisp at this cap while
 // avoiding the quadratic pixel cost on high-DPI displays.
 const MAX_CANVAS_PIXEL_RATIO = 1.5;
+const SELF_DANMAKU_COLOR_VARIABLE = "--danmaku-self-color";
+
+function currentSelfDanmakuColor(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const color = window
+    .getComputedStyle(document.documentElement)
+    .getPropertyValue(SELF_DANMAKU_COLOR_VARIABLE)
+    .trim();
+  return color || undefined;
+}
 
 function canvasFont(fontWeight: number, fontSize: number): string {
   return `${fontWeight} ${fontSize}px ${DANMAKU_FONT_FAMILY}`;
@@ -284,6 +294,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
+  const theme = useSettingsStore((s) => s.theme);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const matchersRef = useRef({ shieldMatcher, filterGifts });
 
@@ -301,6 +312,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       lineCount,
       fontWeight,
       aggregateRepeats: filterRepeats,
+      selfColor: currentSelfDanmakuColor(),
     });
   }
 
@@ -313,9 +325,10 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       lineCount,
       fontWeight,
       aggregateRepeats: filterRepeats,
+      selfColor: currentSelfDanmakuColor(),
     });
     requestFrameRef.current();
-  }, [fontSize, speed, opacity, area, lineCount, fontWeight, filterRepeats]);
+  }, [fontSize, speed, opacity, area, lineCount, fontWeight, filterRepeats, theme]);
 
   useEffect(() => {
     if (!active) return;
@@ -627,7 +640,11 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           // the viewport.
           if (it.kind === "scroll" && (it.x >= width || it.x + it.width <= 0)) continue;
 
-          const richRasterKey = `${it.id}:rich`;
+          // The color is part of a raster's pixels. Include it in the key so
+          // a theme change can repaint an existing local-account item rather
+          // than reusing its old bitmap.
+          const paintKey = `${it.id}:${it.color}`;
+          const richRasterKey = `${paintKey}:rich`;
           // A rich raster is self-contained, including its image pixels. Once
           // one exists we can continue drawing it even if its source image was
           // later evicted from the separate, bounded image-request cache.
@@ -641,7 +658,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
             ? cachedRichRaster
             : richReady
               ? getRichRaster(richRasterKey, it, currentFontWeight)
-              : getTextRaster(`${it.id}:text`, it, currentFontWeight);
+              : getTextRaster(`${paintKey}:text`, it, currentFontWeight);
           let x = it.x;
           if (it.kind === "top") {
             // The engine's width is a scheduling reservation: it can be wider

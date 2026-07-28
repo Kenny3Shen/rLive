@@ -37,6 +37,7 @@ export function isDanmakuEvent(value: unknown): value is DanmakuEvent {
     typeof event.content === "string" &&
     typeof event.ts === "number" &&
     Number.isFinite(event.ts) &&
+    (event.is_self === undefined || typeof event.is_self === "boolean") &&
     (event.color === null || typeof event.color === "string") &&
     (event.spans === undefined || event.spans === null || hasValidDanmakuContentSpans(event.spans))
   );
@@ -130,14 +131,14 @@ export type DanmakuContentAggregator = {
 };
 
 /**
- * Content-only key for normal chat. Sender and source platform are
- * deliberately excluded: a room-wide "加油" burst should be one visible
- * message regardless of where its viewers are watching from.
+ * Content-only key for normal chat, scoped by whether it came from the local
+ * account. A room-wide "加油" burst remains compact, while a local comment
+ * never gets folded into another viewer's visual treatment (or vice versa).
  */
 export function danmakuContentAggregationKey(event: DanmakuEvent): string | null {
   if (event.kind !== "chat") return null;
   const content = event.content.trim();
-  return content || null;
+  return content ? `${event.is_self === true ? "self" : "other"}\u0000${content}` : null;
 }
 
 export function aggregatedDanmakuText(content: string, count: number): string {

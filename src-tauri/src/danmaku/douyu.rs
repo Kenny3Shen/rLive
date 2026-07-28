@@ -588,6 +588,7 @@ fn is_room_enter_noise(content: &str) -> bool {
 
 fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
     let mut user = None;
+    let mut user_id = None;
     let mut content = None;
     let mut color = None;
     let mut has_dms = false;
@@ -602,6 +603,7 @@ fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
         match key {
             "dms" => has_dms = true,
             "nn" => user = Some(value),
+            "uid" => user_id = Some(value),
             "txt" => content = Some(value),
             "col" => color = Some(value),
             _ => {}
@@ -626,6 +628,9 @@ fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
         .map(decode_value)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "用户".into());
+    let user_id = user_id
+        .map(decode_value)
+        .filter(|value| !value.is_empty() && value != "0");
     let col = color
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0);
@@ -633,6 +638,8 @@ fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
     Some(DanmakuEvent {
         kind: DanmakuKind::Chat,
         user,
+        is_self: false,
+        user_id,
         content,
         color: color_from_col(col),
         spans: None,
@@ -643,6 +650,7 @@ fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
 
 fn parse_gift_message(stt: &str) -> DanmakuEvent {
     let mut user = None;
+    let mut user_id = None;
     let mut gift_name = None;
     let mut fallback_gift_name = None;
     let mut gift_count = None;
@@ -654,6 +662,7 @@ fn parse_gift_message(stt: &str) -> DanmakuEvent {
         };
         match key {
             "nn" => user = Some(value),
+            "uid" => user_id = Some(value),
             "gfn" => gift_name = Some(value),
             "gn" => fallback_gift_name = Some(value),
             "gfcnt" => gift_count = Some(value),
@@ -666,6 +675,9 @@ fn parse_gift_message(stt: &str) -> DanmakuEvent {
         .map(decode_value)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "用户".into());
+    let user_id = user_id
+        .map(decode_value)
+        .filter(|value| !value.is_empty() && value != "0");
     let gift = gift_name
         .or(fallback_gift_name)
         .map(decode_value)
@@ -680,6 +692,8 @@ fn parse_gift_message(stt: &str) -> DanmakuEvent {
     DanmakuEvent {
         kind: DanmakuKind::Gift,
         user,
+        is_self: false,
+        user_id,
         content: format!("投喂 {gift} x{count}"),
         color: None,
         spans: None,
@@ -1906,6 +1920,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: format!("正在连接弹幕服务器… room={}", args.room_id),
             color: None,
             spans: None,
@@ -1938,6 +1954,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: "弹幕服务器连接成功".into(),
             color: None,
             spans: None,
@@ -1992,6 +2010,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: format!("弹幕连接结束（已收 {msg_count} 条）"),
             color: None,
             spans: None,
@@ -2241,9 +2261,10 @@ mod tests {
 
     #[test]
     fn parse_chatmsg() {
-        let stt = "type@=chatmsg/nn@=alice/txt@=hello world/col@=1/dms@=5/";
+        let stt = "type@=chatmsg/nn@=alice/uid@=42/txt@=hello world/col@=1/dms@=5/";
         let ev = parse_stt_message(stt).unwrap();
         assert_eq!(ev.user, "alice");
+        assert_eq!(ev.user_id.as_deref(), Some("42"));
         assert_eq!(ev.content, "hello world");
         assert_eq!(ev.color.as_deref(), Some("#ff0000"));
         assert!(matches!(ev.kind, DanmakuKind::Chat));

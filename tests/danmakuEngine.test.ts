@@ -123,6 +123,25 @@ describe("danmaku engine", () => {
     expect(engine.visibleItems()[1]?.text).toBe("加油");
   });
 
+  test("keeps a local account comment separate and gives it the self color", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+      selfColor: "#fedcba",
+    });
+    engine.tick(0, 1280, 720);
+
+    engine.push({ ...chat("同一句弹幕", 1_000, "我"), is_self: true });
+    engine.push({ ...chat("同一句弹幕", 1_100, "其他观众"), color: "#abcdef" });
+
+    const items = engine.visibleItems();
+    expect(items).toHaveLength(2);
+    expect(items.find((item) => item.isSelf)?.color).toBe("#fedcba");
+    expect(items.find((item) => !item.isSelf)?.color).toBe("#abcdef");
+  });
+
   test("keeps a growing aggregate clear of its leading lane item", () => {
     const engine = createEngine({
       fontSize: 18,

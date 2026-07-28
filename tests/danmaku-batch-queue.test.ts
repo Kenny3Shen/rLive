@@ -41,10 +41,27 @@ describe("danmaku batch envelope", () => {
   });
 
   test("validates each native event once before room views fan out", () => {
-    const valid = { kind: "chat", user: "观众", content: "你好", color: null, ts: 1 };
+    const valid = {
+      kind: "chat",
+      user: "观众",
+      content: "你好",
+      color: null,
+      is_self: true,
+      ts: 1,
+    };
     const malformed = { kind: "chat", user: "观众", content: null, color: null, ts: 2 };
+    const malformedSelfMarker = {
+      kind: "chat",
+      user: "观众",
+      content: "你好",
+      color: null,
+      is_self: "true",
+      ts: 3,
+    };
 
-    expect(validatedBatchEvents({ events: [valid, malformed] })).toEqual([valid]);
+    expect(validatedBatchEvents({ events: [valid, malformed, malformedSelfMarker] })).toEqual([
+      valid,
+    ]);
     expect(validatedBatchEvents({ events: "not-an-array" })).toEqual([]);
   });
 
