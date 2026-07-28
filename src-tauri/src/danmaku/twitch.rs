@@ -139,6 +139,10 @@ pub fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
     Some(DanmakuEvent {
         kind: DanmakuKind::Chat,
         user: display_name,
+        is_self: false,
+        user_id: tag_value(tags, "user-id")
+            .map(str::to_owned)
+            .filter(|value| !value.is_empty() && value != "0"),
         content: content.to_owned(),
         color: safe_color(tag_value(tags, "color")),
         spans: None,
@@ -151,6 +155,8 @@ fn system_event(content: impl Into<String>) -> DanmakuEvent {
     DanmakuEvent {
         kind: DanmakuKind::System,
         user: "system".into(),
+        is_self: false,
+        user_id: None,
         content: content.into(),
         color: None,
         spans: None,
@@ -529,9 +535,10 @@ mod tests {
 
     #[test]
     fn extracts_a_tagged_privmsg() {
-        let line = "@badge-info=;color=#1e90ff;display-name=viewer\\sname :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #channel :hello Twitch";
+        let line = "@badge-info=;color=#1e90ff;display-name=viewer\\sname;user-id=42 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #channel :hello Twitch";
         let event = parse_privmsg(line).unwrap();
         assert_eq!(event.user, "viewer name");
+        assert_eq!(event.user_id.as_deref(), Some("42"));
         assert_eq!(event.content, "hello Twitch");
         assert_eq!(event.color.as_deref(), Some("#1E90FF"));
     }

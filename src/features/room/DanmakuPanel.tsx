@@ -4,6 +4,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmaku/filter";
@@ -119,6 +120,24 @@ export async function copyDanmakuText(text: string): Promise<boolean> {
 
 type ActionStatus = "copied" | "copy-failed" | "sent" | "send-failed" | null;
 
+function DanmakuSender({ event, user }: { event: DanmakuEvent; user: string }) {
+  return (
+    <>
+      {event.is_self === true && (
+        <Badge variant="default" className="mr-1.5 align-middle">
+          我
+        </Badge>
+      )}
+      <span
+        className="mr-1.5 font-medium text-primary"
+        style={!event.is_self && event.color ? { color: event.color } : undefined}
+      >
+        {user}：
+      </span>
+    </>
+  );
+}
+
 function actionStatusMessage(status: ActionStatus): string | null {
   switch (status) {
     case "copied":
@@ -189,21 +208,18 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     ? "当前平台暂不支持发送弹幕"
     : danmakuSendPending
       ? "正在同步发送权限…"
-    : !danmakuSendEnabled
-      ? "请先在账号设置启用发送功能"
-      : "发送相同的弹幕（+1）";
+      : !danmakuSendEnabled
+        ? "请先在账号设置启用发送功能"
+        : "发送相同的弹幕（+1）";
   const statusMessage = actionStatusMessage(actionStatus);
   const actionFailed = actionStatus === "copy-failed" || actionStatus === "send-failed";
 
   if (!message) {
     return (
-      <div className="rounded-md px-1.5 py-1 leading-relaxed">
-        <span
-          className="mr-1.5 font-medium text-primary"
-          style={event.color ? { color: event.color } : undefined}
-        >
-          {user}：
-        </span>
+      <div
+        className={cn("rounded-md px-1.5 py-1 leading-relaxed", event.is_self && "bg-primary/5")}
+      >
+        <DanmakuSender event={event} user={user} />
         <DanmakuRichText
           content={event.content}
           spans={event.spans}
@@ -243,25 +259,19 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
       <PopoverTrigger
         type="button"
         aria-label={`选择 ${user} 的弹幕`}
-        className="block w-full cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={cn(
+          "block w-full cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+          event.is_self && "bg-primary/5 hover:bg-primary/10 aria-expanded:bg-primary/10",
+        )}
       >
-        <span
-          className="mr-1.5 font-medium text-primary"
-          style={event.color ? { color: event.color } : undefined}
-        >
-          {user}：
-        </span>
+        <DanmakuSender event={event} user={user} />
         <DanmakuRichText
           content={event.content}
           spans={event.spans}
           className="text-foreground/90"
         />
       </PopoverTrigger>
-      <PopoverContent
-        side="left"
-        align="start"
-        className="w-40 p-1"
-      >
+      <PopoverContent side="left" align="start" className="w-40 p-1">
         <div className="flex flex-col gap-1">
           <Button
             type="button"

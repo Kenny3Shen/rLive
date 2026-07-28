@@ -238,6 +238,8 @@ fn emit_system(events: &DanmakuEventSender, content: &str) {
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: content.into(),
             color: None,
             spans: None,
@@ -573,6 +575,8 @@ fn event_if_content(
         } else {
             user
         },
+        is_self: false,
+        user_id: None,
         content,
         color,
         spans: None,

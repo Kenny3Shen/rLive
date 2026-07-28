@@ -54,7 +54,16 @@ describe("danmaku display filter", () => {
 
   test("drops malformed native event payloads before UI filters access their fields", () => {
     const malformed = { kind: "chat", user: "观众", content: null, color: null, ts: 1 };
+    const malformedSelfMarker = {
+      kind: "chat",
+      user: "观众",
+      content: "你好",
+      color: null,
+      is_self: "yes",
+      ts: 1,
+    };
     expect(isDanmakuEvent(malformed)).toBe(false);
+    expect(isDanmakuEvent(malformedSelfMarker)).toBe(false);
     expect(shouldShowInDanmakuPanel(malformed)).toBe(false);
     expect(shouldShowOnCanvas(null)).toBe(false);
   });
@@ -68,19 +77,34 @@ describe("danmaku display filter", () => {
   test("groups matching chat content across senders inside its five-second window", () => {
     const aggregator = createDanmakuContentAggregator(true, 5_000);
     expect(aggregator.aggregate(event({ user: "观众甲", ts: 1_000 }))).toEqual({
-      key: "你好",
+      key: "other\u0000你好",
       count: 1,
     });
     // The unrelated line must not break a content-specific grouping window.
     expect(aggregator.aggregate(event({ content: "别的内容", ts: 1_500 })).count).toBe(1);
     expect(aggregator.aggregate(event({ user: "观众乙", ts: 2_000 }))).toEqual({
-      key: "你好",
+      key: "other\u0000你好",
       count: 2,
     });
     expect(aggregatedDanmakuText("你好", 2)).toBe("你好 ×2");
-    expect(aggregator.aggregate(event({ ts: 8_100 }))).toEqual({ key: "你好", count: 1 });
+    expect(aggregator.aggregate(event({ ts: 8_100 }))).toEqual({
+      key: "other\u0000你好",
+      count: 1,
+    });
     expect(aggregator.aggregate(event({ kind: "gift", ts: 8_200 }))).toEqual({
       key: null,
+      count: 1,
+    });
+  });
+
+  test("does not combine a local account comment with an identical viewer comment", () => {
+    const aggregator = createDanmakuContentAggregator(true, 5_000);
+    expect(aggregator.aggregate(event({ is_self: true, ts: 1_000 }))).toEqual({
+      key: "self\u0000你好",
+      count: 1,
+    });
+    expect(aggregator.aggregate(event({ is_self: false, ts: 1_100 }))).toEqual({
+      key: "other\u0000你好",
       count: 1,
     });
   });

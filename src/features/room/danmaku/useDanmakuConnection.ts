@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { SiteId } from "@/shared/types/live";
 import { nextDanmakuConnectionEpoch, nextDanmakuConnectionFence } from "./connectionEpoch";
 import { clearExpectedDanmakuConnectionEpoch, setExpectedDanmakuConnectionEpoch } from "./eventBus";
@@ -30,6 +31,9 @@ export function useDanmakuConnection(opts: {
   const [statusText, setStatusText] = useState<string | null>(null);
   const [active, setActive] = useState(false);
   const connectionEpochRef = useRef(0);
+  // The revision carries no Cookie data. Reconnecting is enough for Rust to
+  // rebuild the backend-only identity matcher from the newly saved account.
+  const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
 
   // Fence every route change before waiting for the next room-detail query.
   // The stop and the replacement connection deliberately use *different*
@@ -51,7 +55,7 @@ export function useDanmakuConnection(opts: {
       connectionEpochRef.current = closingEpoch;
       void invokeCmd("danmaku_disconnect", { connectionEpoch: closingEpoch }).catch(() => {});
     };
-  }, [siteId, roomId]);
+  }, [siteId, roomId, danmakuCookieRevision]);
 
   useEffect(() => {
     const connectionEpoch = connectionEpochRef.current;
@@ -85,7 +89,7 @@ export function useDanmakuConnection(opts: {
       cancelled = true;
       setActive(false);
     };
-  }, [enabled, siteId, roomId, detailRoomId]);
+  }, [enabled, siteId, roomId, detailRoomId, danmakuCookieRevision]);
 
   return { statusText, active };
 }

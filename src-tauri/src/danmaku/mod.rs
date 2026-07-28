@@ -6,6 +6,7 @@ pub mod huya;
 pub mod tars;
 pub mod twitch;
 
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::error::{AppError, AppResult};
-use crate::models::live::{DanmakuEvent, SiteId};
+use crate::models::live::{DanmakuEvent, DanmakuKind, SiteId};
 
 /// The frontend receives at most one danmaku event payload every 50ms.  A
 /// bounded ingress queue keeps a sudden busy-room burst from growing without
@@ -24,11 +25,144 @@ use crate::models::live::{DanmakuEvent, SiteId};
 const DANMAKU_EVENT_CHANNEL_CAPACITY: usize = 2_048;
 const DANMAKU_BATCH_MAX_EVENTS: usize = 512;
 const DANMAKU_BATCH_INTERVAL: Duration = Duration::from_millis(50);
+const MAX_ACCOUNT_ID_CHARS: usize = 128;
+const MAX_ACCOUNT_NAME_CHARS: usize = 128;
+
+/// Cookie-derived identity for one active site connection.
+///
+/// This is intentionally backend-only: the event dispatcher turns it into a
+/// boolean `is_self` flag, while account IDs, usernames, and Cookie values
+/// never cross the Tauri IPC boundary.
+#[derive(Clone, Default)]
+struct SelfDanmakuIdentity {
+    user_ids: HashSet<String>,
+    user_names: HashSet<String>,
+}
+
+impl SelfDanmakuIdentity {
+    fn from_cookie(site_id: &SiteId, cookie: &str) -> Self {
+        let (id_keys, site_name_keys): (&[&str], &[&str]) = match site_id {
+            // Bilibili's browser Cookie has a stable account mid but normally
+            // does not contain a display name.
+            SiteId::Bilibili => (&["DedeUserID"], &["DedeUserName"]),
+            // Douyu's QR/browser Cookie carries both the account uid and
+            // display name, so names remain useful when a relay omits uid.
+            SiteId::Douyu => (&["acf_uid", "uid"], &["acf_username"]),
+            // Huya uses either uid key depending on the authentication flow;
+            // `udb_n` is its browser account-name field.
+            SiteId::Huya => (&["yyuid", "udb_uid"], &["udb_n"]),
+            // Do not infer an identity from opaque Douyin/Twitch session
+            // tokens. A human-readable explicit name remains a safe fallback.
+            SiteId::Douyin | SiteId::Twitch | SiteId::Kuaishou => (&[], &[]),
+        };
+        const GENERIC_NAME_KEYS: &[&str] =
+            &["username", "user_name", "nickname", "nick", "display_name"];
+
+        let mut identity = Self::default();
+        for value in cookie_values(cookie, id_keys) {
+            if let Some(user_id) = normalize_user_id(&value) {
+                identity.user_ids.insert(user_id);
+            }
+        }
+        for value in cookie_values(cookie, site_name_keys)
+            .into_iter()
+            .chain(cookie_values(cookie, GENERIC_NAME_KEYS))
+        {
+            if let Some(user_name) = normalize_user_name(&value) {
+                identity.user_names.insert(user_name);
+            }
+        }
+        identity
+    }
+
+    fn matches(&self, event: &DanmakuEvent) -> bool {
+        if matches!(&event.kind, DanmakuKind::System) {
+            return false;
+        }
+
+        // An event ID is authoritative when the Cookie yielded an ID as well.
+        // Falling back to the display name in that case could highlight a
+        // different user whose visible nickname happens to match ours.
+        if let Some(event_id) = event.user_id.as_deref().and_then(normalize_user_id) {
+            if !self.user_ids.is_empty() {
+                return self.user_ids.contains(&event_id);
+            }
+        }
+
+        normalize_user_name(&event.user).is_some_and(|name| self.user_names.contains(&name))
+    }
+
+    fn mark(&self, event: &mut DanmakuEvent) {
+        event.is_self = self.matches(event);
+    }
+}
+
+fn cookie_values(cookie: &str, names: &[&str]) -> Vec<String> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let cookie = cookie.trim();
+    let cookie = cookie
+        .strip_prefix("Cookie:")
+        .or_else(|| cookie.strip_prefix("cookie:"))
+        .unwrap_or(cookie);
+
+    cookie
+        .split(';')
+        .filter_map(|pair| pair.trim().split_once('='))
+        .filter(|(name, _)| {
+            names
+                .iter()
+                .any(|expected| name.trim().eq_ignore_ascii_case(expected))
+        })
+        .filter_map(|(_, value)| {
+            let value = value.trim().trim_matches('"');
+            (value.len() <= MAX_ACCOUNT_NAME_CHARS * 4).then(|| percent_decode_cookie_value(value))
+        })
+        .collect()
+}
+
+/// Cookie values encode a display name with percent escapes on several web
+/// login flows. Cookie encoding treats `+` literally, unlike URL forms.
+fn percent_decode_cookie_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
+}
+
+fn normalize_user_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value != "0" && value.chars().count() <= MAX_ACCOUNT_ID_CHARS)
+        .then(|| value.to_owned())
+}
+
+fn normalize_user_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.chars().count() <= MAX_ACCOUNT_NAME_CHARS)
+        .then(|| value.to_lowercase())
+}
 
 /// Non-blocking handle used by site websocket loops to forward decoded
 /// danmaku to the batched Tauri event dispatcher.
 #[derive(Clone)]
-pub struct DanmakuEventSender(mpsc::Sender<DanmakuEvent>);
+pub struct DanmakuEventSender {
+    sender: mpsc::Sender<DanmakuEvent>,
+    identity: SelfDanmakuIdentity,
+}
 
 #[derive(Clone, Serialize)]
 struct DanmakuBatch<'a> {
@@ -37,15 +171,16 @@ struct DanmakuBatch<'a> {
 }
 
 impl DanmakuEventSender {
-    fn new(sender: mpsc::Sender<DanmakuEvent>) -> Self {
-        Self(sender)
+    fn new(sender: mpsc::Sender<DanmakuEvent>, identity: SelfDanmakuIdentity) -> Self {
+        Self { sender, identity }
     }
 
-    fn send(&self, event: DanmakuEvent) {
+    fn send(&self, mut event: DanmakuEvent) {
+        self.identity.mark(&mut event);
         // Receiving must never wait on the webview.  When an exceptional
         // burst fills the bounded queue, keeping the live connection healthy
         // matters more than retaining every already-stale chat message.
-        let _ = self.0.try_send(event);
+        let _ = self.sender.try_send(event);
     }
 }
 
@@ -164,6 +299,7 @@ fn spawn_loop<F, Fut>(
     manager: &DanmakuManager,
     generation: u64,
     site: &'static str,
+    identity: SelfDanmakuIdentity,
     fut: F,
 ) where
     F: FnOnce(DanmakuEventSender) -> Fut + Send + 'static,
@@ -176,7 +312,7 @@ fn spawn_loop<F, Fut>(
     // gate a route switch in the tiny window between `spawn` and manager
     // registration could still emit a stale room's first event.
     let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
-    let sender = DanmakuEventSender::new(event_tx);
+    let sender = DanmakuEventSender::new(event_tx, identity);
     let error_sender = sender.clone();
     let connection_task = tauri::async_runtime::spawn(async move {
         if start_rx.await.is_err() {
@@ -189,6 +325,8 @@ fn spawn_loop<F, Fut>(
                 DanmakuEvent {
                     kind: crate::models::live::DanmakuKind::System,
                     user: "system".into(),
+                    is_self: false,
+                    user_id: None,
                     content: format!("弹幕连接断开: {e}"),
                     color: None,
                     spans: None,
@@ -263,11 +401,14 @@ pub async fn connect(
     room_id: &str,
     detail_raw: &serde_json::Value,
     cookie: &str,
+    identity_cookie: &str,
     proxy: Option<&str>,
 ) -> AppResult<()> {
     if !manager.is_current(generation) {
         return Ok(());
     }
+
+    let identity = SelfDanmakuIdentity::from_cookie(&site_id, identity_cookie);
 
     match site_id {
         SiteId::Bilibili => {
@@ -283,30 +424,46 @@ pub async fn connect(
                 manager,
                 generation,
                 "bilibili",
+                identity,
                 move |events| bilibili::run_loop(events, args),
             );
             Ok(())
         }
         SiteId::Douyu => {
             let args = douyu::args_from_raw(room_id, detail_raw)?;
-            spawn_loop(app.clone(), manager, generation, "douyu", move |events| {
-                douyu::run_loop(events, args)
-            });
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                "douyu",
+                identity,
+                move |events| douyu::run_loop(events, args),
+            );
             Ok(())
         }
         SiteId::Huya => {
             let args = huya::args_from_raw(room_id, detail_raw)?;
-            spawn_loop(app.clone(), manager, generation, "huya", move |events| {
-                huya::run_loop(events, args)
-            });
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                "huya",
+                identity,
+                move |events| huya::run_loop(events, args),
+            );
             Ok(())
         }
         SiteId::Twitch => {
             let args = twitch::args_from_raw(room_id, detail_raw)?;
             let proxy = proxy.map(str::to_owned);
-            spawn_loop(app.clone(), manager, generation, "twitch", move |events| {
-                twitch::run_loop(events, args, proxy)
-            });
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                "twitch",
+                identity,
+                move |events| twitch::run_loop(events, args, proxy),
+            );
             Ok(())
         }
         SiteId::Douyin => {
@@ -316,9 +473,14 @@ pub async fn connect(
             if !manager.is_current(generation) {
                 return Ok(());
             }
-            spawn_loop(app.clone(), manager, generation, "douyin", move |events| {
-                douyin::run_loop(events, args)
-            });
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                "douyin",
+                identity,
+                move |events| douyin::run_loop(events, args),
+            );
             Ok(())
         }
         other => Err(AppError::new(
@@ -335,7 +497,7 @@ pub fn emit_event(sender: &DanmakuEventSender, event: DanmakuEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{DanmakuBatch, DanmakuManager};
+    use super::{DanmakuBatch, DanmakuManager, SelfDanmakuIdentity};
     use crate::models::live::{DanmakuEvent, DanmakuKind};
 
     #[test]
@@ -367,6 +529,8 @@ mod tests {
         let events = [DanmakuEvent {
             kind: DanmakuKind::Chat,
             user: "viewer".into(),
+            is_self: false,
+            user_id: Some("42".into()),
             content: "hello".into(),
             color: None,
             spans: None,
@@ -381,5 +545,40 @@ mod tests {
 
         assert_eq!(value["connection_epoch"], 42);
         assert_eq!(value["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["events"][0]["is_self"], false);
+        assert!(value["events"][0].get("user_id").is_none());
+    }
+
+    #[test]
+    fn cookie_identity_prefers_platform_user_id_and_keeps_name_as_a_fallback() {
+        let identity = SelfDanmakuIdentity::from_cookie(
+            &crate::models::live::SiteId::Douyu,
+            "acf_uid=42; acf_username=%E5%B0%8F%E6%98%8E",
+        );
+        let mut event = DanmakuEvent {
+            kind: DanmakuKind::Chat,
+            user: "小明".into(),
+            is_self: false,
+            user_id: Some("42".into()),
+            content: "hello".into(),
+            color: None,
+            spans: None,
+            super_chat: None,
+            ts: 1,
+        };
+        identity.mark(&mut event);
+        assert!(event.is_self);
+
+        // A same-name event with a conflicting authoritative UID is another
+        // viewer, not the local account.
+        event.user_id = Some("99".into());
+        identity.mark(&mut event);
+        assert!(!event.is_self);
+
+        // Some relay payloads omit uid, so the decoded Cookie username is the
+        // deliberate safe fallback in that specific case.
+        event.user_id = None;
+        identity.mark(&mut event);
+        assert!(event.is_self);
     }
 }

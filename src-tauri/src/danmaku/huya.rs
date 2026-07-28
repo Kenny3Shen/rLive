@@ -761,9 +761,11 @@ fn decode_message_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     // HYMessage: userInfo@0, content@3, bulletFormat@6
     let mut notice = TarsReader::new(msg.as_ref());
     let mut nick = String::new();
+    let mut user_id = None;
     if notice.read_struct_begin(0, false).unwrap_or(false) {
         // HYSender: uid@0, lMid@0 (ignored), nickName@2, gender@3
-        let _uid = notice.read_i64(0, false).unwrap_or(0);
+        let uid = notice.read_i64(0, false).unwrap_or(0);
+        user_id = (uid > 0).then(|| uid.to_string());
         nick = notice.read_string(2, false).unwrap_or_default();
         let _ = notice.read_struct_end();
     }
@@ -783,6 +785,8 @@ fn decode_message_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
         } else {
             nick
         },
+        is_self: false,
+        user_id,
         content,
         color: color_hex(font_color),
         spans: None,
@@ -804,6 +808,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: format!(
                 "正在连接弹幕服务器… ayyuid={} topSid={}",
                 args.ayyuid, args.top_sid
@@ -842,6 +848,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: "弹幕服务器连接成功".into(),
             color: None,
             spans: None,
@@ -889,6 +897,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: format!("弹幕连接结束（已收 {msg_count} 条）"),
             color: None,
             spans: None,
@@ -1088,6 +1098,7 @@ mod tests {
         let events = decode_message(&frame.into_bytes());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].user, "虎牙观众");
+        assert_eq!(events[0].user_id.as_deref(), Some("42"));
         assert_eq!(events[0].content, "测试弹幕");
         assert_eq!(events[0].color.as_deref(), Some("#112233"));
     }

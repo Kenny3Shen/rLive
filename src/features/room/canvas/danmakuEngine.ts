@@ -21,6 +21,8 @@ export type TrackItem = {
    */
   richSpans?: readonly DanmakuContentSpan[];
   color: string;
+  /** Whether this item came from the locally saved account. */
+  isSelf: boolean;
   /** Top-left y position in CSS pixels. */
   y: number;
   /** Left x position in CSS pixels. */
@@ -89,6 +91,8 @@ export type DanmakuEngineOptions = {
   fontWeight?: number;
   /** Combine matching normal-chat content into one floating item for five seconds. */
   aggregateRepeats?: boolean;
+  /** Distinct canvas-safe color used for messages from the local account. */
+  selfColor?: string;
   /** Test/diagnostic only: collect scheduling counters without production overhead. */
   debug?: boolean;
 };
@@ -134,6 +138,7 @@ const TOP_DURATION_MS = 3000;
 const DEFAULT_SCROLL_AREA_RATIO = 0.9;
 const SPAWN_PADDING = 12;
 const TOP_PADDING = 12;
+const DEFAULT_SELF_DANMAKU_COLOR = "#ffd166";
 // A fixed suffix reservation lets an aggregated item reveal a growing count
 // without moving into either neighbour on its lane. The cap is far beyond a
 // practical five-second burst; pathological counts use the `+` form.
@@ -247,6 +252,11 @@ function clampFontWeight(value: number | undefined): number {
   return 700;
 }
 
+function selfDanmakuColor(value: string | undefined): string {
+  const color = value?.trim();
+  return color || DEFAULT_SELF_DANMAKU_COLOR;
+}
+
 /** First-fit order from the top edge down, matching Simple Live's tracks. */
 function createTopDownLaneOrder(count: number): number[] {
   return Array.from({ length: count }, (_, lane) => lane);
@@ -317,6 +327,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let maxLineCount = clampLineCount(opts.lineCount);
   let currentFontWeight = clampFontWeight(opts.fontWeight);
   let aggregateRepeats = opts.aggregateRepeats === true;
+  let currentSelfColor = selfDanmakuColor(opts.selfColor);
   let contentAggregator = createDanmakuContentAggregator(aggregateRepeats);
   const aggregationTargets = new Map<string, AggregationTarget>();
   let items: EngineTrackItem[] = [];
@@ -687,6 +698,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         text: candidate.text,
         richSpans: candidate.richSpans,
         color: candidate.color,
+        isSelf: candidate.isSelf,
         width: candidate.width,
         speed: candidate.speed,
         fontSize: candidate.fontSize,
@@ -759,7 +771,8 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const text = aggregatedText(baseText, aggregation.count);
     const itemFontSize = fontSize;
     const id = `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`;
-    const color = ev.color || (isTop ? "#ffb020" : "#ffffff");
+    const isSelf = ev.is_self === true;
+    const color = isSelf ? currentSelfColor : ev.color || (isTop ? "#ffb020" : "#ffffff");
     const baseRichSpans = floatingRichSpans(ev);
     const richSpans = richSpansWithAggregateSuffix(baseRichSpans, aggregation.count);
     const aggregationReservedWidth = aggregation.key
@@ -779,6 +792,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         text,
         richSpans,
         color,
+        isSelf,
         width,
         speed,
         fontSize: itemFontSize,
@@ -797,6 +811,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       text,
       richSpans,
       color,
+      isSelf,
       width,
       speed,
       fontSize: itemFontSize,
@@ -903,6 +918,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       const nextScrollArea = clampArea(nextOpts.area);
       const nextLineCount = clampLineCount(nextOpts.lineCount);
       const nextAggregateRepeats = nextOpts.aggregateRepeats ?? aggregateRepeats;
+      const nextSelfColor = selfDanmakuColor(nextOpts.selfColor ?? currentSelfColor);
       if (
         nextFontSize !== fontSize ||
         nextScrollArea !== scrollArea ||
@@ -921,6 +937,15 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       scrollArea = nextScrollArea;
       maxLineCount = nextLineCount;
       currentFontWeight = clampFontWeight(nextOpts.fontWeight);
+      if (nextSelfColor !== currentSelfColor) {
+        currentSelfColor = nextSelfColor;
+        for (const item of items) {
+          if (item.isSelf) item.color = currentSelfColor;
+        }
+        for (const item of pending) {
+          if (item.isSelf) item.color = currentSelfColor;
+        }
+      }
       if (nextAggregateRepeats !== aggregateRepeats) {
         aggregateRepeats = nextAggregateRepeats;
         contentAggregator = createDanmakuContentAggregator(aggregateRepeats);

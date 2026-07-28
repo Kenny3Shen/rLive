@@ -158,6 +158,7 @@ pub async fn danmaku_connect(
         &room_id,
         &detail.raw,
         &danmaku_cookie,
+        cookie.as_deref().unwrap_or_default(),
         settings.proxy.as_deref(),
     )
     .await

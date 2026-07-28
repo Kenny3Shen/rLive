@@ -217,6 +217,14 @@ pub enum DanmakuContentSpan {
 pub struct DanmakuEvent {
     pub kind: DanmakuKind,
     pub user: String,
+    /// True when this event was sent by the account in the locally saved Cookie.
+    /// This is the only account-identity signal exposed over IPC.
+    #[serde(default)]
+    pub is_self: bool,
+    /// Protocol-level sender ID used only by the Rust-side account matcher.
+    /// It must never leave the backend with a danmaku event.
+    #[serde(skip)]
+    pub user_id: Option<String>,
     pub content: String,
     pub color: Option<String>,
     /// Optional text/image fragments for platform-provided rich danmaku.

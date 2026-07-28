@@ -808,6 +808,12 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             .and_then(|a| a.get(1))
             .map(json_stringish)
             .unwrap_or_else(|| "用户".into());
+        let user_id = info
+            .get(2)
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .map(json_stringish)
+            .filter(|value| !value.trim().is_empty() && value != "0");
         let color = if color_num == 0 {
             None
         } else {
@@ -817,6 +823,8 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
         return Some(DanmakuEvent {
             kind: DanmakuKind::Chat,
             user,
+            is_self: false,
+            user_id,
             content: message,
             color,
             spans,
@@ -840,9 +848,16 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
         if message.is_empty() {
             return None;
         }
+        let user_id = data
+            .get("uid")
+            .or_else(|| data.pointer("/user_info/uid"))
+            .map(json_stringish)
+            .filter(|value| !value.trim().is_empty() && value != "0");
         return Some(DanmakuEvent {
             kind: DanmakuKind::SuperChat,
             user,
+            is_self: false,
+            user_id,
             content: message,
             color: None,
             spans: None,
@@ -858,9 +873,15 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             .and_then(|v| v.as_str())
             .unwrap_or("用户")
             .to_string();
+        let user_id = data
+            .get("uid")
+            .map(json_stringish)
+            .filter(|value| !value.trim().is_empty() && value != "0");
         return Some(DanmakuEvent {
             kind: DanmakuKind::Enter,
             user: user.clone(),
+            is_self: false,
+            user_id,
             content: format!("{user} 进入直播间"),
             color: None,
             spans: None,
@@ -881,9 +902,15 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             .and_then(|v| v.as_str())
             .unwrap_or("礼物");
         let num = data.get("num").and_then(|v| v.as_i64()).unwrap_or(1);
+        let user_id = data
+            .get("uid")
+            .map(json_stringish)
+            .filter(|value| !value.trim().is_empty() && value != "0");
         return Some(DanmakuEvent {
             kind: DanmakuKind::Gift,
             user,
+            is_self: false,
+            user_id,
             content: format!("投喂 {gift} x{num}"),
             color: None,
             spans: None,
@@ -911,6 +938,8 @@ fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
+            is_self: false,
+            user_id: None,
             content: content.into(),
             color: None,
             spans: None,
@@ -1260,6 +1289,7 @@ mod tests {
         }"#;
         let ev = parse_message_json(json).unwrap();
         assert_eq!(ev.user, "alice");
+        assert_eq!(ev.user_id.as_deref(), Some("1"));
         assert_eq!(ev.content, "hello world");
         matches!(ev.kind, DanmakuKind::Chat);
     }
