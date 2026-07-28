@@ -8,7 +8,6 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invokeCmd } from "@/shared/api/tauri";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { createLocalPcmCapture, type LocalPcmCapture } from "./localPcmCapture";
 
 const CAPTION_EVENT_NAME = "asr-caption";
@@ -25,28 +24,21 @@ type AsrModelStatus = {
 };
 
 export type AsrModelLoadRequest = {
-  command: "asr_model_load" | "asr_model_load_default";
+  command: "asr_model_load_default";
   args: Record<string, unknown>;
 };
 
 /**
- * Keep the loaded model aligned with the saved preference: a custom path wins,
- * while an untouched installation uses rLive's bundled CPU model.
+ * Captions always use rLive's bundled tiny model. Keeping the decision here
+ * rather than in settings makes every room and every platform follow the same
+ * low-memory CPU-first path.
  */
 export function selectAsrModelLoadRequest(
   model: Pick<AsrModelStatus, "loaded" | "loading" | "bundled" | "path">,
-  customModelPath: string | null | undefined,
 ): AsrModelLoadRequest | null {
   if (model.loading) return null;
-  const path = customModelPath?.trim();
-  if (!path) {
-    return !model.loaded || !model.bundled
-      ? { command: "asr_model_load_default", args: {} }
-      : null;
-  }
-
-  return !model.loaded || model.bundled || model.path?.trim() !== path
-    ? { command: "asr_model_load", args: { path } }
+  return !model.loaded || !model.bundled
+    ? { command: "asr_model_load_default", args: {} }
     : null;
 }
 
@@ -208,7 +200,6 @@ export function useLocalAsrCaptions({
   muted,
 }: UseLocalAsrCaptionsOptions): UseLocalAsrCaptionsResult {
   const roomKey = roomKeyFrom(roomSessionKey);
-  const asrModelPath = useSettingsStore((state) => state.asrModelPath);
   const [enabled, setEnabled] = useState(false);
   const [pending, setPending] = useState(false);
   const [state, setState] = useState<LocalAsrCaptionState>("off");
@@ -664,7 +655,7 @@ export function useLocalAsrCaptions({
       if (model.loading) {
         throw new Error("本地字幕模型正在加载，请稍候");
       }
-      const request = selectAsrModelLoadRequest(model, asrModelPath);
+      const request = selectAsrModelLoadRequest(model);
       return request
         ? invokeCmd<AsrModelStatus>(request.command, request.args)
         : model;
@@ -687,7 +678,6 @@ export function useLocalAsrCaptions({
       },
     );
   }, [
-    asrModelPath,
     clearCaption,
     enabled,
     ensureGraph,

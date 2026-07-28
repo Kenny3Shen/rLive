@@ -13,6 +13,8 @@
     "core:window:allow-toggle-maximize",
     "core:webview:default",
     "opener:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
     "mcp-bridge:default"
   ]
 }

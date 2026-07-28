@@ -1,12 +1,19 @@
-# Bundled Whisper model notice
+# Bundled Candle Whisper model notice
 
-- File: `ggml-tiny-q5_1.bin`
-- Model: Whisper tiny, Q5_1 quantization, multilingual
-- Size: 32,152,673 bytes
-- SHA-256: `818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7`
-- Source: https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny-q5_1.bin
-- Converted artifact repository: https://huggingface.co/ggerganov/whisper.cpp (MIT license)
-- Whisper source model: https://huggingface.co/openai/whisper-tiny (Apache-2.0 license)
+- Files: `whisper-tiny/model-tiny-q40.gguf`, `config-tiny.json`, and
+  `tokenizer-tiny.json`
+- Model: Whisper tiny, Q4_0 quantization, multilingual
+- Model size: 23,252,000 bytes
+- Model SHA-256: `330cbde1517a775d09df5c40a26c0b8caf531d9ceee3c17194f7a5707c43cda9`
+- Quantized artifact source:
+  https://huggingface.co/lmz/candle-whisper/resolve/02d8350e5402f18725eadb6101b4963d181b0b5e/model-tiny-q40.gguf
+- Conversion repository: https://huggingface.co/lmz/candle-whisper
+- Whisper source model: https://huggingface.co/openai/whisper-tiny
+  (Apache-2.0 license)
 
-The model is bundled for opt-in, on-device live captions. rLive does not send
-the captured audio or recognition output to a server.
+`melfilters.bytes` is the 80-bin Whisper filter bank distributed with the
+Hugging Face Candle 0.11 examples (Apache-2.0 OR MIT). It is used only for
+local audio preprocessing.
+
+The model pack is bundled for opt-in, on-device live captions. rLive does not
+send captured audio or recognition output to a server.

@@ -4,8 +4,6 @@
 //! a 16 kHz PCM stream would otherwise spend substantially more CPU and memory
 //! serializing samples than recognizing them.
 
-use std::path::PathBuf;
-
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, State};
 
@@ -26,38 +24,27 @@ pub fn asr_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
     state.asr.model_status()
 }
 
-/// Validates and loads a user-selected GGML Whisper model on a blocking worker.
-/// The model is never uploaded or copied into app data.
-#[tauri::command(async)]
-pub async fn asr_model_load(state: State<'_, AppState>, path: String) -> AppResult<AsrModelStatus> {
-    let path = asr::validate_model_path(&path)?;
-    load_model_at_path(state, path, false).await
-}
-
-/// Loads rLive's bundled CPU-first Whisper model on a blocking worker. Its
-/// resource path is resolved at runtime, so installer locations are never
-/// persisted in the user's settings.
+/// Loads rLive's fixed bundled CPU-first Whisper tiny model on a blocking
+/// worker. User-selected model paths are intentionally unsupported, which
+/// keeps desktop and Android caption behavior identical.
 #[tauri::command(async)]
 pub async fn asr_model_load_default(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<AsrModelStatus> {
-    let path = asr::bundled_model_path(&app)?;
-    load_model_at_path(state, path, true).await
-}
-
-async fn load_model_at_path(
-    state: State<'_, AppState>,
-    path: PathBuf,
-    bundled: bool,
-) -> AppResult<AsrModelStatus> {
     let operation = state.asr.begin_model_load()?;
-    let model_path = path.clone();
-
-    let load_result =
-        tauri::async_runtime::spawn_blocking(move || asr::load_cpu_model(&model_path)).await;
-    let model = match load_result {
-        Ok(Ok(model)) => model,
+    let app_for_load = app.clone();
+    let load_result = tauri::async_runtime::spawn_blocking(move || -> AppResult<_> {
+        // Resolving the bundle copies Android APK assets into app cache. Keep
+        // that work and Candle's GGUF initialization off Tauri's async worker.
+        let paths = asr::bundled_model_paths(&app_for_load)?;
+        let path = paths.weights_path();
+        let model = asr::load_cpu_model(&paths)?;
+        Ok((path, model))
+    })
+    .await;
+    let (path, model) = match load_result {
+        Ok(Ok(loaded)) => loaded,
         Ok(Err(error)) => {
             state.asr.fail_model_load(operation);
             return Err(error);
@@ -71,9 +58,7 @@ async fn load_model_at_path(
         }
     };
 
-    state
-        .asr
-        .complete_model_load(operation, path, model, bundled)
+    state.asr.complete_model_load(operation, path, model, true)
 }
 
 /// Releases the currently loaded model and fences any in-flight audio.

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import type { LucideIcon } from "lucide-react";
 import {
   Database,
+  Download,
   ExternalLink,
   Info,
   MonitorPlay,
@@ -13,6 +15,7 @@ import {
   Radio,
   RefreshCw,
   ShieldAlert,
+  Upload,
   UserRound,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
@@ -23,10 +26,10 @@ import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
-import { SITE_LABELS } from "@/lib/utils";
+import { cn, SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Field,
   FieldContent,
@@ -86,6 +89,7 @@ type AsrModelStatus = {
   sample_rate_hz: number;
   backend: string;
   cpu_only: boolean;
+  speech_gate_active: boolean;
 };
 
 const settingsCategories: {
@@ -102,6 +106,29 @@ const settingsCategories: {
 ];
 
 const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
+const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
+
+function errorMessage(cause: unknown): string {
+  return typeof cause === "object" && cause && "message" in cause
+    ? String((cause as { message: string }).message)
+    : String(cause);
+}
+
+function useCompactSettingsLayout(): boolean {
+  const [compact, setCompact] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setCompact(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return compact;
+}
 
 function isDanmakuSendCookieSite(siteId: SiteId): boolean {
   return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
@@ -117,13 +144,18 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-border-subtle bg-card/60 p-4 md:p-5">
-      <FieldSet>
-        <FieldLegend variant="label">{title}</FieldLegend>
-        {description && <FieldDescription>{description}</FieldDescription>}
-        <FieldGroup className="gap-3">{children}</FieldGroup>
-      </FieldSet>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        {description && <CardDescription>{description}</CardDescription>}
+      </CardHeader>
+      <CardContent>
+        <FieldSet>
+          <FieldLegend className="sr-only">{title}</FieldLegend>
+          <FieldGroup className="gap-3">{children}</FieldGroup>
+        </FieldSet>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -503,20 +535,11 @@ function IptvCustomM3uUrlField() {
   );
 }
 
-function LocalWhisperModelField() {
-  const asrModelPath = useSettingsStore((s) => s.asrModelPath);
-  const setAsrModelPath = useSettingsStore((s) => s.setAsrModelPath);
-  const [draft, setDraft] = useState(asrModelPath ?? "");
+function LocalCaptionModelField() {
   const [modelStatus, setModelStatus] = useState<AsrModelStatus | null>(null);
-  const [action, setAction] = useState<"status" | "load" | "default" | "unload" | null>(
-    null,
-  );
+  const [action, setAction] = useState<"status" | "default" | "unload" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraft(asrModelPath ?? "");
-  }, [asrModelPath]);
 
   const refreshStatus = useCallback(async () => {
     setAction("status");
@@ -540,42 +563,6 @@ function LocalWhisperModelField() {
     void refreshStatus();
   }, [refreshStatus]);
 
-  function savePath() {
-    const next = draft.trim() || null;
-    setAsrModelPath(next);
-    setError(null);
-    setNotice(next ? "本地模型路径已保存" : "本地模型路径已清除");
-  }
-
-  async function loadModel() {
-    const path = draft.trim();
-    if (!path) {
-      setNotice(null);
-      setError("请先填写本地 Whisper 模型文件路径");
-      return;
-    }
-
-    setAction("load");
-    setError(null);
-    setNotice(null);
-    try {
-      const next = await invokeCmd<AsrModelStatus>("asr_model_load", { path });
-      const loadedPath = next.path?.trim() || path;
-      setModelStatus(next);
-      setDraft(loadedPath);
-      setAsrModelPath(loadedPath);
-      setNotice("本地 Whisper 模型已加载，可在直播间开启实时字幕");
-    } catch (cause) {
-      const message =
-        typeof cause === "object" && cause && "message" in cause
-          ? String((cause as { message: string }).message)
-          : String(cause);
-      setError(`加载模型失败：${message}`);
-    } finally {
-      setAction(null);
-    }
-  }
-
   async function loadDefaultModel() {
     setAction("default");
     setError(null);
@@ -583,7 +570,7 @@ function LocalWhisperModelField() {
     try {
       const next = await invokeCmd<AsrModelStatus>("asr_model_load_default");
       setModelStatus(next);
-      setNotice("内置 Whisper 模型已加载，可在直播间开启实时字幕");
+      setNotice("内置字幕模型已加载，可在直播间开启实时字幕");
     } catch (cause) {
       const message =
         typeof cause === "object" && cause && "message" in cause
@@ -602,7 +589,7 @@ function LocalWhisperModelField() {
     try {
       const next = await invokeCmd<AsrModelStatus>("asr_model_unload");
       setModelStatus(next);
-      setNotice("本地 Whisper 模型已卸载；已保存的路径仍可下次直接加载");
+      setNotice("本地字幕模型已卸载；下次开启字幕会按需重新加载");
     } catch (cause) {
       const message =
         typeof cause === "object" && cause && "message" in cause
@@ -614,19 +601,17 @@ function LocalWhisperModelField() {
     }
   }
 
-  const loading = action === "load" || action === "default" || modelStatus?.loading === true;
+  const loading = action === "default" || modelStatus?.loading === true;
   const statusLabel = modelStatus?.loading
     ? "正在加载"
     : modelStatus?.loaded
-      ? modelStatus.bundled
-        ? "内置模型已加载"
-        : "自定义模型已加载"
+      ? "内置模型已加载"
       : "未加载";
 
   return (
     <Section
-      title="本地 Whisper 字幕模型"
-      description="仅用于直播间实时字幕，识别在本机 CPU 上通过 whisper-rs 完成，不会上传音频。默认模型已随安装包提供，按需加载。"
+      title="本地字幕模型"
+      description="仅用于直播间实时字幕；Candle Rust 后端在本机 CPU 上识别，不会上传音频。模型按需加载。"
     >
       <Field>
         <FieldContent>
@@ -634,7 +619,7 @@ function LocalWhisperModelField() {
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <FieldTitle>内置默认模型</FieldTitle>
               <FieldDescription>
-                Whisper tiny Q5_1 · 多语言 · 约 31 MB。适合 CPU 优先的直播间实时字幕。
+                Whisper tiny · 多语言 · Q4 · 约 23 MB。适合 CPU 优先的直播间实时字幕；暂不提供自定义模型配置。
               </FieldDescription>
             </div>
             <Badge variant="secondary">随应用提供</Badge>
@@ -660,45 +645,8 @@ function LocalWhisperModelField() {
         </FieldContent>
       </Field>
       <Field data-invalid={error ? true : undefined}>
-        <FieldLabel htmlFor="asr-model-path">自定义模型路径（可选）</FieldLabel>
         <FieldContent>
-          <form
-            className="w-full"
-            onSubmit={(event) => {
-              event.preventDefault();
-              savePath();
-            }}
-          >
-            <InputGroup>
-              <InputGroupInput
-                id="asr-model-path"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="D:\\models\\ggml-base.bin"
-                spellCheck={false}
-                autoComplete="off"
-                aria-invalid={error ? true : undefined}
-                disabled={loading}
-              />
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton type="submit" variant="secondary" size="sm" disabled={loading}>
-                  保存路径
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
-          </form>
-          <FieldDescription>
-            可替换为本机的 Whisper GGML `.bin` 模型。路径仅保存在当前设备，不会随配置导入或导出。
-          </FieldDescription>
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => void loadModel()} disabled={loading || action === "status"}>
-              {action === "load" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <MonitorPlay data-icon="inline-start" aria-hidden />
-              )}
-              {action === "load" ? "正在加载…" : "加载自定义模型"}
-            </Button>
             <Button
               variant="outline"
               onClick={() => void unloadModel()}
@@ -711,7 +659,11 @@ function LocalWhisperModelField() {
               )}
               {action === "unload" ? "正在卸载…" : "卸载模型"}
             </Button>
-            <Button variant="ghost" onClick={() => void refreshStatus()} disabled={action !== null}>
+            <Button
+              variant="ghost"
+              onClick={() => void refreshStatus()}
+              disabled={action !== null}
+            >
               {action === "status" ? (
                 <Spinner data-icon="inline-start" />
               ) : (
@@ -721,10 +673,12 @@ function LocalWhisperModelField() {
             </Button>
           </div>
           {modelStatus?.loaded && (
-            <FieldDescription>
-              当前加载：
-              {modelStatus.bundled ? "内置 Whisper tiny Q5_1（多语言）" : modelStatus.path}
-            </FieldDescription>
+            <div className="flex flex-wrap items-center gap-2">
+              <FieldDescription>当前加载：内置 Whisper tiny（多语言 · Q4）</FieldDescription>
+              <Badge variant={modelStatus.speech_gate_active ? "secondary" : "outline"}>
+                {modelStatus.speech_gate_active ? "静音跳过已启用" : "静音跳过未启用"}
+              </Badge>
+            </div>
           )}
           {notice && (
             <FieldDescription role="status" aria-live="polite">
@@ -744,6 +698,24 @@ function isHttpM3uUrl(value: string): boolean {
     return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
+  }
+}
+
+function normalizeHttpProxy(value: string): { value: string | null; error: string | null } {
+  const trimmed = value.trim();
+  if (!trimmed) return { value: null, error: null };
+
+  try {
+    const parsed = new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { value: null, error: "仅支持 HTTP 或 HTTPS 代理地址" };
+    }
+    if (!parsed.hostname) {
+      return { value: null, error: "请填写代理主机和端口" };
+    }
+    return { value: parsed.href, error: null };
+  } catch {
+    return { value: null, error: "请输入有效的代理地址，例如 http://127.0.0.1:7890" };
   }
 }
 
@@ -863,6 +835,7 @@ function AboutSettings() {
 }
 
 export function SettingsPage() {
+  const queryClient = useQueryClient();
   const proxy = useSettingsStore((s) => s.proxy);
   const setProxy = useSettingsStore((s) => s.setProxy);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
@@ -870,51 +843,65 @@ export function SettingsPage() {
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
   const [proxyDraft, setProxyDraft] = useState(proxy ?? "");
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
-  const [profilePath, setProfilePath] = useState("");
+  const [proxyError, setProxyError] = useState<string | null>(null);
+  const [profileAction, setProfileAction] = useState<"import" | "export" | null>(null);
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [category, setCategory] = useState<SettingsCategory>("playback");
-
-  useEffect(() => {
-    void loadFromBackend();
-  }, [loadFromBackend]);
+  const compactLayout = useCompactSettingsLayout();
+  const categoryTabRefs = useRef(new Map<SettingsCategory, HTMLButtonElement | null>());
 
   useEffect(() => {
     setProxyDraft(proxy ?? "");
   }, [proxy]);
 
-  async function saveProxy() {
-    setProxyStatus(null);
-    const next = proxyDraft.trim();
-    setProxy(next.length === 0 ? null : next);
-    setProxyStatus("代理已保存");
-  }
+  useEffect(() => {
+    if (!compactLayout) return;
+    const activeTab = categoryTabRefs.current.get(category);
+    if (!activeTab) return;
 
-  async function exportProfile() {
-    setProfileStatus(null);
-    const path = profilePath.trim();
-    if (!path) {
-      setProfileStatus("请填写导出路径");
+    // A compact tab strip intentionally scrolls horizontally. Keep keyboard
+    // and programmatic category changes discoverable instead of leaving the
+    // newly selected panel's trigger offscreen.
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    activeTab.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+  }, [category, compactLayout]);
+
+  function saveProxy() {
+    setProxyStatus(null);
+    const next = normalizeHttpProxy(proxyDraft);
+    if (next.error) {
+      setProxyError(next.error);
       return;
     }
+    setProxyError(null);
+    setProxy(next.value);
+    setProxyDraft(next.value ?? "");
+    setProxyStatus(next.value ? "代理已保存，将用于后续请求" : "代理已关闭，后续请求将直连");
+  }
+
+  async function exportProfile(path: string) {
+    setProfileStatus(null);
+    setProfileError(null);
+    setProfileAction("export");
     try {
       await invokeCmd("profile_export", { path });
-      setProfileStatus(`已导出到 ${path}`);
-    } catch (e) {
-      const msg =
-        typeof e === "object" && e && "message" in e
-          ? String((e as { message: string }).message)
-          : String(e);
-      setProfileStatus(`导出失败：${msg}`);
+      setProfileStatus("配置已导出。档案不包含 Cookie、发送授权或本机路径。");
+    } catch (cause) {
+      setProfileError(`导出失败：${errorMessage(cause)}`);
+    } finally {
+      setProfileAction(null);
     }
   }
 
-  async function importProfile() {
+  async function importProfile(path: string) {
     setProfileStatus(null);
-    const path = profilePath.trim();
-    if (!path) {
-      setProfileStatus("请填写导入路径");
-      return;
-    }
+    setProfileError(null);
+    setProfileAction("import");
     try {
       const r = await invokeCmd<{
         follows: number;
@@ -922,36 +909,86 @@ export function SettingsPage() {
         history: number;
         settings: boolean;
       }>("profile_import", { path });
-      setProfileStatus(`已导入 关注=${r.follows} 标签=${r.tags} 历史=${r.history}`);
       await loadFromBackend();
-    } catch (e) {
-      const msg =
-        typeof e === "object" && e && "message" in e
-          ? String((e as { message: string }).message)
-          : String(e);
-      setProfileStatus(`导入失败：${msg}`);
+      // Import can change settings as well as follows/history. Mark every
+      // cached page stale and immediately refresh pages currently on screen,
+      // so the shell cannot show an old platform or stale local data.
+      await queryClient.invalidateQueries({ refetchType: "active" });
+      setProfileStatus(`已导入：${r.follows} 个关注、${r.tags} 个标签、${r.history} 条历史记录。`);
+    } catch (cause) {
+      setProfileError(`导入失败：${errorMessage(cause)}`);
+    } finally {
+      setProfileAction(null);
+    }
+  }
+
+  async function chooseProfileForImport() {
+    if (profileAction) return;
+    setProfileStatus(null);
+    setProfileError(null);
+    try {
+      const path = await openFileDialog({
+        multiple: false,
+        directory: false,
+        title: "导入 rLive 配置档案",
+        filters: PROFILE_FILE_FILTERS,
+      });
+      if (typeof path === "string") {
+        await importProfile(path);
+      }
+    } catch (cause) {
+      setProfileError(`打开导入文件失败：${errorMessage(cause)}`);
+    }
+  }
+
+  async function chooseProfileForExport() {
+    if (profileAction) return;
+    setProfileStatus(null);
+    setProfileError(null);
+    try {
+      const path = await saveFileDialog({
+        title: "导出 rLive 配置档案",
+        defaultPath: "rlive-profile.json",
+        filters: PROFILE_FILE_FILTERS,
+      });
+      if (typeof path === "string") {
+        await exportProfile(path);
+      }
+    } catch (cause) {
+      setProfileError(`选择导出位置失败：${errorMessage(cause)}`);
     }
   }
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <PageHeader title="设置" />
+      <PageHeader title="设置" description="按类别管理播放、平台、网络和本机数据。" />
 
       <Tabs
         value={category}
-        orientation="vertical"
-        className="min-h-[32rem] max-md:flex-col"
+        orientation={compactLayout ? "horizontal" : "vertical"}
+        className={cn("gap-4", compactLayout ? "min-h-0" : "min-h-[32rem]")}
         onValueChange={(value) => setCategory(value as SettingsCategory)}
       >
         <TabsList
           aria-label="设置分类"
-          className="w-44 shrink-0 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:w-full max-md:flex-row! max-md:overflow-x-auto"
+          className={cn(
+            "shrink-0 rounded-xl border border-border-subtle bg-card/60 p-1",
+            compactLayout
+              ? "sticky top-0 z-10 h-12! w-full flex-row! justify-start overflow-x-auto"
+              : "w-44",
+          )}
         >
           {settingsCategories.map(({ value, label, icon: Icon }) => (
             <TabsTrigger
               key={value}
               value={value}
-              className="h-11 shrink-0 gap-2 rounded-lg px-3 py-2 text-left"
+              ref={(node) => {
+                categoryTabRefs.current.set(value, node);
+              }}
+              className={cn(
+                "h-11 shrink-0 gap-2 rounded-lg px-3 py-2",
+                compactLayout ? "w-auto! flex-none! justify-center text-center" : "text-left",
+              )}
             >
               <Icon aria-hidden />
               <span>{label}</span>
@@ -960,137 +997,201 @@ export function SettingsPage() {
         </TabsList>
 
         <div className="min-w-0 flex-1">
-          <TabsContent value="playback" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="播放">
-              <Section title="清晰度">
-                <Field orientation="responsive">
-                  <FieldContent>
-                    <FieldTitle id="quality-label">优先清晰度</FieldTitle>
-                    <FieldDescription>有可用线路时优先选择此档。</FieldDescription>
-                  </FieldContent>
-                  <ToggleGroup
-                    aria-labelledby="quality-label"
-                    value={[qualityLevel]}
-                    variant="outline"
-                    size="sm"
-                    spacing={1}
-                    onValueChange={(values) => {
-                      const next = values[0];
-                      if (next === "high" || next === "mid" || next === "low") {
-                        setQualityLevel(next);
-                      }
-                    }}
-                  >
-                    <ToggleGroupItem value="high">最高</ToggleGroupItem>
-                    <ToggleGroupItem value="mid">中间</ToggleGroupItem>
-                    <ToggleGroupItem value="low">最低</ToggleGroupItem>
-                  </ToggleGroup>
-                </Field>
-              </Section>
-              <LocalWhisperModelField />
-            </SettingsContent>
-          </TabsContent>
-
-          <TabsContent value="platform" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="平台">
-              <PlatformEnablementField />
-            </SettingsContent>
-          </TabsContent>
-
-          <TabsContent value="network" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="网络">
-              <div className="flex flex-col gap-4">
-                <Section title="代理" description="可选 HTTP(S) 代理">
-                  <Field>
-                    <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
-                    <FieldContent className="flex-row items-center gap-2">
-                      <Input
-                        id="proxy"
-                        value={proxyDraft}
-                        onChange={(event) => setProxyDraft(event.target.value)}
-                        placeholder="http://127.0.0.1:7890"
-                      />
-                      <Button className="shrink-0" onClick={() => void saveProxy()}>
-                        保存
-                      </Button>
+          {category === "playback" && (
+            <TabsContent value="playback" className="mt-0">
+              <SettingsContent title="播放">
+                <Section title="清晰度">
+                  <Field orientation="responsive">
+                    <FieldContent>
+                      <FieldTitle id="quality-label">优先清晰度</FieldTitle>
+                      <FieldDescription>有可用线路时优先选择此档。</FieldDescription>
                     </FieldContent>
-                    {proxyStatus && <FieldDescription>{proxyStatus}</FieldDescription>}
+                    <ToggleGroup
+                      aria-labelledby="quality-label"
+                      value={[qualityLevel]}
+                      variant="outline"
+                      size="sm"
+                      spacing={1}
+                      onValueChange={(values) => {
+                        const next = values[0];
+                        if (next === "high" || next === "mid" || next === "low") {
+                          setQualityLevel(next);
+                        }
+                      }}
+                    >
+                      <ToggleGroupItem value="high">最高</ToggleGroupItem>
+                      <ToggleGroupItem value="mid">中间</ToggleGroupItem>
+                      <ToggleGroupItem value="low">最低</ToggleGroupItem>
+                    </ToggleGroup>
                   </Field>
                 </Section>
-                <IptvCustomM3uUrlField />
-              </div>
-            </SettingsContent>
-          </TabsContent>
+                <LocalCaptionModelField />
+              </SettingsContent>
+            </TabsContent>
+          )}
 
-          <TabsContent value="account" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="账号">
-              <div className="flex flex-col gap-4">
-                <DanmakuSendField />
-                <CookieField
-                  siteId="bilibili"
-                  title="哔哩哔哩"
-                  description="支持官方二维码登录和手动 Cookie 输入；用于只读 API、接收弹幕和已启用的单条弹幕发送。"
-                  placeholder="SESSDATA=…; bili_jct=…"
-                  qrLogin
-                />
-                <CookieField
-                  siteId="douyu"
-                  title="斗鱼"
-                  description="用于发送普通弹幕。支持扫码登录和手动 Cookie 输入。"
-                  placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
-                  qrLogin
-                />
-                <CookieField
-                  siteId="huya"
-                  title="虎牙"
-                  description="用于发送普通弹幕；当前仅支持手动 Cookie 输入，暂不提供二维码登录。请粘贴完整 Cookie。"
-                  placeholder="yyuid=…; udb_cred=…"
-                />
-                <CookieField
-                  siteId="douyin"
-                  title="抖音"
-                  description="支持扫码登录和手动 Cookie 输入；可用于登录态搜索和实时弹幕连接。推荐和分类当前仅支持首屏，抖音仍可能要求网页访问验证。"
-                  placeholder="sessionid=…; ttwid=…; msToken=…"
-                  qrLogin
-                />
-              </div>
-            </SettingsContent>
-          </TabsContent>
+          {category === "platform" && (
+            <TabsContent value="platform" className="mt-0">
+              <SettingsContent title="平台">
+                <PlatformEnablementField />
+              </SettingsContent>
+            </TabsContent>
+          )}
 
-          <TabsContent value="data" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="数据">
-              <Section
-                title="导入 / 导出"
-                description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址、本机 Whisper 模型路径或本机发送授权。"
-              >
-                <Field>
-                  <FieldLabel htmlFor="profile-path">文件路径</FieldLabel>
-                  <FieldContent>
-                    <Input
-                      id="profile-path"
-                      value={profilePath}
-                      onChange={(event) => setProfilePath(event.target.value)}
-                      placeholder="/tmp/rlive-profile.json"
-                      className="font-mono text-xs"
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={() => void exportProfile()}>导出</Button>
-                      <Button variant="outline" onClick={() => void importProfile()}>
-                        导入
-                      </Button>
-                    </div>
-                    {profileStatus && <FieldDescription>{profileStatus}</FieldDescription>}
-                  </FieldContent>
-                </Field>
-              </Section>
-            </SettingsContent>
-          </TabsContent>
+          {category === "network" && (
+            <TabsContent value="network" className="mt-0">
+              <SettingsContent title="网络">
+                <div className="flex flex-col gap-4">
+                  <Section title="代理" description="可选 HTTP(S) 代理">
+                    <Field data-invalid={proxyError ? true : undefined}>
+                      <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
+                      <FieldContent>
+                        <form
+                          className="w-full"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            saveProxy();
+                          }}
+                        >
+                          <InputGroup>
+                            <InputGroupInput
+                              id="proxy"
+                              type="text"
+                              inputMode="url"
+                              autoCapitalize="none"
+                              value={proxyDraft}
+                              onChange={(event) => {
+                                setProxyDraft(event.target.value);
+                                setProxyError(null);
+                                setProxyStatus(null);
+                              }}
+                              placeholder="http://127.0.0.1:7890"
+                              aria-invalid={proxyError ? true : undefined}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupButton type="submit" variant="secondary" size="sm">
+                                保存
+                              </InputGroupButton>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </form>
+                        <FieldDescription>
+                          留空并保存即可关闭代理；未填写协议时会按 HTTP 地址处理。
+                        </FieldDescription>
+                        {proxyError ? (
+                          <FieldError>{proxyError}</FieldError>
+                        ) : (
+                          proxyStatus && (
+                            <FieldDescription role="status">{proxyStatus}</FieldDescription>
+                          )
+                        )}
+                      </FieldContent>
+                    </Field>
+                  </Section>
+                  <IptvCustomM3uUrlField />
+                </div>
+              </SettingsContent>
+            </TabsContent>
+          )}
 
-          <TabsContent value="about" keepMounted className="mt-0 data-[hidden]:hidden">
-            <SettingsContent title="关于">
-              <AboutSettings />
-            </SettingsContent>
-          </TabsContent>
+          {category === "account" && (
+            <TabsContent value="account" className="mt-0">
+              <SettingsContent title="账号">
+                <div className="flex flex-col gap-4">
+                  <DanmakuSendField />
+                  <CookieField
+                    siteId="bilibili"
+                    title="哔哩哔哩"
+                    description="支持官方二维码登录和手动 Cookie 输入；用于只读 API、接收弹幕和已启用的单条弹幕发送。"
+                    placeholder="SESSDATA=…; bili_jct=…"
+                    qrLogin
+                  />
+                  <CookieField
+                    siteId="douyu"
+                    title="斗鱼"
+                    description="用于发送普通弹幕。支持扫码登录和手动 Cookie 输入。"
+                    placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
+                    qrLogin
+                  />
+                  <CookieField
+                    siteId="huya"
+                    title="虎牙"
+                    description="用于发送普通弹幕；当前仅支持手动 Cookie 输入，暂不提供二维码登录。请粘贴完整 Cookie。"
+                    placeholder="yyuid=…; udb_cred=…"
+                  />
+                  <CookieField
+                    siteId="douyin"
+                    title="抖音"
+                    description="支持扫码登录和手动 Cookie 输入；可用于登录态搜索和实时弹幕连接。推荐和分类当前仅支持首屏，抖音仍可能要求网页访问验证。"
+                    placeholder="sessionid=…; ttwid=…; msToken=…"
+                    qrLogin
+                  />
+                </div>
+              </SettingsContent>
+            </TabsContent>
+          )}
+
+          {category === "data" && (
+            <TabsContent value="data" className="mt-0">
+              <SettingsContent title="数据">
+                <Section
+                  title="导入 / 导出"
+                  description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址或本机发送授权。"
+                >
+                  <Field data-invalid={profileError ? true : undefined}>
+                    <FieldContent>
+                      <FieldTitle>配置档案</FieldTitle>
+                      <FieldDescription>
+                        通过系统文件选择器选取文件；Android 会直接使用系统文档，不需要输入文件路径。
+                      </FieldDescription>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          onClick={() => void chooseProfileForExport()}
+                          disabled={profileAction !== null}
+                        >
+                          {profileAction === "export" ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <Download data-icon="inline-start" aria-hidden />
+                          )}
+                          {profileAction === "export" ? "正在导出…" : "导出配置"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => void chooseProfileForImport()}
+                          disabled={profileAction !== null}
+                        >
+                          {profileAction === "import" ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <Upload data-icon="inline-start" aria-hidden />
+                          )}
+                          {profileAction === "import" ? "正在导入…" : "导入配置"}
+                        </Button>
+                      </div>
+                      {profileError ? (
+                        <FieldError>{profileError}</FieldError>
+                      ) : (
+                        profileStatus && (
+                          <FieldDescription role="status" aria-live="polite">
+                            {profileStatus}
+                          </FieldDescription>
+                        )
+                      )}
+                    </FieldContent>
+                  </Field>
+                </Section>
+              </SettingsContent>
+            </TabsContent>
+          )}
+
+          {category === "about" && (
+            <TabsContent value="about" className="mt-0">
+              <SettingsContent title="关于">
+                <AboutSettings />
+              </SettingsContent>
+            </TabsContent>
+          )}
         </div>
       </Tabs>
     </div>
@@ -1101,7 +1202,7 @@ function SettingsContent({ title, children }: { title: string; children: React.R
   return (
     <section className="flex flex-col gap-4">
       <div>
-        <h2 className="text-base font-semibold">{title}</h2>
+        <h2 className="text-base font-semibold max-md:sr-only">{title}</h2>
       </div>
       {children}
     </section>
