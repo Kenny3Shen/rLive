@@ -67,8 +67,6 @@ type SettingsState = {
   danmakuCookieRevision: number;
   /** Device-local custom IPTV M3U address; never included in profile packages. */
   iptvCustomM3uUrl: string | null;
-  /** Device-local Whisper model path; never included in profile packages. */
-  asrModelPath: string | null;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -80,7 +78,6 @@ type SettingsState = {
   setDanmakuSendEnabled: (enabled: boolean) => void;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
-  setAsrModelPath: (path: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -106,7 +103,6 @@ const defaultSettings: AppSettings = {
   quality_level: "high",
   danmaku_send_enabled: false,
   iptv_custom_m3u_url: null,
-  asr_model_path: null,
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
@@ -128,7 +124,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     quality_level: state.qualityLevel,
     danmaku_send_enabled: state.danmakuSendEnabled,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
-    asr_model_path: state.asrModelPath,
   };
 }
 
@@ -154,7 +149,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSendPending: false,
       danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
-      asrModelPath: null,
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
@@ -210,11 +204,6 @@ export const useSettingsStore = create<SettingsState>()(
         set({ iptvCustomM3uUrl: next });
         void get().persistToBackend({ iptv_custom_m3u_url: next });
       },
-      setAsrModelPath: (asrModelPath) => {
-        const next = asrModelPath?.trim() || null;
-        set({ asrModelPath: next });
-        void get().persistToBackend({ asr_model_path: next });
-      },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
@@ -237,7 +226,6 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
-          asrModelPath: settings.asr_model_path?.trim() || null,
           hydratedFromBackend: true,
         });
       },

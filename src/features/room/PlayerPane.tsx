@@ -7,9 +7,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { X } from "lucide-react";
+import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
@@ -18,8 +19,10 @@ import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useLocalAsrCaptions } from "./asr/useLocalAsrCaptions";
+import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useWebPlayer } from "./player/useWebPlayer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { PlayerEvent } from "@/shared/types/player";
@@ -28,7 +31,45 @@ export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
+const COMPACT_VIEWPORT_QUERY = "(max-width: 767px)";
 type OverlayInteractionSource = "controls" | "composer";
+
+function isCompactViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia(COMPACT_VIEWPORT_QUERY).matches;
+}
+
+function useCompactViewport(): boolean {
+  const [compact, setCompact] = useState(isCompactViewport);
+
+  useEffect(() => {
+    const query = window.matchMedia(COMPACT_VIEWPORT_QUERY);
+    const update = () => setCompact(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return compact;
+}
+
+/**
+ * On phones the side panel covers most of the video. Stop the obscured canvas
+ * renderer until the drawer closes, while the chat and SC panels keep their
+ * own bounded event subscriptions alive.
+ */
+export function shouldRunDanmakuCanvas({
+  danmakuActive,
+  osdOn,
+  compactViewport,
+  sidePanelOpen,
+}: {
+  danmakuActive: boolean;
+  osdOn: boolean;
+  compactViewport: boolean;
+  sidePanelOpen: boolean;
+}): boolean {
+  return danmakuActive && osdOn && !(compactViewport && sidePanelOpen);
+}
 
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -101,7 +142,12 @@ export function PlayerPane({
   siteId,
   roomId,
 }: PlayerPaneProps) {
-  const [sidePanelOpen, setSidePanelOpen] = useState(true);
+  const compactViewport = useCompactViewport();
+  // On a phone the side panel is a 72dvh drawer over the video. Start with
+  // the picture unobstructed, but retain the desktop's immediately available
+  // right rail and let the player control open the drawer at any time.
+  const [sidePanelOpen, setSidePanelOpen] = useState(() => !isCompactViewport());
+  const shouldMountSidePanel = sidePanelOpen || !compactViewport;
   const [osdOn, setOsdOn] = useState(true);
   const [captionFontSize, setCaptionFontSize] = useState(20);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
@@ -128,6 +174,9 @@ export function PlayerPane({
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
   });
+  // This stays above the conditional side panel, so hiding that panel never
+  // silently stops a session the user explicitly enabled.
+  const autoDanmakuSend = useAutoDanmakuSend({ siteId, roomId, roomSessionKey });
 
   const displayError =
     error ??
@@ -148,8 +197,6 @@ export function PlayerPane({
     volume: player.volume,
     muted: player.muted,
   });
-  const asrModelPath = useSettingsStore((state) => state.asrModelPath);
-  const setAsrModelPath = useSettingsStore((state) => state.setAsrModelPath);
   const transportDisabled = !showHost;
   // A failed MSE session still has a stream URL and must be refreshable; the
   // error state is precisely where this control is most useful.
@@ -158,6 +205,39 @@ export function PlayerPane({
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
   const canAutoHideControls =
     showHost && player.running && !player.paused && !overlayInteractionOpen;
+  const canvasActive = shouldRunDanmakuCanvas({
+    danmakuActive,
+    osdOn,
+    compactViewport,
+    sidePanelOpen,
+  });
+  const mobileDrawerOpen = compactViewport && sidePanelOpen;
+
+  // The desktop rail is visible by default, while the phone drawer should
+  // begin closed so playback stays unobstructed. Reset only when crossing the
+  // responsive breakpoint; a manual desktop toggle remains intact otherwise.
+  useEffect(() => {
+    setSidePanelOpen(!compactViewport);
+  }, [compactViewport]);
+
+  useEffect(() => {
+    if (!mobileDrawerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setSidePanelOpen(false);
+    };
+    const closeOnAndroidBack = (event: Event) => {
+      event.preventDefault();
+      setSidePanelOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
+    };
+  }, [mobileDrawerOpen]);
 
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current !== null) {
@@ -454,7 +534,7 @@ export function PlayerPane({
             {/* Floating danmaku over the picture (same DOM stack as Simple Live). */}
             {showHost && osdOn && (
               <CanvasDanmaku
-                active={danmakuActive && osdOn}
+                active={canvasActive}
                 sessionKey={danmakuSessionKey}
                 className="z-10"
               />
@@ -481,7 +561,7 @@ export function PlayerPane({
                   <div
                     aria-live="polite"
                     aria-atomic="true"
-                    className="pointer-events-none absolute right-6 bottom-20 left-6 z-20 flex justify-center"
+                    className="pointer-events-none absolute right-6 bottom-[calc(5rem+env(safe-area-inset-bottom))] left-6 z-20 flex justify-center"
                   >
                     <p
                       className="max-w-[min(56rem,92%)] rounded-xl border border-white/10 bg-black/72 px-4 py-2 text-center leading-relaxed font-medium text-white shadow-lg"
@@ -504,7 +584,7 @@ export function PlayerPane({
                 // gradient is animated when the controls auto-hide. The data
                 // attribute is changed imperatively above, avoiding a full
                 // PlayerPane reconciliation at the start of the fade.
-                "absolute inset-x-0 bottom-0 z-30 px-3 pb-3 transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0",
+                "absolute inset-x-0 bottom-0 z-30 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={(event) => {
@@ -532,6 +612,13 @@ export function PlayerPane({
                 volume={player.volume}
                 muted={player.muted}
                 sidePanelOpen={sidePanelOpen}
+                sidePanelLabel={
+                  compactViewport
+                    ? sidePanelOpen
+                      ? "收起直播间面板"
+                      : "打开直播间面板"
+                    : undefined
+                }
                 osdOn={osdOn}
                 qualities={qualities}
                 qualityIndex={qualityIndex}
@@ -576,110 +663,149 @@ export function PlayerPane({
         </div>
       </div>
 
-      <aside
-        aria-hidden={!sidePanelOpen}
-        className={cn(
-          "flex w-[300px] shrink-0 flex-col border-l border-border/80 bg-sidebar lg:w-[320px]",
-          "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-10 max-md:h-[min(26rem,72dvh)] max-md:min-h-64 max-md:w-full max-md:border-t max-md:border-l-0",
-          !sidePanelOpen && "hidden",
-        )}
-      >
-        {sideHeader}
-        <Tabs
-          {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
-          className="flex min-h-0 flex-1 flex-col gap-0"
-          onValueChange={handleSideTabValueChange}
+      {mobileDrawerOpen && (
+        <Button
+          type="button"
+          variant="ghost"
+          tabIndex={-1}
+          aria-hidden
+          className="absolute inset-0 z-40 h-auto w-auto rounded-none bg-black/45 p-0 hover:bg-black/45"
+          onClick={() => setSidePanelOpen(false)}
+        />
+      )}
+
+      {shouldMountSidePanel && (
+        <aside
+          aria-hidden={!sidePanelOpen}
+          aria-labelledby={compactViewport ? "room-side-panel-title" : undefined}
+          aria-modal={compactViewport ? true : undefined}
+          role={compactViewport ? "dialog" : undefined}
+          className={cn(
+            "flex w-[300px] shrink-0 flex-col border-l border-border/80 bg-sidebar lg:w-[320px]",
+            "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:h-[min(26rem,72dvh)] max-md:min-h-64 max-md:w-full max-md:overscroll-contain max-md:rounded-t-2xl max-md:border-t max-md:border-l-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl",
+            !sidePanelOpen && "hidden",
+          )}
         >
-          <TabsList
-            variant="line"
-            className="h-11! w-full justify-start rounded-none border-b border-border/80 bg-transparent px-2"
+          {compactViewport && (
+            <h2 id="room-side-panel-title" className="sr-only">
+              直播间面板
+            </h2>
+          )}
+          {sideHeader}
+          <Tabs
+            {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
+            className="flex min-h-0 flex-1 flex-col gap-0"
+            onValueChange={handleSideTabValueChange}
           >
-            <TabsTrigger value="chat" className="px-3 text-sm">
-              弹幕
-            </TabsTrigger>
-            <TabsTrigger
-              value="sc"
-              className="text-sm"
-              aria-label={
-                scUnreadCount > 0
-                  ? `SC，${scUnreadCount > 99 ? "99+" : scUnreadCount} 条新醒目留言`
-                  : "SC"
-              }
-            >
-              SC
-              {scUnreadCount > 0 && (
-                <span
-                  aria-hidden="true"
-                  className="rounded-full bg-primary px-1.5 py-px text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
+            <div className="flex h-11 shrink-0 items-center border-b border-border/80 pr-2">
+              <TabsList
+                variant="line"
+                className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
+              >
+                <TabsTrigger value="chat" className="px-3 text-sm">
+                  弹幕
+                </TabsTrigger>
+                <TabsTrigger
+                  value="sc"
+                  className="text-sm"
+                  aria-label={
+                    scUnreadCount > 0
+                      ? `SC，${scUnreadCount > 99 ? "99+" : scUnreadCount} 条新醒目留言`
+                      : "SC"
+                  }
                 >
-                  {scUnreadCount > 99 ? "99+" : scUnreadCount}
-                </span>
+                  SC
+                  {scUnreadCount > 0 && (
+                    <span
+                      aria-hidden="true"
+                      className="rounded-full bg-primary px-1.5 py-px text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
+                    >
+                      {scUnreadCount > 99 ? "99+" : scUnreadCount}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="follow" className="text-sm">
+                  关注
+                </TabsTrigger>
+                <TabsTrigger value="settings" className="text-sm">
+                  设置
+                </TabsTrigger>
+              </TabsList>
+              {compactViewport && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="max-md:size-11 max-md:touch-manipulation"
+                  aria-label="关闭直播间面板"
+                  title="关闭直播间面板"
+                  onClick={() => setSidePanelOpen(false)}
+                >
+                  <X data-icon="inline-start" aria-hidden />
+                </Button>
               )}
-            </TabsTrigger>
-            <TabsTrigger value="follow" className="text-sm">
-              关注
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="text-sm">
-              设置
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent
-            value="chat"
-            keepMounted
-            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-          >
-            <DanmakuPanel
-              key={`chat:${roomSessionKey ?? "room"}`}
-              active={danmakuActive}
-              siteId={siteId}
-              roomId={roomId}
-              visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
-              statusText={danmakuStatusText}
-              className="h-full"
-            />
-          </TabsContent>
-          <TabsContent value="sc" keepMounted className="mt-0 min-h-0 flex-1 data-[hidden]:hidden">
-            <SuperChatPanel
-              key={`sc:${roomSessionKey ?? "room"}`}
-              active={danmakuActive}
-              siteId={siteId}
-              danmakuStatusText={danmakuStatusText}
-              visible={sidePanelOpen && (sideTab === undefined || sideTab === "sc")}
-              onUnreadCountChange={handleScUnreadCountChange}
-              className="h-full"
-            />
-          </TabsContent>
-          <TabsContent
-            value="follow"
-            keepMounted
-            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-          >
-            <FollowPanel className="h-full" />
-          </TabsContent>
-          <TabsContent
-            value="settings"
-            keepMounted
-            className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-          >
-            <DanmakuSettingsPanel
-              className="h-full"
-              captions={{
-                enabled: localCaptions.enabled,
-                pending: localCaptions.pending,
-                ready: localCaptions.ready,
-                state: localCaptions.state,
-                message: localCaptions.message,
-                modelPath: asrModelPath,
-                fontSize: captionFontSize,
-                onModelPathChange: setAsrModelPath,
-                onFontSizeChange: (size) => {
-                  setCaptionFontSize(Math.max(16, Math.min(36, Math.round(size))));
-                },
-              }}
-            />
-          </TabsContent>
-        </Tabs>
-      </aside>
+            </div>
+            <TabsContent
+              value="chat"
+              keepMounted
+              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            >
+              <DanmakuPanel
+                key={`chat:${roomSessionKey ?? "room"}`}
+                active={danmakuActive}
+                siteId={siteId}
+                roomId={roomId}
+                visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
+                statusText={danmakuStatusText}
+                className="h-full"
+              />
+            </TabsContent>
+            <TabsContent
+              value="sc"
+              keepMounted
+              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            >
+              <SuperChatPanel
+                key={`sc:${roomSessionKey ?? "room"}`}
+                active={danmakuActive}
+                siteId={siteId}
+                danmakuStatusText={danmakuStatusText}
+                visible={sidePanelOpen && (sideTab === undefined || sideTab === "sc")}
+                onUnreadCountChange={handleScUnreadCountChange}
+                className="h-full"
+              />
+            </TabsContent>
+            <TabsContent
+              value="follow"
+              keepMounted
+              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            >
+              <FollowPanel className="h-full" />
+            </TabsContent>
+            <TabsContent
+              value="settings"
+              keepMounted
+              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            >
+              <DanmakuSettingsPanel
+                className="h-full"
+                autoSend={autoDanmakuSend}
+                captions={{
+                  enabled: localCaptions.enabled,
+                  pending: localCaptions.pending,
+                  ready: localCaptions.ready,
+                  state: localCaptions.state,
+                  message: localCaptions.message,
+                  fontSize: captionFontSize,
+                  onFontSizeChange: (size) => {
+                    setCaptionFontSize(Math.max(16, Math.min(36, Math.round(size))));
+                  },
+                }}
+              />
+            </TabsContent>
+          </Tabs>
+        </aside>
+      )}
     </div>
   );
 }

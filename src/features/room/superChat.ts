@@ -12,11 +12,14 @@ export type SuperChatLine = {
 };
 
 export type SuperChatPalette = {
-  /** Safe opaque endpoints for the paid-message band. */
+  /** Safe opaque colour for the upper identity band. */
   messageStart: string;
+  /** Safe opaque colour for the lower message band. */
   messageEnd: string;
-  /** Chosen for the strongest available contrast across both message endpoints. */
-  messageForeground: string;
+  /** High-contrast text colour for the upper identity band. */
+  headerForeground: string;
+  /** High-contrast text colour for the lower message band. */
+  contentForeground: string;
 };
 
 const HEX_COLOR = /^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i;
@@ -29,7 +32,8 @@ const SUPER_CHAT_AMOUNT_FORMATTER = new Intl.NumberFormat("zh-CN", {
 export const DEFAULT_SUPER_CHAT_PALETTE: SuperChatPalette = {
   messageStart: "#2A60B2",
   messageEnd: "#1D4A92",
-  messageForeground: "#ffffff",
+  headerForeground: "#ffffff",
+  contentForeground: "#ffffff",
 };
 
 export function safeSuperChatColor(value: unknown): string | null {
@@ -81,7 +85,8 @@ export function superChatPalette(info: SuperChatInfo | null | undefined): SuperC
   return {
     messageStart,
     messageEnd,
-    messageForeground: paletteForeground(messageStart, messageEnd),
+    headerForeground: paletteForeground(messageStart),
+    contentForeground: paletteForeground(messageEnd),
   };
 }
 
@@ -116,6 +121,16 @@ export function formatSuperChatAmount(info: SuperChatInfo | null | undefined): s
 }
 
 export function formatSuperChatDuration(info: SuperChatInfo | null | undefined): string | null {
+  const duration = superChatDurationSeconds(info);
+  if (duration === null) return null;
+
+  if (duration < 60) return `${duration} 秒`;
+  const minutes = Math.floor(duration / 60);
+  const seconds = duration % 60;
+  return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+}
+
+function superChatDurationSeconds(info: SuperChatInfo | null | undefined): number | null {
   const duration = info?.duration;
   if (
     typeof duration !== "number" ||
@@ -125,10 +140,25 @@ export function formatSuperChatDuration(info: SuperChatInfo | null | undefined):
   ) {
     return null;
   }
-  if (duration < 60) return `${duration} 秒`;
-  const minutes = Math.floor(duration / 60);
-  const seconds = duration % 60;
-  return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  return duration;
+}
+
+/**
+ * Derives the remaining SC display time from the local receive timestamp.
+ * The Bilibili event supplies a duration, rather than an expiry instant, so
+ * this intentionally starts its countdown when rLive receives the event.
+ */
+export function superChatRemainingSeconds(
+  info: SuperChatInfo | null | undefined,
+  receivedAt: number,
+  now = Date.now(),
+): number | null {
+  const duration = superChatDurationSeconds(info);
+  if (duration === null) return null;
+  if (!Number.isFinite(receivedAt) || receivedAt <= 0 || !Number.isFinite(now)) return duration;
+
+  const elapsedSeconds = Math.max(0, Math.floor((now - receivedAt) / 1_000));
+  return Math.max(0, duration - elapsedSeconds);
 }
 
 /** Prefer Bilibili's stable id; retain a conservative fallback for older payloads. */

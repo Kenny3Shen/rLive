@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -9,7 +9,6 @@ import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import {
   formatSuperChatAmount,
-  formatSuperChatDuration,
   DEFAULT_SUPER_CHAT_PALETTE,
   MAX_BUFFERED_SUPER_CHATS,
   MAX_SUPER_CHAT_DEDUPE_KEYS,
@@ -18,6 +17,7 @@ import {
   superChatAvatarUrl,
   superChatDedupeKey,
   superChatPalette,
+  superChatRemainingSeconds,
   type SuperChatLine,
 } from "./superChat";
 import { cn } from "@/lib/utils";
@@ -32,30 +32,92 @@ function scrollSuperChatViewportToBottom(root: HTMLElement | null): void {
   if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
 }
 
+type SuperChatCountdownProps = {
+  info: SuperChatLine["event"]["super_chat"];
+  receivedAt: number;
+  active: boolean;
+  onExpired: () => void;
+};
+
+function SuperChatCountdown({ info, receivedAt, active, onExpired }: SuperChatCountdownProps) {
+  const [now, setNow] = useState(() => Date.now());
+  const remainingSeconds = superChatRemainingSeconds(info, receivedAt, now);
+
+  useLayoutEffect(() => {
+    const currentNow = Date.now();
+    const currentRemaining = superChatRemainingSeconds(info, receivedAt, currentNow);
+    setNow(currentNow);
+    if (!active || currentRemaining === null) return;
+    if (currentRemaining <= 0) {
+      onExpired();
+      return;
+    }
+
+    let timeoutId: number | undefined;
+    const tick = () => {
+      const nextNow = Date.now();
+      const nextRemaining = superChatRemainingSeconds(info, receivedAt, nextNow);
+      setNow(nextNow);
+      if (nextRemaining === null) return;
+      if (nextRemaining <= 0) {
+        onExpired();
+        return;
+      }
+      timeoutId = window.setTimeout(tick, Math.max(1, 1_000 - (nextNow % 1_000)));
+    };
+
+    timeoutId = window.setTimeout(tick, Math.max(1, 1_000 - (currentNow % 1_000)));
+    return () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [active, info, onExpired, receivedAt]);
+
+  if (remainingSeconds === null || remainingSeconds <= 0) return null;
+
+  return (
+    <time
+      className="shrink-0 self-start pt-1.5 whitespace-nowrap text-[0.82em] leading-none font-medium tabular-nums opacity-70"
+      dateTime={`PT${remainingSeconds}S`}
+      aria-label={`剩余 ${remainingSeconds} 秒`}
+      title={`剩余 ${remainingSeconds} 秒`}
+    >
+      {remainingSeconds}
+    </time>
+  );
+}
+
 /** Existing cards retain their line reference, so only incoming SCs rerender. */
-const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLine }) {
+const SuperChatCard = memo(function SuperChatCard({
+  line,
+  countdownActive,
+  onExpired,
+}: {
+  line: SuperChatLine;
+  countdownActive: boolean;
+  onExpired: (id: number) => void;
+}) {
   const event = line.event;
   const info = event.super_chat;
   const amount = formatSuperChatAmount(info);
-  const duration = formatSuperChatDuration(info);
   const palette = superChatPalette(info) ?? DEFAULT_SUPER_CHAT_PALETTE;
   const user = event.user.trim() || "匿名用户";
   const avatarUrl = superChatAvatarUrl(info);
   const avatarInitial = Array.from(user)[0] ?? "?";
+  const handleExpired = useCallback(() => onExpired(line.id), [line.id, onExpired]);
 
   return (
     <article
       data-slot="super-chat-card"
-      className="overflow-hidden rounded-xl border border-border-subtle bg-card shadow-sm shadow-black/10"
+      className="overflow-hidden rounded-lg shadow-sm shadow-black/15"
     >
       <header
-        className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-x-2.5 px-3 py-2.5"
+        className="flex items-center gap-2.5 px-2.5 py-1.5"
         style={{
-          backgroundImage: `linear-gradient(112deg, ${palette.messageStart}, ${palette.messageEnd})`,
-          color: palette.messageForeground,
+          backgroundColor: palette.messageStart,
+          color: palette.headerForeground,
         }}
       >
-        <Avatar className="size-12 ring-1 ring-border/70">
+        <Avatar className="size-10 shrink-0 ring-1 ring-black/10">
           {avatarUrl && (
             <AvatarImage
               src={avatarUrl}
@@ -70,18 +132,28 @@ const SuperChatCard = memo(function SuperChatCard({ line }: { line: SuperChatLin
             {avatarInitial}
           </AvatarFallback>
         </Avatar>
-        <div className="min-w-0">
-          <p className="truncate text-[0.95em] font-semibold" title={user}>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[1.1em] leading-tight font-semibold" title={user}>
             {user}
           </p>
-          {duration && <p className="mt-0.5 text-[0.75em] opacity-80">置顶 {duration}</p>}
+          {amount && (
+            <p className="mt-0.5 text-[1em] leading-tight font-semibold tabular-nums opacity-80">
+              {amount}
+            </p>
+          )}
         </div>
-        <span className="shrink-0 whitespace-nowrap text-[1.45em] leading-none font-bold tabular-nums">
-          {amount ?? "SC"}
-        </span>
+        <SuperChatCountdown
+          info={info}
+          receivedAt={event.ts}
+          active={countdownActive}
+          onExpired={handleExpired}
+        />
       </header>
-      <div className="bg-card px-3 py-2.5 text-foreground">
-        <div className="whitespace-pre-wrap break-words leading-6">
+      <div
+        className="px-2.5 py-2.5"
+        style={{ backgroundColor: palette.messageEnd, color: palette.contentForeground }}
+      >
+        <div className="whitespace-pre-wrap break-words text-[0.92em] leading-5 font-medium">
           <DanmakuRichText content={event.content} spans={event.spans} />
         </div>
       </div>
@@ -350,6 +422,10 @@ export const SuperChatPanel = memo(function SuperChatPanel({
     scrollSuperChatViewportToBottom(scrollRootRef.current);
   }
 
+  const removeExpiredSuperChat = useCallback((id: number) => {
+    setItems((previous) => previous.filter((line) => line.id !== id));
+  }, []);
+
   const emptyState =
     siteId !== "bilibili"
       ? "当前平台暂未接入 SC"
@@ -375,7 +451,12 @@ export const SuperChatPanel = memo(function SuperChatPanel({
               </p>
             )}
             {items.map((line) => (
-              <SuperChatCard key={line.id} line={line} />
+              <SuperChatCard
+                key={line.id}
+                line={line}
+                countdownActive={visible}
+                onExpired={removeExpiredSuperChat}
+              />
             ))}
           </div>
         </ScrollArea>

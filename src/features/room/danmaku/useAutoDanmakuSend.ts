@@ -1,0 +1,394 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invokeCmd } from "@/shared/api/tauri";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
+import type { SiteId } from "@/shared/types/live";
+import {
+  AUTO_DANMAKU_SEND_INTERVAL_MS,
+  nextAutoDanmakuSegmentIndex,
+  remainingAutoDanmakuSendDelay,
+  splitAutoDanmakuText,
+} from "./autoSend";
+import { getDanmakuSendConfig, type DanmakuSendStatus } from "./sending";
+
+export type AutoDanmakuSendPhase = "off" | "waiting" | "sending" | "paused";
+
+/** Session-only state consumed by the right-side danmaku settings panel. */
+export type AutoDanmakuSendController = {
+  text: string;
+  enabled: boolean;
+  phase: AutoDanmakuSendPhase;
+  canEnable: boolean;
+  availabilityMessage: string;
+  validationMessage: string | null;
+  statusMessage: string;
+  segmentCount: number;
+  currentSegmentIndex: number | null;
+  onTextChange: (value: string) => void;
+  onEnabledChange: (enabled: boolean) => void;
+};
+
+type UseAutoDanmakuSendOptions = {
+  siteId?: SiteId;
+  roomId?: string;
+  /** Changes for a direct room switch even when the component stays mounted. */
+  roomSessionKey?: string;
+};
+
+type AvailabilitySnapshot = {
+  key: string;
+  status: DanmakuSendStatus;
+};
+
+function errorMessage(error: unknown): string {
+  if (typeof error === "object" && error && "message" in error) {
+    const message = String((error as { message: unknown }).message).trim();
+    if (message) return message;
+  }
+  return "发送请求失败，请检查账号状态或直播间限制。";
+}
+
+function waitingMessage(index: number, count: number, firstSend = false): string {
+  return firstSend
+    ? `第 ${index + 1}/${count} 段将在 10 秒后发送。`
+    : `正在等待第 ${index + 1}/${count} 段；发送起始至少相隔 10 秒。`;
+}
+
+/** `performance.now()` is monotonic, unlike wall-clock time after a system sync. */
+function monotonicNow(): number {
+  return performance.now();
+}
+
+function createInFlightCompletion(): { done: Promise<void>; finish: () => void } {
+  let finish = () => {};
+  const done = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  return { done, finish };
+}
+
+/**
+ * Schedule a deliberate, session-scoped sequence of normal danmaku sends.
+ * This hook belongs above the collapsible right panel so closing that panel
+ * cannot silently stop a running sequence. It intentionally never persists
+ * its draft or enabled state.
+ */
+export function useAutoDanmakuSend({
+  siteId,
+  roomId,
+  roomSessionKey,
+}: UseAutoDanmakuSendOptions): AutoDanmakuSendController {
+  const danmakuSendEnabled = useSettingsStore((state) => state.danmakuSendEnabled);
+  const danmakuSendPending = useSettingsStore((state) => state.danmakuSendPending);
+  const danmakuCookieRevision = useSettingsStore((state) => state.danmakuCookieRevision);
+  const sendConfig = getDanmakuSendConfig(siteId);
+  const [text, setText] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [phase, setPhase] = useState<AutoDanmakuSendPhase>("off");
+  const [statusMessage, setStatusMessage] = useState("已关闭。");
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState<number | null>(null);
+  const [availability, setAvailability] = useState<AvailabilitySnapshot | null>(null);
+  const inFlightRef = useRef(false);
+  const inFlightDoneRef = useRef<Promise<void> | null>(null);
+  const lastSendStartedAtRef = useRef<number | null>(null);
+
+  const roomKey = roomSessionKey ?? `${siteId ?? "unknown"}:${roomId ?? ""}`;
+  const latestRoomKeyRef = useRef(roomKey);
+  latestRoomKeyRef.current = roomKey;
+
+  const availabilityKey = [
+    siteId ?? "",
+    roomId ?? "",
+    sendConfig?.statusCommand ?? "",
+    danmakuSendEnabled ? "enabled" : "disabled",
+    danmakuSendPending ? "pending" : "ready",
+    String(danmakuCookieRevision),
+  ].join("\u0000");
+  const currentAvailability = availability?.key === availabilityKey ? availability.status : null;
+  const validation = useMemo(
+    () => splitAutoDanmakuText(text, sendConfig?.maxLength ?? Number.MAX_SAFE_INTEGER),
+    [sendConfig?.maxLength, text],
+  );
+  // Effects clean timers after a render, but a due timer can otherwise sneak
+  // in between a room/text/permission update and that cleanup. Keep a render
+  // synchronous fence as well, so only the current session input may start a
+  // request.
+  const runKey = [
+    roomKey,
+    availabilityKey,
+    sendConfig?.maxLength ?? "",
+    validation.normalized,
+    enabled ? "enabled" : "disabled",
+  ].join("\u0000");
+  const latestRunKeyRef = useRef(runKey);
+  latestRunKeyRef.current = runKey;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!sendConfig || !roomId || danmakuSendPending || !danmakuSendEnabled) {
+      setAvailability(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setAvailability(null);
+    void invokeCmd<DanmakuSendStatus>(sendConfig.statusCommand)
+      .then((status) => {
+        if (!cancelled) setAvailability({ key: availabilityKey, status });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAvailability({
+            key: availabilityKey,
+            status: {
+              send_enabled: false,
+              cookie_ready: false,
+              available: false,
+              message: `暂时无法确认${sendConfig.siteLabel}发送权限。`,
+            },
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    availabilityKey,
+    danmakuSendEnabled,
+    danmakuSendPending,
+    roomId,
+    sendConfig,
+  ]);
+
+  const availabilityMessage = !sendConfig
+    ? "当前平台暂不支持自动发送弹幕。"
+    : !roomId
+      ? "正在等待直播间信息。"
+      : danmakuSendPending
+        ? "正在同步发送权限…"
+        : !danmakuSendEnabled
+          ? "请先在账号设置启用发送功能。"
+          : currentAvailability?.message ?? "正在检查发送权限…";
+  const canEnable = Boolean(
+    sendConfig &&
+      roomId &&
+      danmakuSendEnabled &&
+      !danmakuSendPending &&
+      currentAvailability?.available &&
+      !validation.error,
+  );
+
+  // A route change can reuse PlayerPane. Keep a direct-room-switch from
+  // carrying a session toggle into the newly mounted room.
+  const previousRoomKeyRef = useRef(roomKey);
+  useEffect(() => {
+    if (previousRoomKeyRef.current === roomKey) return;
+    previousRoomKeyRef.current = roomKey;
+    setText("");
+    setEnabled(false);
+    setPhase("paused");
+    setCurrentSegmentIndex(null);
+    setStatusMessage("已暂停：已切换直播间。");
+  }, [roomKey]);
+
+  // Credentials, the shared consent switch, and local text validation are
+  // live prerequisites. Losing any one stops the sequence instead of letting
+  // a stale timer submit a request after the next render.
+  useEffect(() => {
+    if (!enabled || canEnable) return;
+    setEnabled(false);
+    setPhase("paused");
+    setCurrentSegmentIndex(null);
+    setStatusMessage(`已暂停：${validation.error ?? availabilityMessage}`);
+  }, [availabilityMessage, canEnable, enabled, validation.error]);
+
+  useEffect(() => {
+    if (!enabled || !canEnable || !sendConfig || !roomId || validation.segments.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const scheduledRoomKey = roomKey;
+    const scheduledRunKey = runKey;
+    const segments = validation.segments;
+
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const schedule = (segmentIndex: number, delay: number) => {
+      clearTimer();
+      timer = window.setTimeout(() => {
+        void sendSegment(segmentIndex);
+      }, delay);
+    };
+
+    const sendSegment = async (segmentIndex: number) => {
+      if (
+        cancelled ||
+        latestRoomKeyRef.current !== scheduledRoomKey ||
+        latestRunKeyRef.current !== scheduledRunKey
+      ) {
+        return;
+      }
+
+      // A user can turn the feature off and back on while an old command is
+      // finishing. Wait for its completion rather than polling or overlapping
+      // write requests across room/session generations.
+      if (inFlightRef.current) {
+        setPhase("waiting");
+        setCurrentSegmentIndex(segmentIndex);
+        setStatusMessage("正在等待上一条弹幕发送完成。");
+        const inFlightDone = inFlightDoneRef.current;
+        if (inFlightDone) {
+          void inFlightDone.finally(() => {
+            if (
+              cancelled ||
+              latestRoomKeyRef.current !== scheduledRoomKey ||
+              latestRunKeyRef.current !== scheduledRunKey
+            ) {
+              return;
+            }
+            schedule(segmentIndex, 0);
+          });
+        } else {
+          schedule(segmentIndex, 0);
+        }
+        return;
+      }
+
+      const lastStartedAt = lastSendStartedAtRef.current;
+      const minimumWait = remainingAutoDanmakuSendDelay(lastStartedAt, monotonicNow());
+      if (minimumWait > 0) {
+        schedule(segmentIndex, minimumWait);
+        return;
+      }
+
+      const message = segments[segmentIndex];
+      if (!message) return;
+
+      inFlightRef.current = true;
+      const inFlight = createInFlightCompletion();
+      inFlightDoneRef.current = inFlight.done;
+      const startedAt = monotonicNow();
+      lastSendStartedAtRef.current = startedAt;
+      setPhase("sending");
+      setCurrentSegmentIndex(segmentIndex);
+      setStatusMessage(`正在发送第 ${segmentIndex + 1}/${segments.length} 段。`);
+
+      try {
+        await invokeCmd<void>(sendConfig.sendCommand, { roomId, message });
+        if (
+          cancelled ||
+          latestRoomKeyRef.current !== scheduledRoomKey ||
+          latestRunKeyRef.current !== scheduledRunKey
+        ) {
+          return;
+        }
+
+        const nextIndex = nextAutoDanmakuSegmentIndex(segmentIndex, segments.length);
+        setPhase("waiting");
+        setCurrentSegmentIndex(nextIndex);
+        setStatusMessage(waitingMessage(nextIndex, segments.length));
+        schedule(
+          nextIndex,
+          remainingAutoDanmakuSendDelay(startedAt, monotonicNow()),
+        );
+      } catch (error) {
+        if (
+          cancelled ||
+          latestRoomKeyRef.current !== scheduledRoomKey ||
+          latestRunKeyRef.current !== scheduledRunKey
+        ) {
+          return;
+        }
+        setEnabled(false);
+        setPhase("paused");
+        setCurrentSegmentIndex(segmentIndex);
+        setStatusMessage(`已暂停：发送失败：${errorMessage(error)}`);
+      } finally {
+        inFlightRef.current = false;
+        inFlight.finish();
+        if (inFlightDoneRef.current === inFlight.done) {
+          inFlightDoneRef.current = null;
+        }
+      }
+    };
+
+    setPhase("waiting");
+    setCurrentSegmentIndex(0);
+    setStatusMessage(waitingMessage(0, segments.length, true));
+    schedule(0, AUTO_DANMAKU_SEND_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimer();
+    };
+  }, [
+    canEnable,
+    enabled,
+    roomId,
+    roomKey,
+    runKey,
+    sendConfig,
+    validation.segments,
+  ]);
+
+  const onTextChange = useCallback(
+    (value: string) => {
+      setText(value);
+      if (!enabled) return;
+      setEnabled(false);
+      setPhase("paused");
+      setCurrentSegmentIndex(null);
+      setStatusMessage("已暂停：编辑内容后请重新开启自动发送。");
+    },
+    [enabled],
+  );
+
+  const onEnabledChange = useCallback(
+    (nextEnabled: boolean) => {
+      if (!nextEnabled) {
+        setEnabled(false);
+        setPhase("off");
+        setCurrentSegmentIndex(null);
+        setStatusMessage("已关闭。");
+        return;
+      }
+
+      if (!canEnable) {
+        setEnabled(false);
+        setPhase("paused");
+        setCurrentSegmentIndex(null);
+        setStatusMessage(`已暂停：${validation.error ?? availabilityMessage}`);
+        return;
+      }
+
+      setEnabled(true);
+      setPhase("waiting");
+      setCurrentSegmentIndex(0);
+      setStatusMessage(waitingMessage(0, validation.segments.length, true));
+    },
+    [availabilityMessage, canEnable, validation.error, validation.segments.length],
+  );
+
+  return {
+    text,
+    enabled,
+    phase,
+    canEnable,
+    availabilityMessage,
+    validationMessage: validation.error,
+    statusMessage: phase === "off" ? (canEnable ? "已关闭。" : availabilityMessage) : statusMessage,
+    segmentCount: validation.segments.length,
+    currentSegmentIndex,
+    onTextChange,
+    onEnabledChange,
+  };
+}

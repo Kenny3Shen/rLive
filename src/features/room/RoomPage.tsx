@@ -203,10 +203,11 @@ export function RoomPage() {
         />
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 py-1.5">
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
         <Button
           variant="ghost"
           size="sm"
+          className="max-md:h-11 max-md:touch-manipulation"
           title="复制房间页链接"
           onClick={() => {
             void navigator.clipboard?.writeText(detail.url || window.location.href);
@@ -218,6 +219,7 @@ export function RoomPage() {
         <Button
           variant="ghost"
           size="sm"
+          className="max-md:h-11 max-md:touch-manipulation"
           title="复制当前播放直链（流地址）"
           disabled={!playback.playUrl?.url}
           onClick={() => {
@@ -292,7 +294,7 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
         ref={backButtonRef}
         variant="ghost"
         size="icon-sm"
-        className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70"
+        className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
         aria-label="返回上一页"
         title="返回上一页"
         onClick={goBack}

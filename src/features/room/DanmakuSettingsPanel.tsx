@@ -4,6 +4,15 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
   Field,
   FieldContent,
   FieldDescription,
@@ -13,18 +22,13 @@ import {
   FieldSet,
   FieldTitle,
 } from "@/components/ui/field";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 
 const FONT_WEIGHTS = [
   { value: 400, label: "常规" },
@@ -39,16 +43,14 @@ export type LocalCaptionSettings = {
   ready: boolean;
   state: "off" | "starting" | "active" | "error";
   message: string | null;
-  modelPath: string | null;
   fontSize: number;
-  onModelPathChange: (path: string | null) => void;
   onFontSizeChange: (size: number) => void;
 };
 
 type DanmakuSliderProps = {
   id: string;
   title: string;
-  description: string;
+  description?: string;
   value: number;
   min: number;
   max: number;
@@ -76,7 +78,7 @@ function DanmakuSlider({
     <Field>
       <FieldContent>
         <FieldTitle id={labelId}>{title}</FieldTitle>
-        <FieldDescription>{description}</FieldDescription>
+        {description && <FieldDescription>{description}</FieldDescription>}
       </FieldContent>
       <div className="flex items-center gap-3">
         <Slider
@@ -114,108 +116,144 @@ function captionStatusDescription(captions: LocalCaptionSettings): string {
 }
 
 function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSettings }) {
-  const [modelDraft, setModelDraft] = useState(captions.modelPath ?? "");
   const statusLabel = captionStatusLabel(captions);
   const statusDescription = captionStatusDescription(captions);
 
-  useEffect(() => {
-    setModelDraft(captions.modelPath ?? "");
-  }, [captions.modelPath]);
-
   return (
-    <FieldSet>
-      <FieldLegend variant="label">本地字幕</FieldLegend>
-      <FieldDescription>
-        Whisper 在本机 CPU 上实时识别直播声音，不会上传音频；自动识别语言，中文字幕以简体显示。
-      </FieldDescription>
-      <FieldGroup className="gap-3">
-        <Field orientation="horizontal">
-          <FieldContent>
-            <FieldTitle>运行状态</FieldTitle>
-            <FieldDescription>{statusDescription}</FieldDescription>
-          </FieldContent>
+    <Card>
+      <CardHeader>
+        <CardTitle>本地字幕</CardTitle>
+        <CardDescription>音频仅在本机处理。</CardDescription>
+        <CardAction>
           <Badge variant={captions.state === "error" ? "destructive" : "secondary"}>
             {statusLabel}
           </Badge>
-        </Field>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <FieldSet>
+          <FieldLegend className="sr-only">本地字幕</FieldLegend>
+          <FieldGroup className="gap-3">
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle>状态</FieldTitle>
+                <FieldDescription>{statusDescription}</FieldDescription>
+              </FieldContent>
+            </Field>
 
-        <Field orientation="horizontal">
-          <FieldContent>
-            <FieldTitle>识别模型</FieldTitle>
-            <FieldDescription>
-              {captions.modelPath
-                ? "已选择自定义 GGML .bin 模型。"
-                : "使用应用内置的 Whisper tiny Q5_1 多语言模型。"}
-            </FieldDescription>
-          </FieldContent>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!captions.modelPath && !modelDraft.trim()}
-            onClick={() => {
-              setModelDraft("");
-              captions.onModelPathChange(null);
-            }}
-          >
-            使用内置模型
-          </Button>
-        </Field>
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle>识别模型</FieldTitle>
+                <FieldDescription>内置多语言模型，按需加载。</FieldDescription>
+              </FieldContent>
+              <Badge variant="outline">内置 tiny</Badge>
+            </Field>
 
-        <Field>
-          <FieldLabel htmlFor="room-local-caption-model-path">自定义模型路径</FieldLabel>
-          <FieldContent>
-            <form
-              className="w-full"
-              onSubmit={(event) => {
-                event.preventDefault();
-                captions.onModelPathChange(modelDraft);
-              }}
-            >
-              <InputGroup>
-                <InputGroupInput
-                  id="room-local-caption-model-path"
-                  value={modelDraft}
-                  onChange={(event) => setModelDraft(event.target.value)}
-                  placeholder="D:\\models\\ggml-base.bin"
-                  spellCheck={false}
-                  autoComplete="off"
+            <Field>
+              <FieldContent>
+                <FieldTitle id="room-local-caption-font-size">字幕字号</FieldTitle>
+                <FieldDescription>16–36 px</FieldDescription>
+              </FieldContent>
+              <div className="flex items-center gap-3">
+                <Slider
+                  aria-labelledby="room-local-caption-font-size"
+                  value={captions.fontSize}
+                  min={16}
+                  max={36}
+                  step={1}
+                  onValueChange={(value) => captions.onFontSizeChange(Number(value))}
                 />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton type="submit" variant="secondary" size="sm">
-                    保存
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-            </form>
-            <FieldDescription>
-              仅支持 GGML `.bin`
-              文件。保存后会在下次开启字幕时加载；若正在识别，请先关闭再开启字幕。
-            </FieldDescription>
-          </FieldContent>
-        </Field>
+                <Badge variant="secondary" className="min-w-12 justify-center">
+                  {captions.fontSize}px
+                </Badge>
+              </div>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      </CardContent>
+    </Card>
+  );
+}
 
-        <Field>
-          <FieldContent>
-            <FieldTitle id="room-local-caption-font-size">字幕字号</FieldTitle>
-            <FieldDescription>仅作用于当前直播间，不影响弹幕显示。</FieldDescription>
-          </FieldContent>
-          <div className="flex items-center gap-3">
-            <Slider
-              aria-labelledby="room-local-caption-font-size"
-              value={captions.fontSize}
-              min={16}
-              max={36}
-              step={1}
-              onValueChange={(value) => captions.onFontSizeChange(Number(value))}
-            />
-            <Badge variant="secondary" className="min-w-12 justify-center">
-              {captions.fontSize}px
-            </Badge>
-          </div>
-        </Field>
-      </FieldGroup>
-    </FieldSet>
+function autoSendStatusLabel(autoSend: AutoDanmakuSendController): string {
+  switch (autoSend.phase) {
+    case "waiting":
+      return "等待中";
+    case "sending":
+      return "发送中";
+    case "paused":
+      return "已暂停";
+    default:
+      return "已关闭";
+  }
+}
+
+function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendController }) {
+  const segmentLabel =
+    autoSend.currentSegmentIndex === null || autoSend.segmentCount === 0
+      ? "未分段"
+      : `第 ${autoSend.currentSegmentIndex + 1}/${autoSend.segmentCount} 段`;
+  const statusIsError = autoSend.phase === "paused";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>自动发送弹幕</CardTitle>
+        <CardDescription>在本次直播间循环发送。</CardDescription>
+        <CardAction>
+          <Badge variant={statusIsError ? "destructive" : "secondary"}>
+            {autoSendStatusLabel(autoSend)}
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <FieldSet>
+          <FieldLegend className="sr-only">自动发送弹幕</FieldLegend>
+          <FieldGroup className="gap-3">
+            <Field data-invalid={autoSend.validationMessage ? true : undefined}>
+              <FieldLabel htmlFor="room-auto-danmaku-text">发送内容</FieldLabel>
+              <FieldContent>
+                <Textarea
+                  id="room-auto-danmaku-text"
+                  value={autoSend.text}
+                  rows={4}
+                  placeholder="输入要循环发送的普通弹幕"
+                  aria-invalid={autoSend.validationMessage ? true : undefined}
+                  className="resize-y"
+                  onChange={(event) => autoSend.onTextChange(event.target.value)}
+                />
+                <FieldDescription>
+                  {autoSend.validationMessage ?? "10 秒后开始；长文本会自动分段。"}
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+
+            <Field orientation="horizontal" data-disabled={!autoSend.canEnable ? true : undefined}>
+              <FieldContent>
+                <FieldTitle id="room-auto-danmaku-enabled">开启自动发送</FieldTitle>
+                <FieldDescription>{autoSend.availabilityMessage}</FieldDescription>
+              </FieldContent>
+              <Switch
+                aria-labelledby="room-auto-danmaku-enabled"
+                checked={autoSend.enabled}
+                disabled={!autoSend.canEnable}
+                onCheckedChange={autoSend.onEnabledChange}
+              />
+            </Field>
+
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle>发送进度</FieldTitle>
+                <FieldDescription role="status" aria-live="polite">
+                  {autoSend.statusMessage}
+                </FieldDescription>
+              </FieldContent>
+              <Badge variant="outline">{segmentLabel}</Badge>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -244,9 +282,11 @@ function sameWords(left: readonly string[], right: readonly string[]): boolean {
 export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   className,
   captions,
+  autoSend,
 }: {
   className?: string;
   captions?: LocalCaptionSettings;
+  autoSend?: AutoDanmakuSendController;
 }) {
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
@@ -356,151 +396,164 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
       <div className="flex flex-col gap-5 px-3 py-3">
         {captions && <LocalCaptionSettingsSection captions={captions} />}
+        {autoSend && <AutoDanmakuSendSection autoSend={autoSend} />}
 
-        <FieldSet>
-          <FieldGroup className="gap-4">
-            <DanmakuSlider
-              id="room-danmaku-area"
-              title="显示区域"
-              description="限制飘屏可使用的视频高度。"
-              value={Math.round(area * 100)}
-              min={10}
-              max={100}
-              step={5}
-              displayValue={`${Math.round(area * 100)}%`}
-              onPreview={(value) => preview({ danmakuArea: value / 100 })}
-              onCommit={(value) => persist({ danmaku_area: value / 100 })}
-            />
-            <DanmakuSlider
-              id="room-danmaku-lines"
-              title="显示行数"
-              description="自动会按窗口高度安排轨道；可固定为 1–20 行。"
-              value={lineCount}
-              min={0}
-              max={20}
-              displayValue={lineCount === 0 ? "自动" : `${lineCount} 行`}
-              onPreview={(value) => preview({ danmakuLineCount: value })}
-              onCommit={(value) => persist({ danmaku_line_count: value })}
-            />
-            <DanmakuSlider
-              id="room-danmaku-opacity"
-              title="不透明度"
-              description="控制飘屏文字的透明程度。"
-              value={Math.round(opacity * 100)}
-              min={0}
-              max={100}
-              displayValue={`${Math.round(opacity * 100)}%`}
-              onPreview={(value) => preview({ danmakuOpacity: value / 100 })}
-              onCommit={(value) => persist({ danmaku_opacity: value / 100 })}
-            />
-            <DanmakuSlider
-              id="room-danmaku-font-size"
-              title="字号"
-              description="影响飘屏与右侧消息列表的基础大小。"
-              value={fontSize}
-              min={12}
-              max={36}
-              displayValue={`${fontSize}px`}
-              onPreview={(value) => preview({ danmakuFontSize: value })}
-              onCommit={(value) => persist({ danmaku_font_size: value })}
-            />
-            <DanmakuSlider
-              id="room-danmaku-speed"
-              title="滚动速度"
-              description="数值越高，弹幕越快穿过画面。"
-              value={speed}
-              min={1}
-              max={10}
-              displayValue={`${speed} / 10`}
-              onPreview={(value) => preview({ danmakuSpeed: value })}
-              onCommit={(value) => persist({ danmaku_speed: value })}
-            />
-            <Field>
-              <FieldContent>
-                <FieldTitle id="room-danmaku-font-weight">字重</FieldTitle>
-                <FieldDescription>提高对亮色画面的可读性。</FieldDescription>
-              </FieldContent>
-              <ToggleGroup
-                aria-labelledby="room-danmaku-font-weight"
-                value={[String(fontWeight)]}
-                variant="outline"
-                size="sm"
-                spacing={1}
-                onValueChange={(values) => {
-                  const next = Number(values[0]);
-                  if (!FONT_WEIGHTS.some((option) => option.value === next)) return;
-                  preview({ danmakuFontWeight: next });
-                  persist({ danmaku_font_weight: next });
-                }}
-              >
-                {FONT_WEIGHTS.map((option) => (
-                  <ToggleGroupItem key={option.value} value={String(option.value)}>
-                    {option.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </Field>
-            <Field orientation="horizontal">
-              <FieldContent>
-                <FieldTitle id="room-danmaku-repeat-filter">飘屏相同内容合并</FieldTitle>
-                <FieldDescription>
-                  仅在飘屏中：5 秒内合并所有用户的相同聊天内容，并显示次数；右侧列表逐条显示。
-                </FieldDescription>
-              </FieldContent>
-              <Switch
-                aria-labelledby="room-danmaku-repeat-filter"
-                checked={filterRepeats}
-                onCheckedChange={(checked) => {
-                  preview({ danmakuFilterRepeats: checked });
-                  persist({ danmaku_filter_repeats: checked });
-                }}
-              />
-            </Field>
-          </FieldGroup>
-        </FieldSet>
-
-        <FieldSet>
-          <FieldLegend variant="label">弹幕过滤</FieldLegend>
-          <FieldDescription>
-            “进入直播间”等进场提示默认隐藏；屏蔽词对聊天、SC 与飘屏生效。
-          </FieldDescription>
-          <FieldGroup className="gap-3">
-            <Field orientation="horizontal">
-              <FieldContent>
-                <FieldTitle id="room-danmaku-gift-filter">屏蔽礼物消息</FieldTitle>
-                <FieldDescription>隐藏斗鱼等平台的礼物通知，不影响 SC。</FieldDescription>
-              </FieldContent>
-              <Switch
-                aria-labelledby="room-danmaku-gift-filter"
-                checked={filterGifts}
-                onCheckedChange={(checked) => {
-                  preview({ danmakuFilterGifts: checked });
-                  persist({ danmaku_filter_gifts: checked });
-                }}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="room-danmaku-shield-words">屏蔽词</FieldLabel>
-              <FieldContent>
-                <Textarea
-                  id="room-danmaku-shield-words"
-                  value={shieldDraft}
-                  onChange={(event) => {
-                    updateShieldWords(event.target.value);
-                  }}
-                  rows={5}
-                  placeholder="每行一个词，也可用逗号分隔"
-                  className="resize-y"
+        <Card>
+          <CardHeader>
+            <CardTitle>弹幕显示</CardTitle>
+            <CardDescription>调整飘屏的轨道与外观。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldSet>
+              <FieldLegend className="sr-only">弹幕显示</FieldLegend>
+              <FieldGroup className="gap-4">
+                <DanmakuSlider
+                  id="room-danmaku-area"
+                  title="显示区域"
+                  description="飘屏占用的视频高度"
+                  value={Math.round(area * 100)}
+                  min={10}
+                  max={100}
+                  step={5}
+                  displayValue={`${Math.round(area * 100)}%`}
+                  onPreview={(value) => preview({ danmakuArea: value / 100 })}
+                  onCommit={(value) => persist({ danmaku_area: value / 100 })}
                 />
-                {shieldStatus && <FieldDescription>{shieldStatus}</FieldDescription>}
-              </FieldContent>
-            </Field>
-          </FieldGroup>
-        </FieldSet>
+                <DanmakuSlider
+                  id="room-danmaku-lines"
+                  title="显示行数"
+                  description="自动或固定 1–20 行"
+                  value={lineCount}
+                  min={0}
+                  max={20}
+                  displayValue={lineCount === 0 ? "自动" : `${lineCount} 行`}
+                  onPreview={(value) => preview({ danmakuLineCount: value })}
+                  onCommit={(value) => persist({ danmaku_line_count: value })}
+                />
+                <DanmakuSlider
+                  id="room-danmaku-opacity"
+                  title="不透明度"
+                  value={Math.round(opacity * 100)}
+                  min={0}
+                  max={100}
+                  displayValue={`${Math.round(opacity * 100)}%`}
+                  onPreview={(value) => preview({ danmakuOpacity: value / 100 })}
+                  onCommit={(value) => persist({ danmaku_opacity: value / 100 })}
+                />
+                <DanmakuSlider
+                  id="room-danmaku-font-size"
+                  title="字号"
+                  description="飘屏与消息列表字号"
+                  value={fontSize}
+                  min={12}
+                  max={36}
+                  displayValue={`${fontSize}px`}
+                  onPreview={(value) => preview({ danmakuFontSize: value })}
+                  onCommit={(value) => persist({ danmaku_font_size: value })}
+                />
+                <DanmakuSlider
+                  id="room-danmaku-speed"
+                  title="滚动速度"
+                  description="数值越高，滚动越快"
+                  value={speed}
+                  min={1}
+                  max={10}
+                  displayValue={`${speed} / 10`}
+                  onPreview={(value) => preview({ danmakuSpeed: value })}
+                  onCommit={(value) => persist({ danmaku_speed: value })}
+                />
+                <Field>
+                  <FieldContent>
+                    <FieldTitle id="room-danmaku-font-weight">字重</FieldTitle>
+                    <FieldDescription>提升亮色画面的可读性</FieldDescription>
+                  </FieldContent>
+                  <ToggleGroup
+                    aria-labelledby="room-danmaku-font-weight"
+                    value={[String(fontWeight)]}
+                    variant="outline"
+                    size="sm"
+                    spacing={1}
+                    onValueChange={(values) => {
+                      const next = Number(values[0]);
+                      if (!FONT_WEIGHTS.some((option) => option.value === next)) return;
+                      preview({ danmakuFontWeight: next });
+                      persist({ danmaku_font_weight: next });
+                    }}
+                  >
+                    {FONT_WEIGHTS.map((option) => (
+                      <ToggleGroupItem key={option.value} value={String(option.value)}>
+                        {option.label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </Field>
+              </FieldGroup>
+            </FieldSet>
+          </CardContent>
+          <CardFooter className="justify-end">
+            <Button type="button" variant="outline" size="sm" onClick={resetAppearance}>
+              恢复默认值
+            </Button>
+          </CardFooter>
+        </Card>
 
-        <Button variant="outline" size="sm" onClick={resetAppearance}>
-          恢复默认显示
-        </Button>
+        <Card>
+          <CardHeader>
+            <CardTitle>弹幕过滤</CardTitle>
+            <CardDescription>屏蔽词同时作用于聊天、SC 与飘屏。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldSet>
+              <FieldLegend className="sr-only">弹幕过滤</FieldLegend>
+              <FieldGroup className="gap-3">
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldTitle id="room-danmaku-repeat-filter">合并重复飘屏</FieldTitle>
+                    <FieldDescription>5 秒内相同内容显示为次数</FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    aria-labelledby="room-danmaku-repeat-filter"
+                    checked={filterRepeats}
+                    onCheckedChange={(checked) => {
+                      preview({ danmakuFilterRepeats: checked });
+                      persist({ danmaku_filter_repeats: checked });
+                    }}
+                  />
+                </Field>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldTitle id="room-danmaku-gift-filter">屏蔽礼物消息</FieldTitle>
+                    <FieldDescription>隐藏礼物通知，不影响 SC</FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    aria-labelledby="room-danmaku-gift-filter"
+                    checked={filterGifts}
+                    onCheckedChange={(checked) => {
+                      preview({ danmakuFilterGifts: checked });
+                      persist({ danmaku_filter_gifts: checked });
+                    }}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="room-danmaku-shield-words">屏蔽词</FieldLabel>
+                  <FieldContent>
+                    <Textarea
+                      id="room-danmaku-shield-words"
+                      value={shieldDraft}
+                      onChange={(event) => {
+                        updateShieldWords(event.target.value);
+                      }}
+                      rows={5}
+                      placeholder="每行一个词，也可用逗号分隔"
+                      className="resize-y"
+                    />
+                    {shieldStatus && <FieldDescription>{shieldStatus}</FieldDescription>}
+                  </FieldContent>
+                </Field>
+              </FieldGroup>
+            </FieldSet>
+          </CardContent>
+        </Card>
       </div>
     </ScrollArea>
   );

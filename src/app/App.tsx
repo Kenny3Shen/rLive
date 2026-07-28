@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Shell } from "./layout/Shell";
+import { AndroidBackNavigator } from "./androidBackNavigation";
 import { HomePage } from "../features/home/HomePage";
 
 // Keep the discovery page on the critical path, but defer secondary pages
@@ -84,6 +85,7 @@ function EnabledRoomRoute() {
 export function App() {
   return (
     <BrowserRouter>
+      <AndroidBackNavigator />
       <Suspense fallback={<RouteLoadingFallback />}>
         <Routes>
           <Route element={<Shell />}>

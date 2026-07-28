@@ -87,6 +87,8 @@ export type DanmakuContentSpan =
 export type DanmakuEvent = {
   kind: DanmakuKind;
   user: string;
+  /** Set by the backend after matching the locally saved account Cookie. */
+  is_self?: boolean;
   content: string;
   color: string | null;
   /** Optional ordered text/image fragments for platform-hosted image emotes. */
@@ -136,8 +138,6 @@ export type AppSettings = {
   danmaku_send_enabled?: boolean;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;
-  /** Device-local Whisper model path; excluded from profile import/export. */
-  asr_model_path?: string | null;
   /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */
   disabled_site_ids?: SiteId[];
 };

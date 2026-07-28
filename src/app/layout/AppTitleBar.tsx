@@ -8,11 +8,19 @@ function hasTauriWindow(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function isMobilePlatform(): boolean {
+  return typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
 /**
  * A deliberately quiet desktop title bar. It gives the player a real window
  * frame without spending vertical space on a second application header.
  */
 export function AppTitleBar() {
+  return isMobilePlatform() ? null : <DesktopAppTitleBar />;
+}
+
+function DesktopAppTitleBar() {
   const [maximized, setMaximized] = useState(false);
 
   const refreshMaximizedState = useCallback(async () => {
@@ -73,7 +81,7 @@ export function AppTitleBar() {
   return (
     <header
       data-tauri-drag-region="deep"
-      className="relative isolate flex h-9 shrink-0 items-stretch border-b border-border-subtle bg-sidebar/95 text-xs select-none"
+      className="relative isolate flex h-9 shrink-0 items-stretch border-b border-border-subtle bg-sidebar/95 text-xs select-none max-md:hidden"
       aria-label="应用标题栏"
     >
       <div className="relative z-10 flex min-w-0 flex-1 items-center gap-2 px-3">
