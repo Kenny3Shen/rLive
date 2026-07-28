@@ -1,5 +1,5 @@
-# Pin the Rust channel used by agents and CI. Update intentionally.
+# Pin the exact Rust release used by agents and CI. Update intentionally.
 [toolchain]
-channel = "stable"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

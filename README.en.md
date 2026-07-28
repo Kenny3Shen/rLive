@@ -45,6 +45,7 @@ Not currently in scope: TV UI, multiple simultaneous rooms, recording/downloads,
 | Kuaishou platform API | [docs/en/kuaishou-platform-api.md](docs/en/kuaishou-platform-api.md) |
 | Twitch platform API | [docs/en/twitch-platform-api.md](docs/en/twitch-platform-api.md) |
 | Player performance research | [docs/en/player-performance-research.md](docs/en/player-performance-research.md) |
+| Release process | [docs/en/release-process.md](docs/en/release-process.md) |
 
 The primary product chrome is Chinese. Source comments and contribution material may use English or Chinese.
 
@@ -104,6 +105,10 @@ D:\dev\rLive\src-tauri\target\release\rlive.exe
 ```
 
 See [AGENTS.md](AGENTS.md) for delivery rules.
+
+### Signed releases
+
+Pushing a `vX.Y.Z` tag whose three version files agree starts the signed release workflow. It creates a Windows x64 NSIS installer, Android arm64-v8a APK/AAB, `SHA256SUMS.txt`, and a GitHub draft Release for review. Signing material is injected only from the protected GitHub `release` Environment; missing signing material fails the workflow rather than publishing an unsigned release. See the [release process](docs/en/release-process.md).
 
 ## Quick start
 

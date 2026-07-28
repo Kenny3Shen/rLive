@@ -1,0 +1,316 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: Verify release version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Check tag and package versions
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(jq -r '.version' package.json)"
+          tauri_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          cargo_version="$(awk -F '"' '/^version = / { print $2; exit }' src-tauri/Cargo.toml)"
+
+          test -n "$package_version"
+          test "$package_version" = "$tauri_version"
+          test "$package_version" = "$cargo_version"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build signed Windows installer
+    needs: verify-version
+    runs-on: windows-2022
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable at 2026-07-28
+        with:
+          toolchain: 1.97.1
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Import the release certificate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
+            throw "WINDOWS_CERTIFICATE_BASE64 is required for a signed release."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD is required for a signed release."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            throw "Set the non-secret WINDOWS_TIMESTAMP_URL repository variable for release signing."
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "rlive-release.pfx"
+          [IO.File]::WriteAllBytes(
+            $certificatePath,
+            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64)
+          )
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate `
+            -FilePath $certificatePath `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -Password $password
+          if ($null -eq $certificate) {
+            throw "The Windows release certificate could not be imported."
+          }
+
+          $thumbprint = $certificate.Thumbprint.Replace(" ", "").ToUpperInvariant()
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$thumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build and verify signed NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $windowsBundle = @{
+            certificateThumbprint = $env:WINDOWS_CERTIFICATE_THUMBPRINT
+            digestAlgorithm = "sha256"
+            timestampUrl = $env:WINDOWS_TIMESTAMP_URL
+            tsp = $true
+          }
+          $tauriSigningConfig = @{ bundle = @{ windows = $windowsBundle } } |
+            ConvertTo-Json -Compress -Depth 4
+
+          bun run tauri -- build --ci --bundles nsis --config $tauriSigningConfig
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File |
+            Select-Object -First 1
+          if ($null -eq $installer) {
+            throw "NSIS installer was not produced."
+          }
+          $appBinary = Get-Item "src-tauri/target/release/rlive.exe"
+
+          foreach ($file in @($appBinary, $installer)) {
+            $signature = Get-AuthenticodeSignature -FilePath $file.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Authenticode verification failed for $($file.FullName): $($signature.Status)"
+            }
+            if ($signature.SignerCertificate.Thumbprint.Replace(" ", "").ToUpperInvariant() -ne $env:WINDOWS_CERTIFICATE_THUMBPRINT) {
+              throw "Unexpected signing certificate for $($file.FullName)."
+            }
+          }
+
+          New-Item -ItemType Directory -Force "release-assets/windows" | Out-Null
+          Copy-Item $installer.FullName "release-assets/windows/rLive_$($env:RELEASE_VERSION)_x64-setup.exe"
+
+      - name: Upload signed Windows installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-release
+          path: release-assets/windows/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  build-android:
+    name: Build signed Android artifacts
+    needs: verify-version
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+
+      - name: Install Android build packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+
+      - name: Set up Rust Android target
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable at 2026-07-28
+        with:
+          toolchain: 1.97.1
+          targets: aarch64-linux-android
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Restore Android signing material
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret_name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!secret_name}" ]]; then
+              echo "Missing required Android release secret: ${secret_name}" >&2
+              exit 1
+            fi
+          done
+
+          keystore_path="$RUNNER_TEMP/rlive-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          test -s "$keystore_path"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$keystore_path" \
+            "$ANDROID_KEYSTORE_PASSWORD" \
+            "$ANDROID_KEY_ALIAS" \
+            "$ANDROID_KEY_PASSWORD" \
+            > src-tauri/gen/android/app/keystore.properties
+
+      - name: Build and verify signed Android APK and AAB
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.13846066"
+          export NDK_HOME="$ANDROID_NDK_HOME"
+          bun run tauri -- android build --ci --target aarch64 --apk --aab
+
+          mapfile -t apk_files < <(
+            find src-tauri/gen/android/app/build/outputs/apk/universal/release \
+              -type f -name '*.apk' ! -name '*unsigned*' | sort
+          )
+          mapfile -t aab_files < <(
+            find src-tauri/gen/android/app/build/outputs/bundle/universalRelease \
+              -type f -name '*.aab' | sort
+          )
+          test "${#apk_files[@]}" -eq 1
+          test "${#aab_files[@]}" -eq 1
+
+          apk_path="${apk_files[0]}"
+          aab_path="${aab_files[0]}"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk_path"
+          jarsigner -verify -strict "$aab_path"
+
+          if [[ -n "$ANDROID_CERT_SHA256" ]]; then
+            actual_fingerprint="$(
+              "$apksigner" verify --print-certs "$apk_path" |
+                awk -F ': ' '/certificate SHA-256 digest:/ { print $2; exit }' |
+                tr -d ':[:space:]' |
+                tr '[:lower:]' '[:upper:]'
+            )"
+            expected_fingerprint="$(
+              printf '%s' "$ANDROID_CERT_SHA256" |
+                tr -d ':[:space:]' |
+                tr '[:lower:]' '[:upper:]'
+            )"
+            test -n "$actual_fingerprint"
+            if [[ "$actual_fingerprint" != "$expected_fingerprint" ]]; then
+              echo "Android signing certificate fingerprint did not match ANDROID_CERT_SHA256." >&2
+              exit 1
+            fi
+          fi
+
+          mkdir -p release-assets/android
+          cp "$apk_path" "release-assets/android/rLive_${RELEASE_VERSION}_android-arm64-v8a.apk"
+          cp "$aab_path" "release-assets/android/rLive_${RELEASE_VERSION}_android-arm64-v8a.aab"
+
+      - name: Remove Android signing material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/rlive-release.jks" src-tauri/gen/android/app/keystore.properties
+
+      - name: Upload signed Android artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-release
+          path: release-assets/android/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Create draft GitHub Release
+    needs:
+      - verify-version
+      - build-windows
+      - build-android
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "*-release"
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd release-assets
+            find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum
+          ) > release-assets/SHA256SUMS.txt
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Create draft release and attach assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: release-assets/**/*
