@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import type { LucideIcon } from "lucide-react";
@@ -263,7 +264,7 @@ function QrLogin({
             )}
           </div>
           <div className="flex min-w-44 flex-1 flex-col gap-2">
-            <p className="text-sm font-medium">使用手机扫码登录</p>
+            <p className="text-sm font-medium">手机扫码登录</p>
             <FieldDescription role="status" aria-live="polite">
               {status}
             </FieldDescription>
@@ -278,9 +279,7 @@ function QrLogin({
             </Button>
           </div>
         </div>
-        <FieldDescription>
-          扫码确认后会直接把登录 Cookie 保存到本机，不会显示或上传 Cookie 内容。
-        </FieldDescription>
+        <FieldDescription>确认后 Cookie 直接保存到本机，不会显示或上传。</FieldDescription>
       </FieldContent>
     </Field>
   );
@@ -382,10 +381,8 @@ function CookieField({
       {qrLogin && (
         <Field orientation="responsive">
           <FieldContent>
-            <FieldTitle id={`${siteId}-cookie-method`}>获取方式</FieldTitle>
-            <FieldDescription>
-              选择扫码登录，或将浏览器中的 Cookie 手动粘贴到本机。
-            </FieldDescription>
+            <FieldTitle id={`${siteId}-cookie-method`}>登录方式</FieldTitle>
+            <FieldDescription>扫码登录，或粘贴浏览器中的 Cookie。</FieldDescription>
           </FieldContent>
           <ToggleGroup
             aria-labelledby={`${siteId}-cookie-method`}
@@ -442,18 +439,11 @@ function DanmakuSendField() {
   const setEnabled = useSettingsStore((s) => s.setDanmakuSendEnabled);
 
   return (
-    <Section
-      title="弹幕发送"
-      description="默认关闭；开启后可同时使用 B站、斗鱼和虎牙的单条普通文本发送，不会自动重试或发送礼物。"
-    >
+    <Section title="弹幕发送" description="支持 B站、斗鱼、虎牙的普通文本弹幕。">
       <Field orientation="responsive">
         <FieldContent>
-          <FieldTitle id="danmaku-send-title">启用发送功能</FieldTitle>
-          <FieldDescription>
-            {
-              "启用后仍需为每个平台保存有效 Cookie，并通过该平台的房间、文本、冷却和服务端校验；Cookie 缺失或无效时对应发送框会保持禁用。"
-            }
-          </FieldDescription>
+          <FieldTitle id="danmaku-send-title">允许发送弹幕</FieldTitle>
+          <FieldDescription>还需为对应平台保存有效 Cookie，否则发送框保持禁用。</FieldDescription>
         </FieldContent>
         <Switch
           aria-labelledby="danmaku-send-title"
@@ -489,12 +479,9 @@ function IptvCustomM3uUrlField() {
   }
 
   return (
-    <Section
-      title="IPTV 自定义 M3U"
-      description="可选：保存你有权使用的自定义频道源，供 IPTV 页面加载。"
-    >
+    <Section title="IPTV 源" description="可选：供 IPTV 页面加载的自定义频道源。">
       <Field data-invalid={error ? true : undefined}>
-        <FieldLabel htmlFor="iptv-custom-m3u-url">默认 M3U 地址</FieldLabel>
+        <FieldLabel htmlFor="iptv-custom-m3u-url">M3U 地址</FieldLabel>
         <FieldContent>
           <form
             className="w-full"
@@ -521,9 +508,7 @@ function IptvCustomM3uUrlField() {
               </InputGroupAddon>
             </InputGroup>
           </form>
-          <FieldDescription>
-            地址仅保存在本机，不会随配置导入或导出。请确认频道来源、地区限制和内容授权。
-          </FieldDescription>
+          <FieldDescription>仅保存在本机，不随配置导入导出。请确认来源与内容授权。</FieldDescription>
           {error ? (
             <FieldError>{error}</FieldError>
           ) : (
@@ -536,12 +521,14 @@ function IptvCustomM3uUrlField() {
 }
 
 function LocalCaptionModelField() {
+  const nativeRuntime = isTauri();
   const [modelStatus, setModelStatus] = useState<AsrModelStatus | null>(null);
   const [action, setAction] = useState<"status" | "default" | "unload" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
+    if (!nativeRuntime) return;
     setAction("status");
     setError(null);
     try {
@@ -557,11 +544,12 @@ function LocalCaptionModelField() {
     } finally {
       setAction(null);
     }
-  }, []);
+  }, [nativeRuntime]);
 
   useEffect(() => {
+    if (!nativeRuntime) return;
     void refreshStatus();
-  }, [refreshStatus]);
+  }, [nativeRuntime, refreshStatus]);
 
   async function loadDefaultModel() {
     setAction("default");
@@ -602,90 +590,80 @@ function LocalCaptionModelField() {
   }
 
   const loading = action === "default" || modelStatus?.loading === true;
-  const statusLabel = modelStatus?.loading
-    ? "正在加载"
-    : modelStatus?.loaded
-      ? "内置模型已加载"
-      : "未加载";
+  const statusLabel = !nativeRuntime
+    ? "仅应用内可用"
+    : action === "status"
+      ? "检查中"
+      : modelStatus?.loading
+        ? "加载中"
+        : modelStatus?.loaded
+          ? "已加载"
+          : "未加载";
 
   return (
-    <Section
-      title="本地字幕模型"
-      description="仅用于直播间实时字幕；Candle Rust 后端在本机 CPU 上识别，不会上传音频。模型按需加载。"
-    >
-      <Field>
+    <Section title="本地字幕" description="音频仅在本机识别，模型按需加载。">
+      <Field data-invalid={error ? true : undefined}>
         <FieldContent>
           <div className="flex flex-wrap items-start gap-2">
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <FieldTitle>内置默认模型</FieldTitle>
-              <FieldDescription>
-                Whisper tiny · 多语言 · Q4 · 约 23 MB。适合 CPU 优先的直播间实时字幕；暂不提供自定义模型配置。
-              </FieldDescription>
+              <FieldTitle>内置模型</FieldTitle>
+              <FieldDescription>Whisper tiny · 多语言 · Q4 · 约 23 MB</FieldDescription>
             </div>
-            <Badge variant="secondary">随应用提供</Badge>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              onClick={() => void loadDefaultModel()}
-              disabled={
-                loading ||
-                action === "status" ||
-                (modelStatus?.loaded === true && modelStatus.bundled)
-              }
-            >
-              {action === "default" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <MonitorPlay data-icon="inline-start" aria-hidden />
-              )}
-              {action === "default" ? "正在加载…" : "加载内置模型"}
-            </Button>
             <Badge variant={modelStatus?.loaded ? "secondary" : "outline"}>{statusLabel}</Badge>
           </div>
-        </FieldContent>
-      </Field>
-      <Field data-invalid={error ? true : undefined}>
-        <FieldContent>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => void unloadModel()}
-              disabled={action !== null || !modelStatus?.loaded}
-            >
-              {action === "unload" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Power data-icon="inline-start" aria-hidden />
+          {nativeRuntime ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  onClick={() => void loadDefaultModel()}
+                  disabled={
+                    loading ||
+                    action === "status" ||
+                    (modelStatus?.loaded === true && modelStatus.bundled)
+                  }
+                >
+                  {action === "default" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <MonitorPlay data-icon="inline-start" aria-hidden />
+                  )}
+                  {action === "default" ? "加载中…" : "加载模型"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void unloadModel()}
+                  disabled={action !== null || !modelStatus?.loaded}
+                >
+                  {action === "unload" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Power data-icon="inline-start" aria-hidden />
+                  )}
+                  {action === "unload" ? "卸载中…" : "卸载"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => void refreshStatus()}
+                  disabled={action !== null}
+                >
+                  {action === "status" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <RefreshCw data-icon="inline-start" aria-hidden />
+                  )}
+                  刷新
+                </Button>
+              </div>
+              {notice && (
+                <FieldDescription role="status" aria-live="polite">
+                  {notice}
+                </FieldDescription>
               )}
-              {action === "unload" ? "正在卸载…" : "卸载模型"}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => void refreshStatus()}
-              disabled={action !== null}
-            >
-              {action === "status" ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <RefreshCw data-icon="inline-start" aria-hidden />
-              )}
-              刷新状态
-            </Button>
-          </div>
-          {modelStatus?.loaded && (
-            <div className="flex flex-wrap items-center gap-2">
-              <FieldDescription>当前加载：内置 Whisper tiny（多语言 · Q4）</FieldDescription>
-              <Badge variant={modelStatus.speech_gate_active ? "secondary" : "outline"}>
-                {modelStatus.speech_gate_active ? "静音跳过已启用" : "静音跳过未启用"}
-              </Badge>
-            </div>
+              {error && <FieldError>{error}</FieldError>}
+            </>
+          ) : (
+            <FieldDescription role="status">请在 rLive 应用中管理模型。</FieldDescription>
           )}
-          {notice && (
-            <FieldDescription role="status" aria-live="polite">
-              {notice}
-            </FieldDescription>
-          )}
-          {error && <FieldError>{error}</FieldError>}
         </FieldContent>
       </Field>
     </Section>
@@ -725,10 +703,7 @@ function PlatformEnablementField() {
   const enabled = enabledSiteIds(disabledSiteIds);
 
   return (
-    <Section
-      title="直播平台"
-      description="关闭后会从平台切换、首页、分类、搜索和房间入口中隐藏。至少保留一个平台。"
-    >
+    <Section title="直播平台" description="关闭的平台不会出现在首页、分类和搜索中。">
       {LIVE_SITE_IDS.map((siteId) => {
         const isEnabled = enabled.includes(siteId);
         const isLastEnabled = isEnabled && enabled.length === 1;
@@ -742,11 +717,7 @@ function PlatformEnablementField() {
                 {SITE_LABELS[siteId] ?? siteId}
               </FieldTitle>
               <FieldDescription>
-                {isLastEnabled
-                  ? "至少保留一个直播平台，不能关闭当前最后一项。"
-                  : isEnabled
-                    ? "已启用，会显示在直播发现和房间入口中。"
-                    : "已关闭，不会显示在直播发现和房间入口中。"}
+                {isLastEnabled ? "需至少保留一个平台" : isEnabled ? "已启用" : "已关闭"}
               </FieldDescription>
             </FieldContent>
             <Switch
@@ -773,21 +744,18 @@ function AboutSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Section title="项目主页" description="获取源代码、版本动态和问题反馈渠道。">
-        <Field orientation="responsive">
-          <FieldContent>
-            <FieldTitle id="project-homepage">GitHub</FieldTitle>
-            <FieldDescription>{PROJECT_HOMEPAGE_URL}</FieldDescription>
-          </FieldContent>
-          <Button onClick={openProjectHomepage} variant="outline">
-            <ExternalLink data-icon="inline-start" aria-hidden />
-            打开 GitHub
-          </Button>
-        </Field>
-      </Section>
-
       <AlertDialog>
-        <Section title="免责声明" description="使用本应用前，请阅读其内容与第三方服务边界。">
+        <Section title="关于 rLive">
+          <Field orientation="responsive">
+            <FieldContent>
+              <FieldTitle id="project-homepage">项目主页</FieldTitle>
+              <FieldDescription>源代码、版本动态与问题反馈</FieldDescription>
+            </FieldContent>
+            <Button onClick={openProjectHomepage} variant="outline">
+              <ExternalLink data-icon="inline-start" aria-hidden />
+              GitHub
+            </Button>
+          </Field>
           <Field orientation="responsive">
             <FieldContent>
               <FieldTitle id="disclaimer-title">免责声明</FieldTitle>
@@ -799,7 +767,7 @@ function AboutSettings() {
               render={
                 <Button variant="outline">
                   <ShieldAlert data-icon="inline-start" aria-hidden />
-                  查看免责声明
+                  查看
                 </Button>
               }
             />
@@ -961,7 +929,7 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <PageHeader title="设置" description="按类别管理播放、平台、网络和本机数据。" />
+      <PageHeader title="设置" />
 
       <Tabs
         value={category}
@@ -974,7 +942,7 @@ export function SettingsPage() {
           className={cn(
             "shrink-0 rounded-xl border border-border-subtle bg-card/60 p-1",
             compactLayout
-              ? "sticky top-0 z-10 h-12! w-full flex-row! justify-start overflow-x-auto"
+              ? "scroll-fade-x sticky top-0 z-10 h-12! w-full flex-row! justify-start overflow-x-auto"
               : "w-44",
           )}
         >
@@ -1004,7 +972,7 @@ export function SettingsPage() {
                   <Field orientation="responsive">
                     <FieldContent>
                       <FieldTitle id="quality-label">优先清晰度</FieldTitle>
-                      <FieldDescription>有可用线路时优先选择此档。</FieldDescription>
+                      <FieldDescription>有可用线路时优先选择此档</FieldDescription>
                     </FieldContent>
                     <ToggleGroup
                       aria-labelledby="quality-label"
@@ -1042,7 +1010,7 @@ export function SettingsPage() {
             <TabsContent value="network" className="mt-0">
               <SettingsContent title="网络">
                 <div className="flex flex-col gap-4">
-                  <Section title="代理" description="可选 HTTP(S) 代理">
+                  <Section title="代理" description="可选：用于全部平台请求的 HTTP(S) 代理。">
                     <Field data-invalid={proxyError ? true : undefined}>
                       <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
                       <FieldContent>
@@ -1075,9 +1043,7 @@ export function SettingsPage() {
                             </InputGroupAddon>
                           </InputGroup>
                         </form>
-                        <FieldDescription>
-                          留空并保存即可关闭代理；未填写协议时会按 HTTP 地址处理。
-                        </FieldDescription>
+                        <FieldDescription>留空保存即关闭代理；省略协议时按 HTTP 处理。</FieldDescription>
                         {proxyError ? (
                           <FieldError>{proxyError}</FieldError>
                         ) : (
@@ -1102,27 +1068,27 @@ export function SettingsPage() {
                   <CookieField
                     siteId="bilibili"
                     title="哔哩哔哩"
-                    description="支持官方二维码登录和手动 Cookie 输入；用于只读 API、接收弹幕和已启用的单条弹幕发送。"
+                    description="用于登录态浏览、接收和发送弹幕。"
                     placeholder="SESSDATA=…; bili_jct=…"
                     qrLogin
                   />
                   <CookieField
                     siteId="douyu"
                     title="斗鱼"
-                    description="用于发送普通弹幕。支持扫码登录和手动 Cookie 输入。"
+                    description="用于发送弹幕。"
                     placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
                     qrLogin
                   />
                   <CookieField
                     siteId="huya"
                     title="虎牙"
-                    description="用于发送普通弹幕；当前仅支持手动 Cookie 输入，暂不提供二维码登录。请粘贴完整 Cookie。"
+                    description="用于发送弹幕；暂不支持扫码，请粘贴完整 Cookie。"
                     placeholder="yyuid=…; udb_cred=…"
                   />
                   <CookieField
                     siteId="douyin"
                     title="抖音"
-                    description="支持扫码登录和手动 Cookie 输入；可用于登录态搜索和实时弹幕连接。推荐和分类当前仅支持首屏，抖音仍可能要求网页访问验证。"
+                    description="用于登录态搜索和实时弹幕。"
                     placeholder="sessionid=…; ttwid=…; msToken=…"
                     qrLogin
                   />
@@ -1136,15 +1102,13 @@ export function SettingsPage() {
               <SettingsContent title="数据">
                 <Section
                   title="导入 / 导出"
-                  description="设置、关注、标签、历史和屏蔽词；不含 Cookie、自定义 M3U 地址或本机发送授权。"
+                  description="包含设置、关注、标签、历史和屏蔽词，不含 Cookie 和本机路径。"
                 >
                   <Field data-invalid={profileError ? true : undefined}>
                     <FieldContent>
                       <FieldTitle>配置档案</FieldTitle>
-                      <FieldDescription>
-                        通过系统文件选择器选取文件；Android 会直接使用系统文档，不需要输入文件路径。
-                      </FieldDescription>
-                      <div className="flex flex-wrap gap-2">
+                      <FieldDescription>通过系统文件选择器选取 JSON 档案。</FieldDescription>
+                      <div className="mt-1 flex flex-wrap gap-2">
                         <Button
                           onClick={() => void chooseProfileForExport()}
                           disabled={profileAction !== null}

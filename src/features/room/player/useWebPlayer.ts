@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Hls from "hls.js";
+import type Hls from "hls.js";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, PlayerUiMode } from "@/shared/types/player";
@@ -36,6 +36,23 @@ export async function loadMpegts(): Promise<MpegtsStatic> {
     throw new Error("mpegts.js global not found after script load");
   }
   return w.mpegts;
+}
+
+type HlsConstructor = typeof Hls;
+
+let hlsModulePromise: Promise<HlsConstructor> | null = null;
+
+/**
+ * hls.js is only useful for a manifest stream. Keeping it in a separate
+ * chunk avoids parsing its transmuxer in the far more common FLV/MPEG-TS room
+ * path, while caching the module means later HLS switches do not download it
+ * again.
+ */
+export function loadHls(): Promise<HlsConstructor> {
+  if (!hlsModulePromise) {
+    hlsModulePromise = import("hls.js").then(({ default: HlsModule }) => HlsModule);
+  }
+  return hlsModulePromise;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -447,14 +464,17 @@ export function useWebPlayer(opts: {
     mutedRef.current = false;
 
     const hlsSource = isHlsStream(playbackSource.url);
-    // Start fetching the vendored MPEG-TS/FLV demuxer while the serialized
-    // proxy queue tears down the previous session. HLS uses hls.js instead;
-    // giving its manifest to mpegts.js would try to demux playlist text.
+    // Start fetching only the engine the selected transport needs while the
+    // serialized proxy queue tears down the previous session. HLS uses a lazy
+    // chunk; giving its manifest to mpegts.js would try to demux playlist
+    // text, and loading hls.js for an FLV room needlessly delays first paint.
     const mpegtsPromise = hlsSource ? null : loadMpegts();
+    const hlsPromise = hlsSource ? loadHls() : null;
     // If a fast room switch cancels the queued setup before it reaches the
     // await below, retain a rejection handler so the speculative preload never
     // becomes an unhandled promise rejection.
     void mpegtsPromise?.catch(() => {});
+    void hlsPromise?.catch(() => {});
 
     void proxyLifecycleQueue
       .enqueue(async () => {
@@ -528,8 +548,20 @@ export function useWebPlayer(opts: {
           };
 
           if (hlsSource) {
-            if (Hls.isSupported()) {
-              const hls = new Hls({
+            let HlsModule: HlsConstructor | null = null;
+            try {
+              HlsModule = hlsPromise ? await hlsPromise : null;
+            } catch {
+              // Safari and other native-HLS environments can still play the
+              // stream even if the optional JavaScript engine cannot load.
+            }
+            if (cancelled || genRef.current !== gen) {
+              await stopProxy();
+              return;
+            }
+
+            if (HlsModule?.isSupported()) {
+              const hls = new HlsModule({
                 enableWorker: true,
                 lowLatencyMode: true,
                 backBufferLength: 30,
@@ -543,7 +575,7 @@ export function useWebPlayer(opts: {
               // instead of retrying the same expired child playlist forever.
               let hlsFatalFailureCount = 0;
 
-              hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
                 if (!isCurrentHls()) return;
                 requestPlayerAutoplay(
                   { play: () => video.play() },
@@ -552,10 +584,10 @@ export function useWebPlayer(opts: {
                   recoverMutedAutoplay,
                 );
               });
-              hls.on(Hls.Events.FRAG_BUFFERED, () => {
+              hls.on(HlsModule.Events.FRAG_BUFFERED, () => {
                 if (isCurrentHls()) hlsFatalFailureCount = 0;
               });
-              hls.on(Hls.Events.ERROR, (_event, data) => {
+              hls.on(HlsModule.Events.ERROR, (_event, data) => {
                 if (!isCurrentHls() || !data.fatal) return;
 
                 if (siteId === "twitch") {
@@ -567,7 +599,7 @@ export function useWebPlayer(opts: {
                     responseStatus === 401 || responseStatus === 403,
                   );
                   if (action.type === "restart") {
-                    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    if (data.type === HlsModule.ErrorTypes.MEDIA_ERROR) {
                       hls.recoverMediaError();
                     } else {
                       hls.startLoad();
@@ -601,11 +633,11 @@ export function useWebPlayer(opts: {
                   return;
                 }
 
-                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                if (data.type === HlsModule.ErrorTypes.NETWORK_ERROR) {
                   hls.startLoad();
                   return;
                 }
-                if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                if (data.type === HlsModule.ErrorTypes.MEDIA_ERROR) {
                   hls.recoverMediaError();
                   return;
                 }
@@ -641,6 +673,15 @@ export function useWebPlayer(opts: {
                 recoverMutedAutoplay,
               );
               return;
+            }
+
+            if (!HlsModule) {
+              throw {
+                code: "web_player_hls_load",
+                message: "HLS 播放器加载失败，请重试",
+                site: null,
+                retryable: true,
+              } satisfies AppError;
             }
 
             throw {

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -148,8 +148,16 @@ impl HuyaDanmakuSendLimiter {
 }
 
 impl AppState {
-    pub fn init() -> AppResult<Self> {
-        let path = db_path()?;
+    /// Creates the application state using the platform-owned data directory
+    /// when one is supplied by the mobile host.
+    ///
+    /// `dirs` deliberately does not expose Android's app sandbox. Falling
+    /// back to a relative path there makes startup depend on the process
+    /// working directory (normally `/`), which is not writable by an app.
+    /// Desktop callers keep the historic `dirs` location so existing local
+    /// databases continue to be found without a migration.
+    pub fn init(app_data_dir: Option<&Path>) -> AppResult<Self> {
+        let path = db_path(app_data_dir)?;
         let conn = Db::open(&path)?;
         Ok(Self {
             db: Mutex::new(conn),
@@ -163,16 +171,31 @@ impl AppState {
     }
 }
 
-fn db_path() -> AppResult<PathBuf> {
+fn create_db_path(dir: PathBuf) -> AppResult<PathBuf> {
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        AppError::new(
+            "db_io_error",
+            format!("create data dir {}: {e}", dir.display()),
+        )
+    })?;
+    Ok(dir.join("rlive.db"))
+}
+
+#[cfg(target_os = "android")]
+fn db_path(app_data_dir: Option<&Path>) -> AppResult<PathBuf> {
+    let data_dir = app_data_dir.ok_or_else(|| {
+        AppError::new(
+            "db_io_error",
+            "Android app data directory is unavailable during startup",
+        )
+    })?;
+    create_db_path(data_dir.join("rlive"))
+}
+
+#[cfg(not(target_os = "android"))]
+fn db_path(_app_data_dir: Option<&Path>) -> AppResult<PathBuf> {
     if let Some(data_dir) = dirs::data_dir() {
-        let dir = data_dir.join("rlive");
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            AppError::new(
-                "db_io_error",
-                format!("create data dir {}: {e}", dir.display()),
-            )
-        })?;
-        Ok(dir.join("rlive.db"))
+        create_db_path(data_dir.join("rlive"))
     } else {
         Ok(PathBuf::from("./rlive.db"))
     }
