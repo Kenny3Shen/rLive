@@ -368,7 +368,7 @@ function IptvChannelCard({
         <Badge variant="secondary" className="absolute right-2 bottom-2 max-w-[70%] truncate">
           {group}
         </Badge>
-        <span className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+        <span className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100">
           <Play className="size-3.5 fill-current" aria-hidden />
         </span>
       </div>

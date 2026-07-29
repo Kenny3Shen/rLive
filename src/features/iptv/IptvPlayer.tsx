@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { createSerialTaskQueue } from "@/features/room/player/serialTaskQueue";
 import { loadMpegts } from "@/features/room/player/useWebPlayer";
+import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import type { Player as MpegtsPlayer } from "@/vendor/mpegts";
 import type { IptvChannel } from "./types";
 
@@ -53,6 +54,7 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
   const generationRef = useRef(0);
   const [status, setStatus] = useState<PlaybackStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  useScreenWakeLock(status === "playing");
 
   if (instanceIdRef.current === null) {
     instanceIdRef.current = nextPlayerId();
@@ -290,6 +292,7 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
           className="size-full bg-black object-contain"
           aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
           onPlaying={() => setStatus("playing")}
+          onPause={() => setStatus((current) => (current === "playing" ? "ready" : current))}
           onWaiting={() => setStatus((current) => (current === "playing" ? "connecting" : current))}
           onCanPlay={() => setStatus((current) => (current === "connecting" ? "ready" : current))}
           onError={() => {

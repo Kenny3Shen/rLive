@@ -1,0 +1,47 @@
+/**
+ * The native shell only needs a small, stable distinction: Android, iOS, or
+ * a desktop-class client. Prefer User-Agent Client Hints when a WebView
+ * exposes them, then retain conservative fallbacks for current Tauri mobile
+ * WebViews and iPads that identify as Macintosh.
+ */
+export type ClientPlatform = "android" | "ios" | "desktop";
+
+type ClientNavigator = Pick<Navigator, "userAgent" | "maxTouchPoints"> & {
+  userAgentData?: {
+    mobile?: boolean;
+    platform?: string;
+  };
+};
+
+function browserNavigator(): ClientNavigator | undefined {
+  return typeof navigator === "undefined" ? undefined : navigator;
+}
+
+export function getClientPlatform(
+  navigatorRef: ClientNavigator | null | undefined = browserNavigator(),
+): ClientPlatform {
+  if (!navigatorRef) return "desktop";
+
+  const platform = navigatorRef.userAgentData?.platform?.toLowerCase() ?? "";
+  const userAgent = navigatorRef.userAgent ?? "";
+
+  if (platform === "android" || /\bAndroid\b/i.test(userAgent)) return "android";
+
+  const isIpadDesktopUserAgent =
+    /\bMacintosh\b/i.test(userAgent) && (navigatorRef.maxTouchPoints ?? 0) > 1;
+  if (
+    platform === "ios" ||
+    /\biPhone\b|\biPad\b|\biPod\b/i.test(userAgent) ||
+    isIpadDesktopUserAgent
+  ) {
+    return "ios";
+  }
+
+  return "desktop";
+}
+
+export function isMobileClient(
+  navigatorRef: ClientNavigator | null | undefined = browserNavigator(),
+): boolean {
+  return getClientPlatform(navigatorRef) !== "desktop";
+}

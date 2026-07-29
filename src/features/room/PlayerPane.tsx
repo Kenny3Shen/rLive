@@ -24,14 +24,18 @@ import { useWebPlayer } from "./player/useWebPlayer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import type { PlayerEvent } from "@/shared/types/player";
 
 export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
-const COMPACT_VIEWPORT_QUERY = "(max-width: 767px)";
+const COMPACT_LANDSCAPE_VIEWPORT_QUERY =
+  "(orientation: landscape) and (max-height: 540px) and (pointer: coarse)";
+const COMPACT_VIEWPORT_QUERY = `(max-width: 767px), ${COMPACT_LANDSCAPE_VIEWPORT_QUERY}`;
 type OverlayInteractionSource = "controls" | "composer";
 
 function isCompactViewport(): boolean {
@@ -50,6 +54,26 @@ function useCompactViewport(): boolean {
   }, []);
 
   return compact;
+}
+
+function isCompactLandscapeViewport(): boolean {
+  return (
+    typeof window !== "undefined" && window.matchMedia(COMPACT_LANDSCAPE_VIEWPORT_QUERY).matches
+  );
+}
+
+function useCompactLandscapeViewport(): boolean {
+  const [compactLandscape, setCompactLandscape] = useState(isCompactLandscapeViewport);
+
+  useEffect(() => {
+    const query = window.matchMedia(COMPACT_LANDSCAPE_VIEWPORT_QUERY);
+    const update = () => setCompactLandscape(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return compactLandscape;
 }
 
 /**
@@ -143,9 +167,10 @@ export function PlayerPane({
   roomId,
 }: PlayerPaneProps) {
   const compactViewport = useCompactViewport();
-  // On a phone the side panel is a 72dvh drawer over the video. Start with
-  // the picture unobstructed, but retain the desktop's immediately available
-  // right rail and let the player control open the drawer at any time.
+  const compactLandscapeViewport = useCompactLandscapeViewport();
+  // On a phone the side panel opens over the video. Start with the picture
+  // unobstructed; portrait uses a bottom drawer while short landscape screens
+  // use a narrower right drawer so the video keeps meaningful height.
   const [sidePanelOpen, setSidePanelOpen] = useState(() => !isCompactViewport());
   const shouldMountSidePanel = sidePanelOpen || !compactViewport;
   const [osdOn, setOsdOn] = useState(true);
@@ -174,6 +199,7 @@ export function PlayerPane({
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
   });
+  useScreenWakeLock(player.running && !player.paused);
   // This stays above the conditional side panel, so hiding that panel never
   // silently stops a session the user explicitly enabled.
   const autoDanmakuSend = useAutoDanmakuSend({ siteId, roomId, roomSessionKey });
@@ -212,6 +238,9 @@ export function PlayerPane({
     sidePanelOpen,
   });
   const mobileDrawerOpen = compactViewport && sidePanelOpen;
+  const compactSidePanelClassName = compactLandscapeViewport
+    ? "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl"
+    : "absolute inset-x-0 bottom-0 z-50 h-[min(26rem,72dvh)] min-h-64 w-full overscroll-contain rounded-t-2xl border-t border-border/80 pb-[env(safe-area-inset-bottom)] shadow-2xl";
 
   // The desktop rail is visible by default, while the phone drawer should
   // begin closed so playback stays unobstructed. Reset only when crossing the
@@ -219,6 +248,12 @@ export function PlayerPane({
   useEffect(() => {
     setSidePanelOpen(!compactViewport);
   }, [compactViewport]);
+
+  // A landscape rotation is a viewing-first transition. Do not carry an
+  // already opened portrait drawer across it and cover the newly wide video.
+  useEffect(() => {
+    if (compactLandscapeViewport) setSidePanelOpen(false);
+  }, [compactLandscapeViewport]);
 
   useEffect(() => {
     if (!mobileDrawerOpen) return;
@@ -681,8 +716,10 @@ export function PlayerPane({
           aria-modal={compactViewport ? true : undefined}
           role={compactViewport ? "dialog" : undefined}
           className={cn(
-            "flex w-[300px] shrink-0 flex-col border-l border-border/80 bg-sidebar lg:w-[320px]",
-            "max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:h-[min(26rem,72dvh)] max-md:min-h-64 max-md:w-full max-md:overscroll-contain max-md:rounded-t-2xl max-md:border-t max-md:border-l-0 max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl",
+            "flex shrink-0 flex-col bg-sidebar",
+            compactViewport
+              ? compactSidePanelClassName
+              : "w-[300px] border-l border-border/80 lg:w-[320px]",
             !sidePanelOpen && "hidden",
           )}
         >
@@ -732,17 +769,23 @@ export function PlayerPane({
                 </TabsTrigger>
               </TabsList>
               {compactViewport && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="max-md:size-11 max-md:touch-manipulation"
-                  aria-label="关闭直播间面板"
-                  title="关闭直播间面板"
-                  onClick={() => setSidePanelOpen(false)}
-                >
-                  <X data-icon="inline-start" aria-hidden />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="max-md:size-11 max-md:touch-manipulation"
+                        aria-label="关闭直播间面板"
+                        onClick={() => setSidePanelOpen(false)}
+                      />
+                    }
+                  >
+                    <X data-icon="inline-start" aria-hidden />
+                  </TooltipTrigger>
+                  <TooltipContent>关闭直播间面板</TooltipContent>
+                </Tooltip>
               )}
             </div>
             <TabsContent
