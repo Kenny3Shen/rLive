@@ -11,8 +11,8 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId, parse_live_started_at,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
+    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -458,6 +458,31 @@ fn parse_huya_room_list(v: &Value) -> AppResult<RoomListPage> {
     })
 }
 
+/// Extract the small status payload needed by a follow refresh from Huya's
+/// room bootstrap response.  The stream lines and TARS/channel identifiers in
+/// that response are deliberately ignored here; they are only needed after a
+/// user enters a room to play it or connect danmaku.
+fn live_status_from_room_info(info: &Value) -> LiveRoomStatus {
+    let live_info = info.pointer("/roomInfo/tLiveInfo").unwrap_or(&Value::Null);
+    let status = info.pointer("/roomInfo/eLiveStatus").map(json_i64) == Some(2);
+    LiveRoomStatus {
+        status,
+        live_started_at: status
+            .then(|| {
+                parse_live_started_at(
+                    live_info
+                        .get("iLiveStartTime")
+                        .or_else(|| live_info.get("lLiveStartTime"))
+                        .or_else(|| live_info.get("iStartTime"))
+                        .or_else(|| live_info.get("lStartTime"))
+                        .or_else(|| live_info.get("startTime"))
+                        .or_else(|| info.pointer("/roomInfo/iStartTime")),
+                )
+            })
+            .flatten(),
+    }
+}
+
 #[async_trait::async_trait]
 impl LiveSite for HuyaSite {
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
@@ -551,6 +576,13 @@ impl LiveSite for HuyaSite {
             has_more: items.len() >= 20,
             items,
         })
+    }
+
+    async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        // The mobile room bootstrap already contains eLiveStatus.  Avoid the
+        // later play-url/danmaku work performed by get_room_detail.
+        let room = self.room_info(room_id).await?;
+        Ok(live_status_from_room_info(&room))
     }
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
@@ -863,6 +895,26 @@ mod tests {
             "https://live.cdn.huya.com/liveconfig/game/bussLive"
         ));
         assert!(!is_room_page_url("https://search.cdn.huya.com/?q=test"));
+    }
+
+    #[test]
+    fn room_info_status_probe_reads_live_status_and_start_time() {
+        let info = serde_json::json!({
+            "roomInfo": {
+                "eLiveStatus": "2",
+                "tLiveInfo": { "iLiveStartTime": 1_704_067_200 }
+            }
+        });
+        assert_eq!(
+            live_status_from_room_info(&info),
+            LiveRoomStatus {
+                status: true,
+                live_started_at: Some(1_704_067_200_000),
+            }
+        );
+
+        let offline = serde_json::json!({ "roomInfo": { "eLiveStatus": 0 } });
+        assert!(!live_status_from_room_info(&offline).status);
     }
 
     #[test]

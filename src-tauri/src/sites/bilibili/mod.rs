@@ -3,8 +3,9 @@
 mod api;
 
 pub use api::{
-    DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_categories, parse_category_rooms,
-    parse_play_qualities, parse_play_urls, parse_recommend_rooms, parse_search_rooms,
+    DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_account_recommend_rooms, parse_categories,
+    parse_category_rooms, parse_live_status, parse_play_qualities, parse_play_urls,
+    parse_recommend_rooms, parse_search_rooms,
 };
 
 use std::collections::BTreeMap;
@@ -17,7 +18,8 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomStatus, LiveSubCategory, PlayUrl,
+    RoomListPage,
 };
 use crate::sites::traits::LiveSite;
 
@@ -43,11 +45,146 @@ pub struct BilibiliSite {
     play_gate: AsyncMutex<Option<Instant>>,
 }
 
+const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+/// Older official endpoint. It remains useful when the newer web endpoint is
+/// challenged by Bilibili risk control before it returns a short-lived token.
+const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Danmu/getConf";
+
+/// Accept both a raw browser Cookie value and a copied `Cookie: ...` request
+/// header. The latter is a common paste format and must not become part of the
+/// value of the first cookie field.
+fn normalize_cookie_header(value: &str) -> String {
+    let value = value.trim();
+    let value = match value.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("cookie:") => &value[7..],
+        _ => value,
+    };
+    value.trim().to_string()
+}
+
+/// Preserve user-supplied cookie values and add a generated value only when a
+/// field is absent (or empty). This is deliberately a small Cookie-header
+/// merger rather than a Set-Cookie parser: account data is stored as a request
+/// header value, not as browser cookie attributes.
+fn merge_missing_cookie_value(cookie: &str, key: &str, generated: &str) -> String {
+    let generated = generated.trim();
+    let mut found = false;
+    let mut merged = Vec::new();
+
+    for part in cookie
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let Some((name, value)) = part.split_once('=') else {
+            merged.push(part.to_string());
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case(key) {
+            merged.push(part.to_string());
+            continue;
+        }
+
+        // Cookies with the same name are ambiguous. Keep the first non-empty
+        // user value and discard later duplicates; if it is empty, replace it
+        // with the generated device identifier when one is available.
+        if found {
+            continue;
+        }
+        found = true;
+        if value.trim().is_empty() && !generated.is_empty() {
+            merged.push(format!("{key}={generated}"));
+        } else {
+            merged.push(part.to_string());
+        }
+    }
+
+    if !found && !generated.is_empty() {
+        merged.push(format!("{key}={generated}"));
+    }
+    merged.join("; ")
+}
+
+fn cookie_with_buvids(cookie: &str, buvid3: &str, buvid4: &str) -> String {
+    let cookie = merge_missing_cookie_value(cookie, "buvid3", buvid3);
+    merge_missing_cookie_value(&cookie, "buvid4", buvid4)
+}
+
+/// Convert a host array from either Bilibili danmaku endpoint into the shape
+/// consumed by `parse_room_detail_from_data`.
+///
+/// `getDanmuInfo` calls it `host_list`, while the older official `getConf`
+/// endpoint uses `host_server_list` (and some historical responses use
+/// `server_list`). Keep only non-empty host names, but otherwise preserve the
+/// upstream object so future consumers can use its port metadata if needed.
+fn normalized_danmaku_hosts(data: &Value) -> Vec<Value> {
+    for field in ["host_list", "host_server_list", "server_list"] {
+        let Some(entries) = data.get(field).and_then(Value::as_array) else {
+            continue;
+        };
+        let hosts = entries
+            .iter()
+            .filter_map(|entry| {
+                let host = entry
+                    .as_str()
+                    .or_else(|| entry.get("host").and_then(Value::as_str))?
+                    .trim();
+                if host.is_empty() {
+                    return None;
+                }
+
+                let mut normalized = entry.clone();
+                if normalized.is_object() {
+                    normalized["host"] = Value::String(host.to_string());
+                } else {
+                    normalized = serde_json::json!({ "host": host });
+                }
+                Some(normalized)
+            })
+            .collect::<Vec<_>>();
+        if !hosts.is_empty() {
+            return hosts;
+        }
+    }
+
+    data.get("host")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(|host| vec![serde_json::json!({ "host": host })])
+        .unwrap_or_default()
+}
+
+/// Return only an official danmaku response data object that contains a usable
+/// token. Bilibili can return `code = 0` while omitting the short-lived token
+/// for a particular Cookie/device combination; treating that as success would
+/// later fail at WebSocket startup. Normalize the legacy endpoint's host field
+/// at the boundary so the remainder of the connection pipeline stays uniform.
+fn danmaku_data_with_token(text: &str) -> Option<Value> {
+    let mut data = serde_json::from_str::<Value>(text)
+        .ok()?
+        .get("data")?
+        .clone();
+    let token = data
+        .get("token")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())?;
+    // Keep the value sent to the WebSocket free of accidental surrounding
+    // whitespace without logging or exposing the token itself.
+    data["token"] = Value::String(token.to_string());
+    let hosts = normalized_danmaku_hosts(&data);
+    if !hosts.is_empty() {
+        data["host_list"] = Value::Array(hosts);
+    }
+    Some(data)
+}
+
 impl BilibiliSite {
     pub fn new(client: Client, cookie: String) -> Self {
         Self {
             client,
-            cookie,
+            cookie: normalize_cookie_header(&cookie),
             session: Mutex::new(Session::default()),
             play_gate: AsyncMutex::new(None),
         }
@@ -63,21 +200,32 @@ impl BilibiliSite {
             }
         }
 
-        if let Some((b3, b4)) = buvid_from_cookie(&self.cookie) {
+        let (saved_b3, saved_b4) = buvid_from_cookie(&self.cookie).unwrap_or_default();
+        if !saved_b3.is_empty() && !saved_b4.is_empty() {
             let mut s = self.session.lock().map_err(|_| {
                 AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
             })?;
-            s.buvid3 = b3.clone();
-            s.buvid4 = b4.clone();
-            return Ok((b3, b4));
+            s.buvid3 = saved_b3.clone();
+            s.buvid4 = saved_b4.clone();
+            return Ok((saved_b3, saved_b4));
         }
 
-        let (b3, b4) = match self.fetch_buvid().await {
+        let (fetched_b3, fetched_b4) = match self.fetch_buvid().await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "bilibili get_buvid failed; continuing empty");
                 (String::new(), String::new())
             }
+        };
+        let b3 = if saved_b3.is_empty() {
+            fetched_b3
+        } else {
+            saved_b3
+        };
+        let b4 = if saved_b4.is_empty() {
+            fetched_b4
+        } else {
+            saved_b4
         };
         let mut s = self.session.lock().map_err(|_| {
             AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
@@ -88,33 +236,30 @@ impl BilibiliSite {
     }
 
     async fn fetch_buvid(&self) -> AppResult<(String, String)> {
-        let resp = self
+        let mut request = self
             .client
             .get("https://api.bilibili.com/x/frontend/finger/spi")
             .header("user-agent", DEFAULT_USER_AGENT)
-            .header("referer", DEFAULT_REFERER)
-            .header("cookie", &self.cookie)
-            .send()
-            .await
-            .map_err(|e| map_http(e))?;
+            .header("referer", DEFAULT_REFERER);
+        if !self.cookie.is_empty() {
+            request = request.header("cookie", &self.cookie);
+        }
+        let resp = request.send().await.map_err(|e| map_http(e))?;
         let text = resp.text().await.map_err(|e| map_http(e))?;
         parse_buvid(&text)
     }
 
     async fn headers(&self) -> AppResult<Vec<(&'static str, String)>> {
         let (b3, b4) = self.ensure_buvid().await?;
-        let cookie = if self.cookie.is_empty() {
-            format!("buvid3={b3};buvid4={b4};")
-        } else if self.cookie.contains("buvid3") {
-            self.cookie.clone()
-        } else {
-            format!("{};buvid3={b3};buvid4={b4};", self.cookie)
-        };
-        Ok(vec![
+        let cookie = cookie_with_buvids(&self.cookie, &b3, &b4);
+        let mut headers = vec![
             ("user-agent", DEFAULT_USER_AGENT.to_string()),
             ("referer", DEFAULT_REFERER.to_string()),
-            ("cookie", cookie),
-        ])
+        ];
+        if !cookie.is_empty() {
+            headers.push(("cookie", cookie));
+        }
+        Ok(headers)
     }
 
     async fn get_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
@@ -158,6 +303,62 @@ impl BilibiliSite {
                     return Err(AppError::new(
                         "bilibili_api_error",
                         format!("code={code} message={msg}"),
+                    )
+                    .with_site("bilibili"));
+                }
+            }
+        }
+        Ok(text)
+    }
+
+    /// Fetch a public Bilibili response without bootstrapping device IDs.
+    ///
+    /// Follow-list refreshes only need the room's on/off state.  Calling the
+    /// normal JSON helper would first call `ensure_buvid`, which can add a
+    /// fingerprint request for every fresh site instance.  This endpoint is
+    /// public, so a UA and Referer are sufficient and keep the probe to one
+    /// request.
+    async fn get_public_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
+        let mut request = self
+            .client
+            .get(url)
+            .header("user-agent", DEFAULT_USER_AGENT)
+            .header("referer", DEFAULT_REFERER);
+        for (key, value) in query {
+            request = request.query(&[(key, value)]);
+        }
+
+        let response = request.send().await.map_err(map_http)?;
+        let status = response.status();
+        let text = response.text().await.map_err(map_http)?;
+        if status.as_u16() == 429 {
+            return Err(
+                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
+                    .with_site("bilibili")
+                    .retryable(),
+            );
+        }
+        if !status.is_success() {
+            return Err(AppError::new(
+                "bilibili_http_error",
+                format!(
+                    "HTTP {status}: {}",
+                    text.chars().take(200).collect::<String>()
+                ),
+            )
+            .with_site("bilibili"));
+        }
+        if let Ok(response) = serde_json::from_str::<Value>(&text) {
+            if let Some(code) = response.get("code").and_then(Value::as_i64) {
+                if code != 0 {
+                    let message = response
+                        .get("message")
+                        .or_else(|| response.get("msg"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    return Err(AppError::new(
+                        "bilibili_api_error",
+                        format!("code={code} message={message}"),
                     )
                     .with_site("bilibili"));
                 }
@@ -274,6 +475,84 @@ impl BilibiliSite {
         Ok(text)
     }
 
+    /// Resolve a token and websocket hosts without letting a risk-control
+    /// response from one official endpoint turn into a misleading local
+    /// "token missing" error. The legacy endpoint is deliberately tried
+    /// before WBI: it is a normal official response, does not require WBI
+    /// keys, and remains available when `getDanmuInfo` returns code -352.
+    async fn get_danmaku_data(&self, room_id: &str) -> Option<Value> {
+        match self
+            .get_json(
+                DANMAKU_INFO_URL,
+                &[("id", room_id.to_string()), ("type", "0".into())],
+            )
+            .await
+        {
+            Ok(text) => {
+                if let Some(data) = danmaku_data_with_token(&text) {
+                    tracing::info!(
+                        room_id,
+                        endpoint = "getDanmuInfo",
+                        "bilibili danmaku info ok"
+                    );
+                    return Some(data);
+                }
+                tracing::warn!(
+                    room_id,
+                    "bilibili getDanmuInfo omitted token; trying legacy endpoint"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, room_id, "bilibili getDanmuInfo failed; trying legacy endpoint");
+            }
+        }
+
+        match self
+            .get_json(
+                LEGACY_DANMAKU_INFO_URL,
+                &[("room_id", room_id.to_string()), ("platform", "web".into())],
+            )
+            .await
+        {
+            Ok(text) => {
+                if let Some(data) = danmaku_data_with_token(&text) {
+                    tracing::info!(room_id, endpoint = "getConf", "bilibili danmaku info ok");
+                    return Some(data);
+                }
+                tracing::warn!(
+                    room_id,
+                    "bilibili legacy danmaku endpoint omitted token; trying signed endpoint"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, room_id, "bilibili legacy danmaku endpoint failed; trying signed endpoint");
+            }
+        }
+
+        let mut params = BTreeMap::new();
+        params.insert("id".into(), room_id.to_string());
+        params.insert("type".into(), "0".into());
+        match self.get_json_signed(DANMAKU_INFO_URL, params).await {
+            Ok(text) => {
+                let data = danmaku_data_with_token(&text);
+                if data.is_some() {
+                    tracing::info!(
+                        room_id,
+                        endpoint = "getDanmuInfo_wbi",
+                        "bilibili danmaku info ok"
+                    );
+                } else {
+                    tracing::warn!(room_id, "bilibili signed danmaku endpoint omitted token");
+                }
+                data
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, room_id, "bilibili signed danmaku endpoint failed");
+                None
+            }
+        }
+    }
+
     async fn get_room_play_info(&self, query: BTreeMap<String, String>) -> AppResult<String> {
         const RETRY_DELAYS_MS: &[u64] = &[800, 1600];
         let url = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
@@ -362,6 +641,39 @@ impl BilibiliSite {
         }
         Ok(text)
     }
+
+    async fn get_public_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
+        let mut params = BTreeMap::new();
+        params.insert("platform".into(), "web".into());
+        params.insert("sort".into(), "online".into());
+        params.insert("page_size".into(), "30".into());
+        params.insert("page".into(), page.to_string());
+        let text = self
+            .get_json_signed(
+                "https://api.live.bilibili.com/xlive/web-interface/v1/second/getListByArea",
+                params,
+            )
+            .await?;
+        parse_recommend_rooms(&text)
+    }
+
+    /// Bilibili's signed-in home payload is a single, non-paginated page.
+    /// Callers only reach this helper when a saved Cookie is present.
+    async fn get_account_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
+        if page.max(1) > 1 {
+            return Ok(RoomListPage {
+                has_more: false,
+                items: Vec::new(),
+            });
+        }
+        let text = self
+            .get_json(
+                "https://api.live.bilibili.com/xlive/web-interface/v1/index/getList",
+                &[("platform", "web".into())],
+            )
+            .await?;
+        parse_account_recommend_rooms(&text)
+    }
 }
 
 fn map_http(e: reqwest::Error) -> AppError {
@@ -383,18 +695,28 @@ impl LiveSite for BilibiliSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
-        let mut params = BTreeMap::new();
-        params.insert("platform".into(), "web".into());
-        params.insert("sort".into(), "online".into());
-        params.insert("page_size".into(), "30".into());
-        params.insert("page".into(), page.to_string());
-        let text = self
-            .get_json_signed(
-                "https://api.live.bilibili.com/xlive/web-interface/v1/second/getListByArea",
-                params,
-            )
-            .await?;
-        parse_recommend_rooms(&text)
+        if self.cookie.is_empty() {
+            return self.get_public_recommend_rooms(page).await;
+        }
+
+        match self.get_account_recommend_rooms(page).await {
+            Ok(recommendations) if !recommendations.items.is_empty() || page.max(1) > 1 => {
+                Ok(recommendations)
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    "bilibili account recommendation returned no rooms; falling back to public feed"
+                );
+                self.get_public_recommend_rooms(page).await
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "bilibili account recommendation failed; falling back to public feed"
+                );
+                self.get_public_recommend_rooms(page).await
+            }
+        }
     }
 
     async fn get_category_rooms(
@@ -439,6 +761,21 @@ impl LiveSite for BilibiliSite {
         parse_search_rooms(&text)
     }
 
+    async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        let text = self
+            .get_public_json(
+                "https://api.live.bilibili.com/room/v1/Room/get_info",
+                &[("room_id", room_id.to_string())],
+            )
+            .await?;
+        Ok(LiveRoomStatus {
+            status: parse_live_status(&text)?,
+            // This small endpoint is intentionally used only as a status
+            // probe.  Keep duration metadata out of its request/parse path.
+            live_started_at: None,
+        })
+    }
+
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
         let mut params = BTreeMap::new();
         params.insert("room_id".into(), room_id.to_string());
@@ -463,46 +800,7 @@ impl LiveSite for BilibiliSite {
             .unwrap_or_else(|| room_id.to_string());
 
         // Danmaku info is best-effort (upstream: failure must not block room entry).
-        let mut danmaku: Option<Value> = None;
-        {
-            // Prefer plain getDanmuInfo (cookie + type=0); fall back to WBI signed.
-            let plain = self
-                .get_json(
-                    "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
-                    &[("id", real_room_id.clone()), ("type", "0".into())],
-                )
-                .await;
-            let fetched = match plain {
-                Ok(t) => Ok(t),
-                Err(_) => {
-                    let mut dparams = BTreeMap::new();
-                    dparams.insert("id".into(), real_room_id.clone());
-                    dparams.insert("type".into(), "0".into());
-                    self.get_json_signed(
-                        "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo",
-                        dparams,
-                    )
-                    .await
-                }
-            };
-            match fetched {
-                Ok(text) => {
-                    if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                        danmaku = v.get("data").cloned();
-                        let tok_len = danmaku
-                            .as_ref()
-                            .and_then(|d| d.get("token"))
-                            .and_then(|t| t.as_str())
-                            .map(|s| s.len())
-                            .unwrap_or(0);
-                        tracing::info!(room_id = %real_room_id, token_len = tok_len, "danmaku info ok");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, room_id = %real_room_id, "danmaku info failed");
-                }
-            }
-        }
+        let danmaku = self.get_danmaku_data(&real_room_id).await;
 
         let (b3, _) = self.ensure_buvid().await.unwrap_or_default();
         parse_room_detail_from_data(&data, danmaku.as_ref(), &b3, &self.cookie)
@@ -544,6 +842,47 @@ impl LiveSite for BilibiliSite {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+
+    #[test]
+    fn copied_cookie_header_is_normalized_and_missing_buvid_is_added() {
+        let site = BilibiliSite::new(
+            reqwest::Client::new(),
+            "  Cookie: SESSDATA=session; buvid3=saved-device  ".into(),
+        );
+        assert_eq!(site.cookie, "SESSDATA=session; buvid3=saved-device");
+        assert_eq!(
+            cookie_with_buvids(&site.cookie, "fresh-device-3", "fresh-device-4"),
+            "SESSDATA=session; buvid3=saved-device; buvid4=fresh-device-4"
+        );
+        assert_eq!(
+            cookie_with_buvids("SESSDATA=session; buvid3=", "fresh-device-3", ""),
+            "SESSDATA=session; buvid3=fresh-device-3"
+        );
+    }
+
+    #[test]
+    fn danmaku_info_requires_a_nonempty_token() {
+        assert!(danmaku_data_with_token(r#"{"code":0,"data":{"token":""}}"#).is_none());
+        assert!(danmaku_data_with_token(r#"{"code":0,"data":{}}"#).is_none());
+        assert!(danmaku_data_with_token("not json").is_none());
+
+        let data =
+            danmaku_data_with_token(r#"{"code":0,"data":{"token":" token ","host_list":[]}}"#)
+                .expect("usable token");
+        assert_eq!(data["token"], "token");
+    }
+
+    #[test]
+    fn legacy_danmaku_info_normalizes_its_server_list() {
+        let data = danmaku_data_with_token(
+            r#"{"code":0,"data":{"token":" legacy-token ","host_server_list":[{"host":" legacy-1.example ","wss_port":443},{"host":"legacy-2.example","wss_port":443}]}}"#,
+        )
+        .expect("legacy token and hosts");
+
+        assert_eq!(data["token"], "legacy-token");
+        assert_eq!(data["host_list"][0]["host"], "legacy-1.example");
+        assert_eq!(data["host_list"][1]["host"], "legacy-2.example");
+    }
 
     #[tokio::test]
     #[ignore = "live network smoke — run with --ignored"]

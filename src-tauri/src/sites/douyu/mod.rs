@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId, parse_live_started_at,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
+    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -227,6 +227,34 @@ fn parse_mix_list(v: &Value) -> AppResult<RoomListPage> {
     })
 }
 
+/// Select the room object returned by Douyu's lightweight `betard` endpoint
+/// and extract only fields useful to a follow-list refresh.
+fn live_status_from_room_info(root: &Value) -> LiveRoomStatus {
+    let room = root
+        .get("room")
+        .or_else(|| root.get("data"))
+        .unwrap_or(root);
+    let status = json_i64(room.get("show_status").unwrap_or(&Value::Null)) == 1
+        && json_i64(
+            room.get("videoLoop")
+                .or_else(|| room.get("video_loop"))
+                .unwrap_or(&Value::Null),
+        ) != 1;
+
+    LiveRoomStatus {
+        status,
+        live_started_at: status
+            .then(|| {
+                parse_live_started_at(
+                    room.get("show_time")
+                        .or_else(|| room.get("live_start_time"))
+                        .or_else(|| room.get("start_time")),
+                )
+            })
+            .flatten(),
+    }
+}
+
 #[async_trait::async_trait]
 impl LiveSite for DouyuSite {
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
@@ -368,6 +396,14 @@ impl LiveSite for DouyuSite {
             has_more: items.len() >= 20,
             items,
         })
+    }
+
+    async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        // `betard` has the opening state in its first response.  Do not call
+        // h5room/homeH5Enc/getH5Play here: those endpoints exist only to
+        // resolve playback metadata for an entered room.
+        let room = self.room_info(room_id).await?;
+        Ok(live_status_from_room_info(&room))
     }
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
@@ -614,6 +650,29 @@ mod tests {
         assert!(!is_douyu_cookie_url("http://www.douyu.com/japi/weblist"));
         assert!(!is_douyu_cookie_url("https://douyu.com.example.test/api"));
         assert!(!is_douyu_cookie_url("https://webcast.amemv.com/api"));
+    }
+
+    #[test]
+    fn room_info_status_probe_uses_only_opening_fields() {
+        let live = serde_json::json!({
+            "room": {
+                "show_status": "1",
+                "videoLoop": 0,
+                "show_time": 1_704_067_200
+            }
+        });
+        assert_eq!(
+            live_status_from_room_info(&live),
+            LiveRoomStatus {
+                status: true,
+                live_started_at: Some(1_704_067_200_000),
+            }
+        );
+
+        let replay = serde_json::json!({
+            "room": { "show_status": 1, "videoLoop": 1 }
+        });
+        assert!(!live_status_from_room_info(&replay).status);
     }
 
     #[tokio::test]

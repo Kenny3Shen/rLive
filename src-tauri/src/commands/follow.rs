@@ -4,7 +4,7 @@ use tauri::State;
 use crate::account;
 use crate::db::follow::{self, FollowRecord, TagRecord};
 use crate::error::{AppError, AppResult};
-use crate::models::live::SiteId;
+use crate::models::live::{LiveRoomStatus, SiteId};
 use crate::sites;
 use crate::state::AppState;
 
@@ -13,6 +13,37 @@ fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Co
         .db
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
+}
+
+/// Apply a follow-list status probe without allowing a previous session's
+/// start time to bleed into a new session.
+///
+/// Status-only endpoints do not all expose a start timestamp.  That is fine
+/// while a stream remains live, because its stored timestamp is still valid.
+/// Once it has gone offline (or its previous state was unknown), however, a
+/// newly-live result without a timestamp must clear the old value.
+fn apply_live_status(record: &mut FollowRecord, live_status: Option<LiveRoomStatus>) {
+    match live_status {
+        Some(LiveRoomStatus { status: false, .. }) => {
+            record.live_status = Some(0);
+            record.live_started_at = None;
+        }
+        Some(LiveRoomStatus {
+            status: true,
+            live_started_at,
+        }) => {
+            let was_live = record.live_status == Some(1);
+            record.live_status = Some(1);
+            record.live_started_at = live_started_at.or(if was_live {
+                record.live_started_at
+            } else {
+                None
+            });
+        }
+        // Preserve the last verified timestamp during a transient refresh
+        // failure, while showing the state itself as unknown.
+        None => record.live_status = None,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,13 +187,13 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
             let _permit = permit;
             let live_info = match SiteId::from_str_loose(&site_id) {
                 Some(sid) => match sites::site_with_proxy(&sid, cookie, proxy.as_deref()) {
-                    Ok(site) => match site.get_room_detail(&room_id).await {
-                        Ok(detail) => (Some(detail.status), detail.live_started_at),
-                        Err(_) => (None, None),
+                    Ok(site) => match site.get_room_live_status(&room_id).await {
+                        Ok(status) => Some(status),
+                        Err(_) => None,
                     },
-                    Err(_) => (None, None),
+                    Err(_) => None,
                 },
-                None => (None, None),
+                None => None,
             };
             (site_id, room_id, live_info)
         }));
@@ -181,17 +212,8 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
         let mut list = follow::list(&conn)?;
         let now = chrono::Utc::now().timestamp_millis();
         for rec in &mut list {
-            if let Some((status, live_started_at)) =
-                status_map.get(&(rec.site_id.clone(), rec.room_id.clone()))
-            {
-                rec.live_status = status.map(|b| if b { 1 } else { 0 });
-                rec.live_started_at = match status {
-                    Some(true) => live_started_at.or(rec.live_started_at),
-                    Some(false) => None,
-                    // Preserve the last verified timestamp during a transient
-                    // refresh failure, while showing the state itself as unknown.
-                    None => rec.live_started_at,
-                };
+            if let Some(live_status) = status_map.get(&(rec.site_id.clone(), rec.room_id.clone())) {
+                apply_live_status(rec, *live_status);
                 rec.updated_at = now;
                 let _ = follow::upsert(&conn, rec.clone());
             }
@@ -199,4 +221,84 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
         }
     }
     Ok(updated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(live_status: Option<i32>, live_started_at: Option<i64>) -> FollowRecord {
+        FollowRecord {
+            site_id: "bilibili".into(),
+            room_id: "1".into(),
+            user_name: "主播".into(),
+            face: String::new(),
+            tag_ids: Vec::new(),
+            live_status,
+            live_started_at,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_new_live_session_without_timestamp_does_not_keep_the_old_session_start() {
+        let mut follow = record(Some(0), Some(1_700_000_000_000));
+
+        apply_live_status(
+            &mut follow,
+            Some(LiveRoomStatus {
+                status: true,
+                live_started_at: None,
+            }),
+        );
+
+        assert_eq!(follow.live_status, Some(1));
+        assert_eq!(follow.live_started_at, None);
+
+        // An unknown previous state can also carry an old timestamp after a
+        // transient failure, so it must be treated as a potential new session.
+        let mut unknown = record(None, Some(1_700_000_000_000));
+        apply_live_status(
+            &mut unknown,
+            Some(LiveRoomStatus {
+                status: true,
+                live_started_at: None,
+            }),
+        );
+        assert_eq!(unknown.live_started_at, None);
+    }
+
+    #[test]
+    fn an_ongoing_live_session_keeps_its_known_start_when_probe_has_none() {
+        let mut follow = record(Some(1), Some(1_700_000_000_000));
+
+        apply_live_status(
+            &mut follow,
+            Some(LiveRoomStatus {
+                status: true,
+                live_started_at: None,
+            }),
+        );
+
+        assert_eq!(follow.live_started_at, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn offline_and_failed_probes_handle_start_time_deliberately() {
+        let mut offline = record(Some(1), Some(1_700_000_000_000));
+        apply_live_status(
+            &mut offline,
+            Some(LiveRoomStatus {
+                status: false,
+                live_started_at: Some(1_700_000_000_000),
+            }),
+        );
+        assert_eq!(offline.live_status, Some(0));
+        assert_eq!(offline.live_started_at, None);
+
+        let mut failed = record(Some(1), Some(1_700_000_000_000));
+        apply_live_status(&mut failed, None);
+        assert_eq!(failed.live_status, None);
+        assert_eq!(failed.live_started_at, Some(1_700_000_000_000));
+    }
 }
