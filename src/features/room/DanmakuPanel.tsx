@@ -13,6 +13,7 @@ import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import { getDanmakuSendConfig } from "./danmaku/sending";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/shared/clipboard";
 
 // Keep the rendered DOM deliberately small even when a room is producing
 // thousands of comments per minute. The bounded queue preserves recent
@@ -52,70 +53,7 @@ export function formatDanmakuClipboardText(content: string): string {
  * while preserving the user's active selection and focus as much as possible.
  */
 export async function copyDanmakuText(text: string): Promise<boolean> {
-  if (!text || typeof document === "undefined") return false;
-
-  try {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // A rejected native clipboard request can still succeed through the
-    // WebView-compatible fallback below.
-  }
-
-  const selection = document.getSelection();
-  const ranges = selection
-    ? Array.from({ length: selection.rangeCount }, (_, index) =>
-        selection.getRangeAt(index).cloneRange(),
-      )
-    : [];
-  const activeElement = document.activeElement as HTMLElement | null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.setAttribute("aria-hidden", "true");
-  textarea.style.position = "fixed";
-  textarea.style.inset = "0";
-  textarea.style.width = "1px";
-  textarea.style.height = "1px";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
-
-  try {
-    document.body.appendChild(textarea);
-    textarea.focus({ preventScroll: true });
-    textarea.select();
-    textarea.setSelectionRange(0, textarea.value.length);
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    try {
-      textarea.remove();
-    } catch {
-      // The fallback is already complete or failed; cleanup should not turn
-      // that outcome into an unhandled action error.
-    }
-    try {
-      if (selection) {
-        selection.removeAllRanges();
-        for (const range of ranges) selection.addRange(range);
-      }
-    } catch {
-      // A selection can become detached while the clipboard request is open.
-    }
-    try {
-      if (activeElement?.isConnected) activeElement.focus({ preventScroll: true });
-    } catch {
-      // Older WebViews may not support the focus options object.
-      try {
-        activeElement?.focus();
-      } catch {
-        // Focus restoration is best-effort only.
-      }
-    }
-  }
+  return copyText(text);
 }
 
 type ActionStatus = "copied" | "copy-failed" | "sent" | "send-failed" | null;
