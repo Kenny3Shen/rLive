@@ -30,6 +30,10 @@ use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
     douyu_danmaku_send, douyu_danmaku_send_status, huya_danmaku_send, huya_danmaku_send_status,
 };
+use commands::danmaku_send_history::{
+    danmaku_send_history_clear, danmaku_send_history_clear_all, danmaku_send_history_list,
+    danmaku_send_history_list_all,
+};
 use commands::follow::{
     follow_add, follow_list, follow_refresh, follow_remove, follow_set_tags, tag_list, tag_remove,
     tag_upsert,
@@ -209,6 +213,10 @@ pub fn run() {
             douyu_danmaku_send,
             huya_danmaku_send_status,
             huya_danmaku_send,
+            danmaku_send_history_list,
+            danmaku_send_history_list_all,
+            danmaku_send_history_clear,
+            danmaku_send_history_clear_all,
             follow_list,
             follow_add,
             follow_remove,

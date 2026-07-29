@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { SendHorizontal, SmilePlus } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { History, SendHorizontal, SmilePlus, Trash2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import type { SiteId } from "@/shared/types/live";
+import type { DanmakuSendHistoryItem, SiteId } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import {
   InputGroup,
@@ -11,11 +12,18 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
 import { insertBilibiliDanmakuText } from "./danmaku/outgoing";
-import { getDanmakuSendConfig, type DanmakuSendStatus } from "./danmaku/sending";
+import {
+  getDanmakuSendConfig,
+  isDanmakuSendSite,
+  type DanmakuSendSiteId,
+  type DanmakuSendStatus,
+} from "./danmaku/sending";
 
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
@@ -53,6 +61,190 @@ type DanmakuComposerProps = {
   onOverlayInteractionChange?: (open: boolean) => void;
 };
 
+type DanmakuSendHistoryProps = {
+  siteId: DanmakuSendSiteId;
+  siteLabel: string;
+  disabled: boolean;
+  overlay: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (content: string) => void;
+};
+
+function DanmakuSendHistory({
+  siteId,
+  siteLabel,
+  disabled,
+  overlay,
+  onOpenChange,
+  onSelect,
+}: DanmakuSendHistoryProps) {
+  const [open, setOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearFailed, setClearFailed] = useState(false);
+  const queryClient = useQueryClient();
+  const queryKey = ["danmaku-send-history", siteId] as const;
+  const {
+    data: historyItems,
+    isError: historyError,
+    isFetching: historyFetching,
+    refetch: refetchHistory,
+  } = useQuery({
+    queryKey,
+    queryFn: () =>
+      invokeCmd<DanmakuSendHistoryItem[]>("danmaku_send_history_list", {
+        siteId,
+      }),
+    enabled: false,
+  });
+  const items = historyItems ?? [];
+
+  useEffect(() => {
+    if (!open) return;
+    setClearFailed(false);
+    void refetchHistory();
+  }, [open, refetchHistory, siteId]);
+
+  useEffect(
+    () => () => {
+      onOpenChange(false);
+    },
+    [onOpenChange],
+  );
+
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    onOpenChange(nextOpen);
+  }
+
+  async function clearHistory() {
+    if (clearing || items.length === 0) return;
+    setClearing(true);
+    setClearFailed(false);
+    try {
+      await invokeCmd<void>("danmaku_send_history_clear", { siteId });
+      queryClient.setQueryData<DanmakuSendHistoryItem[]>(queryKey, []);
+    } catch {
+      setClearFailed(true);
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger
+        render={
+          <InputGroupButton
+            type="button"
+            size="icon-sm"
+            disabled={disabled}
+            aria-label={`查看${siteLabel}发送历史`}
+            title="发送历史"
+            className={cn(
+              overlay &&
+                "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
+            )}
+          />
+        }
+      >
+        <History data-icon="inline-start" aria-hidden />
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        aria-label={`${siteLabel}发送历史`}
+        className={cn(
+          "w-72 gap-1.5 p-2",
+          overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
+        )}
+      >
+        <div className="flex items-center justify-between gap-2 px-0.5">
+          <PopoverTitle
+            className={cn("text-xs", overlay ? "text-white/70" : "text-muted-foreground")}
+          >
+            发送历史
+          </PopoverTitle>
+          {items.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={clearing}
+              onClick={() => void clearHistory()}
+              className={cn(
+                "text-muted-foreground",
+                overlay &&
+                  "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+              )}
+            >
+              {clearing ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Trash2 data-icon="inline-start" />
+              )}
+              清空
+            </Button>
+          )}
+        </div>
+        {historyFetching && items.length === 0 && (
+          <p
+            className="flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground"
+            role="status"
+          >
+            <Spinner aria-hidden />
+            正在加载发送历史…
+          </p>
+        )}
+        {historyError && items.length === 0 && (
+          <div className="flex items-center justify-between gap-2 px-1 py-2 text-xs text-destructive">
+            <span>发送历史加载失败</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => void refetchHistory()}
+              className={cn(overlay && "text-white hover:bg-white/15")}
+            >
+              重试
+            </Button>
+          </div>
+        )}
+        {!historyFetching && !historyError && items.length === 0 && (
+          <p className={cn("px-1 py-2 text-xs text-muted-foreground", overlay && "text-white/70")}>
+            暂无发送记录
+          </p>
+        )}
+        {items.length > 0 && (
+          <ScrollArea className="max-h-52 pr-0.5">
+            <div className="flex flex-col gap-0.5">
+              {items.map((item) => (
+                <Button
+                  key={item.content}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-8 w-full justify-start truncate px-2 text-left text-sm font-normal",
+                    overlay && "hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                  )}
+                  title={item.content}
+                  onClick={() => {
+                    onSelect(item.content);
+                    handleOpenChange(false);
+                  }}
+                >
+                  {item.content}
+                </Button>
+              ))}
+            </div>
+          </ScrollArea>
+        )}
+        {clearFailed && <p className="px-1 text-xs text-destructive">清空发送历史失败，请重试。</p>}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /**
  * One intentionally small, user-operated composer for platforms with a
  * verified local send endpoint. Platform chat is shown only when it arrives
@@ -71,6 +263,7 @@ export function DanmakuComposer({
   const [availability, setAvailability] = useState<DanmakuSendStatus | null>(null);
   const [draft, setDraft] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -113,16 +306,9 @@ export function DanmakuComposer({
     return () => {
       cancelled = true;
     };
-  }, [
-    siteId,
-    roomId,
-    sendConfig,
-    danmakuSendEnabled,
-    danmakuSendPending,
-    danmakuCookieRevision,
-  ]);
+  }, [siteId, roomId, sendConfig, danmakuSendEnabled, danmakuSendPending, danmakuCookieRevision]);
 
-  const overlayOpen = emojiOpen;
+  const overlayOpen = emojiOpen || historyOpen;
   useEffect(() => {
     onOverlayInteractionChange?.(overlayOpen);
   }, [onOverlayInteractionChange, overlayOpen]);
@@ -134,7 +320,7 @@ export function DanmakuComposer({
     [onOverlayInteractionChange],
   );
 
-  if (!sendConfig || !roomId) return null;
+  if (!sendConfig || !roomId || !isDanmakuSendSite(siteId)) return null;
 
   const config = sendConfig;
   // Keep the narrowed room identity stable for async send callbacks. React
@@ -165,6 +351,18 @@ export function DanmakuComposer({
     window.requestAnimationFrame(() => {
       input?.focus({ preventScroll: true });
       input?.setSelectionRange(caret, caret);
+    });
+  }
+
+  function selectHistory(content: string) {
+    if (!ready || sending) return;
+    const nextDraft = truncateUtf16(content, config.maxLength);
+    setDraft(nextDraft);
+    setResult(null);
+    window.requestAnimationFrame(() => {
+      const input = inputRef.current;
+      input?.focus({ preventScroll: true });
+      input?.setSelectionRange(nextDraft.length, nextDraft.length);
     });
   }
 
@@ -209,6 +407,14 @@ export function DanmakuComposer({
         )}
       >
         <InputGroupAddon align="inline-start" className="py-0">
+          <DanmakuSendHistory
+            siteId={siteId}
+            siteLabel={config.siteLabel}
+            disabled={!ready || sending}
+            overlay={overlay}
+            onOpenChange={setHistoryOpen}
+            onSelect={selectHistory}
+          />
           <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
             <PopoverTrigger
               render={
