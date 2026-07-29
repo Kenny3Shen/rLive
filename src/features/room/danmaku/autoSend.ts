@@ -1,8 +1,22 @@
 /** A user-visible text unit, not a UTF-16 code unit. */
 export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 15;
 
-/** The minimum interval between two automatic-send request starts. */
-export const AUTO_DANMAKU_SEND_INTERVAL_MS = 20_000;
+/** Session-only automatic-send interval bounds, in whole seconds. */
+export const AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS = 20;
+export const AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS = 3_600;
+export const AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS = 20;
+
+/** The default interval between two automatic-send request starts. */
+export const AUTO_DANMAKU_SEND_INTERVAL_MS = AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS * 1_000;
+
+/** Clamp an editable interval to the supported whole-second session range. */
+export function normalizeAutoDanmakuSendIntervalSeconds(value: number): number {
+  if (!Number.isFinite(value)) return AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS;
+  return Math.min(
+    AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS,
+    Math.max(AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS, Math.round(value)),
+  );
+}
 
 /**
  * Calculate a safe wait from a monotonic clock reading. A clock value that
