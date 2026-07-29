@@ -25,7 +25,7 @@ rLive is a desktop live-stream aggregator built with **Tauri 2, React, TypeScrip
 | In-room danmaku settings | Done; area, lanes, opacity, size, weight, speed, repeat grouping, gift filter, shield words, and session-only auto-send |
 | Bilibili Super Chat panel | Done; safe avatar handling, sender details, amount, and full message |
 | Follows, tags, live refresh, and direct room switching | Done |
-| Watch history and viewing statistics | Done; statistics summarizes stored room-entry records and does not infer watch duration |
+| Watch history | Done; retains recent room entries on this device |
 | IPTV discovery and a separate player page | Done; public and device-private M3U sources plus HLS, MPEG-TS, and FLV playback |
 | Settings | Done; shared Bilibili/Douyu/Huya send switch, theme, proxy, QR/manual Cookie login, Huya manual Cookie input, Douyin signer, custom IPTV M3U, quality preference, About, and profile import/export |
 

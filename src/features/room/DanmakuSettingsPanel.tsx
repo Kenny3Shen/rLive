@@ -131,7 +131,7 @@ function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSetti
   const statusDescription = captionStatusDescription(captions);
 
   return (
-    <Card>
+    <Card size="sm">
       <CardHeader>
         <CardTitle>本地字幕</CardTitle>
         <CardDescription>内置 tiny · 音频仅在本机处理</CardDescription>
@@ -200,7 +200,7 @@ function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendControl
   const statusIsError = autoSend.phase === "paused";
 
   return (
-    <Card>
+    <Card size="sm">
       <CardHeader>
         <CardTitle>自动发送弹幕</CardTitle>
         <CardDescription>仅在当前直播间循环发送。</CardDescription>
@@ -408,11 +408,11 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
 
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
-      <div className="flex flex-col gap-4 px-3 py-3">
+      <div className="flex flex-col gap-3 px-3 py-3">
         {captions && <LocalCaptionSettingsSection captions={captions} />}
         {autoSend && <AutoDanmakuSendSection autoSend={autoSend} />}
 
-        <Card>
+        <Card size="sm">
           <CardHeader className="border-b">
             <CardTitle>弹幕轨道</CardTitle>
             <CardDescription>控制画面中的弹幕占用。</CardDescription>
@@ -420,7 +420,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
               <Badge variant="outline">{trackSummary}</Badge>
             </CardAction>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="pt-3">
             <div className="grid gap-2">
               <DanmakuSlider
                 id="room-danmaku-area"
@@ -447,7 +447,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
           </CardContent>
         </Card>
 
-        <Card>
+        <Card size="sm">
           <CardHeader className="border-b">
             <CardTitle>文字与节奏</CardTitle>
             <CardDescription>拖动预览，松手后保存。</CardDescription>
@@ -455,7 +455,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
               <Badge variant="outline">{appearanceSummary}</Badge>
             </CardAction>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="pt-3">
             <div className="grid gap-2">
               <DanmakuSlider
                 id="room-danmaku-opacity"
@@ -524,7 +524,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
           </CardFooter>
         </Card>
 
-        <Card>
+        <Card size="sm">
           <CardHeader className="border-b">
             <CardTitle>消息过滤</CardTitle>
             <CardDescription>新的消息会立即按规则处理。</CardDescription>
@@ -536,7 +536,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
               </Badge>
             </CardAction>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="pt-3">
             <div className="grid gap-2">
               <ControlCard>
                 <Field orientation="horizontal">

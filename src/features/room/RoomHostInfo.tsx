@@ -1,6 +1,7 @@
 import { Flame, Heart } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import type { LiveRoomDetail } from "@/shared/types/live";
 import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
@@ -73,18 +74,27 @@ export function RoomHostInfo({
           </div>
 
           {onToggleFollow && (
-            <Button
-              variant={isFollowed ? "secondary" : "ghost"}
-              size="icon-sm"
-              className={cn("ml-1 self-center", isFollowed && "text-primary hover:text-primary")}
-              disabled={followBusy}
-              onClick={onToggleFollow}
-              aria-label={isFollowed ? "取消关注" : "关注"}
-              aria-pressed={isFollowed}
-              title={isFollowed ? "取消关注" : "关注"}
-            >
-              <Heart className={cn(isFollowed && "fill-current")} />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant={isFollowed ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    className={cn(
+                      "ml-1 self-center",
+                      isFollowed && "text-primary hover:text-primary",
+                    )}
+                    disabled={followBusy}
+                    onClick={onToggleFollow}
+                    aria-label={isFollowed ? "取消关注" : "关注"}
+                    aria-pressed={isFollowed}
+                  >
+                    <Heart className={cn(isFollowed && "fill-current")} />
+                  </Button>
+                }
+              />
+              <TooltipContent>{isFollowed ? "取消关注" : "关注"}</TooltipContent>
+            </Tooltip>
           )}
         </div>
       </div>

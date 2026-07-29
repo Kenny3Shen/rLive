@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, Radio, RefreshCw } from "lucide-react";
+import { Heart, Home, Radio, RefreshCw } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { FollowUser } from "@/shared/types/live";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -10,10 +10,20 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { notify } from "@/components/ui/toast";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { FOLLOW_ROOM_SWITCH_STATE } from "./roomNavigation";
+import { FOLLOW_LIST_QUERY_KEY, refreshFollows } from "../follow/followRefresh";
 
 function sortFollows(follows: FollowUser[]): FollowUser[] {
   return [...follows].sort((a, b) => {
@@ -53,7 +63,7 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
 
   const followsQuery = useQuery({
-    queryKey: ["follows"],
+    queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
     // RoomPage already observes this query for the follow button. Reuse its
     // short-lived cache while rooms are switched from this panel.
@@ -61,9 +71,9 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
   });
 
   const refreshMutation = useMutation({
-    mutationFn: () => invokeCmd<FollowUser[]>("follow_refresh"),
-    onSuccess: (follows) => {
-      queryClient.setQueryData(["follows"], follows);
+    mutationFn: () => refreshFollows(queryClient),
+    onError: () => {
+      notify.error("刷新关注列表失败", "请检查网络后重试。");
     },
   });
 
@@ -114,11 +124,21 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
       )}
 
       {!followsQuery.isLoading && !followsQuery.isError && follows.length === 0 && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 text-center text-muted-foreground">
-          <Heart className="size-7" aria-hidden />
-          <p className="text-sm">还没有关注主播</p>
-          <p className="text-xs">在直播间点击“关注”后会显示在这里</p>
-        </div>
+        <Empty className="min-h-0 border-0 px-5">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Heart aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>还没有关注主播</EmptyTitle>
+            <EmptyDescription>在直播间点击“关注”后会显示在这里。</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+              <Home data-icon="inline-start" aria-hidden />
+              去首页看看
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
 
       {follows.length > 0 && (
@@ -172,7 +192,6 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
               className="absolute right-3 bottom-3 z-10 rounded-full shadow-lg shadow-primary/25"
               disabled={refreshMutation.isPending}
               aria-label="刷新关注列表"
-              title="刷新关注列表"
               onClick={() => refreshMutation.mutate()}
             />
           }

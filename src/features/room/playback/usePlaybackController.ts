@@ -201,7 +201,7 @@ export function usePlaybackController(opts: {
         const requestedDelay =
           typeof event.retryAfterMs === "number" && Number.isFinite(event.retryAfterMs)
             ? Math.max(0, Math.min(event.retryAfterMs, 60_000))
-          : 0;
+            : 0;
         // Keep retries measured when Twitch is changing a playlist during a
         // normal commercial break, while avoiding a tight token-refresh loop.
         const delayMs = Math.max(requestedDelay, (renewalAttempt - 1) * 1_000);

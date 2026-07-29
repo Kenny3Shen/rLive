@@ -508,7 +508,9 @@ function IptvCustomM3uUrlField() {
               </InputGroupAddon>
             </InputGroup>
           </form>
-          <FieldDescription>仅保存在本机，不随配置导入导出。请确认来源与内容授权。</FieldDescription>
+          <FieldDescription>
+            仅保存在本机，不随配置导入导出。请确认来源与内容授权。
+          </FieldDescription>
           {error ? (
             <FieldError>{error}</FieldError>
           ) : (
@@ -1043,7 +1045,9 @@ export function SettingsPage() {
                             </InputGroupAddon>
                           </InputGroup>
                         </form>
-                        <FieldDescription>留空保存即关闭代理；省略协议时按 HTTP 处理。</FieldDescription>
+                        <FieldDescription>
+                          留空保存即关闭代理；省略协议时按 HTTP 处理。
+                        </FieldDescription>
                         {proxyError ? (
                           <FieldError>{proxyError}</FieldError>
                         ) : (

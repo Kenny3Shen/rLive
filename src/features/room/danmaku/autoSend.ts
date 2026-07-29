@@ -31,7 +31,10 @@ export type AutoDanmakuText = {
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))) {
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    ) {
       return true;
     }
   }
@@ -54,8 +57,9 @@ export function normalizeAutoDanmakuText(value: string): string {
  */
 export function splitGraphemes(
   value: string,
-  Segmenter: typeof Intl.Segmenter | null =
-    typeof Intl.Segmenter === "function" ? Intl.Segmenter : null,
+  Segmenter: typeof Intl.Segmenter | null = typeof Intl.Segmenter === "function"
+    ? Intl.Segmenter
+    : null,
 ): string[] | null {
   if (!Segmenter) return null;
 

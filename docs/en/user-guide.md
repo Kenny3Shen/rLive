@@ -38,7 +38,7 @@ See the root [English README](../../README.en.md): `bun install` → `bun run ta
 
 | Area | Role |
 |------|------|
-| Sidebar | Home, follows, categories, history, statistics, IPTV, settings |
+| Sidebar | Home, follows, categories, history, IPTV, settings |
 | Header | Home shows the site switcher and search (user / room ID / title); other pages do not show the search button. Platform changes use a short content transition; the Follows page uses the same centred selector with an extra All platforms option |
 | Room | Icon-only Back control, room title, player, host information, and side tabs in the order Danmaku / SC / Follows / Settings |
 
@@ -115,9 +115,9 @@ Bilibili image emotes in normal chat are delivered with the message itself. rLiv
 
 `/iptv` is a channel-discovery homepage. It reads IPTV-org's official daily-updated Chinese-language, mainland-China, East-Asian, and general public playlists, and deliberately does not mount a player or start a stream on entry. A custom HTTP(S) M3U URL is saved only under **Settings → Network**; once configured, the homepage shows it as **Custom source** rather than providing a free-form address field. The address remains device-local and is omitted from routes, history, and profile import/export. It avoids the provider's oversized global index so every built-in source stays within rLive's bounded playlist loader. Multi-keyword search ranks exact and prefix channel matches first, popular groups are immediately available, and long results are expanded in pages. Selecting a channel opens the separate immersive `/iptv/play` page; its Back control returns to the source, category, and search-filtered list. The localhost proxy rewrites nested HLS manifests, segments, and keys for HLS playback; MPEG-TS and FLV use the existing MSE path. rLive hosts no programme content, bypasses no region restriction, and does not guarantee any third-party source. Only load channels you are allowed to watch.
 
-## 7. Follows, history & statistics
+## 7. Follows & history
 
-Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follows** tab places live rooms first and switches directly to a selected followed room without leaving the room page; its Back action then returns home rather than a previous room. It also provides a floating refresh button. Visited rooms are stored in history. The sidebar **Statistics** page summarizes the currently stored room-entry records with a seven-day trend, platform distribution, and totals. A record keeps the latest entry time for one platform/room pair; it is not watch-duration data.
+Follow anchors (with tags) from the room page; the centred selector on the Follows page filters by **All platforms** or one site, while its only status filters are **All / Live / Offline**. Its floating refresh button updates live status. The room-side **Follows** tab places live rooms first and switches directly to a selected followed room without leaving the room page; its Back action then returns home rather than a previous room. It also provides a floating refresh button. Visited rooms are stored in history.
 
 ## 8. Settings summary
 

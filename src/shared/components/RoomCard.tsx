@@ -1,7 +1,22 @@
 import { memo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Flame } from "lucide-react";
-import type { LiveRoomItem } from "@/shared/types/live";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Copy, ExternalLink, Flame, Hash, Star, StarOff } from "lucide-react";
+import { invokeCmd } from "@/shared/api/tauri";
+import { copyText } from "@/shared/clipboard";
+import type { FollowUser, LiveRoomDetail, LiveRoomItem } from "@/shared/types/live";
+import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { notify } from "@/components/ui/toast";
 import { formatOnline, cn } from "@/lib/utils";
 
 type RoomCardProps = {
@@ -10,47 +25,186 @@ type RoomCardProps = {
 
 export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const followsQuery = useQuery({
+    queryKey: FOLLOW_LIST_QUERY_KEY,
+    queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
+    staleTime: 15_000,
+  });
+  const isFollowed = Boolean(
+    followsQuery.data?.some(
+      (follow) => follow.site_id === room.site_id && follow.room_id === room.room_id,
+    ),
+  );
+
+  async function getRoomDetail(): Promise<LiveRoomDetail> {
+    return queryClient.fetchQuery({
+      queryKey: ["room_detail", room.site_id, room.room_id],
+      queryFn: () =>
+        invokeCmd<LiveRoomDetail>("site_get_room_detail", {
+          siteId: room.site_id,
+          roomId: room.room_id,
+        }),
+      staleTime: 60_000,
+    });
+  }
+
+  const followMutation = useMutation({
+    mutationFn: async () => {
+      const [detail, follows] = await Promise.all([
+        getRoomDetail(),
+        followsQuery.data
+          ? Promise.resolve(followsQuery.data)
+          : queryClient.fetchQuery({
+              queryKey: FOLLOW_LIST_QUERY_KEY,
+              queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
+              staleTime: 15_000,
+            }),
+      ]);
+      const existing = follows.find(
+        (follow) => follow.site_id === detail.site_id && follow.room_id === detail.room_id,
+      );
+
+      if (existing) {
+        await invokeCmd("follow_remove", {
+          siteId: detail.site_id,
+          roomId: detail.room_id,
+        });
+        return false;
+      }
+
+      const user: FollowUser = {
+        site_id: detail.site_id,
+        room_id: detail.room_id,
+        user_name: detail.user_name,
+        face: detail.user_avatar,
+        tag_ids: [],
+        live_status: detail.status,
+        live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
+        updated_at: Date.now(),
+      };
+      await invokeCmd("follow_add", { user });
+      return true;
+    },
+    onSuccess: (followed) => {
+      void queryClient.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
+      notify.success(followed ? "已关注主播" : "已取消关注");
+    },
+    onError: () => {
+      notify.error("关注操作失败", "请检查网络后重试。");
+    },
+  });
 
   function openRoom() {
     navigate(`/room/${room.site_id}/${encodeURIComponent(room.room_id)}`);
   }
 
+  async function copyRoomId() {
+    if (await copyText(room.room_id)) {
+      notify.success("已复制房间号");
+    } else {
+      notify.error("复制房间号失败", "请手动选择并复制。");
+    }
+  }
+
+  async function copyRoomLink() {
+    try {
+      const detail = await getRoomDetail();
+      if (await copyText(detail.url)) {
+        notify.success("已复制房间链接");
+      } else {
+        notify.error("复制房间链接失败", "请手动选择并复制。");
+      }
+    } catch {
+      notify.error("获取房间链接失败", "请稍后重试。");
+    }
+  }
+
+  async function openInBrowser() {
+    try {
+      const detail = await getRoomDetail();
+      try {
+        await openUrl(detail.url);
+      } catch {
+        const opened = window.open(detail.url, "_blank", "noopener,noreferrer");
+        if (!opened) throw new Error("browser_open_failed");
+      }
+      notify.success("已在浏览器中打开");
+    } catch {
+      notify.error("无法在浏览器中打开", "请稍后重试。");
+    }
+  }
+
   return (
-    <button
-      type="button"
-      onClick={openRoom}
-      className={cn(
-        "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring",
-        "hover:-translate-y-0.5",
-      )}
-    >
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
-        {room.cover ? (
-          <img
-            src={room.cover}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
-            referrerPolicy="no-referrer"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <button
+            type="button"
+            onClick={openRoom}
+            className={cn(
+              "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring",
+              "hover:-translate-y-0.5",
+            )}
           />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-            暂无封面
-          </div>
-        )}
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
-        <span className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
-          <Flame className="h-3 w-3 text-orange-400" aria-hidden />
-          {formatOnline(room.online)}
-        </span>
-      </div>
-      <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
-        <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
-          {room.title || "未命名直播间"}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">{room.user_name || "未知主播"}</p>
-      </div>
-    </button>
+        }
+      >
+        <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
+          {room.cover ? (
+            <img
+              src={room.cover}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+              暂无封面
+            </div>
+          )}
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
+          <span className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+            <Flame className="size-3 text-orange-400" aria-hidden />
+            {formatOnline(room.online)}
+          </span>
+        </div>
+        <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
+          <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
+            {room.title || "未命名直播间"}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">{room.user_name || "未知主播"}</p>
+        </div>
+      </ContextMenuTrigger>
+
+      <ContextMenuContent className="min-w-48">
+        <ContextMenuGroup>
+          <ContextMenuLabel>{room.title || room.user_name || "直播间"}</ContextMenuLabel>
+          <ContextMenuItem onClick={() => void copyRoomLink()}>
+            <Copy aria-hidden />
+            复制房间链接
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => void copyRoomId()}>
+            <Hash aria-hidden />
+            复制房间号
+          </ContextMenuItem>
+        </ContextMenuGroup>
+        <ContextMenuSeparator />
+        <ContextMenuGroup>
+          <ContextMenuItem
+            disabled={followMutation.isPending || followsQuery.isLoading}
+            onClick={() => followMutation.mutate()}
+          >
+            {isFollowed ? <StarOff aria-hidden /> : <Star aria-hidden />}
+            {isFollowed ? "取消关注" : "关注主播"}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => void openInBrowser()}>
+            <ExternalLink aria-hidden />
+            在浏览器中打开
+          </ContextMenuItem>
+        </ContextMenuGroup>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 });

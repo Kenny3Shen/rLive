@@ -329,13 +329,13 @@ export function HistoryPage() {
       <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-4">
         <TabsList
           aria-label="历史记录类型"
-          className="w-full rounded-xl border border-border-subtle bg-card/60 p-1 sm:w-auto"
+          className="grid h-11! w-full grid-cols-2 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:h-12! max-md:min-h-12 max-md:p-0.5 sm:w-fit"
         >
-          <TabsTrigger value="watch" className="h-9 gap-2 px-3">
+          <TabsTrigger value="watch" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
             <Clock3 aria-hidden />
             观看历史
           </TabsTrigger>
-          <TabsTrigger value="danmaku" className="h-9 gap-2 px-3">
+          <TabsTrigger value="danmaku" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
             <MessageSquareText aria-hidden />
             发送弹幕
           </TabsTrigger>

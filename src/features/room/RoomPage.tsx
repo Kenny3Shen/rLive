@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Share2, Link2 } from "lucide-react";
+import { ChevronLeft, Ellipsis, Link2, Share2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { copyText } from "@/shared/clipboard";
 import { ErrorState } from "@/shared/components/ErrorState";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
@@ -13,6 +14,10 @@ import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { notify } from "@/components/ui/toast";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -81,7 +86,7 @@ export function RoomPage() {
   });
 
   const followQuery = useQuery({
-    queryKey: ["follows"],
+    queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
   });
 
@@ -110,9 +115,20 @@ export function RoomPage() {
         };
         await invokeCmd("follow_add", { user });
       }
-      await qc.invalidateQueries({ queryKey: ["follows"] });
+      await qc.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
+      notify.success(isFollowed ? "已取消关注" : "已关注主播");
+    } catch {
+      notify.error(isFollowed ? "取消关注失败" : "关注失败", "请检查网络后重试。");
     } finally {
       setFollowBusy(false);
+    }
+  }
+
+  async function copyRoomValue(value: string, successMessage: string) {
+    if (await copyText(value)) {
+      notify.success(successMessage);
+    } else {
+      notify.error("复制失败", "请手动选择并复制。");
     }
   }
 
@@ -173,7 +189,19 @@ export function RoomPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <RoomTopBar title={detail.title || "直播间"} returnToHome={returnToHome} />
+      <RoomTopBar
+        title={detail.title || "直播间"}
+        returnToHome={returnToHome}
+        rightSlot={
+          <div className="md:hidden">
+            <RoomMobileActions
+              roomUrl={detail.url || window.location.href}
+              playbackUrl={playback.playUrl?.url}
+              onCopy={copyRoomValue}
+            />
+          </div>
+        }
+      />
 
       <div className="flex min-h-0 flex-1 flex-col">
         <PlayerPane
@@ -203,15 +231,12 @@ export function RoomPage() {
         />
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
+      <div className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
         <Button
           variant="ghost"
           size="sm"
           className="max-md:h-11 max-md:touch-manipulation"
-          title="复制房间页链接"
-          onClick={() => {
-            void navigator.clipboard?.writeText(detail.url || window.location.href);
-          }}
+          onClick={() => void copyRoomValue(detail.url || window.location.href, "已复制房间链接")}
         >
           <Link2 data-icon="inline-start" />
           复制链接
@@ -220,11 +245,10 @@ export function RoomPage() {
           variant="ghost"
           size="sm"
           className="max-md:h-11 max-md:touch-manipulation"
-          title="复制当前播放直链（流地址）"
           disabled={!playback.playUrl?.url}
           onClick={() => {
             if (playback.playUrl?.url) {
-              void navigator.clipboard?.writeText(playback.playUrl.url);
+              void copyRoomValue(playback.playUrl.url, "已复制播放直链");
             }
           }}
         >
@@ -236,7 +260,15 @@ export function RoomPage() {
   );
 }
 
-function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHome?: boolean }) {
+function RoomTopBar({
+  title,
+  returnToHome = false,
+  rightSlot,
+}: {
+  title: string;
+  returnToHome?: boolean;
+  rightSlot?: ReactNode;
+}) {
   const navigate = useNavigate();
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const titleRef = useRef<HTMLParagraphElement>(null);
@@ -290,17 +322,23 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
 
   return (
     <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
-      <Button
-        ref={backButtonRef}
-        variant="ghost"
-        size="icon-sm"
-        className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
-        aria-label="返回上一页"
-        title="返回上一页"
-        onClick={goBack}
-      >
-        <ChevronLeft data-icon="inline-start" aria-hidden />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              ref={backButtonRef}
+              variant="ghost"
+              size="icon-sm"
+              className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
+              aria-label="返回上一页"
+              onClick={goBack}
+            >
+              <ChevronLeft data-icon="inline-start" aria-hidden />
+            </Button>
+          }
+        />
+        <TooltipContent side="bottom">返回上一页</TooltipContent>
+      </Tooltip>
       <p
         ref={titleRef}
         className="absolute inset-x-20 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
@@ -308,7 +346,70 @@ function RoomTopBar({ title, returnToHome = false }: { title: string; returnToHo
       >
         {title}
       </p>
+      {rightSlot && <div className="absolute right-3 z-10">{rightSlot}</div>}
     </header>
+  );
+}
+
+function RoomMobileActions({
+  roomUrl,
+  playbackUrl,
+  onCopy,
+}: {
+  roomUrl: string;
+  playbackUrl?: string;
+  onCopy: (value: string, successMessage: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+
+  function copy(value: string, successMessage: string) {
+    setOpen(false);
+    void onCopy(value, successMessage);
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-11 touch-manipulation"
+            aria-label="更多房间操作"
+          >
+            <Ellipsis data-icon="inline-start" aria-hidden />
+          </Button>
+        }
+      />
+      <PopoverContent side="bottom" align="end" className="w-52 gap-1 p-1.5">
+        <PopoverTitle className="px-2 py-1 text-xs font-medium text-muted-foreground">
+          房间操作
+        </PopoverTitle>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-11 w-full justify-start text-sm touch-manipulation"
+          onClick={() => copy(roomUrl, "已复制房间链接")}
+        >
+          <Link2 data-icon="inline-start" aria-hidden />
+          复制链接
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-11 w-full justify-start text-sm touch-manipulation"
+          disabled={!playbackUrl}
+          onClick={() => {
+            if (playbackUrl) copy(playbackUrl, "已复制播放直链");
+          }}
+        >
+          <Share2 data-icon="inline-start" aria-hidden />
+          复制直链
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
