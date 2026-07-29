@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -54,6 +54,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   AlertDialog,
   AlertDialogCancel,
   AlertDialogContent,
@@ -67,7 +75,7 @@ import {
 
 type SettingsCategory = "playback" | "platform" | "network" | "account" | "data" | "about";
 
-type CookieMethod = "manual" | "qr";
+type AccountLoginMethod = "manual" | "qr";
 
 type AccountQrLoginStart = {
   qr_code_url: string;
@@ -77,6 +85,11 @@ type AccountQrLoginStart = {
 type AccountQrLoginPoll = {
   status: "pending" | "scanned" | "expired" | "success";
   message: string;
+};
+
+type AccountProfile = {
+  username: string | null;
+  has_cookie: boolean;
 };
 
 type AsrModelStatus = {
@@ -285,7 +298,7 @@ function QrLogin({
   );
 }
 
-function CookieField({
+function AccountCard({
   siteId,
   title,
   description,
@@ -300,10 +313,15 @@ function CookieField({
 }) {
   const queryClient = useQueryClient();
   const markDanmakuCookieChanged = useSettingsStore((s) => s.markDanmakuCookieChanged);
-  const [cookie, setCookie] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [method, setMethod] = useState<CookieMethod>("manual");
+  const [profile, setProfile] = useState<AccountProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loginMethod, setLoginMethod] = useState<AccountLoginMethod | null>(null);
+  const [cookieDraft, setCookieDraft] = useState("");
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const inputId = `${siteId}-cookie`;
 
   const refreshCookieDependentQueries = useCallback(() => {
@@ -313,123 +331,231 @@ function CookieField({
     void invalidateCookieDependentSiteQueries(queryClient, siteId).catch(() => {});
   }, [queryClient, siteId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const value = await invokeCmd<string | null>("account_get_cookie", {
-          siteId,
-        });
-        if (!cancelled) setCookie(value ?? "");
-      } catch {
-        if (!cancelled) setCookie("");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const refreshProfile = useCallback(async () => {
+    setProfileLoading(true);
+    setProfileError(null);
+    if (!isTauri()) {
+      setProfile({ username: null, has_cookie: false });
+      setProfileLoading(false);
+      return;
+    }
+    try {
+      const next = await invokeCmd<AccountProfile>("account_get_profile", { siteId });
+      setProfile(next);
+    } catch (error) {
+      setProfile(null);
+      setProfileError(`账号状态读取失败：${errorMessage(error)}`);
+    } finally {
+      setProfileLoading(false);
+    }
   }, [siteId]);
 
-  async function saveCookie() {
-    setStatus(null);
-    try {
-      const trimmed = cookie.trim();
-      if (trimmed.length === 0) {
-        await invokeCmd<void>("account_clear_cookie", { siteId });
-        setCookie("");
-        setStatus("Cookie 已清除");
-      } else {
-        await invokeCmd<void>("account_set_cookie", {
-          siteId,
-          cookie: trimmed,
-        });
-        setStatus("Cookie 已保存");
-      }
-      // A room composer can remain mounted while the account UI updates its
-      // credentials. Notify it only after the backend mutation succeeds.
+  useEffect(() => {
+    void refreshProfile();
+  }, [refreshProfile]);
+
+  const applySavedCookie = useCallback(
+    async (message: string) => {
       if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
       refreshCookieDependentQueries();
-    } catch (e) {
-      const message =
-        typeof e === "object" && e && "message" in e
-          ? String((e as { message: string }).message)
-          : String(e);
-      setStatus(`失败：${message}`);
+      await refreshProfile();
+      setNotice(message);
+    },
+    [markDanmakuCookieChanged, refreshCookieDependentQueries, refreshProfile, siteId],
+  );
+
+  function closeLoginDialog() {
+    if (saving) return;
+    setLoginMethod(null);
+    setCookieDraft("");
+    setManualError(null);
+  }
+
+  async function saveCookie(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cookie = cookieDraft.trim();
+    if (!cookie) {
+      setManualError("请输入完整 Cookie。");
+      return;
+    }
+
+    setSaving(true);
+    setManualError(null);
+    try {
+      await invokeCmd<void>("account_set_cookie", { siteId, cookie });
+      await applySavedCookie("Cookie 已保存，账号信息已更新。");
+      setLoginMethod(null);
+      setCookieDraft("");
+    } catch (error) {
+      setManualError(`保存失败：${errorMessage(error)}`);
+    } finally {
+      setSaving(false);
     }
   }
 
-  const loadQrCookie = useCallback(async () => {
+  async function clearCookie() {
+    setClearing(true);
+    setProfileError(null);
     try {
-      const value = await invokeCmd<string | null>("account_get_cookie", { siteId });
-      setCookie(value ?? "");
-      setStatus("Cookie 已通过扫码登录更新");
-      if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
-      refreshCookieDependentQueries();
-    } catch {
-      // The QR command has already saved successfully. A later display refresh
-      // should not make that login look failed.
-      if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
-      refreshCookieDependentQueries();
+      await invokeCmd<void>("account_clear_cookie", { siteId });
+      await applySavedCookie("已退出当前账号。");
+    } catch (error) {
+      setProfileError(`退出登录失败：${errorMessage(error)}`);
+    } finally {
+      setClearing(false);
     }
-  }, [markDanmakuCookieChanged, refreshCookieDependentQueries, siteId]);
+  }
+
+  const displayName = profile?.username ?? null;
+  const hasCookie = profile?.has_cookie ?? false;
+  const accountName = profileLoading
+    ? "正在读取账号"
+    : (displayName ?? (hasCookie ? "已保存登录态" : "未登录"));
+  const accountDescription = profileLoading
+    ? "正在读取本机保存的账号状态。"
+    : displayName
+      ? `当前账号用户名：${displayName}`
+      : hasCookie
+        ? "Cookie 已保存，暂未能识别用户名。"
+        : "选择登录方式后，在弹窗中完成账号连接。";
 
   return (
     <Section title={title} description={description}>
-      {qrLogin && (
-        <Field orientation="responsive">
-          <FieldContent>
-            <FieldTitle id={`${siteId}-cookie-method`}>登录方式</FieldTitle>
-            <FieldDescription>扫码登录，或粘贴浏览器中的 Cookie。</FieldDescription>
-          </FieldContent>
-          <ToggleGroup
-            aria-labelledby={`${siteId}-cookie-method`}
-            value={[method]}
-            variant="outline"
-            size="sm"
-            spacing={1}
-            onValueChange={(values) => {
-              const next = values[0];
-              if (next === "manual" || next === "qr") setMethod(next);
-            }}
-          >
-            <ToggleGroupItem value="qr">
-              <QrCode data-icon="inline-start" aria-hidden />
-              扫码登录
-            </ToggleGroupItem>
-            <ToggleGroupItem value="manual">手动输入</ToggleGroupItem>
-          </ToggleGroup>
-        </Field>
-      )}
+      <Field orientation="responsive">
+        <FieldContent>
+          <div className="flex flex-wrap items-center gap-2">
+            <FieldTitle>{accountName}</FieldTitle>
+            <Badge variant={hasCookie ? "secondary" : "outline"}>
+              {hasCookie ? "已登录" : "未登录"}
+            </Badge>
+          </div>
+          <FieldDescription>{accountDescription}</FieldDescription>
+          {notice && <FieldDescription role="status">{notice}</FieldDescription>}
+          {profileError && <FieldError>{profileError}</FieldError>}
+        </FieldContent>
+        <div className="flex flex-wrap items-center gap-2">
+          {qrLogin ? (
+            <ToggleGroup
+              aria-label={`${title}登录方式`}
+              value={loginMethod ? [loginMethod] : []}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              onValueChange={(values) => {
+                const method = values[0];
+                if (method === "manual" || method === "qr") setLoginMethod(method);
+              }}
+            >
+              <ToggleGroupItem value="qr">
+                <QrCode data-icon="inline-start" aria-hidden />
+                扫码登录
+              </ToggleGroupItem>
+              <ToggleGroupItem value="manual">手动输入</ToggleGroupItem>
+            </ToggleGroup>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setLoginMethod("manual")}>
+              手动输入
+            </Button>
+          )}
+          {hasCookie && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void clearCookie()}
+              disabled={clearing}
+            >
+              {clearing ? <Spinner data-icon="inline-start" /> : null}
+              退出登录
+            </Button>
+          )}
+        </div>
+      </Field>
 
-      {method === "qr" && qrLogin ? (
-        <QrLogin siteId={siteId} siteName={title} onSaved={loadQrCookie} />
-      ) : (
-        <Field>
-          <FieldLabel htmlFor={inputId}>Cookie</FieldLabel>
-          <FieldContent>
-            <Textarea
-              id={inputId}
-              value={cookie}
-              onChange={(event) => setCookie(event.target.value)}
-              disabled={loading}
-              rows={5}
-              placeholder={loading ? "加载中…" : placeholder}
-              className="resize-y font-mono text-xs"
-              spellCheck={false}
-              autoComplete="off"
+      <Dialog
+        open={loginMethod === "qr"}
+        onOpenChange={(open) => {
+          if (!open) closeLoginDialog();
+        }}
+      >
+        {loginMethod === "qr" && (
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{title}扫码登录</DialogTitle>
+              <DialogDescription>请使用 {title} App 扫描二维码并在手机上确认。</DialogDescription>
+            </DialogHeader>
+            <QrLogin
+              siteId={siteId}
+              siteName={title}
+              onSaved={async () => {
+                await applySavedCookie("扫码登录成功，当前账号已更新。");
+                setLoginMethod(null);
+              }}
             />
-            <div className="flex items-center gap-3">
-              <Button onClick={() => void saveCookie()} disabled={loading}>
-                保存 Cookie
+            <DialogFooter>
+              <Button variant="outline" onClick={closeLoginDialog}>
+                取消
               </Button>
-              {status && <FieldDescription>{status}</FieldDescription>}
-            </div>
-          </FieldContent>
-        </Field>
-      )}
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={loginMethod === "manual"}
+        onOpenChange={(open) => {
+          if (!open) closeLoginDialog();
+        }}
+      >
+        {loginMethod === "manual" && (
+          <DialogContent>
+            <form onSubmit={(event) => void saveCookie(event)}>
+              <DialogHeader>
+                <DialogTitle>{title}手动输入 Cookie</DialogTitle>
+                <DialogDescription>
+                  Cookie 仅保存在本机，用于读取当前账号和平台登录态。
+                </DialogDescription>
+              </DialogHeader>
+              <FieldGroup className="mt-4">
+                <Field data-invalid={manualError ? true : undefined}>
+                  <FieldLabel htmlFor={inputId}>Cookie</FieldLabel>
+                  <Textarea
+                    id={inputId}
+                    value={cookieDraft}
+                    onChange={(event) => {
+                      setCookieDraft(event.target.value);
+                      setManualError(null);
+                    }}
+                    rows={6}
+                    placeholder={placeholder}
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={saving}
+                    aria-invalid={manualError ? true : undefined}
+                  />
+                  <FieldDescription>
+                    保存后会自动读取当前账号用户名，Cookie 不会在设置页显示。
+                  </FieldDescription>
+                  {manualError && <FieldError>{manualError}</FieldError>}
+                </Field>
+              </FieldGroup>
+              <DialogFooter className="mt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeLoginDialog}
+                  disabled={saving}
+                >
+                  取消
+                </Button>
+                <Button type="submit" disabled={saving}>
+                  {saving ? <Spinner data-icon="inline-start" /> : null}
+                  保存并识别账号
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        )}
+      </Dialog>
     </Section>
   );
 }
@@ -1069,27 +1195,27 @@ export function SettingsPage() {
               <SettingsContent title="账号">
                 <div className="flex flex-col gap-4">
                   <DanmakuSendField />
-                  <CookieField
+                  <AccountCard
                     siteId="bilibili"
                     title="哔哩哔哩"
-                    description="用于登录态浏览、接收和发送弹幕。"
+                    description="用于登录态浏览；保存 Cookie 后首页会自动使用账号推荐，也可接收和发送弹幕。"
                     placeholder="SESSDATA=…; bili_jct=…"
                     qrLogin
                   />
-                  <CookieField
+                  <AccountCard
                     siteId="douyu"
                     title="斗鱼"
                     description="用于发送弹幕。"
                     placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
                     qrLogin
                   />
-                  <CookieField
+                  <AccountCard
                     siteId="huya"
                     title="虎牙"
                     description="用于发送弹幕；暂不支持扫码，请粘贴完整 Cookie。"
-                    placeholder="yyuid=…; udb_cred=…"
+                    placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
                   />
-                  <CookieField
+                  <AccountCard
                     siteId="douyin"
                     title="抖音"
                     description="用于登录态搜索和实时弹幕。"

@@ -2,7 +2,6 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { useFollowStatusRefresh } from "@/features/follow/followRefresh";
 import { Shell } from "./layout/Shell";
 import { AndroidBackNavigator } from "./androidBackNavigation";
 import { HomePage } from "../features/home/HomePage";
@@ -78,8 +77,6 @@ function EnabledRoomRoute() {
 }
 
 export function App() {
-  useFollowStatusRefresh();
-
   return (
     <BrowserRouter>
       <AndroidBackNavigator />

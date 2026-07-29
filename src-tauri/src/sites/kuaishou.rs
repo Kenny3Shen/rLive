@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId, parse_live_started_at,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
+    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -205,6 +205,21 @@ impl KuaishouSite {
             .await?;
         parse_room_list(&value, false)
     }
+
+    /// The public room page SSR state carries an explicit `isLiving` flag.
+    /// Follow refreshes consume that flag directly and never retain the
+    /// playlist payload used for actual playback.
+    async fn get_room_live_status_from_html(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        let html = self
+            .get_text(
+                &format!("https://live.kuaishou.com/u/{room_id}"),
+                &[],
+                LIVE_ROOT,
+                false,
+            )
+            .await?;
+        parse_room_live_status_html(&html)
+    }
 }
 
 #[async_trait::async_trait]
@@ -271,6 +286,11 @@ impl LiveSite for KuaishouSite {
             });
         };
         self.get_gameboard_rooms(&game_id, page).await
+    }
+
+    async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        let room_id = normalize_room_id(room_id)?;
+        self.get_room_live_status_from_html(&room_id).await
     }
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
@@ -684,6 +704,48 @@ fn search_name_score(name: &str, needle: &str) -> u8 {
     }
 }
 
+/// Parse only the two follow-list fields from the room's SSR state.  In
+/// particular, do not use `playUrls` as a heuristic: touching it here couples
+/// a live-state refresh to short-lived playback metadata unnecessarily.
+fn parse_room_live_status_html(html: &str) -> AppResult<LiveRoomStatus> {
+    let state = extract_initial_state(html)?;
+    let play_list = state
+        .pointer("/liveroom/playList")
+        .or_else(|| state.pointer("/liveRoom/playList"))
+        .or_else(|| state.pointer("/liveroom/play_list"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| KuaishouSite::parse_err("快手直播页未包含房间状态数据，可能需要访问验证"))?;
+    let item = play_list.first().ok_or_else(|| {
+        KuaishouSite::parse_err("快手直播页未返回房间状态，主播可能不存在或页面结构已变更")
+    })?;
+    let live_stream = item.get("liveStream").unwrap_or(item);
+    let status = [
+        item.get("isLiving"),
+        live_stream.get("isLiving"),
+        item.get("living"),
+        live_stream.get("living"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(json_bool)
+    .ok_or_else(|| KuaishouSite::parse_err("快手房间状态缺少 isLiving 字段"))?;
+
+    Ok(LiveRoomStatus {
+        status,
+        live_started_at: status
+            .then(|| {
+                parse_live_started_at(
+                    live_stream
+                        .get("startTime")
+                        .or_else(|| live_stream.get("start_time"))
+                        .or_else(|| item.get("startTime"))
+                        .or_else(|| item.get("start_time")),
+                )
+            })
+            .flatten(),
+    })
+}
+
 fn parse_room_detail_html(html: &str, requested_room_id: &str) -> AppResult<LiveRoomDetail> {
     let state = extract_initial_state(html)?;
     let play_list = state
@@ -1082,6 +1144,26 @@ mod tests {
         assert_eq!(page.items[0].room_id, "creator_123");
         assert_eq!(page.items[0].online, 12_000);
         assert_eq!(page.items[0].cover, "https://img.example/poster.jpg");
+    }
+
+    #[test]
+    fn parses_ssr_live_status_without_play_urls() {
+        let html = r#"<script>window.__INITIAL_STATE__ = {"liveroom":{"playList":[{"isLiving":true,"liveStream":{"startTime":"1720000000"}}]}};</script>"#;
+
+        let status = parse_room_live_status_html(html).expect("room status");
+
+        assert!(status.status);
+        assert_eq!(status.live_started_at, Some(1_720_000_000_000));
+    }
+
+    #[test]
+    fn parses_offline_ssr_status_without_retaining_start_time() {
+        let html = r#"<script>window.__INITIAL_STATE__ = {"liveroom":{"playList":[{"isLiving":false,"liveStream":{"startTime":"1720000000"}}]}};</script>"#;
+
+        let status = parse_room_live_status_html(html).expect("room status");
+
+        assert!(!status.status);
+        assert_eq!(status.live_started_at, None);
     }
 
     #[test]

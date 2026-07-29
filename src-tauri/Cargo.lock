@@ -1925,8 +1925,7 @@ dependencies = [
 [[package]]
 name = "gemm-common"
 version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88027625910cc9b1085aaaa1c4bc46bb3a36aad323452b33c25b5e4e7c8e2a3e"
+source = "git+https://github.com/elasticdotventures/gemm?rev=eb487f689ce194db66d04195b281a2d49cbe0ed4#eb487f689ce194db66d04195b281a2d49cbe0ed4"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -4744,6 +4743,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-mcp-bridge",
  "tauri-plugin-opener",
+ "tauri-plugin-player-gesture",
  "tokenizers",
  "tokio",
  "tokio-native-tls",
@@ -5747,6 +5747,14 @@ dependencies = [
  "url",
  "windows",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-player-gesture"
+version = "0.1.0"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

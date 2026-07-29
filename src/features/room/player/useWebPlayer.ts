@@ -188,6 +188,61 @@ export async function toggleVideoPictureInPicture(
   }
 }
 
+/**
+ * Android WebView versions in the wild expose either the standard Fullscreen
+ * API or its older WebKit-prefixed counterpart. Keep the compatibility layer
+ * DOM-argument driven, just like PiP above, so it stays testable without a
+ * browser runtime.
+ */
+export type FullscreenDocument = {
+  fullscreenElement?: Element | null;
+  webkitFullscreenElement?: Element | null;
+  exitFullscreen?: () => Promise<void> | void;
+  webkitExitFullscreen?: () => Promise<void> | void;
+  webkitCancelFullScreen?: () => Promise<void> | void;
+};
+
+export type FullscreenTarget = {
+  requestFullscreen?: () => Promise<void> | void;
+  webkitRequestFullscreen?: () => Promise<void> | void;
+  webkitRequestFullScreen?: () => Promise<void> | void;
+};
+
+export function fullscreenElementFor(
+  documentRef: FullscreenDocument | null | undefined,
+): Element | null {
+  return documentRef?.fullscreenElement ?? documentRef?.webkitFullscreenElement ?? null;
+}
+
+/** Returns false only when this WebView exposes no usable fullscreen API. */
+export async function toggleElementFullscreen(
+  documentRef: FullscreenDocument | null | undefined,
+  target: FullscreenTarget | null | undefined,
+): Promise<boolean> {
+  if (!documentRef || !target) return false;
+
+  const activeElement = fullscreenElementFor(documentRef);
+  if (activeElement) {
+    const exit =
+      documentRef.exitFullscreen ??
+      documentRef.webkitExitFullscreen ??
+      documentRef.webkitCancelFullScreen;
+    if (!exit) return false;
+    await exit.call(documentRef);
+    return true;
+  }
+
+  const request =
+    target.requestFullscreen ?? target.webkitRequestFullscreen ?? target.webkitRequestFullScreen;
+  if (!request) return false;
+  await request.call(target);
+  return true;
+}
+
+function getFullscreenDocument(): FullscreenDocument | null {
+  return typeof document === "undefined" ? null : (document as FullscreenDocument);
+}
+
 export type WebPlayerApi = {
   mode: PlayerUiMode;
   paused: boolean;
@@ -197,6 +252,8 @@ export type WebPlayerApi = {
   pictureInPictureSupported: boolean;
   pictureInPictureActive: boolean;
   loadError: string | null;
+  /** A non-fatal fullscreen failure that must never replace the media view. */
+  fullscreenError: string | null;
   setLoadError: (msg: string | null) => void;
   /** Bump forces a brand-new <video> node (clears stuck MediaSource). */
   mediaKey: number;
@@ -350,6 +407,7 @@ export function useWebPlayer(opts: {
   const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [mediaKey, setMediaKey] = useState(0);
 
   if (playerInstanceIdRef.current === null) {
@@ -458,6 +516,7 @@ export function useWebPlayer(opts: {
     }
 
     setLoadError(null);
+    setFullscreenError(null);
     setPaused(false);
     // Fresh volume defaults on each room open (avoid sticky mute from autoplay).
     setMuted(false);
@@ -885,11 +944,16 @@ export function useWebPlayer(opts: {
   useEffect(() => {
     const onFs = () => {
       const el = stageRef.current;
-      const fs = document.fullscreenElement;
+      const fs = fullscreenElementFor(getFullscreenDocument());
       setMode(fs && el && (fs === el || el.contains(fs)) ? "fullscreen" : "windowed");
     };
+    onFs();
     document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs);
+    };
   }, []);
 
   const togglePause = useCallback(() => {
@@ -946,25 +1010,33 @@ export function useWebPlayer(opts: {
     const stage = stageRef.current;
     if (!stage) return;
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await stage.requestFullscreen();
+      const toggled = await toggleElementFullscreen(getFullscreenDocument(), stage);
+      if (!toggled) {
+        setFullscreenError("当前设备不支持全屏播放");
+        return;
       }
+      setFullscreenError(null);
     } catch (e) {
       const msg =
         typeof e === "object" && e && "message" in e
           ? String((e as { message: string }).message)
           : String(e);
-      setLoadError(msg || "全屏切换失败");
+      setFullscreenError(msg || "全屏切换失败");
     }
   }, []);
 
   useEffect(() => {
     if (mode !== "fullscreen") return;
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape" && document.fullscreenElement) {
-        void document.exitFullscreen().catch(() => {});
+      if (ev.key === "Escape" && fullscreenElementFor(getFullscreenDocument())) {
+        const documentRef = getFullscreenDocument();
+        const exit =
+          documentRef?.exitFullscreen ??
+          documentRef?.webkitExitFullscreen ??
+          documentRef?.webkitCancelFullScreen;
+        if (exit && documentRef) {
+          void Promise.resolve(exit.call(documentRef)).catch(() => {});
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -980,6 +1052,7 @@ export function useWebPlayer(opts: {
     pictureInPictureSupported,
     pictureInPictureActive,
     loadError,
+    fullscreenError,
     setLoadError,
     mediaKey,
     videoRef,

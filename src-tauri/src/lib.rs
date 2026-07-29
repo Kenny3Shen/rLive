@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use commands::account::{
-    account_clear_cookie, account_get_cookie, account_qr_login_poll, account_qr_login_start,
-    account_set_cookie,
+    account_clear_cookie, account_get_cookie, account_get_profile, account_qr_login_poll,
+    account_qr_login_start, account_set_cookie,
 };
 use commands::asr::{
     asr_audio_push, asr_model_load_default, asr_model_status, asr_model_unload, asr_session_start,
@@ -29,6 +29,9 @@ use commands::asr::{
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
     douyu_danmaku_send, douyu_danmaku_send_status, huya_danmaku_send, huya_danmaku_send_status,
+};
+use commands::danmaku_favorite::{
+    danmaku_favorite_add, danmaku_favorite_list, danmaku_favorite_remove,
 };
 use commands::danmaku_send_history::{
     danmaku_send_history_clear, danmaku_send_history_clear_all, danmaku_send_history_list,
@@ -49,10 +52,27 @@ use commands::site::{
 use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop};
 use state::AppState;
 use tauri::Manager;
+#[cfg(target_os = "android")]
+use tauri::Runtime;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 
 const MAX_LOG_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/**
+ * Registers the narrow Android bridge used by the live-player edge gestures.
+ * The Kotlin implementation changes only this Activity's brightness and the
+ * Android media stream; desktop builds retain their existing web controls.
+ */
+#[cfg(target_os = "android")]
+fn android_player_controls_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("player-controls")
+        .setup(|_app, api| {
+            api.register_android_plugin("com.shenss.rlive", "RlivePlayerControlsPlugin")?;
+            Ok(())
+        })
+        .build()
+}
 
 /// A synchronized append-only writer for the app log. A poisoned log mutex
 /// must never interrupt playback or a user-initiated chat send, so writes are
@@ -143,13 +163,16 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init());
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_player_gesture::init());
     #[cfg(debug_assertions)]
     let builder = builder.plugin(
         tauri_plugin_mcp_bridge::Builder::new()
             .bind_address("127.0.0.1")
             .build(),
     );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_player_controls_plugin());
 
     builder
         .setup(|app| {
@@ -187,6 +210,7 @@ pub fn run() {
             asr_session_stop,
             asr_audio_push,
             account_get_cookie,
+            account_get_profile,
             account_set_cookie,
             account_clear_cookie,
             account_qr_login_start,
@@ -214,6 +238,9 @@ pub fn run() {
             douyu_danmaku_send,
             huya_danmaku_send_status,
             huya_danmaku_send,
+            danmaku_favorite_list,
+            danmaku_favorite_add,
+            danmaku_favorite_remove,
             danmaku_send_history_list,
             danmaku_send_history_list_all,
             danmaku_send_history_clear,

@@ -15,6 +15,7 @@
     "opener:default",
     "dialog:allow-open",
     "dialog:allow-save",
+    "player-gesture:default",
     "mcp-bridge:default"
   ]
 }

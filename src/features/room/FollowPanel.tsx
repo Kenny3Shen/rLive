@@ -48,9 +48,9 @@ function statusBadge(user: FollowUser) {
 /**
  * Compact follow list for the room sidebar.
  *
- * It intentionally owns only navigation and follow-list refresh: switching a
- * row changes the active route, so RoomPage tears down the previous player and
- * danmaku connection before opening the next room.
+ * It intentionally owns only navigation and manual follow-list refresh:
+ * switching a row changes the active route, so RoomPage tears down the
+ * previous player and danmaku connection before opening the next room.
  */
 export const FollowPanel = memo(function FollowPanel({ className }: { className?: string }) {
   const navigate = useNavigate();

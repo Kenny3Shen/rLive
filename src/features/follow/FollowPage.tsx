@@ -10,7 +10,11 @@ import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
-import { FOLLOW_LIST_QUERY_KEY, refreshFollows } from "./followRefresh";
+import {
+  FOLLOW_LIST_QUERY_KEY,
+  refreshFollows,
+  useFollowStatusRefresh,
+} from "./followRefresh";
 import {
   FOLLOW_PLATFORM_PARAM,
   followPlatformFromSearch,
@@ -83,6 +87,9 @@ export function FollowPage() {
   const pageRef = useRef<HTMLDivElement>(null);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+  // Status refresh is intentionally started only after the user enters the
+  // dedicated follow page, so first-paint work stays focused on discovery.
+  useFollowStatusRefresh();
   const platformFilter = followPlatformFromSearch(
     searchParams.get(FOLLOW_PLATFORM_PARAM),
     disabledSiteIds,

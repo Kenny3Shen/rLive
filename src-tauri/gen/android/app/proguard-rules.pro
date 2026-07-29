@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# WebView invokes WebChromeClient callbacks from the platform. Keep the
+# fullscreen handler and its callback methods intact in minified builds.
+-keep class com.shenss.rlive.RliveFullscreenWebChromeClient { *; }

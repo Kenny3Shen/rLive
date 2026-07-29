@@ -1,9 +1,9 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, SendHorizontal, SmilePlus, Trash2 } from "lucide-react";
+import { SendHorizontal, SmilePlus, Star, Trash2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import type { DanmakuSendHistoryItem, SiteId } from "@/shared/types/live";
+import type { DanmakuFavoriteItem, DanmakuSendHistoryItem, SiteId } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import {
   InputGroup,
@@ -61,85 +61,145 @@ type DanmakuComposerProps = {
   onOverlayInteractionChange?: (open: boolean) => void;
 };
 
-type DanmakuSendHistoryProps = {
+type DanmakuPickerTab = "emoji" | "favorites" | "history";
+
+type DanmakuQuickPickerProps = {
   siteId: DanmakuSendSiteId;
   siteLabel: string;
+  supportsNativeBilibiliEmoji: boolean;
   disabled: boolean;
   overlay: boolean;
+  open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (content: string) => void;
+  draft: string;
+  onSelectEmoji: (emoji: string) => void;
+  onSelectMessage: (content: string) => void;
 };
 
-function DanmakuSendHistory({
+function isDanmakuPickerTab(value: unknown): value is DanmakuPickerTab {
+  return value === "emoji" || value === "favorites" || value === "history";
+}
+
+function DanmakuQuickPicker({
   siteId,
   siteLabel,
+  supportsNativeBilibiliEmoji,
   disabled,
   overlay,
+  open,
   onOpenChange,
-  onSelect,
-}: DanmakuSendHistoryProps) {
-  const [open, setOpen] = useState(false);
+  draft,
+  onSelectEmoji,
+  onSelectMessage,
+}: DanmakuQuickPickerProps) {
+  const [activeTab, setActiveTab] = useState<DanmakuPickerTab>("emoji");
+  const [favoriteAction, setFavoriteAction] = useState<string | null>(null);
+  const [favoriteFailed, setFavoriteFailed] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearFailed, setClearFailed] = useState(false);
   const queryClient = useQueryClient();
-  const queryKey = ["danmaku-send-history", siteId] as const;
-  const {
-    data: historyItems,
-    isError: historyError,
-    isFetching: historyFetching,
-    refetch: refetchHistory,
-  } = useQuery({
-    queryKey,
+  const favoriteQueryKey = ["danmaku-favorites", siteId] as const;
+  const historyQueryKey = ["danmaku-send-history", siteId] as const;
+  const favoriteQuery = useQuery({
+    queryKey: favoriteQueryKey,
+    queryFn: () =>
+      invokeCmd<DanmakuFavoriteItem[]>("danmaku_favorite_list", {
+        siteId,
+      }),
+    enabled: open && (activeTab === "favorites" || activeTab === "history"),
+  });
+  const historyQuery = useQuery({
+    queryKey: historyQueryKey,
     queryFn: () =>
       invokeCmd<DanmakuSendHistoryItem[]>("danmaku_send_history_list", {
         siteId,
       }),
-    enabled: false,
+    enabled: open && activeTab === "history",
   });
-  const items = historyItems ?? [];
+  const favoriteItems = favoriteQuery.data ?? [];
+  const historyItems = historyQuery.data ?? [];
+  const favoriteContents = new Set(favoriteItems.map((item) => item.content));
+  const favoriteDraft = draft.trim();
+  const favoriteBusy = favoriteAction !== null;
 
   useEffect(() => {
-    if (!open) return;
+    if (open) return;
+    setFavoriteFailed(false);
     setClearFailed(false);
-    void refetchHistory();
-  }, [open, refetchHistory, siteId]);
+  }, [open]);
 
-  useEffect(
-    () => () => {
-      onOpenChange(false);
-    },
-    [onOpenChange],
-  );
+  function selectStoredMessage(content: string) {
+    onSelectMessage(content);
+    onOpenChange(false);
+  }
 
-  function handleOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen);
-    onOpenChange(nextOpen);
+  async function addFavorite(content: string) {
+    const normalized = content.trim();
+    if (!normalized || favoriteBusy) return;
+    setFavoriteAction(normalized);
+    setFavoriteFailed(false);
+    try {
+      await invokeCmd<void>("danmaku_favorite_add", {
+        siteId,
+        content: normalized,
+      });
+      queryClient.setQueryData<DanmakuFavoriteItem[]>(favoriteQueryKey, (current) => [
+        { site_id: siteId, content: normalized, added_at: Date.now() },
+        ...(current ?? []).filter((item) => item.content !== normalized),
+      ]);
+      void queryClient.invalidateQueries({ queryKey: favoriteQueryKey });
+    } catch {
+      setFavoriteFailed(true);
+    } finally {
+      setFavoriteAction(null);
+    }
+  }
+
+  async function removeFavorite(content: string) {
+    if (favoriteBusy) return;
+    setFavoriteAction(content);
+    setFavoriteFailed(false);
+    try {
+      await invokeCmd<void>("danmaku_favorite_remove", { siteId, content });
+      queryClient.setQueryData<DanmakuFavoriteItem[]>(favoriteQueryKey, (current) =>
+        current?.filter((item) => item.content !== content),
+      );
+      void queryClient.invalidateQueries({ queryKey: favoriteQueryKey });
+    } catch {
+      setFavoriteFailed(true);
+    } finally {
+      setFavoriteAction(null);
+    }
   }
 
   async function clearHistory() {
-    if (clearing || items.length === 0) return;
+    if (clearing || historyItems.length === 0) return;
     setClearing(true);
     setClearFailed(false);
     try {
+      await queryClient.cancelQueries({ queryKey: historyQueryKey });
       await invokeCmd<void>("danmaku_send_history_clear", { siteId });
-      queryClient.setQueryData<DanmakuSendHistoryItem[]>(queryKey, []);
+      queryClient.setQueryData<DanmakuSendHistoryItem[]>(historyQueryKey, []);
+      void queryClient.invalidateQueries({ queryKey: historyQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ["danmaku-send-history", "all"] });
     } catch {
       setClearFailed(true);
+      void queryClient.invalidateQueries({ queryKey: historyQueryKey });
     } finally {
       setClearing(false);
     }
   }
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
         render={
           <InputGroupButton
             type="button"
             size="icon-sm"
             disabled={disabled}
-            aria-label={`查看${siteLabel}发送历史`}
-            title="发送历史"
+            aria-label={`打开${siteLabel}快捷弹幕面板`}
+            title="表情、收藏和发送历史"
             className={cn(
               overlay &&
                 "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
@@ -147,99 +207,359 @@ function DanmakuSendHistory({
           />
         }
       >
-        <History data-icon="inline-start" aria-hidden />
+        <SmilePlus data-icon="inline-start" aria-hidden />
       </PopoverTrigger>
       <PopoverContent
         side="top"
         align="start"
-        aria-label={`${siteLabel}发送历史`}
+        aria-label={`${siteLabel}快捷弹幕面板`}
         className={cn(
-          "w-72 gap-1.5 p-2",
+          "w-80 max-h-(--available-height) max-w-(--available-width) overflow-x-hidden overflow-y-auto overscroll-contain gap-2 p-2",
           overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
         )}
       >
-        <div className="flex items-center justify-between gap-2 px-0.5">
-          <PopoverTitle
-            className={cn("text-xs", overlay ? "text-white/70" : "text-muted-foreground")}
+        <PopoverTitle
+          className={cn("px-0.5 text-xs", overlay ? "text-white/70" : "text-muted-foreground")}
+        >
+          快捷弹幕
+        </PopoverTitle>
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            if (isDanmakuPickerTab(value)) setActiveTab(value);
+          }}
+          className="gap-1"
+        >
+          <TabsList
+            variant="line"
+            aria-label="快捷弹幕分类"
+            className={cn(
+              "h-7 w-full justify-start border-b border-border-subtle px-0",
+              overlay && "border-white/15 text-white/70",
+            )}
           >
-            发送历史
-          </PopoverTitle>
-          {items.length > 0 && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              disabled={clearing}
-              onClick={() => void clearHistory()}
+            <TabsTrigger
+              value="emoji"
               className={cn(
-                "text-muted-foreground",
-                overlay &&
-                  "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                "h-7 px-2 text-xs",
+                overlay && "text-white/70 hover:text-white data-active:text-white after:bg-white",
               )}
             >
-              {clearing ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Trash2 data-icon="inline-start" />
+              表情
+            </TabsTrigger>
+            <TabsTrigger
+              value="favorites"
+              className={cn(
+                "h-7 px-2 text-xs",
+                overlay && "text-white/70 hover:text-white data-active:text-white after:bg-white",
               )}
-              清空
-            </Button>
-          )}
-        </div>
-        {historyFetching && items.length === 0 && (
-          <p
-            className="flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground"
-            role="status"
-          >
-            <Spinner aria-hidden />
-            正在加载发送历史…
-          </p>
-        )}
-        {historyError && items.length === 0 && (
-          <div className="flex items-center justify-between gap-2 px-1 py-2 text-xs text-destructive">
-            <span>发送历史加载失败</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              onClick={() => void refetchHistory()}
-              className={cn(overlay && "text-white hover:bg-white/15")}
             >
-              重试
-            </Button>
-          </div>
-        )}
-        {!historyFetching && !historyError && items.length === 0 && (
-          <p className={cn("px-1 py-2 text-xs text-muted-foreground", overlay && "text-white/70")}>
-            暂无发送记录
-          </p>
-        )}
-        {items.length > 0 && (
-          <ScrollArea className="max-h-52 pr-0.5">
-            <div className="flex flex-col gap-0.5">
-              {items.map((item) => (
+              收藏
+            </TabsTrigger>
+            <TabsTrigger
+              value="history"
+              className={cn(
+                "h-7 px-2 text-xs",
+                overlay && "text-white/70 hover:text-white data-active:text-white after:bg-white",
+              )}
+            >
+              历史
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="emoji" className="mt-0 data-[hidden]:hidden">
+            {supportsNativeBilibiliEmoji ? (
+              <Tabs defaultValue="bilibili" className="gap-1">
+                <TabsList
+                  variant="line"
+                  aria-label="表情分类"
+                  className={cn(
+                    "h-7 w-full justify-start border-b border-border-subtle px-0",
+                    overlay && "border-white/15 text-white/70",
+                  )}
+                >
+                  <TabsTrigger
+                    value="bilibili"
+                    className={cn(
+                      "h-7 px-2 text-xs",
+                      overlay &&
+                        "text-white/70 hover:text-white data-active:text-white after:bg-white",
+                    )}
+                  >
+                    B站表情
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="emoji"
+                    className={cn(
+                      "h-7 px-2 text-xs",
+                      overlay &&
+                        "text-white/70 hover:text-white data-active:text-white after:bg-white",
+                    )}
+                  >
+                    Emoji
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="bilibili" className="mt-0 data-[hidden]:hidden">
+                  <div className="max-h-[min(15rem,max(0px,calc(var(--available-height)-6rem)))] overflow-y-auto pr-1">
+                    <div className="grid grid-cols-2 gap-1">
+                      {BILIBILI_NATIVE_TEXT_EMOJIS.map((emoji) => (
+                        <Button
+                          key={emoji}
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
+                            overlay && "hover:bg-white/15 focus-visible:ring-white/70",
+                          )}
+                          aria-label={`插入 B站表情 ${emoji}`}
+                          title={emoji}
+                          onClick={() => onSelectEmoji(emoji)}
+                        >
+                          {emoji}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </TabsContent>
+                <TabsContent value="emoji" className="mt-0 data-[hidden]:hidden">
+                  <DanmakuEmojiGrid overlay={overlay} onSelect={onSelectEmoji} />
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <DanmakuEmojiGrid overlay={overlay} onSelect={onSelectEmoji} />
+            )}
+          </TabsContent>
+
+          <TabsContent value="favorites" className="mt-0 data-[hidden]:hidden">
+            <div className="flex items-center justify-between gap-2 px-0.5">
+              <span className={cn("text-xs", overlay ? "text-white/70" : "text-muted-foreground")}>
+                收藏弹幕
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={disabled || favoriteBusy || favoriteDraft.length === 0}
+                title={favoriteDraft.length > 0 ? "收藏当前输入的弹幕" : "先输入要收藏的弹幕"}
+                onClick={() => void addFavorite(favoriteDraft)}
+                className={cn(
+                  "text-muted-foreground",
+                  overlay &&
+                    "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                )}
+              >
+                {favoriteAction === favoriteDraft ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Star data-icon="inline-start" />
+                )}
+                收藏当前
+              </Button>
+            </div>
+            {favoriteQuery.isFetching && favoriteItems.length === 0 && (
+              <p
+                className={cn(
+                  "flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground",
+                  overlay && "text-white/70",
+                )}
+                role="status"
+              >
+                <Spinner aria-hidden />
+                正在加载收藏…
+              </p>
+            )}
+            {favoriteQuery.isError && favoriteItems.length === 0 && (
+              <div className="flex items-center justify-between gap-2 px-1 py-2 text-xs text-destructive">
+                <span>收藏加载失败</span>
                 <Button
-                  key={item.content}
                   type="button"
                   variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "h-8 w-full justify-start truncate px-2 text-left text-sm font-normal",
-                    overlay && "hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
-                  )}
-                  title={item.content}
-                  onClick={() => {
-                    onSelect(item.content);
-                    handleOpenChange(false);
-                  }}
+                  size="xs"
+                  onClick={() => void favoriteQuery.refetch()}
+                  className={cn(overlay && "text-white hover:bg-white/15")}
                 >
-                  {item.content}
+                  重试
                 </Button>
-              ))}
+              </div>
+            )}
+            {!favoriteQuery.isFetching && !favoriteQuery.isError && favoriteItems.length === 0 && (
+              <p
+                className={cn(
+                  "px-1 py-2 text-xs text-muted-foreground",
+                  overlay && "text-white/70",
+                )}
+              >
+                暂无收藏弹幕
+              </p>
+            )}
+            {favoriteItems.length > 0 && (
+              <ScrollArea className="h-52 max-h-[max(0px,calc(var(--available-height)-6rem))] pr-0.5">
+                <div className="flex flex-col gap-0.5">
+                  {favoriteItems.map((item) => (
+                    <div key={item.content} className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "h-8 min-w-0 flex-1 justify-start truncate px-2 text-left text-sm font-normal",
+                          overlay &&
+                            "hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                        )}
+                        title={item.content}
+                        onClick={() => selectStoredMessage(item.content)}
+                      >
+                        {item.content}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={favoriteBusy}
+                        aria-label={`取消收藏 ${item.content}`}
+                        title="取消收藏"
+                        onClick={() => void removeFavorite(item.content)}
+                        className={cn(
+                          "text-muted-foreground",
+                          overlay &&
+                            "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                        )}
+                      >
+                        {favoriteAction === item.content ? (
+                          <Spinner data-icon="inline-start" aria-hidden />
+                        ) : (
+                          <Trash2 data-icon="inline-start" aria-hidden />
+                        )}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+            {favoriteFailed && (
+              <p className="px-1 text-xs text-destructive">收藏操作失败，请重试。</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-0 data-[hidden]:hidden">
+            <div className="flex items-center justify-between gap-2 px-0.5">
+              <span className={cn("text-xs", overlay ? "text-white/70" : "text-muted-foreground")}>
+                发送历史
+              </span>
+              {historyItems.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={clearing}
+                  onClick={() => void clearHistory()}
+                  className={cn(
+                    "text-muted-foreground",
+                    overlay &&
+                      "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                  )}
+                >
+                  {clearing ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Trash2 data-icon="inline-start" />
+                  )}
+                  清空
+                </Button>
+              )}
             </div>
-          </ScrollArea>
-        )}
-        {clearFailed && <p className="px-1 text-xs text-destructive">清空发送历史失败，请重试。</p>}
+            {historyQuery.isFetching && historyItems.length === 0 && (
+              <p
+                className={cn(
+                  "flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground",
+                  overlay && "text-white/70",
+                )}
+                role="status"
+              >
+                <Spinner aria-hidden />
+                正在加载发送历史…
+              </p>
+            )}
+            {historyQuery.isError && historyItems.length === 0 && (
+              <div className="flex items-center justify-between gap-2 px-1 py-2 text-xs text-destructive">
+                <span>发送历史加载失败</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => void historyQuery.refetch()}
+                  className={cn(overlay && "text-white hover:bg-white/15")}
+                >
+                  重试
+                </Button>
+              </div>
+            )}
+            {!historyQuery.isFetching && !historyQuery.isError && historyItems.length === 0 && (
+              <p
+                className={cn(
+                  "px-1 py-2 text-xs text-muted-foreground",
+                  overlay && "text-white/70",
+                )}
+              >
+                暂无发送记录
+              </p>
+            )}
+            {historyItems.length > 0 && (
+              <ScrollArea className="h-52 max-h-[max(0px,calc(var(--available-height)-6rem))] pr-0.5">
+                <div className="flex flex-col gap-0.5">
+                  {historyItems.map((item) => {
+                    const isFavorite = favoriteContents.has(item.content);
+                    return (
+                      <div key={item.content} className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "h-8 min-w-0 flex-1 justify-start truncate px-2 text-left text-sm font-normal",
+                            overlay &&
+                              "hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                          )}
+                          title={item.content}
+                          onClick={() => selectStoredMessage(item.content)}
+                        >
+                          {item.content}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={favoriteBusy || isFavorite}
+                          aria-label={isFavorite ? "已收藏" : `收藏 ${item.content}`}
+                          title={isFavorite ? "已收藏" : "收藏弹幕"}
+                          onClick={() => void addFavorite(item.content)}
+                          className={cn(
+                            "text-muted-foreground",
+                            overlay &&
+                              "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/70",
+                          )}
+                        >
+                          {favoriteAction === item.content ? (
+                            <Spinner data-icon="inline-start" aria-hidden />
+                          ) : (
+                            <Star data-icon="inline-start" aria-hidden />
+                          )}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            )}
+            {favoriteFailed && (
+              <p className="px-1 text-xs text-destructive">收藏操作失败，请重试。</p>
+            )}
+            {clearFailed && (
+              <p className="px-1 text-xs text-destructive">清空发送历史失败，请重试。</p>
+            )}
+          </TabsContent>
+        </Tabs>
       </PopoverContent>
     </Popover>
   );
@@ -262,13 +582,11 @@ export function DanmakuComposer({
   const sendConfig = getDanmakuSendConfig(siteId);
   const [availability, setAvailability] = useState<DanmakuSendStatus | null>(null);
   const [draft, setDraft] = useState("");
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [quickPickerOpen, setQuickPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sendInFlightRef = useRef(false);
-  const emojiPickerTitleId = useId();
 
   useEffect(() => {
     if (!sendConfig || !roomId) return;
@@ -308,7 +626,7 @@ export function DanmakuComposer({
     };
   }, [siteId, roomId, sendConfig, danmakuSendEnabled, danmakuSendPending, danmakuCookieRevision]);
 
-  const overlayOpen = emojiOpen || historyOpen;
+  const overlayOpen = quickPickerOpen;
   useEffect(() => {
     onOverlayInteractionChange?.(overlayOpen);
   }, [onOverlayInteractionChange, overlayOpen]);
@@ -347,14 +665,14 @@ export function DanmakuComposer({
       : insertPlainDanmakuText(draft, text, start, end, config.maxLength);
 
     setDraft(nextDraft);
-    setEmojiOpen(false);
+    setQuickPickerOpen(false);
     window.requestAnimationFrame(() => {
       input?.focus({ preventScroll: true });
       input?.setSelectionRange(caret, caret);
     });
   }
 
-  function selectHistory(content: string) {
+  function selectStoredDanmaku(content: string) {
     if (!ready || sending) return;
     const nextDraft = truncateUtf16(content, config.maxLength);
     setDraft(nextDraft);
@@ -407,112 +725,18 @@ export function DanmakuComposer({
         )}
       >
         <InputGroupAddon align="inline-start" className="py-0">
-          <DanmakuSendHistory
+          <DanmakuQuickPicker
             siteId={siteId}
             siteLabel={config.siteLabel}
+            supportsNativeBilibiliEmoji={config.supportsNativeBilibiliEmoji === true}
             disabled={!ready || sending}
             overlay={overlay}
-            onOpenChange={setHistoryOpen}
-            onSelect={selectHistory}
+            open={quickPickerOpen}
+            onOpenChange={setQuickPickerOpen}
+            draft={draft}
+            onSelectEmoji={insertEmoji}
+            onSelectMessage={selectStoredDanmaku}
           />
-          <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
-            <PopoverTrigger
-              render={
-                <InputGroupButton
-                  type="button"
-                  size="icon-sm"
-                  disabled={!ready || sending}
-                  aria-label={`选择${config.siteLabel}表情`}
-                  className={cn(
-                    overlay &&
-                      "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
-                  )}
-                />
-              }
-            >
-              <SmilePlus aria-hidden />
-            </PopoverTrigger>
-            <PopoverContent
-              side="top"
-              align="start"
-              aria-labelledby={emojiPickerTitleId}
-              className={cn(
-                "w-80 gap-2 p-2",
-                overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
-              )}
-            >
-              <PopoverTitle
-                id={emojiPickerTitleId}
-                className={cn(
-                  "px-0.5 text-xs",
-                  overlay ? "text-white/70" : "text-muted-foreground",
-                )}
-              >
-                选择表情
-              </PopoverTitle>
-              {config.supportsNativeBilibiliEmoji ? (
-                <Tabs defaultValue="bilibili" className="gap-1">
-                  <TabsList
-                    variant="line"
-                    aria-label="表情分类"
-                    className={cn(
-                      "h-7 w-full justify-start border-b border-border-subtle px-0",
-                      overlay && "border-white/15 text-white/70",
-                    )}
-                  >
-                    <TabsTrigger
-                      value="bilibili"
-                      className={cn(
-                        "h-7 px-2 text-xs",
-                        overlay &&
-                          "text-white/70 hover:text-white data-active:text-white after:bg-white",
-                      )}
-                    >
-                      B站表情
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="emoji"
-                      className={cn(
-                        "h-7 px-2 text-xs",
-                        overlay &&
-                          "text-white/70 hover:text-white data-active:text-white after:bg-white",
-                      )}
-                    >
-                      Emoji
-                    </TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="bilibili" className="mt-0 data-[hidden]:hidden">
-                    <div className="max-h-60 overflow-y-auto pr-1">
-                      <div className="grid grid-cols-2 gap-1">
-                        {BILIBILI_NATIVE_TEXT_EMOJIS.map((emoji) => (
-                          <Button
-                            key={emoji}
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className={cn(
-                              "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
-                              overlay && "hover:bg-white/15 focus-visible:ring-white/70",
-                            )}
-                            aria-label={`插入 B站表情 ${emoji}`}
-                            title={emoji}
-                            onClick={() => insertEmoji(emoji)}
-                          >
-                            {emoji}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  </TabsContent>
-                  <TabsContent value="emoji" className="mt-0 data-[hidden]:hidden">
-                    <DanmakuEmojiGrid overlay={overlay} onSelect={insertEmoji} />
-                  </TabsContent>
-                </Tabs>
-              ) : (
-                <DanmakuEmojiGrid overlay={overlay} onSelect={insertEmoji} />
-              )}
-            </PopoverContent>
-          </Popover>
         </InputGroupAddon>
         <InputGroupInput
           ref={inputRef}
