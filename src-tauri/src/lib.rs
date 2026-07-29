@@ -38,7 +38,7 @@ use commands::follow::{
     follow_add, follow_list, follow_refresh, follow_remove, follow_set_tags, tag_list, tag_remove,
     tag_upsert,
 };
-use commands::history::{history_add, history_clear, history_list};
+use commands::history::{history_add, history_clear, history_list, history_remove};
 use commands::iptv::iptv_load_playlist;
 use commands::profile::{profile_export, profile_import};
 use commands::settings::{settings_get, settings_set};
@@ -202,6 +202,7 @@ pub fn run() {
             history_list,
             history_add,
             history_clear,
+            history_remove,
             iptv_load_playlist,
             stream_proxy_start,
             stream_proxy_stop,
