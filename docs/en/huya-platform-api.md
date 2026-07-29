@@ -1,6 +1,6 @@
 # Huya platform API documentation
 
-Updated 2026-07-27. This page documents rLive's Huya browse, playback, account, and chat adapter. It is not official Huya Open Platform or partner-SDK documentation.
+Updated 2026-07-27. This page documents rLive's Huya browse, playback, account, and chat adapter.
 
 ## Capability matrix
 
@@ -23,11 +23,11 @@ Huya implements the shared category, room-list, search, room-detail, quality, an
 
 Under **Settings → Account → 虎牙**, manually save the local Cookie. Sending requires a numeric account ID (`yyuid` or `udb_uid`) and an opaque login proof (`udb_n` or `udb_cred`), the default-off `danmaku_send_enabled` switch, a valid room, a non-empty single-line message, and a three-second per-room cooldown.
 
-The manual composer sends one ordinary text message per action. Bilibili, Douyu, and Huya rooms also expose a default-off, non-persistent room-session **Auto-send danmaku** control in the right-side **Settings** tab. It is available only while the shared permission, current Cookie/send status, and text validation are valid. It waits 10 seconds before the first send, collapses line breaks and consecutive whitespace to one space, and splits text by grapheme into fragments of at most 15 user-visible characters without exceeding Huya's UTF-16 limit. Fragments are sent in order and loop after the last; requests do not overlap and their start times remain at least 10 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or a send failure disables the session; failures are not retried automatically. A single grapheme over the platform limit is a validation error. rLive does not support bulk sending, auto-replies, gifts, payments, or retry of ambiguous results. A completed write does not manufacture a chat row; the list and floating layer wait for the normal room connection's real echo.
+The manual composer sends one ordinary text message per action. Bilibili, Douyu, and Huya rooms also expose a default-off, non-persistent room-session **Auto-send danmaku** control in the right-side **Settings** tab. It is available only while the shared permission, current Cookie/send status, and text validation are valid. It waits 20 seconds before the first send, collapses line breaks and consecutive whitespace to one space, and splits text by grapheme into fragments of at most 15 user-visible characters without exceeding Huya's UTF-16 limit. Fragments are sent in order and loop after the last; requests do not overlap and their start times remain at least 20 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or a send failure disables the session; failures are not retried automatically. A single grapheme over the platform limit is a validation error. rLive does not support bulk sending, auto-replies, gifts, payments, or retry of ambiguous results. A completed write does not manufacture a chat row; the list and floating layer wait for the normal room connection's real echo.
 
 ## 2026-07-27 send diagnosis and verification
 
-A controlled send was verified in an authorised personal room. The initial fault was not an expired Cookie: the signal service completed login verification and returned a `liveui.sendMessage` WUP response, but rLive incorrectly reported that response as malformed.
+A controlled send was verified in a test room. The initial fault was not an expired Cookie: the signal service completed login verification and returned a `liveui.sendMessage` WUP response, but rLive incorrectly reported that response as malformed.
 
 The diagnosis and repair were:
 
@@ -38,9 +38,9 @@ The diagnosis and repair were:
 
 The repaired controlled test received the platform success status. Platform acceptance still is not a display acknowledgment: rLive adds no local echo and waits for the normal receiver's real room echo; an ambiguous result is never retried automatically.
 
-## Limits and source locations
+## Runtime constraints and source locations
 
-Web protocols, lines, and login requirements may change. Cookies stay on the device and are not logged, exported, or uploaded. This local feature is not a public application-write grant; confirm account/room eligibility and follow Huya terms.
+Web protocols, lines, and login requirements may change. Cookies stay on the device and are not logged, exported, or uploaded.
 
 - Site and playback: `src-tauri/src/sites/huya/`
 - TARS chat transport: `src-tauri/src/danmaku/huya.rs`, `src-tauri/src/danmaku/tars.rs`

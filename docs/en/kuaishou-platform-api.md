@@ -1,6 +1,6 @@
 # Kuaishou platform API documentation
 
-Updated 2026-07-27. This page documents rLive's Kuaishou public-browse and playback adapter. It is not official Kuaishou Open Platform documentation.
+Updated 2026-07-27. This page documents rLive's Kuaishou public-browse and playback adapter.
 
 ## Capability matrix
 

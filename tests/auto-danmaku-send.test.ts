@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUTO_DANMAKU_SEND_INTERVAL_MS,
   nextAutoDanmakuSegmentIndex,
   normalizeAutoDanmakuText,
   remainingAutoDanmakuSendDelay,
@@ -34,9 +35,10 @@ describe("automatic danmaku text preparation", () => {
     expect(sent).toEqual(["第一段", "第二段", "第三段", "第一段", "第二段"]);
   });
 
-  test("never shortens the interval when a clock reading moves backwards", () => {
-    expect(remainingAutoDanmakuSendDelay(1_000, 11_000)).toBe(0);
-    expect(remainingAutoDanmakuSendDelay(1_000, 500)).toBe(10_000);
+  test("uses a 20-second interval and never shortens it when the clock moves backwards", () => {
+    expect(AUTO_DANMAKU_SEND_INTERVAL_MS).toBe(20_000);
+    expect(remainingAutoDanmakuSendDelay(1_000, 21_000)).toBe(0);
+    expect(remainingAutoDanmakuSendDelay(1_000, 500)).toBe(20_000);
   });
 
   test("does not split emoji or combining-character graphemes", () => {

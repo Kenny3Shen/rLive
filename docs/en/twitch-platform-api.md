@@ -1,6 +1,6 @@
 # Twitch platform API documentation
 
-Updated 2026-07-27. This page documents rLive's Twitch web-browse, HLS-playback, and anonymous-IRC-chat adapter. It is not Twitch Developer Console documentation.
+Updated 2026-07-27. This page documents rLive's Twitch web-browse, HLS-playback, and anonymous-IRC-chat adapter.
 
 ## Capability matrix
 
@@ -23,7 +23,7 @@ For playback, rLive requests a short-lived HLS access token by channel login and
 
 `danmaku_connect` joins the channel through anonymous IRC WebSocket and receives chat. Anonymous identity provides no write permission, so rLive has no Twitch chat sender, subscriptions, gifts, payments, or channel-management flow.
 
-Availability, region, channel status, and web interfaces can change. Follow Twitch terms and local law.
+Availability, region, channel status, and web interfaces can change.
 
 - Site and playback: `src-tauri/src/sites/twitch.rs`
 - Anonymous IRC chat: `src-tauri/src/danmaku/twitch.rs`

@@ -29,6 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { AUTO_DANMAKU_SEND_INTERVAL_MS } from "./danmaku/autoSend";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 
 const FONT_WEIGHTS = [
@@ -227,7 +228,8 @@ function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendControl
                   onChange={(event) => autoSend.onTextChange(event.target.value)}
                 />
                 <FieldDescription>
-                  {autoSend.validationMessage ?? "10 秒后开始；长文本会自动分段。"}
+                  {autoSend.validationMessage ??
+                    `${AUTO_DANMAKU_SEND_INTERVAL_MS / 1_000} 秒后开始；长文本会自动分段。`}
                 </FieldDescription>
               </FieldContent>
             </Field>

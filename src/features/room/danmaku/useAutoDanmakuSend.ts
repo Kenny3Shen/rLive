@@ -48,9 +48,10 @@ function errorMessage(error: unknown): string {
 }
 
 function waitingMessage(index: number, count: number, firstSend = false): string {
+  const intervalSeconds = AUTO_DANMAKU_SEND_INTERVAL_MS / 1_000;
   return firstSend
-    ? `第 ${index + 1}/${count} 段将在 10 秒后发送。`
-    : `正在等待第 ${index + 1}/${count} 段；发送起始至少相隔 10 秒。`;
+    ? `第 ${index + 1}/${count} 段将在 ${intervalSeconds} 秒后发送。`
+    : `正在等待第 ${index + 1}/${count} 段；发送起始至少相隔 ${intervalSeconds} 秒。`;
 }
 
 /** `performance.now()` is monotonic, unlike wall-clock time after a system sync. */

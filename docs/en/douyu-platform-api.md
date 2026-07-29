@@ -1,6 +1,6 @@
 # Douyu platform API documentation
 
-Updated 2026-07-27. This page documents rLive's Douyu browse, playback, account, and chat integration, including the repaired sender and its successful personal-room verification. It describes an adapter for web behaviour, not an official Douyu write API.
+Updated 2026-07-27. This page documents rLive's Douyu browse, playback, account, and chat integration, including the repaired sender and its verification.
 
 ## Capability matrix
 
@@ -11,7 +11,7 @@ Updated 2026-07-27. This page documents rLive's Douyu browse, playback, account,
 | Playback and qualities | Supported | Uses web-issued encrypted playback parameters to obtain lines and qualities. |
 | Real-time chat receive | Supported | Joins the Douyu chat gateway and filters noisy entry events. |
 | Account | Supported | QR or manual complete-Cookie storage on the device only. |
-| Normal chat sending and room-session auto-send | Verified | Successfully sent from a personal room; each fragment still waits for platform semantics and real echo. |
+| Normal chat sending and room-session auto-send | Verified | Sent in a test room; each fragment still waits for platform semantics and real echo. |
 
 ## Adapter surface
 
@@ -31,11 +31,11 @@ loginreq → loginres → getEncryption → livreq → livres → lsigreq → ch
 
 The implementation now uses current web-shaped login and chat packets, a stable device identity, a dedicated danmaku-session JWT, bounded encryption negotiation, and shared HTTP/WSS proxy handling. It treats `chatres(res=0)` as acceptance, `error` or non-zero `res` as rejection, and a post-write timeout/close/read failure as unconfirmed. It does not retry an ambiguous write.
 
-The repaired path has successfully sent in a personal live room. That verifies the current account, room, and current web flow; it does not guarantee any other account, room, or future web version.
+The repaired path completed an end-to-end send in a test room. It covers the current web flow and test environment; Cookie state, room conditions, and upstream revisions can still change the result.
 
 ## Prerequisites and result semantics
 
-Sending requires the default-off local `danmaku_send_enabled` switch, a complete saved account Cookie, a numeric room ID, a non-empty single-line message, and a three-second per-room cooldown. The right-side **Settings** tab in Bilibili, Douyu, and Huya rooms additionally offers a default-off, non-persistent room-session **Auto-send danmaku** control. It can turn on only when the shared permission, current Cookie/send status, and text validation are valid. It waits 10 seconds before the first send, normalises line breaks and consecutive whitespace to one space, then splits by grapheme into ordered fragments of at most 15 user-visible characters without exceeding Douyu's UTF-16 limit. It loops from the first fragment after the last, never overlaps requests, and keeps send start times at least 10 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or any send failure disables it; it never retries a failed or ambiguous write. A single grapheme that cannot fit the platform limit is a validation error. rLive supports no bulk sending, auto-replies, gifts, payments, or automatic retry.
+Sending requires the default-off local `danmaku_send_enabled` switch, a complete saved account Cookie, a numeric room ID, a non-empty single-line message, and a three-second per-room cooldown. The right-side **Settings** tab in Bilibili, Douyu, and Huya rooms additionally offers a default-off, non-persistent room-session **Auto-send danmaku** control. It can turn on only when the shared permission, current Cookie/send status, and text validation are valid. It waits 20 seconds before the first send, normalises line breaks and consecutive whitespace to one space, then splits by grapheme into ordered fragments of at most 15 user-visible characters without exceeding Douyu's UTF-16 limit. It loops from the first fragment after the last, never overlaps requests, and keeps send start times at least 20 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or any send failure disables it; it never retries a failed or ambiguous write. A single grapheme that cannot fit the platform limit is a validation error. rLive supports no bulk sending, auto-replies, gifts, payments, or automatic retry.
 
 | Stage | Meaning |
 | --- | --- |
@@ -45,9 +45,9 @@ Sending requires the default-off local `danmaku_send_enabled` switch, a complete
 
 The frontend never creates a synthetic message from a command result. Do not repeatedly resend an unknown result; use the live room's real state.
 
-## Safety and source locations
+## Data handling and source locations
 
-Cookie, JWT, signature, message text, and raw replies stay out of logs, exports, and uploads. A webpage Cookie is not a public application-write grant; use this only where you may speak and follow Douyu's terms, moderation rules, and local law.
+Cookie, JWT, signature, message text, and raw replies stay out of logs, exports, and uploads.
 
 - Site and playback: `src-tauri/src/sites/douyu/`
 - Chat receive/send state machine: `src-tauri/src/danmaku/douyu.rs`

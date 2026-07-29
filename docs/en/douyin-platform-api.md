@@ -1,6 +1,6 @@
 # Douyin platform API notes
 
-Updated: 2026-07-28. This page describes rLive's Douyin live browse, playback, and real-time chat boundaries. It is not official Douyin Open Platform or live SDK documentation.
+Updated: 2026-07-28. This page describes rLive's Douyin live browse, playback, and real-time chat boundaries.
 
 ## Capability overview
 
@@ -15,7 +15,7 @@ Updated: 2026-07-28. This page describes rLive's Douyin live browse, playback, a
 
 ## Local signature and chat
 
-Douyin chat WSS addresses require a short-lived signature. rLive follows the Simple Live flow on-device:
+Douyin chat WSS addresses require a short-lived signature. rLive performs the following steps on-device:
 
 1. Read the internal `room_id` from room detail.
 2. Generate an anonymous 12-digit `user_unique_id`.

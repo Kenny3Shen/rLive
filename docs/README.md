@@ -1,6 +1,6 @@
 # rLive 文档 / Documentation
 
-文档以**中文优先**，英文为对照。UI 默认中文。
+中文与英文文档按主题对应。
 
 | 中文 | English |
 |------|---------|
@@ -15,6 +15,4 @@
 | [播放器性能调研](zh/播放器性能调研.md) | [Player performance research](en/player-performance-research.md) |
 | [发布流程](zh/发布流程.md) | [Release process](en/release-process.md) |
 
-仓库根目录提供 [中文 README](../README.md) 和 [English README](../README.en.md)，包含功能表、环境与构建速查。
-
-Agent / 交付规则：[`AGENTS.md`](../AGENTS.md)（英文为主，面向自动化）。
+仓库根目录的 [中文 README](../README.md) 和 [English README](../README.en.md) 提供功能、环境与构建速查。

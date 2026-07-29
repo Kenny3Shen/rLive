@@ -1,6 +1,6 @@
 # Bilibili platform API documentation
 
-Updated 2026-07-27. This page documents rLive's Bilibili adapter, its upstream API categories, and its device-local account boundary. It is not official Bilibili Open Platform documentation.
+Updated 2026-07-27. This page documents rLive's Bilibili adapter, its upstream API categories, and its device-local account boundary.
 
 ## Capability matrix
 
@@ -41,13 +41,11 @@ It requires all of the following:
 2. A Cookie containing `SESSDATA` and `bili_jct`; `bili_jct` is used as the CSRF value.
 3. A real numeric room ID, a non-empty single-line message, and current conservative length/cooldown validation.
 
-The manual composer sends one ordinary text message per action. Bilibili, Douyu, and Huya rooms also offer a session-only **Auto-send danmaku** control in the right-side **Settings** tab. It is off by default, is not persisted, and can turn on only when the shared local permission, current Cookie/send status, and text validation are valid. After it is enabled, it waits 10 seconds before the first send, collapses line breaks and repeated whitespace to one space, and splits by grapheme into fragments of at most 15 user-visible characters while respecting Bilibili's UTF-16 limit. It sends fragments in order and loops back after the last; requests do not overlap and their start times are at least 10 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or any send failure disables it, and failed sends are never retried automatically. A single grapheme that cannot fit the platform UTF-16 limit is a validation error. rLive does not support bulk sending, auto-replies, gifts, payments, or automatic retry of an ambiguous result. A resolved write command never synthesises chat locally: the list and floating layer render the message only after the normal room connection receives the platform's real echo.
+The manual composer sends one ordinary text message per action. Bilibili, Douyu, and Huya rooms also offer a session-only **Auto-send danmaku** control in the right-side **Settings** tab. It is off by default, is not persisted, and can turn on only when the shared local permission, current Cookie/send status, and text validation are valid. After it is enabled, it waits 20 seconds before the first send, collapses line breaks and repeated whitespace to one space, and splits by grapheme into fragments of at most 15 user-visible characters while respecting Bilibili's UTF-16 limit. It sends fragments in order and loops back after the last; requests do not overlap and their start times are at least 20 seconds apart. Editing text, changing rooms, leaving the page, closing the app, or any send failure disables it, and failed sends are never retried automatically. A single grapheme that cannot fit the platform UTF-16 limit is a validation error. rLive does not support bulk sending, auto-replies, gifts, payments, or automatic retry of an ambiguous result. A resolved write command never synthesises chat locally: the list and floating layer render the message only after the normal room connection receives the platform's real echo.
 
-## Safety and source locations
+## Data handling and source locations
 
 Cookies, CSRF values, message text, short-lived tokens, and raw upstream errors are not logged, exported, or returned to the frontend. The sender does not follow redirects, preventing a redirected target from receiving the logged-in session.
-
-A local web-session write is not a public application permission grant. Verify only in rooms where you may speak and comply with platform terms, moderation rules, and local law.
 
 - Site and playback: `src-tauri/src/sites/bilibili/`
 - Chat receive/send: `src-tauri/src/danmaku/bilibili.rs`
