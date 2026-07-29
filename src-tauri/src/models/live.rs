@@ -82,6 +82,20 @@ pub struct LiveRoomDetail {
     pub raw: serde_json::Value,
 }
 
+/// The small, refresh-safe subset of room metadata used by follow lists.
+///
+/// A follow refresh needs neither playback URLs nor danmaku connection data.
+/// Keeping this as a separate model makes that boundary explicit in site
+/// clients and prevents an innocuous status update from growing into a full
+/// room-detail request again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveRoomStatus {
+    pub status: bool,
+    /// When a platform exposes it on its lightweight status endpoint, retain
+    /// the live-session start time for the follow-list duration display.
+    pub live_started_at: Option<i64>,
+}
+
 /// Convert the varied start-time representations used by live platforms into
 /// a safe Unix timestamp in milliseconds.
 ///
