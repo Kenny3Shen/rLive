@@ -1,6 +1,6 @@
 # Twitch 平台 API 文档
 
-更新时间：2026-07-27。本页说明 rLive 对 Twitch 网页浏览、HLS 播放与匿名 IRC 弹幕的接入范围；它不是 Twitch Developer Console 的官方应用 API 文档。
+更新时间：2026-07-27。本页说明 rLive 对 Twitch 网页浏览、HLS 播放与匿名 IRC 弹幕的接入范围。
 
 ## 能力总览
 
@@ -23,7 +23,7 @@ Twitch 实现统一的分类、推荐、分区房间、搜索、详情、清晰�
 
 `danmaku_connect` 使用匿名 IRC WebSocket 加入当前频道并接收聊天。匿名身份没有账号写入权限，因此 rLive 不提供 Twitch 弹幕发送、订阅、礼物、支付或频道管理功能。
 
-上游可用性、地区、频道状态和网页接口随时可能变化。请遵守 Twitch 的服务条款和当地法律。
+上游可用性、地区、频道状态和网页接口可能变化。
 
 - 站点与播放：`src-tauri/src/sites/twitch.rs`
 - 匿名 IRC 弹幕：`src-tauri/src/danmaku/twitch.rs`

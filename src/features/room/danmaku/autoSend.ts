@@ -2,7 +2,7 @@
 export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 15;
 
 /** The minimum interval between two automatic-send request starts. */
-export const AUTO_DANMAKU_SEND_INTERVAL_MS = 10_000;
+export const AUTO_DANMAKU_SEND_INTERVAL_MS = 20_000;
 
 /**
  * Calculate a safe wait from a monotonic clock reading. A clock value that
