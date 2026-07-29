@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useMemo, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import type { LiveRoomItem, RoomListPage } from "@/shared/types/live";
@@ -31,8 +32,6 @@ const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
 export function HomePage() {
   const siteId = useSiteId();
   const pageRef = useRef<HTMLDivElement>(null);
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-  const loadMoreInFlightRef = useRef(false);
 
   const query = useInfiniteQuery({
     queryKey: ["recommend", siteId],
@@ -49,48 +48,12 @@ export function HomePage() {
   const pages = query.data?.pages;
   const rooms = useMemo(() => mergeRoomPages(pages), [pages]);
 
-  const loadMore = useCallback(
-    (retry = false) => {
-      if (
-        loadMoreInFlightRef.current ||
-        !hasNextPage ||
-        isFetchingNextPage ||
-        (!retry && isFetchNextPageError)
-      ) {
-        return;
-      }
-      loadMoreInFlightRef.current = true;
-      void fetchNextPage().finally(() => {
-        loadMoreInFlightRef.current = false;
-      });
-    },
-    [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError],
-  );
-
-  useEffect(() => {
-    const target = loadMoreRef.current;
-    if (
-      !target ||
-      !hasNextPage ||
-      isFetchingNextPage ||
-      isFetchNextPageError ||
-      typeof IntersectionObserver === "undefined"
-    ) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) loadMore();
-      },
-      {
-        root: document.querySelector<HTMLElement>("main"),
-        rootMargin: "0px 0px 240px 0px",
-      },
-    );
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, loadMore]);
+  const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  });
 
   usePageEntrance(pageRef, {
     entryKey: `home:${siteId}`,
@@ -144,7 +107,7 @@ export function HomePage() {
               重试加载
             </Button>
           )}
-          {typeof IntersectionObserver === "undefined" &&
+          {!supportsIntersectionObserver &&
             !query.isFetchingNextPage &&
             !query.isFetchNextPageError && (
               <Button variant="secondary" onClick={() => loadMore()}>

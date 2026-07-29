@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/rlive.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2"
+      crossorigin
+    />
     <title>rLive</title>
     <script>
       (() => {
@@ -21,20 +28,33 @@
       })();
     </script>
     <style>
-      html { background: #f8f9fb; color-scheme: light; }
-      html.dark { background: #111217; color-scheme: dark; }
-      body { margin: 0; background: inherit; }
-      #root { min-height: 100vh; }
+      html {
+        background: #f8f9fb;
+        color-scheme: light;
+      }
+      html.dark {
+        background: #111217;
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: inherit;
+      }
+      #root {
+        min-height: 100dvh;
+      }
       .rlive-boot {
         display: flex;
-        min-height: 100vh;
+        min-height: 100dvh;
         align-items: center;
         justify-content: center;
         color: #687080;
         font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
         font-size: 14px;
       }
-      html.dark .rlive-boot { color: #a4a9b3; }
+      html.dark .rlive-boot {
+        color: #a4a9b3;
+      }
       .rlive-boot__spinner {
         box-sizing: border-box;
         width: 18px;
@@ -43,9 +63,13 @@
         border: 2px solid currentColor;
         border-right-color: transparent;
         border-radius: 999px;
-        animation: rlive-boot-spin .75s linear infinite;
+        animation: rlive-boot-spin 0.75s linear infinite;
       }
-      @keyframes rlive-boot-spin { to { transform: rotate(360deg); } }
+      @keyframes rlive-boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     </style>
   </head>
 

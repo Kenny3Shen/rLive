@@ -6,10 +6,19 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import type { LiveRoomDetail, LiveRoomItem, RoomListPage } from "@/shared/types/live";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -102,6 +111,12 @@ export function SearchPage() {
       : textQuery.isLoading);
   const isError = scope === "room" ? roomLookup.isError && textQuery.isError : textQuery.isError;
   const error = textQuery.error ?? roomLookup.error;
+  const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
+    hasNextPage: textQuery.hasNextPage,
+    isFetchingNextPage: textQuery.isFetchingNextPage,
+    isFetchNextPageError: textQuery.isFetchNextPageError,
+    fetchNextPage: textQuery.fetchNextPage,
+  });
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -197,10 +212,15 @@ export function SearchPage() {
       </ToggleGroup>
 
       {keyword.length === 0 && (
-        <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
-          <Search className="size-8 opacity-30" aria-hidden />
-          <p className="text-sm">输入关键词开始搜索</p>
-        </div>
+        <Empty className="min-h-56 border-0 py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Search aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>输入关键词开始搜索</EmptyTitle>
+            <EmptyDescription>可按主播、房间号或标题查找直播间。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
 
       {isLoading && <SearchGridSkeleton />}
@@ -208,9 +228,22 @@ export function SearchPage() {
       {isError && <ErrorState error={error} title="搜索失败" onRetry={retry} />}
 
       {keyword.length > 0 && !isLoading && !isError && rooms.length === 0 && (
-        <p className="py-12 text-center text-sm text-muted-foreground">
-          未找到「{keyword}」的{scopeLabel}结果
-        </p>
+        <Empty className="min-h-56 py-10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Search aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>没有找到匹配结果</EmptyTitle>
+            <EmptyDescription>
+              未找到“{keyword}”的{scopeLabel}结果，试试更短的关键词或其他搜索方式。
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => navigate("/search")}>
+              清除搜索
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
 
       {rooms.length > 0 && (
@@ -238,21 +271,29 @@ export function SearchPage() {
       )}
 
       {textQuery.hasNextPage && (
-        <div className="flex justify-center pt-2">
-          <Button
-            variant="secondary"
-            disabled={textQuery.isFetchingNextPage}
-            onClick={() => void textQuery.fetchNextPage()}
-          >
-            {textQuery.isFetchingNextPage ? (
-              <>
-                <Loader2 className="animate-spin-soft" data-icon="inline-start" />
-                加载中…
-              </>
-            ) : (
-              "加载更多"
+        <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
+          {textQuery.isFetchingNextPage && (
+            <span
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Loader2 className="animate-spin-soft" data-icon="inline-start" />
+              加载中…
+            </span>
+          )}
+          {textQuery.isFetchNextPageError && (
+            <Button variant="secondary" onClick={() => loadMore(true)}>
+              重试加载
+            </Button>
+          )}
+          {!supportsIntersectionObserver &&
+            !textQuery.isFetchingNextPage &&
+            !textQuery.isFetchNextPageError && (
+              <Button variant="secondary" onClick={() => loadMore()}>
+                加载更多
+              </Button>
             )}
-          </Button>
         </div>
       )}
     </div>

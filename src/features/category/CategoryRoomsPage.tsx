@@ -1,14 +1,23 @@
 import { useLayoutEffect, useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Radio } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import type { LiveCategory, LiveSubCategory, RoomListPage } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { categoryNameFromSearch } from "./categoryRoute";
 
@@ -76,6 +85,12 @@ export function CategoryRoomsPage() {
     () => roomsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [roomsQuery.data],
   );
+  const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
+    hasNextPage: roomsQuery.hasNextPage,
+    isFetchingNextPage: roomsQuery.isFetchingNextPage,
+    isFetchNextPageError: roomsQuery.isFetchNextPageError,
+    fetchNextPage: roomsQuery.fetchNextPage,
+  });
 
   // Shell owns the scrolling element. A dedicated route should always start at
   // its top instead of inheriting the category browser's previous scroll spot.
@@ -90,7 +105,7 @@ export function CategoryRoomsPage() {
         actions={
           <Button variant="ghost" size="sm" onClick={() => navigate("/category")}>
             <ArrowLeft data-icon="inline-start" />
-            分区
+            返回
           </Button>
         }
       />
@@ -106,7 +121,21 @@ export function CategoryRoomsPage() {
       )}
 
       {!roomsQuery.isLoading && !roomsQuery.isError && rooms.length === 0 && (
-        <p className="py-12 text-center text-sm text-muted-foreground">暂无直播</p>
+        <Empty className="min-h-64 py-12">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Radio aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>这个分区暂时没有直播</EmptyTitle>
+            <EmptyDescription>换个分区看看，或稍后再来刷新。</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => navigate("/category")}>
+              <ArrowLeft data-icon="inline-start" aria-hidden />
+              返回分类
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
 
       {rooms.length > 0 && (
@@ -118,21 +147,29 @@ export function CategoryRoomsPage() {
       )}
 
       {roomsQuery.hasNextPage && (
-        <div className="flex justify-center pt-4">
-          <Button
-            variant="secondary"
-            disabled={roomsQuery.isFetchingNextPage}
-            onClick={() => void roomsQuery.fetchNextPage()}
-          >
-            {roomsQuery.isFetchingNextPage ? (
-              <>
-                <Loader2 className="animate-spin-soft" data-icon="inline-start" />
-                加载中…
-              </>
-            ) : (
-              "加载更多"
+        <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
+          {roomsQuery.isFetchingNextPage && (
+            <span
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Loader2 className="animate-spin-soft" data-icon="inline-start" />
+              加载中…
+            </span>
+          )}
+          {roomsQuery.isFetchNextPageError && (
+            <Button variant="secondary" onClick={() => loadMore(true)}>
+              重试加载
+            </Button>
+          )}
+          {!supportsIntersectionObserver &&
+            !roomsQuery.isFetchingNextPage &&
+            !roomsQuery.isFetchNextPageError && (
+              <Button variant="secondary" onClick={() => loadMore()}>
+                加载更多
+              </Button>
             )}
-          </Button>
         </div>
       )}
     </div>

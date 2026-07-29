@@ -68,12 +68,11 @@ function RouteLoadingFallback() {
 function EnabledRoomRoute() {
   const { siteId } = useParams<{ siteId: string }>();
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
-  const hydratedFromBackend = useSettingsStore((state) => state.hydratedFromBackend);
 
-  // A persisted opt-out may arrive just after the router mounts. Holding the
-  // player route for that short settings load avoids starting a disabled
-  // platform's network requests before redirecting back to discovery.
-  if (!hydratedFromBackend) return <RouteLoadingFallback />;
+  // Zustand restores this small preference from localStorage before the first
+  // render. Let a deep link begin loading with that persisted value instead of
+  // serially waiting for settings_get; applyFromBackend will rerender this
+  // guard and redirect if the authoritative backend value disagrees.
 
   if (isSiteId(siteId) && !isSiteEnabled(siteId, disabledSiteIds)) {
     return <Navigate to="/" replace />;
