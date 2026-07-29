@@ -21,6 +21,7 @@ tauri-plugin-dialog = "2"
 # bridge so profile imports and exports can read and write those user-selected
 # documents without trying to coerce them into invalid POSIX paths.
 tauri-plugin-fs = "2"
+tauri-plugin-player-gesture = { path = "plugins/tauri-plugin-player-gesture" }
 # Automation bridge for https://github.com/hypothesi/mcp-server-tauri (localhost only)
 tauri-plugin-mcp-bridge = "0.12"
 serde = { version = "1", features = ["derive"] }
@@ -70,3 +71,11 @@ lto = "thin"
 opt-level = 3
 strip = "symbols"
 panic = "abort"
+
+# `gemm-common` 0.19.0 emits aarch64 FP16 vector assembly from helpers that
+# are missing their function-level target feature.  Android rejects that even
+# though the library dynamically dispatches those helpers only on compatible
+# CPUs.  Pin the reviewed upstream fix instead of enabling FP16 globally,
+# which would incorrectly raise rLive's Android CPU baseline.
+[patch.crates-io]
+gemm-common = { git = "https://github.com/elasticdotventures/gemm", rev = "eb487f689ce194db66d04195b281a2d49cbe0ed4" }

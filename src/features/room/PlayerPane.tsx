@@ -1,5 +1,6 @@
 import {
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
@@ -7,8 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { X } from "lucide-react";
+import { SunMedium, Volume2 } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
+import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
@@ -21,15 +23,153 @@ import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useLocalAsrCaptions } from "./asr/useLocalAsrCaptions";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useWebPlayer } from "./player/useWebPlayer";
+import {
+  androidPlayerControlStep,
+  useAndroidPlayerControls,
+} from "./player/androidPlayerControls";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import type { PlayerEvent } from "@/shared/types/player";
 
 export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
+
+/** Keep the visual tab order and touch-navigation order in one place. */
+export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "sc", "follow", "settings"];
+
+// A CSS pixel is density-independent in an Android WebView.  This keeps a
+// normal vertical scroll or a short finger adjustment from changing the tab.
+export const ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX = 48;
+const ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO = 1.25;
+const ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX = 8;
+const ROOM_SIDE_TAB_SWIPE_CLICK_SUPPRESSION_MS = 420;
+
+// Android uses a native bridge for the media stream and Activity brightness.
+// Browser previews keep the same gesture with a video/CSS fallback.
+export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
+const PLAYER_EDGE_GESTURE_DIRECTION_RATIO = 1.25;
+const PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX = 160;
+const PLAYER_EDGE_GESTURE_FEEDBACK_DURATION_MS = 900;
+const PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO = 0.25;
+const PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO = 0.75;
+
+export type PlayerEdgeGesture = "brightness" | "volume";
+
+type PlayerEdgeGestureState = {
+  pointerId: number;
+  kind: PlayerEdgeGesture;
+  startX: number;
+  startY: number;
+  startValue: number;
+  lastValue: number;
+  active: boolean;
+  /** Snapshot native availability so a delayed bridge failure cannot reroute a swipe. */
+  native: boolean;
+};
+
+type PlayerEdgeGestureFeedback = {
+  kind: PlayerEdgeGesture;
+  value: number;
+};
+
+/** The left half adjusts picture brightness; the right half adjusts volume. */
+export function playerEdgeGestureForStart(
+  clientX: number,
+  stageLeft: number,
+  stageWidth: number,
+): PlayerEdgeGesture {
+  return clientX - stageLeft < Math.max(0, stageWidth) / 2 ? "brightness" : "volume";
+}
+
+/** A deliberate vertical drag wins over a diagonal or horizontal gesture. */
+export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boolean {
+  const verticalDistance = Math.abs(deltaY);
+  return (
+    verticalDistance >= PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
+    verticalDistance > Math.abs(deltaX) * PLAYER_EDGE_GESTURE_DIRECTION_RATIO
+  );
+}
+
+/** Dragging one player-height up/down maps to a full 0–100 adjustment. */
+export function playerEdgeGestureValue(
+  startValue: number,
+  deltaY: number,
+  stageHeight: number,
+): number {
+  const height = Math.max(PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX, stageHeight);
+  return Math.max(0, Math.min(100, Math.round(startValue - (deltaY / height) * 100)));
+}
+
+/**
+ * Reserve the top/bottom quarters for Android system chrome and the playback
+ * controls. This prevents accidental volume changes while reaching for an
+ * overlay, matching the touch target used by Simple Live.
+ */
+export function canStartPlayerEdgeGesture(
+  clientY: number,
+  stageTop: number,
+  stageHeight: number,
+): boolean {
+  if (stageHeight <= 0) return false;
+  const ratio = (clientY - stageTop) / stageHeight;
+  return ratio >= PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO && ratio <= PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO;
+}
+
+type SideTabSwipeState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  horizontal: boolean;
+};
+
+function isRoomSideTab(value: string): value is RoomSideTab {
+  return ROOM_SIDE_TABS.includes(value as RoomSideTab);
+}
+
+export function isHorizontalRoomSideTabSwipe(deltaX: number, deltaY: number): boolean {
+  const horizontalDistance = Math.abs(deltaX);
+  const verticalDistance = Math.abs(deltaY);
+  return (
+    horizontalDistance >= ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX &&
+    horizontalDistance > verticalDistance * ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO
+  );
+}
+
+/**
+ * Returns the adjacent tab for a deliberate horizontal swipe, or null for a
+ * vertical/short gesture and at either end of the tab strip.  A left swipe
+ * advances through the visible order; a right swipe goes back.
+ */
+export function nextRoomSideTabForSwipe(
+  currentTab: RoomSideTab,
+  deltaX: number,
+  deltaY: number,
+): RoomSideTab | null {
+  if (!isHorizontalRoomSideTabSwipe(deltaX, deltaY)) return null;
+
+  const currentIndex = ROOM_SIDE_TABS.indexOf(currentTab);
+  if (currentIndex < 0) return null;
+  const direction = deltaX < 0 ? 1 : -1;
+  return ROOM_SIDE_TABS[currentIndex + direction] ?? null;
+}
+
+/**
+ * Inputs and drag controls own horizontal gestures.  Do not turn a slider
+ * adjustment, text selection or scrollbar drag on the settings page into a
+ * tab switch. Buttons own their press gesture too; ordinary list rows remain
+ * swipeable and their click is suppressed only after a recognised swipe.
+ */
+function isRoomSideTabSwipeIgnoredTarget(target: EventTarget | null): boolean {
+  const element =
+    target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+  return Boolean(
+    element?.closest(
+      'button, input, textarea, select, [contenteditable="true"], a[href], [role="button"], [role="slider"], [role="combobox"], [role="switch"], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
+    ),
+  );
+}
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
@@ -76,23 +216,22 @@ function useCompactLandscapeViewport(): boolean {
   return compactLandscape;
 }
 
-/**
- * On phones the side panel covers most of the video. Stop the obscured canvas
- * renderer until the drawer closes, while the chat and SC panels keep their
- * own bounded event subscriptions alive.
- */
+/** Stop the canvas only while an overlay genuinely covers the video frame. */
 export function shouldRunDanmakuCanvas({
   danmakuActive,
   osdOn,
-  compactViewport,
-  sidePanelOpen,
+  sidePanelOverlaysPlayer,
 }: {
   danmakuActive: boolean;
   osdOn: boolean;
-  compactViewport: boolean;
-  sidePanelOpen: boolean;
+  sidePanelOverlaysPlayer: boolean;
 }): boolean {
-  return danmakuActive && osdOn && !(compactViewport && sidePanelOpen);
+  return danmakuActive && osdOn && !sidePanelOverlaysPlayer;
+}
+
+/** Portrait phones show the chat directly below the picture on first entry. */
+export function sidePanelStartsOpen(compactLandscapeViewport: boolean): boolean {
+  return !compactLandscapeViewport;
 }
 
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
@@ -100,6 +239,21 @@ function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   return Boolean(
     target.closest(
       'button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
+    ),
+  );
+}
+
+/**
+ * A player-edge swipe must start on the picture itself. In particular, a
+ * touch that begins in the bottom control bar must never turn into a volume
+ * gesture when it leaves a button's hit target.
+ */
+function isPlayerEdgeGestureIgnoredTarget(target: EventTarget | null): boolean {
+  const element =
+    target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+  return Boolean(
+    element?.closest(
+      '[data-player-controls], button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
     ),
   );
 }
@@ -168,13 +322,24 @@ export function PlayerPane({
 }: PlayerPaneProps) {
   const compactViewport = useCompactViewport();
   const compactLandscapeViewport = useCompactLandscapeViewport();
-  // On a phone the side panel opens over the video. Start with the picture
-  // unobstructed; portrait uses a bottom drawer while short landscape screens
-  // use a narrower right drawer so the video keeps meaningful height.
-  const [sidePanelOpen, setSidePanelOpen] = useState(() => !isCompactViewport());
+  const androidClient = getClientPlatform() === "android";
+  // Portrait phones use a normal video + chat stack, so new rooms immediately
+  // expose the danmaku list. Short landscape screens stay viewing-first and
+  // retain a dismissible overlay drawer instead.
+  const [sidePanelOpen, setSidePanelOpen] = useState(() =>
+    sidePanelStartsOpen(isCompactLandscapeViewport()),
+  );
+  // PlayerPane is normally controlled by RoomPage, but keeping a local value
+  // preserves the same tab behaviour for embedded/uncontrolled callers and
+  // lets a touch gesture select a tab without depending on Base UI internals.
+  const [uncontrolledSideTab, setUncontrolledSideTab] = useState<RoomSideTab>("chat");
+  const activeSideTab = sideTab ?? uncontrolledSideTab;
   const shouldMountSidePanel = sidePanelOpen || !compactViewport;
   const [osdOn, setOsdOn] = useState(true);
   const [captionFontSize, setCaptionFontSize] = useState(20);
+  const [playerBrightness, setPlayerBrightness] = useState(100);
+  const [playerEdgeGestureFeedback, setPlayerEdgeGestureFeedback] =
+    useState<PlayerEdgeGestureFeedback | null>(null);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const [scUnreadCount, setScUnreadCount] = useState(0);
   const controlsHideTimerRef = useRef<number | null>(null);
@@ -190,6 +355,11 @@ export function PlayerPane({
     controls: false,
     composer: false,
   });
+  const playerBrightnessRef = useRef(100);
+  const playerEdgeGestureRef = useRef<PlayerEdgeGestureState | null>(null);
+  const playerEdgeGestureFeedbackTimerRef = useRef<number | null>(null);
+  const sideTabSwipeRef = useRef<SideTabSwipeState | null>(null);
+  const sideTabSwipeClickSuppressionUntilRef = useRef(0);
 
   const player = useWebPlayer({
     playUrl,
@@ -199,6 +369,8 @@ export function PlayerPane({
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
   });
+  const androidPlayerControls = useAndroidPlayerControls(androidClient);
+  const changePlayerVolume = player.changeVolume;
   useScreenWakeLock(player.running && !player.paused);
   // This stays above the conditional side panel, so hiding that panel never
   // silently stops a session the user explicitly enabled.
@@ -227,32 +399,33 @@ export function PlayerPane({
   // A failed MSE session still has a stream URL and must be refreshable; the
   // error state is precisely where this control is most useful.
   const refreshDisabled = loading || !playUrl;
-  const loadError = externalLoadError ?? player.loadError;
+  const loadError = externalLoadError ?? player.loadError ?? player.fullscreenError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
+  const nativePlayerControlState = androidPlayerControls.available
+    ? androidPlayerControls.state
+    : null;
+  const nativePlayerControlsActive = nativePlayerControlState !== null;
+  const playerControlVolume = nativePlayerControlState?.mediaVolume ?? player.volume;
+  const playerControlMuted =
+    nativePlayerControlState?.mediaVolume !== undefined
+      ? nativePlayerControlState.mediaVolume <= 0
+      : player.muted;
   const canAutoHideControls =
     showHost && player.running && !player.paused && !overlayInteractionOpen;
+  const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
+  const mobileDrawerOpen = compactLandscapeViewport && sidePanelOpen;
   const canvasActive = shouldRunDanmakuCanvas({
     danmakuActive,
     osdOn,
-    compactViewport,
-    sidePanelOpen,
+    sidePanelOverlaysPlayer: mobileDrawerOpen,
   });
-  const mobileDrawerOpen = compactViewport && sidePanelOpen;
-  const compactSidePanelClassName = compactLandscapeViewport
-    ? "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl"
-    : "absolute inset-x-0 bottom-0 z-50 h-[min(26rem,72dvh)] min-h-64 w-full overscroll-contain rounded-t-2xl border-t border-border/80 pb-[env(safe-area-inset-bottom)] shadow-2xl";
+  const compactLandscapeSidePanelClassName =
+    "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl";
 
-  // The desktop rail is visible by default, while the phone drawer should
-  // begin closed so playback stays unobstructed. Reset only when crossing the
-  // responsive breakpoint; a manual desktop toggle remains intact otherwise.
+  // Entering short landscape switches to an overlay drawer; rotating back to
+  // portrait restores the immediately useful video + danmaku stack.
   useEffect(() => {
-    setSidePanelOpen(!compactViewport);
-  }, [compactViewport]);
-
-  // A landscape rotation is a viewing-first transition. Do not carry an
-  // already opened portrait drawer across it and cover the newly wide video.
-  useEffect(() => {
-    if (compactLandscapeViewport) setSidePanelOpen(false);
+    setSidePanelOpen(sidePanelStartsOpen(compactLandscapeViewport));
   }, [compactLandscapeViewport]);
 
   useEffect(() => {
@@ -402,13 +575,301 @@ export function PlayerPane({
     setScUnreadCount(count);
   }, []);
 
-  const handleSideTabValueChange = useCallback(
-    (value: string) => {
-      const nextTab = value as RoomSideTab;
+  const selectSideTab = useCallback(
+    (nextTab: RoomSideTab) => {
+      if (nextTab === activeSideTab) return;
       if (nextTab === "sc") setScUnreadCount(0);
+      if (sideTab === undefined) setUncontrolledSideTab(nextTab);
       onSideTabChange?.(nextTab);
     },
-    [onSideTabChange],
+    [activeSideTab, onSideTabChange, sideTab],
+  );
+
+  const handleSideTabValueChange = useCallback(
+    (value: string) => {
+      if (isRoomSideTab(value)) selectSideTab(value);
+    },
+    [selectSideTab],
+  );
+
+  const releaseSideTabSwipePointer = useCallback((element: HTMLDivElement, pointerId: number) => {
+    if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+  }, []);
+
+  const handleSideTabSwipeStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (
+      event.pointerType !== "touch" ||
+      !event.isPrimary ||
+      isRoomSideTabSwipeIgnoredTarget(event.target)
+    ) {
+      return;
+    }
+
+    sideTabSwipeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      horizontal: false,
+    };
+    // Capturing lets a swipe that reaches the panel edge finish reliably.
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, []);
+
+  const handleSideTabSwipeMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const swipe = sideTabSwipeRef.current;
+      if (!swipe || swipe.pointerId !== event.pointerId) return;
+
+      const deltaX = event.clientX - swipe.startX;
+      const deltaY = event.clientY - swipe.startY;
+      const horizontalDistance = Math.abs(deltaX);
+      const verticalDistance = Math.abs(deltaY);
+
+      if (!swipe.horizontal) {
+        if (
+          verticalDistance >= ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX &&
+          verticalDistance >= horizontalDistance
+        ) {
+          sideTabSwipeRef.current = null;
+          releaseSideTabSwipePointer(event.currentTarget, event.pointerId);
+          return;
+        }
+        if (
+          horizontalDistance < ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX ||
+          horizontalDistance <= verticalDistance * ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO
+        ) {
+          return;
+        }
+        swipe.horizontal = true;
+      }
+
+      // The panel itself is touch-pan-y, but preventDefault additionally
+      // avoids a partial horizontal browser gesture while the tab changes.
+      event.preventDefault();
+    },
+    [releaseSideTabSwipePointer],
+  );
+
+  const handleSideTabSwipeEnd = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const swipe = sideTabSwipeRef.current;
+      if (!swipe || swipe.pointerId !== event.pointerId) return;
+
+      sideTabSwipeRef.current = null;
+      releaseSideTabSwipePointer(event.currentTarget, event.pointerId);
+      if (!swipe.horizontal) return;
+
+      const nextTab = nextRoomSideTabForSwipe(
+        activeSideTab,
+        event.clientX - swipe.startX,
+        event.clientY - swipe.startY,
+      );
+      // Android WebView may still synthesize a click after PointerEvent
+      // preventDefault(). Fence it in capture phase so swiping a chat row can
+      // never open the row or toggle a nearby control at the same time.
+      sideTabSwipeClickSuppressionUntilRef.current =
+        Date.now() + ROOM_SIDE_TAB_SWIPE_CLICK_SUPPRESSION_MS;
+      if (!nextTab) return;
+      event.preventDefault();
+      selectSideTab(nextTab);
+    },
+    [activeSideTab, releaseSideTabSwipePointer, selectSideTab],
+  );
+
+  const handleSideTabSwipeClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (Date.now() >= sideTabSwipeClickSuppressionUntilRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const handleSideTabSwipeCancel = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const swipe = sideTabSwipeRef.current;
+      if (!swipe || swipe.pointerId !== event.pointerId) return;
+      sideTabSwipeRef.current = null;
+      releaseSideTabSwipePointer(event.currentTarget, event.pointerId);
+    },
+    [releaseSideTabSwipePointer],
+  );
+
+  const clearPlayerEdgeGestureFeedbackTimer = useCallback(() => {
+    if (playerEdgeGestureFeedbackTimerRef.current !== null) {
+      window.clearTimeout(playerEdgeGestureFeedbackTimerRef.current);
+      playerEdgeGestureFeedbackTimerRef.current = null;
+    }
+  }, []);
+
+  const showPlayerEdgeGestureFeedback = useCallback(
+    (kind: PlayerEdgeGesture, value: number) => {
+      setPlayerEdgeGestureFeedback({ kind, value });
+      clearPlayerEdgeGestureFeedbackTimer();
+      playerEdgeGestureFeedbackTimerRef.current = window.setTimeout(() => {
+        playerEdgeGestureFeedbackTimerRef.current = null;
+        setPlayerEdgeGestureFeedback(null);
+      }, PLAYER_EDGE_GESTURE_FEEDBACK_DURATION_MS);
+    },
+    [clearPlayerEdgeGestureFeedbackTimer],
+  );
+
+  const setClampedPlayerBrightness = useCallback((value: number) => {
+    const nextValue = Math.max(0, Math.min(100, Math.round(value)));
+    if (playerBrightnessRef.current === nextValue) return;
+    playerBrightnessRef.current = nextValue;
+    setPlayerBrightness(nextValue);
+  }, []);
+
+  const releasePlayerEdgeGesturePointer = useCallback(
+    (element: HTMLDivElement, pointerId: number) => {
+      if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+    },
+    [],
+  );
+
+  const handlePlayerEdgeGestureStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (
+        !androidClient ||
+        !showHost ||
+        event.pointerType !== "touch" ||
+        !event.isPrimary ||
+        isPlayerEdgeGestureIgnoredTarget(event.target)
+      ) {
+        return;
+      }
+
+      const stageBounds = event.currentTarget.getBoundingClientRect();
+      if (
+        stageBounds.width <= 0 ||
+        stageBounds.height <= 0 ||
+        !canStartPlayerEdgeGesture(event.clientY, stageBounds.top, stageBounds.height)
+      ) {
+        return;
+      }
+
+      const kind = playerEdgeGestureForStart(event.clientX, stageBounds.left, stageBounds.width);
+      const native = nativePlayerControlsActive;
+      let startValue: number;
+      if (kind === "brightness") {
+        startValue = native
+          ? nativePlayerControlState?.brightness ?? playerBrightnessRef.current
+          : playerBrightnessRef.current;
+      } else if (native) {
+        startValue = nativePlayerControlState?.mediaVolume ?? player.volume;
+      } else {
+        startValue = player.muted || player.volume === 0 ? 0 : player.volume;
+      }
+      playerEdgeGestureRef.current = {
+        pointerId: event.pointerId,
+        kind,
+        startX: event.clientX,
+        startY: event.clientY,
+        startValue,
+        lastValue: startValue,
+        active: false,
+        native,
+      };
+      // Capturing keeps an adjustment continuous when the finger reaches a
+      // stage edge in Android WebView fullscreen.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [
+      androidClient,
+      nativePlayerControlState,
+      nativePlayerControlsActive,
+      player.muted,
+      player.volume,
+      showHost,
+    ],
+  );
+
+  /** Returns whether this pointer belongs to a pending/active edge gesture. */
+  const handlePlayerEdgeGestureMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): boolean => {
+      const gesture = playerEdgeGestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return false;
+
+      const deltaX = event.clientX - gesture.startX;
+      const deltaY = event.clientY - gesture.startY;
+      const horizontalDistance = Math.abs(deltaX);
+      const verticalDistance = Math.abs(deltaY);
+      let beganAdjustment = false;
+
+      if (!gesture.active) {
+        if (
+          horizontalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
+          verticalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX
+        ) {
+          return true;
+        }
+        if (!isVerticalPlayerEdgeGesture(deltaX, deltaY)) {
+          playerEdgeGestureRef.current = null;
+          releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
+          return false;
+        }
+        gesture.active = true;
+        beganAdjustment = true;
+      }
+
+      event.preventDefault();
+      const nextValue = androidPlayerControlStep(
+        playerEdgeGestureValue(
+          gesture.startValue,
+          deltaY,
+          event.currentTarget.getBoundingClientRect().height,
+        ),
+      );
+      if (beganAdjustment || nextValue !== gesture.lastValue) {
+        gesture.lastValue = nextValue;
+        if (gesture.kind === "brightness") {
+          if (gesture.native) {
+            androidPlayerControls.setBrightness(nextValue);
+          } else {
+            setClampedPlayerBrightness(nextValue);
+          }
+        } else {
+          if (gesture.native) {
+            androidPlayerControls.setMediaVolume(nextValue);
+          } else {
+            changePlayerVolume(nextValue);
+          }
+        }
+        showPlayerEdgeGestureFeedback(gesture.kind, nextValue);
+      }
+      return true;
+    },
+    [
+      androidPlayerControls,
+      changePlayerVolume,
+      releasePlayerEdgeGesturePointer,
+      setClampedPlayerBrightness,
+      showPlayerEdgeGestureFeedback,
+    ],
+  );
+
+  const handlePlayerEdgeGestureEnd = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const gesture = playerEdgeGestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return false;
+
+      playerEdgeGestureRef.current = null;
+      releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
+      if (gesture.active) {
+        if (gesture.native) androidPlayerControls.flush();
+        event.preventDefault();
+      }
+      return gesture.active;
+    },
+    [androidPlayerControls, releasePlayerEdgeGesturePointer],
+  );
+
+  const handlePlayerEdgeGestureCancel = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const gesture = playerEdgeGestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      playerEdgeGestureRef.current = null;
+      releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
+    },
+    [releasePlayerEdgeGesturePointer],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -423,6 +884,24 @@ export function PlayerPane({
     },
     [revealControls],
   );
+
+  const handleStagePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      handleStagePointerActivity(event);
+      handlePlayerEdgeGestureStart(event);
+    },
+    [handlePlayerEdgeGestureStart, handleStagePointerActivity],
+  );
+
+  const handleStagePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (handlePlayerEdgeGestureMove(event)) return;
+      handleStagePointerActivity(event);
+    },
+    [handlePlayerEdgeGestureMove, handleStagePointerActivity],
+  );
+
+  useEffect(() => clearPlayerEdgeGestureFeedbackTimer, [clearPlayerEdgeGestureFeedbackTimer]);
 
   const focusFirstControl = useCallback(() => {
     // A hidden transparent bar must not be in the tab sequence.  After Tab
@@ -516,18 +995,37 @@ export function PlayerPane({
   }, [revealControls]);
 
   return (
-    <div className="relative flex h-full min-h-0 w-full bg-black">
-      <div className="relative flex min-w-0 flex-1 flex-col bg-black">
+    <div
+      className={cn(
+        "relative flex h-full min-h-0 w-full bg-black",
+        inlineCompactSidePanel && "flex-col",
+      )}
+    >
+      <div
+        className={cn(
+          "relative flex min-w-0 flex-col bg-black",
+          inlineCompactSidePanel && sidePanelOpen ? "w-full flex-none aspect-video" : "flex-1",
+        )}
+      >
         <div className="flex min-h-0 flex-1 flex-col">
           <div
             ref={player.stageRef}
-            className="relative min-h-0 flex-1 overflow-hidden bg-black"
+            className={cn(
+              "relative min-h-0 flex-1 overflow-hidden bg-black",
+              androidClient && showHost && "touch-none",
+            )}
             tabIndex={0}
-            aria-label="直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
+            aria-label={
+              androidClient
+                ? "直播播放器；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
+                : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
+            }
             aria-keyshortcuts="Space K M F"
             onPointerEnter={handleStagePointerActivity}
-            onPointerMove={handleStagePointerActivity}
-            onPointerDown={handleStagePointerActivity}
+            onPointerMove={handleStagePointerMove}
+            onPointerDown={handleStagePointerDown}
+            onPointerUp={handlePlayerEdgeGestureEnd}
+            onPointerCancel={handlePlayerEdgeGestureCancel}
             onKeyDown={handleStageKeyDown}
           >
             {loading && (
@@ -549,30 +1047,38 @@ export function PlayerPane({
               </div>
             )}
 
-            {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
-            <video
-              key={player.mediaKey}
-              ref={player.videoRef}
-              className="absolute inset-0 h-full w-full bg-black object-contain"
-              crossOrigin="anonymous"
-              playsInline
-              autoPlay
-              controls={false}
-            />
+            <div
+              className="absolute inset-0"
+              style={{
+                filter: `brightness(${nativePlayerControlsActive ? 1 : playerBrightness / 100})`,
+              }}
+            >
+              {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
+              <video
+                key={player.mediaKey}
+                ref={player.videoRef}
+                className="absolute inset-0 h-full w-full bg-black object-contain"
+                crossOrigin="anonymous"
+                playsInline
+                autoPlay
+                controls={false}
+              />
+
+              {/* Floating danmaku shares the picture brightness, while the
+                  controls and room information keep their normal contrast. */}
+              {showHost && osdOn && (
+                <CanvasDanmaku
+                  active={canvasActive}
+                  sessionKey={danmakuSessionKey}
+                  className="z-10"
+                />
+              )}
+            </div>
 
             {showHost && !player.running && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
                 <Spinner className="size-8 text-white/70" />
               </div>
-            )}
-
-            {/* Floating danmaku over the picture (same DOM stack as Simple Live). */}
-            {showHost && osdOn && (
-              <CanvasDanmaku
-                active={canvasActive}
-                sessionKey={danmakuSessionKey}
-                className="z-10"
-              />
             )}
 
             {/* Local Whisper captions: DOM text stays above danmaku (z-10),
@@ -607,6 +1113,33 @@ export function PlayerPane({
                   </div>
                 )}
               </>
+            )}
+
+            {playerEdgeGestureFeedback && (
+              <div
+                aria-hidden="true"
+                data-player-edge-gesture-feedback={playerEdgeGestureFeedback.kind}
+                className={cn(
+                  "pointer-events-none absolute top-1/2 z-20 -translate-y-1/2",
+                  playerEdgeGestureFeedback.kind === "brightness"
+                    ? "left-[max(1.25rem,env(safe-area-inset-left))]"
+                    : "right-[max(1.25rem,env(safe-area-inset-right))]",
+                )}
+              >
+                <div className="flex min-w-20 flex-col items-center gap-1 rounded-2xl border border-white/12 bg-black/72 px-3 py-2.5 text-white shadow-lg">
+                  {playerEdgeGestureFeedback.kind === "brightness" ? (
+                    <SunMedium className="size-5" />
+                  ) : (
+                    <Volume2 className="size-5" />
+                  )}
+                  <span className="text-[11px] text-white/70">
+                    {playerEdgeGestureFeedback.kind === "brightness" ? "亮度" : "音量"}
+                  </span>
+                  <strong className="text-sm font-semibold tabular-nums">
+                    {playerEdgeGestureFeedback.value}%
+                  </strong>
+                </div>
+              </div>
             )}
 
             <div
@@ -644,8 +1177,8 @@ export function PlayerPane({
             >
               <PlayerControls
                 paused={player.paused}
-                volume={player.volume}
-                muted={player.muted}
+                volume={playerControlVolume}
+                muted={playerControlMuted}
                 sidePanelOpen={sidePanelOpen}
                 sidePanelLabel={
                   compactViewport
@@ -684,8 +1217,14 @@ export function PlayerPane({
                 refreshDisabled={refreshDisabled}
                 onRefresh={onRefresh}
                 onTogglePause={() => player.togglePause()}
-                onVolume={(v) => player.changeVolume(v)}
-                onToggleMute={player.toggleMute}
+                onVolume={(value) => {
+                  if (!androidPlayerControls.setMediaVolume(value)) {
+                    player.changeVolume(value);
+                  }
+                }}
+                onToggleMute={() => {
+                  if (!androidPlayerControls.toggleMediaMute()) player.toggleMute();
+                }}
                 onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
                 onToggleOsd={() => setOsdOn((v) => !v)}
                 onQualityChange={onQualityChange ?? (() => {})}
@@ -712,29 +1251,31 @@ export function PlayerPane({
       {shouldMountSidePanel && (
         <aside
           aria-hidden={!sidePanelOpen}
-          aria-labelledby={compactViewport ? "room-side-panel-title" : undefined}
-          aria-modal={compactViewport ? true : undefined}
-          role={compactViewport ? "dialog" : undefined}
+          aria-labelledby={mobileDrawerOpen ? "room-side-panel-title" : undefined}
+          aria-modal={mobileDrawerOpen ? true : undefined}
+          role={mobileDrawerOpen ? "dialog" : undefined}
           className={cn(
             "flex shrink-0 flex-col bg-sidebar",
-            compactViewport
-              ? compactSidePanelClassName
-              : "w-[300px] border-l border-border/80 lg:w-[320px]",
+            inlineCompactSidePanel
+              ? "min-h-0 w-full flex-1 border-t border-border/80"
+              : compactLandscapeViewport
+                ? compactLandscapeSidePanelClassName
+                : "w-[300px] border-l border-border/80 lg:w-[320px]",
             !sidePanelOpen && "hidden",
           )}
         >
-          {compactViewport && (
+          {mobileDrawerOpen && (
             <h2 id="room-side-panel-title" className="sr-only">
               直播间面板
             </h2>
           )}
           {sideHeader}
           <Tabs
-            {...(sideTab ? { value: sideTab } : { defaultValue: "chat" })}
+            value={activeSideTab}
             className="flex min-h-0 flex-1 flex-col gap-0"
             onValueChange={handleSideTabValueChange}
           >
-            <div className="flex h-11 shrink-0 items-center border-b border-border/80 pr-2">
+            <div className="flex h-11 shrink-0 items-center border-b border-border/80">
               <TabsList
                 variant="line"
                 className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
@@ -768,84 +1309,75 @@ export function PlayerPane({
                   设置
                 </TabsTrigger>
               </TabsList>
-              {compactViewport && (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="max-md:size-11 max-md:touch-manipulation"
-                        aria-label="关闭直播间面板"
-                        onClick={() => setSidePanelOpen(false)}
-                      />
-                    }
-                  >
-                    <X data-icon="inline-start" aria-hidden />
-                  </TooltipTrigger>
-                  <TooltipContent>关闭直播间面板</TooltipContent>
-                </Tooltip>
-              )}
             </div>
-            <TabsContent
-              value="chat"
-              keepMounted
-              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            <div
+              data-room-side-tab-swipe-surface
+              className="relative flex min-h-0 flex-1 touch-pan-y"
+              onPointerDown={handleSideTabSwipeStart}
+              onPointerMove={handleSideTabSwipeMove}
+              onPointerUp={handleSideTabSwipeEnd}
+              onPointerCancel={handleSideTabSwipeCancel}
+              onClickCapture={handleSideTabSwipeClickCapture}
             >
-              <DanmakuPanel
-                key={`chat:${roomSessionKey ?? "room"}`}
-                active={danmakuActive}
-                siteId={siteId}
-                roomId={roomId}
-                visible={sidePanelOpen && (sideTab === undefined || sideTab === "chat")}
-                statusText={danmakuStatusText}
-                className="h-full"
-              />
-            </TabsContent>
-            <TabsContent
-              value="sc"
-              keepMounted
-              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-            >
-              <SuperChatPanel
-                key={`sc:${roomSessionKey ?? "room"}`}
-                active={danmakuActive}
-                siteId={siteId}
-                danmakuStatusText={danmakuStatusText}
-                visible={sidePanelOpen && (sideTab === undefined || sideTab === "sc")}
-                onUnreadCountChange={handleScUnreadCountChange}
-                className="h-full"
-              />
-            </TabsContent>
-            <TabsContent
-              value="follow"
-              keepMounted
-              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-            >
-              <FollowPanel className="h-full" />
-            </TabsContent>
-            <TabsContent
-              value="settings"
-              keepMounted
-              className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-            >
-              <DanmakuSettingsPanel
-                className="h-full"
-                autoSend={autoDanmakuSend}
-                captions={{
-                  enabled: localCaptions.enabled,
-                  pending: localCaptions.pending,
-                  ready: localCaptions.ready,
-                  state: localCaptions.state,
-                  message: localCaptions.message,
-                  fontSize: captionFontSize,
-                  onFontSizeChange: (size) => {
-                    setCaptionFontSize(Math.max(16, Math.min(36, Math.round(size))));
-                  },
-                }}
-              />
-            </TabsContent>
+              <TabsContent
+                value="chat"
+                keepMounted
+                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+              >
+                <DanmakuPanel
+                  key={`chat:${roomSessionKey ?? "room"}`}
+                  active={danmakuActive}
+                  siteId={siteId}
+                  roomId={roomId}
+                  visible={sidePanelOpen && activeSideTab === "chat"}
+                  statusText={danmakuStatusText}
+                  className="h-full"
+                />
+              </TabsContent>
+              <TabsContent
+                value="sc"
+                keepMounted
+                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+              >
+                <SuperChatPanel
+                  key={`sc:${roomSessionKey ?? "room"}`}
+                  active={danmakuActive}
+                  siteId={siteId}
+                  danmakuStatusText={danmakuStatusText}
+                  visible={sidePanelOpen && activeSideTab === "sc"}
+                  onUnreadCountChange={handleScUnreadCountChange}
+                  className="h-full"
+                />
+              </TabsContent>
+              <TabsContent
+                value="follow"
+                keepMounted
+                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+              >
+                <FollowPanel className="h-full" />
+              </TabsContent>
+              <TabsContent
+                value="settings"
+                keepMounted
+                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+              >
+                <DanmakuSettingsPanel
+                  className="h-full"
+                  autoSend={autoDanmakuSend}
+                  captions={{
+                    enabled: localCaptions.enabled,
+                    pending: localCaptions.pending,
+                    ready: localCaptions.ready,
+                    state: localCaptions.state,
+                    message: localCaptions.message,
+                    fontSize: captionFontSize,
+                    onFontSizeChange: (size) => {
+                      setCaptionFontSize(Math.max(16, Math.min(36, Math.round(size))));
+                    },
+                  }}
+                />
+              </TabsContent>
+            </div>
           </Tabs>
         </aside>
       )}

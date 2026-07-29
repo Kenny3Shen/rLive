@@ -125,6 +125,13 @@ export type DanmakuSendHistoryItem = {
   sent_at: number;
 };
 
+/** An outgoing message intentionally saved for reuse on one platform. */
+export type DanmakuFavoriteItem = {
+  site_id: SiteId;
+  content: string;
+  added_at: number;
+};
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   default_site: string;

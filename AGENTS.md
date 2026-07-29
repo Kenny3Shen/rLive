@@ -1,51 +1,17 @@
 # rLive — Agent Instructions
 
-## Mandatory post-change delivery (Windows)
+## Post-change validation
 
-This project is developed under **WSL/Linux** (`/home/shenss/python/rLive`) and **shipped/run on Windows** (`D:\dev\rLive`).
+This project is developed under **WSL/Linux** (`/home/shenss/python/rLive`) and run on Windows when needed.
 
-**After every completed modification** (feature, fix, UI change, dependency, script, or config that affects the app), you **must** run the Windows delivery pipeline before ending the turn—unless the user explicitly says to skip build, or the change is docs-only with no runtime impact.
+After a feature, fix, UI change, dependency, script, or runtime configuration change:
 
-### Required commands (from the repo root)
+- Do **not** automatically sync to Windows or run a Windows/Tauri build. Run those steps only when the user explicitly requests them.
+- Run the focused functional checks that best cover the change, using the project's existing test, type-check, lint, or local runtime tools as appropriate.
+- If a check exposes an error caused by the change, investigate and fix it, then rerun the relevant check until it passes or an external blocker is clearly reported.
+- For docs-only or planning-only changes, runtime testing is not required.
 
-```bash
-# 1) Sync WSL workspace → D:\dev\rLive
-./scripts/sync-to-windows.sh
-
-# 2) Build on Windows (MSVC + vcvars + tauri)
-./scripts/build-windows-from-wsl.sh
-```
-
-Prefer the combined script when available:
-
-```bash
-./scripts/build-windows-from-wsl.sh
-```
-
-(`build-windows-from-wsl.sh` already runs `sync-to-windows.sh` first.)
-
-### Success criteria
-
-- Sync exits 0 and reports `OK: synced to D:\dev\rLive`
-- Build exits 0 and produces  
-  `D:\dev\rLive\src-tauri\target\release\rlive.exe`
-- On failure: fix the error, then re-run sync + build until green (or report a blocked external cause)
-
-### Implementation notes
-
-- Use `/init` + Windows PowerShell when interop needs elevated path resolution (same pattern as prior successful builds).
-- Do **not** claim “done” after only a Linux `tsc`/`vite` check if the change is meant to run as the Tauri desktop app.
-- Docs-only / pure plan-mode turns: skip Windows build; mention that delivery was skipped.
-
-### Paths
-
-| Role | Path |
-|------|------|
-| Source (WSL) | `/home/shenss/python/rLive` |
-| Windows mirror | `D:\dev\rLive` (`/mnt/d/dev/rLive`) |
-| Sync | `scripts/sync-to-windows.sh` |
-| Windows build | `scripts/build-windows.ps1` |
-| WSL orchestrator | `scripts/build-windows-from-wsl.sh` |
+Before handing off, report the functional checks performed and any known limitation or external blocker.
 
 ## Product context (short)
 

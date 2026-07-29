@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId, parse_live_started_at,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
+    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -491,6 +491,26 @@ impl LiveSite for TwitchSite {
         self.search_page(keyword).await
     }
 
+    async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        let login = normalize_login(room_id)?;
+        let data = self
+            .graphql(
+                "RLiveTwitchRoomStatus",
+                r#"
+                    query RLiveTwitchRoomStatus($login: String!) {
+                      user(login: $login) {
+                        stream {
+                          createdAt
+                        }
+                      }
+                    }
+                "#,
+                json!({ "login": login }),
+            )
+            .await?;
+        parse_room_live_status(&data)
+    }
+
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
         let login = normalize_login(room_id)?;
         let data = self
@@ -748,6 +768,23 @@ fn parse_room_detail(
             "broadcaster_id": json_string(user.get("id")),
             "stream_id": stream_id,
         }),
+    })
+}
+
+/// The follow refresher asks Twitch for this intentionally narrow query: no
+/// room profile, preview image, title, or playback-token data is needed to
+/// decide whether a followed channel is currently live.
+fn parse_room_live_status(data: &Value) -> AppResult<LiveRoomStatus> {
+    let user = data
+        .get("user")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| {
+            AppError::new("twitch_room_not_found", "未找到该 Twitch 频道").with_site("twitch")
+        })?;
+    let stream = user.get("stream").filter(|value| value.is_object());
+    Ok(LiveRoomStatus {
+        status: stream.is_some(),
+        live_started_at: stream.and_then(|stream| parse_live_started_at(stream.get("createdAt"))),
     })
 }
 
@@ -1120,6 +1157,31 @@ mod tests {
         let items = parse_search_items(&data, &SiteId::Bilibili);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].room_id, "online");
+    }
+
+    #[test]
+    fn parses_minimal_twitch_live_status() {
+        let status = parse_room_live_status(&json!({
+            "user": {
+                "stream": {
+                    "createdAt": "2024-07-03T09:46:40Z",
+                    "playback_token_that_must_not_be_needed": "ignored"
+                }
+            }
+        }))
+        .expect("status");
+
+        assert!(status.status);
+        assert_eq!(status.live_started_at, Some(1_720_000_000_000));
+    }
+
+    #[test]
+    fn parses_offline_twitch_live_status() {
+        let status =
+            parse_room_live_status(&json!({ "user": { "stream": null } })).expect("status");
+
+        assert!(!status.status);
+        assert_eq!(status.live_started_at, None);
     }
 
     #[test]

@@ -30,12 +30,22 @@ pub struct BilibiliDanmakuArgs {
     pub uid: i64,
 }
 
+/// Return the value portion of a copied browser `Cookie:` header, if present.
+fn cookie_header_value(cookie: &str) -> &str {
+    let cookie = cookie.trim();
+    match cookie.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("cookie:") => cookie[7..].trim(),
+        _ => cookie,
+    }
+}
+
 /// Extract `key=value` from a cookie header string.
 fn cookie_value(cookie: &str, key: &str) -> Option<String> {
+    let cookie = cookie_header_value(cookie);
     for part in cookie.split(';') {
         let part = part.trim();
         if let Some((k, v)) = part.split_once('=') {
-            if k.trim() == key {
+            if k.trim().eq_ignore_ascii_case(key) {
                 let v = v.trim();
                 if !v.is_empty() {
                     return Some(v.to_string());
@@ -50,6 +60,9 @@ const SEND_CHAT_URL: &str = "https://api.live.bilibili.com/msg/send";
 /// Current ordinary-web-composer default, measured in UTF-16 code units.
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 20;
 const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+/// The older official token endpoint remains available when `getDanmuInfo`
+/// receives a web risk-control response before returning a token.
+const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Danmu/getConf";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
@@ -84,6 +97,7 @@ async fn send_chat_to_url(
     message: &str,
     url: &str,
 ) -> AppResult<()> {
+    let cookie = cookie_header_value(cookie);
     let room_id = room_id.trim();
     if room_id.is_empty()
         || room_id.len() > 32
@@ -278,35 +292,45 @@ fn prepend_unique_host(hosts: &mut Vec<String>, host: &str) {
 
 fn collect_server_hosts(data: &Value) -> Vec<String> {
     let mut hosts = Vec::new();
-    let Some(items) = data
-        .get("server_hosts")
-        .or_else(|| data.get("host_list"))
-        .and_then(Value::as_array)
-    else {
-        return hosts;
-    };
 
-    for item in items {
-        // `parse_room_detail_from_data` stores the initial endpoint list as
-        // strings in `raw.danmaku.server_hosts`, while Bilibili's refresh API
-        // returns `host_list` entries shaped as `{ "host": "…" }`.  Accept
-        // both representations so a reconnect can genuinely rotate across
-        // all originally supplied gateways before/if refresh succeeds.
-        let Some(host) = item
-            .as_str()
-            .or_else(|| item.get("host").and_then(Value::as_str))
-        else {
+    for field in [
+        "server_hosts",
+        "host_list",
+        "host_server_list",
+        "server_list",
+    ] {
+        let Some(items) = data.get(field).and_then(Value::as_array) else {
             continue;
         };
-        let host = host.trim();
-        if host.is_empty()
-            || hosts
-                .iter()
-                .any(|candidate: &String| candidate.eq_ignore_ascii_case(host))
-        {
-            continue;
+        for item in items {
+            // `parse_room_detail_from_data` stores the initial endpoint list
+            // as strings in `raw.danmaku.server_hosts`; newer API responses
+            // use `host_list`, while the legacy `getConf` endpoint calls the
+            // same shape `host_server_list`. Accept all official spellings so
+            // a reconnect can rotate through the refreshed gateways.
+            let Some(host) = item
+                .as_str()
+                .or_else(|| item.get("host").and_then(Value::as_str))
+            else {
+                continue;
+            };
+            let host = host.trim();
+            if host.is_empty()
+                || hosts
+                    .iter()
+                    .any(|candidate: &String| candidate.eq_ignore_ascii_case(host))
+            {
+                continue;
+            }
+            hosts.push(host.to_string());
         }
-        hosts.push(host.to_string());
+        if !hosts.is_empty() {
+            return hosts;
+        }
+    }
+
+    if let Some(host) = data.get("host").and_then(Value::as_str) {
+        prepend_unique_host(&mut hosts, host);
     }
     hosts
 }
@@ -975,17 +999,18 @@ fn next_reconnect_state(
     )
 }
 
-async fn refresh_connection_info(
+async fn request_connection_info(
     client: &Client,
-    args: &mut BilibiliDanmakuArgs,
-) -> Result<(), String> {
+    cookie: &str,
+    url: &str,
+    query: &[(&str, String)],
+) -> Result<Value, String> {
     let mut request = client
-        .get(DANMAKU_INFO_URL)
-        .query(&[("id", args.room_id.to_string()), ("type", "0".to_string())])
+        .get(url)
+        .query(query)
         .header("user-agent", crate::sites::bilibili::DEFAULT_USER_AGENT)
         .header("referer", crate::sites::bilibili::DEFAULT_REFERER)
         .header("origin", "https://live.bilibili.com");
-    let cookie = args.refresh_cookie();
     if !cookie.is_empty() {
         request = request.header("cookie", cookie);
     }
@@ -1004,17 +1029,52 @@ async fn refresh_connection_info(
     }
     let code = body.get("code").and_then(Value::as_i64).unwrap_or(-1);
     if code != 0 {
-        let message = body
-            .get("message")
-            .or_else(|| body.get("msg"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        return Err(format!("B站弹幕信息返回 code={code}: {message}"));
+        return Err(format!("B站弹幕信息返回 code={code}"));
     }
-    let data = body
-        .get("data")
-        .ok_or_else(|| "B站弹幕信息缺少 data".to_string())?;
-    args.apply_refreshed_connection(data)
+    body.get("data")
+        .cloned()
+        .ok_or_else(|| "B站弹幕信息缺少 data".to_string())
+}
+
+async fn refresh_connection_info(
+    client: &Client,
+    args: &mut BilibiliDanmakuArgs,
+) -> Result<(), String> {
+    let cookie = args.refresh_cookie();
+    let modern = request_connection_info(
+        client,
+        &cookie,
+        DANMAKU_INFO_URL,
+        &[("id", args.room_id.to_string()), ("type", "0".to_string())],
+    )
+    .await;
+    match modern {
+        Ok(data) => match args.apply_refreshed_connection(&data) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                tracing::warn!(
+                    reason = error,
+                    room_id = args.room_id,
+                    "bilibili modern danmaku refresh data unusable; trying legacy endpoint"
+                );
+            }
+        },
+        Err(error) => {
+            tracing::warn!(error = %error, room_id = args.room_id, "bilibili modern danmaku refresh failed; trying legacy endpoint");
+        }
+    }
+
+    let legacy = request_connection_info(
+        client,
+        &cookie,
+        LEGACY_DANMAKU_INFO_URL,
+        &[
+            ("room_id", args.room_id.to_string()),
+            ("platform", "web".to_string()),
+        ],
+    )
+    .await?;
+    args.apply_refreshed_connection(&legacy)
         .map_err(str::to_string)
 }
 
@@ -1172,10 +1232,7 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
     loop {
         let host = args.host_for_attempt(host_attempt).to_string();
         if total_messages == 0 && host_attempt == 0 {
-            emit_system(
-                &events,
-                format!("正在连接弹幕服务器… room={} host={host}", args.room_id),
-            );
+            emit_system(&events, "正在连接弹幕服务器…");
         } else {
             emit_system(&events, format!("正在重连弹幕服务器… host={host}"));
         }
@@ -1528,6 +1585,34 @@ mod tests {
     }
 
     #[test]
+    fn refreshed_connection_accepts_legacy_get_conf_hosts() {
+        let raw = serde_json::json!({
+            "room_id": 12345,
+            "danmaku": {
+                "token": "old-token",
+                "server_host": "old.example"
+            }
+        });
+        let mut args = args_from_raw("12345", &raw).unwrap();
+        let fresh = serde_json::json!({
+            "token": "fresh-token",
+            "host_server_list": [
+                {"host": "legacy-primary.example", "wss_port": 443},
+                {"host": "legacy-backup.example", "wss_port": 443}
+            ]
+        });
+
+        args.apply_refreshed_connection(&fresh).unwrap();
+
+        assert_eq!(args.token, "fresh-token");
+        assert_eq!(args.server_host, "legacy-primary.example");
+        assert_eq!(
+            args.server_hosts,
+            ["legacy-primary.example", "legacy-backup.example"]
+        );
+    }
+
+    #[test]
     fn reconnect_backoff_is_bounded() {
         assert_eq!(reconnect_delay(0), Duration::from_secs(1));
         assert_eq!(reconnect_delay(1), Duration::from_secs(2));
@@ -1563,6 +1648,10 @@ mod tests {
     fn cookie_value_parses() {
         let c = "a=1; DedeUserID=42; b=2";
         assert_eq!(cookie_value(c, "DedeUserID").as_deref(), Some("42"));
+        assert_eq!(
+            cookie_value("Cookie: SESSDATA=session; bili_jct=csrf", "SESSDATA").as_deref(),
+            Some("session")
+        );
     }
 
     #[test]
@@ -1570,6 +1659,7 @@ mod tests {
         assert!(!has_send_credentials("SESSDATA=abc"));
         assert!(!has_send_credentials("bili_jct=csrf"));
         assert!(has_send_credentials("SESSDATA=abc; bili_jct=csrf"));
+        assert!(has_send_credentials("Cookie: SESSDATA=abc; bili_jct=csrf"));
     }
 
     #[test]

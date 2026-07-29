@@ -1,6 +1,7 @@
 pub mod account;
 pub mod asr;
 pub mod danmaku;
+pub mod danmaku_favorite;
 pub mod danmaku_send_history;
 pub mod follow;
 pub mod history;

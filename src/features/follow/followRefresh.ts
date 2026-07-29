@@ -25,9 +25,9 @@ export async function refreshFollows(queryClient: QueryClient): Promise<FollowUs
 }
 
 /**
- * Keep followed streamers current for the lifetime of the application. The
- * request begins on launch, rather than waiting until the follow page is
- * visited, then repeats on a fixed one-minute cadence.
+ * Keep followed streamers current while a follow-list view is open. Keeping
+ * this scoped to its consumer avoids doing remote status work during the
+ * application's initial render.
  */
 export function useFollowStatusRefresh() {
   const queryClient = useQueryClient();

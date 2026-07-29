@@ -34,6 +34,9 @@ export function HomePage() {
   const pageRef = useRef<HTMLDivElement>(null);
 
   const query = useInfiniteQuery({
+    // The backend selects Bilibili's signed-in feed whenever it has a Cookie.
+    // Keeping this key stable prevents settings hydration from issuing both a
+    // public-feed request and an account-feed request on startup.
     queryKey: ["recommend", siteId],
     queryFn: ({ pageParam }) =>
       invokeCmd<RoomListPage>("site_get_recommend", {

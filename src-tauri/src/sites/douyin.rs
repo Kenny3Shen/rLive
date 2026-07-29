@@ -16,8 +16,8 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId, parse_live_started_at,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
+    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -324,6 +324,21 @@ impl DouyinSite {
         let internal_room_id = reflow_room_id(&ssr_detail)?;
         self.get_reflow_room_detail(&internal_room_id).await
     }
+
+    /// The web room page exposes the live state in its SSR payload.  Unlike
+    /// room-detail parsing, this deliberately does not inspect stream data or
+    /// resolve a reflow fallback for playback metadata.
+    async fn get_ssr_room_live_status(&self, web_rid: &str) -> AppResult<LiveRoomStatus> {
+        let html = self.get_ssr_page(web_rid).await?;
+        parse_room_live_status_html(&html)
+    }
+
+    /// Internal Douyin room IDs use the lightweight reflow room envelope.
+    /// Only its status and live start time are read by the follow refresher.
+    async fn get_reflow_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        let root = self.get_reflow_room(room_id).await?;
+        parse_reflow_room_live_status(&root)
+    }
 }
 
 #[async_trait::async_trait]
@@ -424,6 +439,18 @@ impl LiveSite for DouyinSite {
             )
             .await?;
         parse_search_rooms(&result)
+    }
+
+    async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
+        let room_id = normalize_room_id(room_id)?;
+        // Public web room IDs are short; the internal IDs returned by reflow
+        // are longer.  Keep the public path on the SSR page so refreshing a
+        // follow never builds playback metadata just to learn its status.
+        if room_id.len() <= 16 {
+            self.get_ssr_room_live_status(&room_id).await
+        } else {
+            self.get_reflow_room_live_status(&room_id).await
+        }
     }
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
@@ -946,6 +973,67 @@ fn parse_reflow_room_detail(root: &Value, requested_room_id: &str) -> AppResult<
     parse_room_detail(room, data.get("user"), requested_room_id)
 }
 
+fn parse_reflow_room_live_status(root: &Value) -> AppResult<LiveRoomStatus> {
+    let data = root
+        .get("data")
+        .ok_or_else(|| DouyinSite::parse_err("抖音 reflow 接口缺少 data"))?;
+    let room = data
+        .get("room")
+        .ok_or_else(|| DouyinSite::parse_err("抖音 reflow 接口未返回房间数据"))?;
+    parse_room_live_status(room)
+}
+
+fn parse_room_live_status_html(html: &str) -> AppResult<LiveRoomStatus> {
+    for (index, _) in html.match_indices("roomInfo") {
+        let tail = &html[index + "roomInfo".len()..];
+        let Some(start) = tail.find('{') else {
+            continue;
+        };
+        if start > 96 {
+            continue;
+        }
+        let Ok(raw) = decode_embedded_json_value(&tail[start..], '{') else {
+            continue;
+        };
+        let Ok(info) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if let Some(room) = info.get("room") {
+            return parse_room_live_status(room);
+        }
+    }
+    Err(DouyinSite::parse_err(
+        "抖音直播页未包含可用房间状态，可能已下播或页面结构发生变化",
+    ))
+}
+
+/// Read just the fields rendered with a room's live state.  Keeping this
+/// separate from `parse_room_detail` makes it impossible for a follow refresh
+/// to accidentally retain stream URLs or invoke their parsing path.
+fn parse_room_live_status(room: &Value) -> AppResult<LiveRoomStatus> {
+    if !room.is_object() {
+        return Err(DouyinSite::parse_err("抖音房间状态数据格式异常"));
+    }
+    let status = json_i64(
+        room.get("status")
+            .or_else(|| room.get("live_status"))
+            .or_else(|| room.get("room_status"))
+            .unwrap_or(&Value::Null),
+    ) == 2;
+    Ok(LiveRoomStatus {
+        status,
+        live_started_at: status
+            .then(|| {
+                parse_live_started_at(
+                    room.get("live_start_time")
+                        .or_else(|| room.get("start_time"))
+                        .or_else(|| room.get("room_start_time")),
+                )
+            })
+            .flatten(),
+    })
+}
+
 fn parse_room_detail_html(html: &str, requested_web_rid: &str) -> AppResult<LiveRoomDetail> {
     for (index, _) in html.match_indices("roomInfo") {
         let tail = &html[index + "roomInfo".len()..];
@@ -1423,6 +1511,33 @@ mod tests {
         assert!(detail.status);
         assert!(!has_playable_stream(&detail));
         assert_eq!(reflow_room_id(&detail).unwrap(), "7666175273884879635");
+    }
+
+    #[test]
+    fn parses_ssr_room_live_status_without_stream_metadata() {
+        let html = r#"<script>roomInfo\":{\"room\":{\"status\":2,\"live_start_time\":\"1720000000\",\"stream_url\":{\"ignored\":true}}}</script>"#;
+
+        let status = parse_room_live_status_html(html).expect("SSR room status");
+
+        assert!(status.status);
+        assert_eq!(status.live_started_at, Some(1_720_000_000_000));
+    }
+
+    #[test]
+    fn parses_reflow_offline_status_without_a_start_time() {
+        let status = parse_reflow_room_live_status(&serde_json::json!({
+            "data": {
+                "room": {
+                    "status": 4,
+                    "live_start_time": "1720000000",
+                    "stream_url": {"ignored": true}
+                }
+            }
+        }))
+        .expect("reflow room status");
+
+        assert!(!status.status);
+        assert_eq!(status.live_started_at, None);
     }
 
     #[test]

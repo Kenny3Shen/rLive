@@ -221,6 +221,51 @@ pub fn parse_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
     Ok(RoomListPage { has_more, items })
 }
 
+/// Parse Bilibili Live's signed-in homepage `index/getList` payload.
+///
+/// The homepage contains a short top recommendation strip followed by
+/// personalised modules. The rLive home view is a single room grid, so retain
+/// that display order, flatten module lists, and remove repeated rooms. The
+/// endpoint does not supply a stable next-page cursor, therefore this is
+/// deliberately a one-page result.
+pub fn parse_account_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| json_err(format!("account recommend: {e}")))?;
+    let data = root
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| json_err("account recommend: missing data object"))?;
+
+    let mut seen_room_ids = std::collections::HashSet::new();
+    let mut items = Vec::new();
+    let mut append_room = |room: &Value| {
+        let item = room_item_from_list_obj(room);
+        if !item.room_id.is_empty() && seen_room_ids.insert(item.room_id.clone()) {
+            items.push(item);
+        }
+    };
+
+    if let Some(rooms) = data.get("recommend_room_list").and_then(Value::as_array) {
+        for room in rooms {
+            append_room(room);
+        }
+    }
+    if let Some(modules) = data.get("room_list").and_then(Value::as_array) {
+        for module in modules {
+            if let Some(rooms) = module.get("list").and_then(Value::as_array) {
+                for room in rooms {
+                    append_room(room);
+                }
+            }
+        }
+    }
+
+    Ok(RoomListPage {
+        has_more: false,
+        items,
+    })
+}
+
 /// Parse search `live` type body.
 pub fn parse_search_rooms(raw: &str) -> AppResult<RoomListPage> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("search: {e}")))?;
@@ -463,7 +508,10 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
 }
 
 /// Parse live status from `Room/get_info`.
-#[cfg(test)]
+///
+/// This endpoint is intentionally used by follow refreshes instead of the
+/// room-detail endpoint: the latter resolves playback and danmaku metadata
+/// that a status badge does not need.
 pub fn parse_live_status(raw: &str) -> AppResult<bool> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("live status: {e}")))?;
@@ -576,12 +624,13 @@ pub fn now_unix() -> i64 {
 
 /// Extract buvid3/buvid4 from cookie string if present.
 pub fn buvid_from_cookie(cookie: &str) -> Option<(String, String)> {
-    if !cookie.contains("buvid3") {
-        return None;
-    }
     let b3 = extract_cookie_value(cookie, "buvid3").unwrap_or_default();
     let b4 = extract_cookie_value(cookie, "buvid4").unwrap_or_default();
-    Some((b3, b4))
+    // A browser export can contain only one of the two device IDs.  Keep the
+    // available value so the caller can fetch and merge only the missing one;
+    // a substring check such as `cookie.contains("buvid3")` also misclassifies
+    // unrelated cookie values as a device identifier.
+    (!b3.is_empty() || !b4.is_empty()).then_some((b3, b4))
 }
 
 fn extract_cookie_value(cookie: &str, key: &str) -> Option<String> {
@@ -628,6 +677,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_account_recommend_fixture_flattens_and_deduplicates_home_modules() {
+        let raw = include_str!("../../../tests/fixtures/bilibili_account_recommend.json");
+        let page = parse_account_recommend_rooms(raw).unwrap();
+
+        assert!(!page.has_more);
+        assert_eq!(page.items.len(), 3);
+        assert_eq!(page.items[0].room_id, "101");
+        assert_eq!(page.items[1].room_id, "102");
+        assert_eq!(page.items[2].room_id, "103");
+        assert_eq!(page.items[2].online, 321);
+    }
+
+    #[test]
     fn parse_category_rooms_fixture() {
         let raw = include_str!("../../../tests/fixtures/bilibili_category_rooms.json");
         let page = parse_category_rooms(raw, 30).unwrap();
@@ -661,6 +723,19 @@ mod tests {
         assert!(
             detail.raw["room_id"].as_i64().is_some() || detail.raw["room_id"].as_str().is_some()
         );
+    }
+
+    #[test]
+    fn buvid_from_cookie_accepts_partial_device_identifiers_only() {
+        assert_eq!(
+            buvid_from_cookie("SESSDATA=session; buvid3=device-3"),
+            Some(("device-3".into(), String::new()))
+        );
+        assert_eq!(
+            buvid_from_cookie("buvid4=device-4; bili_jct=csrf"),
+            Some((String::new(), "device-4".into()))
+        );
+        assert_eq!(buvid_from_cookie("note=contains-buvid3-text"), None);
     }
 
     #[test]

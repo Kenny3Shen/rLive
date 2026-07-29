@@ -1,0 +1,10 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows the Android player gesture bridge to read and update application brightness and media volume."
+permissions = [
+  "allow-get-state",
+  "allow-set-brightness",
+  "allow-set-volume",
+  "allow-reset-brightness",
+]

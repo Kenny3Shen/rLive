@@ -1,0 +1,43 @@
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "recommend_room_list": [
+      {
+        "roomid": 101,
+        "title": "账号推荐直播一",
+        "cover": "https://i0.hdslb.com/bfs/live/cover-101.jpg",
+        "uname": "主播甲",
+        "online": 123
+      },
+      {
+        "roomid": 102,
+        "title": "账号推荐直播二",
+        "cover": "https://i0.hdslb.com/bfs/live/cover-102.jpg",
+        "uname": "主播乙",
+        "online": "234"
+      }
+    ],
+    "room_list": [
+      {
+        "module_info": { "title": "推荐直播" },
+        "list": [
+          {
+            "roomid": 102,
+            "title": "重复的推荐直播",
+            "cover": "https://i0.hdslb.com/bfs/live/cover-102.jpg",
+            "uname": "主播乙",
+            "online": 234
+          },
+          {
+            "roomid": 103,
+            "title": "账号推荐直播三",
+            "cover": "https://i0.hdslb.com/bfs/live/cover-103.jpg",
+            "uname": "主播丙",
+            "online": 321
+          }
+        ]
+      }
+    ]
+  }
+}
