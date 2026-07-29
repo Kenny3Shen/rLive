@@ -154,13 +154,7 @@ export function useAutoDanmakuSend({
     return () => {
       cancelled = true;
     };
-  }, [
-    availabilityKey,
-    danmakuSendEnabled,
-    danmakuSendPending,
-    roomId,
-    sendConfig,
-  ]);
+  }, [availabilityKey, danmakuSendEnabled, danmakuSendPending, roomId, sendConfig]);
 
   const availabilityMessage = !sendConfig
     ? "当前平台暂不支持自动发送弹幕。"
@@ -170,14 +164,14 @@ export function useAutoDanmakuSend({
         ? "正在同步发送权限…"
         : !danmakuSendEnabled
           ? "请先在账号设置启用发送功能。"
-          : currentAvailability?.message ?? "正在检查发送权限…";
+          : (currentAvailability?.message ?? "正在检查发送权限…");
   const canEnable = Boolean(
     sendConfig &&
-      roomId &&
-      danmakuSendEnabled &&
-      !danmakuSendPending &&
-      currentAvailability?.available &&
-      !validation.error,
+    roomId &&
+    danmakuSendEnabled &&
+    !danmakuSendPending &&
+    currentAvailability?.available &&
+    !validation.error,
   );
 
   // A route change can reuse PlayerPane. Keep a direct-room-switch from
@@ -296,10 +290,7 @@ export function useAutoDanmakuSend({
         setPhase("waiting");
         setCurrentSegmentIndex(nextIndex);
         setStatusMessage(waitingMessage(nextIndex, segments.length));
-        schedule(
-          nextIndex,
-          remainingAutoDanmakuSendDelay(startedAt, monotonicNow()),
-        );
+        schedule(nextIndex, remainingAutoDanmakuSendDelay(startedAt, monotonicNow()));
       } catch (error) {
         if (
           cancelled ||
@@ -330,15 +321,7 @@ export function useAutoDanmakuSend({
       cancelled = true;
       clearTimer();
     };
-  }, [
-    canEnable,
-    enabled,
-    roomId,
-    roomKey,
-    runKey,
-    sendConfig,
-    validation.segments,
-  ]);
+  }, [canEnable, enabled, roomId, roomKey, runKey, sendConfig, validation.segments]);
 
   const onTextChange = useCallback(
     (value: string) => {

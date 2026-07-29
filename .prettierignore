@@ -1,0 +1,13 @@
+# Agent guidance and hand-authored documentation are not part of the runtime
+# formatter surface. Keep their existing prose and code samples intact.
+.agents/
+AGENTS.md
+README*.md
+docs/
+
+# Vendored, generated, and model assets have their own upstream formatting.
+public/mpegts.js
+src-tauri/Cargo.toml
+src-tauri/assets/
+src-tauri/resources/
+src-tauri/tests/fixtures/

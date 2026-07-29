@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { useFollowStatusRefresh } from "@/features/follow/followRefresh";
 import { Shell } from "./layout/Shell";
 import { AndroidBackNavigator } from "./androidBackNavigation";
 import { HomePage } from "../features/home/HomePage";
@@ -28,11 +29,6 @@ const FollowPage = lazy(() =>
 const HistoryPage = lazy(() =>
   import("../features/history/HistoryPage").then(({ HistoryPage }) => ({
     default: HistoryPage,
-  })),
-);
-const StatisticsPage = lazy(() =>
-  import("../features/statistics/StatisticsPage").then(({ StatisticsPage }) => ({
-    default: StatisticsPage,
   })),
 );
 const SettingsPage = lazy(() =>
@@ -82,6 +78,8 @@ function EnabledRoomRoute() {
 }
 
 export function App() {
+  useFollowStatusRefresh();
+
   return (
     <BrowserRouter>
       <AndroidBackNavigator />
@@ -94,7 +92,6 @@ export function App() {
             <Route path="search" element={<SearchPage />} />
             <Route path="follow" element={<FollowPage />} />
             <Route path="history" element={<HistoryPage />} />
-            <Route path="statistics" element={<StatisticsPage />} />
             <Route path="iptv/play" element={<IptvPlayerPage />} />
             <Route path="iptv" element={<IptvPage />} />
             <Route path="settings" element={<SettingsPage />} />

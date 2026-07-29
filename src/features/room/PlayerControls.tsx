@@ -21,6 +21,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
 
@@ -111,7 +112,12 @@ function ControlButton({
     </Button>
   );
 
-  return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={button} />
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Compact controls kept separate from the MSE player implementation. */
@@ -152,7 +158,7 @@ export function PlayerControls({
   const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
   const isMuted = muted || volume === 0;
   const volumeLabel = "调节音量";
-  const muteLabel = isMuted ? "取消静音" : "静音";
+  const muteLabel = isMuted ? "取消静音（M）" : "静音（M）";
   const overlayButtonClass = overlay
     ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70"
     : undefined;
@@ -238,7 +244,7 @@ export function PlayerControls({
           </ControlButton>
         )}
         <ControlButton
-          label={paused ? "播放" : "暂停"}
+          label={paused ? "播放（Space / K）" : "暂停（Space / K）"}
           className={overlayButtonClass}
           disabled={disabled}
           onClick={onTogglePause}
@@ -476,7 +482,7 @@ export function PlayerControls({
           </ControlButton>
         )}
         <ControlButton
-          label={fullscreen ? "退出全屏" : "全屏"}
+          label={fullscreen ? "退出全屏（F）" : "全屏（F）"}
           className={overlayButtonClass}
           disabled={disabled}
           aria-pressed={fullscreen}

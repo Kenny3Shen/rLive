@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** Opens the dedicated search page instead of growing an inline header form. */
 export function HeaderSearch() {
@@ -10,15 +11,21 @@ export function HeaderSearch() {
   if (pathname !== "/") return null;
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      title="搜索主播、房间号、标题"
-      aria-label="搜索主播、房间号、标题"
-      onClick={() => navigate("/search")}
-    >
-      <Search />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="搜索主播、房间号、标题"
+            onClick={() => navigate("/search")}
+          />
+        }
+      >
+        <Search />
+      </TooltipTrigger>
+      <TooltipContent>搜索主播、房间号、标题</TooltipContent>
+    </Tooltip>
   );
 }

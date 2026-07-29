@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock3, RefreshCw, Star, UserRoundX, Radio } from "lucide-react";
+import { CirclePlay, Clock3, Home, Radio, RefreshCw, Star, UserRoundX } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
@@ -10,6 +10,7 @@ import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
+import { FOLLOW_LIST_QUERY_KEY, refreshFollows } from "./followRefresh";
 import {
   FOLLOW_PLATFORM_PARAM,
   followPlatformFromSearch,
@@ -19,9 +20,26 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { notify } from "@/components/ui/toast";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type LiveFilter = "all" | "live" | "offline";
@@ -42,7 +60,6 @@ function FollowRefreshButton({ pending, onRefresh }: { pending: boolean; onRefre
             className="fixed right-5 bottom-5 z-20 rounded-full shadow-lg shadow-primary/25"
             disabled={pending}
             aria-label="刷新关注列表"
-            title="刷新关注列表"
             onClick={onRefresh}
           />
         }
@@ -72,14 +89,14 @@ export function FollowPage() {
   );
 
   const followsQuery = useQuery({
-    queryKey: ["follows"],
+    queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
   });
 
   const refreshMutation = useMutation({
-    mutationFn: () => invokeCmd<FollowUser[]>("follow_refresh"),
-    onSuccess: (data) => {
-      qc.setQueryData(["follows"], data);
+    mutationFn: () => refreshFollows(qc),
+    onError: () => {
+      notify.error("刷新关注列表失败", "请检查网络后重试。");
     },
   });
 
@@ -90,7 +107,11 @@ export function FollowPage() {
         roomId: u.room_id,
       }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["follows"] });
+      void qc.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
+      notify.success("已取消关注");
+    },
+    onError: () => {
+      notify.error("取消关注失败", "请检查网络后重试。");
     },
   });
 
@@ -184,11 +205,21 @@ export function FollowPage() {
       )}
 
       {!followsQuery.isLoading && items.length === 0 && (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border py-20 text-muted-foreground">
-          <Star className="h-8 w-8 opacity-40" />
-          <p className="text-sm">还没有关注任何主播</p>
-          <p className="text-xs">打开直播间后点击「关注」即可添加</p>
-        </div>
+        <Empty className="min-h-64 py-12">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Star aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>还没有关注任何主播</EmptyTitle>
+            <EmptyDescription>打开直播间后点击“关注”即可添加。</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+              <Home data-icon="inline-start" aria-hidden />
+              去首页看看
+            </Button>
+          </EmptyContent>
+        </Empty>
       )}
 
       {items.length > 0 && (
@@ -200,80 +231,114 @@ export function FollowPage() {
             const avatarSrc = normalizeImageUrl(u.face);
             return (
               <li data-page-enter-item key={`${u.site_id}:${u.room_id}`}>
-                <div
-                  className={cn(
-                    "group flex items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-2.5 pr-3 transition-colors",
-                    "hover:border-border hover:bg-card-elevated",
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left focus-ring rounded-xl"
-                    onClick={() => navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)}
-                  >
-                    <div className="relative h-16 w-[104px] shrink-0 overflow-hidden rounded-xl bg-muted">
-                      {avatarSrc ? (
-                        <img
-                          src={avatarSrc}
-                          alt=""
-                          className="h-full w-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center">
-                          <Radio className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                      )}
-                      {live && (
-                        <Badge className="absolute left-1.5 top-1.5 animate-live bg-accent text-accent-foreground">
-                          直播中
-                        </Badge>
-                      )}
-                    </div>
-
-                    <div className="relative min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="size-8 ring-2 ring-background">
-                          <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
-                          <AvatarFallback>{(u.user_name || "?").slice(0, 1)}</AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
-                            {u.user_name}
-                            {live && (
-                              <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-success align-middle" />
-                            )}
-                          </p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {SITE_LABELS[u.site_id] ?? u.site_id} · 房间 {u.room_id}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline">{SITE_LABELS[u.site_id] ?? u.site_id}</Badge>
-                        {live && <Badge className="bg-success/15 text-success">直播中</Badge>}
-                        {liveDuration && (
-                          <Badge variant="outline" title={`开播时长：${liveDuration}`}>
-                            <Clock3 aria-hidden />
-                            开播 {liveDuration}
-                          </Badge>
+                <ContextMenu>
+                  <ContextMenuTrigger
+                    render={
+                      <div
+                        className={cn(
+                          "group flex items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-2.5 pr-3 transition-colors",
+                          "hover:border-border hover:bg-card-elevated",
                         )}
-                        {offline && <Badge>未开播</Badge>}
-                        {u.live_status == null && <Badge>未知</Badge>}
-                      </div>
-                    </div>
-                  </button>
-
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="shrink-0 opacity-60 hover:opacity-100 hover:text-danger"
-                    title="取消关注"
-                    onClick={() => removeMutation.mutate(u)}
+                      />
+                    }
                   >
-                    <UserRoundX className="h-4 w-4" />
-                  </Button>
-                </div>
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left focus-ring rounded-xl"
+                      onClick={() =>
+                        navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
+                      }
+                    >
+                      <div className="relative h-16 w-[104px] shrink-0 overflow-hidden rounded-xl bg-muted">
+                        {avatarSrc ? (
+                          <img
+                            src={avatarSrc}
+                            alt=""
+                            className="h-full w-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <Radio className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="relative min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <Avatar className="size-8 ring-2 ring-background">
+                            <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
+                            <AvatarFallback>{(u.user_name || "?").slice(0, 1)}</AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">{u.user_name}</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {SITE_LABELS[u.site_id] ?? u.site_id} · 房间 {u.room_id}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline">{SITE_LABELS[u.site_id] ?? u.site_id}</Badge>
+                          {live && <Badge className="bg-success/15 text-success">直播中</Badge>}
+                          {liveDuration && (
+                            <Badge variant="outline" title={`开播时长：${liveDuration}`}>
+                              <Clock3 aria-hidden />
+                              开播 {liveDuration}
+                            </Badge>
+                          )}
+                          {offline && <Badge>未开播</Badge>}
+                          {u.live_status == null && <Badge>未知</Badge>}
+                        </div>
+                      </div>
+                    </button>
+
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="shrink-0 opacity-60 transition-opacity hover:opacity-100 hover:text-destructive [@media(pointer:coarse)]:opacity-100"
+                            disabled={removeMutation.isPending}
+                            aria-label="取消关注"
+                            aria-busy={removeMutation.isPending}
+                            onClick={() => removeMutation.mutate(u)}
+                          />
+                        }
+                      >
+                        {removeMutation.isPending ? (
+                          <Spinner data-icon="inline-start" aria-hidden />
+                        ) : (
+                          <UserRoundX data-icon="inline-start" aria-hidden />
+                        )}
+                      </TooltipTrigger>
+                      <TooltipContent>取消关注</TooltipContent>
+                    </Tooltip>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuGroup>
+                      <ContextMenuItem
+                        onClick={() =>
+                          navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
+                        }
+                      >
+                        <CirclePlay aria-hidden />
+                        打开直播间
+                      </ContextMenuItem>
+                    </ContextMenuGroup>
+                    <ContextMenuSeparator />
+                    <ContextMenuGroup>
+                      <ContextMenuItem
+                        variant="destructive"
+                        disabled={removeMutation.isPending}
+                        onClick={() => removeMutation.mutate(u)}
+                      >
+                        <UserRoundX aria-hidden />
+                        取消关注
+                      </ContextMenuItem>
+                    </ContextMenuGroup>
+                  </ContextMenuContent>
+                </ContextMenu>
               </li>
             );
           })}

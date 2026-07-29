@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -37,9 +31,7 @@ export function selectAsrModelLoadRequest(
   model: Pick<AsrModelStatus, "loaded" | "loading" | "bundled" | "path">,
 ): AsrModelLoadRequest | null {
   if (model.loading) return null;
-  return !model.loaded || !model.bundled
-    ? { command: "asr_model_load_default", args: {} }
-    : null;
+  return !model.loaded || !model.bundled ? { command: "asr_model_load_default", args: {} } : null;
 }
 
 type AsrCaptionEvent = {
@@ -133,9 +125,7 @@ function createCaptionSessionId(roomKey: string, mediaKey: number): string {
 
 function messageFromError(error: unknown, fallback: string): string {
   if (typeof error === "object" && error !== null && "message" in error) {
-    const message = String(
-      (error as { message?: unknown }).message ?? "",
-    ).trim();
+    const message = String((error as { message?: unknown }).message ?? "").trim();
     if (message) return message;
   }
   if (typeof error === "string" && error.trim()) return error;
@@ -149,9 +139,7 @@ function isCaptionEvent(value: unknown): value is AsrCaptionEvent {
     typeof event.session_id === "string" &&
     typeof event.sequence === "number" &&
     Number.isFinite(event.sequence) &&
-    (event.kind === "partial" ||
-      event.kind === "final" ||
-      event.kind === "status") &&
+    (event.kind === "partial" || event.kind === "final" || event.kind === "status") &&
     typeof event.text === "string"
   );
 }
@@ -175,8 +163,7 @@ export function nextCaptionAudioStartMs(
   }
   if (
     observedEndMs !== null &&
-    Math.abs(observedEndMs - (previousStartMs + durationMs)) >
-      CAPTION_CLOCK_DRIFT_MS
+    Math.abs(observedEndMs - (previousStartMs + durationMs)) > CAPTION_CLOCK_DRIFT_MS
   ) {
     return Math.max(0, observedEndMs - durationMs);
   }
@@ -207,9 +194,7 @@ export function useLocalAsrCaptions({
   const [message, setMessage] = useState<string | null>(null);
   const [mediaReady, setMediaReady] = useState<MediaReady | null>(null);
 
-  const graphRef = useRef<(LocalPcmCapture & { mediaKey: number }) | null>(
-    null,
-  );
+  const graphRef = useRef<(LocalPcmCapture & { mediaKey: number }) | null>(null);
   const activeSessionRef = useRef<ActiveCaptionSession | null>(null);
   const sessionLifecycleRef = useRef(0);
   const enableAttemptRef = useRef(0);
@@ -245,23 +230,17 @@ export function useLocalAsrCaptions({
 
   const clearOutboundForSession = useCallback((sessionId: string) => {
     const outbound = outboundRef.current;
-    outbound.queue = outbound.queue.filter(
-      (item) => item.sessionId !== sessionId,
-    );
+    outbound.queue = outbound.queue.filter((item) => item.sessionId !== sessionId);
   }, []);
 
-  const reportAudioPushFailure = useCallback(
-    (sessionId: string, lifecycle: number) => {
-      const active = activeSessionRef.current;
-      if (!active || active.id !== sessionId || active.lifecycle !== lifecycle)
-        return;
-      // Keep the session alive: a transient bridge failure should not tear down
-      // an otherwise healthy stream. The native bounded queue still protects CPU
-      // and memory when it recovers.
-      setMessage("本地字幕音频传输暂时失败，正在继续尝试");
-    },
-    [],
-  );
+  const reportAudioPushFailure = useCallback((sessionId: string, lifecycle: number) => {
+    const active = activeSessionRef.current;
+    if (!active || active.id !== sessionId || active.lifecycle !== lifecycle) return;
+    // Keep the session alive: a transient bridge failure should not tear down
+    // an otherwise healthy stream. The native bounded queue still protects CPU
+    // and memory when it recovers.
+    setMessage("本地字幕音频传输暂时失败，正在继续尝试");
+  }, []);
 
   const pumpOutboundAudio = useCallback(() => {
     const outbound = outboundRef.current;
@@ -276,11 +255,7 @@ export function useLocalAsrCaptions({
       }
 
       const active = activeSessionRef.current;
-      if (
-        !active ||
-        active.id !== next.sessionId ||
-        active.lifecycle !== next.lifecycle
-      ) {
+      if (!active || active.id !== next.sessionId || active.lifecycle !== next.lifecycle) {
         pump();
         return;
       }
@@ -347,8 +322,7 @@ export function useLocalAsrCaptions({
     if (!video) throw new Error("播放器尚未准备好，无法开启本地字幕");
 
     const current = graphRef.current;
-    if (current?.mediaKey === mediaKey && current.video === video)
-      return current;
+    if (current?.mediaKey === mediaKey && current.video === video) return current;
 
     // A graph only changes alongside useWebPlayer's keyed video replacement.
     // Disposing a graph for a still-mounted video would make it impossible to
@@ -358,14 +332,8 @@ export function useLocalAsrCaptions({
       graphRef.current = null;
     }
 
-    const graph = Object.assign(
-      createLocalPcmCapture({ video, onPcm: enqueuePcm }),
-      { mediaKey },
-    );
-    graph.setPresentationLevel(
-      presentationRef.current.volume,
-      presentationRef.current.muted,
-    );
+    const graph = Object.assign(createLocalPcmCapture({ video, onPcm: enqueuePcm }), { mediaKey });
+    graph.setPresentationLevel(presentationRef.current.volume, presentationRef.current.muted);
     graphRef.current = graph;
     return graph;
   }, [enqueuePcm, mediaKey, videoRef]);
@@ -432,11 +400,7 @@ export function useLocalAsrCaptions({
       if (!alive || !isCaptionEvent(event.payload)) return;
       const payload = event.payload;
       const active = activeSessionRef.current;
-      if (
-        !active ||
-        payload.session_id !== active.id ||
-        payload.sequence <= active.lastSequence
-      ) {
+      if (!active || payload.session_id !== active.id || payload.sequence <= active.lastSequence) {
         return;
       }
       active.lastSequence = payload.sequence;
@@ -448,10 +412,7 @@ export function useLocalAsrCaptions({
         } else if (payload.status === "recognition_error") {
           setState("active");
           setMessage("本地字幕识别暂时失败，下一段语音会自动重试");
-        } else if (
-          payload.status === "model_unloaded" ||
-          payload.status === "model_loading"
-        ) {
+        } else if (payload.status === "model_unloaded" || payload.status === "model_loading") {
           activeSessionRef.current = null;
           clearOutboundForSession(payload.session_id);
           setEnabled(false);
@@ -544,12 +505,7 @@ export function useLocalAsrCaptions({
         }
         await graph.setCapturing(true);
         const active = activeSessionRef.current;
-        if (
-          cancelled ||
-          !active ||
-          active.id !== sessionId ||
-          active.lifecycle !== lifecycle
-        ) {
+        if (cancelled || !active || active.id !== sessionId || active.lifecycle !== lifecycle) {
           void graph.setCapturing(false);
           void invokeCmd("asr_session_stop", { sessionId }).catch(() => {});
           return;
@@ -559,12 +515,7 @@ export function useLocalAsrCaptions({
       } catch (error) {
         void graph?.setCapturing(false);
         const active = activeSessionRef.current;
-        if (
-          cancelled ||
-          !active ||
-          active.id !== sessionId ||
-          active.lifecycle !== lifecycle
-        ) {
+        if (cancelled || !active || active.id !== sessionId || active.lifecycle !== lifecycle) {
           return;
         }
         activeSessionRef.current = null;
@@ -587,15 +538,7 @@ export function useLocalAsrCaptions({
       void graph?.setCapturing(false);
       void invokeCmd("asr_session_stop", { sessionId }).catch(() => {});
     };
-  }, [
-    clearCaption,
-    clearOutboundForSession,
-    enabled,
-    ensureGraph,
-    mediaKey,
-    ready,
-    roomKey,
-  ]);
+  }, [clearCaption, clearOutboundForSession, enabled, ensureGraph, mediaKey, ready, roomKey]);
 
   useEffect(
     () => () => {
@@ -606,9 +549,7 @@ export function useLocalAsrCaptions({
       activeSessionRef.current = null;
       if (active) {
         clearOutboundForSession(active.id);
-        void invokeCmd("asr_session_stop", { sessionId: active.id }).catch(
-          () => {},
-        );
+        void invokeCmd("asr_session_stop", { sessionId: active.id }).catch(() => {});
       }
     },
     [clearOutboundForSession],
@@ -656,9 +597,7 @@ export function useLocalAsrCaptions({
         throw new Error("本地字幕模型正在加载，请稍候");
       }
       const request = selectAsrModelLoadRequest(model);
-      return request
-        ? invokeCmd<AsrModelStatus>(request.command, request.args)
-        : model;
+      return request ? invokeCmd<AsrModelStatus>(request.command, request.args) : model;
     })().then(
       (model) => {
         if (attempt !== enableAttemptRef.current) return;
@@ -677,15 +616,7 @@ export function useLocalAsrCaptions({
         setMessage(messageFromError(error, "无法检查本地字幕模型状态"));
       },
     );
-  }, [
-    clearCaption,
-    enabled,
-    ensureGraph,
-    muted,
-    pending,
-    ready,
-    volume,
-  ]);
+  }, [clearCaption, enabled, ensureGraph, muted, pending, ready, volume]);
 
   return { enabled, pending, ready, state, caption, message, toggle };
 }

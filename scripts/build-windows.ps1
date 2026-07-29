@@ -108,8 +108,15 @@ $tauriArgs = if ($BundleNsis) { "build --bundles nsis" } else { "build --no-bund
 
 if ($bunCmd) {
     Write-Step "bun install"
+    # Bun writes normal dependency-resolution progress to stderr. With this
+    # script's default Stop policy, PowerShell otherwise turns that output
+    # into a terminating NativeCommandError before Bun can finish.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & bun install
-    if ($LASTEXITCODE -ne 0) { throw "bun install failed: $LASTEXITCODE" }
+    $installCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($installCode -ne 0) { throw "bun install failed: $installCode" }
 
     # bun run <script> -- <args>
     $buildInner = "bun run tauri -- $tauriArgs"
@@ -118,8 +125,12 @@ if ($bunCmd) {
     Write-Step "npm install (bun not found)"
     $npm = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $npm) { throw "Neither bun nor npm found on PATH." }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & npm install --no-fund --no-audit
-    if ($LASTEXITCODE -ne 0) { throw "npm install failed: $LASTEXITCODE" }
+    $installCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($installCode -ne 0) { throw "npm install failed: $installCode" }
     $buildInner = "npx tauri $tauriArgs"
     Write-Host "Using: $buildInner"
 }
