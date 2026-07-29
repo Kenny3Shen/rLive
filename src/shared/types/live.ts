@@ -118,6 +118,13 @@ export type HistoryItem = {
   watched_at: number;
 };
 
+/** A confirmed, reusable outgoing message stored only on this device. */
+export type DanmakuSendHistoryItem = {
+  site_id: SiteId;
+  content: string;
+  sent_at: number;
+};
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   default_site: string;

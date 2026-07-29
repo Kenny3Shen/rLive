@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::account;
 use crate::danmaku;
+use crate::db::danmaku_send_history;
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::sites;
@@ -113,6 +114,24 @@ fn validate_and_reserve_huya_send(
     let message = danmaku::huya::normalize_outgoing_message(message)?;
     limiter.reserve(&room_id)?;
     Ok((room_id, message))
+}
+
+/// A successful platform write is the only point at which an outgoing message
+/// becomes reusable history. History is convenience data, so a local database
+/// failure must never turn an already accepted platform write into a false
+/// failure in the UI.
+fn record_successful_danmaku_send(state: &AppState, site_id: SiteId, content: &str) {
+    let sent_at = chrono::Utc::now().timestamp_millis();
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
+        .and_then(|conn| danmaku_send_history::record(&conn, site_id.as_str(), content, sent_at));
+    if let Err(error) = result {
+        // Do not include the outgoing content in logs. It can be personal,
+        // while the app's release log is intentionally failure-only.
+        tracing::warn!(site = site_id.as_str(), error_code = %error.code, "could not save danmaku send history");
+    }
 }
 
 #[tauri::command]
@@ -240,7 +259,9 @@ pub async fn bilibili_danmaku_send(
     // never receive it, so the write path deliberately opts out of redirect
     // following for both proxied and direct requests.
     let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
-    danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await
+    danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
+    record_successful_danmaku_send(state.inner(), SiteId::Bilibili, &message);
+    Ok(())
 }
 
 #[tauri::command]
@@ -317,7 +338,9 @@ pub async fn douyu_danmaku_send(
                 error
             },
         )?;
-    danmaku::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await
+    danmaku::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
+    record_successful_danmaku_send(state.inner(), SiteId::Douyu, &message);
+    Ok(())
 }
 
 #[tauri::command]
@@ -391,7 +414,9 @@ pub async fn huya_danmaku_send(
     let args = danmaku::huya::args_from_raw(&room_id, &detail.raw)?;
     let (_room_id, message) =
         validate_and_reserve_huya_send(&state.huya_send_limiter, &room_id, &message)?;
-    danmaku::huya::send_chat(&cookie, args, &message).await
+    danmaku::huya::send_chat(&cookie, args, &message).await?;
+    record_successful_danmaku_send(state.inner(), SiteId::Huya, &message);
+    Ok(())
 }
 
 #[cfg(test)]
