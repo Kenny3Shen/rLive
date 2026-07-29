@@ -28,3 +28,13 @@ pub fn history_clear(state: State<'_, AppState>) -> AppResult<()> {
     let conn = lock_db(&state)?;
     history::clear(&conn)
 }
+
+#[tauri::command]
+pub fn history_remove(
+    state: State<'_, AppState>,
+    site_id: String,
+    room_id: String,
+) -> AppResult<()> {
+    let conn = lock_db(&state)?;
+    history::remove(&conn, &site_id, &room_id)
+}

@@ -70,6 +70,17 @@ pub fn clear(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+/// Delete one room's local watch record. History is unique per site/room, so
+/// the current timestamp is intentionally not part of the command contract.
+pub fn remove(conn: &Connection, site_id: &str, room_id: &str) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM history WHERE site_id = ?1 AND room_id = ?2",
+        params![site_id, room_id],
+    )
+    .map_err(map_db_err)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +132,11 @@ mod tests {
         let rows = list(&conn).unwrap();
         assert_eq!(rows[0].watched_at, 20);
         assert_eq!(rows[0].title, "t2-old");
+
+        remove(&conn, "bilibili", "1").unwrap();
+        let rows = list(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].room_id, "2");
 
         clear(&conn).unwrap();
         assert!(list(&conn).unwrap().is_empty());
