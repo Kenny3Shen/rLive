@@ -4,6 +4,7 @@ import type { AppSettings } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardAction,
@@ -29,7 +30,11 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { AUTO_DANMAKU_SEND_INTERVAL_MS } from "./danmaku/autoSend";
+import {
+  AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS,
+  AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS,
+  normalizeAutoDanmakuSendIntervalSeconds,
+} from "./danmaku/autoSend";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 
 const FONT_WEIGHTS = [
@@ -194,6 +199,18 @@ function autoSendStatusLabel(autoSend: AutoDanmakuSendController): string {
 }
 
 function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendController }) {
+  const [intervalDraft, setIntervalDraft] = useState(() => String(autoSend.intervalSeconds));
+
+  useEffect(() => {
+    setIntervalDraft(String(autoSend.intervalSeconds));
+  }, [autoSend.intervalSeconds]);
+
+  const commitInterval = () => {
+    const intervalSeconds = normalizeAutoDanmakuSendIntervalSeconds(Number(intervalDraft));
+    autoSend.onIntervalChange(intervalSeconds);
+    setIntervalDraft(String(intervalSeconds));
+  };
+
   const segmentLabel =
     autoSend.currentSegmentIndex === null || autoSend.segmentCount === 0
       ? "未分段"
@@ -204,7 +221,7 @@ function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendControl
     <Card size="sm">
       <CardHeader>
         <CardTitle>自动发送弹幕</CardTitle>
-        <CardDescription>仅在当前直播间循环发送。</CardDescription>
+        <CardDescription>仅在当前直播间循环发送，参数不会保存。</CardDescription>
         <CardAction>
           <Badge variant={statusIsError ? "destructive" : "secondary"}>
             {autoSendStatusLabel(autoSend)}
@@ -228,8 +245,31 @@ function AutoDanmakuSendSection({ autoSend }: { autoSend: AutoDanmakuSendControl
                   onChange={(event) => autoSend.onTextChange(event.target.value)}
                 />
                 <FieldDescription>
-                  {autoSend.validationMessage ??
-                    `${AUTO_DANMAKU_SEND_INTERVAL_MS / 1_000} 秒后开始；长文本会自动分段。`}
+                  {autoSend.validationMessage ?? "开启后立即发送首条；长文本会自动分段。"}
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor="room-auto-danmaku-interval">发送间隔（秒）</FieldLabel>
+              <FieldContent>
+                <Input
+                  id="room-auto-danmaku-interval"
+                  type="number"
+                  inputMode="numeric"
+                  min={AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS}
+                  max={AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS}
+                  step={1}
+                  value={intervalDraft}
+                  onChange={(event) => setIntervalDraft(event.currentTarget.value)}
+                  onBlur={commitInterval}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+                <FieldDescription>
+                  {AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS}–{AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS}
+                  秒；默认 {AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS} 秒，修改后立即重排下一次发送。
                 </FieldDescription>
               </FieldContent>
             </Field>

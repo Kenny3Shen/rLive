@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS,
   AUTO_DANMAKU_SEND_INTERVAL_MS,
+  AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS,
+  AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS,
   nextAutoDanmakuSegmentIndex,
+  normalizeAutoDanmakuSendIntervalSeconds,
   normalizeAutoDanmakuText,
   remainingAutoDanmakuSendDelay,
   splitAutoDanmakuText,
@@ -35,10 +39,22 @@ describe("automatic danmaku text preparation", () => {
     expect(sent).toEqual(["第一段", "第二段", "第三段", "第一段", "第二段"]);
   });
 
-  test("uses a 20-second interval and never shortens it when the clock moves backwards", () => {
+  test("uses a configurable interval and never shortens it when the clock moves backwards", () => {
+    expect(AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS).toBe(20);
     expect(AUTO_DANMAKU_SEND_INTERVAL_MS).toBe(20_000);
+    expect(normalizeAutoDanmakuSendIntervalSeconds(1)).toBe(AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS);
+    expect(normalizeAutoDanmakuSendIntervalSeconds(42.6)).toBe(43);
+    expect(normalizeAutoDanmakuSendIntervalSeconds(9_999)).toBe(
+      AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS,
+    );
+    expect(normalizeAutoDanmakuSendIntervalSeconds(Number.NaN)).toBe(
+      AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS,
+    );
+    expect(remainingAutoDanmakuSendDelay(null, 1_000, 30_000)).toBe(0);
     expect(remainingAutoDanmakuSendDelay(1_000, 21_000)).toBe(0);
     expect(remainingAutoDanmakuSendDelay(1_000, 500)).toBe(20_000);
+    expect(remainingAutoDanmakuSendDelay(1_000, 15_000, 30_000)).toBe(16_000);
+    expect(remainingAutoDanmakuSendDelay(1_000, 16_000, 20_000)).toBe(5_000);
   });
 
   test("does not split emoji or combining-character graphemes", () => {

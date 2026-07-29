@@ -3,8 +3,10 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { SiteId } from "@/shared/types/live";
 import {
+  AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS,
   AUTO_DANMAKU_SEND_INTERVAL_MS,
   nextAutoDanmakuSegmentIndex,
+  normalizeAutoDanmakuSendIntervalSeconds,
   remainingAutoDanmakuSendDelay,
   splitAutoDanmakuText,
 } from "./autoSend";
@@ -15,6 +17,7 @@ export type AutoDanmakuSendPhase = "off" | "waiting" | "sending" | "paused";
 /** Session-only state consumed by the right-side danmaku settings panel. */
 export type AutoDanmakuSendController = {
   text: string;
+  intervalSeconds: number;
   enabled: boolean;
   phase: AutoDanmakuSendPhase;
   canEnable: boolean;
@@ -24,6 +27,7 @@ export type AutoDanmakuSendController = {
   segmentCount: number;
   currentSegmentIndex: number | null;
   onTextChange: (value: string) => void;
+  onIntervalChange: (seconds: number) => void;
   onEnabledChange: (enabled: boolean) => void;
 };
 
@@ -47,11 +51,13 @@ function errorMessage(error: unknown): string {
   return "发送请求失败，请检查账号状态或直播间限制。";
 }
 
-function waitingMessage(index: number, count: number, firstSend = false): string {
-  const intervalSeconds = AUTO_DANMAKU_SEND_INTERVAL_MS / 1_000;
-  return firstSend
-    ? `第 ${index + 1}/${count} 段将在 ${intervalSeconds} 秒后发送。`
-    : `正在等待第 ${index + 1}/${count} 段；发送起始至少相隔 ${intervalSeconds} 秒。`;
+function immediateSendMessage(index: number, count: number): string {
+  return `第 ${index + 1}/${count} 段将立即发送。`;
+}
+
+function waitingMessage(index: number, count: number, intervalMs: number): string {
+  const intervalSeconds = intervalMs / 1_000;
+  return `正在等待第 ${index + 1}/${count} 段；发送起始至少相隔 ${intervalSeconds} 秒。`;
 }
 
 /** `performance.now()` is monotonic, unlike wall-clock time after a system sync. */
@@ -83,6 +89,9 @@ export function useAutoDanmakuSend({
   const danmakuCookieRevision = useSettingsStore((state) => state.danmakuCookieRevision);
   const sendConfig = getDanmakuSendConfig(siteId);
   const [text, setText] = useState("");
+  const [intervalSeconds, setIntervalSeconds] = useState(
+    AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS,
+  );
   const [enabled, setEnabled] = useState(false);
   const [phase, setPhase] = useState<AutoDanmakuSendPhase>("off");
   const [statusMessage, setStatusMessage] = useState("已关闭。");
@@ -91,6 +100,9 @@ export function useAutoDanmakuSend({
   const inFlightRef = useRef(false);
   const inFlightDoneRef = useRef<Promise<void> | null>(null);
   const lastSendStartedAtRef = useRef<number | null>(null);
+  const intervalMsRef = useRef(AUTO_DANMAKU_SEND_INTERVAL_MS);
+  const rescheduleIntervalRef = useRef<((intervalMs: number) => void) | null>(null);
+  intervalMsRef.current = intervalSeconds * 1_000;
 
   const roomKey = roomSessionKey ?? `${siteId ?? "unknown"}:${roomId ?? ""}`;
   const latestRoomKeyRef = useRef(roomKey);
@@ -182,9 +194,11 @@ export function useAutoDanmakuSend({
     if (previousRoomKeyRef.current === roomKey) return;
     previousRoomKeyRef.current = roomKey;
     setText("");
+    setIntervalSeconds(AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS);
     setEnabled(false);
     setPhase("paused");
     setCurrentSegmentIndex(null);
+    lastSendStartedAtRef.current = null;
     setStatusMessage("已暂停：已切换直播间。");
   }, [roomKey]);
 
@@ -206,6 +220,7 @@ export function useAutoDanmakuSend({
 
     let cancelled = false;
     let timer: number | null = null;
+    let scheduledSegmentIndex: number | null = null;
     const scheduledRoomKey = roomKey;
     const scheduledRunKey = runKey;
     const segments = validation.segments;
@@ -215,14 +230,32 @@ export function useAutoDanmakuSend({
         window.clearTimeout(timer);
         timer = null;
       }
+      scheduledSegmentIndex = null;
     };
 
     const schedule = (segmentIndex: number, delay: number) => {
       clearTimer();
+      scheduledSegmentIndex = segmentIndex;
       timer = window.setTimeout(() => {
+        timer = null;
+        scheduledSegmentIndex = null;
         void sendSegment(segmentIndex);
       }, delay);
     };
+
+    const rescheduleInterval = (intervalMs: number) => {
+      const segmentIndex = scheduledSegmentIndex;
+      if (segmentIndex === null || inFlightRef.current) return;
+
+      setPhase("waiting");
+      setCurrentSegmentIndex(segmentIndex);
+      setStatusMessage(waitingMessage(segmentIndex, segments.length, intervalMs));
+      schedule(
+        segmentIndex,
+        remainingAutoDanmakuSendDelay(lastSendStartedAtRef.current, monotonicNow(), intervalMs),
+      );
+    };
+    rescheduleIntervalRef.current = rescheduleInterval;
 
     const sendSegment = async (segmentIndex: number) => {
       if (
@@ -259,7 +292,11 @@ export function useAutoDanmakuSend({
       }
 
       const lastStartedAt = lastSendStartedAtRef.current;
-      const minimumWait = remainingAutoDanmakuSendDelay(lastStartedAt, monotonicNow());
+      const minimumWait = remainingAutoDanmakuSendDelay(
+        lastStartedAt,
+        monotonicNow(),
+        intervalMsRef.current,
+      );
       if (minimumWait > 0) {
         schedule(segmentIndex, minimumWait);
         return;
@@ -288,10 +325,11 @@ export function useAutoDanmakuSend({
         }
 
         const nextIndex = nextAutoDanmakuSegmentIndex(segmentIndex, segments.length);
+        const intervalMs = intervalMsRef.current;
         setPhase("waiting");
         setCurrentSegmentIndex(nextIndex);
-        setStatusMessage(waitingMessage(nextIndex, segments.length));
-        schedule(nextIndex, remainingAutoDanmakuSendDelay(startedAt, monotonicNow()));
+        setStatusMessage(waitingMessage(nextIndex, segments.length, intervalMs));
+        schedule(nextIndex, remainingAutoDanmakuSendDelay(startedAt, monotonicNow(), intervalMs));
       } catch (error) {
         if (
           cancelled ||
@@ -313,14 +351,27 @@ export function useAutoDanmakuSend({
       }
     };
 
+    const intervalMs = intervalMsRef.current;
+    const initialDelay = remainingAutoDanmakuSendDelay(
+      lastSendStartedAtRef.current,
+      monotonicNow(),
+      intervalMs,
+    );
     setPhase("waiting");
     setCurrentSegmentIndex(0);
-    setStatusMessage(waitingMessage(0, segments.length, true));
-    schedule(0, AUTO_DANMAKU_SEND_INTERVAL_MS);
+    setStatusMessage(
+      initialDelay === 0
+        ? immediateSendMessage(0, segments.length)
+        : waitingMessage(0, segments.length, intervalMs),
+    );
+    schedule(0, initialDelay);
 
     return () => {
       cancelled = true;
       clearTimer();
+      if (rescheduleIntervalRef.current === rescheduleInterval) {
+        rescheduleIntervalRef.current = null;
+      }
     };
   }, [canEnable, enabled, roomId, roomKey, runKey, sendConfig, validation.segments]);
 
@@ -335,6 +386,14 @@ export function useAutoDanmakuSend({
     },
     [enabled],
   );
+
+  const onIntervalChange = useCallback((seconds: number) => {
+    const nextSeconds = normalizeAutoDanmakuSendIntervalSeconds(seconds);
+    const nextIntervalMs = nextSeconds * 1_000;
+    intervalMsRef.current = nextIntervalMs;
+    setIntervalSeconds(nextSeconds);
+    rescheduleIntervalRef.current?.(nextIntervalMs);
+  }, []);
 
   const onEnabledChange = useCallback(
     (nextEnabled: boolean) => {
@@ -354,16 +413,20 @@ export function useAutoDanmakuSend({
         return;
       }
 
+      // A deliberate re-enable starts a fresh sequence. The first message is
+      // not held behind the previous sequence's configured interval.
+      lastSendStartedAtRef.current = null;
       setEnabled(true);
       setPhase("waiting");
       setCurrentSegmentIndex(0);
-      setStatusMessage(waitingMessage(0, validation.segments.length, true));
+      setStatusMessage(immediateSendMessage(0, validation.segments.length));
     },
     [availabilityMessage, canEnable, validation.error, validation.segments.length],
   );
 
   return {
     text,
+    intervalSeconds,
     enabled,
     phase,
     canEnable,
@@ -373,6 +436,7 @@ export function useAutoDanmakuSend({
     segmentCount: validation.segments.length,
     currentSegmentIndex,
     onTextChange,
+    onIntervalChange,
     onEnabledChange,
   };
 }
