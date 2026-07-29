@@ -2,6 +2,7 @@ import { onBackButtonPress } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { getClientPlatform } from "@/shared/clientPlatform";
 
 /**
  * Cancelable, app-local event raised before Android falls back to route
@@ -29,7 +30,11 @@ export function shouldRegisterAndroidBackHandler({
 }: AndroidBackRegistrationInput): boolean {
   // Do not install a listener on the root route. Tauri's Android app plugin
   // then retains its normal fallback and lets the system finish the Activity.
-  return tauriRuntime && /Android/i.test(userAgent) && pathname !== "/";
+  return (
+    tauriRuntime &&
+    getClientPlatform({ userAgent, maxTouchPoints: 0 }) === "android" &&
+    pathname !== "/"
+  );
 }
 
 /** Returns true when a room overlay has consumed the system Back action. */

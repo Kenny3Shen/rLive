@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Maximize2, Minimize2, Minus, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isMobileClient } from "@/shared/clientPlatform";
 
 type WindowAction = "close" | "minimize" | "toggleMaximize";
 
@@ -8,16 +10,12 @@ function hasTauriWindow(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function isMobilePlatform(): boolean {
-  return typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-}
-
 /**
  * A deliberately quiet desktop title bar. It gives the player a real window
  * frame without spending vertical space on a second application header.
  */
 export function AppTitleBar() {
-  return isMobilePlatform() ? null : <DesktopAppTitleBar />;
+  return isMobileClient() ? null : <DesktopAppTitleBar />;
 }
 
 function DesktopAppTitleBar() {
@@ -90,46 +88,64 @@ function DesktopAppTitleBar() {
       </div>
 
       <div className="relative z-10 flex h-full items-stretch">
-        <button
-          type="button"
-          data-tauri-drag-region="false"
-          className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          aria-label="最小化"
-          title="最小化"
-          onMouseDown={(event) => event.stopPropagation()}
-          onDoubleClick={(event) => event.stopPropagation()}
-          onClick={() => void performWindowAction("minimize")}
-        >
-          <Minus className="size-3.5" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          data-tauri-drag-region="false"
-          className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          aria-label={maximized ? "还原窗口" : "最大化"}
-          title={maximized ? "还原窗口" : "最大化"}
-          onMouseDown={(event) => event.stopPropagation()}
-          onDoubleClick={(event) => event.stopPropagation()}
-          onClick={toggleMaximize}
-        >
-          {maximized ? (
-            <Minimize2 className="size-3.5" aria-hidden="true" />
-          ) : (
-            <Maximize2 className="size-3.5" aria-hidden="true" />
-          )}
-        </button>
-        <button
-          type="button"
-          data-tauri-drag-region="false"
-          className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          aria-label="关闭"
-          title="关闭"
-          onMouseDown={(event) => event.stopPropagation()}
-          onDoubleClick={(event) => event.stopPropagation()}
-          onClick={() => void performWindowAction("close")}
-        >
-          <X className="size-4" aria-hidden="true" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-tauri-drag-region="false"
+                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                aria-label="最小化"
+                onMouseDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onClick={() => void performWindowAction("minimize")}
+              >
+                <Minus className="size-3.5" aria-hidden="true" />
+              </button>
+            }
+          />
+          <TooltipContent side="bottom">最小化</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-tauri-drag-region="false"
+                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                aria-label={maximized ? "还原窗口" : "最大化"}
+                onMouseDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onClick={toggleMaximize}
+              >
+                {maximized ? (
+                  <Minimize2 className="size-3.5" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="size-3.5" aria-hidden="true" />
+                )}
+              </button>
+            }
+          />
+          <TooltipContent side="bottom">{maximized ? "还原窗口" : "最大化"}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                data-tauri-drag-region="false"
+                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                aria-label="关闭"
+                onMouseDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onClick={() => void performWindowAction("close")}
+              >
+                <X className="size-4" aria-hidden="true" />
+              </button>
+            }
+          />
+          <TooltipContent side="bottom">关闭</TooltipContent>
+        </Tooltip>
       </div>
     </header>
   );

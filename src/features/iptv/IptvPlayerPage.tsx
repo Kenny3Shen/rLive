@@ -8,6 +8,7 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { IptvPlayer } from "./IptvPlayer";
 import { iptvHomePath, iptvReturnPathFromState } from "./iptvRoute";
 import { builtInSources, isHttpUrl, playlistSourceFromRoute } from "./playlistSource";
@@ -32,16 +33,22 @@ function IptvPlayerTopBar({
 }: IptvPlayerTopBarProps) {
   return (
     <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="absolute left-3 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70"
-        aria-label="返回频道列表"
-        title="返回频道列表"
-        onClick={onBack}
-      >
-        <ChevronLeft data-icon="inline-start" aria-hidden />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="absolute left-3 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70"
+              aria-label="返回频道列表"
+              onClick={onBack}
+            />
+          }
+        >
+          <ChevronLeft data-icon="inline-start" aria-hidden />
+        </TooltipTrigger>
+        <TooltipContent>返回频道列表</TooltipContent>
+      </Tooltip>
 
       <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-12">
         <div className="min-w-0 text-center">
@@ -63,16 +70,21 @@ function IptvPlayerTopBar({
             {group}
           </Badge>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!reconnectEnabled}
-          title="重新连接频道"
-          onClick={onReconnect}
-        >
-          <RefreshCw data-icon="inline-start" aria-hidden />
-          <span className="hidden sm:inline">重连</span>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" />}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!reconnectEnabled}
+              aria-label="重新连接频道"
+              onClick={onReconnect}
+            >
+              <RefreshCw data-icon="inline-start" aria-hidden />
+              <span className="hidden sm:inline">重连</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>重新连接频道</TooltipContent>
+        </Tooltip>
       </div>
     </header>
   );
@@ -214,7 +226,10 @@ export function IptvPlayerPage() {
             <IptvPlayer channel={channel} reloadToken={reloadToken} />
           </div>
         </div>
-        <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/80 bg-sidebar/90 px-3 py-2">
+        <footer
+          data-slot="iptv-player-footer"
+          className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/80 bg-sidebar/90 px-3 py-2"
+        >
           <Badge variant="outline">{source.label}</Badge>
           {channel.group && <Badge variant="secondary">{channel.group}</Badge>}
           <p className="min-w-0 flex-1 text-xs text-muted-foreground">

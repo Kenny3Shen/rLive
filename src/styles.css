@@ -1,7 +1,21 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+
+/* The published package version has no `latin.css` entry point. Declare its
+   single Latin variable face directly so CJK chrome continues to use the
+   system fallback fonts instead of shipping unused regional Geist subsets. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/geist/files/geist-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 /* Class-based dark mode so applyTheme() can toggle html.dark */
 @custom-variant dark (&:where(.dark, .dark *));
@@ -159,6 +173,105 @@ body,
 
 body {
   font-family: var(--font-sans);
+}
+
+/* On touch-first devices, browser tap flashes and accidental text selection
+   make card- and control-heavy pages feel like desktop web content. Scope the
+   treatment to interactive UI so normal article text and form values remain
+   selectable. `manipulation` retains pan and pinch zoom while removing the
+   legacy double-tap delay. */
+@media (pointer: coarse) {
+  :where(
+    a[href],
+    button,
+    summary,
+    [role="button"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="tab"],
+    [data-slot="select-trigger"],
+    [data-slot="toggle"],
+    [data-slot="toggle-group-item"]
+  ) {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
+  }
+}
+
+/* A short landscape phone is primarily a viewing surface. Keep its bottom
+   navigation reachable but compact: icons retain a 44px target while labels
+   and excess shell padding no longer consume a fifth of the viewport. */
+@media (max-height: 540px) and (orientation: landscape) and (pointer: coarse) {
+  .app-shell [data-slot="app-sidebar"] {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    height: calc(3rem + env(safe-area-inset-bottom));
+    width: auto;
+    flex-direction: row;
+    border-top: 1px solid var(--border-subtle);
+    border-right-width: 0;
+    padding-right: 0.5rem;
+    padding-left: 0.5rem;
+    padding-top: 0.125rem;
+    padding-bottom: calc(0.125rem + env(safe-area-inset-bottom));
+  }
+
+  .app-shell [data-slot="app-sidebar-nav"] {
+    min-width: 0;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  .app-shell [data-slot="app-sidebar-link"] {
+    height: auto;
+    min-width: 0;
+    min-height: 2.75rem;
+    width: auto;
+    flex: 1 1 0%;
+    flex-direction: column;
+    gap: 0.125rem;
+    border-radius: var(--radius-md);
+    padding-right: 0.25rem;
+    padding-left: 0.25rem;
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+  }
+
+  .app-shell [data-slot="app-sidebar"] > [data-slot="app-sidebar-link"] {
+    width: 2.75rem;
+    flex: 0 0 2.75rem;
+  }
+
+  .app-shell [data-slot="app-sidebar-preferences"] {
+    display: none;
+  }
+
+  .app-shell [data-slot="app-sidebar-label"] {
+    display: none;
+  }
+
+  .app-shell [data-slot="app-header"] {
+    height: 3rem;
+    padding-right: 0.75rem;
+    padding-left: 0.75rem;
+  }
+
+  .app-shell [data-slot="app-content"] {
+    padding: 0.75rem;
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+
+  [data-slot="iptv-player-footer"] {
+    display: none;
+  }
 }
 
 /* Android uses edge-to-edge activity content. Keep the app below the system

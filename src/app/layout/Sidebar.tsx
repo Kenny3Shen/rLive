@@ -42,11 +42,11 @@ function SidebarLink({
   end?: boolean;
   className?: string;
 }) {
-  return (
+  const link = (
     <NavLink
       to={to}
       end={end}
-      title={label}
+      data-slot="app-sidebar-link"
       className={({ isActive }) =>
         cn(
           "group relative flex h-10 w-10 items-center justify-center rounded-xl transition-[background-color,color,box-shadow,transform] duration-150 focus-ring max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1",
@@ -65,12 +65,24 @@ function SidebarLink({
               isActive && "text-primary",
             )}
           />
-          <span className="sr-only max-md:not-sr-only max-md:text-[10px] max-md:leading-none">
+          <span
+            data-slot="app-sidebar-label"
+            className="sr-only max-md:not-sr-only max-md:text-[10px] max-md:leading-none"
+          >
             {label}
           </span>
         </>
       )}
     </NavLink>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={link} />
+      <TooltipContent side="right" className="max-md:hidden">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -92,7 +104,6 @@ function AppearanceToggle() {
             size="icon-sm"
             className="size-8"
             aria-label={label}
-            title={label}
             onClick={() => setTheme(nextTheme)}
           />
         }
@@ -106,8 +117,12 @@ function AppearanceToggle() {
 
 export function Sidebar() {
   return (
-    <aside className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar/95 py-3 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-20 max-md:h-[calc(4.25rem+env(safe-area-inset-bottom))] max-md:w-auto max-md:flex-row max-md:border-t max-md:border-r-0 max-md:px-2 max-md:py-2 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+    <aside
+      data-slot="app-sidebar"
+      className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar/95 py-3 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-20 max-md:h-[calc(4.25rem+env(safe-area-inset-bottom))] max-md:w-auto max-md:flex-row max-md:border-t max-md:border-r-0 max-md:px-2 max-md:py-2 max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+    >
       <nav
+        data-slot="app-sidebar-nav"
         className="flex flex-1 flex-col items-center gap-2 max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden"
         aria-label="主导航"
       >
@@ -115,7 +130,10 @@ export function Sidebar() {
           <SidebarLink key={item.to} {...item} />
         ))}
       </nav>
-      <div className="mb-1.5 flex flex-col items-center max-md:hidden">
+      <div
+        data-slot="app-sidebar-preferences"
+        className="mb-1.5 flex flex-col items-center max-md:hidden"
+      >
         <AppearanceToggle />
       </div>
       <SidebarLink
