@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -rIn -E '\\(^|[^a-zA-Z-]\\)\\(frontend|backend\\)\\(/|[^a-zA-Z-]|$\\)' --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=target --exclude-dir=vendor --exclude-dir=.playwright-cli --exclude-dir=docs --exclude-dir=.agents .)",
+      "Bash(git rm *)",
+      "Bash(sed -i 's#\\\\bfrontend/#src/#g; s#\\\\bbackend/#src-tauri/#g' docs/zh/*.md && grep -rn -E '\\(frontend|backend\\)' docs/zh/ ; echo \"--- EN links ---\"; grep -rn -E 'docs/en|README\\\\.en|\\\\\\(\\\\.\\\\./en/|zh/.*\\\\ben\\\\b' docs/ README.md AGENTS.md 2>/dev/null; echo \"\\(done\\)\")",
+      "Bash(awk 'NR>=14 && NR<=27' docs/zh/架构说明.md)",
+      "Bash(python3 -c ' *)",
+      "Bash(awk 'NR>=16 && NR<=27')",
+      "Bash(cargo test *)"
+    ],
+    "additionalDirectories": [
+      "/home/shenss/python/rLive/docs/zh"
+    ]
+  }
+}

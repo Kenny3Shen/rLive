@@ -18,9 +18,9 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "paths": {
-      "@/*": ["./frontend/*"]
+      "@/*": ["./src/*"]
     }
   },
-  "include": ["frontend"],
+  "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

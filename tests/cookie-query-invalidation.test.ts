@@ -3,7 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import {
   invalidateCookieDependentSiteQueries,
   isCookieDependentSiteQuery,
-} from "../frontend/shared/api/cookieQueryInvalidation";
+} from "../src/shared/api/cookieQueryInvalidation";
 
 describe("platform Cookie query invalidation", () => {
   test("recognizes only credential-dependent queries for the changed platform", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mergeRoomPages, nextRecommendPage } from "../frontend/features/home/pagination";
-import type { LiveRoomItem, RoomListPage } from "../frontend/shared/types/live";
+import { mergeRoomPages, nextRecommendPage } from "../src/features/home/pagination";
+import type { LiveRoomItem, RoomListPage } from "../src/shared/types/live";
 
 function room(roomId: string): LiveRoomItem {
   return {

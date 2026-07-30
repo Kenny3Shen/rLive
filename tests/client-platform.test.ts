@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getClientPlatform, isMobileClient } from "../frontend/shared/clientPlatform";
+import { getClientPlatform, isMobileClient } from "../src/shared/clientPlatform";
 
 describe("client platform detection", () => {
   test("identifies Android from Client Hints or the current Android WebView user agent", () => {

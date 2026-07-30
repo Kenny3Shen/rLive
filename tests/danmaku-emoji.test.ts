@@ -4,12 +4,12 @@ import {
   bilibiliDanmakuUtf16Units,
   insertBilibiliDanmakuText,
   truncateBilibiliDanmaku,
-} from "../frontend/features/room/danmaku/outgoing";
+} from "../src/features/room/danmaku/outgoing";
 import {
   BILIBILI_NATIVE_TEXT_EMOJIS,
   DANMAKU_EMOJIS,
   tokenizeDanmakuContent,
-} from "../frontend/features/room/danmaku/emoji";
+} from "../src/features/room/danmaku/emoji";
 
 describe("Bilibili outgoing danmaku boundaries", () => {
   test("matches the official web UTF-16-unit limit without splitting emoji", () => {

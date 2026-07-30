@@ -3,8 +3,8 @@ import {
   iptvHomePath,
   iptvPlayerPath,
   iptvReturnPathFromState,
-} from "../frontend/features/iptv/iptvRoute";
-import { playlistSourceFromRoute } from "../frontend/features/iptv/playlistSource";
+} from "../src/features/iptv/iptvRoute";
+import { playlistSourceFromRoute } from "../src/features/iptv/playlistSource";
 
 describe("IPTV routes", () => {
   test("keeps discovery filters in a shareable path without exposing a custom source URL", () => {

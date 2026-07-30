@@ -3,8 +3,8 @@ import {
   batchEvents,
   validatedDanmakuBatch,
   validatedBatchEvents,
-} from "../frontend/features/room/danmaku/batch";
-import { BoundedQueue } from "../frontend/features/room/danmaku/boundedQueue";
+} from "../src/features/room/danmaku/batch";
+import { BoundedQueue } from "../src/features/room/danmaku/boundedQueue";
 
 describe("batched danmaku queue", () => {
   test("keeps the newest bounded items and drains them in FIFO batches", () => {

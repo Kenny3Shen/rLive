@@ -23,14 +23,14 @@ rsync -a --delete \
   --exclude '.git/' \
   --exclude 'node_modules/' \
   --exclude 'dist/' \
-  --exclude 'backend/target/' \
-  --exclude 'backend/gen/android/.gradle/' \
-  --exclude 'backend/gen/android/build/' \
-  --exclude 'backend/gen/android/app/.cxx/' \
-  --exclude 'backend/gen/android/app/build/' \
-  --exclude 'backend/gen/android/app/src/main/assets/' \
-  --exclude 'backend/gen/android/app/key.properties' \
-  --exclude 'backend/gen/android/app/keystore.properties' \
+  --exclude 'src-tauri/target/' \
+  --exclude 'src-tauri/gen/android/.gradle/' \
+  --exclude 'src-tauri/gen/android/build/' \
+  --exclude 'src-tauri/gen/android/app/.cxx/' \
+  --exclude 'src-tauri/gen/android/app/build/' \
+  --exclude 'src-tauri/gen/android/app/src/main/assets/' \
+  --exclude 'src-tauri/gen/android/app/key.properties' \
+  --exclude 'src-tauri/gen/android/app/keystore.properties' \
   --exclude '.playwright-cli/' \
   --exclude '.superpowers/' \
   --exclude '.worktrees/' \

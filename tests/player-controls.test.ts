@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { danmakuControlPresentation } from "../frontend/features/room/PlayerControls";
+import { danmakuControlPresentation } from "../src/features/room/PlayerControls";
 import {
   canStartPlayerEdgeGesture,
   isPlayerStageDoubleTap,
@@ -12,7 +12,7 @@ import {
   PLAYER_STAGE_DOUBLE_TAP_MS,
   shouldRunDanmakuCanvas,
   sidePanelStartsOpen,
-} from "../frontend/features/room/PlayerPane";
+} from "../src/features/room/PlayerPane";
 import {
   androidPlayerControlStep,
   getAndroidPlayerControls,
@@ -20,7 +20,8 @@ import {
   setAndroidBrightness,
   setAndroidMediaVolume,
   supportsAndroidNativePlayerControls,
-} from "../frontend/features/room/player/androidPlayerControls";
+} from "../src/features/room/player/androidPlayerControls";
+import { setAndroidPlayerOrientation } from "../src/features/room/player/androidOrientation";
 
 describe("danmaku player control", () => {
   test("shows the enabled state instead of the next action in its icon", () => {
@@ -130,7 +131,7 @@ describe("Android native player controls", () => {
     const calls: { command: string; args?: Record<string, unknown> }[] = [];
     const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
-      if (command.endsWith("getState")) {
+      if (command.endsWith("get_state")) {
         return { mediaVolume: 52, brightness: 48 } as T;
       }
       return { value: args?.value } as T;
@@ -143,11 +144,34 @@ describe("Android native player controls", () => {
     await expect(setAndroidMediaVolume(53, nativeInvoke)).resolves.toBe(55);
     await expect(setAndroidBrightness(3, nativeInvoke)).resolves.toBe(5);
     await expect(resetAndroidBrightness(nativeInvoke)).resolves.toBeUndefined();
+    // App-level commands, not `plugin:player-controls|…`: a plugin-namespaced
+    // invoke is answered by the Rust plugin and never reaches Kotlin.
     expect(calls).toEqual([
-      { command: "plugin:player-controls|getState", args: undefined },
-      { command: "plugin:player-controls|setMediaVolume", args: { value: 55 } },
-      { command: "plugin:player-controls|setBrightness", args: { value: 5 } },
-      { command: "plugin:player-controls|resetBrightness", args: undefined },
+      { command: "android_player_controls_get_state", args: undefined },
+      { command: "android_player_controls_set_media_volume", args: { value: 55 } },
+      { command: "android_player_controls_set_brightness", args: { value: 5 } },
+      { command: "android_player_controls_reset_brightness", args: undefined },
+    ]);
+  });
+
+  test("asks the Activity to lock and release the fullscreen orientation", async () => {
+    const calls: { command: string; args?: Record<string, unknown> }[] = [];
+    const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      return undefined as T;
+    };
+
+    await setAndroidPlayerOrientation("landscape", nativeInvoke);
+    await setAndroidPlayerOrientation("auto", nativeInvoke);
+    expect(calls).toEqual([
+      {
+        command: "android_player_controls_set_orientation",
+        args: { orientation: "landscape" },
+      },
+      {
+        command: "android_player_controls_set_orientation",
+        args: { orientation: "auto" },
+      },
     ]);
   });
 });
