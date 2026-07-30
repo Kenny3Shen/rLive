@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { ListFilter, Play, Radio, RefreshCw, Search, Tv, X } from "lucide-react";
+import { ListFilter, Play, Radio, Search, Tv, X } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { RefreshFab } from "@/shared/components/RefreshFab";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -159,6 +160,11 @@ export function IptvPage() {
       refreshing={playlistQuery.isRefetching}
       className="mx-auto max-w-[1500px]"
     >
+      <RefreshFab
+        onRefresh={() => playlistQuery.refetch()}
+        pending={playlistQuery.isFetching}
+        label="刷新频道"
+      />
       <div
         className="flex min-h-full flex-col gap-4 touch-pan-y"
         onPointerDownCapture={sourceSwipe.onPointerDownCapture}
@@ -171,37 +177,27 @@ export function IptvPage() {
           title="IPTV"
           description={`当前源：${source.label}。选择分类和频道后进入独立播放页；自定义 M3U 地址可在设置 › 网络中管理。`}
           actions={
-            <>
-              <ToggleGroup
-                aria-label="IPTV 频道源"
-                value={[source.id]}
-                variant="outline"
-                size="sm"
-                spacing={1}
-                className="max-w-full flex-wrap justify-end"
-                onValueChange={(values) => {
-                  const next = values[0];
-                  if (next) chooseSource(next);
-                }}
-              >
-                {builtInSources.map((candidate) => (
-                  <ToggleGroupItem key={candidate.id} value={candidate.id}>
-                    {candidate.label}
-                  </ToggleGroupItem>
-                ))}
-                {(configuredCustomSource || source.id === "custom") && (
-                  <ToggleGroupItem value="custom">自定义源</ToggleGroupItem>
-                )}
-              </ToggleGroup>
-              <Button
-                variant="outline"
-                onClick={() => void playlistQuery.refetch()}
-                disabled={playlistQuery.isFetching}
-              >
-                <RefreshCw data-icon="inline-start" aria-hidden />
-                刷新频道
-              </Button>
-            </>
+            <ToggleGroup
+              aria-label="IPTV 频道源"
+              value={[source.id]}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              className="max-w-full flex-wrap justify-end"
+              onValueChange={(values) => {
+                const next = values[0];
+                if (next) chooseSource(next);
+              }}
+            >
+              {builtInSources.map((candidate) => (
+                <ToggleGroupItem key={candidate.id} value={candidate.id}>
+                  {candidate.label}
+                </ToggleGroupItem>
+              ))}
+              {(configuredCustomSource || source.id === "custom") && (
+                <ToggleGroupItem value="custom">自定义源</ToggleGroupItem>
+              )}
+            </ToggleGroup>
           }
         />
 
