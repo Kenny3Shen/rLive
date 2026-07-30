@@ -13,7 +13,10 @@ import {
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { SiteLogo } from "@/shared/components/SiteLogo";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { DanmakuSendHistoryItem, HistoryItem } from "@/shared/types/live";
@@ -55,6 +58,8 @@ import { notify } from "@/components/ui/toast";
 import { SITE_LABELS } from "@/lib/utils";
 
 type HistoryTab = "watch" | "danmaku";
+
+const HISTORY_TABS: readonly HistoryTab[] = ["watch", "danmaku"];
 
 function formatTime(timestamp: number): string {
   const watchedAt = new Date(timestamp);
@@ -266,172 +271,195 @@ export function HistoryPage() {
     }
   }
 
+  const historyTabSwipe = useHorizontalSwipe({
+    items: HISTORY_TABS,
+    value: activeTab,
+    onChange: (tab) => handleTabChange(tab),
+    enabled: isMobileClient(),
+  });
+
+  const refreshActiveHistory = () =>
+    activeTab === "watch" ? watchHistoryQuery.refetch() : danmakuSendHistoryQuery.refetch();
+  const historyRefreshing =
+    activeTab === "watch" ? watchHistoryQuery.isRefetching : danmakuSendHistoryQuery.isRefetching;
+
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
-      <PageHeader
-        title="历史记录"
-        actions={
-          <AlertDialog
-            open={clearOpen}
-            onOpenChange={(open) => {
-              if (clearPending) return;
-              if (open) resetActiveClearMutation();
-              setClearOpen(open);
-            }}
-          >
-            <AlertDialogTrigger
-              render={
-                <Button variant="outline" size="sm" disabled={!canClear || clearPending}>
-                  <Trash2 data-icon="inline-start" />
-                  清空
-                </Button>
-              }
-            />
-            <AlertDialogContent size="sm">
-              <AlertDialogHeader>
-                <AlertDialogMedia className="bg-destructive/10 text-destructive">
-                  <Trash2 aria-hidden />
-                </AlertDialogMedia>
-                <AlertDialogTitle>{clearTitle}</AlertDialogTitle>
-                <AlertDialogDescription>{clearDescription}</AlertDialogDescription>
-              </AlertDialogHeader>
-              {clearError && (
-                <p role="alert" className="text-sm text-destructive">
-                  清空失败，请重试。
-                </p>
-              )}
-              <AlertDialogFooter>
-                <AlertDialogCancel disabled={clearPending}>取消</AlertDialogCancel>
-                <AlertDialogAction
-                  type="button"
-                  variant="destructive"
-                  disabled={clearPending}
-                  onClick={clearActiveHistory}
-                >
-                  {clearPending ? (
-                    <>
-                      <Spinner data-icon="inline-start" />
-                      清空中…
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 data-icon="inline-start" />
-                      清空
-                    </>
-                  )}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        }
-      />
-
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-4">
-        <TabsList
-          aria-label="历史记录类型"
-          className="grid h-11! w-full grid-cols-2 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:h-12! max-md:min-h-12 max-md:p-0.5 sm:w-fit"
-        >
-          <TabsTrigger value="watch" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
-            <Clock3 aria-hidden />
-            观看历史
-          </TabsTrigger>
-          <TabsTrigger value="danmaku" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
-            <MessageSquareText aria-hidden />
-            发送弹幕
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="watch" className="mt-0">
-          {watchHistoryQuery.isLoading && <HistorySkeleton />}
-
-          {watchHistoryQuery.isError && (
-            <ErrorState
-              error={watchHistoryQuery.error}
-              title="观看历史加载失败"
-              onRetry={() => void watchHistoryQuery.refetch()}
-            />
-          )}
-
-          {!watchHistoryQuery.isLoading &&
-            !watchHistoryQuery.isError &&
-            watchItems.length === 0 && (
-              <Empty className="min-h-64 py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Clock3 aria-hidden />
-                  </EmptyMedia>
-                  <EmptyTitle>暂无观看记录</EmptyTitle>
-                  <EmptyDescription>打开直播间后会自动记录在这里。</EmptyDescription>
-                </EmptyHeader>
-                <EmptyContent>
-                  <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                    <Home data-icon="inline-start" aria-hidden />
-                    去首页看看
+    <PullToRefresh
+      onRefresh={refreshActiveHistory}
+      refreshing={historyRefreshing}
+      className="mx-auto max-w-3xl"
+      onPointerDownCapture={historyTabSwipe.onPointerDownCapture}
+      onPointerMoveCapture={historyTabSwipe.onPointerMoveCapture}
+      onPointerUpCapture={historyTabSwipe.onPointerUpCapture}
+      onPointerCancelCapture={historyTabSwipe.onPointerCancelCapture}
+      onClickCapture={historyTabSwipe.onClickCapture}
+    >
+      <div className="flex min-h-full flex-col gap-4 touch-pan-y">
+        <PageHeader
+          title="历史记录"
+          actions={
+            <AlertDialog
+              open={clearOpen}
+              onOpenChange={(open) => {
+                if (clearPending) return;
+                if (open) resetActiveClearMutation();
+                setClearOpen(open);
+              }}
+            >
+              <AlertDialogTrigger
+                render={
+                  <Button variant="outline" size="sm" disabled={!canClear || clearPending}>
+                    <Trash2 data-icon="inline-start" />
+                    清空
                   </Button>
-                </EmptyContent>
-              </Empty>
+                }
+              />
+              <AlertDialogContent size="sm">
+                <AlertDialogHeader>
+                  <AlertDialogMedia className="bg-destructive/10 text-destructive">
+                    <Trash2 aria-hidden />
+                  </AlertDialogMedia>
+                  <AlertDialogTitle>{clearTitle}</AlertDialogTitle>
+                  <AlertDialogDescription>{clearDescription}</AlertDialogDescription>
+                </AlertDialogHeader>
+                {clearError && (
+                  <p role="alert" className="text-sm text-destructive">
+                    清空失败，请重试。
+                  </p>
+                )}
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={clearPending}>取消</AlertDialogCancel>
+                  <AlertDialogAction
+                    type="button"
+                    variant="destructive"
+                    disabled={clearPending}
+                    onClick={clearActiveHistory}
+                  >
+                    {clearPending ? (
+                      <>
+                        <Spinner data-icon="inline-start" />
+                        清空中…
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 data-icon="inline-start" />
+                        清空
+                      </>
+                    )}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          }
+        />
+
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-4">
+          <TabsList
+            aria-label="历史记录类型"
+            className="grid h-11! w-full grid-cols-2 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:h-12! max-md:min-h-12 max-md:p-0.5 sm:w-fit"
+          >
+            <TabsTrigger value="watch" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
+              <Clock3 aria-hidden />
+              观看历史
+            </TabsTrigger>
+            <TabsTrigger value="danmaku" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
+              <MessageSquareText aria-hidden />
+              发送弹幕
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="watch" className="mt-0">
+            {watchHistoryQuery.isLoading && <HistorySkeleton />}
+
+            {watchHistoryQuery.isError && (
+              <ErrorState
+                error={watchHistoryQuery.error}
+                title="观看历史加载失败"
+                onRetry={() => void watchHistoryQuery.refetch()}
+              />
             )}
 
-          {watchItems.length > 0 && (
-            <ul className="flex flex-col gap-2.5">
-              {watchItems.map((item) => (
-                <li key={`${item.site_id}:${item.room_id}:${item.watched_at}`}>
-                  <HistoryCard
-                    item={item}
-                    onOpen={() =>
-                      navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
-                    }
-                    onRemove={() =>
-                      removeWatchHistoryMutation.mutate({
-                        siteId: item.site_id,
-                        roomId: item.room_id,
-                      })
-                    }
-                    isRemoving={removeWatchHistoryMutation.isPending}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </TabsContent>
+            {!watchHistoryQuery.isLoading &&
+              !watchHistoryQuery.isError &&
+              watchItems.length === 0 && (
+                <Empty className="min-h-64 py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Clock3 aria-hidden />
+                    </EmptyMedia>
+                    <EmptyTitle>暂无观看记录</EmptyTitle>
+                    <EmptyDescription>打开直播间后会自动记录在这里。</EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+                      <Home data-icon="inline-start" aria-hidden />
+                      去首页看看
+                    </Button>
+                  </EmptyContent>
+                </Empty>
+              )}
 
-        <TabsContent value="danmaku" className="mt-0">
-          {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
+            {watchItems.length > 0 && (
+              <ul className="flex flex-col gap-2.5">
+                {watchItems.map((item) => (
+                  <li key={`${item.site_id}:${item.room_id}:${item.watched_at}`}>
+                    <HistoryCard
+                      item={item}
+                      onOpen={() =>
+                        navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
+                      }
+                      onRemove={() =>
+                        removeWatchHistoryMutation.mutate({
+                          siteId: item.site_id,
+                          roomId: item.room_id,
+                        })
+                      }
+                      isRemoving={removeWatchHistoryMutation.isPending}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </TabsContent>
 
-          {danmakuSendHistoryQuery.isError && (
-            <ErrorState
-              error={danmakuSendHistoryQuery.error}
-              title="发送弹幕记录加载失败"
-              onRetry={() => void danmakuSendHistoryQuery.refetch()}
-            />
-          )}
+          <TabsContent value="danmaku" className="mt-0">
+            {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
 
-          {!danmakuSendHistoryQuery.isLoading &&
-            !danmakuSendHistoryQuery.isError &&
-            danmakuSendItems.length === 0 && (
-              <Empty className="min-h-64 py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <MessageSquareText aria-hidden />
-                  </EmptyMedia>
-                  <EmptyTitle>暂无发送弹幕记录</EmptyTitle>
-                  <EmptyDescription>成功发送的弹幕会保存在此设备上。</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
+            {danmakuSendHistoryQuery.isError && (
+              <ErrorState
+                error={danmakuSendHistoryQuery.error}
+                title="发送弹幕记录加载失败"
+                onRetry={() => void danmakuSendHistoryQuery.refetch()}
+              />
             )}
 
-          {danmakuSendItems.length > 0 && (
-            <ul className="flex flex-col gap-2.5">
-              {danmakuSendItems.map((item) => (
-                <li key={`${item.site_id}:${item.content}`}>
-                  <DanmakuSendHistoryCard item={item} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </TabsContent>
-      </Tabs>
-    </div>
+            {!danmakuSendHistoryQuery.isLoading &&
+              !danmakuSendHistoryQuery.isError &&
+              danmakuSendItems.length === 0 && (
+                <Empty className="min-h-64 py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <MessageSquareText aria-hidden />
+                    </EmptyMedia>
+                    <EmptyTitle>暂无发送弹幕记录</EmptyTitle>
+                    <EmptyDescription>成功发送的弹幕会保存在此设备上。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+
+            {danmakuSendItems.length > 0 && (
+              <ul className="flex flex-col gap-2.5">
+                {danmakuSendItems.map((item) => (
+                  <li key={`${item.site_id}:${item.content}`}>
+                    <DanmakuSendHistoryCard item={item} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </TabsContent>
+        </Tabs>
+      </div>
+    </PullToRefresh>
   );
 }
 

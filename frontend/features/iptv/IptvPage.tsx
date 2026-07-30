@@ -5,6 +5,9 @@ import { ListFilter, Play, Radio, RefreshCw, Search, Tv, X } from "lucide-react"
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -120,6 +123,19 @@ export function IptvPage() {
     }
   }
 
+  const sourceOptions = useMemo(() => {
+    const options = builtInSources.map((candidate) => candidate.id);
+    if (configuredCustomSource || source.id === "custom") options.push("custom");
+    return options;
+  }, [configuredCustomSource, source.id]);
+
+  const sourceSwipe = useHorizontalSwipe({
+    items: sourceOptions,
+    value: source.id,
+    onChange: chooseSource,
+    enabled: isMobileClient(),
+  });
+
   function clearFilters() {
     navigateHome({ group: "all", query: "" }, true);
   }
@@ -138,195 +154,208 @@ export function IptvPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-[1500px] flex-col gap-4">
-      <PageHeader
-        title="IPTV"
-        description={`当前源：${source.label}。选择分类和频道后进入独立播放页；自定义 M3U 地址可在设置 › 网络中管理。`}
-        actions={
-          <>
-            <ToggleGroup
-              aria-label="IPTV 频道源"
-              value={[source.id]}
-              variant="outline"
-              size="sm"
-              spacing={1}
-              className="max-w-full flex-wrap justify-end"
-              onValueChange={(values) => {
-                const next = values[0];
-                if (next) chooseSource(next);
-              }}
-            >
-              {builtInSources.map((candidate) => (
-                <ToggleGroupItem key={candidate.id} value={candidate.id}>
-                  {candidate.label}
-                </ToggleGroupItem>
-              ))}
-              {(configuredCustomSource || source.id === "custom") && (
-                <ToggleGroupItem value="custom">自定义源</ToggleGroupItem>
-              )}
-            </ToggleGroup>
-            <Button
-              variant="outline"
-              onClick={() => void playlistQuery.refetch()}
-              disabled={playlistQuery.isFetching}
-            >
-              <RefreshCw data-icon="inline-start" aria-hidden />
-              刷新频道
-            </Button>
-          </>
-        }
-      />
-
-      {playlistQuery.isError && channels.length === 0 ? (
-        <ErrorState
-          error={playlistQuery.error}
-          title="IPTV 频道列表加载失败"
-          onRetry={() => void playlistQuery.refetch()}
-        />
-      ) : (
-        <section
-          aria-labelledby="iptv-channel-library-title"
-          className="flex min-h-[32rem] flex-col gap-4 rounded-2xl border border-border-subtle bg-card/45 p-3 md:p-4"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <Radio className="size-4 text-primary" aria-hidden />
-              <h2 id="iptv-channel-library-title" className="truncate text-base font-semibold">
-                频道列表
-              </h2>
-              <Badge variant={hasFilters ? "secondary" : "outline"} aria-live="polite">
-                {hasFilters ? `${filteredChannels.length} / ${channels.length}` : channels.length}
-              </Badge>
-            </div>
-            {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={clearFilters}>
-                <X data-icon="inline-start" aria-hidden />
-                清除筛选
+    <PullToRefresh
+      onRefresh={() => playlistQuery.refetch()}
+      refreshing={playlistQuery.isRefetching}
+      className="mx-auto max-w-[1500px]"
+    >
+      <div
+        className="flex min-h-full flex-col gap-4 touch-pan-y"
+        onPointerDownCapture={sourceSwipe.onPointerDownCapture}
+        onPointerMoveCapture={sourceSwipe.onPointerMoveCapture}
+        onPointerUpCapture={sourceSwipe.onPointerUpCapture}
+        onPointerCancelCapture={sourceSwipe.onPointerCancelCapture}
+        onClickCapture={sourceSwipe.onClickCapture}
+      >
+        <PageHeader
+          title="IPTV"
+          description={`当前源：${source.label}。选择分类和频道后进入独立播放页；自定义 M3U 地址可在设置 › 网络中管理。`}
+          actions={
+            <>
+              <ToggleGroup
+                aria-label="IPTV 频道源"
+                value={[source.id]}
+                variant="outline"
+                size="sm"
+                spacing={1}
+                className="max-w-full flex-wrap justify-end"
+                onValueChange={(values) => {
+                  const next = values[0];
+                  if (next) chooseSource(next);
+                }}
+              >
+                {builtInSources.map((candidate) => (
+                  <ToggleGroupItem key={candidate.id} value={candidate.id}>
+                    {candidate.label}
+                  </ToggleGroupItem>
+                ))}
+                {(configuredCustomSource || source.id === "custom") && (
+                  <ToggleGroupItem value="custom">自定义源</ToggleGroupItem>
+                )}
+              </ToggleGroup>
+              <Button
+                variant="outline"
+                onClick={() => void playlistQuery.refetch()}
+                disabled={playlistQuery.isFetching}
+              >
+                <RefreshCw data-icon="inline-start" aria-hidden />
+                刷新频道
               </Button>
-            )}
-          </div>
+            </>
+          }
+        />
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_13rem]">
-            <Field>
-              <FieldLabel htmlFor="iptv-channel-search" className="sr-only">
-                搜索频道
-              </FieldLabel>
-              <FieldContent>
-                <InputGroup>
-                  <InputGroupAddon>
-                    <Search aria-hidden />
-                  </InputGroupAddon>
-                  <InputGroupInput
-                    id="iptv-channel-search"
-                    value={keyword}
-                    onChange={(event) => navigateHome({ query: event.target.value }, true)}
-                    placeholder="搜索频道或分类（支持多个关键词）"
-                    autoComplete="off"
-                  />
-                  {!playlistQuery.isLoading && (
-                    <InputGroupAddon align="inline-end">
-                      <InputGroupText>{filteredChannels.length} 个</InputGroupText>
-                    </InputGroupAddon>
-                  )}
-                </InputGroup>
-              </FieldContent>
-            </Field>
-
-            <Field>
-              <FieldLabel className="sr-only">频道分类</FieldLabel>
-              <FieldContent>
-                <Select
-                  value={selectedGroup}
-                  onValueChange={(value) => navigateHome({ group: value ?? "all" })}
-                >
-                  <SelectTrigger className="w-full" aria-label="频道分类">
-                    <ListFilter data-icon="inline-start" aria-hidden />
-                    <SelectValue placeholder="全部分类">
-                      {selectedGroup === "all" ? "全部分类" : selectedGroup}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="all">全部分类</SelectItem>
-                      {groupOptions.map((group) => (
-                        <SelectItem key={group.value} value={group.value}>
-                          <span className="min-w-0 flex-1 truncate">{group.value}</span>
-                          <span className="text-xs text-muted-foreground">{group.count}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </FieldContent>
-            </Field>
-          </div>
-
-          {quickGroups.length > 0 && (
-            <ToggleGroup
-              aria-label="常用频道分类"
-              value={[selectedGroup]}
-              variant="outline"
-              size="sm"
-              spacing={1}
-              className="w-full flex-wrap"
-              onValueChange={(values) => navigateHome({ group: values[0] ?? "all" })}
-            >
-              <ToggleGroupItem value="all">全部</ToggleGroupItem>
-              {quickGroups.map((group) => (
-                <ToggleGroupItem key={group.value} value={group.value}>
-                  {group.value} {group.count}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          )}
-
-          {playlistQuery.isLoading ? (
-            <div className="flex min-h-64 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Spinner aria-label="正在加载频道" />
-              正在读取频道列表…
-            </div>
-          ) : filteredChannels.length === 0 ? (
-            <div className="flex min-h-64 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-              <Tv className="size-6" aria-hidden />
-              <p>没有符合条件的频道</p>
+        {playlistQuery.isError && channels.length === 0 ? (
+          <ErrorState
+            error={playlistQuery.error}
+            title="IPTV 频道列表加载失败"
+            onRetry={() => void playlistQuery.refetch()}
+          />
+        ) : (
+          <section
+            aria-labelledby="iptv-channel-library-title"
+            className="flex min-h-[32rem] flex-col gap-4 rounded-2xl border border-border-subtle bg-card/45 p-3 md:p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Radio className="size-4 text-primary" aria-hidden />
+                <h2 id="iptv-channel-library-title" className="truncate text-base font-semibold">
+                  频道列表
+                </h2>
+                <Badge variant={hasFilters ? "secondary" : "outline"} aria-live="polite">
+                  {hasFilters ? `${filteredChannels.length} / ${channels.length}` : channels.length}
+                </Badge>
+              </div>
               {hasFilters && (
-                <Button variant="outline" size="sm" onClick={clearFilters}>
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
+                  <X data-icon="inline-start" aria-hidden />
                   清除筛选
                 </Button>
               )}
             </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 gap-x-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                {displayedChannels.map((channel) => (
-                  <IptvChannelCard key={channel.url} channel={channel} onOpen={openChannel} />
-                ))}
-              </div>
 
-              {displayedChannels.length < filteredChannels.length && (
-                <div className="flex flex-col items-center gap-2 py-2">
-                  <p className="text-xs text-muted-foreground">
-                    已显示 {displayedChannels.length} / {filteredChannels.length} 个频道
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setChannelLimit((current) => current + CHANNEL_PAGE_SIZE)}
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_13rem]">
+              <Field>
+                <FieldLabel htmlFor="iptv-channel-search" className="sr-only">
+                  搜索频道
+                </FieldLabel>
+                <FieldContent>
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <Search aria-hidden />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      id="iptv-channel-search"
+                      value={keyword}
+                      onChange={(event) => navigateHome({ query: event.target.value }, true)}
+                      placeholder="搜索频道或分类（支持多个关键词）"
+                      autoComplete="off"
+                    />
+                    {!playlistQuery.isLoading && (
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupText>{filteredChannels.length} 个</InputGroupText>
+                      </InputGroupAddon>
+                    )}
+                  </InputGroup>
+                </FieldContent>
+              </Field>
+
+              <Field>
+                <FieldLabel className="sr-only">频道分类</FieldLabel>
+                <FieldContent>
+                  <Select
+                    value={selectedGroup}
+                    onValueChange={(value) => navigateHome({ group: value ?? "all" })}
                   >
-                    显示更多
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      )}
+                    <SelectTrigger className="w-full" aria-label="频道分类">
+                      <ListFilter data-icon="inline-start" aria-hidden />
+                      <SelectValue placeholder="全部分类">
+                        {selectedGroup === "all" ? "全部分类" : selectedGroup}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">全部分类</SelectItem>
+                        {groupOptions.map((group) => (
+                          <SelectItem key={group.value} value={group.value}>
+                            <span className="min-w-0 flex-1 truncate">{group.value}</span>
+                            <span className="text-xs text-muted-foreground">{group.count}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </FieldContent>
+              </Field>
+            </div>
 
-      <p className="px-1 text-xs leading-relaxed text-muted-foreground">
-        仅观看你所在地允许访问、且你有权使用的频道。rLive
-        不托管任何节目流，也不会绕过地区或版权限制。
-      </p>
-    </div>
+            {quickGroups.length > 0 && (
+              <ToggleGroup
+                aria-label="常用频道分类"
+                value={[selectedGroup]}
+                variant="outline"
+                size="sm"
+                spacing={1}
+                className="w-full flex-wrap"
+                onValueChange={(values) => navigateHome({ group: values[0] ?? "all" })}
+              >
+                <ToggleGroupItem value="all">全部</ToggleGroupItem>
+                {quickGroups.map((group) => (
+                  <ToggleGroupItem key={group.value} value={group.value}>
+                    {group.value} {group.count}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            )}
+
+            {playlistQuery.isLoading ? (
+              <div className="flex min-h-64 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Spinner aria-label="正在加载频道" />
+                正在读取频道列表…
+              </div>
+            ) : filteredChannels.length === 0 ? (
+              <div className="flex min-h-64 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                <Tv className="size-6" aria-hidden />
+                <p>没有符合条件的频道</p>
+                {hasFilters && (
+                  <Button variant="outline" size="sm" onClick={clearFilters}>
+                    清除筛选
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-x-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                  {displayedChannels.map((channel) => (
+                    <IptvChannelCard key={channel.url} channel={channel} onOpen={openChannel} />
+                  ))}
+                </div>
+
+                {displayedChannels.length < filteredChannels.length && (
+                  <div className="flex flex-col items-center gap-2 py-2">
+                    <p className="text-xs text-muted-foreground">
+                      已显示 {displayedChannels.length} / {filteredChannels.length} 个频道
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setChannelLimit((current) => current + CHANNEL_PAGE_SIZE)}
+                    >
+                      显示更多
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
+        <p className="px-1 text-xs leading-relaxed text-muted-foreground">
+          仅观看你所在地允许访问、且你有权使用的频道。rLive
+          不托管任何节目流，也不会绕过地区或版权限制。
+        </p>
+      </div>
+    </PullToRefresh>
   );
 }
 

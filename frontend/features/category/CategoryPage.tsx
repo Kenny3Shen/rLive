@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, LayoutGrid } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import type { LiveCategory, LiveSubCategory } from "@/shared/types/live";
@@ -113,58 +114,66 @@ export function CategoryPage() {
   }
 
   return (
-    <div ref={pageRef} className="mx-auto max-w-[1600px] pb-6">
-      <h1 className="sr-only">分类</h1>
-      {categoriesQuery.isLoading && <CategorySkeleton />}
+    <PullToRefresh
+      onRefresh={() => categoriesQuery.refetch()}
+      refreshing={categoriesQuery.isRefetching}
+      className="mx-auto max-w-[1600px]"
+    >
+      <div ref={pageRef} className="pb-6">
+        <h1 className="sr-only">分类</h1>
+        {categoriesQuery.isLoading && <CategorySkeleton />}
 
-      {categoriesQuery.isError && (
-        <ErrorState
-          error={categoriesQuery.error}
-          title="分类加载失败"
-          onRetry={() => void categoriesQuery.refetch()}
-        />
-      )}
+        {categoriesQuery.isError && (
+          <ErrorState
+            error={categoriesQuery.error}
+            title="分类加载失败"
+            onRetry={() => void categoriesQuery.refetch()}
+          />
+        )}
 
-      {categories.length > 0 && (
-        <div className="flex flex-col gap-9">
-          {categories.map((parent) => {
-            const expanded = expandedParents.has(parent.id);
-            const children = parent.children.some((child) => child.id === "0")
-              ? parent.children
-              : [allCategory(parent), ...parent.children];
-            const visibleChildren = expanded ? children : children.slice(0, INITIAL_CATEGORY_COUNT);
-            const canExpand = children.length > INITIAL_CATEGORY_COUNT;
+        {categories.length > 0 && (
+          <div className="flex flex-col gap-9">
+            {categories.map((parent) => {
+              const expanded = expandedParents.has(parent.id);
+              const children = parent.children.some((child) => child.id === "0")
+                ? parent.children
+                : [allCategory(parent), ...parent.children];
+              const visibleChildren = expanded
+                ? children
+                : children.slice(0, INITIAL_CATEGORY_COUNT);
+              const canExpand = children.length > INITIAL_CATEGORY_COUNT;
 
-            return (
-              <section
-                data-page-enter-item
-                key={parent.id}
-                aria-labelledby={`category-${parent.id}`}
-              >
-                <h2
-                  id={`category-${parent.id}`}
-                  className="mb-4 text-xl font-semibold tracking-tight text-foreground"
+              return (
+                <section
+                  data-page-enter-item
+                  key={parent.id}
+                  aria-labelledby={`category-${parent.id}`}
                 >
-                  {parent.name}
-                </h2>
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
-                  {visibleChildren.map((child) => (
-                    <CategoryTile
-                      key={child.id}
-                      category={child}
-                      onClick={() => navigate(categoryRoomsPath(child))}
-                    />
-                  ))}
-                  {canExpand && (
-                    <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
-                  )}
-                </div>
-              </section>
-            );
-          })}
-        </div>
-      )}
-    </div>
+                  <h2
+                    id={`category-${parent.id}`}
+                    className="mb-4 text-xl font-semibold tracking-tight text-foreground"
+                  >
+                    {parent.name}
+                  </h2>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
+                    {visibleChildren.map((child) => (
+                      <CategoryTile
+                        key={child.id}
+                        category={child}
+                        onClick={() => navigate(categoryRoomsPath(child))}
+                      />
+                    ))}
+                    {canExpand && (
+                      <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
+                    )}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </PullToRefresh>
   );
 }
 

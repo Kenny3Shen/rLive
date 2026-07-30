@@ -1,20 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CirclePlay, Clock3, Home, Radio, RefreshCw, Star, UserRoundX } from "lucide-react";
+import { CirclePlay, Clock3, Home, Radio, Star, UserRoundX } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
-import {
-  FOLLOW_LIST_QUERY_KEY,
-  refreshFollows,
-  useFollowStatusRefresh,
-} from "./followRefresh";
+import { FOLLOW_LIST_QUERY_KEY, refreshFollows, useFollowStatusRefresh } from "./followRefresh";
 import {
   FOLLOW_PLATFORM_PARAM,
   followPlatformFromSearch,
@@ -47,38 +43,6 @@ import { notify } from "@/components/ui/toast";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type LiveFilter = "all" | "live" | "offline";
-
-function FollowRefreshButton({ pending, onRefresh }: { pending: boolean; onRefresh: () => void }) {
-  // The page entrance animation applies a CSS transform to the route shell.
-  // A fixed descendant of that shell would use it as its containing block and
-  // scroll with the page. Portal the control to the document body so it stays
-  // at the same viewport position throughout the follow list.
-  if (typeof document === "undefined") return null;
-
-  return createPortal(
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            size="icon-lg"
-            className="fixed right-5 bottom-5 z-20 rounded-full shadow-lg shadow-primary/25"
-            disabled={pending}
-            aria-label="刷新关注列表"
-            onClick={onRefresh}
-          />
-        }
-      >
-        {pending ? (
-          <Spinner data-icon="inline-start" aria-hidden />
-        ) : (
-          <RefreshCw data-icon="inline-start" aria-hidden />
-        )}
-      </TooltipTrigger>
-      <TooltipContent>刷新关注列表</TooltipContent>
-    </Tooltip>,
-    document.body,
-  );
-}
 
 export function FollowPage() {
   const navigate = useNavigate();
@@ -172,190 +136,191 @@ export function FollowPage() {
   });
 
   return (
-    <div ref={pageRef} className="mx-auto flex max-w-4xl flex-col gap-4 pb-16">
-      <div data-page-enter-heading>
-        <PageHeader title="关注用户" />
-      </div>
-
-      <div data-page-enter-controls>
-        <ToggleGroup
-          value={[liveFilter]}
-          variant="outline"
-          size="sm"
-          spacing={0}
-          aria-label="关注状态筛选"
-          onValueChange={(value) => {
-            const next = value[0] as LiveFilter | undefined;
-            if (next) setLiveFilter(next);
-          }}
-        >
-          <ToggleGroupItem value="all">全部</ToggleGroupItem>
-          <ToggleGroupItem value="live">直播中</ToggleGroupItem>
-          <ToggleGroupItem value="offline">未开播</ToggleGroupItem>
-        </ToggleGroup>
-      </div>
-
-      {followsQuery.isLoading && (
-        <div className="flex flex-col gap-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[88px] w-full rounded-2xl" />
-          ))}
+    <PullToRefresh
+      onRefresh={() => refreshMutation.mutateAsync()}
+      refreshing={refreshMutation.isPending}
+      className="mx-auto max-w-4xl"
+    >
+      <div ref={pageRef} className="flex flex-col gap-4">
+        <div data-page-enter-heading>
+          <PageHeader title="关注用户" />
         </div>
-      )}
 
-      {followsQuery.isError && (
-        <ErrorState
-          error={followsQuery.error}
-          title="关注列表加载失败"
-          onRetry={() => void followsQuery.refetch()}
-        />
-      )}
+        <div data-page-enter-controls>
+          <ToggleGroup
+            value={[liveFilter]}
+            variant="outline"
+            size="sm"
+            spacing={0}
+            aria-label="关注状态筛选"
+            onValueChange={(value) => {
+              const next = value[0] as LiveFilter | undefined;
+              if (next) setLiveFilter(next);
+            }}
+          >
+            <ToggleGroupItem value="all">全部</ToggleGroupItem>
+            <ToggleGroupItem value="live">直播中</ToggleGroupItem>
+            <ToggleGroupItem value="offline">未开播</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
 
-      {!followsQuery.isLoading && items.length === 0 && (
-        <Empty className="min-h-64 py-12">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <Star aria-hidden />
-            </EmptyMedia>
-            <EmptyTitle>还没有关注任何主播</EmptyTitle>
-            <EmptyDescription>打开直播间后点击“关注”即可添加。</EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-              <Home data-icon="inline-start" aria-hidden />
-              去首页看看
-            </Button>
-          </EmptyContent>
-        </Empty>
-      )}
+        {followsQuery.isLoading && (
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-[88px] w-full rounded-2xl" />
+            ))}
+          </div>
+        )}
 
-      {items.length > 0 && (
-        <ul className="flex flex-col gap-2.5">
-          {items.map((u) => {
-            const live = u.live_status === true;
-            const offline = u.live_status === false;
-            const liveDuration = live ? formatFollowLiveDuration(u.live_started_at, now) : null;
-            const avatarSrc = normalizeImageUrl(u.face);
-            return (
-              <li data-page-enter-item key={`${u.site_id}:${u.room_id}`}>
-                <ContextMenu>
-                  <ContextMenuTrigger
-                    render={
-                      <div
-                        className={cn(
-                          "group flex items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-2.5 pr-3 transition-colors",
-                          "hover:border-border hover:bg-card-elevated",
-                        )}
-                      />
-                    }
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left focus-ring rounded-xl"
-                      onClick={() =>
-                        navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
+        {followsQuery.isError && (
+          <ErrorState
+            error={followsQuery.error}
+            title="关注列表加载失败"
+            onRetry={() => void followsQuery.refetch()}
+          />
+        )}
+
+        {!followsQuery.isLoading && items.length === 0 && (
+          <Empty className="min-h-64 py-12">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Star aria-hidden />
+              </EmptyMedia>
+              <EmptyTitle>还没有关注任何主播</EmptyTitle>
+              <EmptyDescription>打开直播间后点击“关注”即可添加。</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+                <Home data-icon="inline-start" aria-hidden />
+                去首页看看
+              </Button>
+            </EmptyContent>
+          </Empty>
+        )}
+
+        {items.length > 0 && (
+          <ul className="flex flex-col gap-2.5">
+            {items.map((u) => {
+              const live = u.live_status === true;
+              const offline = u.live_status === false;
+              const liveDuration = live ? formatFollowLiveDuration(u.live_started_at, now) : null;
+              const avatarSrc = normalizeImageUrl(u.face);
+              return (
+                <li data-page-enter-item key={`${u.site_id}:${u.room_id}`}>
+                  <ContextMenu>
+                    <ContextMenuTrigger
+                      render={
+                        <div
+                          className={cn(
+                            "group flex items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-2.5 pr-3 transition-colors",
+                            "hover:border-border hover:bg-card-elevated",
+                          )}
+                        />
                       }
                     >
-                      <div className="relative h-16 w-[104px] shrink-0 overflow-hidden rounded-xl bg-muted">
-                        {avatarSrc ? (
-                          <img
-                            src={avatarSrc}
-                            alt=""
-                            className="h-full w-full object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <Radio className="h-5 w-5 text-muted-foreground" />
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="relative min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <Avatar className="size-8 ring-2 ring-background">
-                            <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
-                            <AvatarFallback>{(u.user_name || "?").slice(0, 1)}</AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">{u.user_name}</p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              {SITE_LABELS[u.site_id] ?? u.site_id} · 房间 {u.room_id}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline">{SITE_LABELS[u.site_id] ?? u.site_id}</Badge>
-                          {live && <Badge className="bg-success/15 text-success">直播中</Badge>}
-                          {liveDuration && (
-                            <Badge variant="outline" title={`开播时长：${liveDuration}`}>
-                              <Clock3 aria-hidden />
-                              开播 {liveDuration}
-                            </Badge>
-                          )}
-                          {offline && <Badge>未开播</Badge>}
-                          {u.live_status == null && <Badge>未知</Badge>}
-                        </div>
-                      </div>
-                    </button>
-
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="shrink-0 opacity-60 transition-opacity hover:opacity-100 hover:text-destructive [@media(pointer:coarse)]:opacity-100"
-                            disabled={removeMutation.isPending}
-                            aria-label="取消关注"
-                            aria-busy={removeMutation.isPending}
-                            onClick={() => removeMutation.mutate(u)}
-                          />
-                        }
-                      >
-                        {removeMutation.isPending ? (
-                          <Spinner data-icon="inline-start" aria-hidden />
-                        ) : (
-                          <UserRoundX data-icon="inline-start" aria-hidden />
-                        )}
-                      </TooltipTrigger>
-                      <TooltipContent>取消关注</TooltipContent>
-                    </Tooltip>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent>
-                    <ContextMenuGroup>
-                      <ContextMenuItem
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left focus-ring rounded-xl"
                         onClick={() =>
                           navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
                         }
                       >
-                        <CirclePlay aria-hidden />
-                        打开直播间
-                      </ContextMenuItem>
-                    </ContextMenuGroup>
-                    <ContextMenuSeparator />
-                    <ContextMenuGroup>
-                      <ContextMenuItem
-                        variant="destructive"
-                        disabled={removeMutation.isPending}
-                        onClick={() => removeMutation.mutate(u)}
-                      >
-                        <UserRoundX aria-hidden />
-                        取消关注
-                      </ContextMenuItem>
-                    </ContextMenuGroup>
-                  </ContextMenuContent>
-                </ContextMenu>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                        <div className="relative h-16 w-[104px] shrink-0 overflow-hidden rounded-xl bg-muted">
+                          {avatarSrc ? (
+                            <img
+                              src={avatarSrc}
+                              alt=""
+                              className="h-full w-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center">
+                              <Radio className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                          )}
+                        </div>
 
-      <FollowRefreshButton
-        pending={refreshMutation.isPending}
-        onRefresh={() => refreshMutation.mutate()}
-      />
-    </div>
+                        <div className="relative min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="size-8 ring-2 ring-background">
+                              <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
+                              <AvatarFallback>{(u.user_name || "?").slice(0, 1)}</AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{u.user_name}</p>
+                              <p className="truncate text-xs text-muted-foreground">
+                                {SITE_LABELS[u.site_id] ?? u.site_id} · 房间 {u.room_id}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline">{SITE_LABELS[u.site_id] ?? u.site_id}</Badge>
+                            {live && <Badge className="bg-success/15 text-success">直播中</Badge>}
+                            {liveDuration && (
+                              <Badge variant="outline" title={`开播时长：${liveDuration}`}>
+                                <Clock3 aria-hidden />
+                                开播 {liveDuration}
+                              </Badge>
+                            )}
+                            {offline && <Badge>未开播</Badge>}
+                            {u.live_status == null && <Badge>未知</Badge>}
+                          </div>
+                        </div>
+                      </button>
+
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="shrink-0 opacity-60 transition-opacity hover:opacity-100 hover:text-destructive [@media(pointer:coarse)]:opacity-100"
+                              disabled={removeMutation.isPending}
+                              aria-label="取消关注"
+                              aria-busy={removeMutation.isPending}
+                              onClick={() => removeMutation.mutate(u)}
+                            />
+                          }
+                        >
+                          {removeMutation.isPending ? (
+                            <Spinner data-icon="inline-start" aria-hidden />
+                          ) : (
+                            <UserRoundX data-icon="inline-start" aria-hidden />
+                          )}
+                        </TooltipTrigger>
+                        <TooltipContent>取消关注</TooltipContent>
+                      </Tooltip>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuGroup>
+                        <ContextMenuItem
+                          onClick={() =>
+                            navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
+                          }
+                        >
+                          <CirclePlay aria-hidden />
+                          打开直播间
+                        </ContextMenuItem>
+                      </ContextMenuGroup>
+                      <ContextMenuSeparator />
+                      <ContextMenuGroup>
+                        <ContextMenuItem
+                          variant="destructive"
+                          disabled={removeMutation.isPending}
+                          onClick={() => removeMutation.mutate(u)}
+                        >
+                          <UserRoundX aria-hidden />
+                          取消关注
+                        </ContextMenuItem>
+                      </ContextMenuGroup>
+                    </ContextMenuContent>
+                  </ContextMenu>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </PullToRefresh>
   );
 }

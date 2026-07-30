@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -27,6 +27,8 @@ import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -966,6 +968,13 @@ export function SettingsPage() {
   const [category, setCategory] = useState<SettingsCategory>("playback");
   const compactLayout = useCompactSettingsLayout();
   const categoryTabRefs = useRef(new Map<SettingsCategory, HTMLButtonElement | null>());
+  const settingsCategoryValues = useMemo(() => settingsCategories.map((item) => item.value), []);
+  const settingsCategorySwipe = useHorizontalSwipe({
+    items: settingsCategoryValues,
+    value: category,
+    onChange: setCategory,
+    enabled: isMobileClient(),
+  });
 
   useEffect(() => {
     setProxyDraft(proxy ?? "");
@@ -1076,7 +1085,14 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4">
+    <div
+      className="mx-auto flex min-h-full max-w-5xl flex-col gap-4 touch-pan-y"
+      onPointerDownCapture={settingsCategorySwipe.onPointerDownCapture}
+      onPointerMoveCapture={settingsCategorySwipe.onPointerMoveCapture}
+      onPointerUpCapture={settingsCategorySwipe.onPointerUpCapture}
+      onPointerCancelCapture={settingsCategorySwipe.onPointerCancelCapture}
+      onClickCapture={settingsCategorySwipe.onClickCapture}
+    >
       <PageHeader title="设置" />
 
       <Tabs

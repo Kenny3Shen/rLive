@@ -1,13 +1,18 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { categoryHomePathAfterSiteChange } from "@/features/category/categoryRoute";
 import {
   FOLLOW_PLATFORM_PARAM,
+  type FollowPlatformFilter,
   followPlatformFromSearch,
   withFollowPlatform,
 } from "@/features/follow/followRoute";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { isMobileClient } from "@/shared/clientPlatform";
+import { enabledSiteIds } from "@/shared/siteId";
+import type { SiteId } from "@/shared/types/live";
 import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -22,6 +27,7 @@ export function Shell() {
   const isImmersivePlayer = isRoom || isIptvPlayer;
   const isFollow = pathname === "/follow";
   const selectedSiteId = useSettingsStore((state) => state.siteId);
+  const setSiteId = useSettingsStore((state) => state.setSiteId);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const showSiteSwitcher =
     pathname === "/" ||
@@ -36,12 +42,61 @@ export function Shell() {
   const platformForMotion = isFollow ? followPlatform : selectedSiteId;
   const pageMotionKey = isImmersivePlayer ? pathname : `${pathname}:${platformForMotion}`;
   const categoryHomePath = categoryHomePathAfterSiteChange(pathname);
-  // Player routes use h-full throughout their fixed player layout.
-  // `min-h-full` does not create a definite percentage-height containing
-  // block, which lets a growing danmaku list reflow the whole room on narrow
-  // viewports. Keep normal pages content-sized, but give player routes a fixed
-  // height chain all the way down to the Outlet.
-  const outletHeightClass = isImmersivePlayer ? "h-full min-h-0" : "min-h-full";
+  // Keep a definite height chain from the shell to each route. Regular pages
+  // may still grow past it (main owns overflow), while their gesture surfaces
+  // can resolve min-h-full and cover otherwise empty viewport space.
+  const outletHeightClass = "h-full min-h-0";
+
+  const sitePlatforms = useMemo(
+    () => enabledSiteIds(disabledSiteIds) as SiteId[],
+    [disabledSiteIds],
+  );
+  const activeSiteId = useMemo(
+    () =>
+      sitePlatforms.includes(selectedSiteId as SiteId)
+        ? (selectedSiteId as SiteId)
+        : sitePlatforms[0]!,
+    [selectedSiteId, sitePlatforms],
+  );
+  const followPlatforms = useMemo<FollowPlatformFilter[]>(
+    () => ["all", ...sitePlatforms],
+    [sitePlatforms],
+  );
+
+  const handleSitePlatformChange = useCallback(
+    (nextSiteId: SiteId) => {
+      if (nextSiteId === activeSiteId) return;
+      setSiteId(nextSiteId);
+      if (categoryHomePath) {
+        navigate(categoryHomePath, { replace: true });
+      }
+    },
+    [activeSiteId, categoryHomePath, navigate, setSiteId],
+  );
+
+  const handleFollowPlatformChange = useCallback(
+    (platform: FollowPlatformFilter) => {
+      setSearchParams((current) => withFollowPlatform(current, platform));
+    },
+    [setSearchParams],
+  );
+
+  // Simple Live's home/category/search use TabBarView: a horizontal content
+  // swipe changes the active platform. Keep that contract on touch clients.
+  const platformSwipeEnabled = showSiteSwitcher && isMobileClient();
+  const sitePlatformSwipe = useHorizontalSwipe({
+    items: sitePlatforms,
+    value: activeSiteId,
+    onChange: handleSitePlatformChange,
+    enabled: platformSwipeEnabled && !isFollow,
+  });
+  const followPlatformSwipe = useHorizontalSwipe({
+    items: followPlatforms,
+    value: followPlatform,
+    onChange: handleFollowPlatformChange,
+    enabled: platformSwipeEnabled && isFollow,
+  });
+  const platformSwipe = isFollow ? followPlatformSwipe : sitePlatformSwipe;
 
   // A manually opened URL may name a platform that has since been disabled.
   // Keep the page usable on its first render, then remove that stale filter
@@ -60,6 +115,7 @@ export function Shell() {
           {!isImmersivePlayer && (
             <header
               data-slot="app-header"
+              data-mobile-empty={showSiteSwitcher ? undefined : "true"}
               className={cn(
                 "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
                 !showSiteSwitcher && "max-md:hidden",
@@ -73,16 +129,13 @@ export function Shell() {
                         value={followPlatform}
                         includeAll
                         filterMode
-                        onValueChange={(platform) =>
-                          setSearchParams((current) => withFollowPlatform(current, platform))
-                        }
+                        onValueChange={handleFollowPlatformChange}
                       />
                     ) : (
                       <SiteSwitcher
-                        onValueChange={(nextSiteId) => {
-                          if (nextSiteId !== selectedSiteId && categoryHomePath) {
-                            navigate(categoryHomePath, { replace: true });
-                          }
+                        onValueChange={(value) => {
+                          if (value === "all") return;
+                          handleSitePlatformChange(value);
                         }}
                       />
                     )}
@@ -100,8 +153,15 @@ export function Shell() {
               "min-h-0 min-w-0 flex-1",
               isImmersivePlayer
                 ? "overflow-hidden p-0"
-                : "overflow-auto p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] md:p-5 md:pb-5",
+                : // touch-pan-y keeps vertical list scroll native while horizontal
+                  // platform swipes and pull-to-refresh stay available to JS.
+                  "overflow-auto overscroll-y-contain p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] touch-pan-y md:p-5 md:pb-5",
             )}
+            onPointerDownCapture={platformSwipe.onPointerDownCapture}
+            onPointerMoveCapture={platformSwipe.onPointerMoveCapture}
+            onPointerUpCapture={platformSwipe.onPointerUpCapture}
+            onPointerCancelCapture={platformSwipe.onPointerCancelCapture}
+            onClickCapture={platformSwipe.onClickCapture}
           >
             <div
               key={pageMotionKey}

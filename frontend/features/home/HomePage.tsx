@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -64,61 +65,67 @@ export function HomePage() {
   });
 
   return (
-    <div ref={pageRef} key={siteId} className="mx-auto flex max-w-[1600px] flex-col gap-4">
-      {query.isLoading && (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="flex flex-col gap-2">
-              <Skeleton className="aspect-video w-full rounded-xl" />
-              <Skeleton className="h-3.5 w-4/5" />
-              <Skeleton className="h-3 w-1/2" />
-            </div>
-          ))}
-        </div>
-      )}
+    <PullToRefresh
+      onRefresh={() => query.refetch()}
+      refreshing={query.isRefetching && !query.isFetchingNextPage}
+      className="mx-auto max-w-[1600px]"
+    >
+      <div ref={pageRef} key={siteId} className="flex flex-col gap-4">
+        {query.isLoading && (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="flex flex-col gap-2">
+                <Skeleton className="aspect-video w-full rounded-xl" />
+                <Skeleton className="h-3.5 w-4/5" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            ))}
+          </div>
+        )}
 
-      {query.isError && rooms.length === 0 && (
-        <ErrorState
-          error={query.error}
-          title="推荐直播加载失败"
-          onRetry={() => void query.refetch()}
-        />
-      )}
+        {query.isError && rooms.length === 0 && (
+          <ErrorState
+            error={query.error}
+            title="推荐直播加载失败"
+            onRetry={() => void query.refetch()}
+          />
+        )}
 
-      {!query.isLoading && !query.isError && rooms.length === 0 && (
-        <div className="flex flex-col items-center justify-center gap-2 py-24 text-muted-foreground">
-          <p className="text-sm">暂无 {SITE_LABELS[siteId] ?? siteId} 推荐直播</p>
-        </div>
-      )}
+        {!query.isLoading && !query.isError && rooms.length === 0 && (
+          <div className="flex flex-col items-center justify-center gap-2 py-24 text-muted-foreground">
+            <p className="text-sm">暂无 {SITE_LABELS[siteId] ?? siteId} 推荐直播</p>
+          </div>
+        )}
 
-      {rooms.length > 0 && <RoomGrid rooms={rooms} />}
+        {rooms.length > 0 && <RoomGrid rooms={rooms} />}
 
-      {query.hasNextPage && (
-        <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
-          {query.isFetchingNextPage && (
-            <span
-              className="flex items-center gap-2 text-sm text-muted-foreground"
-              role="status"
-              aria-live="polite"
-            >
-              <Loader2 className="animate-spin-soft" data-icon="inline-start" />
-              加载中…
-            </span>
-          )}
-          {query.isFetchNextPageError && (
-            <Button variant="secondary" onClick={() => loadMore(true)}>
-              重试加载
-            </Button>
-          )}
-          {!supportsIntersectionObserver &&
-            !query.isFetchingNextPage &&
-            !query.isFetchNextPageError && (
-              <Button variant="secondary" onClick={() => loadMore()}>
-                加载更多
+        {query.hasNextPage && (
+          <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
+            {query.isFetchingNextPage && (
+              <span
+                className="flex items-center gap-2 text-sm text-muted-foreground"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="animate-spin-soft" data-icon="inline-start" />
+                加载中…
+              </span>
+            )}
+            {query.isFetchNextPageError && (
+              <Button variant="secondary" onClick={() => loadMore(true)}>
+                重试加载
               </Button>
             )}
-        </div>
-      )}
-    </div>
+            {!supportsIntersectionObserver &&
+              !query.isFetchingNextPage &&
+              !query.isFetchNextPageError && (
+                <Button variant="secondary" onClick={() => loadMore()}>
+                  加载更多
+                </Button>
+              )}
+          </div>
+        )}
+      </div>
+    </PullToRefresh>
   );
 }

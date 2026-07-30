@@ -29,11 +29,15 @@ function clampPercent(value: number): number {
 /** Clamp arbitrary input to an Android player gesture step. */
 export function androidPlayerControlStep(value: number): number {
   const clamped = clampPercent(value);
-  return clampPercent(Math.round(clamped / ANDROID_PLAYER_CONTROL_STEP) * ANDROID_PLAYER_CONTROL_STEP);
+  return clampPercent(
+    Math.round(clamped / ANDROID_PLAYER_CONTROL_STEP) * ANDROID_PLAYER_CONTROL_STEP,
+  );
 }
 
 function percentFrom(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? androidPlayerControlStep(value) : null;
+  return typeof value === "number" && Number.isFinite(value)
+    ? androidPlayerControlStep(value)
+    : null;
 }
 
 /** Keep the platform test pure so desktop/browser fallback is easy to test. */
@@ -151,46 +155,57 @@ export function useAndroidPlayerControls(enabled: boolean) {
       void write(value)
         .then((actualValue) => {
           if (!mountedRef.current || requestVersionRef.current[name] !== version) return;
+          // A successful write proves the native bridge is usable even when the
+          // initial getState race had not finished yet.
+          setAvailable(true);
           patchState({ [name]: actualValue });
         })
         .catch(() => {
           if (!mountedRef.current || requestVersionRef.current[name] !== version) return;
-          // A missing/failed plugin must gracefully fall back to the WebView
-          // controls rather than leaving an Android gesture in a dead state.
-          setAvailable(false);
+          // Keep optimistic UI for this gesture, but allow a later getState /
+          // write to recover. A single failed frame must not permanently
+          // demote Android volume control back to the HTML <video> element.
         });
     });
   }, [patchState]);
 
   const queue = useCallback(
     (name: AndroidPlayerControlName, value: number): boolean => {
-      if (!available || !stateRef.current) return false;
+      // System media volume is the only correct Android control surface.
+      // Queue writes as soon as we are on a Tauri Android host, even before
+      // the first getState resolves, so a first swipe still changes STREAM_MUSIC.
+      if (!enabled || !runningOnAndroidTauri()) return false;
       const nextValue = androidPlayerControlStep(value);
-      patchState({ [name]: nextValue });
+      if (!stateRef.current) {
+        const seed: AndroidPlayerControlsState = {
+          mediaVolume: name === "mediaVolume" ? nextValue : 80,
+          brightness: name === "brightness" ? nextValue : 50,
+        };
+        replaceState(seed);
+      } else {
+        patchState({ [name]: nextValue });
+      }
       pendingRef.current[name] = nextValue;
       if (timerRef.current === null) {
         timerRef.current = window.setTimeout(flush, NATIVE_CONTROL_THROTTLE_MS);
       }
       return true;
     },
-    [available, flush, patchState],
+    [enabled, flush, patchState, replaceState],
   );
 
-  const setMediaVolume = useCallback(
-    (value: number) => queue("mediaVolume", value),
-    [queue],
-  );
+  const setMediaVolume = useCallback((value: number) => queue("mediaVolume", value), [queue]);
   const setBrightness = useCallback((value: number) => queue("brightness", value), [queue]);
 
   const toggleMediaMute = useCallback((): boolean => {
-    const mediaVolume = stateRef.current?.mediaVolume;
-    if (mediaVolume === undefined) return false;
+    if (!enabled || !runningOnAndroidTauri()) return false;
+    const mediaVolume = stateRef.current?.mediaVolume ?? previousMediaVolumeRef.current ?? 80;
     if (mediaVolume <= 0) {
       return setMediaVolume(previousMediaVolumeRef.current || 80);
     }
     previousMediaVolumeRef.current = mediaVolume;
     return setMediaVolume(0);
-  }, [setMediaVolume]);
+  }, [enabled, setMediaVolume]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -239,7 +254,10 @@ export function useAndroidPlayerControls(enabled: boolean) {
   }, [enabled, replaceState]);
 
   return {
+    /** True after a successful native read/write. Volume setters still work earlier. */
     available,
+    /** True on Android Tauri even before getState finishes — volume must hit STREAM_MUSIC. */
+    supported: enabled && (available || runningOnAndroidTauri()),
     state,
     setMediaVolume,
     setBrightness,
