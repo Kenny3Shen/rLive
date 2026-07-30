@@ -13,6 +13,11 @@ import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmak
 import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
+import {
+  danmakuListSurfaceFromTheme,
+  resolveDanmakuListUserColor,
+  type DanmakuListSurface,
+} from "./danmaku/listColor";
 import { getDanmakuSendConfig } from "./danmaku/sending";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/shared/clipboard";
@@ -67,7 +72,20 @@ type ActionStatus =
   | "send-failed"
   | null;
 
-function DanmakuSender({ event, user }: { event: DanmakuEvent; user: string }) {
+function DanmakuSender({
+  event,
+  user,
+  surface,
+}: {
+  event: DanmakuEvent;
+  user: string;
+  surface: DanmakuListSurface;
+}) {
+  // Platform colours target the video overlay. On the light list surface the
+  // common white default has no contrast, so fall back to `text-primary`.
+  const userColor =
+    event.is_self === true ? null : resolveDanmakuListUserColor(event.color, surface);
+
   return (
     <>
       {event.is_self === true && (
@@ -75,10 +93,7 @@ function DanmakuSender({ event, user }: { event: DanmakuEvent; user: string }) {
           我
         </Badge>
       )}
-      <span
-        className="mr-1.5 font-medium text-primary"
-        style={!event.is_self && event.color ? { color: event.color } : undefined}
-      >
+      <span className="mr-1.5 font-medium text-primary" style={userColor ? { color: userColor } : undefined}>
         {user}：
       </span>
     </>
@@ -113,10 +128,12 @@ const DanmakuRow = memo(function DanmakuRow({
   line,
   siteId,
   roomId,
+  surface,
 }: {
   line: DanmakuLine;
   siteId?: SiteId;
   roomId?: string;
+  surface: DanmakuListSurface;
 }) {
   const { event } = line;
   if (event.kind === "system") {
@@ -127,7 +144,7 @@ const DanmakuRow = memo(function DanmakuRow({
     );
   }
 
-  return <SelectableDanmakuRow event={event} siteId={siteId} roomId={roomId} />;
+  return <SelectableDanmakuRow event={event} siteId={siteId} roomId={roomId} surface={surface} />;
 });
 
 /**
@@ -139,10 +156,12 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   event,
   siteId,
   roomId,
+  surface,
 }: {
   event: DanmakuEvent;
   siteId?: SiteId;
   roomId?: string;
+  surface: DanmakuListSurface;
 }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -176,7 +195,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
       <div
         className={cn("rounded-md px-1.5 py-1 leading-relaxed", event.is_self && "bg-primary/5")}
       >
-        <DanmakuSender event={event} user={user} />
+        <DanmakuSender event={event} user={user} surface={surface} />
         <DanmakuRichText
           content={event.content}
           spans={event.spans}
@@ -241,7 +260,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
           event.is_self && "bg-primary/5 hover:bg-primary/10 aria-expanded:bg-primary/10",
         )}
       >
-        <DanmakuSender event={event} user={user} />
+        <DanmakuSender event={event} user={user} surface={surface} />
         <DanmakuRichText
           content={event.content}
           spans={event.spans}
@@ -338,12 +357,29 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   const nextIdRef = useRef(0);
   const activeRef = useRef(active);
   const visibleRef = useRef(visible);
+  const theme = useSettingsStore((s) => s.theme);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const matchersRef = useRef({ shieldMatcher, filterGifts });
+  const [prefersDark, setPrefersDark] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)").matches : false,
+  );
+  const listSurface = useMemo(
+    () => danmakuListSurfaceFromTheme(theme, prefersDark),
+    [theme, prefersDark],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => setPrefersDark(query.matches);
+    onChange();
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
 
   // Keep the event subscription stable while a filter setting changes so the
   // bounded hidden-tab queue does not lose messages in a listener gap.
@@ -535,7 +571,13 @@ export const DanmakuPanel = memo(function DanmakuPanel({
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
             )}
             {items.map((line) => (
-              <DanmakuRow key={line.id} line={line} siteId={siteId} roomId={roomId} />
+              <DanmakuRow
+                key={line.id}
+                line={line}
+                siteId={siteId}
+                roomId={roomId}
+                surface={listSurface}
+              />
             ))}
           </div>
         </ScrollArea>
