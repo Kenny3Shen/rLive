@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
+import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -99,80 +100,86 @@ export function CategoryRoomsPage() {
   }, [categoryId, parentId, siteId]);
 
   return (
-    <div className="mx-auto max-w-[1600px] pb-6">
-      <PageHeader
-        title={category.name}
-        actions={
-          <Button variant="ghost" size="sm" onClick={() => navigate("/category")}>
-            <ArrowLeft data-icon="inline-start" />
-            返回
-          </Button>
-        }
-      />
-
-      {roomsQuery.isLoading && <RoomGridSkeleton />}
-
-      {roomsQuery.isError && (
-        <ErrorState
-          error={roomsQuery.error}
-          title={`加载「${category.name}」失败`}
-          onRetry={() => void roomsQuery.refetch()}
+    <PullToRefresh
+      onRefresh={() => roomsQuery.refetch()}
+      refreshing={roomsQuery.isRefetching && !roomsQuery.isFetchingNextPage}
+      className="mx-auto max-w-[1600px]"
+    >
+      <div className="pb-6">
+        <PageHeader
+          title={category.name}
+          actions={
+            <Button variant="ghost" size="sm" onClick={() => navigate("/category")}>
+              <ArrowLeft data-icon="inline-start" />
+              返回
+            </Button>
+          }
         />
-      )}
 
-      {!roomsQuery.isLoading && !roomsQuery.isError && rooms.length === 0 && (
-        <Empty className="min-h-64 py-12">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <Radio aria-hidden />
-            </EmptyMedia>
-            <EmptyTitle>这个分区暂时没有直播</EmptyTitle>
-            <EmptyDescription>换个分区看看，或稍后再来刷新。</EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button variant="outline" size="sm" onClick={() => navigate("/category")}>
-              <ArrowLeft data-icon="inline-start" aria-hidden />
-              返回分类
-            </Button>
-          </EmptyContent>
-        </Empty>
-      )}
+        {roomsQuery.isLoading && <RoomGridSkeleton />}
 
-      {rooms.length > 0 && (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {rooms.map((room) => (
-            <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
-          ))}
-        </div>
-      )}
+        {roomsQuery.isError && (
+          <ErrorState
+            error={roomsQuery.error}
+            title={`加载「${category.name}」失败`}
+            onRetry={() => void roomsQuery.refetch()}
+          />
+        )}
 
-      {roomsQuery.hasNextPage && (
-        <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
-          {roomsQuery.isFetchingNextPage && (
-            <span
-              className="flex items-center gap-2 text-sm text-muted-foreground"
-              role="status"
-              aria-live="polite"
-            >
-              <Loader2 className="animate-spin-soft" data-icon="inline-start" />
-              加载中…
-            </span>
-          )}
-          {roomsQuery.isFetchNextPageError && (
-            <Button variant="secondary" onClick={() => loadMore(true)}>
-              重试加载
-            </Button>
-          )}
-          {!supportsIntersectionObserver &&
-            !roomsQuery.isFetchingNextPage &&
-            !roomsQuery.isFetchNextPageError && (
-              <Button variant="secondary" onClick={() => loadMore()}>
-                加载更多
+        {!roomsQuery.isLoading && !roomsQuery.isError && rooms.length === 0 && (
+          <Empty className="min-h-64 py-12">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Radio aria-hidden />
+              </EmptyMedia>
+              <EmptyTitle>这个分区暂时没有直播</EmptyTitle>
+              <EmptyDescription>换个分区看看，或稍后再来刷新。</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/category")}>
+                <ArrowLeft data-icon="inline-start" aria-hidden />
+                返回分类
+              </Button>
+            </EmptyContent>
+          </Empty>
+        )}
+
+        {rooms.length > 0 && (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            {rooms.map((room) => (
+              <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
+            ))}
+          </div>
+        )}
+
+        {roomsQuery.hasNextPage && (
+          <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
+            {roomsQuery.isFetchingNextPage && (
+              <span
+                className="flex items-center gap-2 text-sm text-muted-foreground"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="animate-spin-soft" data-icon="inline-start" />
+                加载中…
+              </span>
+            )}
+            {roomsQuery.isFetchNextPageError && (
+              <Button variant="secondary" onClick={() => loadMore(true)}>
+                重试加载
               </Button>
             )}
-        </div>
-      )}
-    </div>
+            {!supportsIntersectionObserver &&
+              !roomsQuery.isFetchingNextPage &&
+              !roomsQuery.isFetchNextPageError && (
+                <Button variant="secondary" onClick={() => loadMore()}>
+                  加载更多
+                </Button>
+              )}
+          </div>
+        )}
+      </div>
+    </PullToRefresh>
   );
 }
 

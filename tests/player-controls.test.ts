@@ -2,10 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { danmakuControlPresentation } from "../frontend/features/room/PlayerControls";
 import {
   canStartPlayerEdgeGesture,
+  isPlayerStageDoubleTap,
+  isPlayerStageTap,
   isVerticalPlayerEdgeGesture,
   nextRoomSideTabForSwipe,
+  playerEdgeGestureDragExtent,
   playerEdgeGestureForStart,
   playerEdgeGestureValue,
+  PLAYER_STAGE_DOUBLE_TAP_MS,
   shouldRunDanmakuCanvas,
   sidePanelStartsOpen,
 } from "../frontend/features/room/PlayerPane";
@@ -80,7 +84,10 @@ describe("Android player edge gestures", () => {
     expect(isVerticalPlayerEdgeGesture(5, -40)).toBe(true);
     expect(isVerticalPlayerEdgeGesture(48, -28)).toBe(false);
     expect(isVerticalPlayerEdgeGesture(0, 10)).toBe(false);
-    expect(playerEdgeGestureValue(50, -80, 320)).toBe(75);
+    // Simple Live maps a full 0–100 sweep onto half the player height.
+    expect(playerEdgeGestureDragExtent(320)).toBe(160);
+    expect(playerEdgeGestureValue(50, -80, 320)).toBe(100);
+    expect(playerEdgeGestureValue(50, 40, 320)).toBe(25);
     expect(playerEdgeGestureValue(98, -400, 320)).toBe(100);
     expect(playerEdgeGestureValue(2, 400, 320)).toBe(0);
   });
@@ -95,19 +102,28 @@ describe("Android player edge gestures", () => {
     expect(androidPlayerControlStep(-5)).toBe(0);
     expect(androidPlayerControlStep(101)).toBe(100);
   });
+
+  test("classifies short stationary touches as stage taps and double taps", () => {
+    expect(isPlayerStageTap(0, 0, 120)).toBe(true);
+    expect(isPlayerStageTap(40, 0, 120)).toBe(false);
+    expect(isPlayerStageTap(0, 0, 500)).toBe(false);
+    expect(isPlayerStageDoubleTap(1_000, 1_000 + PLAYER_STAGE_DOUBLE_TAP_MS)).toBe(true);
+    expect(isPlayerStageDoubleTap(1_000, 1_000 + PLAYER_STAGE_DOUBLE_TAP_MS + 1)).toBe(false);
+    expect(isPlayerStageDoubleTap(0, 1_000)).toBe(false);
+  });
 });
 
 describe("Android native player controls", () => {
   test("uses the bridge only inside a Tauri Android client", () => {
-    expect(
-      supportsAndroidNativePlayerControls({ tauriRuntime: true, platform: "android" }),
-    ).toBe(true);
-    expect(
-      supportsAndroidNativePlayerControls({ tauriRuntime: false, platform: "android" }),
-    ).toBe(false);
-    expect(
-      supportsAndroidNativePlayerControls({ tauriRuntime: true, platform: "desktop" }),
-    ).toBe(false);
+    expect(supportsAndroidNativePlayerControls({ tauriRuntime: true, platform: "android" })).toBe(
+      true,
+    );
+    expect(supportsAndroidNativePlayerControls({ tauriRuntime: false, platform: "android" })).toBe(
+      false,
+    );
+    expect(supportsAndroidNativePlayerControls({ tauriRuntime: true, platform: "desktop" })).toBe(
+      false,
+    );
   });
 
   test("normalizes bridge values and sends stepped native commands", async () => {

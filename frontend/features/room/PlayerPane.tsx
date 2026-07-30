@@ -23,10 +23,7 @@ import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useLocalAsrCaptions } from "./asr/useLocalAsrCaptions";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useWebPlayer } from "./player/useWebPlayer";
-import {
-  androidPlayerControlStep,
-  useAndroidPlayerControls,
-} from "./player/androidPlayerControls";
+import { androidPlayerControlStep, useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -51,9 +48,17 @@ const ROOM_SIDE_TAB_SWIPE_CLICK_SUPPRESSION_MS = 420;
 export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
 const PLAYER_EDGE_GESTURE_DIRECTION_RATIO = 1.25;
 const PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX = 160;
+// Simple Live maps a full 0–100 sweep to half the player height so a short
+// vertical drag remains responsive without needing a full-screen swipe.
+const PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO = 0.5;
 const PLAYER_EDGE_GESTURE_FEEDBACK_DURATION_MS = 900;
 const PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO = 0.25;
 const PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO = 0.75;
+// Match Simple Live's mobile stage interactions: a short tap toggles the
+// chrome, a second tap within this window enters/exits fullscreen.
+export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
+export const PLAYER_STAGE_TAP_MAX_DURATION_MS = 320;
+export const PLAYER_STAGE_DOUBLE_TAP_MS = 280;
 
 export type PlayerEdgeGesture = "brightness" | "volume";
 
@@ -74,6 +79,13 @@ type PlayerEdgeGestureFeedback = {
   value: number;
 };
 
+type PlayerStageTapState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startedAt: number;
+};
+
 /** The left half adjusts picture brightness; the right half adjusts volume. */
 export function playerEdgeGestureForStart(
   clientX: number,
@@ -92,13 +104,24 @@ export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boo
   );
 }
 
-/** Dragging one player-height up/down maps to a full 0–100 adjustment. */
+/**
+ * Drag distance that maps to a full 0–100 adjustment. Simple Live uses half
+ * the player height so volume/brightness remain reachable with a short swipe.
+ */
+export function playerEdgeGestureDragExtent(stageHeight: number): number {
+  return (
+    Math.max(PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX, stageHeight) *
+    PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO
+  );
+}
+
+/** Dragging half a player-height up/down maps to a full 0–100 adjustment. */
 export function playerEdgeGestureValue(
   startValue: number,
   deltaY: number,
   stageHeight: number,
 ): number {
-  const height = Math.max(PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX, stageHeight);
+  const height = playerEdgeGestureDragExtent(stageHeight);
   return Math.max(0, Math.min(100, Math.round(startValue - (deltaY / height) * 100)));
 }
 
@@ -114,7 +137,23 @@ export function canStartPlayerEdgeGesture(
 ): boolean {
   if (stageHeight <= 0) return false;
   const ratio = (clientY - stageTop) / stageHeight;
-  return ratio >= PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO && ratio <= PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO;
+  return (
+    ratio >= PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO && ratio <= PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO
+  );
+}
+
+/** A short, mostly stationary touch is a stage tap rather than a drag gesture. */
+export function isPlayerStageTap(deltaX: number, deltaY: number, durationMs: number): boolean {
+  return (
+    durationMs >= 0 &&
+    durationMs <= PLAYER_STAGE_TAP_MAX_DURATION_MS &&
+    Math.hypot(deltaX, deltaY) <= PLAYER_STAGE_TAP_MAX_DISTANCE_PX
+  );
+}
+
+/** Second short touch inside the double-tap window toggles fullscreen. */
+export function isPlayerStageDoubleTap(lastTapAt: number, now: number): boolean {
+  return lastTapAt > 0 && now - lastTapAt <= PLAYER_STAGE_DOUBLE_TAP_MS;
 }
 
 type SideTabSwipeState = {
@@ -156,17 +195,17 @@ export function nextRoomSideTabForSwipe(
 }
 
 /**
- * Inputs and drag controls own horizontal gestures.  Do not turn a slider
- * adjustment, text selection or scrollbar drag on the settings page into a
- * tab switch. Buttons own their press gesture too; ordinary list rows remain
- * swipeable and their click is suppressed only after a recognised swipe.
+ * Only continuous editors and sliders own the pointer. List rows, tab
+ * triggers and ordinary buttons stay swipeable so the room bottom panel can
+ * change tabs the way Simple Live's TabBarView does; a recognised swipe still
+ * suppresses the synthetic click Android WebView may emit.
  */
 function isRoomSideTabSwipeIgnoredTarget(target: EventTarget | null): boolean {
   const element =
     target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   return Boolean(
     element?.closest(
-      'button, input, textarea, select, [contenteditable="true"], a[href], [role="button"], [role="slider"], [role="combobox"], [role="switch"], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
+      'input, textarea, select, [contenteditable="true"], [role="slider"], [role="combobox"], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
     ),
   );
 }
@@ -200,6 +239,11 @@ function isCompactLandscapeViewport(): boolean {
   return (
     typeof window !== "undefined" && window.matchMedia(COMPACT_LANDSCAPE_VIEWPORT_QUERY).matches
   );
+}
+
+function isTouchPointer(pointerType: string): boolean {
+  // A few Android WebViews expose an empty pointerType for finger input.
+  return pointerType === "touch" || pointerType === "";
 }
 
 function useCompactLandscapeViewport(): boolean {
@@ -358,6 +402,9 @@ export function PlayerPane({
   const playerBrightnessRef = useRef(100);
   const playerEdgeGestureRef = useRef<PlayerEdgeGestureState | null>(null);
   const playerEdgeGestureFeedbackTimerRef = useRef<number | null>(null);
+  const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
+  const playerStageTapTimerRef = useRef<number | null>(null);
+  const lastPlayerStageTapAtRef = useRef(0);
   const sideTabSwipeRef = useRef<SideTabSwipeState | null>(null);
   const sideTabSwipeClickSuppressionUntilRef = useRef(0);
 
@@ -371,6 +418,7 @@ export function PlayerPane({
   });
   const androidPlayerControls = useAndroidPlayerControls(androidClient);
   const changePlayerVolume = player.changeVolume;
+  const togglePlayerFullscreen = player.toggleFullscreen;
   useScreenWakeLock(player.running && !player.paused);
   // This stays above the conditional side panel, so hiding that panel never
   // silently stops a session the user explicitly enabled.
@@ -401,10 +449,11 @@ export function PlayerPane({
   const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError ?? player.fullscreenError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
-  const nativePlayerControlState = androidPlayerControls.available
-    ? androidPlayerControls.state
-    : null;
-  const nativePlayerControlsActive = nativePlayerControlState !== null;
+  // Android routes loudness through STREAM_MUSIC. Use native state whenever the
+  // bridge is supported, even before the first getState resolves, so UI and
+  // gestures never fall back to the HTML <video> volume on a phone.
+  const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
+  const nativePlayerControlState = nativePlayerControlsActive ? androidPlayerControls.state : null;
   const playerControlVolume = nativePlayerControlState?.mediaVolume ?? player.volume;
   const playerControlMuted =
     nativePlayerControlState?.mediaVolume !== undefined
@@ -428,6 +477,16 @@ export function PlayerPane({
     setSidePanelOpen(sidePanelStartsOpen(compactLandscapeViewport));
   }, [compactLandscapeViewport]);
 
+  // Simple Live keeps the player element at full level on mobile and only
+  // adjusts the system media stream. Without this, Android would stack a
+  // reduced <video>.volume on top of STREAM_MUSIC and make system volume
+  // gestures feel broken.
+  useEffect(() => {
+    if (!androidClient) return;
+    if (player.volume === 100 && !player.muted) return;
+    changePlayerVolume(100);
+  }, [androidClient, changePlayerVolume, player.muted, player.volume]);
+
   useEffect(() => {
     if (!mobileDrawerOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -447,10 +506,30 @@ export function PlayerPane({
     };
   }, [mobileDrawerOpen]);
 
+  // Prefer exiting HTML/WebView fullscreen before room navigation. Native
+  // custom-view fullscreen is already handled in MainActivity; this covers
+  // the rare path where the browser reports fullscreen without a custom view.
+  useEffect(() => {
+    if (player.mode !== "fullscreen") return;
+    const exitOnAndroidBack = (event: Event) => {
+      event.preventDefault();
+      void togglePlayerFullscreen();
+    };
+    window.addEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
+    return () => window.removeEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
+  }, [player.mode, togglePlayerFullscreen]);
+
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current !== null) {
       window.clearTimeout(controlsHideTimerRef.current);
       controlsHideTimerRef.current = null;
+    }
+  }, []);
+
+  const clearPlayerStageTapTimer = useCallback(() => {
+    if (playerStageTapTimerRef.current !== null) {
+      window.clearTimeout(playerStageTapTimerRef.current);
+      playerStageTapTimerRef.current = null;
     }
   }, []);
 
@@ -537,6 +616,21 @@ export function PlayerPane({
     if (controlsHideTimerRef.current === null) scheduleControlsHide();
   }, [markControlsActivity, scheduleControlsHide, setControlVisibility]);
 
+  const hideControls = useCallback(() => {
+    clearControlsHideTimer();
+    clearPlayerStageTapTimer();
+    setControlVisibility(false);
+  }, [clearControlsHideTimer, clearPlayerStageTapTimer, setControlVisibility]);
+
+  /** Simple Live single-tap: show when hidden, hide when already visible. */
+  const toggleControls = useCallback(() => {
+    if (controlsVisibleRef.current) {
+      hideControls();
+      return;
+    }
+    revealControls();
+  }, [hideControls, revealControls]);
+
   const holdControlsVisible = useCallback(() => {
     markControlsActivity();
     clearControlsHideTimer();
@@ -596,9 +690,13 @@ export function PlayerPane({
     if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
   }, []);
 
-  const handleSideTabSwipeStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  // Capture-phase handlers: ScrollArea / list rows otherwise claim the touch
+  // on Android and the parent never sees pointermove below the tab strip.
+  const handleSideTabSwipeStartCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    // Some Android WebViews report an empty pointerType for finger input.
+    const pointerType = event.pointerType as string;
     if (
-      event.pointerType !== "touch" ||
+      (pointerType !== "touch" && pointerType !== "") ||
       !event.isPrimary ||
       isRoomSideTabSwipeIgnoredTarget(event.target)
     ) {
@@ -611,46 +709,40 @@ export function PlayerPane({
       startY: event.clientY,
       horizontal: false,
     };
-    // Capturing lets a swipe that reaches the panel edge finish reliably.
-    event.currentTarget.setPointerCapture(event.pointerId);
   }, []);
 
-  const handleSideTabSwipeMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const swipe = sideTabSwipeRef.current;
-      if (!swipe || swipe.pointerId !== event.pointerId) return;
+  const handleSideTabSwipeMoveCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const swipe = sideTabSwipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId) return;
 
-      const deltaX = event.clientX - swipe.startX;
-      const deltaY = event.clientY - swipe.startY;
-      const horizontalDistance = Math.abs(deltaX);
-      const verticalDistance = Math.abs(deltaY);
+    const deltaX = event.clientX - swipe.startX;
+    const deltaY = event.clientY - swipe.startY;
+    const horizontalDistance = Math.abs(deltaX);
+    const verticalDistance = Math.abs(deltaY);
 
-      if (!swipe.horizontal) {
-        if (
-          verticalDistance >= ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX &&
-          verticalDistance >= horizontalDistance
-        ) {
-          sideTabSwipeRef.current = null;
-          releaseSideTabSwipePointer(event.currentTarget, event.pointerId);
-          return;
-        }
-        if (
-          horizontalDistance < ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX ||
-          horizontalDistance <= verticalDistance * ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO
-        ) {
-          return;
-        }
-        swipe.horizontal = true;
+    if (!swipe.horizontal) {
+      if (
+        verticalDistance >= ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX &&
+        verticalDistance >= horizontalDistance
+      ) {
+        sideTabSwipeRef.current = null;
+        return;
       }
+      if (
+        horizontalDistance < ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX ||
+        horizontalDistance <= verticalDistance * ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO
+      ) {
+        return;
+      }
+      swipe.horizontal = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
 
-      // The panel itself is touch-pan-y, but preventDefault additionally
-      // avoids a partial horizontal browser gesture while the tab changes.
-      event.preventDefault();
-    },
-    [releaseSideTabSwipePointer],
-  );
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
 
-  const handleSideTabSwipeEnd = useCallback(
+  const handleSideTabSwipeEndCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const swipe = sideTabSwipeRef.current;
       if (!swipe || swipe.pointerId !== event.pointerId) return;
@@ -664,13 +756,11 @@ export function PlayerPane({
         event.clientX - swipe.startX,
         event.clientY - swipe.startY,
       );
-      // Android WebView may still synthesize a click after PointerEvent
-      // preventDefault(). Fence it in capture phase so swiping a chat row can
-      // never open the row or toggle a nearby control at the same time.
       sideTabSwipeClickSuppressionUntilRef.current =
         Date.now() + ROOM_SIDE_TAB_SWIPE_CLICK_SUPPRESSION_MS;
-      if (!nextTab) return;
       event.preventDefault();
+      event.stopPropagation();
+      if (!nextTab) return;
       selectSideTab(nextTab);
     },
     [activeSideTab, releaseSideTabSwipePointer, selectSideTab],
@@ -682,7 +772,7 @@ export function PlayerPane({
     event.stopPropagation();
   }, []);
 
-  const handleSideTabSwipeCancel = useCallback(
+  const handleSideTabSwipeCancelCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const swipe = sideTabSwipeRef.current;
       if (!swipe || swipe.pointerId !== event.pointerId) return;
@@ -730,7 +820,7 @@ export function PlayerPane({
       if (
         !androidClient ||
         !showHost ||
-        event.pointerType !== "touch" ||
+        !isTouchPointer(event.pointerType) ||
         !event.isPrimary ||
         isPlayerEdgeGestureIgnoredTarget(event.target)
       ) {
@@ -751,10 +841,12 @@ export function PlayerPane({
       let startValue: number;
       if (kind === "brightness") {
         startValue = native
-          ? nativePlayerControlState?.brightness ?? playerBrightnessRef.current
+          ? (nativePlayerControlState?.brightness ?? playerBrightnessRef.current)
           : playerBrightnessRef.current;
       } else if (native) {
-        startValue = nativePlayerControlState?.mediaVolume ?? player.volume;
+        // Prefer the last known system volume; never seed from <video>.volume
+        // (forced to 100% on Android) or a first swipe jumps to full loudness.
+        startValue = nativePlayerControlState?.mediaVolume ?? 50;
       } else {
         startValue = player.muted || player.volume === 0 ? 0 : player.volume;
       }
@@ -808,6 +900,10 @@ export function PlayerPane({
         }
         gesture.active = true;
         beganAdjustment = true;
+        // A recognised volume/brightness drag cancels any pending stage tap.
+        clearPlayerStageTapTimer();
+        lastPlayerStageTapAtRef.current = 0;
+        playerStageTapRef.current = null;
       }
 
       event.preventDefault();
@@ -840,6 +936,7 @@ export function PlayerPane({
     [
       androidPlayerControls,
       changePlayerVolume,
+      clearPlayerStageTapTimer,
       releasePlayerEdgeGesturePointer,
       setClampedPlayerBrightness,
       showPlayerEdgeGestureFeedback,
@@ -865,11 +962,16 @@ export function PlayerPane({
   const handlePlayerEdgeGestureCancel = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const gesture = playerEdgeGestureRef.current;
-      if (!gesture || gesture.pointerId !== event.pointerId) return;
-      playerEdgeGestureRef.current = null;
-      releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
+      if (gesture && gesture.pointerId === event.pointerId) {
+        playerEdgeGestureRef.current = null;
+        releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
+      }
+      if (playerStageTapRef.current?.pointerId === event.pointerId) {
+        playerStageTapRef.current = null;
+      }
+      clearPlayerStageTapTimer();
     },
-    [releasePlayerEdgeGesturePointer],
+    [clearPlayerStageTapTimer, releasePlayerEdgeGesturePointer],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -877,20 +979,41 @@ export function PlayerPane({
       if (event.type === "pointerdown") {
         event.currentTarget.focus({ preventScroll: true });
       }
-      // The hidden bar deliberately has no pointer events.  Revealing on the
-      // first stage movement makes its whole bottom edge immediately usable
-      // without querying layout on every pointer event.
+      // Desktop/mouse keeps the always-reveal behaviour. Android touch uses an
+      // explicit single-tap toggle so a second tap can hide the chrome again,
+      // matching Simple Live rather than only resetting the auto-hide timer.
+      if (androidClient && isTouchPointer(event.pointerType)) return;
       revealControls();
     },
-    [revealControls],
+    [androidClient, revealControls],
   );
 
   const handleStagePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.type === "pointerdown") {
+        event.currentTarget.focus({ preventScroll: true });
+      }
+
+      if (
+        androidClient &&
+        isTouchPointer(event.pointerType) &&
+        event.isPrimary &&
+        !isPlayerEdgeGestureIgnoredTarget(event.target)
+      ) {
+        playerStageTapRef.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          startedAt: Date.now(),
+        };
+        handlePlayerEdgeGestureStart(event);
+        return;
+      }
+
       handleStagePointerActivity(event);
       handlePlayerEdgeGestureStart(event);
     },
-    [handlePlayerEdgeGestureStart, handleStagePointerActivity],
+    [androidClient, handlePlayerEdgeGestureStart, handleStagePointerActivity],
   );
 
   const handleStagePointerMove = useCallback(
@@ -901,7 +1024,59 @@ export function PlayerPane({
     [handlePlayerEdgeGestureMove, handleStagePointerActivity],
   );
 
+  const handleStagePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const gestureConsumed = handlePlayerEdgeGestureEnd(event);
+      const tap = playerStageTapRef.current;
+      if (!tap || tap.pointerId !== event.pointerId) return;
+      playerStageTapRef.current = null;
+      if (gestureConsumed) return;
+      if (
+        !androidClient ||
+        !isTouchPointer(event.pointerType) ||
+        !showHost ||
+        isPlayerEdgeGestureIgnoredTarget(event.target)
+      ) {
+        return;
+      }
+
+      const durationMs = Date.now() - tap.startedAt;
+      if (!isPlayerStageTap(event.clientX - tap.startX, event.clientY - tap.startY, durationMs)) {
+        return;
+      }
+
+      event.preventDefault();
+      const now = Date.now();
+      if (isPlayerStageDoubleTap(lastPlayerStageTapAtRef.current, now)) {
+        clearPlayerStageTapTimer();
+        lastPlayerStageTapAtRef.current = 0;
+        // Double-tap toggles fullscreen the way Simple Live does on Android.
+        void togglePlayerFullscreen();
+        return;
+      }
+
+      lastPlayerStageTapAtRef.current = now;
+      clearPlayerStageTapTimer();
+      // Delay the single-tap action so a second tap can claim double-tap
+      // fullscreen without first flashing the control bar.
+      playerStageTapTimerRef.current = window.setTimeout(() => {
+        playerStageTapTimerRef.current = null;
+        lastPlayerStageTapAtRef.current = 0;
+        toggleControls();
+      }, PLAYER_STAGE_DOUBLE_TAP_MS);
+    },
+    [
+      androidClient,
+      clearPlayerStageTapTimer,
+      handlePlayerEdgeGestureEnd,
+      showHost,
+      toggleControls,
+      togglePlayerFullscreen,
+    ],
+  );
+
   useEffect(() => clearPlayerEdgeGestureFeedbackTimer, [clearPlayerEdgeGestureFeedbackTimer]);
+  useEffect(() => clearPlayerStageTapTimer, [clearPlayerStageTapTimer]);
 
   const focusFirstControl = useCallback(() => {
     // A hidden transparent bar must not be in the tab sequence.  After Tab
@@ -1017,14 +1192,14 @@ export function PlayerPane({
             tabIndex={0}
             aria-label={
               androidClient
-                ? "直播播放器；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
+                ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
                 : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
             }
             aria-keyshortcuts="Space K M F"
             onPointerEnter={handleStagePointerActivity}
             onPointerMove={handleStagePointerMove}
             onPointerDown={handleStagePointerDown}
-            onPointerUp={handlePlayerEdgeGestureEnd}
+            onPointerUp={handleStagePointerUp}
             onPointerCancel={handlePlayerEdgeGestureCancel}
             onKeyDown={handleStageKeyDown}
           >
@@ -1050,7 +1225,7 @@ export function PlayerPane({
             <div
               className="absolute inset-0"
               style={{
-                filter: `brightness(${nativePlayerControlsActive ? 1 : playerBrightness / 100})`,
+                filter: `brightness(${androidClient && androidPlayerControls.supported ? 1 : playerBrightness / 100})`,
               }}
             >
               {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
@@ -1218,12 +1393,21 @@ export function PlayerPane({
                 onRefresh={onRefresh}
                 onTogglePause={() => player.togglePause()}
                 onVolume={(value) => {
-                  if (!androidPlayerControls.setMediaVolume(value)) {
-                    player.changeVolume(value);
+                  // Android always targets STREAM_MUSIC. Falling back to the
+                  // HTML element would only dim the WebView relative to the
+                  // system volume the user already expects from live apps.
+                  if (androidClient) {
+                    androidPlayerControls.setMediaVolume(value);
+                    return;
                   }
+                  player.changeVolume(value);
                 }}
                 onToggleMute={() => {
-                  if (!androidPlayerControls.toggleMediaMute()) player.toggleMute();
+                  if (androidClient) {
+                    androidPlayerControls.toggleMediaMute();
+                    return;
+                  }
+                  player.toggleMute();
                 }}
                 onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
                 onToggleOsd={() => setOsdOn((v) => !v)}
@@ -1254,8 +1438,9 @@ export function PlayerPane({
           aria-labelledby={mobileDrawerOpen ? "room-side-panel-title" : undefined}
           aria-modal={mobileDrawerOpen ? true : undefined}
           role={mobileDrawerOpen ? "dialog" : undefined}
+          data-room-side-tab-swipe-surface
           className={cn(
-            "flex shrink-0 flex-col bg-sidebar",
+            "flex shrink-0 flex-col bg-sidebar touch-pan-y overscroll-y-contain",
             inlineCompactSidePanel
               ? "min-h-0 w-full flex-1 border-t border-border/80"
               : compactLandscapeViewport
@@ -1263,6 +1448,11 @@ export function PlayerPane({
                 : "w-[300px] border-l border-border/80 lg:w-[320px]",
             !sidePanelOpen && "hidden",
           )}
+          onPointerDownCapture={handleSideTabSwipeStartCapture}
+          onPointerMoveCapture={handleSideTabSwipeMoveCapture}
+          onPointerUpCapture={handleSideTabSwipeEndCapture}
+          onPointerCancelCapture={handleSideTabSwipeCancelCapture}
+          onClickCapture={handleSideTabSwipeClickCapture}
         >
           {mobileDrawerOpen && (
             <h2 id="room-side-panel-title" className="sr-only">
@@ -1310,15 +1500,7 @@ export function PlayerPane({
                 </TabsTrigger>
               </TabsList>
             </div>
-            <div
-              data-room-side-tab-swipe-surface
-              className="relative flex min-h-0 flex-1 touch-pan-y"
-              onPointerDown={handleSideTabSwipeStart}
-              onPointerMove={handleSideTabSwipeMove}
-              onPointerUp={handleSideTabSwipeEnd}
-              onPointerCancel={handleSideTabSwipeCancel}
-              onClickCapture={handleSideTabSwipeClickCapture}
-            >
+            <div className="relative flex min-h-0 flex-1">
               <TabsContent
                 value="chat"
                 keepMounted
