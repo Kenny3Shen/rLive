@@ -319,6 +319,8 @@ function AccountCard({
   const [notice, setNotice] = useState<string | null>(null);
   const [loginMethod, setLoginMethod] = useState<AccountLoginMethod | null>(null);
   const [cookieDraft, setCookieDraft] = useState("");
+  const [manualCookieLoaded, setManualCookieLoaded] = useState(false);
+  const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -354,6 +356,35 @@ function AccountCard({
     void refreshProfile();
   }, [refreshProfile]);
 
+  useEffect(() => {
+    if (loginMethod !== "manual" || manualCookieLoaded) return;
+    if (!isTauri()) {
+      setManualCookieLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+    setManualLoading(true);
+    setManualError(null);
+    void invokeCmd<string | null>("account_get_cookie", { siteId })
+      .then((cookie) => {
+        if (cancelled) return;
+        setCookieDraft(cookie ?? "");
+        setManualCookieLoaded(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setManualError(`读取失败：${errorMessage(error)}`);
+      })
+      .finally(() => {
+        if (!cancelled) setManualLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loginMethod, manualCookieLoaded, siteId]);
+
   const applySavedCookie = useCallback(
     async (message: string) => {
       if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
@@ -367,7 +398,6 @@ function AccountCard({
   function closeLoginDialog() {
     if (saving) return;
     setLoginMethod(null);
-    setCookieDraft("");
     setManualError(null);
   }
 
@@ -383,9 +413,10 @@ function AccountCard({
     setManualError(null);
     try {
       await invokeCmd<void>("account_set_cookie", { siteId, cookie });
-      await applySavedCookie("Cookie 已保存，账号信息已更新。");
+      await applySavedCookie("已保存。");
       setLoginMethod(null);
-      setCookieDraft("");
+      setCookieDraft(cookie);
+      setManualCookieLoaded(true);
     } catch (error) {
       setManualError(`保存失败：${errorMessage(error)}`);
     } finally {
@@ -399,6 +430,8 @@ function AccountCard({
     try {
       await invokeCmd<void>("account_clear_cookie", { siteId });
       await applySavedCookie("已退出当前账号。");
+      setCookieDraft("");
+      setManualCookieLoaded(true);
     } catch (error) {
       setProfileError(`退出登录失败：${errorMessage(error)}`);
     } finally {
@@ -434,29 +467,15 @@ function AccountCard({
           {profileError && <FieldError>{profileError}</FieldError>}
         </FieldContent>
         <div className="flex flex-wrap items-center gap-2">
-          {qrLogin ? (
-            <ToggleGroup
-              aria-label={`${title}登录方式`}
-              value={loginMethod ? [loginMethod] : []}
-              variant="outline"
-              size="sm"
-              spacing={1}
-              onValueChange={(values) => {
-                const method = values[0];
-                if (method === "manual" || method === "qr") setLoginMethod(method);
-              }}
-            >
-              <ToggleGroupItem value="qr">
-                <QrCode data-icon="inline-start" aria-hidden />
-                扫码登录
-              </ToggleGroupItem>
-              <ToggleGroupItem value="manual">手动输入</ToggleGroupItem>
-            </ToggleGroup>
-          ) : (
-            <Button variant="outline" size="sm" onClick={() => setLoginMethod("manual")}>
-              手动输入
+          {qrLogin && (
+            <Button variant="outline" size="sm" onClick={() => setLoginMethod("qr")}>
+              <QrCode data-icon="inline-start" aria-hidden />
+              扫码登录
             </Button>
           )}
+          <Button variant="outline" size="sm" onClick={() => setLoginMethod("manual")}>
+            手动输入
+          </Button>
           {hasCookie && (
             <Button
               variant="ghost"
@@ -488,6 +507,8 @@ function AccountCard({
               siteName={title}
               onSaved={async () => {
                 await applySavedCookie("扫码登录成功，当前账号已更新。");
+                setCookieDraft("");
+                setManualCookieLoaded(false);
                 setLoginMethod(null);
               }}
             />
@@ -510,31 +531,30 @@ function AccountCard({
           <DialogContent>
             <form onSubmit={(event) => void saveCookie(event)}>
               <DialogHeader>
-                <DialogTitle>{title}手动输入 Cookie</DialogTitle>
-                <DialogDescription>
-                  Cookie 仅保存在本机，用于读取当前账号和平台登录态。
-                </DialogDescription>
+                <DialogTitle>{title} Cookie</DialogTitle>
+                <DialogDescription>Cookie 仅保存在本机。</DialogDescription>
               </DialogHeader>
               <FieldGroup className="mt-4">
-                <Field data-invalid={manualError ? true : undefined}>
+                <Field
+                  data-disabled={saving || manualLoading ? true : undefined}
+                  data-invalid={manualError ? true : undefined}
+                >
                   <FieldLabel htmlFor={inputId}>Cookie</FieldLabel>
                   <Textarea
                     id={inputId}
                     value={cookieDraft}
                     onChange={(event) => {
                       setCookieDraft(event.target.value);
+                      setManualCookieLoaded(true);
                       setManualError(null);
                     }}
                     rows={6}
                     placeholder={placeholder}
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={saving}
+                    disabled={saving || manualLoading}
                     aria-invalid={manualError ? true : undefined}
                   />
-                  <FieldDescription>
-                    保存后会自动读取当前账号用户名，Cookie 不会在设置页显示。
-                  </FieldDescription>
                   {manualError && <FieldError>{manualError}</FieldError>}
                 </Field>
               </FieldGroup>
@@ -547,9 +567,9 @@ function AccountCard({
                 >
                   取消
                 </Button>
-                <Button type="submit" disabled={saving}>
+                <Button type="submit" disabled={saving || manualLoading}>
                   {saving ? <Spinner data-icon="inline-start" /> : null}
-                  保存并识别账号
+                  保存
                 </Button>
               </DialogFooter>
             </form>
@@ -1212,7 +1232,7 @@ export function SettingsPage() {
                   <AccountCard
                     siteId="huya"
                     title="虎牙"
-                    description="用于发送弹幕；暂不支持扫码，请粘贴完整 Cookie。"
+                    description="用于发送弹幕，仅支持手动输入。"
                     placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
                   />
                   <AccountCard
