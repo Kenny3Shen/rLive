@@ -810,10 +810,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
             user: "system".into(),
             is_self: false,
             user_id: None,
-            content: format!(
-                "正在连接弹幕服务器… ayyuid={} topSid={}",
-                args.ayyuid, args.top_sid
-            ),
+            content: "正在连接弹幕服务器…".into(),
             color: None,
             spans: None,
             super_chat: None,

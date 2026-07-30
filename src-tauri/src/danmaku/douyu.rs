@@ -1922,7 +1922,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
             user: "system".into(),
             is_self: false,
             user_id: None,
-            content: format!("正在连接弹幕服务器… room={}", args.room_id),
+            content: "正在连接弹幕服务器…".into(),
             color: None,
             spans: None,
             super_chat: None,
