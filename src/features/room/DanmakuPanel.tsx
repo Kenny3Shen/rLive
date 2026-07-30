@@ -1,12 +1,14 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Copy, SendHorizontal } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Copy, SendHorizontal, Star } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
-import type { DanmakuEvent, SiteId } from "@/shared/types/live";
+import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmaku/filter";
 import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
@@ -56,7 +58,14 @@ export async function copyDanmakuText(text: string): Promise<boolean> {
   return copyText(text);
 }
 
-type ActionStatus = "copied" | "copy-failed" | "sent" | "send-failed" | null;
+type ActionStatus =
+  | "copied"
+  | "copy-failed"
+  | "favorited"
+  | "favorite-failed"
+  | "sent"
+  | "send-failed"
+  | null;
 
 function DanmakuSender({ event, user }: { event: DanmakuEvent; user: string }) {
   return (
@@ -82,6 +91,10 @@ function actionStatusMessage(status: ActionStatus): string | null {
       return "已复制弹幕内容";
     case "copy-failed":
       return "复制失败，请手动选择内容";
+    case "favorited":
+      return "已收藏";
+    case "favorite-failed":
+      return "收藏失败，请稍后重试";
     case "sent":
       return "已发送相同的弹幕";
     case "send-failed":
@@ -131,8 +144,10 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   siteId?: SiteId;
   roomId?: string;
 }) {
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState<ActionStatus>(null);
+  const [favoriting, setFavoriting] = useState(false);
   const [sending, setSending] = useState(false);
   const message = formatDanmakuClipboardText(event.content);
   const user = event.user.trim() || "匿名";
@@ -142,6 +157,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   const canRepeat =
     event.kind === "chat" &&
     Boolean(sendConfig && roomId && danmakuSendEnabled && !danmakuSendPending);
+  const canFavorite = event.kind === "chat" && Boolean(siteId);
   const repeatUnavailableLabel = !sendConfig
     ? "当前平台暂不支持发送弹幕"
     : danmakuSendPending
@@ -150,7 +166,10 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
         ? "请先在账号设置启用发送功能"
         : "发送相同的弹幕（+1）";
   const statusMessage = actionStatusMessage(actionStatus);
-  const actionFailed = actionStatus === "copy-failed" || actionStatus === "send-failed";
+  const actionFailed =
+    actionStatus === "copy-failed" ||
+    actionStatus === "favorite-failed" ||
+    actionStatus === "send-failed";
 
   if (!message) {
     return (
@@ -183,6 +202,26 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
       setActionStatus("send-failed");
     } finally {
       setSending(false);
+    }
+  }
+
+  async function favorite() {
+    if (!siteId || favoriting) return;
+    setFavoriting(true);
+    setActionStatus(null);
+    const favoriteQueryKey = ["danmaku-favorites", siteId] as const;
+    try {
+      await invokeCmd<void>("danmaku_favorite_add", { siteId, content: message });
+      queryClient.setQueryData<DanmakuFavoriteItem[]>(favoriteQueryKey, (current) => [
+        { site_id: siteId, content: message, added_at: Date.now() },
+        ...(current ?? []).filter((item) => item.content !== message),
+      ]);
+      void queryClient.invalidateQueries({ queryKey: favoriteQueryKey });
+      setActionStatus("favorited");
+    } catch {
+      setActionStatus("favorite-failed");
+    } finally {
+      setFavoriting(false);
     }
   }
 
@@ -221,6 +260,22 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
           >
             <Copy data-icon="inline-start" aria-hidden />
             复制
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start"
+            disabled={!canFavorite || favoriting}
+            title={canFavorite ? "收藏弹幕" : "当前房间暂不支持收藏"}
+            onClick={() => void favorite()}
+          >
+            {favoriting ? (
+              <Spinner data-icon="inline-start" aria-hidden />
+            ) : (
+              <Star data-icon="inline-start" aria-hidden />
+            )}
+            收藏
           </Button>
           <Button
             type="button"
