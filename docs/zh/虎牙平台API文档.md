@@ -42,6 +42,6 @@
 
 虎牙网页协议、线路和登录条件可能随时变更。手动 Cookie 仅保存在当前设备，不记录、不导出也不上传。
 
-- 站点与播放：`backend/src/sites/huya/`
-- 弹幕与 TARS 编解码：`backend/src/danmaku/huya.rs`、`backend/src/danmaku/tars.rs`
-- command、授权与本机冷却：`backend/src/commands/danmaku.rs`
+- 站点与播放：`src-tauri/src/sites/huya/`
+- 弹幕与 TARS 编解码：`src-tauri/src/danmaku/huya.rs`、`src-tauri/src/danmaku/tars.rs`
+- command、授权与本机冷却：`src-tauri/src/commands/danmaku.rs`

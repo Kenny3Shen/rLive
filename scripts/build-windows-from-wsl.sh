@@ -94,10 +94,10 @@ if [[ $code -ne 0 ]]; then
   exit "$code"
 fi
 
-EXE="$DEST_MNT/backend/target/release/rlive.exe"
+EXE="$DEST_MNT/src-tauri/target/release/rlive.exe"
 if [[ ! -f "$EXE" ]]; then
   echo "error: build reported success but EXE missing: $EXE" >&2
   exit 1
 fi
 
-echo "OK: $DEST_WIN\\backend\\target\\release\\rlive.exe ($(stat -c%s "$EXE" 2>/dev/null || echo '?') bytes)"
+echo "OK: $DEST_WIN\\src-tauri\\target\\release\\rlive.exe ($(stat -c%s "$EXE" 2>/dev/null || echo '?') bytes)"

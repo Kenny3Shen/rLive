@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FOLLOW_STATUS_REFRESH_INTERVAL_MS,
   followStatusRefreshDelay,
-} from "../frontend/features/follow/followRefresh";
+} from "../src/features/follow/followRefresh";
 
 describe("follow status refresh scheduling", () => {
   test("refreshes immediately when nothing has been fetched yet", () => {

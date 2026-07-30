@@ -1,0 +1,78 @@
+[package]
+name = "rlive"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2024"
+
+[lib]
+name = "rlive_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+# Native document picker used by profile import and export on desktop/mobile.
+tauri-plugin-dialog = "2"
+# The dialog plugin yields Android content:// URIs. Register the filesystem
+# bridge so profile imports and exports can read and write those user-selected
+# documents without trying to coerce them into invalid POSIX paths.
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "gzip", "brotli", "stream"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1.91"
+base64 = "0.22"
+md-5 = "0.10"
+hex = "0.4"
+# native-tls (SChannel on Windows / OpenSSL elsewhere): Douyu danmaku only
+# offers RSA-AES-GCM suites that modern rustls rejects → HandshakeFailure.
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+tokio-native-tls = "0.3"
+futures-util = "0.3"
+flate2 = "1"
+brotli = "7"
+uuid = { version = "1", features = ["v4"] }
+boa_engine = "0.20"
+# Candle provides the shared Rust tensor runtime and Whisper implementation.
+# Keep optional acceleration disabled: live captions deliberately use the
+# portable CPU backend on Windows and Android.
+candle-core = { version = "=0.11.0", default-features = false }
+candle-transformers = { version = "=0.11.0", default-features = false }
+# Candle selects the tokenizer implementation needed by its GGUF reader on
+# native targets; rLive adds no tokenizer default features or ASR FFI bridge.
+tokenizers = { version = "=0.22.0", default-features = false }
+# Pure-Rust OpenCC conversion for displaying Chinese ASR results in Simplified
+# Chinese. It has no native dependency, model, or runtime data files.
+ferrous-opencc = { version = "0.4", default-features = false, features = ["t2s-conversion"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Douyu's legacy WebSocket TLS suite still needs native-tls. Android has no
+# system OpenSSL development package for Cargo to link against, so opt into
+# openssl-sys's source build only for Android release artifacts.
+openssl = { version = "0.10", features = ["vendored"] }
+
+# Desktop release: smaller + faster binary (web player + sites + proxy).
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+strip = "symbols"
+panic = "abort"
+
+# `gemm-common` 0.19.0 emits aarch64 FP16 vector assembly from helpers that
+# are missing their function-level target feature.  Android rejects that even
+# though the library dynamically dispatches those helpers only on compatible
+# CPUs.  Pin the reviewed upstream fix instead of enabling FP16 globally,
+# which would incorrectly raise rLive's Android CPU baseline.
+[patch.crates-io]
+gemm-common = { git = "https://github.com/elasticdotventures/gemm", rev = "eb487f689ce194db66d04195b281a2d49cbe0ed4" }

@@ -11,7 +11,7 @@ import {
   splitAutoDanmakuText,
   splitGraphemes,
   utf16Units,
-} from "../frontend/features/room/danmaku/autoSend";
+} from "../src/features/room/danmaku/autoSend";
 
 describe("automatic danmaku text preparation", () => {
   test("collapses newlines and repeated whitespace into one sendable space", () => {

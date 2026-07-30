@@ -4,7 +4,7 @@ import {
   followPlatformFromSearch,
   formatFollowLiveDuration,
   withFollowPlatform,
-} from "../frontend/features/follow/followRoute";
+} from "../src/features/follow/followRoute";
 
 describe("follow platform route state", () => {
   test("accepts only supported platforms and falls back to all platforms", () => {

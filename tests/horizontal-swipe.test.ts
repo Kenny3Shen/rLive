@@ -4,13 +4,13 @@ import {
   isHorizontalSwipeIgnoredTarget,
   nextIndexForHorizontalSwipe,
   nextItemForHorizontalSwipe,
-} from "../frontend/shared/gestures/horizontalSwipe";
+} from "../src/shared/gestures/horizontalSwipe";
 import {
   canStartPullToRefresh,
   isPullToRefreshArmed,
   isPullToRefreshGesture,
   pullToRefreshDistance,
-} from "../frontend/shared/gestures/pullToRefresh";
+} from "../src/shared/gestures/pullToRefresh";
 
 describe("horizontal tab swipe", () => {
   test("requires a deliberate horizontal movement", () => {

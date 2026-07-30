@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canUseScreenWakeLock } from "../frontend/shared/hooks/useScreenWakeLock";
+import { canUseScreenWakeLock } from "../src/shared/hooks/useScreenWakeLock";
 
 describe("screen wake lock capability", () => {
   test("only enables the optional playback feature when the WebView exposes request()", () => {

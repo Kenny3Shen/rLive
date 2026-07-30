@@ -8,7 +8,7 @@ import {
   resolveEnabledSiteId,
   resolveStartupSiteId,
   updateDisabledSiteIds,
-} from "../frontend/shared/siteId";
+} from "../src/shared/siteId";
 
 describe("startup platform selection", () => {
   test("opens Bilibili for a first run with no local or backend setting", () => {

@@ -37,7 +37,7 @@
 
 Cookie、短时签名 URL 和上游原始响应均不写入日志或前端缓存。二维码、搜索等网页接口可能返回浏览器访问验证页；应用会使用用户显式配置的 HTTP(S) 代理，但不会自动完成访问验证。访问验证、Cookie 时效、地区和平台风控仍可能导致列表、搜索、房间、播放或弹幕失败；应用会保留已验证的首屏结果，而不是重复或伪造数据。
 
-- 站点与播放：`backend/src/sites/douyin.rs`
-- 弹幕连接与帧解析：`backend/src/danmaku/douyin.rs`
-- 本地签名：`backend/src/danmaku/douyin_sign.rs`
-- MSSDK 脚本：`backend/assets/douyin_webmssdk.js`
+- 站点与播放：`src-tauri/src/sites/douyin.rs`
+- 弹幕连接与帧解析：`src-tauri/src/danmaku/douyin.rs`
+- 本地签名：`src-tauri/src/danmaku/douyin_sign.rs`
+- MSSDK 脚本：`src-tauri/assets/douyin_webmssdk.js`

@@ -7,7 +7,7 @@ docs/
 
 # Vendored, generated, and model assets have their own upstream formatting.
 public/mpegts.js
-backend/Cargo.toml
-backend/assets/
-backend/resources/
-backend/tests/fixtures/
+src-tauri/Cargo.toml
+src-tauri/assets/
+src-tauri/resources/
+src-tauri/tests/fixtures/

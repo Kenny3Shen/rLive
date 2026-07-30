@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { DanmakuEvent } from "../frontend/shared/types/live";
+import type { DanmakuEvent } from "../src/shared/types/live";
 import {
   aggregatedDanmakuText,
   createDanmakuContentAggregator,
@@ -7,7 +7,7 @@ import {
   isDanmakuEvent,
   shouldShowInDanmakuPanel,
   shouldShowOnCanvas,
-} from "../frontend/features/room/danmaku/filter";
+} from "../src/features/room/danmaku/filter";
 
 function event(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
   return {

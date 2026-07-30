@@ -3,7 +3,7 @@ import {
   canUsePictureInPicture,
   toggleVideoPictureInPicture,
   type PictureInPictureDocument,
-} from "../frontend/features/room/player/useWebPlayer";
+} from "../src/features/room/player/useWebPlayer";
 
 type TestVideo = Pick<HTMLVideoElement, "disablePictureInPicture" | "requestPictureInPicture">;
 

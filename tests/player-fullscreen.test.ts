@@ -3,7 +3,11 @@ import {
   fullscreenElementFor,
   toggleElementFullscreen,
   type FullscreenDocument,
-} from "../frontend/features/room/player/useWebPlayer";
+} from "../src/features/room/player/useWebPlayer";
+import {
+  fullscreenPlayerOrientation,
+  videoAspectRatio,
+} from "../src/features/room/player/androidOrientation";
 
 describe("player fullscreen compatibility", () => {
   test("uses the standard Fullscreen API when it is available", async () => {
@@ -47,5 +51,29 @@ describe("player fullscreen compatibility", () => {
 
   test("does not pretend fullscreen succeeded when no API is exposed", async () => {
     await expect(toggleElementFullscreen({}, {})).resolves.toBe(false);
+  });
+});
+
+describe("Android fullscreen orientation", () => {
+  test("rotates only landscape streams, and only while fullscreen", () => {
+    expect(fullscreenPlayerOrientation(true, 16 / 9)).toBe("landscape");
+    expect(fullscreenPlayerOrientation(false, 16 / 9)).toBe("auto");
+    // Portrait rooms must stay upright instead of being turned on their side.
+    expect(fullscreenPlayerOrientation(true, 9 / 16)).toBe("auto");
+    expect(fullscreenPlayerOrientation(true, 1)).toBe("auto");
+  });
+
+  test("releases the lock when the ratio is unusable", () => {
+    expect(fullscreenPlayerOrientation(true, null)).toBe("auto");
+    expect(fullscreenPlayerOrientation(true, 0)).toBe("auto");
+    expect(fullscreenPlayerOrientation(true, Number.NaN)).toBe("auto");
+    expect(fullscreenPlayerOrientation(true, Number.POSITIVE_INFINITY)).toBe("auto");
+  });
+
+  test("derives the ratio from the decoded frame size", () => {
+    expect(videoAspectRatio({ videoWidth: 1920, videoHeight: 1080 })).toBeCloseTo(16 / 9);
+    expect(videoAspectRatio({ videoWidth: 0, videoHeight: 1080 })).toBeNull();
+    expect(videoAspectRatio({ videoWidth: 1920, videoHeight: 0 })).toBeNull();
+    expect(videoAspectRatio(null)).toBeNull();
   });
 });

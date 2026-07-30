@@ -25,5 +25,5 @@ Twitch 实现统一的分类、推荐、分区房间、搜索、详情、清晰�
 
 上游可用性、地区、频道状态和网页接口可能变化。
 
-- 站点与播放：`backend/src/sites/twitch.rs`
-- 匿名 IRC 弹幕：`backend/src/danmaku/twitch.rs`
+- 站点与播放：`src-tauri/src/sites/twitch.rs`
+- 匿名 IRC 弹幕：`src-tauri/src/danmaku/twitch.rs`

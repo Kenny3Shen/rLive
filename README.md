@@ -2,8 +2,6 @@
 
 **rLive** 是基于 **Tauri 2 + React + TypeScript + Rust** 的桌面直播客户端，提供多站点浏览、播放、弹幕与本机数据管理。
 
-英文版请见 [README.en.md](README.en.md)。
-
 ---
 
 ## 功能现状
@@ -37,10 +35,9 @@
 
 | 文档                                                                                  | 说明                          |
 | ------------------------------------------------------------------------------------- | ----------------------------- |
-| [README.en.md](README.en.md)                                                           | English README                |
-| [docs/README.md](docs/README.md)                                                       | 文档目录（中 / 英）           |
-| [docs/zh/用户指南.md](docs/zh/用户指南.md)                                             | 中文用户指南（优先）          |
-| [docs/zh/架构说明.md](docs/zh/架构说明.md)                                             | 中文架构说明                  |
+| [docs/README.md](docs/README.md)                                                       | 文档目录                      |
+| [docs/zh/用户指南.md](docs/zh/用户指南.md)                                             | 用户指南                      |
+| [docs/zh/架构说明.md](docs/zh/架构说明.md)                                             | 架构说明                      |
 | [docs/zh/B站平台API文档.md](docs/zh/B站平台API文档.md)                                   | 哔哩哔哩平台接入、播放与弹幕  |
 | [docs/zh/斗鱼平台API文档.md](docs/zh/斗鱼平台API文档.md)                                 | 斗鱼平台接入、发送修复与验证  |
 | [docs/zh/虎牙平台API文档.md](docs/zh/虎牙平台API文档.md)                                 | 虎牙平台接入、播放与弹幕      |
@@ -49,15 +46,6 @@
 | [docs/zh/Twitch平台API文档.md](docs/zh/Twitch平台API文档.md)                             | Twitch 平台接入、HLS 与 IRC   |
 | [docs/zh/播放器性能调研.md](docs/zh/播放器性能调研.md)                                 | mpegts.js / Rust 播放性能路线 |
 | [docs/zh/发布流程.md](docs/zh/发布流程.md)                                             | Windows / Android 正式发布流程 |
-| [docs/en/user-guide.md](docs/en/user-guide.md)                                         | English user guide            |
-| [docs/en/architecture.md](docs/en/architecture.md)                                     | English architecture          |
-| [docs/en/bilibili-platform-api.md](docs/en/bilibili-platform-api.md)                   | Bilibili platform API         |
-| [docs/en/douyu-platform-api.md](docs/en/douyu-platform-api.md)                         | Douyu platform API            |
-| [docs/en/huya-platform-api.md](docs/en/huya-platform-api.md)                           | Huya platform API             |
-| [docs/en/douyin-platform-api.md](docs/en/douyin-platform-api.md)                       | Douyin platform API           |
-| [docs/en/kuaishou-platform-api.md](docs/en/kuaishou-platform-api.md)                   | Kuaishou platform API         |
-| [docs/en/twitch-platform-api.md](docs/en/twitch-platform-api.md)                       | Twitch platform API           |
-| [docs/en/player-performance-research.md](docs/en/player-performance-research.md)       | Player performance research   |
 
 ---
 
@@ -65,10 +53,10 @@
 
 | 目录 | 职责 |
 | --- | --- |
-| `frontend/` | React / Vite 前端（页面、播放器、弹幕 UI） |
-| `backend/` | Tauri 2 + Rust 后端（站点、弹幕 WS、代理、SQLite） |
+| `src/` | React / Vite 前端（页面、播放器、弹幕 UI） |
+| `src-tauri/` | Tauri 2 + Rust 后端（站点、弹幕 WS、代理、SQLite） |
 | `tests/` | 前端单元测试 |
-| `docs/` | 中英文文档 |
+| `docs/` | 中文文档 |
 | `scripts/` | WSL 同步与 Windows 构建 |
 
 ---
@@ -108,7 +96,7 @@ bun run dev
 ```bash
 bun run build
 bun run test:unit
-cd backend && cargo test --lib
+cd src-tauri && cargo test --lib
 bun run tauri build
 ```
 
@@ -124,7 +112,7 @@ bun run tauri build
 成功产物：
 
 ```text
-D:\dev\rLive\backend\target\release\rlive.exe
+D:\dev\rLive\src-tauri\target\release\rlive.exe
 ```
 
 规则见 [AGENTS.md](AGENTS.md) 与 `.grok/rules/windows-delivery.md`。
@@ -160,7 +148,7 @@ D:\dev\rLive\backend\target\release\rlive.exe
 | 弹幕   | Rust WebSocket → Tauri 事件 → 批处理列表 + 按需 Canvas + SC / 设置 / 关注侧栏                                     |
 | 存储   | SQLite：关注、历史、设置、本机 Cookie                                                                               |
 
-详见 [中文架构说明](docs/zh/架构说明.md) 和 [English architecture](docs/en/architecture.md)。
+详见[架构说明](docs/zh/架构说明.md)。
 
 ---
 
