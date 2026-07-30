@@ -2,8 +2,10 @@ import { memo, useMemo, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { RefreshFab } from "@/shared/components/RefreshFab";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -46,6 +48,7 @@ export function HomePage() {
       }),
     initialPageParam: 1,
     getNextPageParam: nextRecommendPage,
+    ...BROWSING_LIST_QUERY_OPTIONS,
   });
   const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
 
@@ -64,12 +67,19 @@ export function HomePage() {
     ready: rooms.length > 0,
   });
 
+  const refreshing = query.isRefetching && !query.isFetchingNextPage;
+
   return (
     <PullToRefresh
       onRefresh={() => query.refetch()}
-      refreshing={query.isRefetching && !query.isFetchingNextPage}
+      refreshing={refreshing}
       className="mx-auto max-w-[1600px]"
     >
+      <RefreshFab
+        onRefresh={() => query.refetch()}
+        pending={refreshing || query.isLoading}
+        label="刷新推荐直播"
+      />
       <div ref={pageRef} key={siteId} className="flex flex-col gap-4">
         {query.isLoading && (
           <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">

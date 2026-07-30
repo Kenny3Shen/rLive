@@ -3,9 +3,11 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Radio } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
+import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { RefreshFab } from "@/shared/components/RefreshFab";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -61,6 +63,7 @@ export function CategoryRoomsPage() {
   const categoriesQuery = useQuery({
     queryKey: ["categories", siteId],
     queryFn: () => invokeCmd<LiveCategory[]>("site_get_categories", { siteId }),
+    ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
   const category = useMemo(
@@ -80,6 +83,7 @@ export function CategoryRoomsPage() {
     enabled: Boolean(parentId && categoryId),
     getNextPageParam: (last, _pages, lastPageParam) =>
       last.has_more ? lastPageParam + 1 : undefined,
+    ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
   const rooms = useMemo(
@@ -105,6 +109,13 @@ export function CategoryRoomsPage() {
       refreshing={roomsQuery.isRefetching && !roomsQuery.isFetchingNextPage}
       className="mx-auto max-w-[1600px]"
     >
+      <RefreshFab
+        onRefresh={() => roomsQuery.refetch()}
+        pending={
+          (roomsQuery.isRefetching && !roomsQuery.isFetchingNextPage) || roomsQuery.isLoading
+        }
+        label="刷新分区直播"
+      />
       <div className="pb-6">
         <PageHeader
           title={category.name}

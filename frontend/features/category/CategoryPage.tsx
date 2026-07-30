@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, LayoutGrid } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
+import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { RefreshFab } from "@/shared/components/RefreshFab";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import type { LiveCategory, LiveSubCategory } from "@/shared/types/live";
@@ -90,6 +92,7 @@ export function CategoryPage() {
   const categoriesQuery = useQuery({
     queryKey: ["categories", siteId],
     queryFn: () => invokeCmd<LiveCategory[]>("site_get_categories", { siteId }),
+    ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
   const categories = categoriesQuery.data ?? [];
@@ -119,6 +122,11 @@ export function CategoryPage() {
       refreshing={categoriesQuery.isRefetching}
       className="mx-auto max-w-[1600px]"
     >
+      <RefreshFab
+        onRefresh={() => categoriesQuery.refetch()}
+        pending={categoriesQuery.isRefetching || categoriesQuery.isLoading}
+        label="刷新分类"
+      />
       <div ref={pageRef} className="pb-6">
         <h1 className="sr-only">分类</h1>
         {categoriesQuery.isLoading && <CategorySkeleton />}

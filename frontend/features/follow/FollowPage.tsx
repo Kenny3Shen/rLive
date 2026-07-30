@@ -6,6 +6,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { RefreshFab } from "@/shared/components/RefreshFab";
 import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -141,6 +142,11 @@ export function FollowPage() {
       refreshing={refreshMutation.isPending}
       className="mx-auto max-w-4xl"
     >
+      <RefreshFab
+        onRefresh={() => refreshMutation.mutateAsync()}
+        pending={refreshMutation.isPending || followsQuery.isLoading}
+        label="刷新关注列表"
+      />
       <div ref={pageRef} className="flex flex-col gap-4">
         <div data-page-enter-heading>
           <PageHeader title="关注用户" />

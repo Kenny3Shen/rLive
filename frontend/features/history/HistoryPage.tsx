@@ -14,6 +14,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
+import { RefreshFab } from "@/shared/components/RefreshFab";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -294,6 +295,14 @@ export function HistoryPage() {
       onPointerCancelCapture={historyTabSwipe.onPointerCancelCapture}
       onClickCapture={historyTabSwipe.onClickCapture}
     >
+      <RefreshFab
+        onRefresh={refreshActiveHistory}
+        pending={
+          historyRefreshing ||
+          (activeTab === "watch" ? watchHistoryQuery.isLoading : danmakuSendHistoryQuery.isLoading)
+        }
+        label="刷新历史记录"
+      />
       <div className="flex min-h-full flex-col gap-4 touch-pan-y">
         <PageHeader
           title="历史记录"
