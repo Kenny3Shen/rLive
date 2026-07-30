@@ -4,8 +4,8 @@ mod api;
 
 pub use api::{
     DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_account_recommend_rooms, parse_categories,
-    parse_category_rooms, parse_live_status, parse_play_qualities, parse_play_urls,
-    parse_recommend_rooms, parse_search_rooms,
+    parse_category_rooms, parse_play_qualities, parse_play_urls, parse_recommend_rooms,
+    parse_search_rooms,
 };
 
 use std::collections::BTreeMap;
@@ -24,8 +24,8 @@ use crate::models::live::{
 use crate::sites::traits::LiveSite;
 
 use api::{
-    buvid_from_cookie, now_unix, parse_buvid, parse_room_detail_from_data, parse_wbi_keys,
-    wbi_sign_params,
+    buvid_from_cookie, now_unix, parse_buvid, parse_room_detail_from_data, parse_room_live_status,
+    parse_wbi_keys, wbi_sign_params,
 };
 
 /// Mutable session fields shared across requests (buvid / wbi keys).
@@ -768,12 +768,7 @@ impl LiveSite for BilibiliSite {
                 &[("room_id", room_id.to_string())],
             )
             .await?;
-        Ok(LiveRoomStatus {
-            status: parse_live_status(&text)?,
-            // This small endpoint is intentionally used only as a status
-            // probe.  Keep duration metadata out of its request/parse path.
-            live_started_at: None,
-        })
+        parse_room_live_status(&text)
     }
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {

@@ -3,6 +3,7 @@
   "message": "ok",
   "data": {
     "room_id": 23058,
-    "live_status": 1
+    "live_status": 1,
+    "live_time": "2023-11-15 06:13:20"
   }
 }

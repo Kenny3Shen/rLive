@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
-    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveSubCategory, PlayUrl,
-    RoomListPage, SiteId, parse_live_started_at,
+    LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
+    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
@@ -507,16 +507,27 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
         .collect())
 }
 
-/// Parse live status from `Room/get_info`.
+/// Parse the follow-list live metadata from `Room/get_info`.
 ///
 /// This endpoint is intentionally used by follow refreshes instead of the
 /// room-detail endpoint: the latter resolves playback and danmaku metadata
 /// that a status badge does not need.
-pub fn parse_live_status(raw: &str) -> AppResult<bool> {
+pub fn parse_room_live_status(raw: &str) -> AppResult<LiveRoomStatus> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("live status: {e}")))?;
-    let status = root.pointer("/data/live_status").map(as_i64).unwrap_or(0);
-    Ok(status == 1)
+    let data = root.get("data").unwrap_or(&Value::Null);
+    let status = data.get("live_status").map(as_i64).unwrap_or(0) == 1;
+    Ok(LiveRoomStatus {
+        status,
+        live_started_at: status
+            .then(|| {
+                parse_live_started_at(
+                    data.get("live_time")
+                        .or_else(|| data.get("live_start_time")),
+                )
+            })
+            .flatten(),
+    })
 }
 
 /// Parse buvid spi response.
@@ -773,7 +784,22 @@ mod tests {
     #[test]
     fn parse_live_status_fixture() {
         let raw = include_str!("../../../tests/fixtures/bilibili_live_status.json");
-        assert!(parse_live_status(raw).unwrap());
+        let status = parse_room_live_status(raw).unwrap();
+        assert!(status.status);
+        assert_eq!(status.live_started_at, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn offline_live_status_ignores_stale_start_time() {
+        let raw = r#"{
+            "data": {
+                "live_status": 0,
+                "live_time": "2023-11-15 06:13:20"
+            }
+        }"#;
+        let status = parse_room_live_status(raw).unwrap();
+        assert!(!status.status);
+        assert_eq!(status.live_started_at, None);
     }
 
     #[test]
