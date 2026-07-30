@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createEngine } from "../src/features/room/canvas/danmakuEngine";
+import { createEngine } from "../frontend/features/room/canvas/danmakuEngine";
 
 function chat(content: string, ts: number, user = "观众") {
   return {

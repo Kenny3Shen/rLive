@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { nextFailoverAction } from "../src/features/room/playback/failover";
-import { pickDefaultQualityIndex, parseQualityLevel } from "../src/features/room/playback/quality";
+import { nextFailoverAction } from "../frontend/features/room/playback/failover";
+import { pickDefaultQualityIndex, parseQualityLevel } from "../frontend/features/room/playback/quality";
 import {
   createShieldMatcher,
   floatingDanmakuText,
   isShielded,
   shouldShowOnCanvas,
-} from "../src/features/room/danmaku/filter";
-import { lineLabel, clampIndex } from "../src/lib/playUrl";
+} from "../frontend/features/room/danmaku/filter";
+import { lineLabel, clampIndex } from "../frontend/lib/playUrl";
 
 describe("failover policy (Simple Live)", () => {
   test("retries current line twice before advancing", () => {

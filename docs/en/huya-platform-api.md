@@ -42,6 +42,6 @@ The repaired controlled test received the platform success status. Platform acce
 
 Web protocols, lines, and login requirements may change. Cookies stay on the device and are not logged, exported, or uploaded.
 
-- Site and playback: `src-tauri/src/sites/huya/`
-- TARS chat transport: `src-tauri/src/danmaku/huya.rs`, `src-tauri/src/danmaku/tars.rs`
-- Commands, permission, and cooldown: `src-tauri/src/commands/danmaku.rs`
+- Site and playback: `backend/src/sites/huya/`
+- TARS chat transport: `backend/src/danmaku/huya.rs`, `backend/src/danmaku/tars.rs`
+- Commands, permission, and cooldown: `backend/src/commands/danmaku.rs`

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { DanmakuEvent } from "../src/shared/types/live";
+import type { DanmakuEvent } from "../frontend/shared/types/live";
 import {
   formatSuperChatAmount,
   formatSuperChatDuration,
@@ -10,7 +10,7 @@ import {
   superChatPalette,
   superChatRemainingSeconds,
   type SuperChatLine,
-} from "../src/features/room/superChat";
+} from "../frontend/features/room/superChat";
 
 function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
   return {

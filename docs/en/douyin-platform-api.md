@@ -29,7 +29,7 @@ No external signer configuration is required. Cookies, short-lived WSS URLs, and
 
 Browser verification pages, Cookie expiry, region limits, and platform risk controls can still break search, rooms, playback, or chat. rLive keeps verified first-page results rather than inventing pagination.
 
-- Site / playback: `src-tauri/src/sites/douyin.rs`
-- Chat transport: `src-tauri/src/danmaku/douyin.rs`
-- Local signature: `src-tauri/src/danmaku/douyin_sign.rs`
-- MSSDK script: `src-tauri/assets/douyin_webmssdk.js`
+- Site / playback: `backend/src/sites/douyin.rs`
+- Chat transport: `backend/src/danmaku/douyin.rs`
+- Local signature: `backend/src/danmaku/douyin_sign.rs`
+- MSSDK script: `backend/assets/douyin_webmssdk.js`

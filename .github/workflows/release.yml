@@ -33,8 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           package_version="$(jq -r '.version' package.json)"
-          tauri_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
-          cargo_version="$(awk -F '"' '/^version = / { print $2; exit }' src-tauri/Cargo.toml)"
+          tauri_version="$(jq -r '.version' backend/tauri.conf.json)"
+          cargo_version="$(awk -F '"' '/^version = / { print $2; exit }' backend/Cargo.toml)"
 
           test -n "$package_version"
           test "$package_version" = "$tauri_version"
@@ -119,12 +119,12 @@ jobs:
           bun run tauri -- build --ci --bundles nsis --config $tauriSigningConfig
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File |
+          $installer = Get-ChildItem "backend/target/release/bundle/nsis" -Filter "*.exe" -File |
             Select-Object -First 1
           if ($null -eq $installer) {
             throw "NSIS installer was not produced."
           }
-          $appBinary = Get-Item "src-tauri/target/release/rlive.exe"
+          $appBinary = Get-Item "backend/target/release/rlive.exe"
 
           foreach ($file in @($appBinary, $installer)) {
             $signature = Get-AuthenticodeSignature -FilePath $file.FullName
@@ -218,7 +218,7 @@ jobs:
             "$ANDROID_KEYSTORE_PASSWORD" \
             "$ANDROID_KEY_ALIAS" \
             "$ANDROID_KEY_PASSWORD" \
-            > src-tauri/gen/android/app/keystore.properties
+            > backend/gen/android/app/keystore.properties
 
       - name: Build and verify signed Android APK and AAB
         shell: bash
@@ -229,11 +229,11 @@ jobs:
           bun run tauri -- android build --ci --target aarch64 --apk --aab
 
           mapfile -t apk_files < <(
-            find src-tauri/gen/android/app/build/outputs/apk/universal/release \
+            find backend/gen/android/app/build/outputs/apk/universal/release \
               -type f -name '*.apk' ! -name '*unsigned*' | sort
           )
           mapfile -t aab_files < <(
-            find src-tauri/gen/android/app/build/outputs/bundle/universalRelease \
+            find backend/gen/android/app/build/outputs/bundle/universalRelease \
               -type f -name '*.aab' | sort
           )
           test "${#apk_files[@]}" -eq 1
@@ -294,7 +294,7 @@ jobs:
       - name: Remove Android signing material
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/rlive-release.jks" src-tauri/gen/android/app/keystore.properties
+        run: rm -f "$RUNNER_TEMP/rlive-release.jks" backend/gen/android/app/keystore.properties
 
       - name: Upload signed Android artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

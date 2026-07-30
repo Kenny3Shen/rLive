@@ -45,6 +45,16 @@ Not currently in scope: TV UI, multiple simultaneous rooms, recording/downloads,
 | Player performance research | [docs/en/player-performance-research.md](docs/en/player-performance-research.md) |
 | Release process | [docs/en/release-process.md](docs/en/release-process.md) |
 
+## Repository layout
+
+| Path | Role |
+| --- | --- |
+| `frontend/` | React / Vite UI (pages, player, danmaku chrome) |
+| `backend/` | Tauri 2 + Rust (sites, danmaku WS, proxy, SQLite) |
+| `tests/` | Frontend unit tests |
+| `docs/` | Chinese / English docs |
+| `scripts/` | WSL sync and Windows builds |
+
 ## Requirements
 
 - [Rust](https://www.rust-lang.org/) stable
@@ -82,7 +92,7 @@ Build and test:
 ```bash
 bun run build
 bun run test:unit
-cd src-tauri && cargo test --lib
+cd backend && cargo test --lib
 bun run tauri build
 ```
 
@@ -97,7 +107,7 @@ The project is developed in WSL and shipped from the Windows mirror. From the re
 The expected executable is:
 
 ```text
-D:\dev\rLive\src-tauri\target\release\rlive.exe
+D:\dev\rLive\backend\target\release\rlive.exe
 ```
 
 See [AGENTS.md](AGENTS.md) for delivery rules.

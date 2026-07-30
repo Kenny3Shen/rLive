@@ -4,7 +4,7 @@ CI and formal releases are deliberately separate. Pull requests and pushes to `m
 
 ## Triggering a release
 
-1. Keep the versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` identical.
+1. Keep the versions in `package.json`, `backend/Cargo.toml`, and `backend/tauri.conf.json` identical.
 2. Push the matching tag, for example `git tag v0.1.0 && git push origin v0.1.0`.
 3. `.github/workflows/release.yml` rejects a mismatched tag. A GitHub draft Release is created only after both signed builds pass.
 
@@ -48,7 +48,7 @@ chmod 600 /home/shenss/upload-keystore.jks
 keytool -list -v -keystore /home/shenss/upload-keystore.jks
 ```
 
-Create `src-tauri/gen/android/app/keystore.properties` with mode `600` (it is already Git-ignored) and fill in the actual values:
+Create `backend/gen/android/app/keystore.properties` with mode `600` (it is already Git-ignored) and fill in the actual values:
 
 ```properties
 storeFile=/home/shenss/upload-keystore.jks
@@ -62,9 +62,9 @@ Then build and verify the artifacts:
 ```bash
 bun run tauri -- android build --ci --target aarch64 --apk --aab
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs \
-  src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+  backend/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
 jarsigner -verify -strict \
-  src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
+  backend/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
 ```
 
 The local `keystore.properties` file is excluded from the Windows mirror so plaintext passwords do not persist in `D:\\dev\\rLive`.

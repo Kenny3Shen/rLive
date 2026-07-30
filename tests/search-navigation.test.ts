@@ -3,15 +3,15 @@ import {
   categoryHomePathAfterSiteChange,
   categoryNameFromSearch,
   categoryRoomsPath,
-} from "../src/features/category/categoryRoute";
+} from "../frontend/features/category/categoryRoute";
 import {
   canSearchNavigateBack,
   parseSearchScope,
   prepareSearchResults,
   searchMatch,
   searchPath,
-} from "../src/features/search/search";
-import type { LiveRoomItem } from "../src/shared/types/live";
+} from "../frontend/features/search/search";
+import type { LiveRoomItem } from "../frontend/shared/types/live";
 
 const rooms: LiveRoomItem[] = [
   {

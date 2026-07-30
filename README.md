@@ -61,6 +61,18 @@
 
 ---
 
+## 仓库布局
+
+| 目录 | 职责 |
+| --- | --- |
+| `frontend/` | React / Vite 前端（页面、播放器、弹幕 UI） |
+| `backend/` | Tauri 2 + Rust 后端（站点、弹幕 WS、代理、SQLite） |
+| `tests/` | 前端单元测试 |
+| `docs/` | 中英文文档 |
+| `scripts/` | WSL 同步与 Windows 构建 |
+
+---
+
 ## 环境要求
 
 - [Rust](https://www.rust-lang.org/)
@@ -96,7 +108,7 @@ bun run dev
 ```bash
 bun run build
 bun run test:unit
-cd src-tauri && cargo test --lib
+cd backend && cargo test --lib
 bun run tauri build
 ```
 
@@ -112,7 +124,7 @@ bun run tauri build
 成功产物：
 
 ```text
-D:\dev\rLive\src-tauri\target\release\rlive.exe
+D:\dev\rLive\backend\target\release\rlive.exe
 ```
 
 规则见 [AGENTS.md](AGENTS.md) 与 `.grok/rules/windows-delivery.md`。

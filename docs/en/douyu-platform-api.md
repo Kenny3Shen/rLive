@@ -49,6 +49,6 @@ The frontend never creates a synthetic message from a command result. Do not rep
 
 Cookie, JWT, signature, message text, and raw replies stay out of logs, exports, and uploads.
 
-- Site and playback: `src-tauri/src/sites/douyu/`
-- Chat receive/send state machine: `src-tauri/src/danmaku/douyu.rs`
-- Commands, permission, and cooldown: `src-tauri/src/commands/danmaku.rs`
+- Site and playback: `backend/src/sites/douyu/`
+- Chat receive/send state machine: `backend/src/danmaku/douyu.rs`
+- Commands, permission, and cooldown: `backend/src/commands/danmaku.rs`

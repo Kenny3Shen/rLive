@@ -151,7 +151,7 @@ $buildCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 if ($buildCode -ne 0) { throw "tauri build failed: $buildCode" }
 
-$exe = Join-Path $ProjectRoot "src-tauri\target\release\rlive.exe"
+$exe = Join-Path $ProjectRoot "backend\target\release\rlive.exe"
 if (-not (Test-Path $exe)) {
     throw "Build reported success but EXE missing: $exe"
 }

@@ -25,5 +25,5 @@ For playback, rLive requests a short-lived HLS access token by channel login and
 
 Availability, region, channel status, and web interfaces can change.
 
-- Site and playback: `src-tauri/src/sites/twitch.rs`
-- Anonymous IRC chat: `src-tauri/src/danmaku/twitch.rs`
+- Site and playback: `backend/src/sites/twitch.rs`
+- Anonymous IRC chat: `backend/src/danmaku/twitch.rs`

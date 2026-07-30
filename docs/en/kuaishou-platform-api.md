@@ -21,4 +21,4 @@ Playback prefers usable H.264 addresses and passes the required Referer/User-Age
 
 With no real-time receive path, rLive does not add a send-only feature. A future official desktop interaction capability should first establish receive, account state, errors, rate limits, and real echo before any user-operated sender is evaluated.
 
-- Site and playback: `src-tauri/src/sites/kuaishou.rs`
+- Site and playback: `backend/src/sites/kuaishou.rs`

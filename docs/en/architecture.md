@@ -4,17 +4,28 @@ English architecture reference. See [架构说明](../zh/架构说明.md) for th
 
 ## 1. Stack
 
+Top-level layout (formerly `src/` / `src-tauri/`):
+
+```
+rLive/
+├── frontend/     # React UI (Vite entry and pages)
+├── backend/      # Tauri 2 + Rust (commands / sites / DB)
+├── tests/        # Frontend unit tests
+├── docs/         # Chinese / English docs
+└── scripts/      # WSL sync and Windows builds
+```
+
 | Layer | Tech |
 |-------|------|
-| UI | React, Tailwind v4, shadcn/ui (Chinese chrome) |
+| UI | React, Tailwind v4, shadcn/ui (Chinese chrome) in `frontend/` |
 | Shell | Tauri 2 |
-| Backend | Rust: sites, SQLite, stream proxy, danmaku WS |
+| Backend | Rust in `backend/`: sites, SQLite, stream proxy, danmaku WS |
 | Playback | Live: `mpegts.js`; IPTV: `hls.js` / `mpegts.js`, all through localhost `stream_proxy` |
 
 ```
-React (room / IPTV / settings / lists)
+React (frontend/: room / IPTV / settings / lists)
         │ invoke / events
-Rust LiveSite + danmaku + proxy + DB
+Rust (backend/: LiveSite + danmaku + proxy + DB)
 ```
 
 ## 2. Playback flow
@@ -83,7 +94,7 @@ Persisted settings are `danmaku_area`, `danmaku_line_count`, `danmaku_opacity`, 
 ## 5. Delivery
 
 - Source: WSL `/home/.../rLive`  
-- Ship: `D:\dev\rLive` → `src-tauri\target\release\rlive.exe`  
+- Ship: `D:\dev\rLive` → `backend\target\release\rlive.exe`  
 - Script: `./scripts/build-windows-from-wsl.sh`  
 
 ## 6. Extension points

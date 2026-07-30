@@ -27,7 +27,7 @@ Twitch supports live lists, categories, search, rooms, HLS playback, and anonymo
 
 ### Windows
 
-Use `D:\dev\rLive\src-tauri\target\release\rlive.exe` or build with `scripts\build-windows.ps1`.  
+Use `D:\dev\rLive\backend\target\release\rlive.exe` or build with `scripts\build-windows.ps1`.  
 **No mpv required** — playback is Web MSE (`mpegts.js` + local proxy).
 
 ### From source

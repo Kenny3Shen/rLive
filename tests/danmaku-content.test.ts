@@ -5,7 +5,7 @@ import {
   normalizeDanmakuImageUrl,
   richDanmakuContent,
   withDanmakuContentSuffix,
-} from "../src/features/room/danmaku/content";
+} from "../frontend/features/room/danmaku/content";
 
 describe("rich danmaku content", () => {
   test("omits the desktop app Referer for Bilibili CDN emotes", () => {

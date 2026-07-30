@@ -4,7 +4,7 @@ import {
   dispatchAndroidBackEvent,
   hasBrowserHistoryEntry,
   shouldRegisterAndroidBackHandler,
-} from "../src/app/androidBackNavigation";
+} from "../frontend/app/androidBackNavigation";
 
 describe("Android Back navigation", () => {
   test("only registers an app listener for non-root Tauri Android routes", () => {

@@ -3,7 +3,7 @@ import {
   FOLLOW_ROOM_SWITCH_STATE,
   roomNavigationReturnsHome,
   roomSideTabFromNavigationState,
-} from "../src/features/room/roomNavigation";
+} from "../frontend/features/room/roomNavigation";
 
 describe("room navigation state", () => {
   test("follow-list room switches keep the tab open and return home", () => {

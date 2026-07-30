@@ -15,7 +15,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src"),
+      "@": path.resolve(__dirname, "frontend"),
     },
   },
   // Vite 8 + Rolldown: keep dependency prebundle tight for Tauri desktop.
@@ -89,7 +89,7 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/backend/**"],
     },
   },
   envPrefix: ["VITE_", "TAURI_"],

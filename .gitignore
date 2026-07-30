@@ -28,7 +28,7 @@ dist-ssr
 .superpowers/
 node_modules/
 dist/
-src-tauri/target/
+backend/target/
 *.log
 .DS_Store
 .playwright-cli/
@@ -43,3 +43,10 @@ src-tauri/target/
 *.pfx
 key.properties
 keystore.properties
+
+# Root Vite/Tauri intermediate output if created outside backend/target.
+/build
+
+# Local plugin Android build intermediates (never commit).
+backend/plugins/**/android/build/
+backend/plugins/**/android/.tauri/

@@ -3,7 +3,7 @@ import {
   fullscreenElementFor,
   toggleElementFullscreen,
   type FullscreenDocument,
-} from "../src/features/room/player/useWebPlayer";
+} from "../frontend/features/room/player/useWebPlayer";
 
 describe("player fullscreen compatibility", () => {
   test("uses the standard Fullscreen API when it is available", async () => {
