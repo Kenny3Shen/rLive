@@ -489,13 +489,7 @@ pub async fn run_loop(
     args: TwitchDanmakuArgs,
     proxy: Option<String>,
 ) -> AppResult<()> {
-    emit_event(
-        &events,
-        system_event(format!(
-            "正在连接 Twitch 弹幕服务器… #{}",
-            args.channel_login
-        )),
-    );
+    emit_event(&events, system_event("正在连接 Twitch 弹幕服务器…"));
     match proxy_from_setting(proxy.as_deref())? {
         None => {
             let (socket, _) = connect_async(IRC_WS_URL)

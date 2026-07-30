@@ -1234,7 +1234,7 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
         if total_messages == 0 && host_attempt == 0 {
             emit_system(&events, "正在连接弹幕服务器…");
         } else {
-            emit_system(&events, format!("正在重连弹幕服务器… host={host}"));
+            emit_system(&events, "正在重连弹幕服务器…");
         }
 
         let ended = run_connection(&events, &args, &host).await;
