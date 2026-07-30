@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { danmakuControlPresentation } from "../src/features/room/PlayerControls";
+import { danmakuControlPresentation } from "../frontend/features/room/PlayerControls";
 import {
   canStartPlayerEdgeGesture,
   isVerticalPlayerEdgeGesture,
@@ -8,14 +8,15 @@ import {
   playerEdgeGestureValue,
   shouldRunDanmakuCanvas,
   sidePanelStartsOpen,
-} from "../src/features/room/PlayerPane";
+} from "../frontend/features/room/PlayerPane";
 import {
   androidPlayerControlStep,
   getAndroidPlayerControls,
+  resetAndroidBrightness,
   setAndroidBrightness,
   setAndroidMediaVolume,
   supportsAndroidNativePlayerControls,
-} from "../src/features/room/player/androidPlayerControls";
+} from "../frontend/features/room/player/androidPlayerControls";
 
 describe("danmaku player control", () => {
   test("shows the enabled state instead of the next action in its icon", () => {
@@ -125,10 +126,12 @@ describe("Android native player controls", () => {
     });
     await expect(setAndroidMediaVolume(53, nativeInvoke)).resolves.toBe(55);
     await expect(setAndroidBrightness(3, nativeInvoke)).resolves.toBe(5);
+    await expect(resetAndroidBrightness(nativeInvoke)).resolves.toBeUndefined();
     expect(calls).toEqual([
       { command: "plugin:player-controls|getState", args: undefined },
       { command: "plugin:player-controls|setMediaVolume", args: { value: 55 } },
       { command: "plugin:player-controls|setBrightness", args: { value: 5 } },
+      { command: "plugin:player-controls|resetBrightness", args: undefined },
     ]);
   });
 });

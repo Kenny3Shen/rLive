@@ -203,7 +203,7 @@ Displays project info and `components.json` configuration. Run this first to dis
 | -------------------- | --------- | ------------------------------------------------------------------ |
 | `framework`          | `string`  | Detected framework (`next`, `vite`, `react-router`, `start`, etc.) |
 | `frameworkVersion`   | `string`  | Framework version (e.g. `15.2.4`)                                  |
-| `isSrcDir`           | `boolean` | Whether the project uses a `src/` directory                        |
+| `isSrcDir`           | `boolean` | Whether the project uses a `frontend/` directory                        |
 | `isRSC`              | `boolean` | Whether React Server Components are enabled                        |
 | `isTsx`              | `boolean` | Whether the project uses TypeScript                                |
 | `tailwindVersion`    | `string`  | `"v3"` or `"v4"`                                                   |

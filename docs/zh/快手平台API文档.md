@@ -25,4 +25,4 @@ rLive 尚无快手实时弹幕接收，因此也不新增独立的发送功能�
 
 如未来获得适用于桌面客户端的官方实时互动能力，应先实现接收、账号状态、错误处理、限频与回显，再评估用户主动发送。
 
-- 站点与播放：`src-tauri/src/sites/kuaishou.rs`
+- 站点与播放：`backend/src/sites/kuaishou.rs`

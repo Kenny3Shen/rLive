@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   nextCaptionAudioStartMs,
   selectAsrModelLoadRequest,
-} from "../src/features/room/asr/useLocalAsrCaptions";
+} from "../frontend/features/room/asr/useLocalAsrCaptions";
 
 describe("local ASR caption timing", () => {
   test("never serializes a non-finite media time into the raw IPC timestamp", () => {

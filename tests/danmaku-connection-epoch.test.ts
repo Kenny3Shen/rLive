@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   nextDanmakuConnectionEpoch,
   nextDanmakuConnectionFence,
-} from "../src/features/room/danmaku/connectionEpoch";
+} from "../frontend/features/room/danmaku/connectionEpoch";
 
 describe("danmaku connection epochs", () => {
   test("stay strictly ordered for rapid route changes", () => {

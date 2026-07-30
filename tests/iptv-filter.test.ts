@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { filterIptvChannels, getIptvGroupOptions } from "../src/features/iptv/filterChannels";
-import type { IptvChannel } from "../src/features/iptv/types";
+import { filterIptvChannels, getIptvGroupOptions } from "../frontend/features/iptv/filterChannels";
+import type { IptvChannel } from "../frontend/features/iptv/types";
 
 function channel(id: string, name: string, group: string): IptvChannel {
   return {

@@ -16,6 +16,7 @@ Before handing off, report the functional checks performed and any known limitat
 ## Product context (short)
 
 - Tauri 2 + React + Tailwind + shadcn-style UI
+- Layout: **`frontend/`** (React/Vite) + **`backend/`** (Tauri/Rust); do not use legacy `src/` or `src-tauri/` paths
 - Desktop live client: **web MSE player** (`mpegts.js` + `stream_proxy`), not mpv
 - Sites ready: **Bilibili / Huya / Douyu** (lists + play + danmaku); **Douyin** (SSR 首屏浏览 + 房间/播放 + 本地签名实时弹幕，登录 Cookie 搜索); Kuaishou stub
 - Danmaku: settings (opacity / size / speed / shield), list + canvas + SC panel

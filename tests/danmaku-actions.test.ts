@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatDanmakuClipboardText } from "../src/features/room/DanmakuPanel";
+import { formatDanmakuClipboardText } from "../frontend/features/room/DanmakuPanel";
 
 describe("danmaku clipboard actions", () => {
   test("copies a normalized message without altering its wording", () => {

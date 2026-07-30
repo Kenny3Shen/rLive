@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
+import { createSerialTaskQueue } from "../frontend/features/room/player/serialTaskQueue";
 import {
   hlsResponseStatus,
   isHlsStream,
@@ -7,7 +7,7 @@ import {
   nextHlsFatalRecoveryAction,
   playUrlKey,
   requestPlayerAutoplay,
-} from "../src/features/room/player/useWebPlayer";
+} from "../frontend/features/room/player/useWebPlayer";
 
 describe("player session queue", () => {
   test("does not start the replacement until the prior lifecycle has finished", async () => {

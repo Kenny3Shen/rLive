@@ -47,6 +47,6 @@ The manual composer sends one ordinary text message per action. Bilibili, Douyu,
 
 Cookies, CSRF values, message text, short-lived tokens, and raw upstream errors are not logged, exported, or returned to the frontend. The sender does not follow redirects, preventing a redirected target from receiving the logged-in session.
 
-- Site and playback: `src-tauri/src/sites/bilibili/`
-- Chat receive/send: `src-tauri/src/danmaku/bilibili.rs`
-- Commands and cooldown: `src-tauri/src/commands/danmaku.rs`
+- Site and playback: `backend/src/sites/bilibili/`
+- Chat receive/send: `backend/src/danmaku/bilibili.rs`
+- Commands and cooldown: `backend/src/commands/danmaku.rs`
