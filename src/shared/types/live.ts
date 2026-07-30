@@ -1,5 +1,5 @@
 /** Mirrors Rust `SiteId` serde snake_case values. */
-export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "kuaishou" | "twitch";
+export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "twitch";
 
 /** Mirrors Rust `commands::site::SiteInfo`. */
 export type SiteInfo = {
