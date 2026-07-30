@@ -8,7 +8,6 @@ pub enum SiteId {
     Huya,
     Douyu,
     Douyin,
-    Kuaishou,
     Twitch,
 }
 
@@ -19,7 +18,6 @@ impl SiteId {
             SiteId::Huya => "huya",
             SiteId::Douyu => "douyu",
             SiteId::Douyin => "douyin",
-            SiteId::Kuaishou => "kuaishou",
             SiteId::Twitch => "twitch",
         }
     }
@@ -30,7 +28,6 @@ impl SiteId {
             "huya" => Some(SiteId::Huya),
             "douyu" => Some(SiteId::Douyu),
             "douyin" => Some(SiteId::Douyin),
-            "kuaishou" => Some(SiteId::Kuaishou),
             "twitch" => Some(SiteId::Twitch),
             _ => None,
         }

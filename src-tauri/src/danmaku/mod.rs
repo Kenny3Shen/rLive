@@ -53,7 +53,7 @@ impl SelfDanmakuIdentity {
             SiteId::Huya => (&["yyuid", "udb_uid"], &["udb_n"]),
             // Do not infer an identity from opaque Douyin/Twitch session
             // tokens. A human-readable explicit name remains a safe fallback.
-            SiteId::Douyin | SiteId::Twitch | SiteId::Kuaishou => (&[], &[]),
+            SiteId::Douyin | SiteId::Twitch => (&[], &[]),
         };
         const GENERIC_NAME_KEYS: &[&str] =
             &["username", "user_name", "nickname", "nick", "display_name"];
@@ -483,11 +483,6 @@ pub async fn connect(
             );
             Ok(())
         }
-        other => Err(AppError::new(
-            "not_implemented",
-            format!("danmaku not implemented for {}", other.as_str()),
-        )
-        .with_site(other.as_str())),
     }
 }
 

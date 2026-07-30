@@ -102,16 +102,6 @@ export function SiteLogo({ siteId, className }: SiteLogoProps) {
           />
         </svg>
       );
-    case "kuaishou":
-      return (
-        <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">
-          <rect x="5" y="8" width="38" height="32" rx="10" fill="#FF4906" />
-          <circle cx="18" cy="20" r="4" fill="white" />
-          <circle cx="30" cy="20" r="4" fill="white" />
-          <circle cx="18" cy="31" r="4" fill="white" />
-          <circle cx="30" cy="31" r="4" fill="white" />
-        </svg>
-      );
     case "twitch":
       return (
         <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">

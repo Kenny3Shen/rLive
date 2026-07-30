@@ -34,9 +34,14 @@ describe("startup platform selection", () => {
   });
 
   test("falls back when the selected platform has been disabled", () => {
-    expect(resolveEnabledSiteId("kuaishou", ["kuaishou"])).toBe(DEFAULT_SITE_ID);
-    expect(resolveStartupSiteId("kuaishou", true, "douyu", ["kuaishou"])).toBe(DEFAULT_SITE_ID);
-    expect(isSiteEnabled("kuaishou", ["kuaishou"])).toBe(false);
+    expect(resolveEnabledSiteId("douyin", ["douyin"])).toBe(DEFAULT_SITE_ID);
+    expect(resolveStartupSiteId("douyin", true, "douyu", ["douyin"])).toBe(DEFAULT_SITE_ID);
+    expect(isSiteEnabled("douyin", ["douyin"])).toBe(false);
+  });
+
+  test("treats removed platforms such as kuaishou as unknown", () => {
+    expect(resolveEnabledSiteId("kuaishou", [])).toBe(DEFAULT_SITE_ID);
+    expect(isSiteEnabled("kuaishou", [])).toBe(false);
   });
 
   test("never allows every platform to be switched off", () => {

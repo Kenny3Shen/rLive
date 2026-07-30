@@ -319,13 +319,13 @@ mod tests {
     fn merge_carries_platform_visibility_preferences() {
         let mut conn = open_in_memory().unwrap();
         let mut package = ProfilePackage::sample();
-        package.settings.disabled_site_ids = vec!["kuaishou".into(), "douyin".into()];
+        package.settings.disabled_site_ids = vec!["huya".into(), "douyin".into()];
         package.settings.default_site = "douyu".into();
 
         merge_into_db(&mut conn, &package).unwrap();
 
         let settings = settings::get(&conn).unwrap();
-        assert_eq!(settings.disabled_site_ids, vec!["kuaishou", "douyin"]);
+        assert_eq!(settings.disabled_site_ids, vec!["huya", "douyin"]);
         assert_eq!(settings.default_site, "douyu");
     }
 

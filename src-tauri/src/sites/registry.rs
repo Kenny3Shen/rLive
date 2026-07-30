@@ -5,7 +5,6 @@ use crate::sites::bilibili::BilibiliSite;
 use crate::sites::douyin::DouyinSite;
 use crate::sites::douyu::DouyuSite;
 use crate::sites::huya::HuyaSite;
-use crate::sites::kuaishou::KuaishouSite;
 use crate::sites::traits::LiveSite;
 use crate::sites::twitch::TwitchSite;
 
@@ -33,10 +32,6 @@ pub fn all_meta() -> Vec<SiteMeta> {
         SiteMeta {
             id: SiteId::Douyin,
             name: "Douyin",
-        },
-        SiteMeta {
-            id: SiteId::Kuaishou,
-            name: "Kuaishou",
         },
         SiteMeta {
             id: SiteId::Twitch,
@@ -81,10 +76,6 @@ fn site_with_client(
             client,
             cookie.unwrap_or_default(),
         ))),
-        SiteId::Kuaishou => Ok(Box::new(KuaishouSite::new(
-            client,
-            cookie.unwrap_or_default(),
-        ))),
         SiteId::Twitch => Ok(Box::new(TwitchSite::new(client))),
     }
 }
@@ -97,7 +88,6 @@ pub fn is_ready(id: &SiteId) -> bool {
             | SiteId::Huya
             | SiteId::Douyu
             | SiteId::Douyin
-            | SiteId::Kuaishou
             | SiteId::Twitch
     )
 }
@@ -107,8 +97,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_six_sites() {
-        assert_eq!(all().len(), 6);
+    fn registry_has_five_sites() {
+        assert_eq!(all().len(), 5);
     }
 
     #[test]
@@ -124,7 +114,6 @@ mod tests {
         assert!(is_ready(&SiteId::Huya));
         assert!(is_ready(&SiteId::Douyu));
         assert!(is_ready(&SiteId::Douyin));
-        assert!(is_ready(&SiteId::Kuaishou));
         assert!(is_ready(&SiteId::Twitch));
     }
 }

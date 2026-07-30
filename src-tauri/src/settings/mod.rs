@@ -152,7 +152,7 @@ mod tests {
     fn set_keeps_one_platform_enabled_when_all_are_disabled() {
         let conn = open_in_memory().unwrap();
         let mut settings = AppSettings::default();
-        settings.default_site = "kuaishou".into();
+        settings.default_site = "douyin".into();
         settings.disabled_site_ids = crate::sites::registry::all_meta()
             .into_iter()
             .map(|site| site.id.as_str().to_owned())
