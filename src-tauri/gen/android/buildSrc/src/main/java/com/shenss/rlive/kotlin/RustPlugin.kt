@@ -69,9 +69,12 @@ open class RustPlugin : Plugin<Project> {
                     ).apply {
                         group = TASK_GROUP
                         description = "Build dynamic library in $profile mode for $targetArch"
-                        rootDirRel = config.rootDirRel
-                        target = targetName
-                        release = profile == "release"
+                        // Configure inputs at configuration time so the task action never
+                        // touches Task.project (deprecated at execution time / Gradle 10).
+                        rootDirRel.set(config.rootDirRel)
+                        target.set(targetName)
+                        release.set(profile == "release")
+                        rootDir.set(layout.projectDirectory.dir(config.rootDirRel))
                     }
 
                     buildTask.dependsOn(targetBuildTask)
