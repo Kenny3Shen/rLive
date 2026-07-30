@@ -5,7 +5,8 @@ buildscript {
     }
     dependencies {
         classpath("com.android.tools.build:gradle:8.11.0")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25")
+        // 2.0.x drops StartParameter.isConfigurationCacheRequested (deprecated in Gradle 8.14+).
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21")
     }
 }
 
