@@ -1,40 +1,22 @@
-import javax.inject.Inject
+import java.io.File
 import org.apache.tools.ant.taskdefs.condition.Os
 import org.gradle.api.DefaultTask
-import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.GradleException
 import org.gradle.api.logging.LogLevel
-import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
-import org.gradle.process.ExecOperations
 
-/**
- * Runs `bun tauri android android-studio-script` for one ABI/profile.
- *
- * Uses [ExecOperations] and configuration-time [rootDir] so this task stays
- * compatible with Gradle 9+ (no Task.project / Project.exec at execution time).
- */
-abstract class BuildTask : DefaultTask() {
-    @get:Inject
-    abstract val execOperations: ExecOperations
-
-    @get:Input
-    abstract val rootDirRel: Property<String>
-
-    @get:Input
-    abstract val target: Property<String>
-
-    @get:Input
-    abstract val release: Property<Boolean>
-
-    /** Absolute app/crate root; resolved at configuration time from [rootDirRel]. */
-    @get:Internal
-    abstract val rootDir: DirectoryProperty
+open class BuildTask : DefaultTask() {
+    @Input
+    var rootDirRel: String? = null
+    @Input
+    var target: String? = null
+    @Input
+    var release: Boolean? = null
 
     @TaskAction
     fun assemble() {
-        val executable = "bun"
+        val executable = """bun""";
         try {
             runTauriCli(executable)
         } catch (e: Exception) {
@@ -45,7 +27,7 @@ abstract class BuildTask : DefaultTask() {
                     "$executable.cmd",
                     "$executable.bat",
                 )
-
+                
                 var lastException: Exception = e
                 for (fallback in fallbacks) {
                     try {
@@ -57,29 +39,30 @@ abstract class BuildTask : DefaultTask() {
                 }
                 throw lastException
             } else {
-                throw e
+                throw e;
             }
         }
     }
 
-    private fun runTauriCli(executable: String) {
-        val args = mutableListOf("tauri", "android", "android-studio-script")
+    fun runTauriCli(executable: String) {
+        val rootDirRel = rootDirRel ?: throw GradleException("rootDirRel cannot be null")
+        val target = target ?: throw GradleException("target cannot be null")
+        val release = release ?: throw GradleException("release cannot be null")
+        val args = listOf("tauri", "android", "android-studio-script");
 
-        if (logger.isEnabled(LogLevel.DEBUG)) {
-            args.add("-vv")
-        } else if (logger.isEnabled(LogLevel.INFO)) {
-            args.add("-v")
-        }
-        if (release.get()) {
-            args.add("--release")
-        }
-        args.add("--target")
-        args.add(target.get())
-
-        execOperations.exec {
-            workingDir(rootDir.get().asFile)
+        project.exec {
+            workingDir(File(project.projectDir, rootDirRel))
             executable(executable)
             args(args)
+            if (project.logger.isEnabled(LogLevel.DEBUG)) {
+                args("-vv")
+            } else if (project.logger.isEnabled(LogLevel.INFO)) {
+                args("-v")
+            }
+            if (release) {
+                args("--release")
+            }
+            args(listOf("--target", target))
         }.assertNormalExitValue()
     }
 }

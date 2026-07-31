@@ -167,6 +167,7 @@ export const SuperChatOverlay = memo(function SuperChatOverlay({
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
   const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
+  const superChatOpacity = useSettingsStore((state) => state.superChatOpacity);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const shieldMatcherRef = useRef(shieldMatcher);
 
@@ -286,6 +287,7 @@ export const SuperChatOverlay = memo(function SuperChatOverlay({
       style={{
         fontSize: Math.max(12, (fontSize || 16) - 4),
         fontWeight,
+        opacity: superChatOpacity,
       }}
       aria-live="polite"
       aria-relevant="additions"
