@@ -1,18 +1,30 @@
-import java.io.File
+import javax.inject.Inject
 import org.apache.tools.ant.taskdefs.condition.Os
 import org.gradle.api.DefaultTask
-import org.gradle.api.GradleException
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.logging.LogLevel
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 
-open class BuildTask : DefaultTask() {
-    @Input
-    var rootDirRel: String? = null
-    @Input
-    var target: String? = null
-    @Input
-    var release: Boolean? = null
+abstract class BuildTask : DefaultTask() {
+    @get:Input
+    abstract val rootDirRel: Property<String>
+
+    @get:Input
+    abstract val target: Property<String>
+
+    @get:Input
+    abstract val release: Property<Boolean>
+
+    /** Working directory for the Tauri CLI, resolved at configuration time. */
+    @get:Internal
+    abstract val rootDir: DirectoryProperty
+
+    @get:Inject
+    abstract val execOperations: ExecOperations
 
     @TaskAction
     fun assemble() {
@@ -27,7 +39,7 @@ open class BuildTask : DefaultTask() {
                     "$executable.cmd",
                     "$executable.bat",
                 )
-                
+
                 var lastException: Exception = e
                 for (fallback in fallbacks) {
                     try {
@@ -45,24 +57,24 @@ open class BuildTask : DefaultTask() {
     }
 
     fun runTauriCli(executable: String) {
-        val rootDirRel = rootDirRel ?: throw GradleException("rootDirRel cannot be null")
-        val target = target ?: throw GradleException("target cannot be null")
-        val release = release ?: throw GradleException("release cannot be null")
+        val workingDirFile = rootDir.get().asFile
+        val targetName = target.get()
+        val isRelease = release.get()
         val args = listOf("tauri", "android", "android-studio-script");
 
-        project.exec {
-            workingDir(File(project.projectDir, rootDirRel))
+        execOperations.exec {
+            workingDir(workingDirFile)
             executable(executable)
             args(args)
-            if (project.logger.isEnabled(LogLevel.DEBUG)) {
+            if (logger.isEnabled(LogLevel.DEBUG)) {
                 args("-vv")
-            } else if (project.logger.isEnabled(LogLevel.INFO)) {
+            } else if (logger.isEnabled(LogLevel.INFO)) {
                 args("-v")
             }
-            if (release) {
+            if (isRelease) {
                 args("--release")
             }
-            args(listOf("--target", target))
+            args(listOf("--target", targetName))
         }.assertNormalExitValue()
     }
 }
