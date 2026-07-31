@@ -20,7 +20,6 @@ import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
-import { useLocalAsrCaptions } from "./asr/useLocalAsrCaptions";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useWebPlayer } from "./player/useWebPlayer";
 import { androidPlayerControlStep, useAndroidPlayerControls } from "./player/androidPlayerControls";
@@ -383,7 +382,6 @@ export function PlayerPane({
   const activeSideTab = sideTab ?? uncontrolledSideTab;
   const shouldMountSidePanel = sidePanelOpen || !compactViewport;
   const [osdOn, setOsdOn] = useState(true);
-  const [captionFontSize, setCaptionFontSize] = useState(20);
   const [playerBrightness, setPlayerBrightness] = useState(100);
   const [playerEdgeGestureFeedback, setPlayerEdgeGestureFeedback] =
     useState<PlayerEdgeGestureFeedback | null>(null);
@@ -445,14 +443,6 @@ export function PlayerPane({
         }
       : null);
   const showHost = !loading && displayError == null && !!playUrl;
-  const localCaptions = useLocalAsrCaptions({
-    videoRef: player.videoRef,
-    roomSessionKey,
-    mediaKey: player.mediaKey,
-    playbackAvailable: showHost,
-    volume: player.volume,
-    muted: player.muted,
-  });
   const transportDisabled = !showHost;
   // A failed MSE session still has a stream URL and must be refreshable; the
   // error state is precisely where this control is most useful.
@@ -1268,40 +1258,6 @@ export function PlayerPane({
               </div>
             )}
 
-            {/* Local captions: DOM text stays above danmaku (z-10),
-                below the bottom playback chrome (z-30), and is intentionally
-                absent from native PiP because PiP owns only the video frame. */}
-            {showHost && (
-              <>
-                {localCaptions.message && (
-                  <div className="pointer-events-none absolute top-3 right-3 z-20 max-w-[min(22rem,calc(100%-1.5rem))]">
-                    <span
-                      role="status"
-                      aria-live="polite"
-                      className="rounded-md border border-white/10 bg-black/72 px-2 py-1 text-xs text-white/85 shadow-sm"
-                    >
-                      {localCaptions.message}
-                    </span>
-                  </div>
-                )}
-
-                {localCaptions.caption && (
-                  <div
-                    aria-live="polite"
-                    aria-atomic="true"
-                    className="pointer-events-none absolute right-6 bottom-[calc(5rem+env(safe-area-inset-bottom))] left-6 z-20 flex justify-center"
-                  >
-                    <p
-                      className="max-w-[min(56rem,92%)] rounded-xl border border-white/10 bg-black/72 px-4 py-2 text-center leading-relaxed font-medium text-white shadow-lg"
-                      style={{ fontSize: `${captionFontSize}px` }}
-                    >
-                      {localCaptions.caption}
-                    </p>
-                  </div>
-                )}
-              </>
-            )}
-
             {playerEdgeGestureFeedback && (
               <div
                 aria-hidden="true"
@@ -1386,12 +1342,6 @@ export function PlayerPane({
                 loadError={loadError}
                 disabled={transportDisabled}
                 overlay
-                captions={{
-                  enabled: localCaptions.enabled,
-                  pending: localCaptions.pending,
-                  ready: localCaptions.ready,
-                  onToggle: localCaptions.toggle,
-                }}
                 centerSlot={
                   <DanmakuComposer
                     siteId={siteId}
@@ -1525,17 +1475,6 @@ export function PlayerPane({
                   className="h-full"
                   autoSend={autoDanmakuSend}
                   siteId={siteId}
-                  captions={{
-                    enabled: localCaptions.enabled,
-                    pending: localCaptions.pending,
-                    ready: localCaptions.ready,
-                    state: localCaptions.state,
-                    message: localCaptions.message,
-                    fontSize: captionFontSize,
-                    onFontSizeChange: (size) => {
-                      setCaptionFontSize(Math.max(16, Math.min(36, Math.round(size))));
-                    },
-                  }}
                 />
               </TabsContent>
             </div>

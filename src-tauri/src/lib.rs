@@ -1,5 +1,4 @@
 mod account;
-mod asr;
 mod commands;
 mod danmaku;
 mod db;
@@ -28,10 +27,6 @@ use commands::android_player_controls::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
     android_player_controls_set_brightness, android_player_controls_set_media_volume,
     android_player_controls_set_orientation,
-};
-use commands::asr::{
-    asr_audio_push, asr_model_load_default, asr_model_status, asr_model_unload, asr_session_start,
-    asr_session_stop, asr_status,
 };
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
@@ -213,13 +208,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings_get,
             settings_set,
-            asr_model_status,
-            asr_status,
-            asr_model_load_default,
-            asr_model_unload,
-            asr_session_start,
-            asr_session_stop,
-            asr_audio_push,
             account_get_cookie,
             account_get_profile,
             account_set_cookie,
@@ -285,7 +273,6 @@ pub fn run() {
                 api.prevent_close();
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
-                    state.asr.stop_all();
                     state.stream_proxy.stop();
                     state.danmaku.disconnect();
                 }
@@ -297,14 +284,12 @@ pub fn run() {
                 ..
             } if label == "main" => {
                 if let Some(state) = app_handle.try_state::<AppState>() {
-                    state.inner().asr.stop_all();
                     state.inner().stream_proxy.stop();
                 }
             }
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
-                    state.asr.stop_all();
                     state.stream_proxy.stop();
                     state.danmaku.disconnect();
                 }

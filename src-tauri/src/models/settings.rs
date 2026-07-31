@@ -149,17 +149,4 @@ mod tests {
         assert!(settings.iptv_custom_m3u_url.is_none());
         assert!(settings.disabled_site_ids.is_empty());
     }
-
-    #[test]
-    fn legacy_custom_model_path_is_ignored() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value.as_object_mut().unwrap().insert(
-            "asr_model_path".into(),
-            serde_json::json!("C:\\models\\old.bin"),
-        );
-
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert_eq!(settings, AppSettings::default());
-    }
 }

@@ -21,17 +21,9 @@ import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
-import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
-
-export type LocalCaptionControls = {
-  enabled: boolean;
-  pending: boolean;
-  ready: boolean;
-  onToggle: () => void;
-};
 
 export function danmakuControlPresentation(osdOn: boolean | undefined) {
   const enabled = Boolean(osdOn);
@@ -63,8 +55,6 @@ export type PlayerControlsProps = {
   overlay?: boolean;
   /** Optional compact content centered between transport and room controls. */
   centerSlot?: ReactNode;
-  /** Local caption controls, available for a live room player. */
-  captions?: LocalCaptionControls;
   /**
    * The menu content is portalled outside the player stage. Tell the stage
    * when one is open so its idle timer cannot fade out beneath a menu.
@@ -92,6 +82,14 @@ type ControlButtonProps = Omit<
   children: ReactNode;
 };
 
+/**
+ * Video chrome reads from further away than in-page buttons, so the glyphs run
+ * one step above the shared button default (size-4).
+ */
+const CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-5";
+/** Keep the larger glyphs from crowding their own hit target. */
+const CONTROL_BUTTON_CLASS = "size-9 max-md:size-11 max-md:touch-manipulation";
+
 function ControlButton({
   label,
   children,
@@ -107,7 +105,7 @@ function ControlButton({
       size="icon-sm"
       disabled={disabled}
       aria-label={label}
-      className={cn("max-md:size-11 max-md:touch-manipulation", className)}
+      className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, className)}
     >
       {children}
     </Button>
@@ -140,7 +138,6 @@ export function PlayerControls({
   disabled = false,
   overlay = false,
   centerSlot,
-  captions,
   onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
@@ -162,7 +159,7 @@ export function PlayerControls({
   const volumeLabel = "调节音量";
   const muteLabel = isMuted ? "取消静音（M）" : "静音（M）";
   const overlayButtonClass = overlay
-    ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70"
+    ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
     : undefined;
   const overlayStreamSettingsContentClass = overlay
     ? "border border-white/10 bg-black/90 text-white shadow-xl"
@@ -216,13 +213,6 @@ export function PlayerControls({
     .filter(Boolean)
     .join("，");
   const closeStreamSettings = () => setStreamSettingsOpen(false);
-  const captionButtonLabel = captions?.pending
-    ? "正在启动本地字幕"
-    : captions?.enabled
-      ? "关闭本地字幕"
-      : captions?.ready
-        ? "开启本地字幕"
-        : "开启本地字幕（等待播放器音频）";
   const danmakuControl = danmakuControlPresentation(osdOn);
   const DanmakuControlIcon = danmakuControl.icon === "captions" ? Captions : CaptionsOff;
   const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
@@ -231,7 +221,9 @@ export function PlayerControls({
       className={cn(
         "flex min-w-0 shrink-0 items-center gap-1 px-1.5 py-1 max-md:justify-between",
         overlay
-          ? "rounded-xl border border-white/10 bg-black/72 text-white shadow-[0_10px_30px_rgb(0_0_0_/_0.34)]"
+          ? // Transparent chrome: the video is the background. Contrast comes
+            // from each glyph's own drop shadow, not a plate behind the bar.
+            "border-0 bg-transparent text-white shadow-none"
           : "border-t border-border bg-card",
       )}
     >
@@ -263,7 +255,12 @@ export function PlayerControls({
                 size="icon-sm"
                 disabled={disabled}
                 aria-label={volumeLabel}
-                className={cn("max-md:hidden", overlayButtonClass)}
+                className={cn(
+                  CONTROL_BUTTON_CLASS,
+                  CONTROL_ICON_CLASS,
+                  "max-md:hidden",
+                  overlayButtonClass,
+                )}
               />
             }
           >
@@ -333,7 +330,7 @@ export function PlayerControls({
                     aria-label={
                       streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : "播放设置"
                     }
-                    className={cn("max-md:size-11 max-md:touch-manipulation", overlayButtonClass)}
+                    className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
                   />
                 }
               >
@@ -433,28 +430,6 @@ export function PlayerControls({
           </div>
         )}
 
-        {captions && (
-          <div className="hidden md:block">
-            <ControlButton
-              label={captionButtonLabel}
-              variant={overlay ? "ghost" : captions.enabled ? "secondary" : "ghost"}
-              className={overlayButtonClass}
-              disabled={disabled || captions.pending}
-              aria-pressed={captions.enabled}
-              aria-busy={captions.pending}
-              onClick={captions.onToggle}
-            >
-              {captions.pending ? (
-                <Spinner data-icon="inline-start" aria-hidden />
-              ) : captions.enabled ? (
-                <Captions data-icon="inline-start" aria-hidden />
-              ) : (
-                <CaptionsOff data-icon="inline-start" aria-hidden />
-              )}
-            </ControlButton>
-          </div>
-        )}
-
         <Popover open={mobileOptionsOpen} onOpenChange={setMobileOptionsOpen}>
           <PopoverTrigger
             render={
@@ -462,7 +437,11 @@ export function PlayerControls({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="更多播放选项"
-                className={cn("size-11 touch-manipulation md:hidden", overlayButtonClass)}
+                className={cn(
+                  CONTROL_ICON_CLASS,
+                  "size-11 touch-manipulation md:hidden",
+                  overlayButtonClass,
+                )}
               />
             }
           >
@@ -570,43 +549,9 @@ export function PlayerControls({
               </>
             )}
 
-            {captions && (
-              <>
-                {(onRefresh || qualities.length > 1 || lines.length > 1) && (
-                  <Separator className={cn("my-1", overlay && "bg-white/10")} />
-                )}
-                <Button
-                  type="button"
-                  variant={overlay ? "ghost" : captions.enabled ? "secondary" : "ghost"}
-                  size="sm"
-                  className={cn(
-                    "h-11 w-full justify-start",
-                    overlayStreamSettingsOptionClass,
-                    overlay && captions.enabled && "bg-white/18 text-white",
-                  )}
-                  disabled={disabled || captions.pending}
-                  aria-pressed={captions.enabled}
-                  aria-busy={captions.pending}
-                  onClick={() => {
-                    captions.onToggle();
-                    setMobileOptionsOpen(false);
-                  }}
-                >
-                  {captions.pending ? (
-                    <Spinner data-icon="inline-start" aria-hidden />
-                  ) : captions.enabled ? (
-                    <Captions data-icon="inline-start" aria-hidden />
-                  ) : (
-                    <CaptionsOff data-icon="inline-start" aria-hidden />
-                  )}
-                  {captionButtonLabel}
-                </Button>
-              </>
-            )}
-
             {pictureInPictureSupported && onTogglePictureInPicture && (
               <>
-                {(onRefresh || qualities.length > 1 || lines.length > 1 || captions) && (
+                {(onRefresh || qualities.length > 1 || lines.length > 1) && (
                   <Separator className={cn("my-1", overlay && "bg-white/10")} />
                 )}
                 <Button

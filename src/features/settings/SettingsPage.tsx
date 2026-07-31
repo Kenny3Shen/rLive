@@ -11,7 +11,6 @@ import {
   Info,
   MonitorPlay,
   Network,
-  Power,
   QrCode,
   Radio,
   RefreshCw,
@@ -93,20 +92,6 @@ type AccountQrLoginPoll = {
 type AccountProfile = {
   username: string | null;
   has_cookie: boolean;
-};
-
-type AsrModelStatus = {
-  loaded: boolean;
-  loading: boolean;
-  bundled: boolean;
-  path: string | null;
-  active_session_id: string | null;
-  queue_depth: number;
-  queue_capacity: number;
-  sample_rate_hz: number;
-  backend: string;
-  cpu_only: boolean;
-  speech_gate_active: boolean;
 };
 
 const settingsCategories: {
@@ -668,153 +653,6 @@ function IptvCustomM3uUrlField() {
   );
 }
 
-function LocalCaptionModelField() {
-  const nativeRuntime = isTauri();
-  const [modelStatus, setModelStatus] = useState<AsrModelStatus | null>(null);
-  const [action, setAction] = useState<"status" | "default" | "unload" | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshStatus = useCallback(async () => {
-    if (!nativeRuntime) return;
-    setAction("status");
-    setError(null);
-    try {
-      const next = await invokeCmd<AsrModelStatus>("asr_model_status");
-      setModelStatus(next);
-      setNotice(null);
-    } catch (cause) {
-      const message =
-        typeof cause === "object" && cause && "message" in cause
-          ? String((cause as { message: string }).message)
-          : String(cause);
-      setError(`无法读取本地字幕模型状态：${message}`);
-    } finally {
-      setAction(null);
-    }
-  }, [nativeRuntime]);
-
-  useEffect(() => {
-    if (!nativeRuntime) return;
-    void refreshStatus();
-  }, [nativeRuntime, refreshStatus]);
-
-  async function loadDefaultModel() {
-    setAction("default");
-    setError(null);
-    setNotice(null);
-    try {
-      const next = await invokeCmd<AsrModelStatus>("asr_model_load_default");
-      setModelStatus(next);
-      setNotice("内置字幕模型已加载，可在直播间开启实时字幕");
-    } catch (cause) {
-      const message =
-        typeof cause === "object" && cause && "message" in cause
-          ? String((cause as { message: string }).message)
-          : String(cause);
-      setError(`加载内置模型失败：${message}`);
-    } finally {
-      setAction(null);
-    }
-  }
-
-  async function unloadModel() {
-    setAction("unload");
-    setError(null);
-    setNotice(null);
-    try {
-      const next = await invokeCmd<AsrModelStatus>("asr_model_unload");
-      setModelStatus(next);
-      setNotice("本地字幕模型已卸载；下次开启字幕会按需重新加载");
-    } catch (cause) {
-      const message =
-        typeof cause === "object" && cause && "message" in cause
-          ? String((cause as { message: string }).message)
-          : String(cause);
-      setError(`卸载模型失败：${message}`);
-    } finally {
-      setAction(null);
-    }
-  }
-
-  const loading = action === "default" || modelStatus?.loading === true;
-  const backendUnavailable = modelStatus?.backend === "unavailable";
-  const statusLabel = !nativeRuntime
-    ? "仅应用内可用"
-    : action === "status"
-      ? "检查中"
-      : backendUnavailable
-        ? "待重构"
-        : modelStatus?.loading
-          ? "加载中"
-          : modelStatus?.loaded
-            ? "已加载"
-            : "未加载";
-
-  return (
-    <Field data-invalid={error ? true : undefined}>
-      <FieldContent>
-        <div className="flex flex-wrap items-center gap-2">
-          <FieldTitle className="mr-auto">字幕后端</FieldTitle>
-          <Badge variant={modelStatus?.loaded ? "secondary" : "outline"}>{statusLabel}</Badge>
-        </div>
-        {nativeRuntime && (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                onClick={() => void loadDefaultModel()}
-                disabled={
-                  loading ||
-                  action === "status" ||
-                  backendUnavailable ||
-                  (modelStatus?.loaded === true && modelStatus.bundled)
-                }
-              >
-                {action === "default" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <MonitorPlay data-icon="inline-start" aria-hidden />
-                )}
-                {action === "default" ? "加载中…" : backendUnavailable ? "暂无模型" : "加载模型"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => void unloadModel()}
-                disabled={action !== null || !modelStatus?.loaded}
-              >
-                {action === "unload" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <Power data-icon="inline-start" aria-hidden />
-                )}
-                {action === "unload" ? "卸载中…" : "卸载"}
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => void refreshStatus()}
-                disabled={action !== null}
-              >
-                {action === "status" ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <RefreshCw data-icon="inline-start" aria-hidden />
-                )}
-                刷新
-              </Button>
-            </div>
-            {notice && (
-              <FieldDescription role="status" aria-live="polite">
-                {notice}
-              </FieldDescription>
-            )}
-            {error && <FieldError>{error}</FieldError>}
-          </>
-        )}
-      </FieldContent>
-    </Field>
-  );
-}
-
 function isHttpM3uUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -1139,9 +977,6 @@ export function SettingsPage() {
                       <ToggleGroupItem value="low">最低</ToggleGroupItem>
                     </ToggleGroup>
                   </Field>
-                </Section>
-                <Section title="本地字幕">
-                  <LocalCaptionModelField />
                 </Section>
               </SettingsContent>
             </TabsContent>

@@ -45,16 +45,6 @@ const FONT_WEIGHTS = [
   { value: 700, label: "粗体" },
 ] as const;
 
-export type LocalCaptionSettings = {
-  enabled: boolean;
-  pending: boolean;
-  ready: boolean;
-  state: "off" | "starting" | "active" | "error";
-  message: string | null;
-  fontSize: number;
-  onFontSizeChange: (size: number) => void;
-};
-
 type DanmakuSliderProps = {
   id: string;
   title: string;
@@ -98,60 +88,6 @@ function DanmakuSlider({
         </Badge>
       </div>
     </Field>
-  );
-}
-
-function captionStatusLabel(captions: LocalCaptionSettings): string {
-  if (captions.pending || captions.state === "starting") return "准备中";
-  if (captions.enabled) return "正在识别";
-  if (captions.state === "error") return "需要重试";
-  return "已关闭";
-}
-
-function LocalCaptionSettingsSection({ captions }: { captions: LocalCaptionSettings }) {
-  const statusLabel = captionStatusLabel(captions);
-
-  return (
-    <Card size="sm">
-      <CardHeader className="border-b">
-        <CardTitle>本地字幕</CardTitle>
-        <CardAction>
-          <Badge variant={captions.state === "error" ? "destructive" : "secondary"}>
-            {statusLabel}
-          </Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="pt-3">
-        <FieldSet>
-          <FieldLegend className="sr-only">本地字幕</FieldLegend>
-          <FieldGroup>
-            <Field className="gap-2 rounded-lg bg-muted/35 p-3">
-              <FieldTitle id="room-local-caption-font-size">字幕字号</FieldTitle>
-              <div className="flex items-center gap-3">
-                <Slider
-                  aria-labelledby="room-local-caption-font-size"
-                  value={captions.fontSize}
-                  min={16}
-                  max={36}
-                  step={1}
-                  onValueChange={(value) => captions.onFontSizeChange(Number(value))}
-                />
-                <Badge variant="secondary" className="min-w-12 justify-center">
-                  {captions.fontSize}px
-                </Badge>
-              </div>
-            </Field>
-          </FieldGroup>
-        </FieldSet>
-      </CardContent>
-      {captions.message && (
-        <CardFooter>
-          <span className="text-xs text-muted-foreground" role="status" aria-live="polite">
-            {captions.message}
-          </span>
-        </CardFooter>
-      )}
-    </Card>
   );
 }
 
@@ -304,12 +240,10 @@ function sameWords(left: readonly string[], right: readonly string[]): boolean {
  */
 export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   className,
-  captions,
   autoSend,
   siteId,
 }: {
   className?: string;
-  captions?: LocalCaptionSettings;
   autoSend?: AutoDanmakuSendController;
   siteId?: SiteId;
 }) {
@@ -471,7 +405,6 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
             </CardContent>
           </Card>
         )}
-        {captions && <LocalCaptionSettingsSection captions={captions} />}
         {autoSend && <AutoDanmakuSendSection autoSend={autoSend} />}
 
         <Card size="sm">
