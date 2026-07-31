@@ -1,4 +1,4 @@
-//! Tauri commands for the opt-in, entirely local Whisper live-caption path.
+//! Stable Tauri command surface for the pending local-caption redesign.
 //!
 //! Audio is intentionally accepted as an IPC raw body instead of a JSON array:
 //! a 16 kHz PCM stream would otherwise spend substantially more CPU and memory
@@ -7,7 +7,7 @@
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, State};
 
-use crate::asr::{self, AsrAudioPushResult, AsrModelStatus};
+use crate::asr::{AsrAudioPushResult, AsrModelStatus};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -24,41 +24,10 @@ pub fn asr_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
     state.asr.model_status()
 }
 
-/// Loads rLive's fixed bundled CPU-first Whisper tiny model on a blocking
-/// worker. User-selected model paths are intentionally unsupported, which
-/// keeps desktop and Android caption behavior identical.
-#[tauri::command(async)]
-pub async fn asr_model_load_default(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> AppResult<AsrModelStatus> {
-    let operation = state.asr.begin_model_load()?;
-    let app_for_load = app.clone();
-    let load_result = tauri::async_runtime::spawn_blocking(move || -> AppResult<_> {
-        // Resolving the bundle copies Android APK assets into app cache. Keep
-        // that work and Candle's GGUF initialization off Tauri's async worker.
-        let paths = asr::bundled_model_paths(&app_for_load)?;
-        let path = paths.weights_path();
-        let model = asr::load_cpu_model(&paths)?;
-        Ok((path, model))
-    })
-    .await;
-    let (path, model) = match load_result {
-        Ok(Ok(loaded)) => loaded,
-        Ok(Err(error)) => {
-            state.asr.fail_model_load(operation);
-            return Err(error);
-        }
-        Err(_) => {
-            state.asr.fail_model_load(operation);
-            return Err(AppError::new(
-                "asr_model_load_interrupted",
-                "本地字幕模型加载被中断",
-            ));
-        }
-    };
-
-    state.asr.complete_model_load(operation, path, model, true)
+/// Retained for renderer compatibility while the native backend is rebuilt.
+#[tauri::command]
+pub fn asr_model_load_default(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
+    state.asr.load_default_model()
 }
 
 /// Releases the currently loaded model and fences any in-flight audio.

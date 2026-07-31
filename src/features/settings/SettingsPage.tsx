@@ -738,24 +738,24 @@ function LocalCaptionModelField() {
   }
 
   const loading = action === "default" || modelStatus?.loading === true;
+  const backendUnavailable = modelStatus?.backend === "unavailable";
   const statusLabel = !nativeRuntime
     ? "仅应用内可用"
     : action === "status"
       ? "检查中"
-      : modelStatus?.loading
-        ? "加载中"
-        : modelStatus?.loaded
-          ? "已加载"
-          : "未加载";
+      : backendUnavailable
+        ? "待重构"
+        : modelStatus?.loading
+          ? "加载中"
+          : modelStatus?.loaded
+            ? "已加载"
+            : "未加载";
 
   return (
     <Field data-invalid={error ? true : undefined}>
       <FieldContent>
         <div className="flex flex-wrap items-center gap-2">
-          <FieldTitle className="mr-auto">内置模型</FieldTitle>
-          <Badge variant="outline">tiny</Badge>
-          <Badge variant="outline">Q4</Badge>
-          <Badge variant="outline">23 MB</Badge>
+          <FieldTitle className="mr-auto">字幕后端</FieldTitle>
           <Badge variant={modelStatus?.loaded ? "secondary" : "outline"}>{statusLabel}</Badge>
         </div>
         {nativeRuntime && (
@@ -766,6 +766,7 @@ function LocalCaptionModelField() {
                 disabled={
                   loading ||
                   action === "status" ||
+                  backendUnavailable ||
                   (modelStatus?.loaded === true && modelStatus.bundled)
                 }
               >
@@ -774,7 +775,7 @@ function LocalCaptionModelField() {
                 ) : (
                   <MonitorPlay data-icon="inline-start" aria-hidden />
                 )}
-                {action === "default" ? "加载中…" : "加载模型"}
+                {action === "default" ? "加载中…" : backendUnavailable ? "暂无模型" : "加载模型"}
               </Button>
               <Button
                 variant="outline"
