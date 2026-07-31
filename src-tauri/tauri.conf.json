@@ -26,7 +26,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "rpm", "appimage"],
     "resources": {
       "resources/models/whisper-tiny/model-tiny-q40.gguf": "models/whisper-tiny/model-tiny-q40.gguf",
       "resources/models/whisper-tiny/config-tiny.json": "models/whisper-tiny/config-tiny.json",
