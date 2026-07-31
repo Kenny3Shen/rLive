@@ -206,7 +206,7 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
             <Button
               type="button"
               size="icon-lg"
-              className="absolute right-3 bottom-3"
+              className="absolute right-3 bottom-3 rounded-full"
               disabled={refreshMutation.isPending || followsQuery.isLoading}
               aria-label={refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
               onClick={() => refreshMutation.mutate()}
