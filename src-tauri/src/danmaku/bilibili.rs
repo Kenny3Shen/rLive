@@ -60,9 +60,11 @@ const SEND_CHAT_URL: &str = "https://api.live.bilibili.com/msg/send";
 /// Current ordinary-web-composer default, measured in UTF-16 code units.
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 20;
 const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
-/// The older official token endpoint remains available when `getDanmuInfo`
-/// receives a web risk-control response before returning a token.
+/// The older official token endpoint needs no WBI keys, so it stays reachable
+/// when the signed `getDanmuInfo` call or its key fetch fails.
 const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Danmu/getConf";
+/// Source of the WBI signing keys required by `getDanmuInfo`.
+const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
@@ -999,6 +1001,28 @@ fn next_reconnect_state(
     )
 }
 
+/// Fetch WBI signing keys from `nav`.
+///
+/// `nav` answers `code = -101` ("not logged in") for anonymous sessions but
+/// still carries `wbi_img`, so the code is deliberately ignored here.
+async fn fetch_wbi_keys(client: &Client, cookie: &str) -> Result<(String, String), String> {
+    let mut request = client
+        .get(NAV_URL)
+        .header("user-agent", crate::sites::bilibili::DEFAULT_USER_AGENT)
+        .header("referer", crate::sites::bilibili::DEFAULT_REFERER);
+    if !cookie.is_empty() {
+        request = request.header("cookie", cookie);
+    }
+    let text = request
+        .send()
+        .await
+        .map_err(|error| format!("请求 B站 WBI 密钥失败: {error}"))?
+        .text()
+        .await
+        .map_err(|error| format!("读取 B站 WBI 密钥失败: {error}"))?;
+    crate::sites::bilibili::parse_wbi_keys(&text).map_err(|error| error.to_string())
+}
+
 async fn request_connection_info(
     client: &Client,
     cookie: &str,
@@ -1041,26 +1065,48 @@ async fn refresh_connection_info(
     args: &mut BilibiliDanmakuArgs,
 ) -> Result<(), String> {
     let cookie = args.refresh_cookie();
-    let modern = request_connection_info(
-        client,
-        &cookie,
-        DANMAKU_INFO_URL,
-        &[("id", args.room_id.to_string()), ("type", "0".to_string())],
-    )
-    .await;
-    match modern {
-        Ok(data) => match args.apply_refreshed_connection(&data) {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                tracing::warn!(
-                    reason = error,
-                    room_id = args.room_id,
-                    "bilibili modern danmaku refresh data unusable; trying legacy endpoint"
-                );
+
+    // `getDanmuInfo` always returns -352 when unsigned; sign it first.
+    let keys = fetch_wbi_keys(client, &cookie).await;
+    match keys {
+        Ok((img_key, sub_key)) => {
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("id".into(), args.room_id.to_string());
+            params.insert("type".into(), "0".into());
+            let signed = crate::sites::bilibili::wbi_sign_params(
+                params,
+                &img_key,
+                &sub_key,
+                crate::sites::bilibili::now_unix(),
+            );
+            let query: Vec<(&str, String)> = signed
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.clone()))
+                .collect();
+
+            let modern = request_connection_info(client, &cookie, DANMAKU_INFO_URL, &query).await;
+            match modern {
+                Ok(data) => match args.apply_refreshed_connection(&data) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        tracing::warn!(
+                            reason = error,
+                            room_id = args.room_id,
+                            "bilibili signed getDanmuInfo refresh data unusable; trying legacy endpoint"
+                        );
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(error = %error, room_id = args.room_id, "bilibili signed getDanmuInfo refresh failed; trying legacy endpoint");
+                }
             }
-        },
+        }
         Err(error) => {
-            tracing::warn!(error = %error, room_id = args.room_id, "bilibili modern danmaku refresh failed; trying legacy endpoint");
+            tracing::warn!(
+                error = %error,
+                room_id = args.room_id,
+                "bilibili WBI key fetch failed; skipping signed endpoint and trying legacy"
+            );
         }
     }
 

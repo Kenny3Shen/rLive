@@ -3,9 +3,9 @@
 mod api;
 
 pub use api::{
-    DEFAULT_REFERER, DEFAULT_USER_AGENT, parse_account_recommend_rooms, parse_categories,
+    DEFAULT_REFERER, DEFAULT_USER_AGENT, now_unix, parse_account_recommend_rooms, parse_categories,
     parse_category_rooms, parse_play_qualities, parse_play_urls, parse_recommend_rooms,
-    parse_search_rooms,
+    parse_search_rooms, parse_wbi_keys, wbi_sign_params,
 };
 
 use std::collections::BTreeMap;
@@ -23,10 +23,7 @@ use crate::models::live::{
 };
 use crate::sites::traits::LiveSite;
 
-use api::{
-    buvid_from_cookie, now_unix, parse_buvid, parse_room_detail_from_data, parse_room_live_status,
-    parse_wbi_keys, wbi_sign_params,
-};
+use api::{buvid_from_cookie, parse_buvid, parse_room_detail_from_data, parse_room_live_status};
 
 /// Mutable session fields shared across requests (buvid / wbi keys).
 #[derive(Default)]
@@ -475,35 +472,34 @@ impl BilibiliSite {
         Ok(text)
     }
 
-    /// Resolve a token and websocket hosts without letting a risk-control
-    /// response from one official endpoint turn into a misleading local
-    /// "token missing" error. The legacy endpoint is deliberately tried
-    /// before WBI: it is a normal official response, does not require WBI
-    /// keys, and remains available when `getDanmuInfo` returns code -352.
+    /// Resolve a token and websocket hosts for the room chat WebSocket.
+    ///
+    /// `getDanmuInfo` sits behind WBI risk control and answers `code = -352` to
+    /// every unsigned request, independent of room id or device cookies, so it
+    /// is only ever called signed. The older `getConf` endpoint needs no WBI
+    /// keys and still returns a usable token, which keeps danmaku working when
+    /// the key fetch itself fails (`nav` rate limited, network hiccup).
     async fn get_danmaku_data(&self, room_id: &str) -> Option<Value> {
-        match self
-            .get_json(
-                DANMAKU_INFO_URL,
-                &[("id", room_id.to_string()), ("type", "0".into())],
-            )
-            .await
-        {
+        let mut params = BTreeMap::new();
+        params.insert("id".into(), room_id.to_string());
+        params.insert("type".into(), "0".into());
+        match self.get_json_signed(DANMAKU_INFO_URL, params).await {
             Ok(text) => {
                 if let Some(data) = danmaku_data_with_token(&text) {
                     tracing::info!(
                         room_id,
-                        endpoint = "getDanmuInfo",
+                        endpoint = "getDanmuInfo_wbi",
                         "bilibili danmaku info ok"
                     );
                     return Some(data);
                 }
                 tracing::warn!(
                     room_id,
-                    "bilibili getDanmuInfo omitted token; trying legacy endpoint"
+                    "bilibili signed getDanmuInfo omitted token; trying legacy endpoint"
                 );
             }
             Err(error) => {
-                tracing::warn!(error = %error, room_id, "bilibili getDanmuInfo failed; trying legacy endpoint");
+                tracing::warn!(error = %error, room_id, "bilibili signed getDanmuInfo failed; trying legacy endpoint");
             }
         }
 
@@ -515,39 +511,16 @@ impl BilibiliSite {
             .await
         {
             Ok(text) => {
-                if let Some(data) = danmaku_data_with_token(&text) {
-                    tracing::info!(room_id, endpoint = "getConf", "bilibili danmaku info ok");
-                    return Some(data);
-                }
-                tracing::warn!(
-                    room_id,
-                    "bilibili legacy danmaku endpoint omitted token; trying signed endpoint"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(error = %error, room_id, "bilibili legacy danmaku endpoint failed; trying signed endpoint");
-            }
-        }
-
-        let mut params = BTreeMap::new();
-        params.insert("id".into(), room_id.to_string());
-        params.insert("type".into(), "0".into());
-        match self.get_json_signed(DANMAKU_INFO_URL, params).await {
-            Ok(text) => {
                 let data = danmaku_data_with_token(&text);
                 if data.is_some() {
-                    tracing::info!(
-                        room_id,
-                        endpoint = "getDanmuInfo_wbi",
-                        "bilibili danmaku info ok"
-                    );
+                    tracing::info!(room_id, endpoint = "getConf", "bilibili danmaku info ok");
                 } else {
-                    tracing::warn!(room_id, "bilibili signed danmaku endpoint omitted token");
+                    tracing::warn!(room_id, "bilibili legacy danmaku endpoint omitted token");
                 }
                 data
             }
             Err(error) => {
-                tracing::warn!(error = %error, room_id, "bilibili signed danmaku endpoint failed");
+                tracing::warn!(error = %error, room_id, "bilibili legacy danmaku endpoint failed");
                 None
             }
         }
@@ -877,6 +850,37 @@ mod live_tests {
         assert_eq!(data["token"], "legacy-token");
         assert_eq!(data["host_list"][0]["host"], "legacy-1.example");
         assert_eq!(data["host_list"][1]["host"], "legacy-2.example");
+    }
+
+    /// Guards the -352 regression: `getDanmuInfo` is behind WBI risk control and
+    /// answers `code = -352` to any unsigned request, so the signed call must be
+    /// the one that succeeds — without the legacy endpoint being reached at all.
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_signed_danmaku_info_smoke() {
+        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+
+        let unsigned = site
+            .get_json(
+                DANMAKU_INFO_URL,
+                &[("id", "7734200".into()), ("type", "0".into())],
+            )
+            .await;
+        let error = unsigned.expect_err("unsigned getDanmuInfo should stay risk-controlled");
+        assert!(
+            error.to_string().contains("-352"),
+            "expected -352 risk control, got: {error}"
+        );
+
+        let mut params = BTreeMap::new();
+        params.insert("id".into(), "7734200".to_string());
+        params.insert("type".into(), "0".into());
+        let text = site
+            .get_json_signed(DANMAKU_INFO_URL, params)
+            .await
+            .expect("signed getDanmuInfo should succeed");
+        let data = danmaku_data_with_token(&text).expect("signed response carries a token");
+        assert!(!data["host_list"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
