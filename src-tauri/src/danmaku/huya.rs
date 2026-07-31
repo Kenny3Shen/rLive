@@ -241,10 +241,11 @@ fn credentials_from_cookie(cookie: &str) -> Option<HuyaSendCredentials> {
         || cookie.len() > MAX_COOKIE_LEN
         || cookie.contains(['\r', '\n'])
         // A single yyuid is easy to fabricate and is insufficient proof of a
-        // logged-in web session. Huya browser sessions can expose either
-        // `udb_n` or `udb_cred` as the opaque login proof. The server-side
-        // verification response remains authoritative before any chat write.
-        || !["udb_n", "udb_cred"]
+        // logged-in web session. Browser exports often carry `udb_n` /
+        // `udb_cred`; the UDB QR flow more commonly yields `udb_biztoken`.
+        // The server-side verification response remains authoritative before
+        // any chat write.
+        || !["udb_n", "udb_cred", "udb_biztoken"]
             .iter()
             .any(|&key| cookie_value(cookie, key).is_some())
     {
@@ -675,7 +676,7 @@ pub async fn send_chat(cookie: &str, args: HuyaDanmakuArgs, message: &str) -> Ap
     let credentials = credentials_from_cookie(cookie).ok_or_else(|| {
         AppError::new(
             "huya_send_cookie_missing",
-            "请先在设置中保存含 yyuid 或 udb_uid，且含 udb_n 或 udb_cred 的完整虎牙 Cookie",
+            "请先在设置中扫码登录或保存含 yyuid/udb_uid，以及 udb_n/udb_cred/udb_biztoken 的完整虎牙 Cookie",
         )
         .with_site("huya")
     })?;
@@ -964,6 +965,9 @@ mod tests {
         ));
         assert!(has_send_credentials(
             "udb_uid=12345; udb_cred=opaque-session-proof; guid=test-guid"
+        ));
+        assert!(has_send_credentials(
+            "udb_uid=12345; udb_biztoken=qr-session-token; guid=test-guid"
         ));
         assert!(!has_send_credentials("yyuid=12345; udb_uid=12345"));
         assert!(!has_send_credentials(

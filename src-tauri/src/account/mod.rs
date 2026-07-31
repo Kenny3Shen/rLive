@@ -1,6 +1,7 @@
 pub mod bilibili_qr;
 pub mod douyin_qr;
 pub mod douyu_qr;
+pub mod huya_qr;
 
 use rusqlite::{Connection, OptionalExtension, params};
 

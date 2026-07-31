@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
-use crate::account::{bilibili_qr, douyin_qr, douyu_qr};
+use crate::account::{bilibili_qr, douyin_qr, douyu_qr, huya_qr};
 use crate::error::AppResult;
 use crate::models::live::SiteId;
 use crate::state::AppState;
@@ -161,6 +161,13 @@ pub async fn account_qr_login_start(
                 qr_key: session.qr_key,
             })
         }
+        SiteId::Huya => {
+            let session = huya_qr::start().await?;
+            Ok(AccountQrLoginStart {
+                qr_code_url: session.qr_code_url,
+                qr_key: session.qr_key,
+            })
+        }
         _ => Err(qr_login_unsupported(&site_id)),
     }
 }
@@ -175,6 +182,7 @@ pub async fn account_qr_login_poll(
         SiteId::Bilibili => map_bilibili_qr_poll(bilibili_qr::poll(&qr_key).await?),
         SiteId::Douyin => map_douyin_qr_poll(douyin_qr::poll(&qr_key).await?),
         SiteId::Douyu => map_douyu_qr_poll(douyu_qr::poll(&qr_key).await?),
+        SiteId::Huya => map_huya_qr_poll(huya_qr::poll(&qr_key).await?),
         _ => return Err(qr_login_unsupported(&site_id)),
     };
     match result {
@@ -230,6 +238,15 @@ fn map_douyu_qr_poll(result: douyu_qr::QrLoginPoll) -> QrLoginPollResult {
     }
 }
 
+fn map_huya_qr_poll(result: huya_qr::QrLoginPoll) -> QrLoginPollResult {
+    match result {
+        huya_qr::QrLoginPoll::Pending => QrLoginPollResult::Pending,
+        huya_qr::QrLoginPoll::Scanned => QrLoginPollResult::Scanned,
+        huya_qr::QrLoginPoll::Expired => QrLoginPollResult::Expired,
+        huya_qr::QrLoginPoll::Success { cookie } => QrLoginPollResult::Success { cookie },
+    }
+}
+
 fn qr_login_unsupported(site_id: &SiteId) -> crate::error::AppError {
     crate::error::AppError::new(
         "account_qr_login_unsupported",
@@ -243,6 +260,7 @@ fn qr_login_site_name(site_id: &SiteId) -> &'static str {
         SiteId::Bilibili => "哔哩哔哩",
         SiteId::Douyin => "抖音",
         SiteId::Douyu => "斗鱼",
+        SiteId::Huya => "虎牙",
         _ => "当前平台",
     }
 }
