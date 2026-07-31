@@ -14,7 +14,7 @@ export const FOLLOW_ROOM_SWITCH_STATE: Readonly<RoomNavigationState> = {
 export function roomSideTabFromNavigationState(state: unknown): RoomSideTab {
   if (!state || typeof state !== "object" || !("roomSideTab" in state)) return "chat";
   const tab = (state as RoomNavigationState).roomSideTab;
-  return tab === "chat" || tab === "sc" || tab === "settings" || tab === "follow" ? tab : "chat";
+  return tab === "chat" || tab === "settings" || tab === "follow" ? tab : "chat";
 }
 
 /** A follow-list switch returns to the home page instead of a prior room. */

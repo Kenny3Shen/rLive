@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
-import type { AppSettings } from "@/shared/types/live";
+import type { AppSettings, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ import {
   normalizeAutoDanmakuSendIntervalSeconds,
 } from "./danmaku/autoSend";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
+import { siteSupportsSuperChat } from "./superChat";
 
 const FONT_WEIGHTS = [
   { value: 400, label: "常规" },
@@ -305,10 +306,12 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   className,
   captions,
   autoSend,
+  siteId,
 }: {
   className?: string;
   captions?: LocalCaptionSettings;
   autoSend?: AutoDanmakuSendController;
+  siteId?: SiteId;
 }) {
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
@@ -318,6 +321,8 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
+  const superChatEnabled = useSettingsStore((s) => s.superChatEnabled);
+  const setSuperChatEnabled = useSettingsStore((s) => s.setSuperChatEnabled);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const [shieldDraft, setShieldDraft] = useState(shieldWords.join("\n"));
   const [shieldStatus, setShieldStatus] = useState<string | null>(null);
@@ -427,6 +432,30 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
       <div className="flex flex-col gap-3 px-3 py-3">
+        {siteSupportsSuperChat(siteId) && (
+          <Card size="sm">
+            <CardHeader className="border-b">
+              <CardTitle>醒目留言</CardTitle>
+              <CardAction>
+                <Badge variant={superChatEnabled ? "secondary" : "outline"}>
+                  {superChatEnabled ? "已开启" : "已关闭"}
+                </Badge>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="pt-3">
+              <FieldGroup>
+                <Field orientation="horizontal" className="rounded-lg bg-muted/35 p-3">
+                  <FieldTitle id="room-super-chat-enabled">显示 SC 卡片</FieldTitle>
+                  <Switch
+                    aria-labelledby="room-super-chat-enabled"
+                    checked={superChatEnabled}
+                    onCheckedChange={setSuperChatEnabled}
+                  />
+                </Field>
+              </FieldGroup>
+            </CardContent>
+          </Card>
+        )}
         {captions && <LocalCaptionSettingsSection captions={captions} />}
         {autoSend && <AutoDanmakuSendSection autoSend={autoSend} />}
 

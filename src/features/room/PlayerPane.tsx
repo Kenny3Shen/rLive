@@ -16,7 +16,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
-import { SuperChatPanel } from "./SuperChatPanel";
+import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
@@ -31,11 +31,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import type { PlayerEvent } from "@/shared/types/player";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { siteSupportsSuperChat } from "./superChat";
 
-export type RoomSideTab = "chat" | "sc" | "settings" | "follow";
+export type RoomSideTab = "chat" | "settings" | "follow";
 
 /** Keep the visual tab order and touch-navigation order in one place. */
-export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "sc", "follow", "settings"];
+export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
 
 // A CSS pixel is density-independent in an Android WebView.  This keeps a
 // normal vertical scroll or a short finger adjustment from changing the tab.
@@ -386,7 +388,7 @@ export function PlayerPane({
   const [playerEdgeGestureFeedback, setPlayerEdgeGestureFeedback] =
     useState<PlayerEdgeGestureFeedback | null>(null);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
-  const [scUnreadCount, setScUnreadCount] = useState(0);
+  const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
@@ -673,14 +675,9 @@ export function PlayerPane({
     [handleOverlayInteractionChange],
   );
 
-  const handleScUnreadCountChange = useCallback((count: number) => {
-    setScUnreadCount(count);
-  }, []);
-
   const selectSideTab = useCallback(
     (nextTab: RoomSideTab) => {
       if (nextTab === activeSideTab) return;
-      if (nextTab === "sc") setScUnreadCount(0);
       if (sideTab === undefined) setUncontrolledSideTab(nextTab);
       onSideTabChange?.(nextTab);
     },
@@ -1159,7 +1156,6 @@ export function PlayerPane({
     overlayInteractionOpenRef.current = false;
     controlsFocusWithinRef.current = false;
     setOverlayInteractionOpen(false);
-    setScUnreadCount(0);
   }, [roomSessionKey]);
 
   useEffect(() => {
@@ -1257,6 +1253,14 @@ export function PlayerPane({
                 />
               )}
             </div>
+
+            {showHost && superChatEnabled && siteSupportsSuperChat(siteId) && (
+              <SuperChatOverlay
+                key={`sc:${roomSessionKey ?? "room"}`}
+                active={danmakuActive}
+                className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(20rem,calc(100%-1.5rem))]"
+              />
+            )}
 
             {showHost && !player.running && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
@@ -1481,25 +1485,6 @@ export function PlayerPane({
                 <TabsTrigger value="chat" className="px-3 text-sm">
                   弹幕
                 </TabsTrigger>
-                <TabsTrigger
-                  value="sc"
-                  className="text-sm"
-                  aria-label={
-                    scUnreadCount > 0
-                      ? `SC，${scUnreadCount > 99 ? "99+" : scUnreadCount} 条新醒目留言`
-                      : "SC"
-                  }
-                >
-                  SC
-                  {scUnreadCount > 0 && (
-                    <span
-                      aria-hidden="true"
-                      className="rounded-full bg-primary px-1.5 py-px text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
-                    >
-                      {scUnreadCount > 99 ? "99+" : scUnreadCount}
-                    </span>
-                  )}
-                </TabsTrigger>
                 <TabsTrigger value="follow" className="text-sm">
                   关注
                 </TabsTrigger>
@@ -1525,21 +1510,6 @@ export function PlayerPane({
                 />
               </TabsContent>
               <TabsContent
-                value="sc"
-                keepMounted
-                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-              >
-                <SuperChatPanel
-                  key={`sc:${roomSessionKey ?? "room"}`}
-                  active={danmakuActive}
-                  siteId={siteId}
-                  danmakuStatusText={danmakuStatusText}
-                  visible={sidePanelOpen && activeSideTab === "sc"}
-                  onUnreadCountChange={handleScUnreadCountChange}
-                  className="h-full"
-                />
-              </TabsContent>
-              <TabsContent
                 value="follow"
                 keepMounted
                 className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
@@ -1554,6 +1524,7 @@ export function PlayerPane({
                 <DanmakuSettingsPanel
                   className="h-full"
                   autoSend={autoDanmakuSend}
+                  siteId={siteId}
                   captions={{
                     enabled: localCaptions.enabled,
                     pending: localCaptions.pending,

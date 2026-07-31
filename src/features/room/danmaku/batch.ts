@@ -23,9 +23,9 @@ export function batchEvents(payload: unknown): readonly unknown[] {
 }
 
 /**
- * Validate a native batch once at the room boundary. Canvas, chat and SC can
- * then consume the same immutable event objects without each repeating the
- * span and field checks for every message.
+ * Validate a native batch once at the room boundary. Canvas, chat and the SC
+ * overlay can then consume the same immutable event objects without each
+ * repeating the span and field checks for every message.
  */
 export function validatedBatchEvents(payload: unknown): DanmakuEvent[] {
   const valid: DanmakuEvent[] = [];

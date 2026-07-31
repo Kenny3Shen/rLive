@@ -1,10 +1,16 @@
-import type { DanmakuEvent, SuperChatInfo } from "@/shared/types/live";
+import type { DanmakuEvent, SiteId, SuperChatInfo } from "@/shared/types/live";
 import { normalizeDanmakuImageUrl } from "./danmaku/content";
 
 export const MAX_SUPER_CHAT_ITEMS = 80;
 export const MAX_BUFFERED_SUPER_CHATS = 160;
 export const MAX_SUPER_CHATS_PER_FRAME = 24;
 export const MAX_SUPER_CHAT_DEDUPE_KEYS = MAX_SUPER_CHAT_ITEMS + MAX_BUFFERED_SUPER_CHATS;
+export const MAX_VISIBLE_SUPER_CHAT_CARDS = 3;
+
+/** Platforms whose live event stream currently exposes validated SC metadata. */
+export function siteSupportsSuperChat(siteId: SiteId | null | undefined): boolean {
+  return siteId === "bilibili";
+}
 
 export type SuperChatLine = {
   id: number;

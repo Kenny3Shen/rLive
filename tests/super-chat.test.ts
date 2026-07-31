@@ -5,6 +5,7 @@ import {
   formatSuperChatDuration,
   retainSuperChatItems,
   safeSuperChatColor,
+  siteSupportsSuperChat,
   superChatAvatarUrl,
   superChatDedupeKey,
   superChatPalette,
@@ -32,6 +33,12 @@ function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
 }
 
 describe("Super Chat presentation", () => {
+  test("enables the overlay only for platforms with SC event support", () => {
+    expect(siteSupportsSuperChat("bilibili")).toBe(true);
+    expect(siteSupportsSuperChat("douyu")).toBe(false);
+    expect(siteSupportsSuperChat(undefined)).toBe(false);
+  });
+
   test("normalizes only trusted Bilibili sender avatar URLs", () => {
     expect(superChatAvatarUrl({ avatar_url: "//i0.hdslb.com/bfs/face/sc-user.jpg" })).toBe(
       "https://i0.hdslb.com/bfs/face/sc-user.jpg",
