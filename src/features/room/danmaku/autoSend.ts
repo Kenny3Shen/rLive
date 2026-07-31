@@ -2,7 +2,7 @@
 export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 15;
 
 /** Session-only automatic-send interval bounds, in whole seconds. */
-export const AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS = 20;
+export const AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS = 10;
 export const AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS = 3_600;
 export const AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS = 20;
 
