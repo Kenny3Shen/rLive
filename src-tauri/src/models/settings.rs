@@ -30,12 +30,15 @@ pub struct AppSettings {
     /// Suppress consecutive duplicate chat messages in the visual clients.
     #[serde(default = "default_danmaku_filter_repeats")]
     pub danmaku_filter_repeats: bool,
-    /// Hide gift and similar platform interaction notices in both visual feeds.
+    /// Whether gift-related messages should be hidden from the danmaku stream.
     #[serde(default = "default_danmaku_filter_gifts")]
     pub danmaku_filter_gifts: bool,
-    /// Show supported-platform Super Chat cards over the player.
+    /// Whether Super Chat cards are enabled for the current site.
     #[serde(default = "default_super_chat_enabled")]
     pub super_chat_enabled: bool,
+    /// 0.0 ..= 1.0 for SC card transparency
+    #[serde(default = "default_super_chat_opacity")]
+    pub super_chat_opacity: f32,
     pub danmaku_shield_words: Vec<String>,
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
@@ -78,6 +81,10 @@ fn default_super_chat_enabled() -> bool {
     true
 }
 
+fn default_super_chat_opacity() -> f32 {
+    1.0
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -85,7 +92,7 @@ impl Default for AppSettings {
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
             proxy: None,
-            danmaku_opacity: 1.0,
+            danmaku_opacity: 0.8,
             danmaku_font_size: 18,
             danmaku_speed: 8,
             danmaku_area: default_danmaku_area(),
@@ -93,6 +100,7 @@ impl Default for AppSettings {
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
             danmaku_filter_gifts: default_danmaku_filter_gifts(),
+            super_chat_opacity: default_super_chat_opacity(),
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
@@ -122,7 +130,7 @@ mod tests {
           "theme": "system",
           "default_site": "bilibili",
           "proxy": null,
-          "danmaku_opacity": 1.0,
+          "danmaku_opacity": 0.8,
           "danmaku_font_size": 18,
           "danmaku_speed": 8,
           "danmaku_shield_words": [],
