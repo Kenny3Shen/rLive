@@ -322,6 +322,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const superChatEnabled = useSettingsStore((s) => s.superChatEnabled);
+  const superChatOpacity = useSettingsStore((s) => s.superChatOpacity);
   const setSuperChatEnabled = useSettingsStore((s) => s.setSuperChatEnabled);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const [shieldDraft, setShieldDraft] = useState(shieldWords.join("\n"));
@@ -367,6 +368,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
     danmakuFontWeight?: number;
     danmakuFilterRepeats?: boolean;
     danmakuFilterGifts?: boolean;
+    superChatOpacity?: number;
   }) {
     useSettingsStore.setState(patch);
   }
@@ -405,6 +407,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
       danmakuFontWeight: 600,
       danmakuFilterRepeats: true,
       danmakuFilterGifts: true,
+      superChatOpacity: 1,
     };
     preview(defaults);
     persist({
@@ -416,6 +419,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
       danmaku_font_weight: defaults.danmakuFontWeight,
       danmaku_filter_repeats: defaults.danmakuFilterRepeats,
       danmaku_filter_gifts: defaults.danmakuFilterGifts,
+      super_chat_opacity: defaults.superChatOpacity,
     });
   }
 
@@ -453,6 +457,17 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                   />
                 </Field>
               </FieldGroup>
+              <DanmakuSlider
+                id="room-super-chat-opacity"
+                title="SC 透明度"
+                value={Math.round(superChatOpacity * 100)}
+                min={0}
+                max={100}
+                step={5}
+                displayValue={`${Math.round(superChatOpacity * 100)}%`}
+                onPreview={(value) => preview({ superChatOpacity: value / 100 })}
+                onCommit={(value) => persist({ super_chat_opacity: value / 100 })}
+              />
             </CardContent>
           </Card>
         )}
