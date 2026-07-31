@@ -40,9 +40,13 @@ describe("automatic danmaku text preparation", () => {
   });
 
   test("uses a configurable interval and never shortens it when the clock moves backwards", () => {
+    expect(AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS).toBe(10);
+    expect(AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS).toBe(3_600);
     expect(AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS).toBe(20);
     expect(AUTO_DANMAKU_SEND_INTERVAL_MS).toBe(20_000);
     expect(normalizeAutoDanmakuSendIntervalSeconds(1)).toBe(AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS);
+    expect(normalizeAutoDanmakuSendIntervalSeconds(10)).toBe(10);
+    expect(normalizeAutoDanmakuSendIntervalSeconds(3_600)).toBe(3_600);
     expect(normalizeAutoDanmakuSendIntervalSeconds(42.6)).toBe(43);
     expect(normalizeAutoDanmakuSendIntervalSeconds(9_999)).toBe(
       AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS,
