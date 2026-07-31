@@ -447,7 +447,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
               </CardAction>
             </CardHeader>
             <CardContent className="pt-3">
-              <FieldGroup>
+              <FieldGroup className="gap-2">
                 <Field orientation="horizontal" className="rounded-lg bg-muted/35 p-3">
                   <FieldTitle id="room-super-chat-enabled">显示 SC 卡片</FieldTitle>
                   <Switch
@@ -456,18 +456,18 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                     onCheckedChange={setSuperChatEnabled}
                   />
                 </Field>
+                <DanmakuSlider
+                  id="room-super-chat-opacity"
+                  title="SC 透明度"
+                  value={Math.round(superChatOpacity * 100)}
+                  min={0}
+                  max={100}
+                  step={5}
+                  displayValue={`${Math.round(superChatOpacity * 100)}%`}
+                  onPreview={(value) => preview({ superChatOpacity: value / 100 })}
+                  onCommit={(value) => persist({ super_chat_opacity: value / 100 })}
+                />
               </FieldGroup>
-              <DanmakuSlider
-                id="room-super-chat-opacity"
-                title="SC 透明度"
-                value={Math.round(superChatOpacity * 100)}
-                min={0}
-                max={100}
-                step={5}
-                displayValue={`${Math.round(superChatOpacity * 100)}%`}
-                onPreview={(value) => preview({ superChatOpacity: value / 100 })}
-                onCommit={(value) => persist({ super_chat_opacity: value / 100 })}
-              />
             </CardContent>
           </Card>
         )}
