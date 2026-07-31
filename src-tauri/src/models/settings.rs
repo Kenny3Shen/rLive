@@ -30,8 +30,8 @@ pub struct AppSettings {
     /// Suppress consecutive duplicate chat messages in the visual clients.
     #[serde(default = "default_danmaku_filter_repeats")]
     pub danmaku_filter_repeats: bool,
-    /// Hide gift notices in the room chat list and floating danmaku.
-    #[serde(default)]
+    /// Hide gift and similar platform interaction notices in both visual feeds.
+    #[serde(default = "default_danmaku_filter_gifts")]
     pub danmaku_filter_gifts: bool,
     /// Show supported-platform Super Chat cards over the player.
     #[serde(default = "default_super_chat_enabled")]
@@ -70,6 +70,10 @@ fn default_danmaku_filter_repeats() -> bool {
     true
 }
 
+fn default_danmaku_filter_gifts() -> bool {
+    true
+}
+
 fn default_super_chat_enabled() -> bool {
     true
 }
@@ -88,7 +92,7 @@ impl Default for AppSettings {
             danmaku_line_count: 0,
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
-            danmaku_filter_gifts: false,
+            danmaku_filter_gifts: default_danmaku_filter_gifts(),
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
@@ -131,7 +135,7 @@ mod tests {
         assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
-        assert!(!settings.danmaku_filter_gifts);
+        assert!(settings.danmaku_filter_gifts);
         assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.iptv_custom_m3u_url.is_none());

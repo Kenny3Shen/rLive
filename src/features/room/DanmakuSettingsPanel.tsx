@@ -404,7 +404,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
       danmakuLineCount: 0,
       danmakuFontWeight: 600,
       danmakuFilterRepeats: true,
-      danmakuFilterGifts: false,
+      danmakuFilterGifts: true,
     };
     preview(defaults);
     persist({
@@ -589,7 +589,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
                 />
               </Field>
               <Field orientation="horizontal" className="rounded-lg bg-muted/35 p-3">
-                <FieldTitle id="room-danmaku-gift-filter">隐藏礼物消息</FieldTitle>
+                <FieldTitle id="room-danmaku-gift-filter">隐藏礼物信息</FieldTitle>
                 <Switch
                   aria-labelledby="room-danmaku-gift-filter"
                   checked={filterGifts}

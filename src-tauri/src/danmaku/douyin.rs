@@ -492,7 +492,10 @@ fn decode_like(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
         return Ok(None);
     }
     event_if_content(
-        DanmakuKind::Chat,
+        // Likes are platform interaction notices rather than user-authored
+        // chat. Classifying them with gifts lets the shared gift-information
+        // setting hide both high-frequency event types consistently.
+        DanmakuKind::Gift,
         user,
         format!("点赞 × {count}"),
         Some("#ff8bab".into()),
@@ -704,6 +707,26 @@ mod tests {
         assert!(matches!(events[0].kind, DanmakuKind::Gift));
         assert_eq!(events[0].content, "赠送 小心心 × 3");
         assert!(matches!(events[1].kind, DanmakuKind::Enter));
+    }
+
+    #[test]
+    fn decodes_likes_as_filterable_gift_messages() {
+        let user = field_bytes(3, "观众".as_bytes());
+        let mut like_body = field_uint(2, 33);
+        like_body.extend(field_bytes(5, &user));
+        let mut like_message = field_bytes(1, b"WebcastLikeMessage");
+        like_message.extend(field_bytes(2, &like_body));
+
+        let mut events = Vec::new();
+        decode_response(&field_bytes(1, &like_message), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].kind, DanmakuKind::Gift));
+        assert_eq!(events[0].user, "观众");
+        assert_eq!(events[0].content, "点赞 × 33");
     }
 
     #[test]
