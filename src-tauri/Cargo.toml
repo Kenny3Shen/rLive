@@ -52,10 +52,12 @@ boa_engine = "0.20"
 # openssl-sys's source build only for Android release artifacts.
 openssl = { version = "0.10", features = ["vendored"] }
 
-# Desktop release: smaller + faster binary (web player + sites + proxy).
+[profile.dev]
+incremental = true # 以较小的步骤编译您的二进制文件。
+
 [profile.release]
-codegen-units = 1
-lto = "thin"
-opt-level = 3
-strip = "symbols"
-panic = "abort"
+codegen-units = 1 # 允许 LLVM 执行更好的优化。
+lto = true # 启用链接时优化。
+opt-level = "s" # 优先考虑小的二进制文件大小。如果您更喜欢速度，请使用 `3`。
+panic = "abort" # 通过禁用 panic 处理程序来提高性能。
+strip = true # 确保移除调试符号。

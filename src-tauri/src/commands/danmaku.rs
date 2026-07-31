@@ -8,7 +8,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::sites;
 use crate::state::{
-    AppState, BilibiliDanmakuSendLimiter, DouyuDanmakuSendLimiter, HuyaDanmakuSendLimiter,
+    AppState, BilibiliDanmakuSendLimiter, DouyinDanmakuSendLimiter, DouyuDanmakuSendLimiter,
+    HuyaDanmakuSendLimiter,
 };
 
 #[derive(Debug, Serialize)]
@@ -40,6 +41,17 @@ pub struct DouyuDanmakuSendStatus {
 /// assertion.
 #[derive(Debug, Serialize)]
 pub struct HuyaDanmakuSendStatus {
+    pub send_enabled: bool,
+    pub cookie_ready: bool,
+    pub available: bool,
+    pub message: String,
+}
+
+/// Availability of the locally stored Douyin web session for one explicit
+/// ordinary text message. The shared device-local sending permission and a
+/// non-empty Cookie are both required before the user can submit it.
+#[derive(Debug, Serialize)]
+pub struct DouyinDanmakuSendStatus {
     pub send_enabled: bool,
     pub cookie_ready: bool,
     pub available: bool,
@@ -114,6 +126,25 @@ fn validate_and_reserve_huya_send(
     let message = danmaku::huya::normalize_outgoing_message(message)?;
     limiter.reserve(&room_id)?;
     Ok((room_id, message))
+}
+
+fn validate_and_reserve_douyin_send(
+    limiter: &DouyinDanmakuSendLimiter,
+    room_id: &str,
+    message: &str,
+) -> AppResult<(String, String)> {
+    let room_id = room_id.trim();
+    if room_id.is_empty()
+        || room_id.len() > 32
+        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            AppError::new("douyin_send_invalid_room", "抖音直播间号无效").with_site("douyin"),
+        );
+    }
+    let message = danmaku::douyin::normalize_outgoing_message(message)?;
+    limiter.reserve(room_id)?;
+    Ok((room_id.to_string(), message))
 }
 
 /// A successful platform write is the only point at which an outgoing message
@@ -419,14 +450,111 @@ pub async fn huya_danmaku_send(
     Ok(())
 }
 
+#[tauri::command]
+pub fn douyin_danmaku_send_status(
+    state: State<'_, AppState>,
+) -> AppResult<DouyinDanmakuSendStatus> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+    let settings = crate::settings::get(&conn)?;
+    let cookie = account::get_cookie(&conn, &SiteId::Douyin)?.unwrap_or_default();
+    let cookie_ready = !cookie.trim().is_empty();
+    let send_enabled = settings.danmaku_send_enabled;
+    let message = if !send_enabled {
+        "在设置中启用“弹幕发送功能”后可使用".into()
+    } else if !cookie_ready {
+        "请先在设置中扫码登录，或保存抖音 Cookie".into()
+    } else {
+        "可发送单条普通滚动文本。".into()
+    };
+    Ok(DouyinDanmakuSendStatus {
+        send_enabled,
+        cookie_ready,
+        available: send_enabled && cookie_ready,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn douyin_danmaku_send(
+    state: State<'_, AppState>,
+    room_id: String,
+    message: String,
+) -> AppResult<()> {
+    let (send_enabled, cookie, proxy) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let settings = crate::settings::get(&conn)?;
+        (
+            settings.danmaku_send_enabled,
+            account::get_cookie(&conn, &SiteId::Douyin)?.unwrap_or_default(),
+            settings.proxy,
+        )
+    };
+    if !send_enabled {
+        return Err(AppError::new(
+            "douyin_send_disabled",
+            "弹幕发送功能尚未启用，请先在设置中确认开启",
+        )
+        .with_site("douyin"));
+    }
+    if cookie.trim().is_empty() {
+        tracing::warn!(
+            room_id = %room_id.trim(),
+            stage = "preflight",
+            "douyin send rejected because the required Cookie is absent"
+        );
+        return Err(AppError::new(
+            "douyin_send_cookie_missing",
+            "请先在设置中扫码登录，或保存抖音 Cookie",
+        )
+        .with_site("douyin"));
+    }
+    // Douyin send needs the internal room id (from room detail raw), not the
+    // short public web_rid. Resolve detail first, then reserve the cooldown.
+    let site = sites::site_with_proxy(&SiteId::Douyin, Some(cookie.clone()), proxy.as_deref())?;
+    let detail = site.get_room_detail(&room_id).await?;
+    let actual_room_id = detail
+        .raw
+        .get("room_id")
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value.trim().to_string()),
+            serde_json::Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| room_id.trim().to_string());
+    let (actual_room_id, message) =
+        validate_and_reserve_douyin_send(&state.douyin_send_limiter, &actual_room_id, &message)
+            .map_err(|error| {
+                tracing::warn!(
+                    room_id = %room_id.trim(),
+                    stage = "preflight",
+                    error_code = %error.code,
+                    "douyin send rejected by local validation"
+                );
+                error
+            })?;
+    // Cookie-bearing write: do not follow redirects.
+    let client = crate::http_client::build_no_redirect_client(proxy.as_deref())?;
+    danmaku::douyin::send_chat(&client, &cookie, &actual_room_id, &message).await?;
+    record_successful_danmaku_send(state.inner(), SiteId::Douyin, &message);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_and_reserve_bilibili_send, validate_and_reserve_douyu_send,
-        validate_and_reserve_huya_send,
+        validate_and_reserve_bilibili_send, validate_and_reserve_douyin_send,
+        validate_and_reserve_douyu_send, validate_and_reserve_huya_send,
     };
     use crate::state::{
-        BilibiliDanmakuSendLimiter, DouyuDanmakuSendLimiter, HuyaDanmakuSendLimiter,
+        BilibiliDanmakuSendLimiter, DouyinDanmakuSendLimiter, DouyuDanmakuSendLimiter,
+        HuyaDanmakuSendLimiter,
     };
 
     #[test]
@@ -456,5 +584,14 @@ mod tests {
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "\n").is_err());
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "你好").is_ok());
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "第二条").is_err());
+    }
+
+    #[test]
+    fn invalid_douyin_draft_does_not_consume_room_cooldown() {
+        let limiter = DouyinDanmakuSendLimiter::new();
+
+        assert!(validate_and_reserve_douyin_send(&limiter, "123", "\n").is_err());
+        assert!(validate_and_reserve_douyin_send(&limiter, "123", "你好").is_ok());
+        assert!(validate_and_reserve_douyin_send(&limiter, "123", "第二条").is_err());
     }
 }

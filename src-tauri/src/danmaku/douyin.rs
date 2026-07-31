@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use futures_util::{SinkExt, StreamExt};
-use reqwest::Url;
+use reqwest::{Client, Url};
 use tokio::time;
 use tokio_tungstenite::{
     connect_async,
@@ -32,7 +32,11 @@ const DEFAULT_HEARTBEAT_MS: u64 = 10_000;
 const MAX_DECOMPRESSED_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT_CHARS: usize = 500;
 const MAX_USER_NAME_CHARS: usize = 128;
+/// Web room chat is shorter than app chat; keep a conservative bound.
+const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 50;
 const WSS_PUSH_URL: &str = "wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/";
+/// Official web live room chat write endpoint (form POST + Cookie).
+const SEND_CHAT_URL: &str = "https://live.douyin.com/webcast/room/chat/";
 /// This is a valid `PushFrame` containing protobuf field 7 = "hb".
 const HEARTBEAT: &[u8] = &[0x3a, 0x02, b'h', b'b'];
 
@@ -634,6 +638,157 @@ fn encode_ack(log_id: u64, internal_ext: &[u8]) -> Vec<u8> {
     out
 }
 
+pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
+    let message = value.trim();
+    if message.is_empty() {
+        return Err(
+            AppError::new("douyin_send_empty", "请输入要发送的弹幕内容").with_site("douyin"),
+        );
+    }
+    if message.encode_utf16().count() > MAX_OUTGOING_CHAT_UTF16_UNITS {
+        return Err(AppError::new(
+            "douyin_send_too_long",
+            format!("单条弹幕最多 {MAX_OUTGOING_CHAT_UTF16_UNITS} 个字符"),
+        )
+        .with_site("douyin"));
+    }
+    if message.chars().any(char::is_control) {
+        return Err(
+            AppError::new("douyin_send_invalid_text", "弹幕不能包含换行或控制字符")
+                .with_site("douyin"),
+        );
+    }
+    Ok(message.to_string())
+}
+
+/// Send one ordinary text danmaku through Douyin's web room chat endpoint.
+///
+/// The write reuses the same local MSSDK signature parameters used for the
+/// receive WSS handshake, then posts to the official live chat HTTP API with
+/// the user-saved Cookie. Cookie-bearing writes never follow redirects.
+pub async fn send_chat(
+    client: &Client,
+    cookie: &str,
+    room_id: &str,
+    message: &str,
+) -> AppResult<()> {
+    let room_id = room_id.trim();
+    if room_id.is_empty()
+        || room_id.len() > 32
+        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            AppError::new("douyin_send_invalid_room", "抖音直播间号无效").with_site("douyin"),
+        );
+    }
+    let cookie = cookie.trim();
+    if cookie.is_empty() {
+        return Err(AppError::new(
+            "douyin_send_cookie_missing",
+            "请先在设置中扫码登录，或保存抖音 Cookie",
+        )
+        .with_site("douyin"));
+    }
+    let message = normalize_outgoing_message(message)?;
+    let user_unique_id = generate_user_unique_id();
+    let signature = douyin_sign::get_signature(room_id, &user_unique_id)?;
+    // Web live room chat accepts form fields; the signature pair is the same
+    // short-lived pair used by the receive WSS URL builder.
+    let form = [
+        ("content", message.as_str()),
+        ("room_id", room_id),
+        ("aid", "6383"),
+        ("app_name", "douyin_web"),
+        ("live_id", "1"),
+        ("device_platform", "web"),
+        ("language", "zh-CN"),
+        ("enter_source", "web_live"),
+        ("user_unique_id", user_unique_id.as_str()),
+        ("signature", signature.as_str()),
+    ];
+    let response = client
+        .post(SEND_CHAT_URL)
+        .header("user-agent", DEFAULT_USER_AGENT)
+        .header("origin", "https://live.douyin.com")
+        .header("referer", format!("https://live.douyin.com/{room_id}"))
+        .header("cookie", cookie)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "douyin_send_unknown",
+                "发送状态未知，请到直播间确认是否已送达",
+            )
+            .with_site("douyin")
+            .retryable()
+        })?;
+    let status = response.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(
+            AppError::new("douyin_send_rate_limited", "发送过快，请稍后再试")
+                .with_site("douyin")
+                .retryable(),
+        );
+    }
+    let text = response.text().await.map_err(|_| {
+        AppError::new(
+            "douyin_send_unknown",
+            "发送状态未知，请到直播间确认是否已送达",
+        )
+        .with_site("douyin")
+        .retryable()
+    })?;
+    parse_send_response(status, &text)
+}
+
+fn parse_send_response(status: reqwest::StatusCode, text: &str) -> AppResult<()> {
+    let value: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
+    // Prefer structured platform codes when present; otherwise fall back to
+    // the HTTP status so a non-JSON success page is not treated as acceptance.
+    let code = value
+        .get("status_code")
+        .or_else(|| value.get("code"))
+        .or_else(|| value.get("error"))
+        .and_then(|value| value.as_i64())
+        .or_else(|| value.get("status_code").and_then(|value| value.as_u64()).map(|n| n as i64));
+    match code {
+        Some(0) => Ok(()),
+        Some(code) if matches!(code, 10011 | 10012 | 4003101 | 4003105) => Err(AppError::new(
+            "douyin_send_rate_limited",
+            "发送过快，请稍后再试",
+        )
+        .with_site("douyin")
+        .retryable()),
+        Some(code) if matches!(code, 20003 | 20004 | 8 | 10002) => Err(AppError::new(
+            "douyin_send_login_expired",
+            "抖音登录状态已失效，请更新 Cookie 后重试",
+        )
+        .with_site("douyin")),
+        Some(_) => Err(AppError::new(
+            "douyin_send_rejected",
+            "抖音未接受此条弹幕，请检查账号状态或直播间限制",
+        )
+        .with_site("douyin")),
+        None if status.is_success() && !text.trim().is_empty() && value.is_null() => {
+            // Empty/non-JSON success bodies are ambiguous: the write may have
+            // already landed, so do not encourage automatic retries.
+            Err(AppError::new(
+                "douyin_send_unknown",
+                "发送状态未知，请到直播间确认是否已送达",
+            )
+            .with_site("douyin")
+            .retryable())
+        }
+        None if status.is_success() => Ok(()),
+        None => Err(AppError::new(
+            "douyin_send_rejected",
+            "抖音未接受此条弹幕，请检查账号状态或直播间限制",
+        )
+        .with_site("douyin")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,5 +925,44 @@ mod tests {
         let uid = generate_user_unique_id();
         assert_eq!(uid.len(), 12);
         assert!(uid.bytes().all(|byte| byte.is_ascii_digit()));
+    }
+
+    #[test]
+    fn outgoing_message_is_single_line_and_bounded() {
+        assert_eq!(normalize_outgoing_message("  你好  ").unwrap(), "你好");
+        assert!(normalize_outgoing_message("\n").is_err());
+        assert!(normalize_outgoing_message("hello\nworld").is_err());
+        assert!(normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_UTF16_UNITS)).is_ok());
+        assert!(
+            normalize_outgoing_message(&"a".repeat(MAX_OUTGOING_CHAT_UTF16_UNITS + 1)).is_err()
+        );
+    }
+
+    #[test]
+    fn parse_send_response_accepts_zero_codes() {
+        assert!(parse_send_response(
+            reqwest::StatusCode::OK,
+            r#"{"status_code":0,"data":{}}"#
+        )
+        .is_ok());
+        assert!(parse_send_response(reqwest::StatusCode::OK, r#"{"code":0}"#).is_ok());
+        assert!(parse_send_response(reqwest::StatusCode::OK, r#"{"error":0}"#).is_ok());
+    }
+
+    #[test]
+    fn parse_send_response_maps_login_and_rate_limit_codes() {
+        let login = parse_send_response(
+            reqwest::StatusCode::OK,
+            r#"{"status_code":20003,"data":null}"#,
+        )
+        .unwrap_err();
+        assert_eq!(login.code, "douyin_send_login_expired");
+
+        let rate = parse_send_response(
+            reqwest::StatusCode::OK,
+            r#"{"status_code":10011,"data":null}"#,
+        )
+        .unwrap_err();
+        assert_eq!(rate.code, "douyin_send_rate_limited");
     }
 }

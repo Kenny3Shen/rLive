@@ -148,7 +148,7 @@ function useCompactSettingsLayout(): boolean {
 }
 
 function isDanmakuSendCookieSite(siteId: SiteId): boolean {
-  return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
+  return siteId === "bilibili" || siteId === "douyu" || siteId === "huya" || siteId === "douyin";
 }
 
 /** Huya UDB serves a ready-made PNG; other platforms return encodeable payloads. */
