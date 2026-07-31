@@ -63,7 +63,7 @@ export type PlayerControlsProps = {
   overlay?: boolean;
   /** Optional compact content centered between transport and room controls. */
   centerSlot?: ReactNode;
-  /** Local Whisper caption controls, available for a live room player. */
+  /** Local caption controls, available for a live room player. */
   captions?: LocalCaptionControls;
   /**
    * The menu content is portalled outside the player stage. Tell the stage

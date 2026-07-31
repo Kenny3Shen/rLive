@@ -1268,7 +1268,7 @@ export function PlayerPane({
               </div>
             )}
 
-            {/* Local Whisper captions: DOM text stays above danmaku (z-10),
+            {/* Local captions: DOM text stays above danmaku (z-10),
                 below the bottom playback chrome (z-30), and is intentionally
                 absent from native PiP because PiP owns only the video frame. */}
             {showHost && (

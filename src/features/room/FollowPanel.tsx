@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, Home, Radio } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Heart, Home, Radio, RefreshCw } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { FollowUser } from "@/shared/types/live";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Empty,
   EmptyContent,
@@ -75,14 +77,12 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
     staleTime: 15_000,
   });
 
-  const refreshFollowsList = async () => {
-    try {
-      await refreshFollows(queryClient);
-    } catch (error) {
+  const refreshMutation = useMutation({
+    mutationFn: () => refreshFollows(queryClient),
+    onError: () => {
       notify.error("刷新关注列表失败", "请检查网络后重试。");
-      throw error;
-    }
-  };
+    },
+  });
 
   const follows = useMemo(
     () =>
@@ -115,9 +115,9 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
     >
       <ScrollArea className="min-h-0 flex-1">
         <PullToRefresh
-          onRefresh={refreshFollowsList}
-          refreshing={followsQuery.isFetching}
-          className="h-full min-h-0 p-2"
+          onRefresh={() => refreshMutation.mutateAsync().catch(() => undefined)}
+          refreshing={refreshMutation.isPending || followsQuery.isFetching}
+          className="h-full min-h-0 p-2 pb-14"
         >
           {followsQuery.isLoading && (
             <div className="flex flex-col gap-2">
@@ -199,6 +199,30 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
           )}
         </PullToRefresh>
       </ScrollArea>
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-lg"
+              className="absolute right-3 bottom-3"
+              disabled={refreshMutation.isPending || followsQuery.isLoading}
+              aria-label={refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
+              onClick={() => refreshMutation.mutate()}
+            />
+          }
+        >
+          {refreshMutation.isPending ? (
+            <Spinner data-icon="inline-start" aria-hidden />
+          ) : (
+            <RefreshCw data-icon="inline-start" aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipContent side="left">
+          {refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
+        </TooltipContent>
+      </Tooltip>
     </section>
   );
 });

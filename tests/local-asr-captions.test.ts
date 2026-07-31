@@ -18,7 +18,7 @@ describe("local ASR caption timing", () => {
     expect(nextCaptionAudioStartMs(1_000, 12, 500)).toBe(11_500);
   });
 
-  test("loads the fixed bundled tiny model when no model is ready", () => {
+  test("requests the compatibility loader when no model is ready", () => {
     expect(
       selectAsrModelLoadRequest({ loaded: false, loading: false, bundled: false, path: null }),
     ).toEqual({ command: "asr_model_load_default", args: {} });
@@ -27,12 +27,12 @@ describe("local ASR caption timing", () => {
         loaded: true,
         loading: false,
         bundled: true,
-        path: "D:\\app\\models\\tiny.bin",
+        path: "D:\\app\\models\\future.gguf",
       }),
     ).toBeNull();
   });
 
-  test("replaces a non-bundled legacy runtime model with the fixed tiny model", () => {
+  test("replaces a non-bundled legacy runtime through the compatibility loader", () => {
     expect(
       selectAsrModelLoadRequest({
         loaded: true,
@@ -49,7 +49,7 @@ describe("local ASR caption timing", () => {
         loaded: true,
         loading: true,
         bundled: true,
-        path: "D:\\app\\models\\tiny.bin",
+        path: "D:\\app\\models\\future.gguf",
       }),
     ).toBeNull();
   });

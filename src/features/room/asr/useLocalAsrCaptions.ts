@@ -15,6 +15,7 @@ type AsrModelStatus = {
   bundled: boolean;
   path: string | null;
   active_session_id: string | null;
+  backend: string;
 };
 
 export type AsrModelLoadRequest = {
@@ -23,9 +24,8 @@ export type AsrModelLoadRequest = {
 };
 
 /**
- * Captions always use rLive's bundled tiny model. Keeping the decision here
- * rather than in settings makes every room and every platform follow the same
- * low-memory CPU-first path.
+ * Keep model loading behind one command so a future local backend can replace
+ * the current placeholder without changing room lifecycle code.
  */
 export function selectAsrModelLoadRequest(
   model: Pick<AsrModelStatus, "loaded" | "loading" | "bundled" | "path">,
@@ -171,7 +171,7 @@ export function nextCaptionAudioStartMs(
 }
 
 /**
- * Room-scoped, opt-in local Whisper bridge.
+ * Room-scoped, opt-in local-caption bridge.
  *
  * A native command owns one active ASR session, but React can temporarily
  * retain an old PlayerPane during route/media changes. The session ID and
@@ -493,8 +493,11 @@ export function useLocalAsrCaptions({
         if (cancelled) return;
 
         const model = await invokeCmd<AsrModelStatus>("asr_status");
+        if (model.backend === "unavailable") {
+          throw new Error("本地字幕后端待重构，当前版本暂不可用");
+        }
         if (!model.loaded || model.loading) {
-          throw new Error("请先在设置－播放中加载本地 Whisper 模型");
+          throw new Error("请先在设置－播放中加载本地字幕模型");
         }
         if (cancelled) return;
 
@@ -593,6 +596,9 @@ export function useLocalAsrCaptions({
     setMessage(null);
     void (async () => {
       const model = await invokeCmd<AsrModelStatus>("asr_status");
+      if (model.backend === "unavailable") {
+        throw new Error("本地字幕后端待重构，当前版本暂不可用");
+      }
       if (model.loading) {
         throw new Error("本地字幕模型正在加载，请稍候");
       }
