@@ -33,6 +33,9 @@ pub struct AppSettings {
     /// Hide gift notices in the room chat list and floating danmaku.
     #[serde(default)]
     pub danmaku_filter_gifts: bool,
+    /// Show supported-platform Super Chat cards over the player.
+    #[serde(default = "default_super_chat_enabled")]
+    pub super_chat_enabled: bool,
     pub danmaku_shield_words: Vec<String>,
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
@@ -67,6 +70,10 @@ fn default_danmaku_filter_repeats() -> bool {
     true
 }
 
+fn default_super_chat_enabled() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -82,6 +89,7 @@ impl Default for AppSettings {
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
             danmaku_filter_gifts: false,
+            super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
             danmaku_send_enabled: false,
@@ -124,6 +132,7 @@ mod tests {
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
         assert!(!settings.danmaku_filter_gifts);
+        assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.iptv_custom_m3u_url.is_none());
         assert!(settings.disabled_site_ids.is_empty());

@@ -151,6 +151,20 @@ function isDanmakuSendCookieSite(siteId: SiteId): boolean {
   return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
 }
 
+/** Huya UDB serves a ready-made PNG; other platforms return encodeable payloads. */
+function isHostedQrImageUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "udblgn.huya.com" || url.hostname.endsWith(".huya.com")) &&
+      url.pathname.includes("/qrLgn/getQrImg")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section data-slot="settings-section">
@@ -254,15 +268,28 @@ function QrLogin({
         <div className="flex flex-wrap items-center gap-4">
           <div className="rounded-xl border border-border-subtle bg-card p-2 shadow-sm">
             {session ? (
-              <QRCodeSVG
-                value={session.qr_code_url}
-                size={176}
-                level="M"
-                includeMargin={false}
-                fgColor="#111111"
-                bgColor="#ffffff"
-                title={`${siteName}登录二维码`}
-              />
+              isHostedQrImageUrl(session.qr_code_url) ? (
+                // Huya UDB returns a PNG from getQrImg; other platforms give a
+                // payload string that QRCodeSVG encodes locally.
+                <img
+                  src={session.qr_code_url}
+                  alt={`${siteName}登录二维码`}
+                  width={176}
+                  height={176}
+                  className="size-44 rounded-lg bg-white object-contain"
+                  draggable={false}
+                />
+              ) : (
+                <QRCodeSVG
+                  value={session.qr_code_url}
+                  size={176}
+                  level="M"
+                  includeMargin={false}
+                  fgColor="#111111"
+                  bgColor="#ffffff"
+                  title={`${siteName}登录二维码`}
+                />
+              )
             ) : (
               <div className="flex size-44 items-center justify-center text-muted-foreground">
                 <RefreshCw className="size-5 animate-spin-soft" aria-hidden />
@@ -1205,6 +1232,7 @@ export function SettingsPage() {
                     siteId="huya"
                     title="虎牙"
                     placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
+                    qrLogin
                   />
                   <AccountCard
                     siteId="douyin"

@@ -144,6 +144,8 @@ export type AppSettings = {
   danmaku_font_weight: number;
   danmaku_filter_repeats: boolean;
   danmaku_filter_gifts: boolean;
+  /** Show supported-platform Super Chat cards over the player. */
+  super_chat_enabled?: boolean;
   danmaku_shield_words: string[];
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
   quality_level?: "high" | "mid" | "low";

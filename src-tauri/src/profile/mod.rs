@@ -189,6 +189,7 @@ pub fn merge_into_db(
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
+    settings.super_chat_enabled = package.settings.super_chat_enabled;
     // Do not copy `danmaku_send_enabled` or `iptv_custom_m3u_url`.
     // A profile is portable/untrusted input; importing it must not grant
     // sending consent, replace this device's private playlist address, or
@@ -305,14 +306,17 @@ mod tests {
     }
 
     #[test]
-    fn merge_carries_the_gift_filter_preference() {
+    fn merge_carries_room_display_preferences() {
         let mut conn = open_in_memory().unwrap();
         let mut package = ProfilePackage::sample();
         package.settings.danmaku_filter_gifts = true;
+        package.settings.super_chat_enabled = false;
 
         merge_into_db(&mut conn, &package).unwrap();
 
-        assert!(settings::get(&conn).unwrap().danmaku_filter_gifts);
+        let imported = settings::get(&conn).unwrap();
+        assert!(imported.danmaku_filter_gifts);
+        assert!(!imported.super_chat_enabled);
     }
 
     #[test]

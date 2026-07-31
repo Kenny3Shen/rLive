@@ -8,11 +8,9 @@
 # Usage:
 #   cd D:\dev\rLive
 #   .\scripts\build-windows.ps1
-#   .\scripts\build-windows.ps1 -BundleNsis
 
 param(
-    [string]$ProjectRoot = "D:\dev\rLive",
-    [switch]$BundleNsis
+    [string]$ProjectRoot = "D:\dev\rLive"
 )
 
 $ErrorActionPreference = "Stop"
@@ -104,7 +102,7 @@ Set-Location $ProjectRoot
 
 # Prefer local CLI via package.json script: "tauri": "tauri"
 # (winget bun often has no bunx.exe; `bun x tauri` may not resolve the binary either)
-$tauriArgs = if ($BundleNsis) { "build --bundles nsis" } else { "build --no-bundle" }
+$tauriArgs = "build --no-bundle"
 
 if ($bunCmd) {
     Write-Step "bun install"

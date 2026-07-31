@@ -13,6 +13,7 @@ describe("room navigation state", () => {
 
   test("ordinary room navigation preserves normal back behavior", () => {
     expect(roomSideTabFromNavigationState(undefined)).toBe("chat");
+    expect(roomSideTabFromNavigationState({ roomSideTab: "sc" })).toBe("chat");
     expect(roomNavigationReturnsHome({ roomSideTab: "follow" })).toBe(false);
     expect(roomNavigationReturnsHome({ roomBackTarget: "previous" })).toBe(false);
   });
