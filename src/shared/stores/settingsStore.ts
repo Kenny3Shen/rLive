@@ -54,6 +54,7 @@ type SettingsState = {
   danmakuFilterRepeats: boolean;
   danmakuFilterGifts: boolean;
   superChatEnabled: boolean;
+  superChatOpacity: number;
   danmakuShieldWords: string[];
   qualityLevel: QualityLevel;
   danmakuSendEnabled: boolean;
@@ -75,6 +76,7 @@ type SettingsState = {
   setProxy: (proxy: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
+  setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
@@ -99,6 +101,7 @@ const defaultSettings: AppSettings = {
   danmaku_filter_repeats: true,
   danmaku_filter_gifts: true,
   super_chat_enabled: true,
+  super_chat_opacity: 1,
   danmaku_shield_words: [],
   quality_level: "high",
   danmaku_send_enabled: false,
@@ -120,6 +123,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_filter_repeats: state.danmakuFilterRepeats,
     danmaku_filter_gifts: state.danmakuFilterGifts,
     super_chat_enabled: state.superChatEnabled,
+    super_chat_opacity: state.superChatOpacity,
     danmaku_shield_words: state.danmakuShieldWords,
     quality_level: state.qualityLevel,
     danmaku_send_enabled: state.danmakuSendEnabled,
@@ -143,6 +147,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuFilterRepeats: true,
       danmakuFilterGifts: true,
       superChatEnabled: true,
+      superChatOpacity: 1,
       danmakuShieldWords: [],
       qualityLevel: "high",
       danmakuSendEnabled: false,
@@ -179,6 +184,10 @@ export const useSettingsStore = create<SettingsState>()(
       setSuperChatEnabled: (superChatEnabled) => {
         set({ superChatEnabled });
         void get().persistToBackend({ super_chat_enabled: superChatEnabled });
+      },
+      setSuperChatOpacity: (superChatOpacity) => {
+        set({ superChatOpacity });
+        void get().persistToBackend({ super_chat_opacity: superChatOpacity });
       },
       setDanmakuSendEnabled: (danmakuSendEnabled) => {
         const epoch = ++danmakuSendSettingEpoch;
@@ -221,6 +230,7 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuFilterRepeats: settings.danmaku_filter_repeats,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
           superChatEnabled: settings.super_chat_enabled ?? true,
+          superChatOpacity: settings.super_chat_opacity ?? 1,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           qualityLevel: parseQualityLevel(settings.quality_level),
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
