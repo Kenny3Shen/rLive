@@ -1,10 +1,15 @@
 //! Douyin live site client.
 //!
-//! Douyin's public list APIs are protected by a browser challenge.  The live
-//! site itself still server-renders the same category / hot-room payloads, so
-//! this implementation uses those SSR payloads for browse pages and the
-//! official room endpoints for details and streams.  A `ttwid` session is
-//! obtained from the live home page when the caller has not supplied one.
+//! Douyin's public list APIs are protected by a browser challenge: every
+//! request carries an `a_bogus` signature derived from its own query string.
+//! That signature is computed locally (see [`a_bogus`]), so browse lists use
+//! the same paginated `partition/detail/room/v2` endpoint as the web client
+//! and can therefore load more than one page.  Room details and streams still
+//! come from the SSR room page and the official reflow endpoint.  A `ttwid`
+//! session is obtained from the live home page when the caller has not
+//! supplied one.
+
+mod a_bogus;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -28,6 +33,20 @@ pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) 
 const LIVE_ROOT: &str = "https://live.douyin.com/";
 const ROOM_REFLOW_URL: &str = "https://webcast.amemv.com/webcast/room/reflow/info/";
 const LIVE_SEARCH_URL: &str = "https://www.douyin.com/aweme/v1/web/live/search/";
+/// Paginated browse endpoint used by the web client for both category lists
+/// and the home feed.
+const PARTITION_ROOMS_URL: &str = "https://live.douyin.com/webcast/web/partition/detail/room/v2/";
+/// The home feed is not a real category. Douyin's web client reads it from the
+/// partition endpoint using this synthetic partition, which is what makes the
+/// recommendation list pageable at all.
+const RECOMMEND_PARTITION_ID: &str = "720";
+const RECOMMEND_PARTITION_TYPE: &str = "1";
+/// Rooms requested per list page. Douyin advances its own `offset` by exactly
+/// this amount, so a page number maps onto a stable offset.
+const LIST_PAGE_SIZE: u32 = 15;
+/// Length of the `msToken` sent by the web client on list requests.
+const MS_TOKEN_LENGTH: usize = 107;
+const MS_TOKEN_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 /// A Douyin site instance owns only transient, read-only request state.  The
 /// initial cookie comes from the account store; response cookies such as
@@ -270,6 +289,65 @@ impl DouyinSite {
         self.get_text(&url, &[], LIVE_ROOT, false).await
     }
 
+    /// GET a browser-signed Douyin web API.
+    ///
+    /// `a_bogus` covers the exact query string that is sent, so the parameters
+    /// are encoded once here and the signature is appended to that same string
+    /// rather than handed to `reqwest` as a separate pair.
+    async fn get_signed_json(
+        &self,
+        url: &str,
+        params: &[(String, String)],
+        referer: &str,
+    ) -> AppResult<Value> {
+        let query = encode_query(params);
+        let signature = a_bogus::generate_a_bogus(&query, DEFAULT_USER_AGENT);
+        let signed = format!("{url}?{query}&a_bogus={}", url_encode(&signature));
+        // `get_json` appends nothing further: the URL already carries the
+        // signed query, and adding a parameter here would invalidate it.
+        self.get_json(&signed, &[], referer).await
+    }
+
+    /// Fetch one page of rooms from the paginated browse endpoint.
+    ///
+    /// `partition` is a Douyin partition id with its type; the home feed uses
+    /// the synthetic [`RECOMMEND_PARTITION_ID`].
+    async fn get_partition_rooms(
+        &self,
+        partition: &str,
+        partition_type: &str,
+        page: u32,
+        referer: &str,
+    ) -> AppResult<RoomListPage> {
+        self.ensure_web_session().await?;
+        let offset = page.saturating_sub(1).saturating_mul(LIST_PAGE_SIZE);
+        let params = vec![
+            ("aid".into(), "6383".into()),
+            ("app_name".into(), "douyin_web".into()),
+            ("live_id".into(), "1".into()),
+            ("device_platform".into(), "web".into()),
+            ("language".into(), "zh-CN".into()),
+            ("enter_from".into(), "web_homepage_hot".into()),
+            ("cookie_enabled".into(), "true".into()),
+            ("screen_width".into(), "1920".into()),
+            ("screen_height".into(), "1080".into()),
+            ("browser_language".into(), "zh-CN".into()),
+            ("browser_platform".into(), "Win32".into()),
+            ("browser_name".into(), "Chrome".into()),
+            ("browser_version".into(), "125.0.0.0".into()),
+            ("count".into(), LIST_PAGE_SIZE.to_string()),
+            ("offset".into(), offset.to_string()),
+            ("partition".into(), partition.to_string()),
+            ("partition_type".into(), partition_type.to_string()),
+            ("req_from".into(), "2".into()),
+            ("msToken".into(), generate_ms_token()),
+        ];
+        let value = self
+            .get_signed_json(PARTITION_ROOMS_URL, &params, referer)
+            .await?;
+        parse_partition_rooms(&value, offset)
+    }
+
     async fn get_reflow_room(&self, room_id: &str) -> AppResult<Value> {
         // This official reflow endpoint works with the public room id and is
         // intentionally requested without the `.douyin.com` Cookie/session.
@@ -355,26 +433,44 @@ impl LiveSite for DouyinSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
-        // The public SSR payload exposes only its first page. The subsequent
-        // cursor API is browser-signed and cannot be safely reproduced from a
-        // saved Cookie, so never advertise a non-functional next page.
-        if page.max(1) > 1 {
-            return Ok(RoomListPage {
-                has_more: false,
-                items: Vec::new(),
-            });
+        // The hot feed is served by the same paginated browse endpoint as a
+        // category, under a synthetic partition. Its first page matches the
+        // `hot_live` SSR payload, so the SSR path is only a fallback for when
+        // the signed request is rejected on the very first page.
+        let page = page.max(1);
+        match self
+            .get_partition_rooms(
+                RECOMMEND_PARTITION_ID,
+                RECOMMEND_PARTITION_TYPE,
+                page,
+                &format!("{LIVE_ROOT}hot_live"),
+            )
+            .await
+        {
+            Ok(rooms) => Ok(rooms),
+            // Keep the first screen working even when the signed endpoint is
+            // unavailable; a later page has no SSR equivalent to fall back to.
+            Err(error) if page == 1 => match self.get_ssr_page("hot_live").await {
+                Ok(html) => parse_ssr_rooms(&html),
+                Err(_) => Err(error),
+            },
+            Err(error) => Err(error),
         }
-        let html = self.get_ssr_page("hot_live").await?;
-        parse_ssr_rooms(&html)
     }
 
     async fn get_category_rooms(
         &self,
         category: &LiveSubCategory,
-        offset: u32,
+        page: u32,
     ) -> AppResult<RoomListPage> {
-        let html = self.get_ssr_page(&format!("category/{offset}")).await?; // temporary for testing
-        parse_ssr_rooms(&html)
+        let (partition, partition_type) = category_partition(category)?;
+        self.get_partition_rooms(
+            partition,
+            partition_type,
+            page.max(1),
+            &format!("{LIVE_ROOT}category/{partition}_{partition_type}"),
+        )
+        .await
     }
 
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
@@ -574,6 +670,110 @@ fn is_safe_session_value(value: &str) -> bool {
         && !value
             .bytes()
             .any(|byte| byte == b';' || byte.is_ascii_control())
+}
+
+/// Percent-encode one query component, keeping only the unreserved set.
+///
+/// `a_bogus` signs the literal query string, so the value that is signed and
+/// the value that is sent have to be encoded identically. Doing it here keeps
+/// both sides on this single implementation.
+fn url_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn encode_query(params: &[(String, String)]) -> String {
+    params
+        .iter()
+        .map(|(key, value)| format!("{}={}", url_encode(key), url_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Build the throwaway `msToken` that Douyin's web client sends on list calls.
+///
+/// The upstream value is an opaque browser token. The endpoint only checks its
+/// shape, so a per-request random string of the expected length is enough; it
+/// is deliberately not persisted or reused as an identifier.
+fn generate_ms_token() -> String {
+    // uuid v4 is already a CSPRNG-backed source and is a dependency here, so
+    // this avoids pulling in `rand` just to fill a throwaway token.
+    let mut token = String::with_capacity(MS_TOKEN_LENGTH);
+    while token.len() < MS_TOKEN_LENGTH {
+        for byte in uuid::Uuid::new_v4().as_bytes() {
+            if token.len() == MS_TOKEN_LENGTH {
+                break;
+            }
+            let index = usize::from(*byte) % MS_TOKEN_CHARSET.len();
+            token.push(char::from(MS_TOKEN_CHARSET[index]));
+        }
+    }
+    token
+}
+
+/// Split a stored category id into its Douyin `partition` and `partition_type`.
+///
+/// [`parse_categories_html`] stores these joined as `id,type`; the browse
+/// endpoint needs them as separate parameters. Both must be numeric so neither
+/// can inject an extra query parameter into the signed string.
+fn split_partition(category_id: &str) -> AppResult<(&str, &str)> {
+    let (partition, partition_type) = category_id
+        .split_once(',')
+        .ok_or_else(|| DouyinSite::parse_err("抖音分区标识缺少类型，请刷新分类后重试"))?;
+    Ok((
+        numeric_id(partition.trim(), "分区标识")?,
+        numeric_id(partition_type.trim(), "分区类型")?,
+    ))
+}
+
+/// Resolve the `partition` / `partition_type` to browse for a category.
+///
+/// The category browser prepends a synthetic "全部<分区>" entry whose id is `0`
+/// rather than a real partition; browsing it means browsing its parent.
+fn category_partition(category: &LiveSubCategory) -> AppResult<(&str, &str)> {
+    let id = if category.id.trim() == "0" {
+        category.parent_id.trim()
+    } else {
+        category.id.trim()
+    };
+    split_partition(id)
+}
+
+/// Read one page of the paginated browse endpoint.
+///
+/// Douyin does not send `has_more` here, so a further page is assumed only
+/// while it returns a full page and its own `offset` keeps advancing past the
+/// one that was requested. That keeps the UI from offering a "load more" that
+/// would return the same rooms forever.
+fn parse_partition_rooms(value: &Value, requested_offset: u32) -> AppResult<RoomListPage> {
+    let data = value
+        .get("data")
+        .ok_or_else(|| DouyinSite::parse_err("抖音房间列表缺少 data"))?;
+    let rooms = data
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DouyinSite::parse_err("抖音房间列表缺少 data 数组"))?;
+    let items = rooms
+        .iter()
+        .filter_map(|item| room_item_from_value(item.get("room").unwrap_or(item)))
+        .collect::<Vec<_>>();
+
+    let next_offset = data.get("offset").map(json_i64).unwrap_or_default();
+    let advanced = next_offset > i64::from(requested_offset);
+    let has_more = match data.get("has_more").and_then(Value::as_bool) {
+        Some(has_more) => has_more && advanced,
+        None => rooms.len() >= LIST_PAGE_SIZE as usize && advanced,
+    };
+
+    Ok(RoomListPage { has_more, items })
 }
 
 fn json_i64_opt(value: &Value) -> Option<i64> {
@@ -1487,6 +1687,126 @@ mod tests {
         assert_eq!(page.items[0].online, 42);
     }
 
+    /// One page of the browse endpoint, shaped like the live response: the
+    /// public `web_rid` sits on the outer item and on `room.owner`.
+    fn partition_page(count: usize, offset: i64) -> Value {
+        let rooms = (0..count)
+            .map(|index| {
+                serde_json::json!({
+                    "web_rid": format!("100000000{index}"),
+                    "room": {
+                        "id_str": format!("76661752738848796{index:02}"),
+                        "title": format!("房间 {index}"),
+                        "cover": {"url_list": ["https://img.example/cover.jpg"]},
+                        "owner": {
+                            "web_rid": format!("100000000{index}"),
+                            "nickname": format!("主播 {index}")
+                        },
+                        "room_view_stats": {"display_value": 1_000 + index}
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "status_code": 0,
+            "data": {"count": count, "offset": offset, "data": rooms}
+        })
+    }
+
+    #[test]
+    fn full_partition_page_with_advancing_offset_has_more() {
+        let page = parse_partition_rooms(&partition_page(15, 15), 0).expect("partition page");
+
+        assert_eq!(page.items.len(), 15);
+        assert_eq!(page.items[0].room_id, "1000000000");
+        assert_eq!(page.items[0].online, 1_000);
+        assert!(page.has_more);
+    }
+
+    #[test]
+    fn short_partition_page_ends_pagination() {
+        let page = parse_partition_rooms(&partition_page(7, 22), 15).expect("partition page");
+
+        assert_eq!(page.items.len(), 7);
+        assert!(!page.has_more);
+    }
+
+    /// A stalled cursor would otherwise let infinite scroll refetch the same
+    /// rooms forever, so a non-advancing offset must end pagination.
+    #[test]
+    fn stalled_offset_ends_pagination_even_on_a_full_page() {
+        let page = parse_partition_rooms(&partition_page(15, 15), 15).expect("partition page");
+
+        assert_eq!(page.items.len(), 15);
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn explicit_has_more_false_is_respected() {
+        let mut value = partition_page(15, 30);
+        value["data"]["has_more"] = Value::Bool(false);
+
+        assert!(!parse_partition_rooms(&value, 15).unwrap().has_more);
+    }
+
+    #[test]
+    fn category_partition_splits_id_and_type() {
+        assert_eq!(
+            category_partition(&sub_category("1010032,1", "103,4")).unwrap(),
+            ("1010032", "1")
+        );
+        assert_eq!(
+            category_partition(&sub_category("103,4", "103,4")).unwrap(),
+            ("103", "4")
+        );
+    }
+
+    /// The category browser injects a synthetic "全部X" tile whose id is `0`.
+    /// That is not a Douyin partition, so the parent's partition must be used.
+    #[test]
+    fn all_category_falls_back_to_its_parent_partition() {
+        assert_eq!(
+            category_partition(&sub_category("0", "103,4")).unwrap(),
+            ("103", "4")
+        );
+    }
+
+    #[test]
+    fn category_partition_rejects_non_numeric_ids() {
+        assert!(category_partition(&sub_category("103;drop,4", "103,4")).is_err());
+        assert!(category_partition(&sub_category("103", "0")).is_err());
+    }
+
+    fn sub_category(id: &str, parent_id: &str) -> LiveSubCategory {
+        LiveSubCategory {
+            id: id.into(),
+            name: "测试分区".into(),
+            parent_id: parent_id.into(),
+            pic: None,
+        }
+    }
+
+    #[test]
+    fn ms_token_has_the_expected_shape_and_is_not_reused() {
+        let token = generate_ms_token();
+
+        assert_eq!(token.len(), MS_TOKEN_LENGTH);
+        assert!(token.bytes().all(|byte| MS_TOKEN_CHARSET.contains(&byte)));
+        assert_ne!(token, generate_ms_token());
+    }
+
+    /// The signature covers the literal query string, so encoding has to be
+    /// applied before signing and never a second time by the HTTP client.
+    #[test]
+    fn query_encoding_escapes_values_once() {
+        let query = encode_query(&[
+            ("partition".into(), "1010032".into()),
+            ("keyword".into(), "a b&c=d".into()),
+        ]);
+
+        assert_eq!(query, "partition=1010032&keyword=a%20b%26c%3Dd");
+    }
+
     #[test]
     fn ssr_room_metadata_uses_its_internal_id_for_reflow() {
         let html = r#"<script>roomInfo\":{\"room\":{\"id_str\":\"7666175273884879635\",\"status\":2,\"title\":\"轻量房间数据\",\"owner\":{\"web_rid\":\"522864404974\",\"nickname\":\"主播\"},\"stream_url\":{}},\"anchor\":{\"nickname\":\"主播\"}}</script>"#;
@@ -1591,5 +1911,52 @@ mod tests {
         let html = r#"<script>roomInfo\":{\"room\":{\"id_str\":\"7666175273884879635\",\"status\":2,\"title\":\"SSR 直播\",\"owner\":{\"web_rid\":\"522864404974\",\"nickname\":\"主播\"},\"stream_url\":{}},\"anchor\":{\"nickname\":\"主播\"}}</script>"#;
         let detail = parse_room_detail_html(html, "522864404974").expect("SSR fallback detail");
         assert_eq!(detail.title, "SSR 直播");
+    }
+
+    /// Exercises the signed browse endpoint for real: a locally computed
+    /// `a_bogus` that Douyin rejects would still parse as a valid (empty)
+    /// payload, so only a live request proves the signature is accepted and
+    /// that a second page returns different rooms.
+    #[tokio::test]
+    #[ignore = "live Douyin browse smoke; requires external network"]
+    async fn live_signed_browse_pagination_smoke() {
+        let site = DouyinSite::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            String::new(),
+        );
+
+        let first = site.get_recommend_rooms(1).await.expect("first page");
+        assert!(
+            !first.items.is_empty(),
+            "recommend page 1 returned no rooms"
+        );
+        assert!(first.has_more, "recommend page 1 should offer another page");
+
+        let second = site.get_recommend_rooms(2).await.expect("second page");
+        assert!(
+            !second.items.is_empty(),
+            "recommend page 2 returned no rooms"
+        );
+        let first_ids: Vec<_> = first.items.iter().map(|item| &item.room_id).collect();
+        assert!(
+            second
+                .items
+                .iter()
+                .any(|item| !first_ids.contains(&&item.room_id)),
+            "recommend page 2 repeated page 1 exactly"
+        );
+
+        // A real category id, as stored by `parse_categories_html`.
+        let category = LiveSubCategory {
+            id: "1010032,1".into(),
+            name: "和平精英".into(),
+            parent_id: "103,4".into(),
+            pic: None,
+        };
+        let rooms = site
+            .get_category_rooms(&category, 1)
+            .await
+            .expect("category page");
+        assert!(!rooms.items.is_empty(), "category page returned no rooms");
     }
 }
