@@ -63,7 +63,7 @@ export type RoomListPage = {
   items: LiveRoomItem[];
 };
 
-export type DanmakuKind = "chat" | "gift" | "enter" | "super_chat" | "system";
+export type DanmakuKind = "chat" | "gift" | "enter" | "social" | "super_chat" | "system";
 
 /** Optional Bilibili Super Chat metadata emitted with `super_chat` events. */
 export type SuperChatInfo = {
