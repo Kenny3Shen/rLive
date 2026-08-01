@@ -122,7 +122,7 @@ mod tests {
         assert!(!has_saved_settings);
         assert_eq!(s.default_site, "bilibili");
         assert_eq!(s.theme, "system");
-        assert_eq!(s.danmaku_opacity, 1.0);
+        assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_size, 18);
         assert_eq!(s.danmaku_speed, 8);
         assert_eq!(s.danmaku_area, 0.9);
