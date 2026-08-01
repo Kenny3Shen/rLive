@@ -23,7 +23,6 @@ use tokio_tungstenite::{
 };
 
 use crate::danmaku::douyin_sign;
-use crate::danmaku::tls::rustls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -173,7 +172,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> Ap
     }
 
     emit_system(&events, "正在连接抖音弹幕服务器…");
-    let (ws, _) = connect_async_tls_with_config(request, None, false, Some(rustls_connector()?))
+    let (ws, _) = connect_async_tls_with_config(request, None, false, None)
         .await
         .map_err(|_| {
             AppError::new(
@@ -645,7 +644,7 @@ pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     let message = value.trim();
     if message.is_empty() {
         return Err(
-            AppError::new("douyin_send_empty", "请输入要发送的弹幕内容").with_site("douyin"),
+            AppError::new("douyin_send_empty", "请输入要发送的弹幕内容").with_site("douyin")
         );
     }
     if message.encode_utf16().count() > MAX_OUTGOING_CHAT_UTF16_UNITS {
@@ -754,7 +753,12 @@ fn parse_send_response(status: reqwest::StatusCode, text: &str) -> AppResult<()>
         .or_else(|| value.get("code"))
         .or_else(|| value.get("error"))
         .and_then(|value| value.as_i64())
-        .or_else(|| value.get("status_code").and_then(|value| value.as_u64()).map(|n| n as i64));
+        .or_else(|| {
+            value
+                .get("status_code")
+                .and_then(|value| value.as_u64())
+                .map(|n| n as i64)
+        });
     match code {
         Some(0) => Ok(()),
         Some(code) if matches!(code, 10011 | 10012 | 4003101 | 4003105) => Err(AppError::new(
@@ -943,11 +947,9 @@ mod tests {
 
     #[test]
     fn parse_send_response_accepts_zero_codes() {
-        assert!(parse_send_response(
-            reqwest::StatusCode::OK,
-            r#"{"status_code":0,"data":{}}"#
-        )
-        .is_ok());
+        assert!(
+            parse_send_response(reqwest::StatusCode::OK, r#"{"status_code":0,"data":{}}"#).is_ok()
+        );
         assert!(parse_send_response(reqwest::StatusCode::OK, r#"{"code":0}"#).is_ok());
         assert!(parse_send_response(reqwest::StatusCode::OK, r#"{"error":0}"#).is_ok());
     }

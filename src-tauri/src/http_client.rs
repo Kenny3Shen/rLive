@@ -27,10 +27,10 @@ pub(crate) fn with_proxy(
     Ok(builder)
 }
 
-/// Shared client policy with rustls, compression, and an optional HTTP proxy.
+/// Shared client policy with native-tls, compression, and an optional HTTP proxy.
 fn client_builder(proxy: Option<&str>) -> AppResult<ClientBuilder> {
     let builder = Client::builder()
-        .use_rustls_tls()
+        .use_native_tls()
         .gzip(true)
         .brotli(true)
         .timeout(Duration::from_secs(20))
@@ -41,7 +41,7 @@ fn client_builder(proxy: Option<&str>) -> AppResult<ClientBuilder> {
     with_proxy(builder, proxy)
 }
 
-/// Build a reqwest client with rustls, gzip/brotli, and optional HTTP proxy.
+/// Build a reqwest client with native-tls, gzip/brotli, and optional HTTP proxy.
 pub fn build_client(proxy: Option<&str>) -> AppResult<Client> {
     client_builder(proxy)?
         .build()
@@ -76,7 +76,7 @@ pub fn default_client() -> Client {
         .get_or_init(|| {
             build_client(None).unwrap_or_else(|_| {
                 Client::builder()
-                    .use_rustls_tls()
+                    .use_native_tls()
                     .timeout(Duration::from_secs(20))
                     .build()
                     .expect("fallback reqwest client")

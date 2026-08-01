@@ -17,11 +17,10 @@ use tokio_tungstenite::{
 use uuid::Uuid;
 
 use crate::danmaku::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
-use crate::danmaku::tls::rustls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
-
+/// simple_live heartbeat payload: base64 `ABQdAAwsNgBM`
 const SERVER_URL: &str = "wss://cdnws.api.huya.com";
 const HEARTBEAT_SECS: u64 = 60;
 /// simple_live heartbeat payload: base64 `ABQdAAwsNgBM`
@@ -500,7 +499,7 @@ async fn connect_send_ws(credentials: &HuyaSendCredentials) -> AppResult<HuyaWeb
         headers.insert("User-Agent", user_agent);
         headers.insert("Cookie", cookie);
 
-        match connect_async_tls_with_config(request, None, false, Some(rustls_connector()?)).await {
+        match connect_async_tls_with_config(request, None, false, None).await {
             Ok((socket, _)) => return Ok(socket),
             Err(error) => {
                 // Do not include the URL here: its query holds a user-bound
@@ -820,7 +819,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         },
     );
 
-    let (ws, _) = connect_async_tls_with_config(SERVER_URL, None, false, Some(rustls_connector()?))
+    let (ws, _) = connect_async_tls_with_config(SERVER_URL, None, false, None)
         .await
         .map_err(|e| {
             AppError::new("danmaku_ws_error", format!("huya connect failed: {e}"))

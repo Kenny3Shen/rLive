@@ -144,7 +144,7 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
 
 fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
     Client::builder()
-        .use_rustls_tls()
+        .use_native_tls()
         .cookie_provider(jar)
         // QR authentication carries a temporary login session. Do not use a
         // process-level HTTP(S) proxy or the app's browsing proxy for it.

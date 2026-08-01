@@ -521,7 +521,7 @@ mod tests {
 fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
     crate::http_client::with_proxy(
         Client::builder()
-            .use_rustls_tls()
+            .use_native_tls()
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_max_idle_per_host(2)
             .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT),
