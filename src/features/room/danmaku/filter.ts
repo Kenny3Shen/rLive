@@ -21,7 +21,14 @@ function matchesShieldWords(event: DanmakuEvent, shieldWords: readonly string[])
   return shieldWords.some((word) => lower.includes(word));
 }
 
-const DANMAKU_KINDS: readonly DanmakuKind[] = ["chat", "gift", "enter", "super_chat", "system"];
+const DANMAKU_KINDS: readonly DanmakuKind[] = [
+  "chat",
+  "gift",
+  "enter",
+  "social",
+  "super_chat",
+  "system",
+];
 
 /**
  * Tauri events originate outside the TypeScript type system. Treat a malformed
@@ -93,7 +100,9 @@ export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]):
 /**
  * Hide service join notices everywhere. They are noisy on busy Douyu rooms;
  * Douyu additionally drops them before IPC, while this keeps other sites
- * consistent if they emit the shared `enter` event.
+ * consistent if they emit the shared `enter` event. Platform social notices
+ * (“user followed the host”, “shared the room”) are equally service-level
+ * noise, so the `social` kind is filtered with the same blanket rule.
  */
 export function shouldShowValidatedInDanmakuPanel(
   event: DanmakuEvent,
@@ -103,6 +112,7 @@ export function shouldShowValidatedInDanmakuPanel(
   return (
     Boolean(content) &&
     !isRoomEnterNotice(event.kind, content) &&
+    event.kind !== "social" &&
     !(filterGifts && event.kind === "gift")
   );
 }

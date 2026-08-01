@@ -184,6 +184,12 @@ pub enum DanmakuKind {
     Chat,
     Gift,
     Enter,
+    /// Platform-generated social notices (e.g. “user followed the host”).
+    ///
+    /// Consumers filter these like service join notices; the distinct kind
+    /// keeps the intent explicit and leaves room for a later visibility
+    /// setting.
+    Social,
     SuperChat,
     System,
 }
