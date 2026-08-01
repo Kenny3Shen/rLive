@@ -2,6 +2,7 @@
 //!
 //! WS: `wss://cdnws.api.huya.com`
 //! Join packet encodes ayyuid + channel ids; chat push uri=1400.
+//! The read loop reconnects with an exponential, jittered backoff.
 
 use std::time::Duration;
 
@@ -34,6 +35,13 @@ const SEND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 30;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 const HUYA_APP_SOURCE: &str = "HUYA&ZH&2052";
+/// Read-side reconnect policy: after a drop wait `2^attempt` seconds before
+/// dialing again, capped at 30s.
+const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
+const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
+/// Random 0..=800 ms jitter added to every retry so concurrent clients do
+/// not reconnect in lockstep.
+const RECONNECT_JITTER_MAX_MS: u64 = 800;
 // This is Huya Signal's protocol UA, not the HTTP User-Agent header. The web
 // client carries it in `WSConnectParaInfo`, `WSVerifyCookieReq`, and `UserId`.
 // The official web player currently advertises its H5-player build here.
@@ -803,9 +811,69 @@ fn decode_message(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
+/// Read-side reconnect delay: exponential backoff capped at 30s.
+fn reconnect_delay_secs(attempt: u32) -> u64 {
+    let exp = RECONNECT_BACKOFF_INITIAL_SECS << attempt.min(9);
+    exp.min(RECONNECT_BACKOFF_MAX_SECS)
+}
+
 pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppResult<()> {
+    let mut attempt: u32 = 0;
+    loop {
+        let outcome = run_connection_once(&events, &args).await;
+        // A session that actually connected resets the backoff so a healthy
+        // gateway is re-dialed quickly; a clean drop does not carry the
+        // failure history of the connect phase.
+        if matches!(outcome, RunOutcome::Dropped(_)) {
+            attempt = 0;
+        }
+        let backoff = reconnect_delay_secs(attempt);
+        let content = match &outcome {
+            RunOutcome::Dropped(count) => {
+                format!("弹幕连接断开（已收 {count} 条），{backoff} 秒后自动重连…")
+            }
+            RunOutcome::ConnectFailed(message) => {
+                format!("弹幕连接失败：{message}，{backoff} 秒后自动重连…")
+            }
+        };
+        tracing::warn!(
+            attempt,
+            backoff_secs = backoff,
+            "huya danmaku disconnected, reconnecting"
+        );
+        emit_event(
+            &events,
+            DanmakuEvent {
+                kind: DanmakuKind::System,
+                user: "system".into(),
+                is_self: false,
+                user_id: None,
+                content,
+                color: None,
+                spans: None,
+                super_chat: None,
+                ts: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+        // The task is aborted by the danmaku manager when the frontend leaves
+        // the room, so this loop only exits through cancellation.
+        let jitter_ms = (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1))
+            as u64;
+        time::sleep(Duration::from_secs(backoff) + Duration::from_millis(jitter_ms)).await;
+        attempt += 1;
+    }
+}
+
+enum RunOutcome {
+    /// Connected, joined, and the read loop ended after `count` chat events.
+    Dropped(u64),
+    /// Never connected: WS dial or join send failed.
+    ConnectFailed(String),
+}
+
+async fn run_connection_once(events: &DanmakuEventSender, args: &HuyaDanmakuArgs) -> RunOutcome {
     emit_event(
-        &events,
+        events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
@@ -819,13 +887,12 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         },
     );
 
-    let (ws, _) = connect_async_tls_with_config(SERVER_URL, None, false, None)
-        .await
-        .map_err(|e| {
-            AppError::new("danmaku_ws_error", format!("huya connect failed: {e}"))
-                .with_site("huya")
-                .retryable()
-        })?;
+    let (ws, _) = match connect_async_tls_with_config(SERVER_URL, None, false, None).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            return RunOutcome::ConnectFailed(format!("huya connect failed: {e}"));
+        }
+    };
     let (mut write, mut read) = ws.split();
 
     // simple_live uses topSid for both tid and sid in join
@@ -836,15 +903,12 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
     };
     let sid = tid;
     let join = encode_join(args.ayyuid, tid, sid);
-    write
-        .send(Message::Binary(join.into()))
-        .await
-        .map_err(|e| {
-            AppError::new("danmaku_ws_error", format!("huya join send: {e}")).with_site("huya")
-        })?;
+    if write.send(Message::Binary(join.into())).await.is_err() {
+        return RunOutcome::ConnectFailed("join send failed".into());
+    }
 
     emit_event(
-        &events,
+        events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
@@ -875,7 +939,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
                     Some(Ok(Message::Binary(bin))) => {
                         decode_message_with(&bin, &mut |ev| {
                             msg_count += 1;
-                            emit_event(&events, ev);
+                            emit_event(events, ev);
                         });
                     }
                     Some(Ok(Message::Ping(p))) => {
@@ -892,21 +956,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         }
     }
 
-    emit_event(
-        &events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: format!("弹幕连接结束（已收 {msg_count} 条）"),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
-    Ok(())
+    RunOutcome::Dropped(msg_count)
 }
 
 #[cfg(test)]
@@ -928,6 +978,16 @@ mod tests {
     fn heartbeat_matches_simple_live() {
         let hb = heartbeat_bytes();
         assert_eq!(hb, base64_decode(HEARTBEAT_B64).unwrap());
+    }
+
+    #[test]
+    fn reconnect_backoff_grows_to_its_cap() {
+        assert_eq!(reconnect_delay_secs(0), 1);
+        assert_eq!(reconnect_delay_secs(1), 2);
+        assert_eq!(reconnect_delay_secs(2), 4);
+        assert_eq!(reconnect_delay_secs(4), 16);
+        assert_eq!(reconnect_delay_secs(5), 30);
+        assert_eq!(reconnect_delay_secs(u32::MAX), 30);
     }
 
     #[test]
