@@ -337,6 +337,9 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         matchersRef.current;
       const accepted: DanmakuEvent[] = [];
       for (const message of events) {
+        // Super Chats are presented by the dedicated bottom-left SC card
+        // (SuperChatOverlay) and must not also float as fixed-top danmaku.
+        if (message.kind === "super_chat") continue;
         if (!shouldShowValidatedOnCanvas(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
         accepted.push(message);
