@@ -231,7 +231,7 @@ export function PlayerControls({
         {onRefresh && (
           <ControlButton
             label="刷新播放"
-            className={cn(overlayButtonClass, "max-md:hidden")}
+            className={cn(overlayButtonClass)}
             disabled={refreshDisabled}
             onClick={onRefresh}
           >
@@ -339,7 +339,7 @@ export function PlayerControls({
               <PopoverContent
                 side="top"
                 align="end"
-                className={cn("w-56 gap-0 p-1.5", overlayStreamSettingsContentClass)}
+                className={cn("z-50 w-56 gap-0 p-1.5", overlayStreamSettingsContentClass)}
               >
                 {qualities.length > 0 && (
                   <div className="flex flex-col gap-0.5">
@@ -442,7 +442,7 @@ export function PlayerControls({
             side="top"
             align="end"
             className={cn(
-              "max-h-[min(26rem,calc(100dvh-5rem))] w-64 gap-1.5 overflow-y-auto p-1.5",
+              "z-50 max-h-[min(26rem,calc(100dvh-5rem))] w-64 gap-1.5 overflow-y-auto p-1.5",
               overlayStreamSettingsContentClass,
             )}
           >
@@ -455,26 +455,8 @@ export function PlayerControls({
               更多播放选项
             </PopoverTitle>
 
-            {onRefresh && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={cn("h-11 w-full justify-start", overlayStreamSettingsOptionClass)}
-                disabled={refreshDisabled}
-                onClick={() => {
-                  onRefresh();
-                  setMobileOptionsOpen(false);
-                }}
-              >
-                <RefreshCw data-icon="inline-start" aria-hidden />
-                刷新播放
-              </Button>
-            )}
-
             {(qualities.length > 1 || lines.length > 1) && (
               <>
-                {onRefresh && <Separator className={cn("my-1", overlay && "bg-white/10")} />}
                 <div className="flex flex-col gap-0.5">
                   <span
                     className={cn(

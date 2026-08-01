@@ -92,7 +92,7 @@ const defaultSettings: AppSettings = {
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
   proxy: null,
-  danmaku_opacity: 1,
+  danmaku_opacity: 0.8,
   danmaku_font_size: 18,
   danmaku_speed: 8,
   danmaku_area: 0.9,
