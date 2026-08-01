@@ -1,5 +1,5 @@
 /** A user-visible text unit, not a UTF-16 code unit. */
-export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 15;
+export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 20;
 
 /** Session-only automatic-send interval bounds, in whole seconds. */
 export const AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS = 10;
@@ -88,7 +88,7 @@ export function utf16Units(value: string): number {
 
 /**
  * Split one session draft into sendable messages. A segment can contain at
- * most fifteen user-visible characters and must also stay under the platform
+ * most twenty user-visible characters and must also stay under the platform
  * UTF-16 bound. A single over-limit grapheme cannot be safely split, so it is
  * reported to the user instead of creating an invalid request.
  */

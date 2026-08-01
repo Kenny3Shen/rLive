@@ -1,8 +1,8 @@
 [package]
 name = "rlive"
-version = "0.1.0"
+version = "0.9.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["KennyShen"]
 edition = "2024"
 
 [lib]
@@ -14,8 +14,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# CrabNebula instrumentation is registered only in debug builds.
-tauri-plugin-devtools = "=2.0.0"
 tauri-plugin-opener = "2"
 # Native document picker used by profile import and export on desktop/mobile.
 tauri-plugin-dialog = "2"
@@ -36,20 +34,33 @@ async-trait = "0.1.91"
 base64 = "0.22"
 md-5 = "0.10"
 hex = "0.4"
-# native-tls (SChannel on Windows / OpenSSL elsewhere): Douyu danmaku only
-# offers RSA-AES-GCM suites that modern rustls rejects → HandshakeFailure.
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
-tokio-native-tls = "0.3"
+# Two TLS backends, selected per site at the call site:
+#   * native-tls (SChannel on Windows / OpenSSL elsewhere) for Douyu danmaku
+#     only, whose proxy ports offer nothing but static-RSA AES-GCM suites.
+#     rustls does not implement static RSA key exchange at all, so those
+#     handshakes fail with HandshakeFailure.
+#   * rustls for every other site.
+# Note the sharp edge: with `native-tls` enabled, a `None` connector means
+# native-tls, so non-Douyu call sites pass an explicit connector. See
+# danmaku::tls.
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots", "native-tls"] }
+# Used by danmaku::tls to build that explicit rustls connector. `ring` rather
+# than the default `aws_lc_rs` provider: the latter needs a C toolchain, which
+# the Android targets do not have configured. tokio-rustls re-exports `rustls`,
+# so rustls itself is not needed as a direct dependency.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-native-certs = "0.8"
 futures-util = "0.3"
 flate2 = "1"
 brotli = "7"
 uuid = { version = "1", features = ["v4"] }
 boa_engine = "0.20"
+#crispasr = "0.8.24"
 
 [target.'cfg(target_os = "android")'.dependencies]
-# Douyu's legacy WebSocket TLS suite still needs native-tls. Android has no
-# system OpenSSL development package for Cargo to link against, so opt into
-# openssl-sys's source build only for Android release artifacts.
+# Douyu's danmaku ports need native-tls (see danmaku::tls), and Android has no
+# system OpenSSL for Cargo to link against, so build openssl-sys from source
+# there. Desktop targets use the platform stack and skip this.
 openssl = { version = "0.10", features = ["vendored"] }
 
 [profile.dev]
@@ -58,6 +69,6 @@ incremental = true # 以较小的步骤编译您的二进制文件。
 [profile.release]
 codegen-units = 1 # 允许 LLVM 执行更好的优化。
 lto = true # 启用链接时优化。
-opt-level = "s" # 优先考虑小的二进制文件大小。如果您更喜欢速度，请使用 `3`。
+opt-level = "s" # 优先考虑小的二进制文件大小。如果您更喜欢性能，请使用 `3`。
 panic = "abort" # 通过禁用 panic 处理程序来提高性能。
 strip = true # 确保移除调试符号。

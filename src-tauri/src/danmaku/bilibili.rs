@@ -6,8 +6,9 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Url};
 use serde_json::Value;
 use tokio::time;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
 
+use crate::danmaku::tls::rustls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuContentSpan, DanmakuEvent, DanmakuKind, SuperChatInfo};
@@ -1130,7 +1131,17 @@ async fn run_connection(
     host: &str,
 ) -> ConnectionEnd {
     let url = format!("wss://{host}/sub");
-    let (ws, _) = match connect_async(&url).await {
+    let connector = match rustls_connector() {
+        Ok(connector) => connector,
+        Err(error) => {
+            return ConnectionEnd {
+                message_count: 0,
+                authenticated: false,
+                reason: error.message,
+            };
+        }
+    };
+    let (ws, _) = match connect_async_tls_with_config(&url, None, false, Some(connector)).await {
         Ok(connection) => connection,
         Err(error) => {
             return ConnectionEnd {

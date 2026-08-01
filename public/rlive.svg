@@ -25,8 +25,6 @@
   <rect width="512" height="512" rx="128" fill="url(#surface)"/>
   <path d="M96 167c0-30.376 24.624-55 55-55h210c30.376 0 55 24.624 55 55v178c0 30.376-24.624 55-55 55H151c-30.376 0-55-24.624-55-55V167Z" fill="#111A30" stroke="url(#screen)" stroke-width="20"/>
   <path d="M210 188.72c0-14.116 15.472-22.798 27.542-15.45l96.726 58.875c11.513 7.008 11.513 23.702 0 30.71l-96.726 58.875C225.472 329.078 210 320.396 210 306.28V188.72Z" fill="url(#play)" filter="url(#glow)"/>
-  <circle cx="382" cy="146" r="31" fill="#FF6F91"/>
-  <circle cx="382" cy="146" r="12" fill="#FFF4F7"/>
   <path d="M164 434h184" stroke="#4E648F" stroke-width="18" stroke-linecap="round"/>
   <path d="M210 434h92" stroke="url(#screen)" stroke-width="18" stroke-linecap="round"/>
 </svg>

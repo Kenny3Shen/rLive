@@ -15,8 +15,14 @@ use tokio::{
     net::TcpStream,
     time,
 };
-use tokio_tungstenite::{WebSocketStream, client_async_tls, connect_async, tungstenite::Message};
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_tungstenite::{
+    Connector, WebSocketStream, client_async_tls_with_config, connect_async_tls_with_config,
+    tungstenite::Message,
+};
 
+use crate::danmaku::tls::rustls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -407,14 +413,16 @@ async fn open_http_tunnel(proxy: &ConnectProxy) -> AppResult<BufStream<TcpStream
 
 async fn open_https_tunnel(
     proxy: &ConnectProxy,
-) -> AppResult<BufStream<tokio_native_tls::TlsStream<TcpStream>>> {
+) -> AppResult<BufStream<tokio_rustls::client::TlsStream<TcpStream>>> {
     let stream = connect_proxy_tcp(proxy).await?;
-    let connector = tokio_native_tls::native_tls::TlsConnector::new()
-        .map(tokio_native_tls::TlsConnector::from)
-        .map_err(|error| proxy_error(format!("Twitch 弹幕代理 TLS 初始化失败: {error}")))?;
+    let Connector::Rustls(config) = rustls_connector()? else {
+        return Err(proxy_error("Twitch 弹幕代理 TLS 初始化失败"));
+    };
+    let server_name = ServerName::try_from(proxy.host.clone())
+        .map_err(|_| proxy_error(format!("Twitch 弹幕代理主机名无效: {}", proxy.host)))?;
     let stream = time::timeout(
         PROXY_CONNECT_TIMEOUT,
-        connector.connect(&proxy.host, stream),
+        TlsConnector::from(config).connect(server_name, stream),
     )
     .await
     .map_err(|_| proxy_connection_error("Twitch 弹幕代理 TLS 握手超时"))?
@@ -492,28 +500,43 @@ pub async fn run_loop(
     emit_event(&events, system_event("正在连接 Twitch 弹幕服务器…"));
     match proxy_from_setting(proxy.as_deref())? {
         None => {
-            let (socket, _) = connect_async(IRC_WS_URL)
-                .await
-                .map_err(websocket_connection_error)?;
+            let (socket, _) =
+                connect_async_tls_with_config(IRC_WS_URL, None, false, Some(rustls_connector()?))
+                    .await
+                    .map_err(websocket_connection_error)?;
             run_irc_session(events, args, socket).await
         }
         Some(proxy) => match proxy.scheme {
             ProxyScheme::Http => {
                 let stream = open_http_tunnel(&proxy).await?;
-                let (socket, _) =
-                    time::timeout(PROXY_CONNECT_TIMEOUT, client_async_tls(IRC_WS_URL, stream))
-                        .await
-                        .map_err(|_| proxy_connection_error("Twitch 弹幕 WebSocket 握手超时"))?
-                        .map_err(websocket_connection_error)?;
+                let (socket, _) = time::timeout(
+                    PROXY_CONNECT_TIMEOUT,
+                    client_async_tls_with_config(
+                        IRC_WS_URL,
+                        stream,
+                        None,
+                        Some(rustls_connector()?),
+                    ),
+                )
+                .await
+                .map_err(|_| proxy_connection_error("Twitch 弹幕 WebSocket 握手超时"))?
+                .map_err(websocket_connection_error)?;
                 run_irc_session(events, args, socket).await
             }
             ProxyScheme::Https => {
                 let stream = open_https_tunnel(&proxy).await?;
-                let (socket, _) =
-                    time::timeout(PROXY_CONNECT_TIMEOUT, client_async_tls(IRC_WS_URL, stream))
-                        .await
-                        .map_err(|_| proxy_connection_error("Twitch 弹幕 WebSocket 握手超时"))?
-                        .map_err(websocket_connection_error)?;
+                let (socket, _) = time::timeout(
+                    PROXY_CONNECT_TIMEOUT,
+                    client_async_tls_with_config(
+                        IRC_WS_URL,
+                        stream,
+                        None,
+                        Some(rustls_connector()?),
+                    ),
+                )
+                .await
+                .map_err(|_| proxy_connection_error("Twitch 弹幕 WebSocket 握手超时"))?
+                .map_err(websocket_connection_error)?;
                 run_irc_session(events, args, socket).await
             }
         },

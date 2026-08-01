@@ -3,8 +3,9 @@
 //! WS: `wss://danmuproxy.douyu.com:8501..=8506`
 //! Login / join / heartbeat are STT strings framed as little-endian packets.
 //!
-//! Note: Douyu's TLS stack only offers RSA-AES-GCM ciphers. Connections must
-//! use the system TLS backend (`native-tls`), not rustls.
+//! Note: Douyu's danmaku proxy ports only offer static-RSA AES-GCM ciphers, so
+//! these connections must use the system TLS backend (native-tls) rather than
+//! rustls. See `danmaku::tls`.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -24,10 +25,12 @@ use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{
-    WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
+    WebSocketStream, client_async_tls_with_config, connect_async_tls_with_config,
+    tungstenite::Message,
 };
 use uuid::Uuid;
 
+use crate::danmaku::tls::native_tls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -1322,7 +1325,7 @@ async fn connect_douyu_send_ws(
                 continue;
             }
         };
-        match client_async_tls_with_config(request, socket, None, None).await {
+        match client_async_tls_with_config(request, socket, None, native_tls_connector()).await {
             Ok((ws, _)) => return Ok(ws),
             Err(error) => {
                 tracing::warn!(
@@ -1364,7 +1367,7 @@ async fn connect_douyu_ws() -> AppResult<
         if let Ok(v) = HeaderValue::from_str(SEND_BROWSER_USER_AGENT) {
             headers.insert("User-Agent", v);
         }
-        match connect_async(req).await {
+        match connect_async_tls_with_config(req, None, false, native_tls_connector()).await {
             Ok((ws, _)) => return Ok(ws),
             Err(e) => {
                 last_err = format!("{url}: {e}");
