@@ -341,15 +341,6 @@ export function PlayerControls({
                 align="end"
                 className={cn("w-56 gap-0 p-1.5", overlayStreamSettingsContentClass)}
               >
-                <PopoverTitle
-                  className={cn(
-                    "px-2 py-1 text-xs font-medium text-muted-foreground",
-                    overlay && "text-white/60",
-                  )}
-                >
-                  播放设置
-                </PopoverTitle>
-
                 {qualities.length > 0 && (
                   <div className="flex flex-col gap-0.5">
                     <span

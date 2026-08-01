@@ -1295,7 +1295,7 @@ export function PlayerPane({
                 // gradient is animated when the controls auto-hide. The data
                 // attribute is changed imperatively above, avoiding a full
                 // PlayerPane reconciliation at the start of the fade.
-                "absolute inset-x-0 bottom-0 z-30 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0",
+                "absolute inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom))] transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={(event) => {

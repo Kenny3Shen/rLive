@@ -63,6 +63,16 @@ type DanmakuComposerProps = {
 
 type DanmakuPickerTab = "emoji" | "favorites" | "history";
 
+/**
+ * The quick picker and the send button flank the same input. Sharing one
+ * geometry keeps the group symmetric, and staying a step under the group's
+ * 2rem height keeps either button from touching its border.
+ */
+const COMPOSER_BUTTON_CLASS = "size-7 rounded-md transition-colors";
+/** Matches the transparent player chrome the overlay composer sits in. */
+const COMPOSER_OVERLAY_GHOST_CLASS =
+  "text-white/90 hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70";
+
 type DanmakuQuickPickerProps = {
   siteId: DanmakuSendSiteId;
   siteLabel: string;
@@ -201,8 +211,8 @@ function DanmakuQuickPicker({
             aria-label={`打开${siteLabel}快捷弹幕面板`}
             title="表情、收藏和发送历史"
             className={cn(
-              overlay &&
-                "text-white hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-visible:ring-white/70",
+              COMPOSER_BUTTON_CLASS,
+              overlay ? COMPOSER_OVERLAY_GHOST_CLASS : "text-muted-foreground hover:text-foreground",
             )}
           />
         }
@@ -755,16 +765,37 @@ export function DanmakuComposer({
         <InputGroupAddon align="inline-end" className="py-0">
           <InputGroupButton
             type="button"
-            variant="default"
+            variant="ghost"
             size="icon-sm"
             disabled={!canSubmit}
             onClick={() => void send()}
             aria-label={`发送${config.siteLabel}弹幕`}
+            title={canSubmit ? "发送弹幕（Enter）" : statusText}
+            aria-busy={sending}
             className={cn(
-              overlay && "bg-white/90 text-black hover:bg-white focus-visible:ring-white/70",
+              COMPOSER_BUTTON_CLASS,
+              // Idle, the button is as quiet as the picker opposite it. Once
+              // the draft is actually sendable it fills in, so the primary
+              // action reads at a glance without a permanent bright block
+              // sitting in the player chrome.
+              overlay
+                ? cn(
+                    COMPOSER_OVERLAY_GHOST_CLASS,
+                    "disabled:text-white/45",
+                    canSubmit && "bg-white text-black hover:bg-white hover:text-black",
+                  )
+                : cn(
+                    "text-muted-foreground hover:text-foreground disabled:text-muted-foreground/60",
+                    canSubmit &&
+                      "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
+                  ),
+              // The disabled group already dims; a second opacity pass on the
+              // button makes the icon nearly invisible over video. Dim via
+              // colour above instead, so the affordance stays legible.
+              "disabled:opacity-100",
             )}
           >
-            <SendHorizontal />
+            {sending ? <Spinner aria-hidden /> : <SendHorizontal aria-hidden />}
           </InputGroupButton>
         </InputGroupAddon>
       </InputGroup>
