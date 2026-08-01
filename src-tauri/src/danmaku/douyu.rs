@@ -4,8 +4,8 @@
 //! Login / join / heartbeat are STT strings framed as little-endian packets.
 //!
 //! Note: Douyu's danmaku proxy ports only offer static-RSA AES-GCM ciphers, so
-//! these connections must use the system TLS backend (native-tls) rather than
-//! rustls. See `danmaku::tls`.
+//! `None` here is always the native-tls connector (see
+//! [`ASSERT_NATIVE_TLS_ENABLED`]).
 
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,15 +25,22 @@ use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{
-    WebSocketStream, client_async_tls_with_config, connect_async_tls_with_config,
+    Connector, WebSocketStream, client_async_tls_with_config, connect_async_tls_with_config,
     tungstenite::Message,
 };
 use uuid::Uuid;
 
-use crate::danmaku::tls::native_tls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
+
+/// Fails to compile if tokio-tungstenite's `native-tls` feature is switched
+/// off. Douyu's danmaku proxy ports offer only static-RSA AES-GCM ciphers that
+/// rustls rejects, and with the feature disabled a `None` connector would
+/// quietly resolve to rustls and fail every handshake. Referenced below so the
+/// guard survives dead-code pruning.
+const ASSERT_NATIVE_TLS_ENABLED: fn(&Connector) -> bool =
+    |connector| matches!(connector, Connector::NativeTls(_));
 
 /// Official proxy ports (simple_live uses 8506; rotate on failure).
 const SERVER_PORTS: &[u16] = &[8506, 8505, 8504, 8503, 8502, 8501];
@@ -1325,7 +1332,7 @@ async fn connect_douyu_send_ws(
                 continue;
             }
         };
-        match client_async_tls_with_config(request, socket, None, native_tls_connector()).await {
+        match client_async_tls_with_config(request, socket, None, None).await {
             Ok((ws, _)) => return Ok(ws),
             Err(error) => {
                 tracing::warn!(
@@ -1367,7 +1374,11 @@ async fn connect_douyu_ws() -> AppResult<
         if let Ok(v) = HeaderValue::from_str(SEND_BROWSER_USER_AGENT) {
             headers.insert("User-Agent", v);
         }
-        match connect_async_tls_with_config(req, None, false, native_tls_connector()).await {
+        // Do NOT offer a `Sec-WebSocket-Protocol` subprotocol here: the danmaku
+        // proxy never echoes one back, and tungstenite (RFC 6455) then rejects
+        // the handshake with `SecWebSocketSubProtocolError::NoSubProtocol`.
+        let _ = ASSERT_NATIVE_TLS_ENABLED;
+        match connect_async_tls_with_config(req, None, false, None).await {
             Ok((ws, _)) => return Ok(ws),
             Err(e) => {
                 last_err = format!("{url}: {e}");
@@ -1917,9 +1928,57 @@ pub async fn send_chat(
     }
 }
 
+/// Read-side reconnect policy: after a drop, wait `2^attempt` seconds (capped
+/// at [`RECONNECT_BACKOFF_MAX_SECS`]) before dialing again. The task itself is
+/// aborted by the danmaku manager when the frontend leaves the room, so this
+/// loop only exits through cancellation.
+const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
+const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
+
+fn reconnect_backoff_secs(attempt: u32) -> u64 {
+    let exp = RECONNECT_BACKOFF_INITIAL_SECS << attempt.min(5);
+    exp.min(RECONNECT_BACKOFF_MAX_SECS)
+}
+
 pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> AppResult<()> {
+    let mut attempt: u32 = 0;
+    loop {
+        let outcome = run_connection_once(&events, &args).await;
+        let backoff = reconnect_backoff_secs(attempt);
+        attempt += 1;
+        let content = match &outcome {
+            Ok(msg_count) => format!("弹幕连接断开（已收 {msg_count} 条），{backoff} 秒后自动重连…"),
+            Err(e) => format!("弹幕连接失败：{e}，{backoff} 秒后自动重连…"),
+        };
+        tracing::warn!(
+            attempt,
+            backoff_secs = backoff,
+            "douyu danmaku disconnected, reconnecting"
+        );
+        emit_event(
+            &events,
+            DanmakuEvent {
+                kind: DanmakuKind::System,
+                user: "system".into(),
+                is_self: false,
+                user_id: None,
+                content,
+                color: None,
+                spans: None,
+                super_chat: None,
+                ts: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+        time::sleep(Duration::from_secs(backoff)).await;
+    }
+}
+
+async fn run_connection_once(
+    events: &DanmakuEventSender,
+    args: &DouyuDanmakuArgs,
+) -> Result<u64, AppError> {
     emit_event(
-        &events,
+        events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
@@ -1953,7 +2012,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
         })?;
 
     emit_event(
-        &events,
+        events,
         DanmakuEvent {
             kind: DanmakuKind::System,
             user: "system".into(),
@@ -1984,14 +2043,14 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
                     Some(Ok(Message::Binary(bin))) => {
                         decode_binary_with(&bin, |ev| {
                             msg_count += 1;
-                            emit_event(&events, ev);
+                            emit_event(events, ev);
                         });
                     }
                     Some(Ok(Message::Text(text))) => {
                         // Some proxies may deliver text; try STT parse directly.
                         if let Some(ev) = parse_stt_message(text.as_str()) {
                             msg_count += 1;
-                            emit_event(&events, ev);
+                            emit_event(events, ev);
                         }
                     }
                     Some(Ok(Message::Ping(p))) => {
@@ -2008,26 +2067,23 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
         }
     }
 
-    emit_event(
-        &events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: format!("弹幕连接结束（已收 {msg_count} 条）"),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
-    Ok(())
+    Ok(msg_count)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnect_backoff_grows_exponentially_and_caps() {
+        assert_eq!(reconnect_backoff_secs(0), 1);
+        assert_eq!(reconnect_backoff_secs(1), 2);
+        assert_eq!(reconnect_backoff_secs(2), 4);
+        assert_eq!(reconnect_backoff_secs(3), 8);
+        assert_eq!(reconnect_backoff_secs(4), 16);
+        assert_eq!(reconnect_backoff_secs(5), 30);
+        assert_eq!(reconnect_backoff_secs(99), 30);
+    }
 
     #[test]
     fn serialize_roundtrip_body() {
