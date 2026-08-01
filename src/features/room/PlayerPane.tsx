@@ -1179,6 +1179,7 @@ export function PlayerPane({
         <div className="flex min-h-0 flex-1 flex-col">
           <div
             ref={player.stageRef}
+            data-player-stage
             className={cn(
               "relative min-h-0 flex-1 overflow-hidden bg-black",
               androidClient && showHost && "touch-none",

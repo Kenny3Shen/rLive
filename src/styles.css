@@ -270,6 +270,23 @@ html[data-platform="android"] .app-shell {
   padding-top: env(safe-area-inset-top);
 }
 
+/* The player stage is the element requested for fullscreen. WebKitGTK (the
+   Linux Tauri WebView) does not reliably stretch a flex-child `:fullscreen`
+   element to the viewport — it keeps the previous windowed height and pins the
+   frame to the top, leaving the black band beneath the video the bottom action
+   bar used to occupy. Force it to cover the whole viewport under every engine's
+   fullscreen pseudo-class so the `object-contain` video fills the screen. */
+[data-player-stage]:fullscreen,
+[data-player-stage]:-webkit-full-screen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+}
+
 /* Room grids can retain many cards after infinite scrolling. Chromium can
    skip offscreen layout/paint for each complete card while preserving a stable
    placeholder size for scrolling. */
