@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
+import android.os.Build
 import android.provider.Settings
 import android.view.WindowManager
 import app.tauri.annotation.Command
@@ -65,11 +66,15 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
         }
         val percent = clampPercent(args.value)
         val streamVolume = (maxVolume * percent / 100f).roundToInt()
-        // Do not play a volume tick or vibrate on every pointer-move update.
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+          AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
+        } else {
+          0
+        }
         audioManager.setStreamVolume(
           AudioManager.STREAM_MUSIC,
           streamVolume,
-          AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE,
+          flags
         )
         invoke.resolve(controlValue(mediaVolumePercent()))
       } catch (error: Exception) {
