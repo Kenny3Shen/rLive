@@ -227,6 +227,72 @@ fn parse_mix_list(v: &Value) -> AppResult<RoomListPage> {
     })
 }
 
+/// Parse the mobile recommendation API (`hgapi/live/cate/newRecList`) list.
+/// It uses flat field names (`roomName`/`nickname`/`roomSrc`) and reports an
+/// authoritative `total` for pagination; `hn` is a localized viewer label
+/// such as `101.8万` rather than a raw number.
+fn parse_mobile_recommend_list(v: &Value, page: u32, page_size: usize) -> AppResult<RoomListPage> {
+    if json_i64(v.get("error").unwrap_or(&Value::Null)) != 0 {
+        return Err(AppError::new("douyu_api_error", "mobile list error")
+            .with_site("douyu")
+            .retryable());
+    }
+    let data = v.get("data").cloned().unwrap_or(Value::Null);
+    let mut items = Vec::new();
+    if let Some(arr) = data.get("list").and_then(|x| x.as_array()) {
+        for item in arr {
+            let room_id = json_str(item.get("rid").unwrap_or(&Value::Null));
+            if room_id.is_empty() {
+                continue;
+            }
+            items.push(LiveRoomItem {
+                site_id: SiteId::Douyu,
+                room_id,
+                title: json_str(
+                    item.get("roomName")
+                        .or_else(|| item.get("rn"))
+                        .unwrap_or(&Value::Null),
+                ),
+                cover: json_str(
+                    item.get("roomSrc")
+                        .or_else(|| item.get("rs16"))
+                        .unwrap_or(&Value::Null),
+                ),
+                user_name: json_str(
+                    item.get("nickname")
+                        .or_else(|| item.get("nn"))
+                        .unwrap_or(&Value::Null),
+                ),
+                online: parse_online_label(json_str(
+                    item.get("hn")
+                        .or_else(|| item.get("ol"))
+                        .unwrap_or(&Value::Null),
+                )),
+            });
+        }
+    }
+    let total = json_i64(data.get("total").unwrap_or(&Value::Null)) as usize;
+    let has_more = if total > 0 {
+        (page as usize).saturating_mul(page_size) < total
+    } else {
+        items.len() >= page_size
+    };
+    Ok(RoomListPage { has_more, items })
+}
+
+/// Recover an approximate viewer count from a localized label (`101.8万`,
+/// `5.6k`) that the mobile API uses in place of a raw number.
+fn parse_online_label(value: String) -> i64 {
+    let value = value.trim();
+    if let Some(num) = value.strip_suffix('万') {
+        return (num.trim().parse::<f64>().unwrap_or(0.0) * 10_000.0) as i64;
+    }
+    if let Some(num) = value.strip_suffix('k').or_else(|| value.strip_suffix('K')) {
+        return (num.trim().parse::<f64>().unwrap_or(0.0) * 1_000.0) as i64;
+    }
+    value.parse().unwrap_or(0)
+}
+
 /// Select the room object returned by Douyu's lightweight `betard` endpoint
 /// and extract only fields useful to a follow-list refresh.
 fn live_status_from_room_info(root: &Value) -> LiveRoomStatus {
@@ -317,6 +383,22 @@ impl LiveSite for DouyuSite {
         page: u32,
     ) -> AppResult<RoomListPage> {
         let page = page.max(1);
+        // The mobile API is the first-party app source: it returns an explicit
+        // `total`, needs only an iPhone UA, and is generally less guarded than
+        // the desktop web directory. Region-restricted networks reject it with
+        // `error: 1`; fall back to the web `mixList` endpoint in that case.
+        let offset = (page - 1) * DIRECTORY_PAGE_SIZE as u32;
+        let mobile_url = format!(
+            "https://m.douyu.com/hgapi/live/cate/newRecList?offset={offset}&cate2={}&limit={DIRECTORY_PAGE_SIZE}",
+            category.id
+        );
+        if let Ok(v) = self.get_json(&mobile_url, "https://m.douyu.com/").await {
+            if let Ok(page_data) = parse_mobile_recommend_list(&v, page, DIRECTORY_PAGE_SIZE) {
+                return Ok(page_data);
+            }
+            tracing::debug!("douyu mobile category list rejected; falling back to web API");
+        }
+
         let url = format!(
             "https://www.douyu.com/gapi/rkc/directory/mixList/2_{}/{page}",
             category.id
@@ -673,6 +755,16 @@ mod tests {
             "room": { "show_status": 1, "videoLoop": 1 }
         });
         assert!(!live_status_from_room_info(&replay).status);
+    }
+
+    #[test]
+    fn online_label_is_parsed_to_an_approximate_count() {
+        assert_eq!(parse_online_label("101.8万".into()), 1_018_000);
+        assert_eq!(parse_online_label("5.6k".into()), 5_600);
+        assert_eq!(parse_online_label("1.2K".into()), 1_200);
+        assert_eq!(parse_online_label("12345".into()), 12_345);
+        assert_eq!(parse_online_label("".into()), 0);
+        assert_eq!(parse_online_label("abc".into()), 0);
     }
 
     #[tokio::test]
