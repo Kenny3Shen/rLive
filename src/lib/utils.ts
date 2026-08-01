@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { proxyImageUrl } from "@/shared/api/imageProxy";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -24,6 +25,11 @@ export function formatOnline(n: number): string {
  * on a normal https webpage, but resolve against Tauri's custom page protocol
  * in the desktop app. Upgrading plain http URLs also avoids mixed-content
  * failures in the WebView.
+ *
+ * Hotlink-protected CDN hosts (Bilibili / Douyu / Huya / Douyin / Twitch) are
+ * additionally routed through the localhost image proxy, which attaches the
+ * platform Referer the WebView cannot send. URLs that predate the proxy's
+ * startup or belong to unknown hosts are returned untouched.
  */
 export function normalizeImageUrl(value: string | null | undefined): string | undefined {
   const raw = value?.trim();
@@ -33,7 +39,8 @@ export function normalizeImageUrl(value: string | null | undefined): string | un
 
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "https:" ? parsed.href : undefined;
+    if (parsed.protocol !== "https:") return undefined;
+    return proxyImageUrl(parsed.href) ?? parsed.href;
   } catch {
     return undefined;
   }

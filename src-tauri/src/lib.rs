@@ -4,6 +4,7 @@ mod danmaku;
 mod db;
 mod error;
 mod http_client;
+mod image_proxy;
 mod iptv;
 mod models;
 mod profile;
@@ -30,8 +31,8 @@ use commands::android_player_controls::{
 };
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
-    douyin_danmaku_send, douyin_danmaku_send_status, douyu_danmaku_send,
-    douyu_danmaku_send_status, huya_danmaku_send, huya_danmaku_send_status,
+    douyin_danmaku_send, douyin_danmaku_send_status, douyu_danmaku_send, douyu_danmaku_send_status,
+    huya_danmaku_send, huya_danmaku_send_status,
 };
 use commands::danmaku_favorite::{
     danmaku_favorite_add, danmaku_favorite_list, danmaku_favorite_remove,
@@ -45,6 +46,7 @@ use commands::follow::{
     tag_upsert,
 };
 use commands::history::{history_add, history_clear, history_list, history_remove};
+use commands::image_proxy::image_proxy_url;
 use commands::iptv::iptv_load_playlist;
 use commands::profile::{profile_export, profile_import};
 use commands::settings::{settings_get, settings_set};
@@ -75,7 +77,8 @@ const MAX_LOG_FILE_BYTES: u64 = 2 * 1024 * 1024;
 fn android_player_controls_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("player-controls")
         .setup(|app, api| {
-            let handle = api.register_android_plugin("com.shenss.rlive", "RlivePlayerControlsPlugin")?;
+            let handle =
+                api.register_android_plugin("com.shenss.rlive", "RlivePlayerControlsPlugin")?;
             app.manage(AndroidPlayerControls(handle));
             Ok(())
         })
@@ -162,6 +165,7 @@ fn init_logging(directory: Option<PathBuf>) {
         .try_init();
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -221,6 +225,7 @@ pub fn run() {
             iptv_load_playlist,
             stream_proxy_start,
             stream_proxy_stop,
+            image_proxy_url,
             danmaku_connect,
             danmaku_disconnect,
             bilibili_danmaku_send_status,
@@ -266,6 +271,7 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
                     state.stream_proxy.stop();
+                    state.image_proxy.stop();
                     state.danmaku.disconnect();
                 }
                 std::process::exit(0);
@@ -277,12 +283,14 @@ pub fn run() {
             } if label == "main" => {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     state.inner().stream_proxy.stop();
+                    state.inner().image_proxy.stop();
                 }
             }
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
                     state.stream_proxy.stop();
+                    state.image_proxy.stop();
                     state.danmaku.disconnect();
                 }
             }

@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use crate::danmaku::DanmakuManager;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::image_proxy::ImageProxy;
 use crate::stream_proxy::StreamProxy;
 
 pub struct AppState {
@@ -18,6 +19,7 @@ pub struct AppState {
     pub huya_send_limiter: HuyaDanmakuSendLimiter,
     pub douyin_send_limiter: DouyinDanmakuSendLimiter,
     pub stream_proxy: StreamProxy,
+    pub image_proxy: ImageProxy,
 }
 
 /// Conservative per-room write gate for the Bilibili sender.
@@ -208,6 +210,7 @@ impl AppState {
             huya_send_limiter: HuyaDanmakuSendLimiter::new(),
             douyin_send_limiter: DouyinDanmakuSendLimiter::new(),
             stream_proxy: StreamProxy::new(),
+            image_proxy: ImageProxy::new(),
         })
     }
 }

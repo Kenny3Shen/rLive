@@ -7,6 +7,7 @@ import { getClientPlatform } from "./shared/clientPlatform";
 import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Toaster } from "./components/ui/toast";
+import { preloadImageProxy } from "./shared/api/imageProxy";
 import "./styles.css";
 
 if (getClientPlatform() === "android") {
@@ -28,6 +29,9 @@ const queryClient = new QueryClient({
 applyTheme(useSettingsStore.getState().theme);
 useSettingsStore.subscribe((s) => applyTheme(s.theme));
 void useSettingsStore.getState().loadFromBackend();
+// Start the loopback image proxy as early as possible so first-paint covers
+// and avatars route through it instead of being hotlink-rejected.
+void preloadImageProxy();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
