@@ -383,7 +383,17 @@ impl DouyinSite {
                 false,
             )
             .await?;
-        parse_room_detail_html(&html, web_rid)
+        let mut detail = parse_room_detail_html(&html, web_rid)?;
+        // The SSR payload carries the session's own web id. Attach it to the
+        // opaque raw payload so the danmaku WSS signs with the same
+        // fingerprint as the room page visit instead of a local random id.
+        if let Some(web_id) = parse_render_data_web_id(&html)
+            .or_else(|| session_web_id(&self.cookie().unwrap_or_default()))
+            && let Some(obj) = detail.raw.as_object_mut()
+        {
+            obj.insert("user_unique_id".into(), Value::String(web_id));
+        }
+        Ok(detail)
     }
 
     /// Avoid the browser-signed web-enter endpoint for a public web room id.
@@ -1242,6 +1252,57 @@ fn parse_room_detail_html(html: &str, requested_web_rid: &str) -> AppResult<Live
     ))
 }
 
+/// The room page's `RENDER_DATA` script carries the session's own web id
+/// (`app.odin.user_unique_id`).  Prefer it over a locally generated id so the
+/// WSS request fingerprint matches the cookies of the same browser session,
+/// which the webcast risk engine can correlate.
+fn parse_render_data_web_id(html: &str) -> Option<String> {
+    const MARKER: &str = r#"<script id="RENDER_DATA" type="application/json">"#;
+    let start = html.find(MARKER)?;
+    let body_start = start + MARKER.len();
+    let body = html.get(body_start..)?;
+    let body = &body[..body.find("</script>")?];
+    let value: Value = serde_json::from_str(&percent_decode(body)).ok()?;
+    match value.pointer("/app/odin/user_unique_id")? {
+        Value::String(id) if !id.is_empty() => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    }
+}
+
+/// Percent-decode without URL-form's `+` → space rule; `RENDER_DATA` uses
+/// percent escapes only, and a literal plus is valid JSON.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Fallback web id: the `s_v_web_id` cookie is a real browser fingerprint
+/// from the same session, used when `RENDER_DATA` lacks an explicit id.
+fn session_web_id(cookie: &str) -> Option<String> {
+    cookie
+        .split(';')
+        .map(str::trim)
+        .find_map(|pair| pair.strip_prefix("s_v_web_id="))
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 fn parse_room_detail(
     room: &Value,
     fallback_user: Option<&Value>,
@@ -1759,6 +1820,27 @@ mod tests {
             category_partition(&sub_category("103,4", "103,4")).unwrap(),
             ("103", "4")
         );
+    }
+
+    #[test]
+    fn render_data_web_id_is_extracted_from_room_page() {
+        let html = r#"<html><head></head><body><script id="RENDER_DATA" type="application/json">%7B%22app%22%3A%7B%22odin%22%3A%7B%22user_unique_id%22%3A%227392091211001140287%22%7D%7D%7D</script></body></html>"#;
+        assert_eq!(
+            parse_render_data_web_id(html).as_deref(),
+            Some("7392091211001140287")
+        );
+        assert_eq!(parse_render_data_web_id("<html></html>"), None);
+        // A missing odin block must not panic.
+        let empty = r#"<script id="RENDER_DATA" type="application/json">%7B%22app%22%3A%7B%7D%7D</script>"#;
+        assert_eq!(parse_render_data_web_id(empty), None);
+    }
+
+    #[test]
+    fn session_web_id_prefers_s_v_web_id() {
+        let cookie = "ttwid=1|abc; s_v_web_id=deadbeef; msToken=xyz";
+        assert_eq!(session_web_id(cookie).as_deref(), Some("deadbeef"));
+        assert_eq!(session_web_id("ttwid=1|abc; msToken=xyz"), None);
+        assert_eq!(session_web_id(""), None);
     }
 
     /// The category browser injects a synthetic "全部X" tile whose id is `0`.
