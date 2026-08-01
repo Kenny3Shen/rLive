@@ -1,6 +1,6 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Copy, SendHorizontal, Star } from "lucide-react";
+import { ArrowDownToLine, Copy, SendHorizontal, Star } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -349,6 +349,9 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   const [items, setItems] = useState<DanmakuLine[]>([]);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
+  const unreadCountRef = useRef(0);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
   const pendingRef = useRef(new BoundedQueue<DanmakuLine>(MAX_BUFFERED));
   const flushFrameRef = useRef<number | null>(null);
   const flushTimerRef = useRef<number | null>(null);
@@ -418,6 +421,9 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       nextIdRef.current = 0;
       lastFlushAtRef.current = 0;
       autoScroll.current = true;
+      unreadCountRef.current = 0;
+      setAtBottom(true);
+      setUnreadCount(0);
       setItems([]);
       return;
     }
@@ -431,6 +437,13 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       const batch = pending.take(MAX_PER_FLUSH);
       if (batch.length === 0) return;
       lastFlushAtRef.current = performance.now();
+
+      if (!autoScroll.current) {
+        // The feed is intentionally pinned up in history: keep a count of
+        // what arrived since, shown on the jump-back control.
+        unreadCountRef.current += batch.length;
+        setUnreadCount(unreadCountRef.current);
+      }
 
       setItems((previous) => {
         const next = previous.concat(batch);
@@ -538,19 +551,29 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     if (!viewport) return;
 
     // React's delegated scroll handler runs for every programmatic pin as
-    // well as user scrolling. This listener mutates only refs, so attach it
+    // well as user scrolling. This listener mutates only refs on the hot
+    // path and reports the pin state only when it flips, so attach it
     // directly and passively to the actual nested viewport instead.
     const updateAutoScroll = () => {
       const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-      autoScroll.current = distanceToBottom < 48;
+      const next = distanceToBottom < 48;
+      autoScroll.current = next;
+      setAtBottom((previous) => (previous === next ? previous : next));
     };
     viewport.addEventListener("scroll", updateAutoScroll, { passive: true });
     return () => viewport.removeEventListener("scroll", updateAutoScroll);
   }, []);
 
+  const scrollToBottom = useCallback(() => {
+    autoScroll.current = true;
+    unreadCountRef.current = 0;
+    setUnreadCount(0);
+    scrollDanmakuViewportToBottom(scrollRootRef.current);
+  }, []);
+
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
-      <div ref={scrollRootRef} className="min-h-0 flex-1">
+      <div ref={scrollRootRef} className="relative min-h-0 flex-1">
         <ScrollArea className="h-full min-h-0">
           <div
             className="flex flex-col gap-0.5 px-2.5 py-2"
@@ -581,6 +604,23 @@ export const DanmakuPanel = memo(function DanmakuPanel({
             ))}
           </div>
         </ScrollArea>
+
+        {visible && active && !atBottom && (
+          <Button
+            type="button"
+            aria-label="滚动到底部"
+            title="滚动到底部"
+            onClick={scrollToBottom}
+            className="absolute right-2.5 bottom-2.5 z-10 size-10 rounded-full border border-border/80 bg-background/90 p-0 shadow-lg shadow-black/20 backdrop-blur animate-in fade-in"
+          >
+            <ArrowDownToLine className="size-4.5" aria-hidden />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-4.5 rounded-full bg-primary px-1 py-px text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );
