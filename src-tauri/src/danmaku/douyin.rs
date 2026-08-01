@@ -3,7 +3,8 @@
 //! Douyin's web IM endpoint requires a short-lived, signed WSS URL. rLive
 //! builds that URL locally: room metadata + anonymous user id, MSSDK
 //! signature via Boa, then a direct WebSocket with gzip / protobuf framing,
-//! heartbeat and ACK.
+//! heartbeat and ACK.  The dial rotates through several webcast edge hosts
+//! and the read loop reconnects with an exponential, status-aware backoff.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -16,6 +17,7 @@ use tokio::time;
 use tokio_tungstenite::{
     connect_async_tls_with_config,
     tungstenite::{
+        Error as WsError,
         Message,
         client::IntoClientRequest,
         http::{HeaderName, HeaderValue},
@@ -34,24 +36,73 @@ const MAX_EVENT_TEXT_CHARS: usize = 500;
 const MAX_USER_NAME_CHARS: usize = 128;
 /// Web room chat is shorter than app chat; keep a conservative bound.
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 50;
-const WSS_PUSH_URL: &str = "wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/";
 /// Official web live room chat write endpoint (form POST + Cookie).
 const SEND_CHAT_URL: &str = "https://live.douyin.com/webcast/room/chat/";
 /// This is a valid `PushFrame` containing protobuf field 7 = "hb".
 const HEARTBEAT: &[u8] = &[0x3a, 0x02, b'h', b'b'];
+/// Maximum wait for one edge host's WSS handshake before rotating.
+const CONNECT_TIMEOUT_SECS: u64 = 12;
+
+/// Douyin webcast push edges, in preference order.  The first host mirrors
+/// the web client's primary edge; the rest are rotation candidates used when
+/// the primary is unreachable or rate-limited.
+const DOUYIN_WS_HOSTS: &[&str] = &[
+    "webcast3-ws-web-lq.douyin.com",
+    "webcast5-ws-web-lf.douyin.com",
+    "webcast5-ws-web-hl.douyin.com",
+    "webcast3-ws-web-hl.douyin.com",
+    "webcast3-ws-web-lf.douyin.com",
+];
+
+/// Read-side reconnect policy: after a drop wait `2^attempt` seconds before
+/// dialing again.  A handshake rejected as 429/403 means the edge is
+/// rate-limiting this client, so back off much harder instead of hammering
+/// the same egress IP; 504 suggests a transient gateway issue.
+const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
+const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
+const RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS: u64 = 10;
+const RECONNECT_BACKOFF_GATEWAY_MAX_SECS: u64 = 120;
+const RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS: u64 = 60;
+const RECONNECT_BACKOFF_BLOCKED_MAX_SECS: u64 = 300;
+/// Random 0..=800 ms jitter added to every retry so concurrent clients do
+/// not reconnect in lockstep.
+const RECONNECT_JITTER_MAX_MS: u64 = 800;
 
 #[derive(Debug, Clone)]
 pub struct DouyinDanmakuArgs {
-    pub wss_url: String,
+    /// Internal (numeric) room id used by the WSS query string.
+    pub room_id: String,
+    /// Anonymous web uid bound to the signed URL.
+    pub user_unique_id: String,
+    /// Short-lived MSSDK WSS signature.
+    pub signature: String,
+    /// Browser-style `internal_ext` query value (see [`build_internal_ext`]).
+    pub internal_ext: String,
     pub headers: HashMap<String, String>,
     pub heartbeat_interval: Duration,
+}
+
+fn douyin_ws_hosts() -> Vec<String> {
+    if let Ok(raw) = std::env::var("RLIVE_DOUYIN_WS_HOSTS") {
+        let hosts: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(str::to_string)
+            .collect();
+        if !hosts.is_empty() {
+            return hosts;
+        }
+    }
+    DOUYIN_WS_HOSTS.iter().map(|host| (*host).to_string()).collect()
 }
 
 /// Resolve room metadata into a short-lived signed WSS connection.
 ///
 /// Flow matches Simple Live: internal room id + anonymous user id → local
 /// MSSDK signature → WSS query string, then Cookie / Origin headers for the
-/// direct WebSocket.
+/// direct WebSocket.  The edge host is picked per dial by [`run_loop`], so
+/// the signature and `internal_ext` are computed here and shared across hosts.
 pub fn build_connection(
     room_id: &str,
     raw: &serde_json::Value,
@@ -59,9 +110,12 @@ pub fn build_connection(
 ) -> AppResult<DouyinDanmakuArgs> {
     let actual_room_id = numeric_field(raw.get("room_id")).unwrap_or_else(|| room_id.to_string());
     validate_numeric_id(&actual_room_id, "房间号")?;
-    let user_unique_id = generate_user_unique_id();
+    // Prefer the session web id captured from the SSR room page; the locally
+    // generated anonymous id is only a fallback.
+    let user_unique_id = web_id_field(raw.get("user_unique_id")).unwrap_or_else(generate_user_unique_id);
     let signature = douyin_sign::get_signature(&actual_room_id, &user_unique_id)?;
-    let wss_url = build_wss_url(&actual_room_id, &user_unique_id, &signature)?;
+    let ts_ms = now_ms();
+    let internal_ext = build_internal_ext(&actual_room_id, &user_unique_id, ts_ms);
 
     let mut headers = HashMap::new();
     headers.insert("User-Agent".into(), DEFAULT_USER_AGENT.into());
@@ -72,22 +126,22 @@ pub fn build_connection(
     }
 
     Ok(DouyinDanmakuArgs {
-        wss_url,
+        room_id: actual_room_id,
+        user_unique_id,
+        signature,
+        internal_ext,
         headers,
         heartbeat_interval: Duration::from_millis(DEFAULT_HEARTBEAT_MS),
     })
 }
 
-fn build_wss_url(room_id: &str, user_unique_id: &str, signature: &str) -> AppResult<String> {
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
+fn build_wss_url(host: &str, args: &DouyinDanmakuArgs) -> AppResult<String> {
+    let ts_ms = now_ms();
     let browser_version = DEFAULT_USER_AGENT
         .strip_prefix("Mozilla/")
         .unwrap_or(DEFAULT_USER_AGENT);
 
-    let mut url = Url::parse(WSS_PUSH_URL).map_err(|_| {
+    let mut url = Url::parse(&format!("wss://{host}/webcast/im/push/v2/")).map_err(|_| {
         AppError::new("douyin_wss_build_failed", "抖音弹幕连接地址构建失败").with_site("douyin")
     })?;
     {
@@ -108,7 +162,7 @@ fn build_wss_url(room_id: &str, user_unique_id: &str, signature: &str) -> AppRes
         query.append_pair("endpoint", "live_pc");
         query.append_pair("support_wrds", "1");
         query.append_pair("im_path", "/webcast/im/fetch/");
-        query.append_pair("user_unique_id", user_unique_id);
+        query.append_pair("user_unique_id", &args.user_unique_id);
         query.append_pair("device_platform", "web");
         query.append_pair("cookie_enabled", "true");
         query.append_pair("screen_width", "1920");
@@ -120,11 +174,41 @@ fn build_wss_url(room_id: &str, user_unique_id: &str, signature: &str) -> AppRes
         query.append_pair("browser_online", "true");
         query.append_pair("tz_name", "Asia/Shanghai");
         query.append_pair("identity", "audience");
-        query.append_pair("room_id", room_id);
+        query.append_pair("room_id", &args.room_id);
         query.append_pair("heartbeatDuration", "0");
-        query.append_pair("signature", signature);
+        query.append_pair("internal_ext", &args.internal_ext);
+        query.append_pair("signature", &args.signature);
     }
     Ok(url.to_string())
+}
+
+/// Browser-style `internal_ext` captured from the web client.  The value
+/// binds the WSS request to the room / web id pair and is *not* part of the
+/// MSSDK signature input, so it can be added without re-signing.
+fn build_internal_ext(room_id: &str, user_unique_id: &str, ts_ms: u64) -> String {
+    let first_req_ms = ts_ms.saturating_sub(100);
+    format!(
+        "internal_src:dim|wss_push_room_id:{room_id}|wss_push_did:{user_unique_id}|first_req_ms:{first_req_ms}|fetch_time:{ts_ms}|seq:1|wss_info:0-{ts_ms}-0-0|wrds_v:7392094459690748497"
+    )
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn reconnect_backoff_secs(attempt: u32, blocked: bool, gateway: bool) -> u64 {
+    let (floor, max) = if blocked {
+        (RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS, RECONNECT_BACKOFF_BLOCKED_MAX_SECS)
+    } else if gateway {
+        (RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS, RECONNECT_BACKOFF_GATEWAY_MAX_SECS)
+    } else {
+        (RECONNECT_BACKOFF_INITIAL_SECS, RECONNECT_BACKOFF_MAX_SECS)
+    };
+    let exp = RECONNECT_BACKOFF_INITIAL_SECS << attempt.min(9);
+    exp.min(max).max(floor)
 }
 
 /// Anonymous 12-digit web uid (Simple Live `generateRandomNumber(12)`).
@@ -148,6 +232,19 @@ fn numeric_field(value: Option<&serde_json::Value>) -> Option<String> {
     (!number.is_empty()).then_some(number)
 }
 
+/// The SSR room page exposes the session's own web id (a numeric string or
+/// number).  Unlike [`numeric_field`] it is not required to be digits-only,
+/// because `s_v_web_id` fallbacks are alphanumeric.
+fn web_id_field(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    let id = match value {
+        serde_json::Value::String(value) => value.trim().to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        _ => return None,
+    };
+    (!id.is_empty()).then_some(id)
+}
+
 fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
     if value.is_empty() || value.len() > 32 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(
@@ -158,46 +255,161 @@ fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> AppResult<()> {
-    let mut request = args.wss_url.clone().into_client_request().map_err(|_| {
-        AppError::new("douyin_ws_request_invalid", "抖音弹幕连接地址无效").with_site("douyin")
-    })?;
-    for (name, value) in args.headers {
-        let Ok(name) = HeaderName::from_bytes(name.trim().as_bytes()) else {
-            continue;
+    let mut attempt: u32 = 0;
+    loop {
+        let outcome = run_connection_once(&events, &args).await;
+        // A session that actually connected resets the backoff so a healthy
+        // edge is re-dialed quickly; a clean drop does not carry the failure
+        // history of the connect phase.
+        if matches!(outcome, RunOutcome::Dropped(_)) {
+            attempt = 0;
+        }
+        let (blocked, gateway) = match &outcome {
+            RunOutcome::ConnectFailed(failure) => (
+                matches!(failure.http_status, Some(403 | 429)),
+                matches!(failure.http_status, Some(504)),
+            ),
+            _ => (false, false),
         };
-        let Ok(value) = HeaderValue::from_str(value.trim()) else {
-            continue;
+        let backoff = reconnect_backoff_secs(attempt, blocked, gateway);
+        let content = match &outcome {
+            RunOutcome::Dropped(count) => {
+                format!("弹幕连接断开（已收 {count} 条），{backoff} 秒后自动重连…")
+            }
+            RunOutcome::ConnectFailed(failure) => {
+                format!("弹幕连接失败：{}，{backoff} 秒后自动重连…", failure.message)
+            }
+            RunOutcome::TransportFailed(message) => {
+                format!("弹幕连接异常：{message}，{backoff} 秒后自动重连…")
+            }
         };
-        request.headers_mut().insert(name, value);
+        tracing::warn!(
+            attempt,
+            blocked,
+            gateway,
+            backoff_secs = backoff,
+            "douyin danmaku disconnected, reconnecting"
+        );
+        emit_event(
+            &events,
+            DanmakuEvent {
+                kind: DanmakuKind::System,
+                user: "system".into(),
+                is_self: false,
+                user_id: None,
+                content,
+                color: None,
+                spans: None,
+                super_chat: None,
+                ts: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+        // The task is aborted by the danmaku manager when the frontend leaves
+        // the room, so this loop only exits through cancellation.
+        let jitter_ms = (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1)) as u64;
+        time::sleep(Duration::from_secs(backoff) + Duration::from_millis(jitter_ms)).await;
+        attempt += 1;
+    }
+}
+
+enum RunOutcome {
+    /// Connected and the read loop ended after `count` events.
+    Dropped(u64),
+    /// Never connected; every edge host failed, the last failure wins.
+    ConnectFailed(ConnectFailure),
+    /// Connected but a transport error ended the session.
+    TransportFailed(String),
+}
+
+#[derive(Debug)]
+struct ConnectFailure {
+    /// HTTP status of the failed WSS handshake when the edge answered.
+    http_status: Option<u16>,
+    message: String,
+}
+
+async fn run_connection_once(
+    events: &DanmakuEventSender,
+    args: &DouyinDanmakuArgs,
+) -> RunOutcome {
+    emit_system(events, "正在连接抖音弹幕服务器…");
+
+    let hosts = douyin_ws_hosts();
+    let mut last_failure: Option<ConnectFailure> = None;
+    let mut connected = None;
+    for host in hosts {
+        let url = match build_wss_url(&host, args) {
+            Ok(url) => url,
+            Err(_) => continue,
+        };
+        let mut request = match url.into_client_request() {
+            Ok(request) => request,
+            Err(_) => continue,
+        };
+        for (name, value) in &args.headers {
+            let Ok(name) = HeaderName::from_bytes(name.trim().as_bytes()) else {
+                continue;
+            };
+            let Ok(value) = HeaderValue::from_str(value.trim()) else {
+                continue;
+            };
+            request.headers_mut().insert(name, value);
+        }
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(CONNECT_TIMEOUT_SECS),
+            connect_async_tls_with_config(request, None, false, None),
+        )
+        .await;
+        match outcome {
+            Ok(Ok((ws, _))) => {
+                connected = Some(ws);
+                break;
+            }
+            Ok(Err(error)) => {
+                let failure = connect_failure(&error);
+                tracing::warn!(
+                    host,
+                    http_status = failure.http_status,
+                    "douyin danmaku handshake failed: {error}"
+                );
+                last_failure = Some(failure);
+            }
+            Err(_) => {
+                tracing::warn!(host, "douyin danmaku handshake timed out");
+                last_failure = Some(ConnectFailure {
+                    http_status: None,
+                    message: format!("连接超时（{host}）"),
+                });
+            }
+        }
     }
 
-    emit_system(&events, "正在连接抖音弹幕服务器…");
-    let (ws, _) = connect_async_tls_with_config(request, None, false, None)
-        .await
-        .map_err(|_| {
-            AppError::new(
-                "douyin_ws_connect_failed",
-                "抖音弹幕服务器连接失败，请稍后重试",
-            )
-            .with_site("douyin")
-            .retryable()
-        })?;
+    let Some(ws) = connected else {
+        let failure = last_failure.unwrap_or_else(|| ConnectFailure {
+            http_status: None,
+            message: "所有弹幕服务器均连接失败".into(),
+        });
+        return RunOutcome::ConnectFailed(failure);
+    };
+    tracing::info!(site = "douyin", "danmaku websocket connected");
+
     let (mut write, mut read) = ws.split();
-    write
+    if write
         .send(Message::Binary(HEARTBEAT.to_vec().into()))
         .await
-        .map_err(|_| {
-            AppError::new("douyin_ws_heartbeat_failed", "抖音弹幕心跳发送失败")
-                .with_site("douyin")
-                .retryable()
-        })?;
+        .is_err()
+    {
+        return RunOutcome::TransportFailed("心跳发送失败".into());
+    }
 
-    emit_system(&events, "抖音弹幕服务器连接成功");
+    emit_system(events, "抖音弹幕服务器连接成功");
     let mut heartbeat = time::interval(args.heartbeat_interval);
     // `interval` ticks immediately; consume that tick because the opening
     // heartbeat above has already been sent.
     heartbeat.tick().await;
 
+    let mut msg_count: u64 = 0;
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
@@ -207,13 +419,25 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> Ap
             }
             incoming = read.next() => match incoming {
                 Some(Ok(Message::Binary(bytes))) => {
-                    let decoded = decode_push_frame(&bytes)?;
-                    let payload = maybe_gunzip(decoded.payload)?;
-                    let ack = decode_response(&payload, &mut |event| emit_event(&events, event))?;
-                    if ack.need_ack {
-                        let frame = encode_ack(decoded.log_id, ack.internal_ext.as_bytes());
-                        if write.send(Message::Binary(frame.into())).await.is_err() {
-                            break;
+                    match decode_push_frame(&bytes)
+                        .and_then(|decoded| {
+                            let payload = maybe_gunzip(decoded.payload)?;
+                            let ack = decode_response(&payload, &mut |event| {
+                                msg_count += 1;
+                                emit_event(events, event);
+                            })?;
+                            Ok((decoded, ack))
+                        }) {
+                        Ok((decoded, ack)) => {
+                            if ack.need_ack {
+                                let frame = encode_ack(decoded.log_id, ack.internal_ext.as_bytes());
+                                if write.send(Message::Binary(frame.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(site = "douyin", "danmaku frame dropped: {error}");
                         }
                     }
                 }
@@ -222,20 +446,22 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> Ap
                 }
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(_)) => {}
-                Some(Err(_)) => {
-                    return Err(
-                        AppError::new("douyin_ws_read_failed", "抖音弹幕连接中断")
-                            .with_site("douyin")
-                            .retryable(),
-                    );
-                }
+                Some(Err(_)) => break,
             }
         }
     }
+    RunOutcome::Dropped(msg_count)
+}
 
-    Err(AppError::new("douyin_ws_closed", "抖音弹幕连接已断开")
-        .with_site("douyin")
-        .retryable())
+fn connect_failure(error: &WsError) -> ConnectFailure {
+    let http_status = match error {
+        WsError::Http(response) => Some(response.status().as_u16()),
+        _ => None,
+    };
+    ConnectFailure {
+        http_status,
+        message: error.to_string(),
+    }
 }
 
 fn emit_system(events: &DanmakuEventSender, content: &str) {
@@ -542,7 +768,7 @@ fn decode_social(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
         3 => format!("{user} 分享了直播间"),
         _ => String::new(),
     };
-    event_if_content(DanmakuKind::Chat, user, content, None)
+    event_if_content(DanmakuKind::Social, user, content, None)
 }
 
 fn decode_user_name(bytes: &[u8]) -> AppResult<String> {
@@ -872,8 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn decodes_likes_as_filterable_gift_messages() {
-        let user = field_bytes(3, "观众".as_bytes());
+    fn decodes_likes_as_filterable_gift_messages() {        let user = field_bytes(3, "观众".as_bytes());
         let mut like_body = field_uint(2, 33);
         like_body.extend(field_bytes(5, &user));
         let mut like_message = field_bytes(1, b"WebcastLikeMessage");
@@ -892,13 +1117,53 @@ mod tests {
     }
 
     #[test]
-    fn builds_signed_wss_url_with_room_and_signature() {
+    fn decodes_follow_and_share_notices_as_social_messages() {
+        let user = field_bytes(3, "阿森纳".as_bytes());
+        let mut follow_body = field_bytes(2, &user);
+        follow_body.extend(field_uint(4, 1));
+        let mut follow_message = field_bytes(1, b"WebcastSocialMessage");
+        follow_message.extend(field_bytes(2, &follow_body));
+
+        let mut share_body = field_bytes(2, &user);
+        share_body.extend(field_uint(4, 3));
+        let mut share_message = field_bytes(1, b"WebcastSocialMessage");
+        share_message.extend(field_bytes(2, &share_body));
+
+        let mut response = field_bytes(1, &follow_message);
+        response.extend(field_bytes(1, &share_message));
+        let mut events = Vec::new();
+        decode_response(&response, &mut |event| events.push(event)).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event.kind, DanmakuKind::Social)));
+        assert_eq!(events[0].content, "阿森纳 关注了主播");
+        assert_eq!(events[1].content, "阿森纳 分享了直播间");
+    }
+
+    #[test]
+    fn builds_signed_connection_and_per_host_wss_url() {
         let raw = serde_json::json!({
             "room_id": "1234567890123456789",
             "web_rid": "522864404974",
         });
         let args = build_connection("522864404974", &raw, "ttwid=fixture").unwrap();
-        let url = Url::parse(&args.wss_url).unwrap();
+        assert_eq!(args.room_id, "1234567890123456789");
+        assert_eq!(args.user_unique_id.len(), 12);
+        assert!(args.user_unique_id.bytes().all(|byte| byte.is_ascii_digit()));
+        assert!(!args.signature.is_empty());
+        assert!(args.internal_ext.contains("wss_push_room_id:1234567890123456789"));
+        assert!(args.internal_ext.contains("wss_push_did:"));
+        assert_eq!(
+            args.headers.get("Cookie").map(String::as_str),
+            Some("ttwid=fixture")
+        );
+        assert_eq!(
+            args.headers.get("Origin").map(String::as_str),
+            Some("https://live.douyin.com")
+        );
+
+        let url = Url::parse(&build_wss_url("webcast3-ws-web-lq.douyin.com", &args).unwrap())
+            .unwrap();
         assert_eq!(url.scheme(), "wss");
         assert!(url.as_str().contains("webcast3-ws-web-lq.douyin.com"));
         let pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -912,18 +1177,66 @@ mod tests {
                 .get("signature")
                 .is_some_and(|value| !value.is_empty())
         );
+        assert_eq!(
+            pairs.get("internal_ext").map(String::as_str),
+            Some(args.internal_ext.as_str())
+        );
         assert!(
             pairs
                 .get("user_unique_id")
                 .is_some_and(|value| value.len() == 12)
         );
+    }
+
+    #[test]
+    fn build_connection_prefers_the_render_data_web_id() {
+        let raw = serde_json::json!({
+            "room_id": "1234567890123456789",
+            "user_unique_id": "7392091211001140287",
+        });
+        let args = build_connection("522864404974", &raw, "").unwrap();
+        assert_eq!(args.user_unique_id, "7392091211001140287");
+        assert!(args.internal_ext.contains("wss_push_did:7392091211001140287"));
+
+        // Without a session web id the anonymous fallback is 12 digits.
+        let raw = serde_json::json!({ "room_id": "1234567890123456789" });
+        let args = build_connection("522864404974", &raw, "").unwrap();
+        assert_eq!(args.user_unique_id.len(), 12);
+        assert!(args.user_unique_id.bytes().all(|byte| byte.is_ascii_digit()));
+    }
+
+    #[test]
+    fn default_ws_hosts_lead_with_the_primary_edge() {
+        let hosts = douyin_ws_hosts();
         assert_eq!(
-            args.headers.get("Cookie").map(String::as_str),
-            Some("ttwid=fixture")
+            hosts.first().map(String::as_str),
+            Some("webcast3-ws-web-lq.douyin.com")
+        );
+        assert!(hosts.len() >= 3);
+    }
+
+    #[test]
+    fn reconnect_backoff_grows_to_its_per_class_caps() {
+        assert_eq!(reconnect_backoff_secs(0, false, false), 1);
+        assert_eq!(reconnect_backoff_secs(1, false, false), 2);
+        assert_eq!(reconnect_backoff_secs(5, false, false), RECONNECT_BACKOFF_MAX_SECS);
+        // Blocked (429/403) starts at the 60s floor and grows to 300s.
+        assert_eq!(
+            reconnect_backoff_secs(0, true, false),
+            RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS
         );
         assert_eq!(
-            args.headers.get("Origin").map(String::as_str),
-            Some("https://live.douyin.com")
+            reconnect_backoff_secs(9, true, false),
+            RECONNECT_BACKOFF_BLOCKED_MAX_SECS
+        );
+        // Gateway (504) starts at the 10s floor and grows to 120s.
+        assert_eq!(
+            reconnect_backoff_secs(0, false, true),
+            RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS
+        );
+        assert_eq!(
+            reconnect_backoff_secs(9, false, true),
+            RECONNECT_BACKOFF_GATEWAY_MAX_SECS
         );
     }
 

@@ -22,7 +22,7 @@ const SIGN_THREAD_STACK: usize = 16 * 1024 * 1024;
 /// MD5 stub of the fixed webcast client parameters (Simple Live `getMsStub`).
 pub fn ms_stub(room_id: &str, user_unique_id: &str) -> AppResult<String> {
     validate_numeric_component(room_id, "房间号")?;
-    validate_numeric_component(user_unique_id, "用户标识")?;
+    validate_web_id_component(user_unique_id, "用户标识")?;
 
     // Field order and values match the first-party web client used by Simple Live.
     let sig_params = format!(
@@ -133,6 +133,20 @@ fn validate_numeric_component(value: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// The web id may be a numeric `user_unique_id` or an alphanumeric
+/// `s_v_web_id` from the browser session; the signature input accepts both.
+fn validate_web_id_component(value: &str, label: &str) -> AppResult<()> {
+    if value.is_empty()
+        || value.len() > 32
+        || !value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(
+            AppError::new("douyin_invalid_room", format!("无效的抖音{label}")).with_site("douyin"),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +162,15 @@ mod tests {
         assert!(ms_stub("12ab", "1").is_err());
         assert!(ms_stub("1", "uid-x").is_err());
         assert!(ms_stub("", "1").is_err());
+    }
+
+    #[test]
+    fn ms_stub_accepts_alphanumeric_session_web_ids() {
+        // `s_v_web_id` fallbacks are alphanumeric; the signature input accepts
+        // them alongside numeric `user_unique_id` values.
+        assert!(ms_stub("1234567890", "deadbeef1234").is_ok());
+        assert!(ms_stub("1234567890", "7392091211001140287").is_ok());
+        assert!(ms_stub("1234567890", "1|with-pipe").is_err());
     }
 
     #[test]
