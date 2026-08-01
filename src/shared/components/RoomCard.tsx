@@ -17,7 +17,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { notify } from "@/components/ui/toast";
-import { formatOnline, cn } from "@/lib/utils";
+import { formatOnline, normalizeImageUrl, cn } from "@/lib/utils";
 
 type RoomCardProps = {
   room: LiveRoomItem;
@@ -152,7 +152,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
           {room.cover ? (
             <img
-              src={room.cover}
+              src={normalizeImageUrl(room.cover)}
               alt=""
               loading="lazy"
               decoding="async"
