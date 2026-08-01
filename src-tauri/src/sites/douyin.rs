@@ -371,25 +371,9 @@ impl LiveSite for DouyinSite {
     async fn get_category_rooms(
         &self,
         category: &LiveSubCategory,
-        page: u32,
+        offset: u32,
     ) -> AppResult<RoomListPage> {
-        if page.max(1) > 1 {
-            return Ok(RoomListPage {
-                has_more: false,
-                items: Vec::new(),
-            });
-        }
-        let mut id_parts = category.id.split(',');
-        let partition_id = id_parts.next().unwrap_or_default().trim();
-        let partition_id = numeric_id(partition_id, "分类 ID")?;
-        let partition_type = id_parts.next().unwrap_or_default().trim();
-        let path = if partition_type.is_empty() {
-            format!("category/{partition_id}")
-        } else {
-            let partition_type = numeric_id(partition_type, "分类类型")?;
-            format!("categorynew/{partition_type}_{partition_id}")
-        };
-        let html = self.get_ssr_page(&path).await?;
+        let html = self.get_ssr_page(&format!("category/{offset}")).await?; // temporary for testing
         parse_ssr_rooms(&html)
     }
 

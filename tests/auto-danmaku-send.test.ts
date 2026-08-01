@@ -18,11 +18,11 @@ describe("automatic danmaku text preparation", () => {
     expect(normalizeAutoDanmakuText("\n  一起\t\t看   直播  \r\n")).toBe("一起 看 直播");
   });
 
-  test("splits sixteen Chinese characters into ordered fifteen-character messages", () => {
-    const text = "弹".repeat(16);
+  test("splits twenty-one Chinese characters into ordered twenty-character messages", () => {
+    const text = "弹".repeat(21);
     expect(splitAutoDanmakuText(text, 100)).toEqual({
       normalized: text,
-      segments: ["弹".repeat(15), "弹"],
+      segments: ["弹".repeat(20), "弹"],
       error: null,
     });
   });
@@ -70,7 +70,7 @@ describe("automatic danmaku text preparation", () => {
     expect(result.segments.every((segment) => splitGraphemes(segment)?.length === 1)).toBe(true);
   });
 
-  test("honours Bilibili's twenty UTF-16-unit limit before the fifteen-grapheme target", () => {
+  test("honours Bilibili's twenty UTF-16-unit limit before the twenty-grapheme target", () => {
     const result = splitAutoDanmakuText("😀".repeat(11), 20);
 
     expect(result.error).toBeNull();

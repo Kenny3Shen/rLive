@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Url};
 use tokio::time;
 use tokio_tungstenite::{
-    connect_async,
+    connect_async_tls_with_config,
     tungstenite::{
         Message,
         client::IntoClientRequest,
@@ -23,6 +23,7 @@ use tokio_tungstenite::{
 };
 
 use crate::danmaku::douyin_sign;
+use crate::danmaku::tls::rustls_connector;
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -172,14 +173,16 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> Ap
     }
 
     emit_system(&events, "正在连接抖音弹幕服务器…");
-    let (ws, _) = connect_async(request).await.map_err(|_| {
-        AppError::new(
-            "douyin_ws_connect_failed",
-            "抖音弹幕服务器连接失败，请稍后重试",
-        )
-        .with_site("douyin")
-        .retryable()
-    })?;
+    let (ws, _) = connect_async_tls_with_config(request, None, false, Some(rustls_connector()?))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "douyin_ws_connect_failed",
+                "抖音弹幕服务器连接失败，请稍后重试",
+            )
+            .with_site("douyin")
+            .retryable()
+        })?;
     let (mut write, mut read) = ws.split();
     write
         .send(Message::Binary(HEARTBEAT.to_vec().into()))
