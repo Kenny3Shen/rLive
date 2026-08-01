@@ -155,7 +155,7 @@ fn build_login_client(jar: Arc<Jar>, proxy: Option<&str>) -> AppResult<Client> {
     // variable, while still allowing users whose network requires a proxy to
     // reach Douyin's SSO service.
     let builder = Client::builder()
-        .use_rustls_tls()
+        .use_native_tls()
         .cookie_provider(jar)
         .no_proxy()
         .timeout(Duration::from_secs(20))

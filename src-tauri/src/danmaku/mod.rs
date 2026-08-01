@@ -4,7 +4,6 @@ pub mod douyin_sign;
 pub mod douyu;
 pub mod huya;
 pub mod tars;
-pub mod tls;
 pub mod twitch;
 
 use std::collections::HashSet;

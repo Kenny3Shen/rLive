@@ -28,28 +28,20 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "gzip", "brotli", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
 base64 = "0.22"
 md-5 = "0.10"
 hex = "0.4"
-# Two TLS backends, selected per site at the call site:
-#   * native-tls (SChannel on Windows / OpenSSL elsewhere) for Douyu danmaku
-#     only, whose proxy ports offer nothing but static-RSA AES-GCM suites.
-#     rustls does not implement static RSA key exchange at all, so those
-#     handshakes fail with HandshakeFailure.
-#   * rustls for every other site.
-# Note the sharp edge: with `native-tls` enabled, a `None` connector means
-# native-tls, so non-Douyu call sites pass an explicit connector. See
-# danmaku::tls.
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots", "native-tls"] }
-# Used by danmaku::tls to build that explicit rustls connector. `ring` rather
-# than the default `aws_lc_rs` provider: the latter needs a C toolchain, which
-# the Android targets do not have configured. tokio-rustls re-exports `rustls`,
-# so rustls itself is not needed as a direct dependency.
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
-rustls-native-certs = "0.8"
+# Single TLS backend everywhere: native-tls (SChannel on Windows / OpenSSL
+# elsewhere). Douyu's danmaku proxy ports offer only static-RSA suites that
+# rustls does not support, so HTTP (reqwest) and WebSocket (tokio-tungstenite)
+# both use native-tls.
+# With `native-tls` enabled on tokio-tungstenite, `None` is the native-tls backend.
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
 futures-util = "0.3"
 flate2 = "1"
 brotli = "7"

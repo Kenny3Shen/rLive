@@ -177,7 +177,7 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
 
 fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
     Client::builder()
-        .use_rustls_tls()
+        .use_native_tls()
         .cookie_provider(jar)
         // QR authentication carries a temporary login session. Do not route it
         // through the app browsing proxy.
@@ -318,7 +318,10 @@ async fn finish_login(session: &QrSession, domain_urls: &[String]) -> AppResult<
         let response = session
             .client
             .get(url)
-            .header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header(
+                ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
             .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
             .header(REFERER, WEB_ORIGIN)
             .header(USER_AGENT, USER_AGENT_VALUE)
