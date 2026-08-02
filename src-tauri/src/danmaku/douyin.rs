@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use futures_util::{SinkExt, StreamExt};
@@ -24,6 +24,7 @@ use tokio_tungstenite::{
 };
 
 use crate::danmaku::douyin_sign;
+use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -53,19 +54,14 @@ const DOUYIN_WS_HOSTS: &[&str] = &[
     "webcast3-ws-web-lf.douyin.com",
 ];
 
-/// Read-side reconnect policy: after a drop wait `2^attempt` seconds before
-/// dialing again.  A handshake rejected as 429/403 means the edge is
-/// rate-limiting this client, so back off much harder instead of hammering
-/// the same egress IP; 504 suggests a transient gateway issue.
-const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
-const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
+/// Per-class reconnect clamps handed to the shared policy.  A handshake
+/// rejected as 429/403 means the edge is rate-limiting this client, so back off
+/// much harder instead of hammering the same egress IP; 504 suggests a
+/// transient gateway issue that clears sooner.
 const RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS: u64 = 10;
 const RECONNECT_BACKOFF_GATEWAY_MAX_SECS: u64 = 120;
 const RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS: u64 = 60;
 const RECONNECT_BACKOFF_BLOCKED_MAX_SECS: u64 = 300;
-/// Random 0..=800 ms jitter added to every retry so concurrent clients do
-/// not reconnect in lockstep.
-const RECONNECT_JITTER_MAX_MS: u64 = 800;
 
 #[derive(Debug, Clone)]
 pub struct DouyinDanmakuArgs {
@@ -202,22 +198,31 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn reconnect_backoff_secs(attempt: u32, blocked: bool, gateway: bool) -> u64 {
-    let (floor, max) = if blocked {
-        (
-            RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS,
-            RECONNECT_BACKOFF_BLOCKED_MAX_SECS,
-        )
-    } else if gateway {
-        (
-            RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS,
-            RECONNECT_BACKOFF_GATEWAY_MAX_SECS,
-        )
-    } else {
-        (RECONNECT_BACKOFF_INITIAL_SECS, RECONNECT_BACKOFF_MAX_SECS)
-    };
-    let exp = RECONNECT_BACKOFF_INITIAL_SECS << attempt.min(9);
-    exp.min(max).max(floor)
+/// Map one failed handshake onto a reconnect reason.
+///
+/// A 403/429 means this egress IP is being refused or rate-limited, and 504 is
+/// a transient gateway fault; both stay retryable but on a much slower
+/// schedule. A 401 is a rejected credential, which retrying cannot fix.
+fn connect_failure_reason(failure: ConnectFailure) -> DisconnectReason {
+    match failure.http_status {
+        Some(401) => DisconnectReason::fatal(format!(
+            "{}（登录状态已失效，请重新保存 Cookie）",
+            failure.message
+        )),
+        Some(403 | 429) => DisconnectReason::Throttled {
+            message: failure.message,
+            floor: Duration::from_secs(RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS),
+            max: Duration::from_secs(RECONNECT_BACKOFF_BLOCKED_MAX_SECS),
+        },
+        Some(504) => DisconnectReason::Throttled {
+            message: failure.message,
+            floor: Duration::from_secs(RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS),
+            max: Duration::from_secs(RECONNECT_BACKOFF_GATEWAY_MAX_SECS),
+        },
+        _ => DisconnectReason::Transient {
+            message: failure.message,
+        },
+    }
 }
 
 /// Anonymous 12-digit web uid (Simple Live `generateRandomNumber(12)`).
@@ -264,71 +269,20 @@ fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> AppResult<()> {
-    let mut attempt: u32 = 0;
+    let mut policy = ReconnectPolicy::with_defaults("douyin");
     loop {
-        let outcome = run_connection_once(&events, &args).await;
-        // A session that actually connected resets the backoff so a healthy
-        // edge is re-dialed quickly; a clean drop does not carry the failure
-        // history of the connect phase.
-        if matches!(outcome, RunOutcome::Dropped(_)) {
-            attempt = 0;
+        let reason = run_connection_once(&events, &args).await;
+        match policy.on_disconnect(reason) {
+            Decision::Retry { delay, notice } => {
+                emit_system(&events, notice);
+                time::sleep(delay).await;
+            }
+            Decision::Stop { notice, .. } => {
+                emit_system(&events, notice);
+                return Ok(());
+            }
         }
-        let (blocked, gateway) = match &outcome {
-            RunOutcome::ConnectFailed(failure) => (
-                matches!(failure.http_status, Some(403 | 429)),
-                matches!(failure.http_status, Some(504)),
-            ),
-            _ => (false, false),
-        };
-        let backoff = reconnect_backoff_secs(attempt, blocked, gateway);
-        let content = match &outcome {
-            RunOutcome::Dropped(count) => {
-                format!("弹幕连接断开（已收 {count} 条），{backoff} 秒后自动重连…")
-            }
-            RunOutcome::ConnectFailed(failure) => {
-                format!("弹幕连接失败：{}，{backoff} 秒后自动重连…", failure.message)
-            }
-            RunOutcome::TransportFailed(message) => {
-                format!("弹幕连接异常：{message}，{backoff} 秒后自动重连…")
-            }
-        };
-        tracing::warn!(
-            attempt,
-            blocked,
-            gateway,
-            backoff_secs = backoff,
-            "douyin danmaku disconnected, reconnecting"
-        );
-        emit_event(
-            &events,
-            DanmakuEvent {
-                kind: DanmakuKind::System,
-                user: "system".into(),
-                is_self: false,
-                user_id: None,
-                content,
-                color: None,
-                spans: None,
-                super_chat: None,
-                ts: chrono::Utc::now().timestamp_millis(),
-            },
-        );
-        // The task is aborted by the danmaku manager when the frontend leaves
-        // the room, so this loop only exits through cancellation.
-        let jitter_ms =
-            (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1)) as u64;
-        time::sleep(Duration::from_secs(backoff) + Duration::from_millis(jitter_ms)).await;
-        attempt += 1;
     }
-}
-
-enum RunOutcome {
-    /// Connected and the read loop ended after `count` events.
-    Dropped(u64),
-    /// Never connected; every edge host failed, the last failure wins.
-    ConnectFailed(ConnectFailure),
-    /// Connected but a transport error ended the session.
-    TransportFailed(String),
 }
 
 #[derive(Debug)]
@@ -338,7 +292,10 @@ struct ConnectFailure {
     message: String,
 }
 
-async fn run_connection_once(events: &DanmakuEventSender, args: &DouyinDanmakuArgs) -> RunOutcome {
+async fn run_connection_once(
+    events: &DanmakuEventSender,
+    args: &DouyinDanmakuArgs,
+) -> DisconnectReason {
     emit_system(events, "正在连接抖音弹幕服务器…");
 
     let hosts = douyin_ws_hosts();
@@ -397,17 +354,18 @@ async fn run_connection_once(events: &DanmakuEventSender, args: &DouyinDanmakuAr
             http_status: None,
             message: "所有弹幕服务器均连接失败".into(),
         });
-        return RunOutcome::ConnectFailed(failure);
+        return connect_failure_reason(failure);
     };
     tracing::info!(site = "douyin", "danmaku websocket connected");
 
+    let connected_at = Instant::now();
     let (mut write, mut read) = ws.split();
     if write
         .send(Message::Binary(HEARTBEAT.to_vec().into()))
         .await
         .is_err()
     {
-        return RunOutcome::TransportFailed("心跳发送失败".into());
+        return DisconnectReason::transient("心跳发送失败");
     }
 
     emit_system(events, "抖音弹幕服务器连接成功");
@@ -457,7 +415,10 @@ async fn run_connection_once(events: &DanmakuEventSender, args: &DouyinDanmakuAr
             }
         }
     }
-    RunOutcome::Dropped(msg_count)
+    DisconnectReason::Dropped {
+        messages: msg_count,
+        connected_for: connected_at.elapsed(),
+    }
 }
 
 fn connect_failure(error: &WsError) -> ConnectFailure {
@@ -471,7 +432,7 @@ fn connect_failure(error: &WsError) -> ConnectFailure {
     }
 }
 
-fn emit_system(events: &DanmakuEventSender, content: &str) {
+fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
     emit_event(
         events,
         DanmakuEvent {
@@ -1241,32 +1202,41 @@ mod tests {
         assert!(hosts.len() >= 3);
     }
 
+    /// The handshake status decides the retry class, so a rejected credential
+    /// stops instead of spending a five-minute backoff schedule on an answer
+    /// the edge has already given.
     #[test]
-    fn reconnect_backoff_grows_to_its_per_class_caps() {
-        assert_eq!(reconnect_backoff_secs(0, false, false), 1);
-        assert_eq!(reconnect_backoff_secs(1, false, false), 2);
-        assert_eq!(
-            reconnect_backoff_secs(5, false, false),
-            RECONNECT_BACKOFF_MAX_SECS
-        );
-        // Blocked (429/403) starts at the 60s floor and grows to 300s.
-        assert_eq!(
-            reconnect_backoff_secs(0, true, false),
-            RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS
-        );
-        assert_eq!(
-            reconnect_backoff_secs(9, true, false),
-            RECONNECT_BACKOFF_BLOCKED_MAX_SECS
-        );
-        // Gateway (504) starts at the 10s floor and grows to 120s.
-        assert_eq!(
-            reconnect_backoff_secs(0, false, true),
-            RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS
-        );
-        assert_eq!(
-            reconnect_backoff_secs(9, false, true),
-            RECONNECT_BACKOFF_GATEWAY_MAX_SECS
-        );
+    fn handshake_status_selects_the_retry_class() {
+        let failure = |status: Option<u16>| ConnectFailure {
+            http_status: status,
+            message: "handshake".into(),
+        };
+
+        assert!(matches!(
+            connect_failure_reason(failure(Some(401))),
+            DisconnectReason::Fatal { .. }
+        ));
+        for blocked in [403, 429] {
+            match connect_failure_reason(failure(Some(blocked))) {
+                DisconnectReason::Throttled { floor, max, .. } => {
+                    assert_eq!(floor.as_secs(), RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS);
+                    assert_eq!(max.as_secs(), RECONNECT_BACKOFF_BLOCKED_MAX_SECS);
+                }
+                other => panic!("expected throttling for {blocked}, got {other:?}"),
+            }
+        }
+        match connect_failure_reason(failure(Some(504))) {
+            DisconnectReason::Throttled { floor, max, .. } => {
+                assert_eq!(floor.as_secs(), RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS);
+                assert_eq!(max.as_secs(), RECONNECT_BACKOFF_GATEWAY_MAX_SECS);
+            }
+            other => panic!("expected gateway throttling, got {other:?}"),
+        }
+        // An unanswered dial (DNS, TLS, timeout) stays on the ordinary schedule.
+        assert!(matches!(
+            connect_failure_reason(failure(None)),
+            DisconnectReason::Transient { .. }
+        ));
     }
 
     #[test]

@@ -270,19 +270,29 @@ html[data-platform="android"] .app-shell {
   padding-top: env(safe-area-inset-top);
 }
 
-/* The player stage is the element requested for fullscreen. WebKitGTK (the
-   Linux Tauri WebView) does not reliably stretch a flex-child `:fullscreen`
-   element to the viewport — it keeps the previous windowed height and pins the
-   frame to the top, leaving the black band beneath the video the bottom action
-   bar used to occupy. Force it to cover the whole viewport under every engine's
-   fullscreen pseudo-class so the `object-contain` video fills the screen. */
+/* Fullscreen player stage.
+
+   Two mechanisms feed this one rule:
+   - Mobile/web use the HTML Fullscreen API, matched by the `:fullscreen`
+     pseudo-classes, and the WebView promotes the element to the top layer.
+   - Desktop Tauri uses NATIVE window fullscreen (see toggleFullscreen). WebView2
+     will not grow a maximized window past the work area for HTML fullscreen, so
+     an HTML `:fullscreen` element renders at screen height while the viewport is
+     still work-area height — the taskbar-height black band at the bottom. The
+     native window instead covers the whole screen, and `data-fullscreen="true"`
+     lifts this flex-child stage out of flow to overlay the app chrome as a
+     fixed, full-window layer.
+
+   `inset: 0` fills whichever surface applies. The z-index sits above the app
+   title bar and the room's bottom action bar so no chrome shows through. */
 [data-player-stage]:fullscreen,
-[data-player-stage]:-webkit-full-screen {
+[data-player-stage]:-webkit-full-screen,
+[data-player-stage][data-fullscreen="true"] {
   position: fixed;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
+  z-index: 60;
+  width: auto;
+  height: auto;
   max-width: none;
   max-height: none;
 }

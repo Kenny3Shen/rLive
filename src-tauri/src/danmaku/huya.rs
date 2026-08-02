@@ -2,9 +2,10 @@
 //!
 //! WS: `wss://cdnws.api.huya.com`
 //! Join packet encodes ayyuid + channel ids; chat push uri=1400.
-//! The read loop reconnects with an exponential, jittered backoff.
+//! Reconnects follow the shared [`crate::danmaku::reconnect`] policy, which
+//! stops once the endpoint stops looking recoverable.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -17,6 +18,7 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmaku::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
@@ -35,13 +37,6 @@ const SEND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 30;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 const HUYA_APP_SOURCE: &str = "HUYA&ZH&2052";
-/// Read-side reconnect policy: after a drop wait `2^attempt` seconds before
-/// dialing again, capped at 30s.
-const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
-const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
-/// Random 0..=800 ms jitter added to every retry so concurrent clients do
-/// not reconnect in lockstep.
-const RECONNECT_JITTER_MAX_MS: u64 = 800;
 // This is Huya Signal's protocol UA, not the HTTP User-Agent header. The web
 // client carries it in `WSConnectParaInfo`, `WSVerifyCookieReq`, and `UserId`.
 // The official web player currently advertises its H5-player build here.
@@ -811,67 +806,52 @@ fn decode_message(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
-/// Read-side reconnect delay: exponential backoff capped at 30s.
-fn reconnect_delay_secs(attempt: u32) -> u64 {
-    let exp = RECONNECT_BACKOFF_INITIAL_SECS << attempt.min(9);
-    exp.min(RECONNECT_BACKOFF_MAX_SECS)
+fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
+    emit_event(
+        events,
+        DanmakuEvent {
+            kind: DanmakuKind::System,
+            user: "system".into(),
+            is_self: false,
+            user_id: None,
+            content: content.into(),
+            color: None,
+            spans: None,
+            super_chat: None,
+            ts: chrono::Utc::now().timestamp_millis(),
+        },
+    );
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppResult<()> {
-    let mut attempt: u32 = 0;
+    // Channel ids come from room metadata; without one the join packet can
+    // never address a channel, so this is a local refusal rather than a dial.
+    if args.top_sid == 0 && args.sub_sid == 0 {
+        return Err(
+            AppError::new("danmaku_bad_room", "虎牙频道号缺失，无法连接弹幕").with_site("huya"),
+        );
+    }
+
+    let mut policy = ReconnectPolicy::with_defaults("huya");
     loop {
-        let outcome = run_connection_once(&events, &args).await;
-        // A session that actually connected resets the backoff so a healthy
-        // gateway is re-dialed quickly; a clean drop does not carry the
-        // failure history of the connect phase.
-        if matches!(outcome, RunOutcome::Dropped(_)) {
-            attempt = 0;
+        let reason = run_connection_once(&events, &args).await;
+        match policy.on_disconnect(reason) {
+            Decision::Retry { delay, notice } => {
+                emit_system(&events, notice);
+                time::sleep(delay).await;
+            }
+            Decision::Stop { notice, .. } => {
+                emit_system(&events, notice);
+                return Ok(());
+            }
         }
-        let backoff = reconnect_delay_secs(attempt);
-        let content = match &outcome {
-            RunOutcome::Dropped(count) => {
-                format!("弹幕连接断开（已收 {count} 条），{backoff} 秒后自动重连…")
-            }
-            RunOutcome::ConnectFailed(message) => {
-                format!("弹幕连接失败：{message}，{backoff} 秒后自动重连…")
-            }
-        };
-        tracing::warn!(
-            attempt,
-            backoff_secs = backoff,
-            "huya danmaku disconnected, reconnecting"
-        );
-        emit_event(
-            &events,
-            DanmakuEvent {
-                kind: DanmakuKind::System,
-                user: "system".into(),
-                is_self: false,
-                user_id: None,
-                content,
-                color: None,
-                spans: None,
-                super_chat: None,
-                ts: chrono::Utc::now().timestamp_millis(),
-            },
-        );
-        // The task is aborted by the danmaku manager when the frontend leaves
-        // the room, so this loop only exits through cancellation.
-        let jitter_ms =
-            (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1)) as u64;
-        time::sleep(Duration::from_secs(backoff) + Duration::from_millis(jitter_ms)).await;
-        attempt += 1;
     }
 }
 
-enum RunOutcome {
-    /// Connected, joined, and the read loop ended after `count` chat events.
-    Dropped(u64),
-    /// Never connected: WS dial or join send failed.
-    ConnectFailed(String),
-}
-
-async fn run_connection_once(events: &DanmakuEventSender, args: &HuyaDanmakuArgs) -> RunOutcome {
+async fn run_connection_once(
+    events: &DanmakuEventSender,
+    args: &HuyaDanmakuArgs,
+) -> DisconnectReason {
     emit_event(
         events,
         DanmakuEvent {
@@ -890,9 +870,10 @@ async fn run_connection_once(events: &DanmakuEventSender, args: &HuyaDanmakuArgs
     let (ws, _) = match connect_async_tls_with_config(SERVER_URL, None, false, None).await {
         Ok(ws) => ws,
         Err(e) => {
-            return RunOutcome::ConnectFailed(format!("huya connect failed: {e}"));
+            return DisconnectReason::transient(format!("连接虎牙弹幕服务器失败：{e}"));
         }
     };
+    let connected_at = Instant::now();
     let (mut write, mut read) = ws.split();
 
     // simple_live uses topSid for both tid and sid in join
@@ -904,7 +885,7 @@ async fn run_connection_once(events: &DanmakuEventSender, args: &HuyaDanmakuArgs
     let sid = tid;
     let join = encode_join(args.ayyuid, tid, sid);
     if write.send(Message::Binary(join.into())).await.is_err() {
-        return RunOutcome::ConnectFailed("join send failed".into());
+        return DisconnectReason::transient("加入虎牙弹幕频道失败");
     }
 
     emit_event(
@@ -956,7 +937,10 @@ async fn run_connection_once(events: &DanmakuEventSender, args: &HuyaDanmakuArgs
         }
     }
 
-    RunOutcome::Dropped(msg_count)
+    DisconnectReason::Dropped {
+        messages: msg_count,
+        connected_for: connected_at.elapsed(),
+    }
 }
 
 #[cfg(test)]
@@ -980,14 +964,18 @@ mod tests {
         assert_eq!(hb, base64_decode(HEARTBEAT_B64).unwrap());
     }
 
-    #[test]
-    fn reconnect_backoff_grows_to_its_cap() {
-        assert_eq!(reconnect_delay_secs(0), 1);
-        assert_eq!(reconnect_delay_secs(1), 2);
-        assert_eq!(reconnect_delay_secs(2), 4);
-        assert_eq!(reconnect_delay_secs(4), 16);
-        assert_eq!(reconnect_delay_secs(5), 30);
-        assert_eq!(reconnect_delay_secs(u32::MAX), 30);
+    #[tokio::test]
+    async fn missing_channel_ids_refuse_to_dial_at_all() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let events = DanmakuEventSender::new(tx, Default::default());
+        let args = HuyaDanmakuArgs {
+            ayyuid: 1,
+            top_sid: 0,
+            sub_sid: 0,
+            presenter_id: 0,
+        };
+        let error = run_loop(events, args).await.unwrap_err();
+        assert_eq!(error.code, "danmaku_bad_room");
     }
 
     #[test]

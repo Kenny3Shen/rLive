@@ -49,6 +49,17 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { notify } from "@/components/ui/toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
 type LiveFilter = "all" | "live" | "offline";
@@ -59,6 +70,7 @@ export function FollowPage() {
   const qc = useQueryClient();
   const pageRef = useRef<HTMLDivElement>(null);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
+  const [pendingRemove, setPendingRemove] = useState<FollowUser | null>(null);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   // Status refresh is intentionally started only after the user enters the
   // dedicated follow page, so first-paint work stays focused on discovery.
@@ -256,11 +268,7 @@ export function FollowPage() {
                 removeMutation.variables?.site_id === u.site_id &&
                 removeMutation.variables.room_id === u.room_id;
               return (
-                <li
-                  data-page-enter-item
-                  key={`${u.site_id}:${u.room_id}`}
-                  className="min-w-0"
-                >
+                <li data-page-enter-item key={`${u.site_id}:${u.room_id}`} className="min-w-0">
                   <ContextMenu>
                     <ContextMenuTrigger
                       render={
@@ -310,7 +318,7 @@ export function FollowPage() {
                                   disabled={removeMutation.isPending}
                                   aria-label="取消关注"
                                   aria-busy={removingThis}
-                                  onClick={() => removeMutation.mutate(u)}
+                                  onClick={() => setPendingRemove(u)}
                                 />
                               }
                             >
@@ -357,7 +365,7 @@ export function FollowPage() {
                         <ContextMenuItem
                           variant="destructive"
                           disabled={removeMutation.isPending}
-                          onClick={() => removeMutation.mutate(u)}
+                          onClick={() => setPendingRemove(u)}
                         >
                           <UserRoundX aria-hidden />
                           取消关注
@@ -370,6 +378,41 @@ export function FollowPage() {
             })}
           </ul>
         )}
+
+        <AlertDialog
+          open={pendingRemove != null}
+          onOpenChange={(open) => {
+            if (removeMutation.isPending) return;
+            if (!open) setPendingRemove(null);
+          }}
+        >
+          <AlertDialogContent size="sm">
+            <AlertDialogHeader>
+              <AlertDialogMedia className="bg-destructive/10 text-destructive">
+                <UserRoundX aria-hidden />
+              </AlertDialogMedia>
+              <AlertDialogTitle>取消关注</AlertDialogTitle>
+              <AlertDialogDescription>
+                确定不再关注 {pendingRemove?.user_name} 吗？取消后将不再显示在关注列表中。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={removeMutation.isPending}>取消</AlertDialogCancel>
+              <AlertDialogAction
+                type="button"
+                variant="destructive"
+                disabled={removeMutation.isPending}
+                onClick={() => {
+                  if (pendingRemove) removeMutation.mutate(pendingRemove);
+                  setPendingRemove(null);
+                }}
+              >
+                <UserRoundX data-icon="inline-start" aria-hidden />
+                取消关注
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </PullToRefresh>
   );

@@ -3,6 +3,7 @@ pub mod douyin;
 pub mod douyin_sign;
 pub mod douyu;
 pub mod huya;
+pub mod reconnect;
 pub mod tars;
 pub mod twitch;
 
