@@ -193,7 +193,40 @@ pub async fn danmaku_connect(
     // the same proxy setting as ordinary browsing so Twitch rooms do not fail
     // before their anonymous IRC connection is started.
     let site = sites::site_with_proxy(&site_id, cookie.clone(), settings.proxy.as_deref())?;
-    let detail = site.get_room_detail(&room_id).await?;
+    // Bilibili danmaku works without a session. When the saved Cookie is
+    // expired, the room detail is still fetched, but the chat connection must
+    // fall back to the anonymous mode instead of silently using a dead uid.
+    // Probe the session concurrently with the detail request so the room
+    // entry latency is unchanged.
+    let (detail, cookie_status) = tokio::join!(
+        site.get_room_detail(&room_id),
+        async {
+            match (&site_id, &cookie) {
+                (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
+                    crate::sites::bilibili::cookie_session_status(
+                        value,
+                        settings.proxy.as_deref(),
+                    )
+                    .await
+                }
+                _ => None,
+            }
+        },
+    );
+    let mut detail = detail?;
+    let mut identity_cookie = cookie.clone();
+    let mut notice: Option<String> = None;
+    if cookie_status == Some(false) {
+        tracing::warn!(
+            room_id = %room_id.trim(),
+            "bilibili cookie expired; danmaku falls back to anonymous mode"
+        );
+        strip_bilibili_danmaku_cookie(&mut detail.raw);
+        identity_cookie = None;
+        notice = Some(
+            "B站 Cookie 已失效，弹幕已切换为匿名模式。请在设置中重新登录。".to_string(),
+        );
+    }
     // Douyin may derive an anonymous `ttwid` / `msToken` while resolving the
     // room. The WSS handshake needs that same in-memory browser session, but
     // transient values must neither reach the frontend nor be persisted.
@@ -208,10 +241,26 @@ pub async fn danmaku_connect(
         &room_id,
         &detail.raw,
         &danmaku_cookie,
-        cookie.as_deref().unwrap_or_default(),
+        identity_cookie.as_deref().unwrap_or_default(),
         settings.proxy.as_deref(),
+        notice,
     )
     .await
+}
+
+/// Remove the account Cookie and viewer identity from cached room detail so a
+/// Bilibili chat connection joins anonymously (`uid = 0`, no session cookie).
+fn strip_bilibili_danmaku_cookie(raw: &mut serde_json::Value) {
+    if let Some(danmaku) = raw.get_mut("danmaku").and_then(serde_json::Value::as_object_mut) {
+        danmaku.insert(
+            "cookie".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        danmaku.insert(
+            "viewer_uid".to_string(),
+            serde_json::Value::Number(0.into()),
+        );
+    }
 }
 
 #[tauri::command]
@@ -549,8 +598,9 @@ pub async fn douyin_danmaku_send(
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_and_reserve_bilibili_send, validate_and_reserve_douyin_send,
-        validate_and_reserve_douyu_send, validate_and_reserve_huya_send,
+        strip_bilibili_danmaku_cookie, validate_and_reserve_bilibili_send,
+        validate_and_reserve_douyin_send, validate_and_reserve_douyu_send,
+        validate_and_reserve_huya_send,
     };
     use crate::state::{
         BilibiliDanmakuSendLimiter, DouyinDanmakuSendLimiter, DouyuDanmakuSendLimiter,
@@ -566,6 +616,27 @@ mod tests {
         // was attempted for the invalid draft above.
         assert!(validate_and_reserve_bilibili_send(&limiter, "123", "你好").is_ok());
         assert!(validate_and_reserve_bilibili_send(&limiter, "123", "第二条").is_err());
+    }
+
+    #[test]
+    fn bilibili_anonymous_strip_removes_cookie_and_viewer_uid() {
+        let mut raw = serde_json::json!({
+            "room_id": 1,
+            "danmaku": {
+                "token": "token",
+                "cookie": "SESSDATA=secret; bili_jct=csrf",
+                "viewer_uid": 42,
+                "server_hosts": ["host-a.example"],
+            }
+        });
+        strip_bilibili_danmaku_cookie(&mut raw);
+
+        assert_eq!(raw["danmaku"]["cookie"], "");
+        assert_eq!(raw["danmaku"]["viewer_uid"], 0);
+        // The connection metadata is untouched: only the session identity is
+        // removed, so the anonymous join keeps the shared token and hosts.
+        assert_eq!(raw["danmaku"]["token"], "token");
+        assert_eq!(raw["danmaku"]["server_hosts"][0], "host-a.example");
     }
 
     #[test]
