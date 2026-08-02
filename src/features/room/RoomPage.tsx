@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Ellipsis, Link2, Share2 } from "lucide-react";
+import { ChevronLeft, Ellipsis, Link2, Share2, UserRoundX } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -17,6 +17,17 @@ import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 
 export function RoomPage() {
@@ -31,6 +42,7 @@ export function RoomPage() {
   const recordedHistoryRoomRef = useRef<string | null>(null);
 
   const [followBusy, setFollowBusy] = useState(false);
+  const [confirmUnfollowOpen, setConfirmUnfollowOpen] = useState(false);
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
   const returnToHome = roomNavigationReturnsHome(location.state);
   const [sideTab, setSideTab] = useState<RoomSideTab>(requestedSideTab);
@@ -183,7 +195,13 @@ export function RoomPage() {
       detail={detail}
       isFollowed={isFollowed}
       followBusy={followBusy}
-      onToggleFollow={() => void toggleFollow()}
+      onToggleFollow={() => {
+        if (isFollowed) {
+          setConfirmUnfollowOpen(true);
+        } else {
+          void toggleFollow();
+        }
+      }}
     />
   );
 
@@ -256,6 +274,50 @@ export function RoomPage() {
           复制直链
         </Button>
       </div>
+
+      <AlertDialog
+        open={confirmUnfollowOpen}
+        onOpenChange={(open) => {
+          if (followBusy) return;
+          setConfirmUnfollowOpen(open);
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <UserRoundX aria-hidden />
+            </AlertDialogMedia>
+            <AlertDialogTitle>取消关注</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定不再关注 {detail.user_name} 吗？取消后将不再显示在关注列表中。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={followBusy}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              variant="destructive"
+              disabled={followBusy}
+              onClick={() => {
+                setConfirmUnfollowOpen(false);
+                void toggleFollow();
+              }}
+            >
+              {followBusy ? (
+                <>
+                  <Spinner data-icon="inline-start" aria-hidden />
+                  正在取消…
+                </>
+              ) : (
+                <>
+                  <UserRoundX data-icon="inline-start" aria-hidden />
+                  取消关注
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

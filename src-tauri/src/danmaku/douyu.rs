@@ -8,7 +8,7 @@
 //! [`ASSERT_NATIVE_TLS_ENABLED`]).
 
 use std::collections::BTreeSet;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{
@@ -30,6 +30,7 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -1928,57 +1929,56 @@ pub async fn send_chat(
     }
 }
 
-/// Read-side reconnect policy: after a drop, wait `2^attempt` seconds (capped
-/// at [`RECONNECT_BACKOFF_MAX_SECS`]) before dialing again. The task itself is
-/// aborted by the danmaku manager when the frontend leaves the room, so this
-/// loop only exits through cancellation.
-const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
-const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
-
-fn reconnect_backoff_secs(attempt: u32) -> u64 {
-    let exp = RECONNECT_BACKOFF_INITIAL_SECS << attempt.min(5);
-    exp.min(RECONNECT_BACKOFF_MAX_SECS)
+fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
+    emit_event(
+        events,
+        DanmakuEvent {
+            kind: DanmakuKind::System,
+            user: "system".into(),
+            is_self: false,
+            user_id: None,
+            content: content.into(),
+            color: None,
+            spans: None,
+            super_chat: None,
+            ts: chrono::Utc::now().timestamp_millis(),
+        },
+    );
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> AppResult<()> {
-    let mut attempt: u32 = 0;
+    let mut policy = ReconnectPolicy::with_defaults("douyu");
     loop {
-        let outcome = run_connection_once(&events, &args).await;
-        let backoff = reconnect_backoff_secs(attempt);
-        attempt += 1;
-        let content = match &outcome {
-            Ok(msg_count) => {
-                format!("弹幕连接断开（已收 {msg_count} 条），{backoff} 秒后自动重连…")
+        let reason = run_connection_once(&events, &args).await;
+        match policy.on_disconnect(reason) {
+            Decision::Retry { delay, notice } => {
+                emit_system(&events, notice);
+                time::sleep(delay).await;
             }
-            Err(e) => format!("弹幕连接失败：{e}，{backoff} 秒后自动重连…"),
-        };
-        tracing::warn!(
-            attempt,
-            backoff_secs = backoff,
-            "douyu danmaku disconnected, reconnecting"
-        );
-        emit_event(
-            &events,
-            DanmakuEvent {
-                kind: DanmakuKind::System,
-                user: "system".into(),
-                is_self: false,
-                user_id: None,
-                content,
-                color: None,
-                spans: None,
-                super_chat: None,
-                ts: chrono::Utc::now().timestamp_millis(),
-            },
-        );
-        time::sleep(Duration::from_secs(backoff)).await;
+            Decision::Stop { notice, .. } => {
+                emit_system(&events, notice);
+                return Ok(());
+            }
+        }
     }
 }
 
 async fn run_connection_once(
     events: &DanmakuEventSender,
     args: &DouyuDanmakuArgs,
-) -> Result<u64, AppError> {
+) -> DisconnectReason {
+    match connect_and_read(events, args).await {
+        Ok(reason) => reason,
+        // Every read-path error here is a dial or transport failure, so it maps
+        // to a transient reason; the policy decides when the streak ends.
+        Err(error) => DisconnectReason::transient(error.message),
+    }
+}
+
+async fn connect_and_read(
+    events: &DanmakuEventSender,
+    args: &DouyuDanmakuArgs,
+) -> Result<DisconnectReason, AppError> {
     emit_event(
         events,
         DanmakuEvent {
@@ -2028,6 +2028,7 @@ async fn run_connection_once(
         },
     );
 
+    let connected_at = Instant::now();
     let mut heartbeat = time::interval(Duration::from_secs(HEARTBEAT_SECS));
     heartbeat.tick().await;
     let mut msg_count: u64 = 0;
@@ -2069,23 +2070,15 @@ async fn run_connection_once(
         }
     }
 
-    Ok(msg_count)
+    Ok(DisconnectReason::Dropped {
+        messages: msg_count,
+        connected_for: connected_at.elapsed(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reconnect_backoff_grows_exponentially_and_caps() {
-        assert_eq!(reconnect_backoff_secs(0), 1);
-        assert_eq!(reconnect_backoff_secs(1), 2);
-        assert_eq!(reconnect_backoff_secs(2), 4);
-        assert_eq!(reconnect_backoff_secs(3), 8);
-        assert_eq!(reconnect_backoff_secs(4), 16);
-        assert_eq!(reconnect_backoff_secs(5), 30);
-        assert_eq!(reconnect_backoff_secs(99), 30);
-    }
 
     #[test]
     fn serialize_roundtrip_body() {

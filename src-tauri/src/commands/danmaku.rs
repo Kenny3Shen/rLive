@@ -198,21 +198,15 @@ pub async fn danmaku_connect(
     // fall back to the anonymous mode instead of silently using a dead uid.
     // Probe the session concurrently with the detail request so the room
     // entry latency is unchanged.
-    let (detail, cookie_status) = tokio::join!(
-        site.get_room_detail(&room_id),
-        async {
-            match (&site_id, &cookie) {
-                (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
-                    crate::sites::bilibili::cookie_session_status(
-                        value,
-                        settings.proxy.as_deref(),
-                    )
+    let (detail, cookie_status) = tokio::join!(site.get_room_detail(&room_id), async {
+        match (&site_id, &cookie) {
+            (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
+                crate::sites::bilibili::cookie_session_status(value, settings.proxy.as_deref())
                     .await
-                }
-                _ => None,
             }
-        },
-    );
+            _ => None,
+        }
+    },);
     let mut detail = detail?;
     let mut identity_cookie = cookie.clone();
     let mut notice: Option<String> = None;
@@ -223,9 +217,7 @@ pub async fn danmaku_connect(
         );
         strip_bilibili_danmaku_cookie(&mut detail.raw);
         identity_cookie = None;
-        notice = Some(
-            "B站 Cookie 已失效，弹幕已切换为匿名模式。请在设置中重新登录。".to_string(),
-        );
+        notice = Some("B站 Cookie 已失效，弹幕已切换为匿名模式。请在设置中重新登录。".to_string());
     }
     // Douyin may derive an anonymous `ttwid` / `msToken` while resolving the
     // room. The WSS handshake needs that same in-memory browser session, but
@@ -251,7 +243,10 @@ pub async fn danmaku_connect(
 /// Remove the account Cookie and viewer identity from cached room detail so a
 /// Bilibili chat connection joins anonymously (`uid = 0`, no session cookie).
 fn strip_bilibili_danmaku_cookie(raw: &mut serde_json::Value) {
-    if let Some(danmaku) = raw.get_mut("danmaku").and_then(serde_json::Value::as_object_mut) {
+    if let Some(danmaku) = raw
+        .get_mut("danmaku")
+        .and_then(serde_json::Value::as_object_mut)
+    {
         danmaku.insert(
             "cookie".to_string(),
             serde_json::Value::String(String::new()),

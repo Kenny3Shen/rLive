@@ -4,7 +4,7 @@
 //! identity. No user OAuth token or saved Cookie is needed to receive public
 //! channel messages.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
@@ -22,6 +22,7 @@ use tokio_tungstenite::{
     tungstenite::Message,
 };
 
+use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -432,10 +433,10 @@ async fn open_https_tunnel(
 }
 
 async fn run_irc_session<S>(
-    events: DanmakuEventSender,
-    args: TwitchDanmakuArgs,
+    events: &DanmakuEventSender,
+    args: &TwitchDanmakuArgs,
     socket: WebSocketStream<S>,
-) -> AppResult<()>
+) -> AppResult<SessionEnd>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -451,7 +452,8 @@ where
     send_irc(&mut write, format!("NICK justinfan{guest_number}")).await?;
     send_irc(&mut write, format!("JOIN #{}", args.channel_login)).await?;
 
-    emit_event(&events, system_event("Twitch 弹幕服务器连接成功"));
+    emit_event(events, system_event("Twitch 弹幕服务器连接成功"));
+    let connected_at = Instant::now();
     let mut message_count = 0_u64;
     while let Some(message) = read.next().await {
         match message {
@@ -463,7 +465,7 @@ where
                     }
                     if let Some(event) = parse_privmsg(line) {
                         message_count += 1;
-                        emit_event(&events, event);
+                        emit_event(events, event);
                     }
                 }
             }
@@ -482,10 +484,19 @@ where
         }
     }
     emit_event(
-        &events,
+        events,
         system_event(format!("Twitch 弹幕连接结束（已收 {message_count} 条）")),
     );
-    Ok(())
+    Ok(SessionEnd {
+        messages: message_count,
+        connected_for: connected_at.elapsed(),
+    })
+}
+
+/// Outcome of one IRC session that reached the chat loop.
+struct SessionEnd {
+    messages: u64,
+    connected_for: Duration,
 }
 
 pub async fn run_loop(
@@ -493,8 +504,41 @@ pub async fn run_loop(
     args: TwitchDanmakuArgs,
     proxy: Option<String>,
 ) -> AppResult<()> {
-    emit_event(&events, system_event("正在连接 Twitch 弹幕服务器…"));
-    match proxy_from_setting(proxy.as_deref())? {
+    // A malformed proxy setting is a local configuration error: every retry
+    // would fail identically, so surface it instead of entering the loop.
+    let proxy = proxy_from_setting(proxy.as_deref())?;
+
+    let mut policy = ReconnectPolicy::with_defaults("twitch");
+    loop {
+        let reason = match connect_and_run(&events, &args, proxy.as_ref()).await {
+            Ok(end) => DisconnectReason::Dropped {
+                messages: end.messages,
+                connected_for: end.connected_for,
+            },
+            // Dial, tunnel, and IRC transport failures are all recoverable;
+            // the policy decides when the streak has gone on too long.
+            Err(error) => DisconnectReason::transient(error.message),
+        };
+        match policy.on_disconnect(reason) {
+            Decision::Retry { delay, notice } => {
+                emit_event(&events, system_event(notice));
+                time::sleep(delay).await;
+            }
+            Decision::Stop { notice, .. } => {
+                emit_event(&events, system_event(notice));
+                return Ok(());
+            }
+        }
+    }
+}
+
+async fn connect_and_run(
+    events: &DanmakuEventSender,
+    args: &TwitchDanmakuArgs,
+    proxy: Option<&ConnectProxy>,
+) -> AppResult<SessionEnd> {
+    emit_event(events, system_event("正在连接 Twitch 弹幕服务器…"));
+    match proxy {
         None => {
             let (socket, _) = connect_async_tls_with_config(IRC_WS_URL, None, false, None)
                 .await
@@ -503,7 +547,7 @@ pub async fn run_loop(
         }
         Some(proxy) => match proxy.scheme {
             ProxyScheme::Http => {
-                let stream = open_http_tunnel(&proxy).await?;
+                let stream = open_http_tunnel(proxy).await?;
                 let (socket, _) = time::timeout(
                     PROXY_CONNECT_TIMEOUT,
                     client_async_tls_with_config(IRC_WS_URL, stream, None, None),
@@ -514,7 +558,7 @@ pub async fn run_loop(
                 run_irc_session(events, args, socket).await
             }
             ProxyScheme::Https => {
-                let stream = open_https_tunnel(&proxy).await?;
+                let stream = open_https_tunnel(proxy).await?;
                 let (socket, _) = time::timeout(
                     PROXY_CONNECT_TIMEOUT,
                     client_async_tls_with_config(IRC_WS_URL, stream, None, None),

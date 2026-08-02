@@ -1,12 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type Hls from "hls.js";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invokeCmd } from "@/shared/api/tauri";
+import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, PlayerUiMode } from "@/shared/types/player";
 import type { AppError } from "@/shared/types/error";
 import type { MpegtsStatic, Player as MpegtsPlayer } from "@/vendor/mpegts";
 import { videoAspectRatio } from "./androidOrientation";
 import { createSerialTaskQueue } from "./serialTaskQueue";
+
+/**
+ * Desktop Tauri (Windows/macOS/Linux) drives fullscreen through the native OS
+ * window rather than the HTML Fullscreen API. WebView2 does not grow the
+ * native window past the work area when the window is maximized, so an HTML
+ * `:fullscreen` element renders at screen height while the viewport is still
+ * only work-area height — the taskbar-height black band users hit at the
+ * bottom. A real window fullscreen covers the taskbar and the stage overlays
+ * the room chrome as an in-page fixed layer.
+ */
+function isTauriDesktop(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in window &&
+    getClientPlatform() === "desktop"
+  );
+}
 
 /** Load vendored UMD from /mpegts.js (public/) — no npm github deps on Windows. */
 export async function loadMpegts(): Promise<MpegtsStatic> {
@@ -980,6 +999,37 @@ export function useWebPlayer(opts: {
     };
   }, []);
 
+  // Desktop Tauri drives fullscreen through the native window, so the OS (F11,
+  // a window manager shortcut, or exiting via the title bar) can change it
+  // without an HTML fullscreenchange event. Reconcile `mode` from the window's
+  // own resize stream so the stage overlay and the control icon stay correct.
+  useEffect(() => {
+    if (!isTauriDesktop()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        const sync = async () => {
+          try {
+            const fullscreen = await appWindow.isFullscreen();
+            if (!disposed) setMode(fullscreen ? "fullscreen" : "windowed");
+          } catch {
+            /* The window may be mid-teardown during a route change. */
+          }
+        };
+        await sync();
+        unlisten = await appWindow.onResized(() => void sync());
+      } catch {
+        // A browser preview without a native window keeps the HTML path above.
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   const togglePause = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -1031,6 +1081,27 @@ export function useWebPlayer(opts: {
   }, []);
 
   const toggleFullscreen = useCallback(async () => {
+    // Desktop Tauri uses a real OS-window fullscreen. This covers the taskbar
+    // (unlike WebView2's HTML fullscreen from a maximized window) and drives
+    // `mode` through the resulting resize; the stage then overlays the room
+    // chrome as a fixed in-page layer (see the CSS rule for data-fullscreen).
+    if (isTauriDesktop()) {
+      try {
+        const appWindow = getCurrentWindow();
+        const next = !(await appWindow.isFullscreen());
+        await appWindow.setFullscreen(next);
+        setMode(next ? "fullscreen" : "windowed");
+        setFullscreenError(null);
+      } catch (e) {
+        const msg =
+          typeof e === "object" && e && "message" in e
+            ? String((e as { message: string }).message)
+            : String(e);
+        setFullscreenError(msg || "全屏切换失败");
+      }
+      return;
+    }
+
     const stage = stageRef.current;
     if (!stage) return;
     try {
@@ -1052,7 +1123,25 @@ export function useWebPlayer(opts: {
   useEffect(() => {
     if (mode !== "fullscreen") return;
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape" && fullscreenElementFor(getFullscreenDocument())) {
+      if (ev.key !== "Escape") return;
+      // Desktop Tauri drives fullscreen through the native window, which has no
+      // HTML fullscreen element to exit. Leave the OS window fullscreen and let
+      // the resulting resize move `mode` back to windowed.
+      if (isTauriDesktop()) {
+        void (async () => {
+          try {
+            const appWindow = getCurrentWindow();
+            if (await appWindow.isFullscreen()) {
+              await appWindow.setFullscreen(false);
+              setMode("windowed");
+            }
+          } catch {
+            /* A missing native window action must not trap the user. */
+          }
+        })();
+        return;
+      }
+      if (fullscreenElementFor(getFullscreenDocument())) {
         const documentRef = getFullscreenDocument();
         const exit =
           documentRef?.exitFullscreen ??

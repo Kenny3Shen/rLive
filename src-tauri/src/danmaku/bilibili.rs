@@ -11,6 +11,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 
+use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuContentSpan, DanmakuEvent, DanmakuKind, SuperChatInfo};
@@ -69,8 +70,6 @@ const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Dan
 /// Source of the WBI signing keys required by `getDanmuInfo`.
 const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
-const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 
 /// Whether a saved browser Cookie contains the two values required for the
 /// Bilibili live chat write endpoint.  This intentionally exposes only a
@@ -958,7 +957,12 @@ const CLOSE_GRACE_PERIOD: Duration = Duration::from_secs(2);
 struct ConnectionEnd {
     message_count: u64,
     authenticated: bool,
+    /// Set when the gateway explicitly rejected the join credential. The token
+    /// is short-lived, so one rejection is worth a refresh-and-retry; a second
+    /// one after a fresh token means the Cookie itself is no longer valid.
+    auth_rejected: bool,
     reason: String,
+    connected_for: Duration,
 }
 
 fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
@@ -976,32 +980,6 @@ fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
             ts: chrono::Utc::now().timestamp_millis(),
         },
     );
-}
-
-fn reconnect_delay(attempt: u32) -> Duration {
-    let multiplier = 1_u64 << attempt.min(5);
-    let seconds = RECONNECT_INITIAL_DELAY
-        .as_secs()
-        .saturating_mul(multiplier)
-        .min(RECONNECT_MAX_DELAY.as_secs());
-    Duration::from_secs(seconds)
-}
-
-/// Advance gateway rotation on every reconnect while backing off only the
-/// consecutive failures that never completed websocket authentication.
-fn next_reconnect_state(
-    host_attempt: u32,
-    pre_auth_failures: u32,
-    authenticated: bool,
-) -> (u32, u32) {
-    (
-        host_attempt.wrapping_add(1),
-        if authenticated {
-            0
-        } else {
-            pre_auth_failures.saturating_add(1)
-        },
-    )
 }
 
 /// Fetch WBI signing keys from `nav`.
@@ -1144,7 +1122,9 @@ async fn run_connection(
             return ConnectionEnd {
                 message_count: 0,
                 authenticated: false,
+                auth_rejected: false,
                 reason: format!("构造连接请求失败: {error}"),
+                connected_for: Duration::ZERO,
             };
         }
     };
@@ -1170,10 +1150,13 @@ async fn run_connection(
             return ConnectionEnd {
                 message_count: 0,
                 authenticated: false,
+                auth_rejected: false,
                 reason: format!("连接失败: {error}"),
+                connected_for: Duration::ZERO,
             };
         }
     };
+    let connected_at = time::Instant::now();
     let (mut write, mut read) = ws.split();
 
     // Auth / join. `uid` must be viewer mid (or 0).
@@ -1192,7 +1175,9 @@ async fn run_connection(
         return ConnectionEnd {
             message_count: 0,
             authenticated: false,
+            auth_rejected: false,
             reason: format!("认证发送失败: {error}"),
+            connected_for: connected_at.elapsed(),
         };
     }
 
@@ -1207,6 +1192,7 @@ async fn run_connection(
     idle_check.tick().await;
 
     let mut auth_ok = false;
+    let mut auth_rejected = false;
     let mut msg_count: u64 = 0;
     let mut last_inbound = time::Instant::now();
     let reason = loop {
@@ -1234,7 +1220,10 @@ async fn run_connection(
                                             auth_ok = true;
                                             emit_system(events, "弹幕服务器连接成功");
                                         }
-                                        Some(Err(code)) => break format!("认证被 B站拒绝（code={code}）"),
+                                        Some(Err(code)) => {
+                                            auth_rejected = true;
+                                            break format!("认证被 B站拒绝（code={code}）");
+                                        }
                                         None => {}
                                     }
                                 }
@@ -1283,7 +1272,9 @@ async fn run_connection(
     ConnectionEnd {
         message_count: msg_count,
         authenticated: auth_ok,
+        auth_rejected,
         reason,
+        connected_for: connected_at.elapsed(),
     }
 }
 
@@ -1302,56 +1293,75 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
     }
 
     let refresh_client = crate::http_client::default_client();
-    // Keep host rotation separate from pre-auth backoff.  A healthy socket
-    // resets the latter, but it must not pin every later reconnect to the
-    // first backup gateway after the primary closes a long-lived connection.
+    // Host rotation stays independent of the reconnect policy: even a healthy
+    // socket that Bilibili closes should try the next edge rather than pinning
+    // every later attempt to one gateway.
     let mut host_attempt = 0_u32;
-    let mut pre_auth_failures = 0_u32;
-    let mut total_messages = 0_u64;
+    // A token is short-lived, so the first rejection is worth one refresh; a
+    // second rejection with a freshly fetched token means the credential
+    // itself is not accepted, and no amount of retrying will change that.
+    let mut token_refreshed_after_rejection = false;
+    let mut policy = ReconnectPolicy::with_defaults("bilibili");
 
     loop {
         let host = args.host_for_attempt(host_attempt).to_string();
-        if total_messages == 0 && host_attempt == 0 {
+        if policy.attempts() == 0 {
             emit_system(&events, "正在连接弹幕服务器…");
         } else {
             emit_system(&events, "正在重连弹幕服务器…");
         }
 
         let ended = run_connection(&events, &args, &host).await;
-        total_messages = total_messages.saturating_add(ended.message_count);
         tracing::warn!(
             host = %host,
             received = ended.message_count,
-            total_received = total_messages,
             authenticated = ended.authenticated,
+            auth_rejected = ended.auth_rejected,
             reason = %ended.reason,
             "bilibili danmaku connection interrupted; scheduling reconnect"
         );
 
-        // A socket that had authenticated is a fresh failure sequence: retry
-        // promptly. Consecutive failures before auth back off exponentially.
-        let delay = reconnect_delay(pre_auth_failures);
-        emit_system(
-            &events,
-            format!(
-                "弹幕连接中断，{} 秒后自动重连（已收 {total_messages} 条）",
-                delay.as_secs()
-            ),
-        );
-        time::sleep(delay).await;
+        let reason = if ended.auth_rejected && token_refreshed_after_rejection {
+            DisconnectReason::fatal(format!(
+                "{}（请在设置中重新保存 B 站 Cookie）",
+                ended.reason
+            ))
+        } else if ended.authenticated || ended.message_count > 0 {
+            DisconnectReason::Dropped {
+                messages: ended.message_count,
+                connected_for: ended.connected_for,
+            }
+        } else {
+            DisconnectReason::transient(ended.reason.clone())
+        };
+        let rejected = ended.auth_rejected;
+
+        match policy.on_disconnect(reason) {
+            Decision::Retry { delay, notice } => {
+                emit_system(&events, notice);
+                time::sleep(delay).await;
+            }
+            Decision::Stop { notice, .. } => {
+                emit_system(&events, notice);
+                return Ok(());
+            }
+        }
 
         // Tokens and edge hosts are short-lived. Refreshing before each retry
         // handles token expiry and lets us leave an unhealthy gateway, while
         // retaining the previous values if Bilibili's metadata endpoint is
         // temporarily unavailable.
-        if let Err(error) = refresh_connection_info(&refresh_client, &mut args).await {
-            tracing::warn!(error = %error, room_id = args.room_id, "bilibili danmaku refresh failed; using previous connection info");
+        match refresh_connection_info(&refresh_client, &mut args).await {
+            Ok(()) => {
+                if rejected {
+                    token_refreshed_after_rejection = true;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, room_id = args.room_id, "bilibili danmaku refresh failed; using previous connection info");
+            }
         }
-        // Always advance independently of the backoff counter.  In
-        // particular, authenticated disconnects reset backoff but still need
-        // to try the next Bilibili edge rather than retrying one host forever.
-        (host_attempt, pre_auth_failures) =
-            next_reconnect_state(host_attempt, pre_auth_failures, ended.authenticated);
+        host_attempt = host_attempt.wrapping_add(1);
     }
 }
 
@@ -1690,29 +1700,6 @@ mod tests {
             args.server_hosts,
             ["legacy-primary.example", "legacy-backup.example"]
         );
-    }
-
-    #[test]
-    fn reconnect_backoff_is_bounded() {
-        assert_eq!(reconnect_delay(0), Duration::from_secs(1));
-        assert_eq!(reconnect_delay(1), Duration::from_secs(2));
-        assert_eq!(reconnect_delay(5), Duration::from_secs(30));
-        assert_eq!(reconnect_delay(u32::MAX), Duration::from_secs(30));
-    }
-
-    #[test]
-    fn authenticated_disconnects_rotate_hosts_without_carrying_backoff() {
-        let (next_host, next_failures) = next_reconnect_state(0, 4, true);
-        assert_eq!(next_host, 1);
-        assert_eq!(next_failures, 0);
-
-        let (third_host, next_failures) = next_reconnect_state(next_host, next_failures, true);
-        assert_eq!(third_host, 2);
-        assert_eq!(next_failures, 0);
-
-        let (after_failed_host, failures) = next_reconnect_state(third_host, next_failures, false);
-        assert_eq!(after_failed_host, 3);
-        assert_eq!(failures, 1);
     }
 
     #[test]

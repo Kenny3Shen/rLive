@@ -1180,6 +1180,7 @@ export function PlayerPane({
           <div
             ref={player.stageRef}
             data-player-stage
+            data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
             className={cn(
               "relative min-h-0 flex-1 overflow-hidden bg-black",
               androidClient && showHost && "touch-none",
