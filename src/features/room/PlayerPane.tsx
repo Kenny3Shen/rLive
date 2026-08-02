@@ -1343,6 +1343,8 @@ export function PlayerPane({
                 loadError={loadError}
                 disabled={transportDisabled}
                 overlay
+                compact={compactViewport}
+                portalContainer={player.stageRef}
                 centerSlot={
                   <DanmakuComposer
                     siteId={siteId}

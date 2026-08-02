@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
@@ -26,6 +26,24 @@ export function Shell() {
   const isIptvPlayer = pathname === "/iptv/play";
   const isImmersivePlayer = isRoom || isIptvPlayer;
   const isFollow = pathname === "/follow";
+
+  // React Router records each pushState entry with an incrementing `idx`.
+  // Comparing it across renders tells the tab transition which way the user
+  // moved through history so the incoming page can slide in from that side.
+  // Written idempotently during render, the refs only mirror the last view.
+  const historyIndex = typeof window !== "undefined" ? ((window.history.state as { idx?: number } | null)?.idx ?? 0) : 0;
+  const prevPathRef = useRef(pathname);
+  const prevHistoryIndexRef = useRef(historyIndex);
+  const isTabNavigation =
+    pathname !== prevPathRef.current && historyIndex !== prevHistoryIndexRef.current;
+  const tabDirection: "forward" | "backward" | null = isTabNavigation
+    ? historyIndex > prevHistoryIndexRef.current
+      ? "forward"
+      : "backward"
+    : null;
+  prevPathRef.current = pathname;
+  prevHistoryIndexRef.current = historyIndex;
+
   const selectedSiteId = useSettingsStore((state) => state.siteId);
   const setSiteId = useSettingsStore((state) => state.setSiteId);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
@@ -169,7 +187,11 @@ export function Shell() {
                 "relative",
                 outletHeightClass,
                 !isImmersivePlayer &&
-                  "motion-safe:animate-platform-page-enter motion-reduce:animate-none",
+                  (tabDirection === "forward"
+                    ? "animate-tab-page-enter-forward"
+                    : tabDirection === "backward"
+                      ? "animate-tab-page-enter-backward"
+                      : "motion-safe:animate-platform-page-enter motion-reduce:animate-none"),
               )}
             >
               <div className={cn("relative", outletHeightClass)}>

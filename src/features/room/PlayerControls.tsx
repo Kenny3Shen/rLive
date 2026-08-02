@@ -5,7 +5,6 @@ import {
   Check,
   Maximize2,
   Minimize2,
-  MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Pause,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
@@ -56,6 +56,18 @@ export type PlayerControlsProps = {
   /** Optional compact content centered between transport and room controls. */
   centerSlot?: ReactNode;
   /**
+   * Compact viewport (portrait phones + short landscape). Drops desktop-only
+   * keyboard hints from labels so the chrome reads shorter on a small screen.
+   */
+  compact?: boolean;
+  /**
+   * Portal target for the settings/volume popovers. Under a `:fullscreen`
+   * ancestor the top layer owns the stacking context, so a portal rendered to
+   * <body> stacks beneath the fullscreen element — render inside the stage
+   * instead so the popover stays above the controls bar.
+   */
+  portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
+  /**
    * The menu content is portalled outside the player stage. Tell the stage
    * when one is open so its idle timer cannot fade out beneath a menu.
    */
@@ -80,6 +92,8 @@ type ControlButtonProps = Omit<
 > & {
   label: string;
   children: ReactNode;
+  /** Desktop hover tooltip. Disabled on compact touch layouts. */
+  tooltip?: boolean;
 };
 
 /**
@@ -96,6 +110,7 @@ function ControlButton({
   disabled,
   variant = "ghost",
   className,
+  tooltip = true,
   ...props
 }: ControlButtonProps) {
   const button = (
@@ -110,6 +125,8 @@ function ControlButton({
       {children}
     </Button>
   );
+
+  if (!tooltip) return button;
 
   return (
     <Tooltip>
@@ -137,7 +154,9 @@ export function PlayerControls({
   pictureInPictureDisabled = false,
   disabled = false,
   overlay = false,
+  compact = false,
   centerSlot,
+  portalContainer,
   onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
@@ -154,10 +173,32 @@ export function PlayerControls({
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
-  const [mobileOptionsOpen, setMobileOptionsOpen] = useState(false);
+  // Mobile settings open as a drawer: bottom sheet in portrait, right side in
+  // landscape. Track orientation so the drawer matches the current posture.
+  const [portrait, setPortrait] = useState<boolean>(() =>
+    typeof window !== "undefined" && window.matchMedia("(orientation: portrait)").matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(orientation: portrait)");
+    const update = () => setPortrait(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
   const isMuted = muted || volume === 0;
   const volumeLabel = "调节音量";
-  const muteLabel = isMuted ? "取消静音（M）" : "静音（M）";
+  // Desktop shows keyboard hints（M）因为鼠标 hover tooltip 有空间；移动端屏小
+  // 又无物理键盘，提示串只会让 tooltip/aria-label 更长。compact 下精简到动词。
+  const muteLabel = isMuted ? "取消静音" : "静音";
+  const pauseLabel = compact ? "播放" : "播放（Space / K）";
+  const pauseActiveLabel = compact ? "暂停" : "暂停（Space / K）";
+  const fullscreenLabel = compact
+    ? fullscreen
+      ? "退出全屏"
+      : "全屏"
+    : fullscreen
+      ? "退出全屏（F）"
+      : "全屏（F）";
   const overlayButtonClass = overlay
     ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
     : undefined;
@@ -167,7 +208,7 @@ export function PlayerControls({
   const overlayStreamSettingsOptionClass = overlay
     ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
     : undefined;
-  const overlayInteractionOpen = volumeOpen || streamSettingsOpen || mobileOptionsOpen;
+  const overlayInteractionOpen = volumeOpen || streamSettingsOpen;
 
   useEffect(() => {
     onOverlayInteractionChange?.(overlayInteractionOpen);
@@ -181,16 +222,15 @@ export function PlayerControls({
   );
 
   useEffect(() => {
-    if (!volumeOpen && !streamSettingsOpen && !mobileOptionsOpen) return;
+    if (!volumeOpen && !streamSettingsOpen) return;
     const closeOnAndroidBack = (event: Event) => {
       event.preventDefault();
       setVolumeOpen(false);
       setStreamSettingsOpen(false);
-      setMobileOptionsOpen(false);
     };
     window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
     return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-  }, [mobileOptionsOpen, streamSettingsOpen, volumeOpen]);
+  }, [streamSettingsOpen, volumeOpen]);
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
@@ -213,9 +253,101 @@ export function PlayerControls({
     .filter(Boolean)
     .join("，");
   const closeStreamSettings = () => setStreamSettingsOpen(false);
+  /**
+   * Shared trigger glyph. On desktop this button *is* the popover trigger, so it
+   * doubles as the positioning anchor — rendering a separate anchor would leave a
+   * stray default-variant button visible in the bar.
+   */
+  const streamSettingsTriggerProps = {
+    variant: "ghost",
+    size: "icon-sm",
+    disabled: streamSettingsDisabled,
+    "aria-label": streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : "播放设置",
+    className: cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass),
+  } as const;
   const danmakuControl = danmakuControlPresentation(osdOn);
   const DanmakuControlIcon = danmakuControl.icon === "captions" ? Captions : CaptionsOff;
   const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
+  /** Shared body of the stream settings popover/drawer. */
+  const streamSettingsBody = (
+    <>
+      {qualities.length > 0 && (
+        <div className="flex flex-col gap-0.5 max-md:gap-px">
+          <span
+            className={cn(
+              "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
+              overlay && "text-white/60",
+            )}
+          >
+            清晰度
+          </span>
+          {qualities.map((quality, index) => {
+            const selected = index === qualityIndex;
+            return (
+              <Button
+                key={`${quality.quality}-${index}`}
+                variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
+                size="sm"
+                className={cn(
+                  "w-full justify-between max-md:h-10",
+                  overlayStreamSettingsOptionClass,
+                  overlay && selected && "bg-white/18 text-white",
+                )}
+                aria-pressed={selected}
+                onClick={() => {
+                  onQualityChange(index);
+                  closeStreamSettings();
+                }}
+              >
+                <span className="truncate">{qualityLabel(index)}</span>
+                {selected && <Check data-icon="inline-end" aria-hidden />}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+
+      {qualities.length > 0 && lines.length > 0 && (
+        <Separator className={cn("my-1 max-md:my-0.5", overlay && "bg-white/10")} />
+      )}
+
+      {lines.length > 0 && (
+        <div className="flex flex-col gap-0.5 max-md:gap-px">
+          <span
+            className={cn(
+              "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
+              overlay && "text-white/60",
+            )}
+          >
+            线路
+          </span>
+          {lines.map((line, index) => {
+            const selected = index === lineIndex;
+            return (
+              <Button
+                key={`${line.url}-${index}`}
+                variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
+                size="sm"
+                className={cn(
+                  "w-full justify-between max-md:h-10",
+                  overlayStreamSettingsOptionClass,
+                  overlay && selected && "bg-white/18 text-white",
+                )}
+                aria-pressed={selected}
+                onClick={() => {
+                  onLineChange(index);
+                  closeStreamSettings();
+                }}
+              >
+                <span className="truncate">{lineLabel(line.url, index)}</span>
+                {selected && <Check data-icon="inline-end" aria-hidden />}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
   return (
     <div
       className={cn(
@@ -234,15 +366,17 @@ export function PlayerControls({
             className={cn(overlayButtonClass)}
             disabled={refreshDisabled}
             onClick={onRefresh}
+            tooltip={!compact}
           >
             <RefreshCw />
           </ControlButton>
         )}
         <ControlButton
-          label={paused ? "播放（Space / K）" : "暂停（Space / K）"}
+          label={paused ? pauseLabel : pauseActiveLabel}
           className={overlayButtonClass}
           disabled={disabled}
           onClick={onTogglePause}
+          tooltip={!compact}
         >
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
@@ -267,6 +401,7 @@ export function PlayerControls({
             <Volume2 />
           </PopoverTrigger>
           <PopoverContent
+            container={portalContainer}
             side="top"
             align="start"
             className={cn(
@@ -296,6 +431,7 @@ export function PlayerControls({
           disabled={disabled}
           aria-pressed={isMuted}
           onClick={onToggleMute}
+          tooltip={!compact}
         >
           {isMuted ? <VolumeX /> : <Volume2 />}
         </ControlButton>
@@ -315,241 +451,77 @@ export function PlayerControls({
       <div className="hidden min-w-0 flex-1 justify-center px-1 md:flex">{centerSlot}</div>
 
       <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1 max-md:overflow-visible">
-        {hasStreamSettings && (
-          <div className="hidden md:block">
+        {hasStreamSettings &&
+          (compact ? (
+            <>
+              <Button
+                {...streamSettingsTriggerProps}
+                aria-expanded={streamSettingsOpen}
+                onClick={() => setStreamSettingsOpen((open) => !open)}
+              >
+                <Settings data-icon="inline-start" aria-hidden />
+              </Button>
+              <Drawer open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
+                <DrawerContent
+                  side={portrait ? "bottom" : "right"}
+                  container={portalContainer}
+                  className={cn(overlayStreamSettingsContentClass)}
+                >
+                  <DrawerTitle
+                    className={cn(
+                      "px-1 pb-1 text-xs font-medium text-muted-foreground",
+                      overlay && "text-white/60",
+                    )}
+                  >
+                    播放设置
+                  </DrawerTitle>
+                  {streamSettingsBody}
+                </DrawerContent>
+              </Drawer>
+            </>
+          ) : (
             <Popover open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
               <PopoverTrigger
                 openOnHover
                 delay={120}
                 closeDelay={180}
                 render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled={streamSettingsDisabled}
-                    aria-label={
-                      streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : "播放设置"
-                    }
-                    className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
-                  />
+                  <Button {...streamSettingsTriggerProps}>
+                    <Settings data-icon="inline-start" aria-hidden />
+                  </Button>
                 }
-              >
-                <Settings data-icon="inline-start" aria-hidden />
-              </PopoverTrigger>
+              />
               <PopoverContent
+                container={portalContainer}
                 side="top"
                 align="end"
-                className={cn("z-50 w-56 gap-0 p-1.5", overlayStreamSettingsContentClass)}
+                collisionBoundary={
+                  typeof document !== "undefined" ? document.documentElement : undefined
+                }
+                collisionPadding={{
+                  top: 24,
+                  right: 12,
+                  bottom: 12,
+                  left: 12,
+                }}
+                sticky
+                className={cn(
+                  "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))] gap-0 overflow-y-auto p-1.5",
+                  overlayStreamSettingsContentClass,
+                )}
               >
-                {qualities.length > 0 && (
-                  <div className="flex flex-col gap-0.5">
-                    <span
-                      className={cn(
-                        "px-2 pt-1 text-xs text-muted-foreground",
-                        overlay && "text-white/60",
-                      )}
-                    >
-                      清晰度
-                    </span>
-                    {qualities.map((quality, index) => {
-                      const selected = index === qualityIndex;
-                      return (
-                        <Button
-                          key={`${quality.quality}-${index}`}
-                          variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
-                          size="sm"
-                          className={cn(
-                            "w-full justify-between max-md:h-11",
-                            overlayStreamSettingsOptionClass,
-                            overlay && selected && "bg-white/18 text-white",
-                          )}
-                          aria-pressed={selected}
-                          onClick={() => {
-                            onQualityChange(index);
-                            closeStreamSettings();
-                          }}
-                        >
-                          <span className="truncate">{qualityLabel(index)}</span>
-                          {selected && <Check data-icon="inline-end" aria-hidden />}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {qualities.length > 0 && lines.length > 0 && (
-                  <Separator className={cn("my-1", overlay && "bg-white/10")} />
-                )}
-
-                {lines.length > 0 && (
-                  <div className="flex flex-col gap-0.5">
-                    <span
-                      className={cn(
-                        "px-2 pt-1 text-xs text-muted-foreground",
-                        overlay && "text-white/60",
-                      )}
-                    >
-                      线路
-                    </span>
-                    {lines.map((line, index) => {
-                      const selected = index === lineIndex;
-                      return (
-                        <Button
-                          key={`${line.url}-${index}`}
-                          variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
-                          size="sm"
-                          className={cn(
-                            "w-full justify-between max-md:h-11",
-                            overlayStreamSettingsOptionClass,
-                            overlay && selected && "bg-white/18 text-white",
-                          )}
-                          aria-pressed={selected}
-                          onClick={() => {
-                            onLineChange(index);
-                            closeStreamSettings();
-                          }}
-                        >
-                          <span className="truncate">{lineLabel(line.url, index)}</span>
-                          {selected && <Check data-icon="inline-end" aria-hidden />}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                )}
+                <PopoverTitle
+                  className={cn(
+                    "px-2 py-1 text-xs font-medium text-muted-foreground max-md:py-0.5",
+                    overlay && "text-white/60",
+                  )}
+                >
+                  播放设置
+                </PopoverTitle>
+                {streamSettingsBody}
               </PopoverContent>
             </Popover>
-          </div>
-        )}
-
-        <Popover open={mobileOptionsOpen} onOpenChange={setMobileOptionsOpen}>
-          <PopoverTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="更多播放选项"
-                className={cn(
-                  CONTROL_ICON_CLASS,
-                  "size-11 touch-manipulation md:hidden",
-                  overlayButtonClass,
-                )}
-              />
-            }
-          >
-            <MoreHorizontal data-icon="inline-start" aria-hidden />
-          </PopoverTrigger>
-          <PopoverContent
-            side="top"
-            align="end"
-            className={cn(
-              "z-50 max-h-[min(26rem,calc(100dvh-5rem))] w-64 gap-1.5 overflow-y-auto p-1.5",
-              overlayStreamSettingsContentClass,
-            )}
-          >
-            <PopoverTitle
-              className={cn(
-                "px-2 py-1 text-xs font-medium text-muted-foreground",
-                overlay && "text-white/60",
-              )}
-            >
-              更多播放选项
-            </PopoverTitle>
-
-            {(qualities.length > 1 || lines.length > 1) && (
-              <>
-                <div className="flex flex-col gap-0.5">
-                  <span
-                    className={cn(
-                      "px-2 pt-1 text-xs text-muted-foreground",
-                      overlay && "text-white/60",
-                    )}
-                  >
-                    播放设置
-                  </span>
-                  {qualities.length > 1 &&
-                    qualities.map((quality, index) => {
-                      const selected = index === qualityIndex;
-                      return (
-                        <Button
-                          key={`mobile-quality-${quality.quality}-${index}`}
-                          type="button"
-                          variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
-                          size="sm"
-                          className={cn(
-                            "h-11 w-full justify-between",
-                            overlayStreamSettingsOptionClass,
-                            overlay && selected && "bg-white/18 text-white",
-                          )}
-                          disabled={disabled}
-                          aria-pressed={selected}
-                          onClick={() => {
-                            onQualityChange(index);
-                            setMobileOptionsOpen(false);
-                          }}
-                        >
-                          <span className="truncate">清晰度 · {qualityLabel(index)}</span>
-                          {selected && <Check data-icon="inline-end" aria-hidden />}
-                        </Button>
-                      );
-                    })}
-                  {lines.length > 1 &&
-                    lines.map((line, index) => {
-                      const selected = index === lineIndex;
-                      return (
-                        <Button
-                          key={`mobile-line-${line.url}-${index}`}
-                          type="button"
-                          variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
-                          size="sm"
-                          className={cn(
-                            "h-11 w-full justify-between",
-                            overlayStreamSettingsOptionClass,
-                            overlay && selected && "bg-white/18 text-white",
-                          )}
-                          disabled={disabled}
-                          aria-pressed={selected}
-                          onClick={() => {
-                            onLineChange(index);
-                            setMobileOptionsOpen(false);
-                          }}
-                        >
-                          <span className="truncate">线路 · {lineLabel(line.url, index)}</span>
-                          {selected && <Check data-icon="inline-end" aria-hidden />}
-                        </Button>
-                      );
-                    })}
-                </div>
-              </>
-            )}
-
-            {pictureInPictureSupported && onTogglePictureInPicture && (
-              <>
-                {(onRefresh || qualities.length > 1 || lines.length > 1) && (
-                  <Separator className={cn("my-1", overlay && "bg-white/10")} />
-                )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "h-11 w-full justify-start",
-                    overlayStreamSettingsOptionClass,
-                    overlay && pictureInPictureActive && "bg-white/18 text-white",
-                  )}
-                  disabled={disabled || pictureInPictureDisabled}
-                  aria-pressed={pictureInPictureActive}
-                  onClick={() => {
-                    onTogglePictureInPicture();
-                    setMobileOptionsOpen(false);
-                  }}
-                >
-                  <PictureInPicture2 data-icon="inline-start" aria-hidden />
-                  {pictureInPictureActive ? "退出画中画" : "画中画"}
-                </Button>
-              </>
-            )}
-          </PopoverContent>
-        </Popover>
+          ))}
 
         {onToggleOsd && (
           <ControlButton
@@ -559,38 +531,42 @@ export function PlayerControls({
             disabled={disabled}
             aria-pressed={danmakuControl.enabled}
             onClick={onToggleOsd}
+            tooltip={!compact}
           >
             <DanmakuControlIcon data-icon="inline-start" aria-hidden />
           </ControlButton>
         )}
-        <ControlButton
-          label={resolvedSidePanelLabel}
-          variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
-          className={overlayButtonClass}
-          aria-pressed={sidePanelOpen}
-          onClick={onToggleSidePanel}
-        >
-          {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-        </ControlButton>
+        {!compact && (
+          <ControlButton
+            label={resolvedSidePanelLabel}
+            variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
+            className={overlayButtonClass}
+            aria-pressed={sidePanelOpen}
+            onClick={onToggleSidePanel}
+            tooltip={!compact}
+          >
+            {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+          </ControlButton>
+        )}
         {pictureInPictureSupported && onTogglePictureInPicture && (
-          <div className="hidden md:block">
-            <ControlButton
-              label={pictureInPictureActive ? "退出画中画" : "画中画"}
-              className={overlayButtonClass}
-              disabled={disabled || pictureInPictureDisabled}
-              aria-pressed={pictureInPictureActive}
-              onClick={onTogglePictureInPicture}
-            >
-              <PictureInPicture2 />
-            </ControlButton>
-          </div>
+          <ControlButton
+            label={pictureInPictureActive ? "退出画中画" : "画中画"}
+            className={overlayButtonClass}
+            disabled={disabled || pictureInPictureDisabled}
+            aria-pressed={pictureInPictureActive}
+            onClick={onTogglePictureInPicture}
+            tooltip={!compact}
+          >
+            <PictureInPicture2 />
+          </ControlButton>
         )}
         <ControlButton
-          label={fullscreen ? "退出全屏（F）" : "全屏（F）"}
+          label={fullscreenLabel}
           className={overlayButtonClass}
           disabled={disabled}
           aria-pressed={fullscreen}
           onClick={onToggleFullscreen}
+          tooltip={!compact}
         >
           {fullscreen ? (
             <Minimize2 data-icon="inline-start" aria-hidden />

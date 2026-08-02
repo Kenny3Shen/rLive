@@ -38,7 +38,7 @@ function SidebarLink({
       data-slot="app-sidebar-link"
       className={({ isActive }) =>
         cn(
-          "group relative flex h-10 w-10 items-center justify-center rounded-xl transition-[background-color,color,box-shadow,transform] duration-150 focus-ring max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1",
+          "group relative flex h-10 w-10 items-center justify-center rounded-xl transition-[background-color,color,box-shadow,transform] duration-150 focus-ring max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1 max-md:active:scale-90",
           className,
           isActive
             ? "bg-primary/12 text-primary ring-1 ring-primary/15 shadow-sm shadow-primary/10"
@@ -54,10 +54,7 @@ function SidebarLink({
               isActive && "text-primary",
             )}
           />
-          <span
-            data-slot="app-sidebar-label"
-            className="sr-only max-md:not-sr-only max-md:text-[10px] max-md:leading-none"
-          >
+          <span data-slot="app-sidebar-label" className="sr-only">
             {label}
           </span>
         </>
