@@ -544,6 +544,7 @@ function AccountCard({
                       setManualError(null);
                     }}
                     rows={6}
+                    className="max-h-[40vh] overflow-y-auto resize-y"
                     placeholder={placeholder}
                     spellCheck={false}
                     autoComplete="off"
