@@ -1337,7 +1337,10 @@ export function PlayerPane({
                 lines={lines}
                 lineIndex={lineIndex}
                 fullscreen={player.mode === "fullscreen"}
-                pictureInPictureSupported={showHost && player.pictureInPictureSupported}
+                // Capability is device-level and stable; keep the control
+                // mounted so reconnect loops (loading toggling) cannot make
+                // the chrome flicker. transportDisabled covers unusable states.
+                pictureInPictureSupported={player.pictureInPictureSupported}
                 pictureInPictureActive={player.pictureInPictureActive}
                 pictureInPictureDisabled={!player.running || player.mode === "fullscreen"}
                 loadError={loadError}

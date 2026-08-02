@@ -434,7 +434,10 @@ export function useWebPlayer(opts: {
     const video = videoRef.current;
     void exitPictureInPictureForVideo(getPictureInPictureDocument(), video);
     setPictureInPictureActive(false);
-    setPictureInPictureSupported(false);
+    // `pictureInPictureSupported` is a device/document capability, not a
+    // per-stream state. Clearing it here made the control unmount on every
+    // teardown, so a stall's reconnect loop flickered the button in and out.
+    // Leave it sticky; `togglePictureInPicture` re-checks availability anyway.
 
     const hls = hlsRef.current;
     hlsRef.current = null;
@@ -891,7 +894,8 @@ export function useWebPlayer(opts: {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) {
-      setPictureInPictureSupported(false);
+      // A momentary null (mid mediaKey swap) is not a loss of the device
+      // capability. Only the active flag, which is element-specific, resets.
       setPictureInPictureActive(false);
       return;
     }
@@ -901,7 +905,11 @@ export function useWebPlayer(opts: {
       // A leave event from the <video> that was just replaced must never
       // overwrite the state of the new MediaSource node.
       if (videoRef.current !== video) return;
-      setPictureInPictureSupported(canUsePictureInPicture(pictureInPictureDocument, video));
+      // Support is monotonic: latch it on once so a reconnect loop cannot
+      // unmount the control. `canUsePictureInPicture` gates the actual toggle.
+      if (canUsePictureInPicture(pictureInPictureDocument, video)) {
+        setPictureInPictureSupported(true);
+      }
       setPictureInPictureActive(pictureInPictureDocument?.pictureInPictureElement === video);
     };
 
