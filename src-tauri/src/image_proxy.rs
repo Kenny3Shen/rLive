@@ -9,8 +9,8 @@
 //! responses for small image bodies). Started lazily on first use and kept
 //! for the app lifetime.
 
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use reqwest::Url;
 use tauri::async_runtime::JoinHandle;
@@ -90,11 +90,9 @@ impl ImageProxy {
 
         // Bind outside the lock so a concurrent second call merely drops its
         // uninstalled listener instead of waiting on a held mutex.
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| {
-                AppError::new("image_proxy_bind", format!("bind localhost failed: {e}")).retryable()
-            })?;
+        let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
+            AppError::new("image_proxy_bind", format!("bind localhost failed: {e}")).retryable()
+        })?;
         let port = listener
             .local_addr()
             .map_err(|e| AppError::new("image_proxy_bind", e.to_string()))?
@@ -217,14 +215,8 @@ async fn handle_image_request(
     let target = parts.next().unwrap_or("");
 
     if method == "OPTIONS" {
-        return write_response_bytes(
-            socket,
-            204,
-            "No Content",
-            "text/plain; charset=utf-8",
-            &[],
-        )
-        .await;
+        return write_response_bytes(socket, 204, "No Content", "text/plain; charset=utf-8", &[])
+            .await;
     }
     if method != "GET" && method != "HEAD" {
         return write_response_bytes(
@@ -267,10 +259,7 @@ async fn handle_image_request(
         request = request.header("referer", referer);
     }
 
-    let upstream = request
-        .send()
-        .await
-        .map_err(|e| format!("upstream: {e}"))?;
+    let upstream = request.send().await.map_err(|e| format!("upstream: {e}"))?;
     let status = upstream.status().as_u16();
     let status_reason = upstream.status().canonical_reason().unwrap_or("Error");
     let content_type = upstream
@@ -332,10 +321,8 @@ fn percent_decode(s: &str) -> String {
     while index < bytes.len() {
         if bytes[index] == b'%'
             && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) = (
-                hex_value(bytes[index + 1]),
-                hex_value(bytes[index + 2]),
-            )
+            && let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
         {
             out.push((high << 4) | low);
             index += 3;
@@ -395,18 +382,24 @@ async fn write_response_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_is_allowed, parse_image_url, referer_for, ALLOWED_IMAGE_HOSTS, ImageProxy};
+    use super::{ALLOWED_IMAGE_HOSTS, ImageProxy, host_is_allowed, parse_image_url, referer_for};
 
     #[test]
     fn allowed_host_matching_uses_suffixes() {
         assert!(host_is_allowed("rpic.douyucdn.cn", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("i0.hdslb.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("huyaimg.msstatic.com", ALLOWED_IMAGE_HOSTS));
-        assert!(host_is_allowed("p3-sign.douyinpic.com", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed(
+            "p3-sign.douyinpic.com",
+            ALLOWED_IMAGE_HOSTS
+        ));
         assert!(host_is_allowed("static-cdn.jtvnw.net", ALLOWED_IMAGE_HOSTS));
         assert!(!host_is_allowed("example.com", ALLOWED_IMAGE_HOSTS));
         assert!(!host_is_allowed("evil-hdslb.com", ALLOWED_IMAGE_HOSTS));
-        assert!(!host_is_allowed("douyucdn.cn.evil.com", ALLOWED_IMAGE_HOSTS));
+        assert!(!host_is_allowed(
+            "douyucdn.cn.evil.com",
+            ALLOWED_IMAGE_HOSTS
+        ));
     }
 
     #[test]
@@ -460,10 +453,7 @@ mod tests {
         });
 
         let proxy = ImageProxy::new();
-        let base = proxy
-            .start_with_allowlist(&["127.0.0.1"])
-            .await
-            .unwrap();
+        let base = proxy.start_with_allowlist(&["127.0.0.1"]).await.unwrap();
         // Explicitly build the URL-encoded form to exercise percent decoding.
         let encoded_upstream = format!("http://{upstream_addr}/pic.png")
             .as_bytes()

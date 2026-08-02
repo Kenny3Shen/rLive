@@ -1831,7 +1831,8 @@ mod tests {
         );
         assert_eq!(parse_render_data_web_id("<html></html>"), None);
         // A missing odin block must not panic.
-        let empty = r#"<script id="RENDER_DATA" type="application/json">%7B%22app%22%3A%7B%7D%7D</script>"#;
+        let empty =
+            r#"<script id="RENDER_DATA" type="application/json">%7B%22app%22%3A%7B%7D%7D</script>"#;
         assert_eq!(parse_render_data_web_id(empty), None);
     }
 

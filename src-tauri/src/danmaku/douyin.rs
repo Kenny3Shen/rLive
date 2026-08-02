@@ -17,8 +17,7 @@ use tokio::time;
 use tokio_tungstenite::{
     connect_async_tls_with_config,
     tungstenite::{
-        Error as WsError,
-        Message,
+        Error as WsError, Message,
         client::IntoClientRequest,
         http::{HeaderName, HeaderValue},
     },
@@ -94,7 +93,10 @@ fn douyin_ws_hosts() -> Vec<String> {
             return hosts;
         }
     }
-    DOUYIN_WS_HOSTS.iter().map(|host| (*host).to_string()).collect()
+    DOUYIN_WS_HOSTS
+        .iter()
+        .map(|host| (*host).to_string())
+        .collect()
 }
 
 /// Resolve room metadata into a short-lived signed WSS connection.
@@ -112,7 +114,8 @@ pub fn build_connection(
     validate_numeric_id(&actual_room_id, "房间号")?;
     // Prefer the session web id captured from the SSR room page; the locally
     // generated anonymous id is only a fallback.
-    let user_unique_id = web_id_field(raw.get("user_unique_id")).unwrap_or_else(generate_user_unique_id);
+    let user_unique_id =
+        web_id_field(raw.get("user_unique_id")).unwrap_or_else(generate_user_unique_id);
     let signature = douyin_sign::get_signature(&actual_room_id, &user_unique_id)?;
     let ts_ms = now_ms();
     let internal_ext = build_internal_ext(&actual_room_id, &user_unique_id, ts_ms);
@@ -201,9 +204,15 @@ fn now_ms() -> u64 {
 
 fn reconnect_backoff_secs(attempt: u32, blocked: bool, gateway: bool) -> u64 {
     let (floor, max) = if blocked {
-        (RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS, RECONNECT_BACKOFF_BLOCKED_MAX_SECS)
+        (
+            RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS,
+            RECONNECT_BACKOFF_BLOCKED_MAX_SECS,
+        )
     } else if gateway {
-        (RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS, RECONNECT_BACKOFF_GATEWAY_MAX_SECS)
+        (
+            RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS,
+            RECONNECT_BACKOFF_GATEWAY_MAX_SECS,
+        )
     } else {
         (RECONNECT_BACKOFF_INITIAL_SECS, RECONNECT_BACKOFF_MAX_SECS)
     };
@@ -306,7 +315,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> Ap
         );
         // The task is aborted by the danmaku manager when the frontend leaves
         // the room, so this loop only exits through cancellation.
-        let jitter_ms = (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1)) as u64;
+        let jitter_ms =
+            (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1)) as u64;
         time::sleep(Duration::from_secs(backoff) + Duration::from_millis(jitter_ms)).await;
         attempt += 1;
     }
@@ -328,10 +338,7 @@ struct ConnectFailure {
     message: String,
 }
 
-async fn run_connection_once(
-    events: &DanmakuEventSender,
-    args: &DouyinDanmakuArgs,
-) -> RunOutcome {
+async fn run_connection_once(events: &DanmakuEventSender, args: &DouyinDanmakuArgs) -> RunOutcome {
     emit_system(events, "正在连接抖音弹幕服务器…");
 
     let hosts = douyin_ws_hosts();
@@ -1098,7 +1105,8 @@ mod tests {
     }
 
     #[test]
-    fn decodes_likes_as_filterable_gift_messages() {        let user = field_bytes(3, "观众".as_bytes());
+    fn decodes_likes_as_filterable_gift_messages() {
+        let user = field_bytes(3, "观众".as_bytes());
         let mut like_body = field_uint(2, 33);
         like_body.extend(field_bytes(5, &user));
         let mut like_message = field_bytes(1, b"WebcastLikeMessage");
@@ -1135,7 +1143,11 @@ mod tests {
         decode_response(&response, &mut |event| events.push(event)).unwrap();
 
         assert_eq!(events.len(), 2);
-        assert!(events.iter().all(|event| matches!(event.kind, DanmakuKind::Social)));
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event.kind, DanmakuKind::Social))
+        );
         assert_eq!(events[0].content, "阿森纳 关注了主播");
         assert_eq!(events[1].content, "阿森纳 分享了直播间");
     }
@@ -1149,9 +1161,16 @@ mod tests {
         let args = build_connection("522864404974", &raw, "ttwid=fixture").unwrap();
         assert_eq!(args.room_id, "1234567890123456789");
         assert_eq!(args.user_unique_id.len(), 12);
-        assert!(args.user_unique_id.bytes().all(|byte| byte.is_ascii_digit()));
+        assert!(
+            args.user_unique_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        );
         assert!(!args.signature.is_empty());
-        assert!(args.internal_ext.contains("wss_push_room_id:1234567890123456789"));
+        assert!(
+            args.internal_ext
+                .contains("wss_push_room_id:1234567890123456789")
+        );
         assert!(args.internal_ext.contains("wss_push_did:"));
         assert_eq!(
             args.headers.get("Cookie").map(String::as_str),
@@ -1162,8 +1181,8 @@ mod tests {
             Some("https://live.douyin.com")
         );
 
-        let url = Url::parse(&build_wss_url("webcast3-ws-web-lq.douyin.com", &args).unwrap())
-            .unwrap();
+        let url =
+            Url::parse(&build_wss_url("webcast3-ws-web-lq.douyin.com", &args).unwrap()).unwrap();
         assert_eq!(url.scheme(), "wss");
         assert!(url.as_str().contains("webcast3-ws-web-lq.douyin.com"));
         let pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -1196,13 +1215,20 @@ mod tests {
         });
         let args = build_connection("522864404974", &raw, "").unwrap();
         assert_eq!(args.user_unique_id, "7392091211001140287");
-        assert!(args.internal_ext.contains("wss_push_did:7392091211001140287"));
+        assert!(
+            args.internal_ext
+                .contains("wss_push_did:7392091211001140287")
+        );
 
         // Without a session web id the anonymous fallback is 12 digits.
         let raw = serde_json::json!({ "room_id": "1234567890123456789" });
         let args = build_connection("522864404974", &raw, "").unwrap();
         assert_eq!(args.user_unique_id.len(), 12);
-        assert!(args.user_unique_id.bytes().all(|byte| byte.is_ascii_digit()));
+        assert!(
+            args.user_unique_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        );
     }
 
     #[test]
@@ -1219,7 +1245,10 @@ mod tests {
     fn reconnect_backoff_grows_to_its_per_class_caps() {
         assert_eq!(reconnect_backoff_secs(0, false, false), 1);
         assert_eq!(reconnect_backoff_secs(1, false, false), 2);
-        assert_eq!(reconnect_backoff_secs(5, false, false), RECONNECT_BACKOFF_MAX_SECS);
+        assert_eq!(
+            reconnect_backoff_secs(5, false, false),
+            RECONNECT_BACKOFF_MAX_SECS
+        );
         // Blocked (429/403) starts at the 60s floor and grows to 300s.
         assert_eq!(
             reconnect_backoff_secs(0, true, false),

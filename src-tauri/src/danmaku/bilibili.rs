@@ -6,7 +6,10 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Url};
 use serde_json::Value;
 use tokio::time;
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async_tls_with_config,
+    tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
+};
 
 use crate::danmaku::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
@@ -1130,7 +1133,38 @@ async fn run_connection(
     host: &str,
 ) -> ConnectionEnd {
     let url = format!("wss://{host}/sub");
-    let (ws, _) = match connect_async_tls_with_config(&url, None, false, None).await {
+    // Bilibili's edge nodes now reset the `/sub` socket immediately after the
+    // upgrade unless it carries browser-like headers, which manifests as an
+    // instant `received=0`, never-authenticated reconnect loop. Mirror the
+    // other danmaku backends and present Origin / User-Agent (and the session
+    // cookie when available) on the handshake.
+    let mut request = match url.as_str().into_client_request() {
+        Ok(request) => request,
+        Err(error) => {
+            return ConnectionEnd {
+                message_count: 0,
+                authenticated: false,
+                reason: format!("构造连接请求失败: {error}"),
+            };
+        }
+    };
+    {
+        let headers = request.headers_mut();
+        headers.insert(
+            "Origin",
+            HeaderValue::from_static("https://live.bilibili.com"),
+        );
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_static(crate::sites::bilibili::DEFAULT_USER_AGENT),
+        );
+        if let Ok(cookie) = HeaderValue::from_str(&args.refresh_cookie()) {
+            if !cookie.is_empty() {
+                headers.insert("Cookie", cookie);
+            }
+        }
+    }
+    let (ws, _) = match connect_async_tls_with_config(request, None, false, None).await {
         Ok(connection) => connection,
         Err(error) => {
             return ConnectionEnd {
