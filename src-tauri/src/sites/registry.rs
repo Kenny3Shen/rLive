@@ -84,11 +84,7 @@ fn site_with_client(
 pub fn is_ready(id: &SiteId) -> bool {
     matches!(
         id,
-        SiteId::Bilibili
-            | SiteId::Huya
-            | SiteId::Douyu
-            | SiteId::Douyin
-            | SiteId::Twitch
+        SiteId::Bilibili | SiteId::Huya | SiteId::Douyu | SiteId::Douyin | SiteId::Twitch
     )
 }
 

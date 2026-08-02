@@ -857,8 +857,8 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
         );
         // The task is aborted by the danmaku manager when the frontend leaves
         // the room, so this loop only exits through cancellation.
-        let jitter_ms = (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1))
-            as u64;
+        let jitter_ms =
+            (uuid::Uuid::new_v4().as_u128() % u128::from(RECONNECT_JITTER_MAX_MS + 1)) as u64;
         time::sleep(Duration::from_secs(backoff) + Duration::from_millis(jitter_ms)).await;
         attempt += 1;
     }

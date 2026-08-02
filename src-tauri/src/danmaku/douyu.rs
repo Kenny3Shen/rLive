@@ -1947,7 +1947,9 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
         let backoff = reconnect_backoff_secs(attempt);
         attempt += 1;
         let content = match &outcome {
-            Ok(msg_count) => format!("弹幕连接断开（已收 {msg_count} 条），{backoff} 秒后自动重连…"),
+            Ok(msg_count) => {
+                format!("弹幕连接断开（已收 {msg_count} 条），{backoff} 秒后自动重连…")
+            }
             Err(e) => format!("弹幕连接失败：{e}，{backoff} 秒后自动重连…"),
         };
         tracing::warn!(
