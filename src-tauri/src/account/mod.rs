@@ -68,7 +68,7 @@ pub fn display_name_from_cookie(site_id: &SiteId, cookie: &str) -> Option<String
         // for browser exports that do include it.
         SiteId::Bilibili => &["DedeUserName"],
         SiteId::Douyu => &["acf_username"],
-        SiteId::Huya => &["udb_n"],
+        SiteId::Huya => &["udb_n", "username"],
         // Some manually exported Douyin Cookies carry one of these fields;
         // do not mistake a numeric login/session token for a display name.
         SiteId::Douyin => &["nickname", "user_name", "username"],
@@ -165,6 +165,21 @@ mod tests {
             display_name_from_cookie(&SiteId::Huya, "udb_n=%E8%99%8E%E7%89%99+%E7%94%A8%E6%88%B7")
                 .as_deref(),
             Some("虎牙+用户")
+        );
+        // Some Huya browser exports carry the display name in `username`
+        // instead of (or in addition to) `udb_n`; `udb_n` takes priority.
+        assert_eq!(
+            display_name_from_cookie(&SiteId::Huya, "username=%E5%B0%8F%E8%99%8E; yyuid=42")
+                .as_deref(),
+            Some("小虎")
+        );
+        assert_eq!(
+            display_name_from_cookie(
+                &SiteId::Huya,
+                "udb_n=%E8%99%8E%E7%89%99; username=%E5%B0%8F%E8%99%8E",
+            )
+            .as_deref(),
+            Some("虎牙")
         );
         assert_eq!(
             display_name_from_cookie(&SiteId::Bilibili, "SESSDATA=secret; DedeUserID=42"),
