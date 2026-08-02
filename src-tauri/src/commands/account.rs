@@ -38,6 +38,23 @@ pub struct AccountQrLoginPoll {
 pub struct AccountProfile {
     pub username: Option<String>,
     pub has_cookie: bool,
+    pub status: AccountStatus,
+}
+
+/// Cookie session state as far as the app can determine it locally.  Platforms
+/// without a cheap validity check report `Unknown` while a Cookie is present.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStatus {
+    /// No Cookie is saved for this site.
+    None,
+    /// The platform accepted the session.
+    Valid,
+    /// The platform explicitly rejected the session (expired / logged out).
+    /// Danmaku falls back to the anonymous mode and sends are disabled.
+    Expired,
+    /// The session could not be verified (network failure or unsupported).
+    Unknown,
 }
 
 enum QrLoginPollResult {
@@ -102,23 +119,38 @@ pub async fn account_get_profile(
 
     let has_cookie = !cookie.trim().is_empty();
     let cookie_username = crate::account::display_name_from_cookie(&site_id, &cookie);
-    let username = match site_id {
+    let (username, status) = match site_id {
         SiteId::Bilibili if has_cookie => {
             match bilibili_profile_lookup(&cookie, proxy.as_deref()).await {
                 // A completed first-party lookup is authoritative: an
                 // expired Cookie must not keep showing an old cached name.
-                BilibiliProfileLookup::Verified(username) => username,
+                BilibiliProfileLookup::Verified(username) => {
+                    let status = if username.is_some() {
+                        AccountStatus::Valid
+                    } else {
+                        AccountStatus::Expired
+                    };
+                    (username, status)
+                }
                 // Network/challenge failures should not hide the optional
                 // DedeUserName field present in some browser exports.
-                BilibiliProfileLookup::Unavailable => cookie_username,
+                BilibiliProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
             }
         }
-        _ => cookie_username,
+        _ => {
+            let status = if has_cookie {
+                AccountStatus::Unknown
+            } else {
+                AccountStatus::None
+            };
+            (cookie_username, status)
+        }
     };
 
     Ok(AccountProfile {
         username,
         has_cookie,
+        status,
     })
 }
 

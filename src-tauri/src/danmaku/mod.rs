@@ -300,6 +300,7 @@ fn spawn_loop<F, Fut>(
     generation: u64,
     site: &'static str,
     identity: SelfDanmakuIdentity,
+    notice: Option<String>,
     fut: F,
 ) where
     F: FnOnce(DanmakuEventSender) -> Fut + Send + 'static,
@@ -317,6 +318,24 @@ fn spawn_loop<F, Fut>(
     let connection_task = tauri::async_runtime::spawn(async move {
         if start_rx.await.is_err() {
             return;
+        }
+        // An account-level notice (e.g. "Cookie expired, anonymous mode") is
+        // the first thing a fresh room sees, before any chat from the wire.
+        if let Some(content) = notice {
+            emit_event(
+                &sender,
+                DanmakuEvent {
+                    kind: crate::models::live::DanmakuKind::System,
+                    user: "system".into(),
+                    is_self: false,
+                    user_id: None,
+                    content,
+                    color: None,
+                    spans: None,
+                    super_chat: None,
+                    ts: chrono::Utc::now().timestamp_millis(),
+                },
+            );
         }
         if let Err(e) = fut(sender).await {
             tracing::warn!("{site} danmaku ended: {e}");
@@ -403,6 +422,7 @@ pub async fn connect(
     cookie: &str,
     identity_cookie: &str,
     proxy: Option<&str>,
+    notice: Option<String>,
 ) -> AppResult<()> {
     if !manager.is_current(generation) {
         return Ok(());
@@ -425,6 +445,7 @@ pub async fn connect(
                 generation,
                 "bilibili",
                 identity,
+                notice,
                 move |events| bilibili::run_loop(events, args),
             );
             Ok(())
@@ -437,6 +458,7 @@ pub async fn connect(
                 generation,
                 "douyu",
                 identity,
+                notice,
                 move |events| douyu::run_loop(events, args),
             );
             Ok(())
@@ -449,6 +471,7 @@ pub async fn connect(
                 generation,
                 "huya",
                 identity,
+                notice,
                 move |events| huya::run_loop(events, args),
             );
             Ok(())
@@ -462,6 +485,7 @@ pub async fn connect(
                 generation,
                 "twitch",
                 identity,
+                notice,
                 move |events| twitch::run_loop(events, args, proxy),
             );
             Ok(())
@@ -479,6 +503,7 @@ pub async fn connect(
                 generation,
                 "douyin",
                 identity,
+                notice,
                 move |events| douyin::run_loop(events, args),
             );
             Ok(())

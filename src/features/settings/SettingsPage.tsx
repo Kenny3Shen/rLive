@@ -92,6 +92,7 @@ type AccountQrLoginPoll = {
 type AccountProfile = {
   username: string | null;
   has_cookie: boolean;
+  status: "none" | "valid" | "expired" | "unknown";
 };
 
 const settingsCategories: {
@@ -340,7 +341,7 @@ function AccountCard({
     setProfileLoading(true);
     setProfileError(null);
     if (!isTauri()) {
-      setProfile({ username: null, has_cookie: false });
+      setProfile({ username: null, has_cookie: false, status: "none" });
       setProfileLoading(false);
       return;
     }
@@ -444,7 +445,25 @@ function AccountCard({
 
   const displayName = profile?.username ?? null;
   const hasCookie = profile?.has_cookie ?? false;
-  const accountState = profileLoading ? "读取中" : hasCookie ? "已登录" : "未登录";
+  const expired = profile?.status === "expired";
+  const accountState = profileLoading
+    ? "读取中"
+    : expired
+      ? "已失效"
+      : hasCookie
+        ? "已登录"
+        : "未登录";
+
+  const COOKIE_EXPIRED_NOTICE = "Cookie 已失效，弹幕将改用匿名模式获取，发送功能不可用。";
+
+  useEffect(() => {
+    if (profileLoading) return;
+    if (expired) {
+      if (notice !== COOKIE_EXPIRED_NOTICE) setNotice(COOKIE_EXPIRED_NOTICE);
+    } else if (notice === COOKIE_EXPIRED_NOTICE) {
+      setNotice(null);
+    }
+  }, [expired, profileLoading, notice]);
 
   return (
     <>
@@ -455,7 +474,11 @@ function AccountCard({
               <SiteLogo siteId={siteId} className="size-5" />
               {title}
             </FieldTitle>
-            <Badge variant={hasCookie ? "secondary" : "outline"}>{accountState}</Badge>
+            <Badge
+              variant={expired ? "destructive" : hasCookie ? "secondary" : "outline"}
+            >
+              {accountState}
+            </Badge>
             {displayName && <span className="min-w-0 truncate text-sm">{displayName}</span>}
           </div>
           {notice && <FieldDescription role="status">{notice}</FieldDescription>}

@@ -59,6 +59,50 @@ fn normalize_cookie_header(value: &str) -> String {
     value.trim().to_string()
 }
 
+/// Whether a saved Bilibili browser Cookie is still accepted by the platform.
+///
+/// Returns `Some(true)` when the nav endpoint reports a valid logged-in
+/// session, `Some(false)` when Bilibili explicitly rejects the Cookie
+/// (expired or logged out, commonly `code = -101`), and `None` when the
+/// session cannot be verified (network failure or an unrecognized response).
+/// Callers use `false` to fall back to anonymous danmaku and notify the user.
+pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<bool> {
+    let cookie = normalize_cookie_header(cookie);
+    if cookie.is_empty() {
+        return Some(false);
+    }
+    let client = crate::http_client::client_for_proxy(proxy).ok()?;
+    let response = client
+        .get("https://api.bilibili.com/x/web-interface/nav")
+        .header("user-agent", DEFAULT_USER_AGENT)
+        .header("referer", DEFAULT_REFERER)
+        .header("cookie", cookie)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    parse_nav_session_status(&response.text().await.ok()?)
+}
+
+/// `code != 0` (commonly `-101`) is Bilibili explicitly rejecting the Cookie.
+/// A `code = 0` answer is only accepted when `data.isLogin` confirms a logged
+/// in session, otherwise the Cookie no longer carries an identity.
+fn parse_nav_session_status(body: &str) -> Option<bool> {
+    let response: Value = serde_json::from_str(body).ok()?;
+    let code = response.get("code")?.as_i64()?;
+    if code != 0 {
+        return Some(false);
+    }
+    Some(
+        response
+            .pointer("/data/isLogin")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    )
+}
+
 /// Preserve user-supplied cookie values and add a generated value only when a
 /// field is absent (or empty). This is deliberately a small Cookie-header
 /// merger rather than a Set-Cookie parser: account data is stored as a request
@@ -838,6 +882,23 @@ mod live_tests {
             danmaku_data_with_token(r#"{"code":0,"data":{"token":" token ","host_list":[]}}"#)
                 .expect("usable token");
         assert_eq!(data["token"], "token");
+    }
+
+    #[test]
+    fn nav_session_status_detects_expired_cookie() {
+        assert_eq!(
+            parse_nav_session_status(r#"{"code":0,"data":{"isLogin":true,"uname":"小明"}}"#),
+            Some(true)
+        );
+        assert_eq!(
+            parse_nav_session_status(r#"{"code":-101,"message":"账号未登录"}"#),
+            Some(false)
+        );
+        assert_eq!(
+            parse_nav_session_status(r#"{"code":0,"data":{"isLogin":false}}"#),
+            Some(false)
+        );
+        assert_eq!(parse_nav_session_status("not json"), None);
     }
 
     #[test]
