@@ -43,6 +43,14 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
   /** Prior window brightness before the first player gesture override. */
   private var brightnessBeforePlayer: Float? = null
 
+  /**
+   * Set once the first scripted media-volume write has primed STREAM_MUSIC as
+   * Android's active stream. Until the user presses the hardware volume key,
+   * a programmatic `setStreamVolume(STREAM_MUSIC, …)` may be no-opped by the
+   * AudioManager, so the very first gesture needs `FLAG_SHOW_UI` to take.
+   */
+  private var primedActiveMediaStream = false
+
   @Command
   fun getState(invoke: Invoke) {
     activity.runOnUiThread {
@@ -66,7 +74,17 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
         }
         val percent = clampPercent(args.value)
         val streamVolume = (maxVolume * percent / 100f).roundToInt()
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        // A scripted setStreamVolume(STREAM_MUSIC) before any physical volume
+        // keypress has been pressed often lands in the system's "active stream"
+        // instead of STREAM_MUSIC — the very first swipe then looks inert until
+        // the user taps the hardware volume rocker once. Doing that first write
+        // with FLAG_SHOW_UI makes Android promote STREAM_MUSIC to active and the
+        // volume panel flicker is the same the hardware key shows. Later writes
+        // keep the silent flags so a drag is not noisy.
+        val flags = if (!primedActiveMediaStream) {
+          primedActiveMediaStream = true
+          AudioManager.FLAG_SHOW_UI or AudioManager.FLAG_VIBRATE
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
           AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
         } else {
           0

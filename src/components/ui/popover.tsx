@@ -17,16 +17,39 @@ function PopoverContent({
   alignOffset = 0,
   side = "bottom",
   sideOffset = 4,
+  container,
+  collisionBoundary = "clipping-ancestors",
+  collisionPadding = 5,
+  sticky = false,
   ...props
 }: PopoverPrimitive.Popup.Props &
-  Pick<PopoverPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
+  Pick<
+    PopoverPrimitive.Positioner.Props,
+    | "align"
+    | "alignOffset"
+    | "side"
+    | "sideOffset"
+    | "collisionBoundary"
+    | "collisionPadding"
+    | "sticky"
+  > & {
+    /**
+     * Portal target. Defaults to <body>. Render inside the fullscreen element
+     * (e.g. the player stage) when the popover must stay above the top layer
+     * while a `:fullscreen` ancestor owns the stacking context.
+     */
+    container?: HTMLElement | React.RefObject<HTMLElement | null> | null;
+  }) {
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        collisionBoundary={collisionBoundary}
+        collisionPadding={collisionPadding}
+        sticky={sticky}
         className="isolate z-50"
       >
         <PopoverPrimitive.Popup
