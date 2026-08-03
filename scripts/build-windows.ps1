@@ -100,6 +100,35 @@ if ($rustc) {
 
 Set-Location $ProjectRoot
 
+# A previous `tauri dev` or manual launch may still have the target executable
+# (and its CrispASR DLLs) mapped. Windows cannot replace loaded binaries, so
+# stop only rLive instances built from this checkout before Cargo stages the
+# new runtime files. Installed copies outside this target directory are left
+# untouched.
+$projectTargetRoot = [IO.Path]::GetFullPath((Join-Path $ProjectRoot "src-tauri\target"))
+$projectProcesses = @(Get-Process -Name "rlive" -ErrorAction SilentlyContinue | Where-Object {
+    try {
+        $_.Path -and
+            [IO.Path]::GetFullPath($_.Path).StartsWith(
+                $projectTargetRoot,
+                [StringComparison]::OrdinalIgnoreCase
+            )
+    } catch {
+        $false
+    }
+})
+if ($projectProcesses.Count -gt 0) {
+    Write-Host "Stopping $($projectProcesses.Count) project rLive process(es) before build..."
+    $projectProcesses | Stop-Process -Force
+    $projectProcesses | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+    $stillRunning = @($projectProcesses | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue })
+    if ($stillRunning.Count -gt 0) {
+        throw "Could not stop the existing project rLive process before build."
+    }
+}
+
+Write-Host "CrispASR backend: CPU"
+
 # Prefer local CLI via package.json script: "tauri": "tauri"
 # (winget bun often has no bunx.exe; `bun x tauri` may not resolve the binary either)
 $tauriArgs = "build --no-bundle"

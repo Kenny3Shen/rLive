@@ -11,8 +11,10 @@ function isDependency(id: string, packages: readonly string[]) {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
+  // Release builds keep warnings/errors but omit the generated chunk table.
+  logLevel: command === "build" ? "warn" : "info",
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
@@ -93,4 +95,4 @@ export default defineConfig({
     },
   },
   envPrefix: ["VITE_", "TAURI_"],
-});
+}));
