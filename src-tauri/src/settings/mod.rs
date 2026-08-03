@@ -131,6 +131,7 @@ mod tests {
         assert!(s.danmaku_filter_repeats);
         assert!(s.danmaku_filter_gifts);
         assert!(s.super_chat_enabled);
+        assert_eq!(s.asr_font_size, 20);
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
     }

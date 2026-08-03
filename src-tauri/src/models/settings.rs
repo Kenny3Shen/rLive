@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrComputeMode {
+    #[default]
+    Gpu,
+    Cpu,
+}
+
 /// Persisted application preferences (JSON in `settings_kv` key `app_settings`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppSettings {
@@ -49,16 +57,47 @@ pub struct AppSettings {
     /// are still required after this global consent is enabled.
     #[serde(default)]
     pub danmaku_send_enabled: bool,
+    /// Device-local consent for the optional on-device ASR model. It remains
+    /// disabled by default so first launch never downloads model data.
+    #[serde(default)]
+    pub asr_enabled: bool,
+    /// Device-local inference placement. GPU builds use the platform backend;
+    /// CPU remains available in the same binary as a compatibility fallback.
+    #[serde(default)]
+    pub asr_compute_mode: AsrComputeMode,
+    /// Device-local Silero VAD prefilter. Disabled by default; when enabled it
+    /// skips Qwen3 inference for chunks where CrispASR detects no speech.
+    #[serde(default)]
+    pub asr_vad_enabled: bool,
+    /// Player subtitle font size in CSS pixels.
+    #[serde(default = "default_asr_font_size")]
+    pub asr_font_size: u32,
     /// Optional custom IPTV M3U address for this device.
     ///
     /// A playlist URL can identify a private source or include an access token,
     /// so it is intentionally excluded from profile export and import.
     #[serde(default)]
     pub iptv_custom_m3u_url: Option<String>,
+    /// Legacy compatibility field. The client now performs one startup probe
+    /// and no longer schedules periodic checks, but old profiles still carry
+    /// this value and must remain deserializable.
+    #[serde(default = "default_iptv_availability_auto_check")]
+    pub iptv_availability_auto_check: bool,
+    /// Legacy compatibility field retained for old settings records.
+    #[serde(default = "default_iptv_availability_auto_check_interval_hours")]
+    pub iptv_availability_auto_check_interval_hours: u32,
 }
 
 fn default_quality_level() -> String {
     "high".into()
+}
+
+fn default_iptv_availability_auto_check() -> bool {
+    true
+}
+
+fn default_iptv_availability_auto_check_interval_hours() -> u32 {
+    1
 }
 
 fn default_danmaku_area() -> f32 {
@@ -75,6 +114,10 @@ fn default_danmaku_filter_repeats() -> bool {
 
 fn default_danmaku_filter_gifts() -> bool {
     true
+}
+
+fn default_asr_font_size() -> u32 {
+    20
 }
 
 fn default_super_chat_enabled() -> bool {
@@ -105,7 +148,13 @@ impl Default for AppSettings {
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
             danmaku_send_enabled: false,
+            asr_enabled: false,
+            asr_compute_mode: AsrComputeMode::default(),
+            asr_vad_enabled: false,
+            asr_font_size: default_asr_font_size(),
             iptv_custom_m3u_url: None,
+            iptv_availability_auto_check: true,
+            iptv_availability_auto_check_interval_hours: 1,
         }
     }
 }
@@ -146,7 +195,12 @@ mod tests {
         assert!(settings.danmaku_filter_gifts);
         assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
+        assert!(!settings.asr_enabled);
+        assert_eq!(settings.asr_compute_mode, AsrComputeMode::Gpu);
+        assert!(!settings.asr_vad_enabled);
         assert!(settings.iptv_custom_m3u_url.is_none());
+        assert!(settings.iptv_availability_auto_check);
+        assert_eq!(settings.iptv_availability_auto_check_interval_hours, 1);
         assert!(settings.disabled_site_ids.is_empty());
     }
 }

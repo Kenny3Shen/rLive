@@ -28,6 +28,7 @@ import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
+import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +52,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
@@ -65,6 +67,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
+  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -474,9 +477,7 @@ function AccountCard({
               <SiteLogo siteId={siteId} className="size-5" />
               {title}
             </FieldTitle>
-            <Badge
-              variant={expired ? "destructive" : hasCookie ? "secondary" : "outline"}
-            >
+            <Badge variant={expired ? "destructive" : hasCookie ? "secondary" : "outline"}>
               {accountState}
             </Badge>
             {displayName && <span className="min-w-0 truncate text-sm">{displayName}</span>}
@@ -608,6 +609,230 @@ function DanmakuSendField() {
       <FieldTitle id="danmaku-send-title">允许发送弹幕</FieldTitle>
       <Switch aria-labelledby="danmaku-send-title" checked={enabled} onCheckedChange={setEnabled} />
     </Field>
+  );
+}
+
+const ASR_FONT_SIZE_MIN = 12;
+const ASR_FONT_SIZE_MAX = 48;
+
+function AsrCaptionFontSizeField() {
+  const fontSize = useSettingsStore((state) => state.asrFontSize);
+  const labelId = "asr-font-size-title";
+
+  return (
+    <Field orientation="responsive">
+      <FieldContent>
+        <FieldTitle id={labelId}>字幕字号</FieldTitle>
+        <FieldDescription>调整播放器字幕叠加层的字号，不影响弹幕字号。</FieldDescription>
+      </FieldContent>
+      <div className="flex min-w-52 items-center gap-3">
+        <Slider
+          aria-labelledby={labelId}
+          value={fontSize}
+          min={ASR_FONT_SIZE_MIN}
+          max={ASR_FONT_SIZE_MAX}
+          step={1}
+          onValueChange={(value) => {
+            const next = Number(value);
+            if (Number.isFinite(next)) useSettingsStore.setState({ asrFontSize: next });
+          }}
+          onValueCommitted={(value) => {
+            const next = Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(Number(value))));
+            useSettingsStore.setState({ asrFontSize: next });
+            void useSettingsStore.getState().persistToBackend({ asr_font_size: next });
+          }}
+        />
+        <Badge variant="secondary" className="min-w-14 justify-center tabular-nums">
+          {fontSize}px
+        </Badge>
+      </div>
+    </Field>
+  );
+}
+
+function AsrModelField() {
+  const enabled = useSettingsStore((state) => state.asrEnabled);
+  const computeMode = useSettingsStore((state) => state.asrComputeMode);
+  const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
+  const pending = useSettingsStore((state) => state.asrPending);
+  const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
+  const setComputeMode = useSettingsStore((state) => state.setAsrComputeMode);
+  const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
+  const model = useAsrModelStatus({ enabled });
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const presentation = describeAsrModelStatus(model.status, {
+    enabled,
+    supported: model.supported,
+    queryError: model.queryError,
+  });
+
+  async function applyEnabled(next: boolean) {
+    setActionError(null);
+    try {
+      await setEnabled(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function retryPreparation() {
+    setActionError(null);
+    try {
+      await model.prepare();
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function applyComputeMode(next: "gpu" | "cpu") {
+    setActionError(null);
+    try {
+      await setComputeMode(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function applyVadEnabled(next: boolean) {
+    setActionError(null);
+    try {
+      await setVadEnabled(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  const invalid = presentation.error || actionError !== null;
+  const busy = pending || (enabled && presentation.busy);
+  return (
+    <>
+      <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
+        <Field
+          orientation="responsive"
+          data-disabled={!model.supported || undefined}
+          data-invalid={invalid || undefined}
+        >
+          <FieldContent>
+            <FieldTitle id="asr-enabled-title">本地语音字幕（ASR）</FieldTitle>
+            {invalid ? (
+              <FieldError role="status" aria-live="polite">
+                {actionError ?? presentation.message}
+              </FieldError>
+            ) : (
+              <FieldDescription role="status" aria-live="polite">
+                {presentation.message}
+              </FieldDescription>
+            )}
+            {enabled && presentation.error && (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="mt-2 w-fit"
+                disabled={pending}
+                onClick={() => void retryPreparation()}
+              >
+                <RefreshCw data-icon="inline-start" aria-hidden />
+                重试
+              </Button>
+            )}
+          </FieldContent>
+          <div className="flex shrink-0 items-center gap-2">
+            {busy && <Spinner aria-hidden />}
+            <Switch
+              aria-labelledby="asr-enabled-title"
+              aria-invalid={invalid || undefined}
+              checked={enabled}
+              disabled={!model.supported || model.isPending || pending}
+              onCheckedChange={(checked) => {
+                if (checked && model.status?.state === "not_downloaded") {
+                  setConfirmOpen(true);
+                  return;
+                }
+                void applyEnabled(checked);
+              }}
+            />
+          </div>
+        </Field>
+
+        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+          <FieldContent>
+            <FieldTitle id="asr-compute-title">推理设备</FieldTitle>
+            <FieldDescription>
+              {model.status && !model.status.gpu_available
+                ? "当前构建未包含 GPU 后端，将使用 CPU"
+                : "切换设备时会自动重新加载模型"}
+            </FieldDescription>
+          </FieldContent>
+          <ToggleGroup
+            aria-labelledby="asr-compute-title"
+            value={[computeMode]}
+            variant="outline"
+            size="sm"
+            spacing={1}
+            disabled={!model.supported || model.isPending || pending}
+            onValueChange={(values) => {
+              const next = values[0];
+              if (next === "gpu" || next === "cpu") void applyComputeMode(next);
+            }}
+          >
+            <ToggleGroupItem value="gpu" disabled={model.status?.gpu_available === false}>
+              GPU
+            </ToggleGroupItem>
+            <ToggleGroupItem value="cpu">CPU</ToggleGroupItem>
+          </ToggleGroup>
+        </Field>
+
+        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+          <FieldContent>
+            <FieldTitle id="asr-vad-title">语音活动检测（VAD）</FieldTitle>
+            <FieldDescription>
+              {model.status?.vad_model_downloaded
+                ? "使用 Silero 过滤无语音片段，减少无效推理和静音误识别"
+                : "首次开启会下载约 865 KiB 的 Silero 模型，并跳过无语音片段"}
+            </FieldDescription>
+          </FieldContent>
+          <Switch
+            aria-labelledby="asr-vad-title"
+            checked={vadEnabled}
+            disabled={!model.supported || model.isPending || pending}
+            onCheckedChange={(checked) => void applyVadEnabled(checked)}
+          />
+        </Field>
+      </FieldGroup>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Download aria-hidden />
+            </AlertDialogMedia>
+            <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
+            <AlertDialogDescription>
+              启用后将在后台下载约 631 MB 的 Qwen3-ASR Q4_K
+              本地模型。下载完成后会自动加载，模型文件保留在本机。若已开启 VAD，还会下载约 865 KiB
+              的 Silero 模型。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmOpen(false);
+                void applyEnabled(true);
+              }}
+            >
+              下载并启用
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -1001,6 +1226,10 @@ export function SettingsPage() {
                       <ToggleGroupItem value="low">最低</ToggleGroupItem>
                     </ToggleGroup>
                   </Field>
+                </Section>
+                <Section title="语音字幕">
+                  <AsrCaptionFontSizeField />
+                  <AsrModelField />
                 </Section>
               </SettingsContent>
             </TabsContent>
