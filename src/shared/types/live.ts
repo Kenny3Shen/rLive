@@ -153,8 +153,20 @@ export type AppSettings = {
   quality_level?: "high" | "mid" | "low";
   /** Device-local permission for user-operated single-message senders. */
   danmaku_send_enabled?: boolean;
+  /** Device-local consent for downloading and loading the optional ASR model. */
+  asr_enabled?: boolean;
+  /** Device-local CrispASR inference placement. */
+  asr_compute_mode?: "gpu" | "cpu";
+  /** Device-local Silero VAD prefilter; excluded from profile import/export. */
+  asr_vad_enabled?: boolean;
+  /** Player subtitle font size in CSS pixels. */
+  asr_font_size?: number;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;
+  /** Legacy settings field kept only for backwards-compatible deserialization. */
+  iptv_availability_auto_check?: boolean;
+  /** Legacy interval field; the client no longer schedules periodic checks. */
+  iptv_availability_auto_check_interval_hours?: number;
   /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */
   disabled_site_ids?: SiteId[];
 };

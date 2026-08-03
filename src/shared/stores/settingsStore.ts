@@ -12,12 +12,14 @@ import type { AppSettings, SiteId } from "../types/live";
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
+export type AsrComputeMode = "gpu" | "cpu";
 
 // `settings_set` writes one complete object. Serialize writes so rapid room
 // controls (for example two slider commits) cannot resolve out of order and
 // restore an earlier snapshot over the newest setting.
 let settingsWriteQueue: Promise<void> = Promise.resolve();
 let danmakuSendSettingEpoch = 0;
+let asrSettingEpoch = 0;
 
 type SettingsGetResponse = {
   settings: AppSettings;
@@ -37,6 +39,20 @@ function isThemeMode(v: string): v is ThemeMode {
 function parseQualityLevel(value: unknown): QualityLevel {
   if (value === "mid" || value === "low" || value === "high") return value;
   return "high";
+}
+
+function parseAsrComputeMode(value: unknown): AsrComputeMode {
+  return value === "cpu" ? "cpu" : "gpu";
+}
+
+const ASR_FONT_SIZE_MIN = 12;
+const ASR_FONT_SIZE_MAX = 48;
+const ASR_FONT_SIZE_DEFAULT = 20;
+
+function parseAsrFontSize(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return ASR_FONT_SIZE_DEFAULT;
+  return Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(numeric)));
 }
 
 type SettingsState = {
@@ -60,6 +76,12 @@ type SettingsState = {
   danmakuSendEnabled: boolean;
   /** True while the local multi-platform sending permission reaches the backend. */
   danmakuSendPending: boolean;
+  asrEnabled: boolean;
+  asrComputeMode: AsrComputeMode;
+  asrVadEnabled: boolean;
+  asrFontSize: number;
+  /** True while the device-local ASR choice reaches the Rust backend. */
+  asrPending: boolean;
   /**
    * In-memory only revision for a send-capable account cookie. It deliberately
    * carries no credential data; consumers use it solely to invalidate cached
@@ -78,6 +100,9 @@ type SettingsState = {
   setSuperChatEnabled: (enabled: boolean) => void;
   setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
+  setAsrEnabled: (enabled: boolean) => Promise<void>;
+  setAsrComputeMode: (mode: AsrComputeMode) => Promise<void>;
+  setAsrVadEnabled: (enabled: boolean) => Promise<void>;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
@@ -105,6 +130,10 @@ const defaultSettings: AppSettings = {
   danmaku_shield_words: [],
   quality_level: "high",
   danmaku_send_enabled: false,
+  asr_enabled: false,
+  asr_compute_mode: "gpu",
+  asr_vad_enabled: false,
+  asr_font_size: ASR_FONT_SIZE_DEFAULT,
   iptv_custom_m3u_url: null,
 };
 
@@ -127,6 +156,10 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_shield_words: state.danmakuShieldWords,
     quality_level: state.qualityLevel,
     danmaku_send_enabled: state.danmakuSendEnabled,
+    asr_enabled: state.asrEnabled,
+    asr_compute_mode: state.asrComputeMode,
+    asr_vad_enabled: state.asrVadEnabled,
+    asr_font_size: state.asrFontSize,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
   };
 }
@@ -152,6 +185,11 @@ export const useSettingsStore = create<SettingsState>()(
       qualityLevel: "high",
       danmakuSendEnabled: false,
       danmakuSendPending: false,
+      asrEnabled: false,
+      asrComputeMode: "gpu",
+      asrVadEnabled: false,
+      asrFontSize: ASR_FONT_SIZE_DEFAULT,
+      asrPending: false,
       danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
       hydratedFromBackend: false,
@@ -203,6 +241,61 @@ export const useSettingsStore = create<SettingsState>()(
             }
           });
       },
+      setAsrEnabled: async (asrEnabled) => {
+        const epoch = ++asrSettingEpoch;
+        const previous = get().asrEnabled;
+        set({ asrEnabled, asrPending: true });
+        try {
+          await get().persistToBackend({ asr_enabled: asrEnabled });
+          await invokeCmd(asrEnabled ? "asr_enable" : "asr_disable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrEnabled: previous });
+            await get().persistToBackend({ asr_enabled: previous });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) {
+            set({ asrPending: false });
+          }
+        }
+      },
+      setAsrComputeMode: async (asrComputeMode) => {
+        const epoch = ++asrSettingEpoch;
+        const previous = get().asrComputeMode;
+        if (asrComputeMode === previous) return;
+        set({ asrComputeMode, asrPending: true });
+        try {
+          await get().persistToBackend({ asr_compute_mode: asrComputeMode });
+          if (get().asrEnabled) await invokeCmd("asr_enable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrComputeMode: previous });
+            await get().persistToBackend({ asr_compute_mode: previous });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) set({ asrPending: false });
+        }
+      },
+      setAsrVadEnabled: async (asrVadEnabled) => {
+        const epoch = ++asrSettingEpoch;
+        const previous = get().asrVadEnabled;
+        if (asrVadEnabled === previous) return;
+        set({ asrVadEnabled, asrPending: true });
+        try {
+          await get().persistToBackend({ asr_vad_enabled: asrVadEnabled });
+          if (get().asrEnabled) await invokeCmd("asr_enable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrVadEnabled: previous });
+            await get().persistToBackend({ asr_vad_enabled: previous });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) set({ asrPending: false });
+        }
+      },
       markDanmakuCookieChanged: () => {
         // This is intentionally not persisted. It has no meaning across an
         // app restart and must never contain the Cookie itself.
@@ -235,6 +328,11 @@ export const useSettingsStore = create<SettingsState>()(
           qualityLevel: parseQualityLevel(settings.quality_level),
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
+          asrEnabled: settings.asr_enabled ?? false,
+          asrComputeMode: parseAsrComputeMode(settings.asr_compute_mode),
+          asrVadEnabled: settings.asr_vad_enabled ?? false,
+          asrFontSize: parseAsrFontSize(settings.asr_font_size),
+          asrPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
           hydratedFromBackend: true,
         });

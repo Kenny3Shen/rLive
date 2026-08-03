@@ -21,6 +21,7 @@ import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "./PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
+import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { useWebPlayer } from "./player/useWebPlayer";
 import { androidPlayerControlStep, useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
@@ -336,7 +337,7 @@ type PlayerPaneProps = {
 };
 
 /**
- * Room player — **web MSE path** (mpegts.js + localhost stream proxy).
+ * Room player — **xgplayer web MSE path** (protocol plugins + localhost proxy).
  *
  * No mpv / no native HWND / no companion overlay window. Video + scrolling
  * danmaku share one DOM stack; leave-room unmount stops everything cleanly.
@@ -387,6 +388,9 @@ export function PlayerPane({
     useState<PlayerEdgeGestureFeedback | null>(null);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
+  const asrEnabled = useSettingsStore((state) => state.asrEnabled);
+  const asrPending = useSettingsStore((state) => state.asrPending);
+  const asrFontSize = useSettingsStore((state) => state.asrFontSize);
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
@@ -449,6 +453,14 @@ export function PlayerPane({
   const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError ?? player.fullscreenError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
+  const asr = useAsrCaptions({
+    videoRef: player.videoRef,
+    mediaKey: player.mediaKey,
+    sessionKey: danmakuSessionKey,
+    featureEnabled: asrEnabled,
+    settingPending: asrPending,
+    mediaAvailable: showHost,
+  });
   // Android routes loudness through STREAM_MUSIC. Use native state whenever the
   // bridge is supported, even before the first getState resolves, so UI and
   // gestures never fall back to the HTML <video> volume on a phone.
@@ -1224,16 +1236,23 @@ export function PlayerPane({
                 filter: `brightness(${androidClient && androidPlayerControls.supported ? 1 : playerBrightness / 100})`,
               }}
             >
-              {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
-              <video
-                key={player.mediaKey}
-                ref={player.videoRef}
-                className="absolute inset-0 h-full w-full bg-black object-contain"
-                crossOrigin="anonymous"
-                playsInline
-                autoPlay
-                controls={false}
-              />
+              <div
+                ref={player.playerRootRef}
+                data-player-engine-root
+                className="absolute inset-0 size-full overflow-hidden bg-black"
+              >
+                {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
+                <video
+                  key={player.mediaKey}
+                  ref={player.videoRef}
+                  data-player-video
+                  className="absolute inset-0 size-full bg-black object-contain"
+                  crossOrigin="anonymous"
+                  playsInline
+                  autoPlay
+                  controls={false}
+                />
+              </div>
 
               {/* Floating danmaku shares the picture brightness, while the
                   controls and room information keep their normal contrast. */}
@@ -1252,6 +1271,25 @@ export function PlayerPane({
                 active={danmakuActive}
                 className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(20rem,calc(100%-1.5rem))]"
               />
+            )}
+
+            {showHost && (asr.captionsOn || asr.notice) && (asr.notice || asr.caption) && (
+              <div
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                className="pointer-events-none absolute inset-x-4 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-20 flex justify-center"
+              >
+                <p
+                  className={cn(
+                    "line-clamp-2 max-w-[min(48rem,92%)] rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
+                    asr.noticeIsError && asr.notice && "border border-destructive/45 text-red-100",
+                  )}
+                  style={{ fontSize: `${asrFontSize}px` }}
+                >
+                  {asr.notice ?? asr.caption}
+                </p>
+              </div>
             )}
 
             {showHost && !player.running && (
@@ -1333,6 +1371,11 @@ export function PlayerPane({
                     : undefined
                 }
                 osdOn={osdOn}
+                asrVisible={asr.desktopClient}
+                asrOn={asr.captionsOn}
+                asrLabel={asr.controlLabel}
+                asrDisabled={asr.controlDisabled}
+                asrBusy={asr.controlBusy}
                 qualities={qualities}
                 qualityIndex={qualityIndex}
                 lines={lines}
@@ -1380,6 +1423,7 @@ export function PlayerPane({
                 }}
                 onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
                 onToggleOsd={() => setOsdOn((v) => !v)}
+                onToggleAsr={asr.toggle}
                 onQualityChange={onQualityChange ?? (() => {})}
                 onLineChange={onLineChange ?? (() => {})}
                 onTogglePictureInPicture={() => void player.togglePictureInPicture()}
