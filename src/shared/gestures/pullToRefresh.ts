@@ -48,11 +48,10 @@ export function findVerticalScrollParent(start: Element | null): HTMLElement | n
         (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
         node.scrollHeight > node.clientHeight + 1;
       if (canScroll) return node;
-      // The app shell main pane is the primary page scroller even when content
-      // is shorter than one viewport (scrollTop stays 0, still the right root).
-      // ScrollArea viewports need the same treatment for empty/error states;
-      // otherwise a follow panel with no rows would have no pull target.
-      if (node.dataset.slot === "app-content" || node.dataset.slot === "scroll-area-viewport") {
+      // The animated page wrapper is the primary page scroller. ScrollArea
+      // viewports need the same treatment for empty/error states; otherwise a
+      // follow panel with no rows would have no pull target.
+      if (node.dataset.slot === "app-page" || node.dataset.slot === "scroll-area-viewport") {
         return node;
       }
     }

@@ -49,7 +49,7 @@ use commands::follow::{
 };
 use commands::history::{history_add, history_clear, history_list, history_remove};
 use commands::image_proxy::image_proxy_url;
-use commands::iptv::iptv_load_playlist;
+use commands::iptv::{iptv_check_channels, iptv_load_playlist};
 use commands::profile::{profile_export, profile_import};
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -229,6 +229,7 @@ pub fn run() {
             history_clear,
             history_remove,
             iptv_load_playlist,
+            iptv_check_channels,
             stream_proxy_start,
             stream_proxy_stop,
             image_proxy_url,

@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
 import { AlertCircle, Radio, Tv } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
+import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { createSerialTaskQueue } from "@/features/room/player/serialTaskQueue";
-import { loadMpegts } from "@/features/room/player/useWebPlayer";
+import {
+  createXgPlayer,
+  loadXgPlayerModules,
+  xgPlayerErrorMessage,
+  type XgPlaybackKind,
+  type XgPlayerInstance,
+} from "@/features/room/player/xgPlayer";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
-import type { Player as MpegtsPlayer } from "@/vendor/mpegts";
 import type { IptvChannel } from "./types";
 
-type PlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
+export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
+
+const AUTO_RECONNECT_MAX_ATTEMPTS = 2;
+const AUTO_RECONNECT_DELAYS_MS = [1_000, 2_500] as const;
 
 // The localhost stream proxy is application-global. This queue keeps channel
 // changes orderly within the IPTV page; each proxy session additionally has a
@@ -25,34 +33,51 @@ function nextPlayerId(): string {
   return `iptv-player-${entropy}-${playerInstanceSequence}`;
 }
 
+function isFlvStream(url: string): boolean {
+  return /\.flv(?:[?#]|$)/i.test(url) || /[?&](?:format|type)=flv(?:[&#]|$)/i.test(url);
+}
+
 function isMpegTransportStream(url: string): boolean {
-  return /\.(?:flv|ts|m2ts)(?:[?#]|$)/i.test(url) || /[?&](?:format|type)=(?:flv|ts)/i.test(url);
+  return (
+    /\.(?:ts|m2ts)(?:[?#]|$)/i.test(url) || /[?&](?:format|type)=(?:ts|mpegts)(?:[&#]|$)/i.test(url)
+  );
 }
 
 function isProgressiveVideo(url: string): boolean {
   return /\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(url);
 }
 
+export function iptvPlaybackKind(url: string): XgPlaybackKind {
+  if (isFlvStream(url)) return "flv";
+  if (isMpegTransportStream(url)) return "mpegts";
+  if (isProgressiveVideo(url)) return "native";
+  return "hls";
+}
+
 type IptvPlayerProps = {
   channel: IptvChannel | null;
   reloadToken: number;
+  onStatusChange?: (status: IptvPlaybackStatus, error: string | null) => void;
 };
 
 /**
- * IPTV playback uses a dedicated HLS path (hls.js) rather than routing a
- * manifest through mpegts.js. The local proxy rewrites nested playlists,
- * keys, and segments so HLS sources do not depend on remote CORS headers.
+ * IPTV playback shares the xgplayer protocol plugins used by live rooms. The
+ * local proxy rewrites nested HLS resources and supplies remote headers.
  */
-export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
+export function IptvPlayer({ channel, reloadToken, onStatusChange }: IptvPlayerProps) {
   const channelId = channel?.id ?? null;
   const channelUrl = channel?.url ?? null;
   const channelHeaders = channel?.headers ?? EMPTY_HEADERS;
+  const playerRootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const mpegtsRef = useRef<MpegtsPlayer | null>(null);
+  const playerRef = useRef<XgPlayerInstance | null>(null);
   const instanceIdRef = useRef<string | null>(null);
   const generationRef = useRef(0);
-  const [status, setStatus] = useState<PlaybackStatus>("idle");
+  const retryTimerRef = useRef<number | null>(null);
+  const retryAttemptRef = useRef(0);
+  const autoReconnectRef = useRef<(message: string) => void>(() => {});
+  const [reconnectToken, setReconnectToken] = useState(0);
+  const [status, setStatus] = useState<IptvPlaybackStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   useScreenWakeLock(status === "playing");
 
@@ -61,41 +86,56 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
   }
 
   useEffect(() => {
+    retryAttemptRef.current = 0;
+  }, [channelId, channelUrl]);
+
+  // A manual retry starts a fresh retry budget. Automatic retries use a
+  // separate token and therefore keep their finite attempt count.
+  useEffect(() => {
+    retryAttemptRef.current = 0;
+  }, [reloadToken]);
+
+  useEffect(() => {
+    onStatusChange?.(status, error);
+  }, [error, onStatusChange, status]);
+
+  useEffect(() => {
     let disposed = false;
     const generation = ++generationRef.current;
     const sessionId = `${instanceIdRef.current}:${generation}`;
 
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+
     const destroyMedia = () => {
-      const hls = hlsRef.current;
-      hlsRef.current = null;
-      if (hls) {
-        try {
-          hls.destroy();
-        } catch {
-          // A half-initialized HLS instance still needs to be disposable.
-        }
-      }
-
-      const mpegts = mpegtsRef.current;
-      mpegtsRef.current = null;
-      if (mpegts) {
-        try {
-          mpegts.pause();
-          mpegts.unload();
-          mpegts.detachMediaElement();
-          mpegts.destroy();
-        } catch {
-          // Treat player cleanup as best-effort during route/channel changes.
-        }
-      }
-
       const video = videoRef.current;
+      const muted = video?.muted ?? false;
+      const volume = video?.volume ?? 1;
+      const player = playerRef.current;
+      playerRef.current = null;
+      if (player) {
+        try {
+          player.pause();
+        } catch {
+          // Playback can already be detached during a channel switch.
+        }
+        try {
+          player.destroy();
+        } catch {
+          // A partly initialized protocol plugin is still safe to discard.
+        }
+      }
+
       if (video) {
         try {
           video.pause();
           video.removeAttribute("src");
           video.srcObject = null;
           video.load();
+          video.muted = muted;
+          video.volume = volume;
         } catch {
           // The element can already be detached while React is unmounting.
         }
@@ -110,8 +150,62 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
       }
     };
 
+    const finishWithError = (message: string) => {
+      if (disposed || generationRef.current !== generation) return;
+      setStatus("error");
+      setError(message);
+    };
+
+    const scheduleAutoReconnect = (message: string) => {
+      if (disposed || generationRef.current !== generation || retryTimerRef.current !== null) {
+        return;
+      }
+      const attempt = retryAttemptRef.current + 1;
+      if (attempt > AUTO_RECONNECT_MAX_ATTEMPTS) {
+        finishWithError(`${message}，自动重连失败，请手动重连`);
+        return;
+      }
+
+      retryAttemptRef.current = attempt;
+      setStatus("connecting");
+      setError(`${message}，正在自动重连（${attempt}/${AUTO_RECONNECT_MAX_ATTEMPTS}）…`);
+      // Reserve the retry slot before tearing down the media element. Calling
+      // video.load() can synchronously emit another error event, which should
+      // not consume a second attempt while this retry is already queued.
+      retryTimerRef.current = 0;
+      destroyMedia();
+      void proxyQueue.enqueue(stopProxy).then(
+        () => {
+          if (disposed || generationRef.current !== generation) return;
+          retryTimerRef.current = window.setTimeout(
+            () => {
+              retryTimerRef.current = null;
+              if (!disposed && generationRef.current === generation) {
+                setReconnectToken((token) => token + 1);
+              }
+            },
+            AUTO_RECONNECT_DELAYS_MS[attempt - 1] ?? AUTO_RECONNECT_DELAYS_MS.at(-1)!,
+          );
+        },
+        () => {
+          if (disposed || generationRef.current !== generation) return;
+          retryTimerRef.current = window.setTimeout(
+            () => {
+              retryTimerRef.current = null;
+              if (!disposed && generationRef.current === generation) {
+                setReconnectToken((token) => token + 1);
+              }
+            },
+            AUTO_RECONNECT_DELAYS_MS[attempt - 1] ?? AUTO_RECONNECT_DELAYS_MS.at(-1)!,
+          );
+        },
+      );
+    };
+    autoReconnectRef.current = scheduleAutoReconnect;
+
     if (!channelUrl) {
       destroyMedia();
+      retryAttemptRef.current = 0;
       setStatus("idle");
       setError(null);
       void proxyQueue.enqueue(stopProxy);
@@ -124,6 +218,9 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
 
     setStatus("connecting");
     setError(null);
+    const playbackKind = iptvPlaybackKind(channelUrl);
+    const xgModulesPromise = loadXgPlayerModules(playbackKind);
+    void xgModulesPromise.catch(() => {});
 
     void proxyQueue
       .enqueue(async () => {
@@ -134,13 +231,11 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
 
         try {
           destroyMedia();
-          const hlsCandidate =
-            !isMpegTransportStream(channelUrl) && !isProgressiveVideo(channelUrl);
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
             url: channelUrl,
             headers: channelHeaders,
             sessionId,
-            hls: hlsCandidate,
+            hls: playbackKind === "hls",
           });
           if (disposed || generationRef.current !== generation) {
             await stopProxy();
@@ -148,43 +243,60 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
           }
 
           const video = videoRef.current;
-          if (!video) throw new Error("播放器尚未准备好");
+          const playerRoot = playerRootRef.current;
+          if (!video || !playerRoot) throw new Error("播放器尚未准备好");
           const playbackUrl = `${localUrl}?t=${Date.now()}_${generation}`;
-          const startPlayback = () => {
+          const startPlayback = (player: XgPlayerInstance) => {
             if (disposed || generationRef.current !== generation) return;
-            void video.play().then(
-              () => {
-                if (!disposed && generationRef.current === generation) setStatus("playing");
-              },
-              () => {
-                if (!disposed && generationRef.current === generation) setStatus("ready");
-              },
-            );
+            const isCurrentPlayer = () =>
+              !disposed && generationRef.current === generation && playerRef.current === player;
+            const markPlaying = () => {
+              if (!isCurrentPlayer()) return;
+              retryAttemptRef.current = 0;
+              setError(null);
+              setStatus("playing");
+            };
+            requestPlayerAutoplay(player, video, isCurrentPlayer, () => {}, markPlaying);
           };
           const reportError = (message: string) => {
             if (disposed || generationRef.current !== generation) return;
-            setStatus("error");
-            setError(message);
+            scheduleAutoReconnect(message);
           };
 
-          if (isMpegTransportStream(channelUrl)) {
-            const mpegts = await loadMpegts();
-            if (disposed || generationRef.current !== generation) {
-              await stopProxy();
-              return;
-            }
-            if (!mpegts.isSupported()) {
-              throw new Error("当前环境不支持此 MPEG-TS / FLV 频道");
-            }
-            const player = mpegts.createPlayer(
-              {
-                type: /\.flv(?:[?#]|$)/i.test(channelUrl) ? "flv" : "mpegts",
+          const modules = await xgModulesPromise;
+          if (disposed || generationRef.current !== generation) {
+            await stopProxy();
+            return;
+          }
+          const player = createXgPlayer(modules, {
+            root: playerRoot,
+            video,
+            url: playbackUrl,
+            kind: playbackKind,
+            isLive: playbackKind !== "native",
+            hls: {
+              enableWorker: true,
+              lowLatencyMode: true,
+              backBufferLength: 30,
+            },
+            flv: {
+              isLive: true,
+              retryCount: 3,
+              retryDelay: 1_000,
+              bufferBehind: 15,
+              maxLatency: 3,
+              targetLatency: 0.5,
+              mseLowLatency: true,
+              enableStartGapJump: true,
+            },
+            mpegts: {
+              mediaDataSource: {
+                type: "mpegts",
                 isLive: true,
-                url: playbackUrl,
                 hasAudio: true,
                 hasVideo: true,
               },
-              {
+              mpegtsConfig: {
                 enableWorker: false,
                 enableStashBuffer: true,
                 stashInitialSize: 384,
@@ -193,72 +305,23 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
                 liveBufferLatencyMinRemain: 0.5,
                 autoCleanupSourceBuffer: true,
               },
-            );
-            mpegtsRef.current = player;
-            player.on(mpegts.Events.ERROR, (_type, _detail, info) => {
-              const detail =
-                info && typeof info === "object" && "msg" in info
-                  ? String((info as { msg?: string }).msg ?? "")
-                  : "";
-              reportError(detail || "该频道的 MPEG-TS / FLV 流播放失败");
-            });
-            player.attachMediaElement(video);
-            player.load();
-            startPlayback();
-            return;
-          }
-
-          if (isProgressiveVideo(channelUrl)) {
-            video.src = playbackUrl;
-            video.load();
-            startPlayback();
-            return;
-          }
-
-          if (Hls.isSupported()) {
-            const hls = new Hls({
-              enableWorker: true,
-              lowLatencyMode: true,
-              backBufferLength: 30,
-            });
-            hlsRef.current = hls;
-            hls.on(Hls.Events.MANIFEST_PARSED, startPlayback);
-            hls.on(Hls.Events.ERROR, (_event, data) => {
-              if (!data.fatal) return;
-              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                setStatus("connecting");
-                hls.startLoad();
-                return;
-              }
-              if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                hls.recoverMediaError();
-                return;
-              }
-              reportError(`该频道的 HLS 流播放失败：${data.details}`);
-              try {
-                hls.destroy();
-              } catch {
-                // A fatal parser error may already have torn down internals.
-              }
-            });
-            hls.loadSource(playbackUrl);
-            hls.attachMedia(video);
-            return;
-          }
-
-          if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = playbackUrl;
-            video.load();
-            startPlayback();
-            return;
-          }
-          throw new Error("当前环境不支持 HLS 频道播放");
+            },
+          });
+          playerRef.current = player;
+          const reportXgError = (cause: unknown) => {
+            if (playerRef.current !== player) return;
+            const fallback =
+              playbackKind === "hls" ? "该频道的 HLS 流播放失败" : "该频道的视频流播放失败";
+            reportError(xgPlayerErrorMessage(cause, fallback));
+          };
+          player.on("error", reportXgError);
+          if (playbackKind === "mpegts") player.on("mpegts_error", reportXgError);
+          startPlayback(player);
         } catch (cause) {
           if (disposed || generationRef.current !== generation) return;
           const message =
             cause instanceof Error ? cause.message : "频道播放初始化失败，请切换线路或重试";
-          setStatus("error");
-          setError(message);
+          scheduleAutoReconnect(message);
           destroyMedia();
           await stopProxy();
         }
@@ -269,12 +332,17 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
 
     return () => {
       disposed = true;
+      autoReconnectRef.current = () => {};
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
       destroyMedia();
       void proxyQueue.enqueue(stopProxy);
     };
-  }, [channelHeaders, channelId, channelUrl, reloadToken]);
+  }, [channelHeaders, channelId, channelUrl, reconnectToken, reloadToken]);
 
-  const statusText: Record<PlaybackStatus, string> = {
+  const statusText: Record<IptvPlaybackStatus, string> = {
     idle: "选择一个频道开始观看",
     connecting: "正在连接频道…",
     ready: "频道已就绪，点击播放器开始",
@@ -283,25 +351,35 @@ export function IptvPlayer({ channel, reloadToken }: IptvPlayerProps) {
   };
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-border-subtle bg-black shadow-sm">
-      <div className="relative aspect-video min-h-56 bg-muted/20">
-        <video
-          ref={videoRef}
-          controls
-          playsInline
-          className="size-full bg-black object-contain"
-          aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
-          onPlaying={() => setStatus("playing")}
-          onPause={() => setStatus((current) => (current === "playing" ? "ready" : current))}
-          onWaiting={() => setStatus((current) => (current === "playing" ? "connecting" : current))}
-          onCanPlay={() => setStatus((current) => (current === "connecting" ? "ready" : current))}
-          onError={() => {
-            if (status !== "error") {
-              setStatus("error");
-              setError("浏览器无法解码此频道流");
+    <section className="relative w-full overflow-hidden rounded-2xl border border-border-subtle bg-black shadow-sm">
+      <div data-iptv-player-stage className="relative aspect-video bg-muted/20">
+        <div
+          ref={playerRootRef}
+          data-player-engine-root
+          className="absolute inset-0 size-full overflow-hidden bg-black"
+        >
+          <video
+            ref={videoRef}
+            data-player-video
+            controls
+            playsInline
+            className="absolute inset-0 size-full bg-black object-contain"
+            aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
+            onPlaying={() => {
+              retryAttemptRef.current = 0;
+              setError(null);
+              setStatus("playing");
+            }}
+            onPause={() => setStatus((current) => (current === "playing" ? "ready" : current))}
+            onWaiting={() =>
+              setStatus((current) => (current === "playing" ? "connecting" : current))
             }
-          }}
-        />
+            onCanPlay={() => setStatus((current) => (current === "connecting" ? "ready" : current))}
+            onError={() => {
+              autoReconnectRef.current("浏览器无法解码此频道流");
+            }}
+          />
+        </div>
 
         {!channel && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">

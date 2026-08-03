@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, RefreshCw, Tv } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { IptvPlayer } from "./IptvPlayer";
+import { IptvPlayer, type IptvPlaybackStatus } from "./IptvPlayer";
 import { iptvHomePath, iptvReturnPathFromState } from "./iptvRoute";
 import { builtInSources, isHttpUrl, playlistSourceFromRoute } from "./playlistSource";
 import type { IptvChannel } from "./types";
@@ -18,6 +18,8 @@ type IptvPlayerTopBarProps = {
   title: string;
   sourceLabel: string;
   group: string | null;
+  status: IptvPlaybackStatus;
+  reconnecting: boolean;
   reconnectEnabled: boolean;
   onBack: () => void;
   onReconnect: () => void;
@@ -27,6 +29,8 @@ function IptvPlayerTopBar({
   title,
   sourceLabel,
   group,
+  status,
+  reconnecting,
   reconnectEnabled,
   onBack,
   onReconnect,
@@ -70,17 +74,37 @@ function IptvPlayerTopBar({
             {group}
           </Badge>
         )}
+        {status === "playing" && (
+          <Badge variant="secondary" className="hidden sm:inline-flex">
+            播放中
+          </Badge>
+        )}
+        {status === "connecting" && (
+          <Badge variant="outline" className="hidden sm:inline-flex">
+            <Spinner data-icon="inline-start" aria-hidden />
+            连接中
+          </Badge>
+        )}
+        {status === "error" && (
+          <Badge variant="destructive" className="hidden sm:inline-flex">
+            播放失败
+          </Badge>
+        )}
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Button
               variant="ghost"
               size="sm"
-              disabled={!reconnectEnabled}
+              disabled={!reconnectEnabled || reconnecting}
               aria-label="重新连接频道"
               onClick={onReconnect}
             >
-              <RefreshCw data-icon="inline-start" aria-hidden />
-              <span className="hidden sm:inline">重连</span>
+              {reconnecting ? (
+                <Spinner data-icon="inline-start" aria-hidden />
+              ) : (
+                <RefreshCw data-icon="inline-start" aria-hidden />
+              )}
+              <span className="hidden sm:inline">{reconnecting ? "重连中" : "重连"}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>重新连接频道</TooltipContent>
@@ -103,6 +127,9 @@ export function IptvPlayerPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [reloadToken, setReloadToken] = useState(0);
+  const [playbackStatus, setPlaybackStatus] = useState<IptvPlaybackStatus>("idle");
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [manualReconnect, setManualReconnect] = useState(false);
   const iptvCustomM3uUrl = useSettingsStore((state) => state.iptvCustomM3uUrl);
 
   const sourceId = searchParams.get("source");
@@ -120,6 +147,22 @@ export function IptvPlayerPage() {
   const query = searchParams.get("q");
   const homePath = iptvHomePath({ source, group, query });
   const returnPath = iptvReturnPathFromState(location.state) ?? homePath;
+
+  const handlePlaybackStatus = useCallback(
+    (nextStatus: IptvPlaybackStatus, nextError: string | null) => {
+      setPlaybackStatus(nextStatus);
+      setPlaybackError(nextError);
+      if (nextStatus !== "connecting") setManualReconnect(false);
+    },
+    [],
+  );
+
+  const handleReconnect = useCallback(() => {
+    setManualReconnect(true);
+    setPlaybackStatus("connecting");
+    setPlaybackError(null);
+    setReloadToken((token) => token + 1);
+  }, []);
 
   const playlistQuery = useQuery({
     queryKey: ["iptv_playlist", source.url],
@@ -147,9 +190,11 @@ export function IptvPlayerPage() {
       title={title}
       sourceLabel={source.label}
       group={channelGroup}
-      reconnectEnabled={channel !== null}
+      status={playbackStatus}
+      reconnecting={manualReconnect || playbackStatus === "connecting"}
+      reconnectEnabled={channel !== null && playbackStatus !== "connecting"}
       onBack={goBack}
-      onReconnect={() => setReloadToken((token) => token + 1)}
+      onReconnect={handleReconnect}
     />
   );
 
@@ -222,8 +267,12 @@ export function IptvPlayerPage() {
       {topBar}
       <main className="flex min-h-0 flex-1 flex-col bg-black">
         <div className="flex min-h-0 flex-1 items-center justify-center p-3 md:p-5">
-          <div className="aspect-video h-full max-h-full max-w-full">
-            <IptvPlayer channel={channel} reloadToken={reloadToken} />
+          <div className="flex aspect-video h-full max-h-full max-w-full items-center">
+            <IptvPlayer
+              channel={channel}
+              reloadToken={reloadToken}
+              onStatusChange={handlePlaybackStatus}
+            />
           </div>
         </div>
         <footer
@@ -232,6 +281,26 @@ export function IptvPlayerPage() {
         >
           <Badge variant="outline">{source.label}</Badge>
           {channel.group && <Badge variant="secondary">{channel.group}</Badge>}
+          <Badge
+            variant={
+              playbackStatus === "playing"
+                ? "secondary"
+                : playbackStatus === "error"
+                  ? "destructive"
+                  : "outline"
+            }
+            title={playbackError ?? undefined}
+            aria-live="polite"
+          >
+            {playbackStatus === "connecting" && <Spinner data-icon="inline-start" aria-hidden />}
+            {playbackStatus === "playing"
+              ? "播放中"
+              : playbackStatus === "error"
+                ? "播放失败"
+                : playbackStatus === "ready"
+                  ? "已就绪"
+                  : "连接中"}
+          </Badge>
           <p className="min-w-0 flex-1 text-xs text-muted-foreground">
             仅观看你所在地允许访问、且你有权使用的频道。
           </p>

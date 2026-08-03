@@ -253,7 +253,9 @@ body {
     display: none;
   }
 
-  .app-shell [data-slot="app-content"] {
+  /* Padding lives on the scrolling page wrapper, not the clipped main pane, so
+     the entrance transform cannot enlarge an ancestor's scrollable area. */
+  .app-shell [data-slot="app-page"] {
     padding: 0.75rem;
     padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
   }
@@ -317,6 +319,18 @@ html.overlay-window #root {
 * {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent) transparent;
+}
+
+/* Keep the compact player chrome from changing height when its action row
+   briefly overflows while a state button receives focus. Touch and wheel
+   scrolling remain available; only the layout-affecting scrollbar is hidden. */
+.player-controls-actions {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.player-controls-actions::-webkit-scrollbar {
+  display: none;
 }
 
 @utility focus-ring {

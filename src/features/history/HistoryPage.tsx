@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
@@ -18,22 +18,11 @@ import { RefreshFab } from "@/shared/components/RefreshFab";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
-import { isSiteEnabled } from "@/shared/siteId";
+import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import type { DanmakuSendHistoryItem, HistoryItem } from "@/shared/types/live";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
+import type { DanmakuSendHistoryItem, HistoryItem, SiteId } from "@/shared/types/live";
+import { historyPlatformFromSearch, HISTORY_PLATFORM_PARAM } from "./historyRoute";
+import { useHistoryShellStore, type HistoryTab } from "./historyShellStore";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -53,14 +42,88 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notify } from "@/components/ui/toast";
 import { SITE_LABELS } from "@/lib/utils";
 
-type HistoryTab = "watch" | "danmaku";
-
 const HISTORY_TABS: readonly HistoryTab[] = ["watch", "danmaku"];
+
+type HistoryDateGroup<T> = {
+  key: string;
+  label: string;
+  items: T[];
+};
+
+type HistoryPlatformGroup<T> = {
+  siteId: SiteId;
+  count: number;
+  dates: HistoryDateGroup<T>[];
+};
+
+function startOfLocalDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function dateKey(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return `invalid:${timestamp}`;
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+function dateLabel(timestamp: number, today: number, yesterday: number): string {
+  const day = startOfLocalDay(timestamp);
+  if (day === today) return "今天";
+  if (day === yesterday) return "昨天";
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? "未知日期"
+    : date.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
+}
+
+function groupHistory<T extends { site_id: SiteId }>(
+  items: readonly T[],
+  getTimestamp: (item: T) => number,
+  platformFilter: "all" | SiteId,
+  disabledSiteIds: unknown,
+): HistoryPlatformGroup<T>[] {
+  const visiblePlatforms = enabledSiteIds(disabledSiteIds).filter(
+    (siteId) => platformFilter === "all" || siteId === platformFilter,
+  );
+  const byPlatform = new Map<SiteId, T[]>();
+  for (const item of items) {
+    if (!isSiteEnabled(item.site_id, disabledSiteIds)) continue;
+    if (platformFilter !== "all" && item.site_id !== platformFilter) continue;
+    const current = byPlatform.get(item.site_id) ?? [];
+    current.push(item);
+    byPlatform.set(item.site_id, current);
+  }
+
+  const today = startOfLocalDay(Date.now());
+  const yesterday = today - 86_400_000;
+  return visiblePlatforms.flatMap((siteId) => {
+    const platformItems = byPlatform.get(siteId);
+    if (!platformItems || platformItems.length === 0) return [];
+    platformItems.sort((left, right) => getTimestamp(right) - getTimestamp(left));
+    const dateMap = new Map<string, T[]>();
+    for (const item of platformItems) {
+      const key = dateKey(getTimestamp(item));
+      const current = dateMap.get(key) ?? [];
+      current.push(item);
+      dateMap.set(key, current);
+    }
+    const dates = [...dateMap.entries()]
+      .map(([key, dateItems]) => ({
+        key,
+        label: dateLabel(getTimestamp(dateItems[0]!), today, yesterday),
+        items: dateItems,
+        timestamp: getTimestamp(dateItems[0]!),
+      }))
+      .sort((left, right) => right.timestamp - left.timestamp)
+      .map(({ key, label, items: dateItems }) => ({ key, label, items: dateItems }));
+    return [{ siteId, count: platformItems.length, dates }];
+  });
+}
 
 function formatTime(timestamp: number): string {
   const watchedAt = new Date(timestamp);
@@ -88,7 +151,6 @@ type HistoryCardProps = {
 };
 
 function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
-  const platform = SITE_LABELS[item.site_id] ?? item.site_id;
   const title = item.title || "未命名直播间";
 
   return (
@@ -116,7 +178,6 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
             {item.user_name || "未知主播"}
           </span>
           <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Badge variant="outline">{platform}</Badge>
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <Clock3 className="size-3.5" aria-hidden />
               {formatTime(item.watched_at)}
@@ -153,8 +214,6 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
 }
 
 function DanmakuSendHistoryCard({ item }: { item: DanmakuSendHistoryItem }) {
-  const platform = SITE_LABELS[item.site_id] ?? item.site_id;
-
   return (
     <Card size="sm">
       <CardHeader>
@@ -162,7 +221,6 @@ function DanmakuSendHistoryCard({ item }: { item: DanmakuSendHistoryItem }) {
           <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
             <SiteLogo siteId={item.site_id} className="size-4" />
           </span>
-          <Badge variant="outline">{platform}</Badge>
         </CardTitle>
         <CardAction>
           <time className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -178,12 +236,64 @@ function DanmakuSendHistoryCard({ item }: { item: DanmakuSendHistoryItem }) {
   );
 }
 
+type HistoryPlatformSectionsProps<T extends { site_id: SiteId }> = {
+  groups: HistoryPlatformGroup<T>[];
+  itemKey: (item: T) => string;
+  renderItem: (item: T) => React.ReactNode;
+};
+
+function HistoryPlatformSections<T extends { site_id: SiteId }>({
+  groups,
+  itemKey,
+  renderItem,
+}: HistoryPlatformSectionsProps<T>) {
+  return (
+    <div className="flex flex-col gap-6">
+      {groups.map((group) => (
+        <section key={group.siteId} aria-labelledby={`history-platform-${group.siteId}`}>
+          <div className="mb-2.5 flex items-center gap-2 border-b border-border-subtle pb-2">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <SiteLogo siteId={group.siteId} className="size-4" />
+            </span>
+            <h2
+              id={`history-platform-${group.siteId}`}
+              className="text-sm font-semibold text-foreground"
+            >
+              {SITE_LABELS[group.siteId] ?? group.siteId}
+            </h2>
+            <span className="text-xs text-muted-foreground">{group.count} 条</span>
+          </div>
+          <div className="flex flex-col gap-4">
+            {group.dates.map((date) => (
+              <div key={date.key}>
+                <h3 className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <span>{date.label}</span>
+                  <span className="h-px flex-1 bg-border-subtle" />
+                </h3>
+                <ul className="flex flex-col gap-2.5">
+                  {date.items.map((item) => (
+                    <li key={itemKey(item)}>{renderItem(item)}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function HistoryPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<HistoryTab>("watch");
-  const [clearOpen, setClearOpen] = useState(false);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+  const historyPlatform = historyPlatformFromSearch(
+    searchParams.get(HISTORY_PLATFORM_PARAM),
+    disabledSiteIds,
+  );
 
   const watchHistoryQuery = useQuery({
     queryKey: ["history"],
@@ -200,7 +310,7 @@ export function HistoryPage() {
     mutationFn: () => invokeCmd<void>("history_clear"),
     onSuccess: () => {
       qc.setQueryData<HistoryItem[]>(["history"], []);
-      setClearOpen(false);
+      useHistoryShellStore.getState().setClearOpen(false);
       void qc.invalidateQueries({ queryKey: ["history"] });
     },
   });
@@ -209,7 +319,7 @@ export function HistoryPage() {
     mutationFn: () => invokeCmd<void>("danmaku_send_history_clear_all"),
     onSuccess: () => {
       qc.setQueriesData<DanmakuSendHistoryItem[]>({ queryKey: ["danmaku-send-history"] }, []);
-      setClearOpen(false);
+      useHistoryShellStore.getState().setClearOpen(false);
       void qc.invalidateQueries({ queryKey: ["danmaku-send-history"] });
     },
   });
@@ -234,8 +344,25 @@ export function HistoryPage() {
       (watchHistoryQuery.data ?? []).filter((item) => isSiteEnabled(item.site_id, disabledSiteIds)),
     [disabledSiteIds, watchHistoryQuery.data],
   );
-  const danmakuSendItems = danmakuSendHistoryQuery.data ?? [];
-  const canClear = activeTab === "watch" ? watchItems.length > 0 : danmakuSendItems.length > 0;
+  const danmakuSendItems = useMemo(
+    () =>
+      (danmakuSendHistoryQuery.data ?? []).filter((item) =>
+        isSiteEnabled(item.site_id, disabledSiteIds),
+      ),
+    [danmakuSendHistoryQuery.data, disabledSiteIds],
+  );
+  const watchGroups = useMemo(
+    () => groupHistory(watchItems, (item) => item.watched_at, historyPlatform, disabledSiteIds),
+    [disabledSiteIds, historyPlatform, watchItems],
+  );
+  const danmakuGroups = useMemo(
+    () => groupHistory(danmakuSendItems, (item) => item.sent_at, historyPlatform, disabledSiteIds),
+    [danmakuSendItems, disabledSiteIds, historyPlatform],
+  );
+  const canClear =
+    activeTab === "watch"
+      ? (watchHistoryQuery.data?.length ?? 0) > 0
+      : (danmakuSendHistoryQuery.data?.length ?? 0) > 0;
   const clearPending =
     activeTab === "watch"
       ? clearWatchHistoryMutation.isPending
@@ -252,25 +379,21 @@ export function HistoryPage() {
 
   function handleTabChange(value: string) {
     if (value !== "watch" && value !== "danmaku") return;
-    setActiveTab(value);
-    setClearOpen(false);
+    const nextTab = value as HistoryTab;
+    setActiveTab(nextTab);
+    useHistoryShellStore.getState().setActiveTab(nextTab);
+    useHistoryShellStore.getState().setClearOpen(false);
   }
 
-  function resetActiveClearMutation() {
-    if (activeTab === "watch") {
-      clearWatchHistoryMutation.reset();
-    } else {
-      clearDanmakuSendHistoryMutation.reset();
-    }
-  }
+  const resetActiveClearMutation = useCallback(() => {
+    if (activeTab === "watch") clearWatchHistoryMutation.reset();
+    else clearDanmakuSendHistoryMutation.reset();
+  }, [activeTab, clearDanmakuSendHistoryMutation, clearWatchHistoryMutation]);
 
-  function clearActiveHistory() {
-    if (activeTab === "watch") {
-      clearWatchHistoryMutation.mutate();
-    } else {
-      clearDanmakuSendHistoryMutation.mutate();
-    }
-  }
+  const clearActiveHistory = useCallback(() => {
+    if (activeTab === "watch") clearWatchHistoryMutation.mutate();
+    else clearDanmakuSendHistoryMutation.mutate();
+  }, [activeTab, clearDanmakuSendHistoryMutation, clearWatchHistoryMutation]);
 
   const historyTabSwipe = useHorizontalSwipe({
     items: HISTORY_TABS,
@@ -283,6 +406,30 @@ export function HistoryPage() {
     activeTab === "watch" ? watchHistoryQuery.refetch() : danmakuSendHistoryQuery.refetch();
   const historyRefreshing =
     activeTab === "watch" ? watchHistoryQuery.isRefetching : danmakuSendHistoryQuery.isRefetching;
+
+  useEffect(() => {
+    const shell = useHistoryShellStore.getState();
+    shell.register({
+      activeTab,
+      canClear,
+      clearPending,
+      clearError,
+      clearTitle,
+      clearDescription,
+      resetActiveMutation: resetActiveClearMutation,
+      clearActiveHistory,
+    });
+    return () => useHistoryShellStore.getState().reset();
+  }, [
+    activeTab,
+    canClear,
+    clearActiveHistory,
+    clearDescription,
+    clearError,
+    clearPending,
+    clearTitle,
+    resetActiveClearMutation,
+  ]);
 
   return (
     <PullToRefresh
@@ -304,63 +451,7 @@ export function HistoryPage() {
         label="刷新历史记录"
       />
       <div className="flex min-h-full flex-col gap-4 touch-pan-y">
-        <PageHeader
-          title="历史记录"
-          actions={
-            <AlertDialog
-              open={clearOpen}
-              onOpenChange={(open) => {
-                if (clearPending) return;
-                if (open) resetActiveClearMutation();
-                setClearOpen(open);
-              }}
-            >
-              <AlertDialogTrigger
-                render={
-                  <Button variant="outline" size="sm" disabled={!canClear || clearPending}>
-                    <Trash2 data-icon="inline-start" />
-                    清空
-                  </Button>
-                }
-              />
-              <AlertDialogContent size="sm">
-                <AlertDialogHeader>
-                  <AlertDialogMedia className="bg-destructive/10 text-destructive">
-                    <Trash2 aria-hidden />
-                  </AlertDialogMedia>
-                  <AlertDialogTitle>{clearTitle}</AlertDialogTitle>
-                  <AlertDialogDescription>{clearDescription}</AlertDialogDescription>
-                </AlertDialogHeader>
-                {clearError && (
-                  <p role="alert" className="text-sm text-destructive">
-                    清空失败，请重试。
-                  </p>
-                )}
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={clearPending}>取消</AlertDialogCancel>
-                  <AlertDialogAction
-                    type="button"
-                    variant="destructive"
-                    disabled={clearPending}
-                    onClick={clearActiveHistory}
-                  >
-                    {clearPending ? (
-                      <>
-                        <Spinner data-icon="inline-start" />
-                        清空中…
-                      </>
-                    ) : (
-                      <>
-                        <Trash2 data-icon="inline-start" />
-                        清空
-                      </>
-                    )}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          }
-        />
+        <PageHeader title="历史记录" />
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-4">
           <TabsList
@@ -390,7 +481,7 @@ export function HistoryPage() {
 
             {!watchHistoryQuery.isLoading &&
               !watchHistoryQuery.isError &&
-              watchItems.length === 0 && (
+              watchGroups.length === 0 && (
                 <Empty className="min-h-64 py-12">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -408,26 +499,26 @@ export function HistoryPage() {
                 </Empty>
               )}
 
-            {watchItems.length > 0 && (
-              <ul className="flex flex-col gap-2.5">
-                {watchItems.map((item) => (
-                  <li key={`${item.site_id}:${item.room_id}:${item.watched_at}`}>
-                    <HistoryCard
-                      item={item}
-                      onOpen={() =>
-                        navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
-                      }
-                      onRemove={() =>
-                        removeWatchHistoryMutation.mutate({
-                          siteId: item.site_id,
-                          roomId: item.room_id,
-                        })
-                      }
-                      isRemoving={removeWatchHistoryMutation.isPending}
-                    />
-                  </li>
-                ))}
-              </ul>
+            {watchGroups.length > 0 && (
+              <HistoryPlatformSections
+                groups={watchGroups}
+                itemKey={(item) => `${item.site_id}:${item.room_id}:${item.watched_at}`}
+                renderItem={(item) => (
+                  <HistoryCard
+                    item={item}
+                    onOpen={() =>
+                      navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
+                    }
+                    onRemove={() =>
+                      removeWatchHistoryMutation.mutate({
+                        siteId: item.site_id,
+                        roomId: item.room_id,
+                      })
+                    }
+                    isRemoving={removeWatchHistoryMutation.isPending}
+                  />
+                )}
+              />
             )}
           </TabsContent>
 
@@ -444,7 +535,7 @@ export function HistoryPage() {
 
             {!danmakuSendHistoryQuery.isLoading &&
               !danmakuSendHistoryQuery.isError &&
-              danmakuSendItems.length === 0 && (
+              danmakuGroups.length === 0 && (
                 <Empty className="min-h-64 py-12">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -456,14 +547,12 @@ export function HistoryPage() {
                 </Empty>
               )}
 
-            {danmakuSendItems.length > 0 && (
-              <ul className="flex flex-col gap-2.5">
-                {danmakuSendItems.map((item) => (
-                  <li key={`${item.site_id}:${item.content}`}>
-                    <DanmakuSendHistoryCard item={item} />
-                  </li>
-                ))}
-              </ul>
+            {danmakuGroups.length > 0 && (
+              <HistoryPlatformSections
+                groups={danmakuGroups}
+                itemKey={(item) => `${item.site_id}:${item.sent_at}:${item.content}`}
+                renderItem={(item) => <DanmakuSendHistoryCard item={item} />}
+              />
             )}
           </TabsContent>
         </Tabs>

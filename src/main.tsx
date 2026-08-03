@@ -7,6 +7,7 @@ import { getClientPlatform } from "./shared/clientPlatform";
 import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Toaster } from "./components/ui/toast";
+import { MotionProvider } from "./shared/motion/MotionProvider";
 import { preloadImageProxy } from "./shared/api/imageProxy";
 import "./styles.css";
 
@@ -36,11 +37,13 @@ void preloadImageProxy();
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster>
-          <App />
-        </Toaster>
-      </TooltipProvider>
+      <MotionProvider>
+        <TooltipProvider>
+          <Toaster>
+            <App />
+          </Toaster>
+        </TooltipProvider>
+      </MotionProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

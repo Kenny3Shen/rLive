@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Shell } from "./layout/Shell";
 import { AndroidBackNavigator } from "./androidBackNavigation";
 import { HomePage } from "../features/home/HomePage";
+import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
 
 // Keep the discovery page on the critical path, but defer secondary pages
 // (especially the player and its danmaku renderer) until a route needs them.
@@ -80,6 +81,7 @@ export function App() {
   return (
     <BrowserRouter>
       <AndroidBackNavigator />
+      <IptvStartupWarmup />
       <Suspense fallback={<RouteLoadingFallback />}>
         <Routes>
           <Route element={<Shell />}>
