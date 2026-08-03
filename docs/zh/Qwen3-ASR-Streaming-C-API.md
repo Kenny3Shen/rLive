@@ -1,6 +1,6 @@
 # Qwen3-ASR Streaming C API 暴露流程
 
-本文记录将 Qwen3-ASR 的逐 token streaming 从 CrispASR CLI 暴露给 Rust/Tauri（以及未来 WASM）的实施边界和建议流程。它是接口设计文档，不表示当前 rLive 已经启用逐 token 字幕；当前客户端仍使用 1–8 秒自适应窗口完成一次 `asr_transcribe` 后更新字幕。
+本文记录将 Qwen3-ASR 的逐 token streaming 从 CrispASR CLI 暴露给 Rust/Tauri（以及未来 WASM）的实施边界和建议流程。它是接口设计文档，不表示当前 rLive 已经启用逐 token 字幕；当前客户端使用设置中的固定 `1–6 秒`窗口（默认 `1 秒`）完成一次 `asr_transcribe` 后更新字幕。
 
 ## 现状核对
 
@@ -16,7 +16,7 @@
 
 需要同时定义两种“流式”，不要混为一个 API：
 
-1. **窗口级流式音频**：每 1–8 秒提交一个 PCM 窗口，窗口完成 encoder 后开始解码；这是当前 rLive 的实现，延迟可控、改动小。
+1. **窗口级流式音频**：每 1–6 秒提交一个 PCM 窗口，窗口完成 encoder 后开始解码；这是当前 rLive 的实现，延迟可控、改动小。
 2. **窗口内逐 token 流式解码**：同一个窗口的 encoder/prefill 完成后，每产生一个文本 token 就通知上层；它可以让字幕更早出现，但不能在 encoder 尚未完成时可靠地产生 token。
 
 Qwen3-ASR 属于第二种能力。它不是传统 CTC/Transducer 的逐帧增量模型，不能只把 `step_ms` 调小就得到相同效果。
@@ -126,7 +126,7 @@ while let Ok(event) = rx.recv() {
 
 ## 实时性与正确性检查清单
 
-- **窗口边界**：继续使用 1–8 秒和有限背压；不要为了 token 更早而无限缩短 encoder 窗口。
+- **窗口边界**：继续使用 1–6 秒和有限背压；不要为了 token 更早而无限缩短 encoder 窗口。
 - **VAD**：VAD 返回空片段时不启动 Qwen3 decode；有语音时 token 时间轴仍以窗口起点为偏移。
 - **时间戳**：Qwen3 当前 token callback 没有可靠的 token 时间戳；只能标记窗口范围，不能伪造逐 token 精确时间。
 - **去重**：重叠窗口会重复文本，采用 token/text LCS 或稳定前缀去重；final 前的临时 token 不应重复写入历史。
