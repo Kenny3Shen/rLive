@@ -1,13 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AsrComputeMode {
-    #[default]
-    Gpu,
-    Cpu,
-}
-
 /// Persisted application preferences (JSON in `settings_kv` key `app_settings`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppSettings {
@@ -61,14 +53,14 @@ pub struct AppSettings {
     /// disabled by default so first launch never downloads model data.
     #[serde(default)]
     pub asr_enabled: bool,
-    /// Device-local inference placement. GPU builds use the platform backend;
-    /// CPU remains available in the same binary as a compatibility fallback.
-    #[serde(default)]
-    pub asr_compute_mode: AsrComputeMode,
     /// Device-local Silero VAD prefilter. Disabled by default; when enabled it
     /// skips Qwen3 inference for chunks where CrispASR detects no speech.
     #[serde(default)]
     pub asr_vad_enabled: bool,
+    /// Device-local fixed live-caption window in seconds, clamped to 1.0..=6.0
+    /// with one decimal place.
+    #[serde(default = "default_asr_window_seconds")]
+    pub asr_window_seconds: f32,
     /// Player subtitle font size in CSS pixels.
     #[serde(default = "default_asr_font_size")]
     pub asr_font_size: u32,
@@ -120,6 +112,10 @@ fn default_asr_font_size() -> u32 {
     20
 }
 
+fn default_asr_window_seconds() -> f32 {
+    1.0
+}
+
 fn default_super_chat_enabled() -> bool {
     true
 }
@@ -149,8 +145,8 @@ impl Default for AppSettings {
             quality_level: default_quality_level(),
             danmaku_send_enabled: false,
             asr_enabled: false,
-            asr_compute_mode: AsrComputeMode::default(),
             asr_vad_enabled: false,
+            asr_window_seconds: default_asr_window_seconds(),
             asr_font_size: default_asr_font_size(),
             iptv_custom_m3u_url: None,
             iptv_availability_auto_check: true,
@@ -196,8 +192,8 @@ mod tests {
         assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
         assert!(!settings.asr_enabled);
-        assert_eq!(settings.asr_compute_mode, AsrComputeMode::Gpu);
         assert!(!settings.asr_vad_enabled);
+        assert_eq!(settings.asr_window_seconds, 1.0);
         assert!(settings.iptv_custom_m3u_url.is_none());
         assert!(settings.iptv_availability_auto_check);
         assert_eq!(settings.iptv_availability_auto_check_interval_hours, 1);

@@ -12,7 +12,6 @@ import type { AppSettings, SiteId } from "../types/live";
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
-export type AsrComputeMode = "gpu" | "cpu";
 
 // `settings_set` writes one complete object. Serialize writes so rapid room
 // controls (for example two slider commits) cannot resolve out of order and
@@ -41,18 +40,24 @@ function parseQualityLevel(value: unknown): QualityLevel {
   return "high";
 }
 
-function parseAsrComputeMode(value: unknown): AsrComputeMode {
-  return value === "cpu" ? "cpu" : "gpu";
-}
-
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
 const ASR_FONT_SIZE_DEFAULT = 20;
+const ASR_WINDOW_SECONDS_MIN = 1;
+const ASR_WINDOW_SECONDS_MAX = 6;
+const ASR_WINDOW_SECONDS_DEFAULT = 1;
 
 function parseAsrFontSize(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric)) return ASR_FONT_SIZE_DEFAULT;
   return Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(numeric)));
+}
+
+function parseAsrWindowSeconds(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return ASR_WINDOW_SECONDS_DEFAULT;
+  const bounded = Math.min(ASR_WINDOW_SECONDS_MAX, Math.max(ASR_WINDOW_SECONDS_MIN, numeric));
+  return Math.round(bounded * 10) / 10;
 }
 
 type SettingsState = {
@@ -77,8 +82,8 @@ type SettingsState = {
   /** True while the local multi-platform sending permission reaches the backend. */
   danmakuSendPending: boolean;
   asrEnabled: boolean;
-  asrComputeMode: AsrComputeMode;
   asrVadEnabled: boolean;
+  asrWindowSeconds: number;
   asrFontSize: number;
   /** True while the device-local ASR choice reaches the Rust backend. */
   asrPending: boolean;
@@ -101,8 +106,8 @@ type SettingsState = {
   setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
-  setAsrComputeMode: (mode: AsrComputeMode) => Promise<void>;
   setAsrVadEnabled: (enabled: boolean) => Promise<void>;
+  setAsrWindowSeconds: (seconds: number) => Promise<void>;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
@@ -131,8 +136,8 @@ const defaultSettings: AppSettings = {
   quality_level: "high",
   danmaku_send_enabled: false,
   asr_enabled: false,
-  asr_compute_mode: "gpu",
   asr_vad_enabled: false,
+  asr_window_seconds: ASR_WINDOW_SECONDS_DEFAULT,
   asr_font_size: ASR_FONT_SIZE_DEFAULT,
   iptv_custom_m3u_url: null,
 };
@@ -157,8 +162,8 @@ function toAppSettings(state: SettingsState): AppSettings {
     quality_level: state.qualityLevel,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
-    asr_compute_mode: state.asrComputeMode,
     asr_vad_enabled: state.asrVadEnabled,
+    asr_window_seconds: state.asrWindowSeconds,
     asr_font_size: state.asrFontSize,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
   };
@@ -186,8 +191,8 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
-      asrComputeMode: "gpu",
       asrVadEnabled: false,
+      asrWindowSeconds: ASR_WINDOW_SECONDS_DEFAULT,
       asrFontSize: ASR_FONT_SIZE_DEFAULT,
       asrPending: false,
       danmakuCookieRevision: 0,
@@ -260,24 +265,6 @@ export const useSettingsStore = create<SettingsState>()(
           }
         }
       },
-      setAsrComputeMode: async (asrComputeMode) => {
-        const epoch = ++asrSettingEpoch;
-        const previous = get().asrComputeMode;
-        if (asrComputeMode === previous) return;
-        set({ asrComputeMode, asrPending: true });
-        try {
-          await get().persistToBackend({ asr_compute_mode: asrComputeMode });
-          if (get().asrEnabled) await invokeCmd("asr_enable");
-        } catch (error) {
-          if (epoch === asrSettingEpoch) {
-            set({ asrComputeMode: previous });
-            await get().persistToBackend({ asr_compute_mode: previous });
-          }
-          throw error;
-        } finally {
-          if (epoch === asrSettingEpoch) set({ asrPending: false });
-        }
-      },
       setAsrVadEnabled: async (asrVadEnabled) => {
         const epoch = ++asrSettingEpoch;
         const previous = get().asrVadEnabled;
@@ -294,6 +281,19 @@ export const useSettingsStore = create<SettingsState>()(
           throw error;
         } finally {
           if (epoch === asrSettingEpoch) set({ asrPending: false });
+        }
+      },
+      setAsrWindowSeconds: async (seconds) => {
+        const next = parseAsrWindowSeconds(seconds);
+        const previous = get().asrWindowSeconds;
+        if (next === previous) return;
+        set({ asrWindowSeconds: next });
+        try {
+          await get().persistToBackend({ asr_window_seconds: next });
+        } catch (error) {
+          set({ asrWindowSeconds: previous });
+          await get().persistToBackend({ asr_window_seconds: previous });
+          throw error;
         }
       },
       markDanmakuCookieChanged: () => {
@@ -329,8 +329,8 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled ?? false,
-          asrComputeMode: parseAsrComputeMode(settings.asr_compute_mode),
           asrVadEnabled: settings.asr_vad_enabled ?? false,
+          asrWindowSeconds: parseAsrWindowSeconds(settings.asr_window_seconds),
           asrFontSize: parseAsrFontSize(settings.asr_font_size),
           asrPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,

@@ -1,11 +1,8 @@
-import {
-  ASR_DEFAULT_SEGMENT_SECONDS,
-  ASR_MAX_SEGMENT_SECONDS,
-  ASR_MIN_SEGMENT_SECONDS,
-} from "./adaptive";
-
 export const ASR_SAMPLE_RATE = 16_000;
-/** Initial window; AdaptiveAsrWindow can move it between 1 and 8 seconds. */
+export const ASR_MIN_SEGMENT_SECONDS = 1;
+export const ASR_MAX_SEGMENT_SECONDS = 6;
+export const ASR_DEFAULT_SEGMENT_SECONDS = 1;
+/** Default fixed live-caption window. Settings may change it within 1–6 seconds. */
 export const ASR_SEGMENT_SECONDS = ASR_DEFAULT_SEGMENT_SECONDS;
 export const ASR_OVERLAP_SECONDS = 0.25;
 

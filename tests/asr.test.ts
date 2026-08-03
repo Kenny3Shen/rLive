@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { AdaptiveAsrWindow } from "../src/features/asr/adaptive";
-import { downsamplePcm, encodePcmBase64, joinAsrCaptionText } from "../src/features/asr/audio";
+import {
+  ASR_DEFAULT_SEGMENT_SECONDS,
+  ASR_MAX_SEGMENT_SECONDS,
+  ASR_MIN_SEGMENT_SECONDS,
+  downsamplePcm,
+  encodePcmBase64,
+  joinAsrCaptionText,
+} from "../src/features/asr/audio";
 import {
   describeAsrModelStatus,
   supportsLocalAsr,
@@ -17,8 +23,6 @@ function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
     vad_model_size_bytes: 885_098,
     vad_enabled: false,
     vad_model_downloaded: false,
-    compute_mode: "gpu",
-    gpu_available: true,
     threads: 4,
     message: null,
     ...patch,
@@ -26,10 +30,10 @@ function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
 }
 
 describe("ASR model status", () => {
-  test("is available only in a Tauri desktop client", () => {
+  test("is available in a Tauri desktop and Android client", () => {
     expect(supportsLocalAsr({ tauriRuntime: true, platform: "desktop" })).toBe(true);
     expect(supportsLocalAsr({ tauriRuntime: false, platform: "desktop" })).toBe(false);
-    expect(supportsLocalAsr({ tauriRuntime: true, platform: "android" })).toBe(false);
+    expect(supportsLocalAsr({ tauriRuntime: true, platform: "android" })).toBe(true);
   });
 
   test("reports bounded download progress and ready state", () => {
@@ -48,7 +52,7 @@ describe("ASR model status", () => {
         enabled: true,
         supported: true,
       }).message,
-    ).toBe("模型已就绪（GPU），可在播放页开启字幕");
+    ).toBe("模型已就绪（CPU / 4 线程），可在播放页开启字幕");
   });
 
   test("keeps the downloaded model when the feature is disabled", () => {
@@ -62,7 +66,7 @@ describe("ASR model status", () => {
 
   test("reports the active CPU thread count", () => {
     expect(
-      describeAsrModelStatus(modelStatus({ state: "ready", compute_mode: "cpu", threads: 6 }), {
+      describeAsrModelStatus(modelStatus({ state: "ready", threads: 6 }), {
         enabled: true,
         supported: true,
       }).message,
@@ -87,7 +91,7 @@ describe("ASR model status", () => {
         modelStatus({ state: "ready", vad_enabled: true, vad_model_downloaded: true }),
         { enabled: true, supported: true },
       ).message,
-    ).toBe("模型已就绪（GPU + VAD），可在播放页开启字幕");
+    ).toBe("模型已就绪（CPU / 4 线程 + VAD），可在播放页开启字幕");
   });
 });
 
@@ -115,43 +119,11 @@ describe("ASR audio transport", () => {
   });
 });
 
-describe("adaptive ASR windows", () => {
-  test("shrinks after stable headroom and expands after backpressure", () => {
-    const controller = new AdaptiveAsrWindow();
-    expect(controller.segmentSeconds).toBe(6);
-
-    for (let index = 0; index < 3; index += 1) {
-      controller.observe({
-        audioSeconds: controller.segmentSeconds,
-        processingMs: controller.segmentSeconds * 300,
-        queueWaitMs: 0,
-        dropped: false,
-      });
-    }
-    expect(controller.segmentSeconds).toBe(5);
-
-    for (let index = 0; index < 2; index += 1) {
-      controller.observe({
-        audioSeconds: controller.segmentSeconds,
-        processingMs: controller.segmentSeconds * 1_100,
-        queueWaitMs: 700,
-        dropped: true,
-      });
-    }
-    expect(controller.segmentSeconds).toBe(6);
-  });
-
-  test("keeps the window inside the supported bounds", () => {
-    const controller = new AdaptiveAsrWindow(1);
-    for (let index = 0; index < 20; index += 1) {
-      controller.observe({ audioSeconds: 1, processingMs: 100, queueWaitMs: 0, dropped: false });
-    }
-    expect(controller.segmentSeconds).toBe(1);
-
-    for (let index = 0; index < 20; index += 1) {
-      controller.observe({ audioSeconds: 1, processingMs: 5_000, queueWaitMs: 2_000, dropped: true });
-    }
-    expect(controller.segmentSeconds).toBe(8);
+describe("fixed ASR windows", () => {
+  test("use a one-second default and a 1–6 second settings range", () => {
+    expect(ASR_DEFAULT_SEGMENT_SECONDS).toBe(1);
+    expect(ASR_MIN_SEGMENT_SECONDS).toBe(1);
+    expect(ASR_MAX_SEGMENT_SECONDS).toBe(6);
   });
 });
 

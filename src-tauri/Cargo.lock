@@ -837,6 +837,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "crispasr-sys"
+version = "0.8.25"
+source = "git+https://github.com/CrispStrobe/CrispASR?rev=6e5bf7ff1de640617726c93a017fd7df855874c4#6e5bf7ff1de640617726c93a017fd7df855874c4"
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3655,6 +3660,7 @@ dependencies = [
  "boa_engine",
  "brotli 7.0.0",
  "chrono",
+ "crispasr-sys",
  "dirs",
  "flate2",
  "futures-util",

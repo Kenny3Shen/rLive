@@ -50,8 +50,8 @@ impl ProfilePackage {
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.danmaku_send_enabled = false;
     settings.asr_enabled = false;
-    settings.asr_compute_mode = Default::default();
     settings.asr_vad_enabled = false;
+    settings.asr_window_seconds = Default::default();
     settings.iptv_custom_m3u_url = None;
 }
 
@@ -74,8 +74,8 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
         // changes cannot mistake these device-local choices for portable data.
         settings.remove("danmaku_send_enabled");
         settings.remove("asr_enabled");
-        settings.remove("asr_compute_mode");
         settings.remove("asr_vad_enabled");
+        settings.remove("asr_window_seconds");
         settings.remove("iptv_custom_m3u_url");
     }
     Ok(value)
@@ -198,7 +198,7 @@ pub fn merge_into_db(
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
     // Do not copy `danmaku_send_enabled`, `asr_enabled`,
-    // `asr_compute_mode`, `asr_vad_enabled`, or `iptv_custom_m3u_url`.
+    // `asr_vad_enabled`, `asr_window_seconds`, or `iptv_custom_m3u_url`.
     // A profile is portable/untrusted input; importing it must not grant
     // sending consent, enable this device's local ASR model, or replace this
     // device's private playlist address.
@@ -239,7 +239,6 @@ mod tests {
         let mut package = ProfilePackage::sample();
         package.settings.danmaku_send_enabled = true;
         package.settings.asr_enabled = true;
-        package.settings.asr_compute_mode = crate::models::settings::AsrComputeMode::Cpu;
         package.settings.asr_vad_enabled = true;
         package.settings.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
 
@@ -248,14 +247,12 @@ mod tests {
         let settings = v["settings"].as_object().unwrap();
         assert!(!settings.contains_key("danmaku_send_enabled"));
         assert!(!settings.contains_key("asr_enabled"));
-        assert!(!settings.contains_key("asr_compute_mode"));
         assert!(!settings.contains_key("asr_vad_enabled"));
         assert!(!settings.contains_key("iptv_custom_m3u_url"));
 
         let text = encode_package(&package).unwrap();
         assert!(!text.contains("danmaku_send_enabled"));
         assert!(!text.contains("asr_enabled"));
-        assert!(!text.contains("asr_compute_mode"));
         assert!(!text.contains("asr_vad_enabled"));
         assert!(!text.contains("iptv_custom_m3u_url"));
     }
@@ -273,7 +270,6 @@ mod tests {
         let mut local = AppSettings::default();
         local.danmaku_send_enabled = true;
         local.asr_enabled = true;
-        local.asr_compute_mode = crate::models::settings::AsrComputeMode::Cpu;
         local.asr_vad_enabled = true;
         local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
@@ -282,10 +278,6 @@ mod tests {
 
         assert!(!package.settings.danmaku_send_enabled);
         assert!(!package.settings.asr_enabled);
-        assert_eq!(
-            package.settings.asr_compute_mode,
-            crate::models::settings::AsrComputeMode::Gpu
-        );
         assert!(!package.settings.asr_vad_enabled);
         assert!(package.settings.iptv_custom_m3u_url.is_none());
     }
@@ -365,7 +357,6 @@ mod tests {
         let mut local = AppSettings::default();
         local.danmaku_send_enabled = true;
         local.asr_enabled = true;
-        local.asr_compute_mode = crate::models::settings::AsrComputeMode::Cpu;
         local.asr_vad_enabled = true;
         local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
@@ -373,7 +364,6 @@ mod tests {
         let mut package = ProfilePackage::sample();
         package.settings.danmaku_send_enabled = false;
         package.settings.asr_enabled = false;
-        package.settings.asr_compute_mode = crate::models::settings::AsrComputeMode::Gpu;
         package.settings.asr_vad_enabled = false;
         package.settings.iptv_custom_m3u_url =
             Some("https://untrusted.example.invalid/playlist.m3u".into());
@@ -383,10 +373,6 @@ mod tests {
         let after = settings::get(&conn).unwrap();
         assert!(after.danmaku_send_enabled);
         assert!(after.asr_enabled);
-        assert_eq!(
-            after.asr_compute_mode,
-            crate::models::settings::AsrComputeMode::Cpu
-        );
         assert!(after.asr_vad_enabled);
         assert_eq!(
             after.iptv_custom_m3u_url.as_deref(),

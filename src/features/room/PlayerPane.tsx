@@ -390,6 +390,7 @@ export function PlayerPane({
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
   const asrPending = useSettingsStore((state) => state.asrPending);
+  const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
   const asrFontSize = useSettingsStore((state) => state.asrFontSize);
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -460,6 +461,7 @@ export function PlayerPane({
     featureEnabled: asrEnabled,
     settingPending: asrPending,
     mediaAvailable: showHost,
+    windowSeconds: asrWindowSeconds,
   });
   // Android routes loudness through STREAM_MUSIC. Use native state whenever the
   // bridge is supported, even before the first getState resolves, so UI and
