@@ -4,7 +4,7 @@
 |------|------|
 | [用户指南](zh/用户指南.md) | 安装、日常使用与常见问题 |
 | [架构说明](zh/架构说明.md) | 前后端分层、数据流与关键模块 |
-| [本地语音字幕](zh/本地语音字幕.md) | CrispASR、Qwen3-ASR、CPU/GPU 多后端构建、VAD、窗口与字号设置 |
+| [本地语音字幕](zh/本地语音字幕.md) | CrispASR CPU 多线程、Qwen3-ASR、VAD、窗口与字号设置 |
 | [Qwen3-ASR Streaming C API 暴露流程](zh/Qwen3-ASR-Streaming-C-API.md) | 从 CLI `--live` 到 CrispASR C ABI、Rust FFI 与 Tauri 事件的实施步骤 |
 | [B站平台 API 文档](zh/B站平台API文档.md) | B 站接口、签名与弹幕协议 |
 | [斗鱼平台 API 文档](zh/斗鱼平台API文档.md) | 斗鱼接口与弹幕收发 |
