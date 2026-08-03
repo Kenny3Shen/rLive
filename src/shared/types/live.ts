@@ -155,10 +155,10 @@ export type AppSettings = {
   danmaku_send_enabled?: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */
   asr_enabled?: boolean;
-  /** Device-local CrispASR inference placement. */
-  asr_compute_mode?: "gpu" | "cpu";
   /** Device-local Silero VAD prefilter; excluded from profile import/export. */
   asr_vad_enabled?: boolean;
+  /** Device-local fixed live-caption window in seconds, limited to 1..=6. */
+  asr_window_seconds?: number;
   /** Player subtitle font size in CSS pixels. */
   asr_font_size?: number;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */

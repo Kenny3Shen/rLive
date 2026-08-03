@@ -614,6 +614,8 @@ function DanmakuSendField() {
 
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
+const ASR_WINDOW_SECONDS_MIN = 1;
+const ASR_WINDOW_SECONDS_MAX = 6;
 
 function AsrCaptionFontSizeField() {
   const fontSize = useSettingsStore((state) => state.asrFontSize);
@@ -637,7 +639,10 @@ function AsrCaptionFontSizeField() {
             if (Number.isFinite(next)) useSettingsStore.setState({ asrFontSize: next });
           }}
           onValueCommitted={(value) => {
-            const next = Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(Number(value))));
+            const next = Math.min(
+              ASR_FONT_SIZE_MAX,
+              Math.max(ASR_FONT_SIZE_MIN, Math.round(Number(value))),
+            );
             useSettingsStore.setState({ asrFontSize: next });
             void useSettingsStore.getState().persistToBackend({ asr_font_size: next });
           }}
@@ -650,13 +655,53 @@ function AsrCaptionFontSizeField() {
   );
 }
 
+function AsrWindowField({ disabled }: { disabled: boolean }) {
+  const windowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
+  const setWindowSeconds = useSettingsStore((state) => state.setAsrWindowSeconds);
+  const [draft, setDraft] = useState(windowSeconds);
+  const labelId = "asr-window-title";
+
+  useEffect(() => setDraft(windowSeconds), [windowSeconds]);
+
+  return (
+    <Field orientation="responsive" data-disabled={disabled || undefined}>
+      <FieldContent>
+        <FieldTitle id={labelId}>语音字幕窗口</FieldTitle>
+        <FieldDescription>
+          每个窗口完成后立即显示字幕；窗口越短延迟越低，但上下文和识别稳定性可能下降。
+        </FieldDescription>
+      </FieldContent>
+      <div className="flex min-w-52 items-center gap-3">
+        <Slider
+          aria-labelledby={labelId}
+          value={draft}
+          min={ASR_WINDOW_SECONDS_MIN}
+          max={ASR_WINDOW_SECONDS_MAX}
+          step={0.1}
+          disabled={disabled}
+          onValueChange={(value) => {
+            const next = Number(value);
+            if (Number.isFinite(next)) setDraft(next);
+          }}
+          onValueCommitted={(value) => {
+            const next = Number(value);
+            setDraft(next);
+            void setWindowSeconds(next);
+          }}
+        />
+        <Badge variant="secondary" className="min-w-14 justify-center tabular-nums">
+          {Number.isInteger(draft) ? draft : draft.toFixed(1)}s
+        </Badge>
+      </div>
+    </Field>
+  );
+}
+
 function AsrModelField() {
   const enabled = useSettingsStore((state) => state.asrEnabled);
-  const computeMode = useSettingsStore((state) => state.asrComputeMode);
   const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
   const pending = useSettingsStore((state) => state.asrPending);
   const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
-  const setComputeMode = useSettingsStore((state) => state.setAsrComputeMode);
   const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
   const model = useAsrModelStatus({ enabled });
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -681,16 +726,6 @@ function AsrModelField() {
     setActionError(null);
     try {
       await model.prepare();
-      await model.refetch();
-    } catch (error) {
-      setActionError(errorMessage(error));
-    }
-  }
-
-  async function applyComputeMode(next: "gpu" | "cpu") {
-    setActionError(null);
-    try {
-      await setComputeMode(next);
       await model.refetch();
     } catch (error) {
       setActionError(errorMessage(error));
@@ -762,34 +797,6 @@ function AsrModelField() {
 
         <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
-            <FieldTitle id="asr-compute-title">推理设备</FieldTitle>
-            <FieldDescription>
-              {model.status && !model.status.gpu_available
-                ? "当前构建未包含 GPU 后端，将使用 CPU"
-                : "切换设备时会自动重新加载模型"}
-            </FieldDescription>
-          </FieldContent>
-          <ToggleGroup
-            aria-labelledby="asr-compute-title"
-            value={[computeMode]}
-            variant="outline"
-            size="sm"
-            spacing={1}
-            disabled={!model.supported || model.isPending || pending}
-            onValueChange={(values) => {
-              const next = values[0];
-              if (next === "gpu" || next === "cpu") void applyComputeMode(next);
-            }}
-          >
-            <ToggleGroupItem value="gpu" disabled={model.status?.gpu_available === false}>
-              GPU
-            </ToggleGroupItem>
-            <ToggleGroupItem value="cpu">CPU</ToggleGroupItem>
-          </ToggleGroup>
-        </Field>
-
-        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
-          <FieldContent>
             <FieldTitle id="asr-vad-title">语音活动检测（VAD）</FieldTitle>
             <FieldDescription>
               {model.status?.vad_model_downloaded
@@ -804,6 +811,8 @@ function AsrModelField() {
             onCheckedChange={(checked) => void applyVadEnabled(checked)}
           />
         </Field>
+
+        <AsrWindowField disabled={!model.supported || pending} />
       </FieldGroup>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>

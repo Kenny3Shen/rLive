@@ -60,6 +60,15 @@ fn normalize_site_preferences(settings: &mut AppSettings) {
     settings.default_site = fallback_site_id.to_owned();
 }
 
+fn normalize_asr_preferences(settings: &mut AppSettings) {
+    if !settings.asr_window_seconds.is_finite() {
+        settings.asr_window_seconds = 1.0;
+        return;
+    }
+    let bounded = settings.asr_window_seconds.clamp(1.0, 6.0);
+    settings.asr_window_seconds = (bounded * 10.0).round() / 10.0;
+}
+
 /// Load app settings from `settings_kv`, or return defaults if missing/invalid.
 pub fn get(conn: &Connection) -> AppResult<AppSettings> {
     Ok(get_with_status(conn)?.0)
@@ -83,6 +92,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
         Some(json) => match serde_json::from_str(&json) {
             Ok(mut settings) => {
                 normalize_site_preferences(&mut settings);
+                normalize_asr_preferences(&mut settings);
                 Ok((settings, true))
             }
             // Corrupt JSON: fall back to defaults so the app remains usable.
@@ -95,6 +105,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
 pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
     normalize_site_preferences(&mut normalized);
+    normalize_asr_preferences(&mut normalized);
     let json = serde_json::to_string(&normalized).map_err(|e| {
         AppError::new(
             "settings_encode_error",

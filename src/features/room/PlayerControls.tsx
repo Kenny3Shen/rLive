@@ -4,6 +4,8 @@ import {
   CaptionsOff,
   Check,
   Maximize2,
+  MessageCircle,
+  MessageCircleOff,
   Minimize2,
   PanelRightClose,
   PanelRightOpen,
@@ -16,6 +18,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
@@ -30,7 +33,14 @@ export function danmakuControlPresentation(osdOn: boolean | undefined) {
   return {
     enabled,
     label: enabled ? "关闭弹幕" : "开启弹幕",
-    icon: enabled ? "captions" : "captions-off",
+    icon: enabled ? "message-circle" : "message-circle-off",
+  } as const;
+}
+
+export function asrControlPresentation(enabled: boolean, busy: boolean) {
+  return {
+    enabled,
+    icon: busy ? "spinner" : enabled ? "captions" : "captions-off",
   } as const;
 }
 
@@ -42,6 +52,11 @@ export type PlayerControlsProps = {
   /** Changes with the responsive side-panel presentation (rail vs. drawer). */
   sidePanelLabel?: string;
   osdOn?: boolean;
+  asrVisible?: boolean;
+  asrOn?: boolean;
+  asrLabel?: string;
+  asrDisabled?: boolean;
+  asrBusy?: boolean;
   qualities: { quality: string }[];
   qualityIndex: number;
   lines: { url: string }[];
@@ -80,6 +95,7 @@ export type PlayerControlsProps = {
   onToggleMute: () => void;
   onToggleSidePanel: () => void;
   onToggleOsd?: () => void;
+  onToggleAsr?: () => void;
   onQualityChange: (index: number) => void;
   onLineChange: (index: number) => void;
   onTogglePictureInPicture?: () => void;
@@ -144,6 +160,11 @@ export function PlayerControls({
   sidePanelOpen,
   sidePanelLabel,
   osdOn,
+  asrVisible = false,
+  asrOn = false,
+  asrLabel = asrOn ? "关闭语音字幕" : "开启语音字幕",
+  asrDisabled = false,
+  asrBusy = false,
   qualities,
   qualityIndex,
   lines,
@@ -166,6 +187,7 @@ export function PlayerControls({
   onToggleMute,
   onToggleSidePanel,
   onToggleOsd,
+  onToggleAsr,
   onQualityChange,
   onLineChange,
   onTogglePictureInPicture,
@@ -266,7 +288,9 @@ export function PlayerControls({
     className: cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass),
   } as const;
   const danmakuControl = danmakuControlPresentation(osdOn);
-  const DanmakuControlIcon = danmakuControl.icon === "captions" ? Captions : CaptionsOff;
+  const DanmakuControlIcon =
+    danmakuControl.icon === "message-circle" ? MessageCircle : MessageCircleOff;
+  const asrControl = asrControlPresentation(asrOn, asrBusy);
   const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
   /** Shared body of the stream settings popover/drawer. */
   const streamSettingsBody = (
@@ -450,7 +474,7 @@ export function PlayerControls({
 
       <div className="hidden min-w-0 flex-1 justify-center px-1 md:flex">{centerSlot}</div>
 
-      <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1 max-md:overflow-visible">
+      <div className="player-controls-actions ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1 max-md:overflow-visible">
         {hasStreamSettings &&
           (compact ? (
             <>
@@ -534,6 +558,29 @@ export function PlayerControls({
             tooltip={!compact}
           >
             <DanmakuControlIcon data-icon="inline-start" aria-hidden />
+          </ControlButton>
+        )}
+        {asrVisible && onToggleAsr && (
+          <ControlButton
+            label={asrLabel}
+            variant="ghost"
+            className={cn(
+              overlayButtonClass,
+              asrDisabled && "pointer-events-auto opacity-50",
+              asrOn && !overlay && "text-primary",
+            )}
+            aria-disabled={asrDisabled}
+            aria-pressed={asrOn}
+            onClick={asrDisabled ? undefined : onToggleAsr}
+            tooltip={!compact}
+          >
+            {asrControl.icon === "spinner" ? (
+              <Spinner aria-hidden />
+            ) : asrControl.icon === "captions" ? (
+              <Captions data-icon="inline-start" aria-hidden />
+            ) : (
+              <CaptionsOff data-icon="inline-start" aria-hidden />
+            )}
           </ControlButton>
         )}
         {!compact && (

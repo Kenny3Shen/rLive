@@ -1,4 +1,5 @@
 mod account;
+mod asr;
 mod commands;
 mod danmaku;
 mod db;
@@ -29,6 +30,7 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_media_volume,
     android_player_controls_set_orientation,
 };
+use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_transcribe};
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
     douyin_danmaku_send, douyin_danmaku_send_status, douyu_danmaku_send, douyu_danmaku_send_status,
@@ -204,6 +206,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings_get,
             settings_set,
+            asr_get_status,
+            asr_enable,
+            asr_disable,
+            asr_transcribe,
             account_get_cookie,
             account_get_profile,
             account_set_cookie,

@@ -1,5 +1,6 @@
 pub mod account;
 pub mod android_player_controls;
+pub mod asr;
 pub mod danmaku;
 pub mod danmaku_favorite;
 pub mod danmaku_send_history;

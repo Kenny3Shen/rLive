@@ -28,7 +28,7 @@ describe("danmaku player control", () => {
     expect(danmakuControlPresentation(true)).toEqual({
       enabled: true,
       label: "关闭弹幕",
-      icon: "captions",
+      icon: "message-circle",
     });
   });
 
@@ -36,7 +36,7 @@ describe("danmaku player control", () => {
     expect(danmakuControlPresentation(false)).toEqual({
       enabled: false,
       label: "开启弹幕",
-      icon: "captions-off",
+      icon: "message-circle-off",
     });
   });
 });

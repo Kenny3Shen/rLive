@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
+use crate::asr::AsrManager;
 use crate::danmaku::DanmakuManager;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -13,6 +14,7 @@ use crate::stream_proxy::StreamProxy;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
+    pub asr: AsrManager,
     pub danmaku: DanmakuManager,
     pub bilibili_send_limiter: BilibiliDanmakuSendLimiter,
     pub douyu_send_limiter: DouyuDanmakuSendLimiter,
@@ -204,6 +206,7 @@ impl AppState {
         let conn = Db::open(&path)?;
         Ok(Self {
             db: Mutex::new(conn),
+            asr: AsrManager::new(app_data_dir),
             danmaku: DanmakuManager::new(),
             bilibili_send_limiter: BilibiliDanmakuSendLimiter::new(),
             douyu_send_limiter: DouyuDanmakuSendLimiter::new(),
