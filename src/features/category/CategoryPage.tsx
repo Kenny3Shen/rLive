@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, LayoutGrid } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -8,7 +8,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
-import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
+import { PageEnter, PageEnterItem } from "@/shared/motion/PageEnter";
 import type { LiveCategory, LiveSubCategory } from "@/shared/types/live";
 import { Skeleton } from "@/components/ui/skeleton";
 import { categoryRoomsPath } from "./categoryRoute";
@@ -86,7 +86,6 @@ function ExpandTile({ expanded, onClick }: ExpandTileProps) {
 export function CategoryPage() {
   const navigate = useNavigate();
   const siteId = useSiteId();
-  const pageRef = useRef<HTMLDivElement>(null);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set());
 
   const categoriesQuery = useQuery({
@@ -96,12 +95,6 @@ export function CategoryPage() {
   });
 
   const categories = categoriesQuery.data ?? [];
-
-  usePageEntrance(pageRef, {
-    entryKey: `category:${siteId}`,
-    ready: categories.length > 0,
-    maxItems: 8,
-  });
 
   useEffect(() => {
     setExpandedParents(new Set());
@@ -127,7 +120,7 @@ export function CategoryPage() {
         pending={categoriesQuery.isRefetching || categoriesQuery.isLoading}
         label="刷新分类"
       />
-      <div ref={pageRef} className="pb-6">
+      <div className="pb-6">
         <h1 className="sr-only">分类</h1>
         {categoriesQuery.isLoading && <CategorySkeleton />}
 
@@ -140,8 +133,14 @@ export function CategoryPage() {
         )}
 
         {categories.length > 0 && (
-          <div className="flex flex-col gap-9">
-            {categories.map((parent) => {
+          // Parent sections are the staggered units; `maxItems` keeps a long
+          // category list from animating every section on a platform switch.
+          // Keyed by platform because Shell's page wrapper no longer is: the
+          // scroller persists across a site switch, so the replay of this
+          // stagger has to be requested here rather than inherited from a
+          // route-level remount.
+          <PageEnter key={siteId} ready maxItems={8} className="flex flex-col gap-9">
+            {categories.map((parent, index) => {
               const expanded = expandedParents.has(parent.id);
               const children = parent.children.some((child) => child.id === "0")
                 ? parent.children
@@ -152,33 +151,31 @@ export function CategoryPage() {
               const canExpand = children.length > INITIAL_CATEGORY_COUNT;
 
               return (
-                <section
-                  data-page-enter-item
-                  key={parent.id}
-                  aria-labelledby={`category-${parent.id}`}
-                >
-                  <h2
-                    id={`category-${parent.id}`}
-                    className="mb-4 text-xl font-semibold tracking-tight text-foreground"
-                  >
-                    {parent.name}
-                  </h2>
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
-                    {visibleChildren.map((child) => (
-                      <CategoryTile
-                        key={child.id}
-                        category={child}
-                        onClick={() => navigate(categoryRoomsPath(child))}
-                      />
-                    ))}
-                    {canExpand && (
-                      <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
-                    )}
-                  </div>
-                </section>
+                <PageEnterItem index={index} key={parent.id}>
+                  <section aria-labelledby={`category-${parent.id}`}>
+                    <h2
+                      id={`category-${parent.id}`}
+                      className="mb-4 text-xl font-semibold tracking-tight text-foreground"
+                    >
+                      {parent.name}
+                    </h2>
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
+                      {visibleChildren.map((child) => (
+                        <CategoryTile
+                          key={child.id}
+                          category={child}
+                          onClick={() => navigate(categoryRoomsPath(child))}
+                        />
+                      ))}
+                      {canExpand && (
+                        <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
+                      )}
+                    </div>
+                  </section>
+                </PageEnterItem>
               );
             })}
-          </div>
+          </PageEnter>
         )}
       </div>
     </PullToRefresh>

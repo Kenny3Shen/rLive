@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef } from "react";
+import { memo, useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -9,7 +9,7 @@ import { RefreshFab } from "@/shared/components/RefreshFab";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
-import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
+import { PageEnter, PageEnterItem } from "@/shared/motion/PageEnter";
 import type { LiveRoomItem, RoomListPage } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,19 +22,23 @@ type RoomGridProps = {
 
 const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
   return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-      {rooms.map((room) => (
-        <div data-page-enter-item key={`${room.site_id}:${room.room_id}`}>
+    // PageEnter is the stagger container: PageEnterItem children inherit
+    // `visible` from it, so items reveal in sequence without per-item delays.
+    <PageEnter
+      ready
+      className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+    >
+      {rooms.map((room, index) => (
+        <PageEnterItem index={index} key={`${room.site_id}:${room.room_id}`}>
           <RoomCard room={room} />
-        </div>
+        </PageEnterItem>
       ))}
-    </div>
+    </PageEnter>
   );
 });
 
 export function HomePage() {
   const siteId = useSiteId();
-  const pageRef = useRef<HTMLDivElement>(null);
 
   const query = useInfiniteQuery({
     // The backend selects Bilibili's signed-in feed whenever it has a Cookie.
@@ -62,11 +66,6 @@ export function HomePage() {
     isFetchNextPageError,
   });
 
-  usePageEntrance(pageRef, {
-    entryKey: `home:${siteId}`,
-    ready: rooms.length > 0,
-  });
-
   const refreshing = query.isRefetching && !query.isFetchingNextPage;
 
   return (
@@ -80,7 +79,7 @@ export function HomePage() {
         pending={refreshing || query.isLoading}
         label="刷新推荐直播"
       />
-      <div ref={pageRef} key={siteId} className="flex flex-col gap-4">
+      <div key={siteId} className="flex flex-col gap-4">
         {query.isLoading && (
           <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {Array.from({ length: 12 }).map((_, i) => (
