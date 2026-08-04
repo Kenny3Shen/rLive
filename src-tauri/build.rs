@@ -2,6 +2,7 @@ use std::{
     env, fs,
     io::{self, ErrorKind},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 fn main() {
@@ -85,6 +86,10 @@ fn stage_crispasr_runtime() -> io::Result<()> {
     } else {
         None
     };
+    let android_release = target_os == "android"
+        && env::var("PROFILE")
+            .map(|profile| profile == "release")
+            .unwrap_or(false);
 
     if bundle_dir.exists() {
         remove_dir_all_with_retry(&bundle_dir)?;
@@ -112,7 +117,14 @@ fn stage_crispasr_runtime() -> io::Result<()> {
         copy_with_retry(&source, &profile_dir.join(name))?;
         copy_with_retry(&source, &bundle_dir.join(name))?;
         if let Some(directory) = &android_jni_dir {
-            copy_with_retry(&source, &directory.join(name))?;
+            let destination = directory.join(name);
+            copy_with_retry(&source, &destination)?;
+            if android_release {
+                // CMake's Android toolchain adds `-g` even to Release builds.
+                // Strip only the copies staged for packaging; the CMake output
+                // remains intact for incremental/debug builds.
+                strip_android_debug_sections(&destination)?;
+            }
         }
     }
 
@@ -328,7 +340,7 @@ fn find_runtime_library(build_dir: &Path, name: &str) -> io::Result<PathBuf> {
     ))
 }
 
-fn find_android_runtime_library(name: &str) -> io::Result<PathBuf> {
+fn android_ndk_path() -> io::Result<PathBuf> {
     let ndk = [
         env::var_os("CRISPASR_ANDROID_NDK").map(PathBuf::from),
         env::var_os("ANDROID_NDK_HOME").map(PathBuf::from),
@@ -343,9 +355,79 @@ fn find_android_runtime_library(name: &str) -> io::Result<PathBuf> {
             "Android NDK path is unavailable; set ANDROID_NDK_HOME",
         )
     })?;
+    Ok(ndk)
+}
+
+fn android_llvm_prebuilt(ndk: &Path) -> io::Result<PathBuf> {
+    let prebuilt = ndk.join("toolchains").join("llvm").join("prebuilt");
+    if !prebuilt.is_dir() {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!(
+                "Android LLVM prebuilt directory is missing: {}",
+                prebuilt.display()
+            ),
+        ));
+    }
+    Ok(prebuilt)
+}
+
+fn android_target_llvm_arch() -> io::Result<&'static str> {
+    match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => Ok("aarch64"),
+        Ok("arm") => Ok("arm"),
+        // NDK names the 32-bit x86 directory `i386`, while Cargo uses `x86`.
+        Ok("x86") => Ok("i386"),
+        Ok("x86_64") => Ok("x86_64"),
+        Ok(arch) => Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("unsupported Android Cargo target architecture: {arch}"),
+        )),
+        Err(error) => Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("CARGO_CFG_TARGET_ARCH is unavailable: {error}"),
+        )),
+    }
+}
+
+fn find_android_runtime_library(name: &str) -> io::Result<PathBuf> {
+    let ndk = android_ndk_path()?;
+    let llvm_prebuilt = android_llvm_prebuilt(&ndk)?;
+
+    // OpenMP is shipped once per target architecture below clang's runtime
+    // tree. A broad recursive walk is unsafe here: directory iteration can
+    // return the 32-bit ARM `libomp.so` before the arm64 copy, which produces
+    // an APK that installs but crashes while Android loads libcrispasr.so.
+    let target_arch = android_target_llvm_arch()?;
+    if name == "libomp.so" {
+        if let Ok(hosts) = fs::read_dir(&llvm_prebuilt) {
+            for host in hosts.flatten() {
+                let clang_root = host.path().join("lib").join("clang");
+                if let Ok(versions) = fs::read_dir(&clang_root) {
+                    for version in versions.flatten() {
+                        let candidate = version
+                            .path()
+                            .join("lib")
+                            .join("linux")
+                            .join(target_arch)
+                            .join(name);
+                        if candidate.is_file() {
+                            return Ok(candidate);
+                        }
+                    }
+                }
+            }
+        }
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!(
+                "Android runtime library {name} for {target_arch} was not found under {}",
+                llvm_prebuilt.display()
+            ),
+        ));
+    }
 
     let names = candidate_names(name);
-    let llvm_prebuilt = ndk.join("toolchains").join("llvm").join("prebuilt");
     if let Some(found) = walk_find(&llvm_prebuilt, &names, 10) {
         return Ok(found);
     }
@@ -356,4 +438,49 @@ fn find_android_runtime_library(name: &str) -> io::Result<PathBuf> {
             llvm_prebuilt.display()
         ),
     ))
+}
+
+fn find_android_llvm_strip() -> io::Result<PathBuf> {
+    let ndk = android_ndk_path()?;
+    let prebuilt = android_llvm_prebuilt(&ndk)?;
+    if let Ok(hosts) = fs::read_dir(&prebuilt) {
+        for host in hosts.flatten() {
+            let candidate = host.path().join("bin").join("llvm-strip");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(io::Error::new(
+        ErrorKind::NotFound,
+        format!(
+            "Android llvm-strip was not found under {}",
+            prebuilt.display()
+        ),
+    ))
+}
+
+fn strip_android_debug_sections(path: &Path) -> io::Result<()> {
+    let strip = find_android_llvm_strip()?;
+    let status = Command::new(&strip)
+        .arg("--strip-debug")
+        .arg(path)
+        .status()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to run {}: {error}", strip.display()),
+            )
+        })?;
+    if !status.success() {
+        return Err(io::Error::new(
+            ErrorKind::Other,
+            format!(
+                "{} failed while stripping {} (status {status})",
+                strip.display(),
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
