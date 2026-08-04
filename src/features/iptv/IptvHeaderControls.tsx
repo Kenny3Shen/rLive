@@ -43,7 +43,7 @@ export function IptvSourceSwitcher({
       <span id="iptv-source-label" className="sr-only">
         频道源
       </span>
-      <div className="min-w-0 md:hidden">
+      <div className="min-w-0 lg:hidden">
         <Select value={value} onValueChange={(next) => next && onValueChange(next)}>
           <SelectTrigger
             className="w-full border border-input bg-background"
@@ -66,7 +66,7 @@ export function IptvSourceSwitcher({
       <div
         role="tablist"
         aria-labelledby="iptv-source-label"
-        className="hidden h-full min-w-0 max-w-full items-stretch gap-1 md:flex"
+        className="hidden h-full min-w-0 max-w-full items-stretch gap-1 lg:flex"
       >
         {sources.map((source) => {
           const active = source.id === value;
@@ -144,7 +144,7 @@ function availabilityFilterLabel(filter: IptvAvailabilityFilter): string {
   return "全部状态";
 }
 
-/** Filters and live probe status for the IPTV content, owned by Shell's right rail. */
+/** Filters for the IPTV content, owned by Shell's left rail. */
 export function IptvHeaderStatusControls({ className }: { className?: string }) {
   const {
     groupOptions,
@@ -164,14 +164,14 @@ export function IptvHeaderStatusControls({ className }: { className?: string }) 
       >
         <SelectTrigger
           size="sm"
-          className="w-32 max-xl:w-28 max-md:w-8 max-md:justify-center max-md:px-0 [&>[data-slot=select-value]]:max-md:hidden max-md:[&>svg:last-child]:hidden"
+          className="w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
           aria-label="频道分类"
           title={selectedGroup === "all" ? "全部分类" : selectedGroup}
         >
           <ListFilter data-icon="inline-start" aria-hidden />
           <SelectValue>{selectedGroup === "all" ? "全部分类" : selectedGroup}</SelectValue>
         </SelectTrigger>
-        <SelectContent align="end">
+        <SelectContent align="start">
           <SelectGroup>
             <SelectItem value="all">全部分类</SelectItem>
             {groupOptions.map((group) => (
@@ -192,14 +192,14 @@ export function IptvHeaderStatusControls({ className }: { className?: string }) 
       >
         <SelectTrigger
           size="sm"
-          className="w-28 max-xl:w-24 max-md:w-8 max-md:justify-center max-md:px-0 [&>[data-slot=select-value]]:max-md:hidden max-md:[&>svg:last-child]:hidden"
+          className="w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
           aria-label="可用状态"
           title={availabilityFilterLabel(availabilityFilter)}
         >
           <Activity data-icon="inline-start" aria-hidden />
           <SelectValue>{availabilityFilterLabel(availabilityFilter)}</SelectValue>
         </SelectTrigger>
-        <SelectContent align="end">
+        <SelectContent align="start">
           <SelectGroup>
             <SelectItem value="all">全部状态</SelectItem>
             <SelectItem value="available">可用</SelectItem>
@@ -251,8 +251,8 @@ export function IptvAvailabilityFab() {
             disabled={matchingChannels.length === 0 || pending}
             onClick={() => void checkChannelAvailability()}
             className={cn(
-              "fixed bottom-4 left-[calc(68px+1rem)] z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:bottom-5 md:left-[calc(68px+1.25rem)]",
-              "max-md:bottom-[calc(5rem+env(safe-area-inset-bottom))] max-md:left-4",
+              "fixed right-4 bottom-[4.5rem] z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:right-5 md:bottom-[4.75rem]",
+              "max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]",
             )}
           />
         }

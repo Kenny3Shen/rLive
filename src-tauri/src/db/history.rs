@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::schema::map_db_err;
@@ -15,6 +15,16 @@ pub struct HistoryRecord {
 
 const LIST_LIMIT: i64 = 200;
 
+fn map_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord> {
+    Ok(HistoryRecord {
+        site_id: row.get(0)?,
+        room_id: row.get(1)?,
+        title: row.get(2)?,
+        user_name: row.get(3)?,
+        watched_at: row.get(4)?,
+    })
+}
+
 pub fn list(conn: &Connection) -> AppResult<Vec<HistoryRecord>> {
     let mut stmt = conn
         .prepare(
@@ -25,15 +35,28 @@ pub fn list(conn: &Connection) -> AppResult<Vec<HistoryRecord>> {
         )
         .map_err(map_db_err)?;
     let rows = stmt
-        .query_map(params![LIST_LIMIT], |row| {
-            Ok(HistoryRecord {
-                site_id: row.get(0)?,
-                room_id: row.get(1)?,
-                title: row.get(2)?,
-                user_name: row.get(3)?,
-                watched_at: row.get(4)?,
-            })
-        })
+        .query_map(params![LIST_LIMIT], map_history_record)
+        .map_err(map_db_err)?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(map_db_err)?);
+    }
+    Ok(out)
+}
+
+pub fn list_for_site(conn: &Connection, site_id: &str) -> AppResult<Vec<HistoryRecord>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT site_id, room_id, title, user_name, watched_at
+             FROM history
+             WHERE site_id = ?1
+             ORDER BY watched_at DESC
+             LIMIT ?2",
+        )
+        .map_err(map_db_err)?;
+    let rows = stmt
+        .query_map(params![site_id, LIST_LIMIT], map_history_record)
         .map_err(map_db_err)?;
 
     let mut out = Vec::new();
@@ -140,5 +163,73 @@ mod tests {
 
         clear(&conn).unwrap();
         assert!(list(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn global_list_uses_one_limit_and_site_list_remains_available() {
+        let conn = open_in_memory().unwrap();
+        upsert(
+            &conn,
+            HistoryRecord {
+                site_id: "huya".into(),
+                room_id: "huya-room".into(),
+                title: "huya".into(),
+                user_name: "huya-user".into(),
+                watched_at: 1,
+            },
+        )
+        .unwrap();
+
+        for index in 0..=LIST_LIMIT {
+            upsert(
+                &conn,
+                HistoryRecord {
+                    site_id: "bilibili".into(),
+                    room_id: format!("bilibili-{index}"),
+                    title: format!("title-{index}"),
+                    user_name: "bilibili-user".into(),
+                    watched_at: index + 10,
+                },
+            )
+            .unwrap();
+        }
+
+        let rows = list(&conn).unwrap();
+        assert_eq!(rows.len(), LIST_LIMIT as usize);
+        assert!(rows.iter().all(|record| record.site_id == "bilibili"));
+
+        let huya_rows = list_for_site(&conn, "huya").unwrap();
+        assert_eq!(huya_rows.len(), 1);
+        assert_eq!(huya_rows[0].room_id, "huya-room");
+    }
+
+    #[test]
+    fn global_list_mixes_platforms_by_recency() {
+        let conn = open_in_memory().unwrap();
+        for (site_id, room_id, watched_at) in [
+            ("bilibili", "middle", 20),
+            ("huya", "newest", 30),
+            ("douyu", "oldest", 10),
+        ] {
+            upsert(
+                &conn,
+                HistoryRecord {
+                    site_id: site_id.into(),
+                    room_id: room_id.into(),
+                    title: room_id.into(),
+                    user_name: site_id.into(),
+                    watched_at,
+                },
+            )
+            .unwrap();
+        }
+
+        let rows = list(&conn).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|record| record.room_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["newest", "middle", "oldest"]
+        );
     }
 }

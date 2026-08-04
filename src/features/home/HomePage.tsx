@@ -1,20 +1,18 @@
 import { memo, useMemo } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { invokeCmd } from "@/shared/api/tauri";
-import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
-import { PageEnter, PageEnterItem } from "@/shared/motion/PageEnter";
-import type { LiveRoomItem, RoomListPage } from "@/shared/types/live";
+import type { LiveRoomItem } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SITE_LABELS } from "@/lib/utils";
-import { mergeRoomPages, nextRecommendPage } from "./pagination";
+import { homeRecommendationsQueryOptions } from "./homeQuery";
+import { mergeRoomPages } from "./pagination";
 
 type RoomGridProps = {
   rooms: readonly LiveRoomItem[];
@@ -22,18 +20,13 @@ type RoomGridProps = {
 
 const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
   return (
-    // PageEnter is the stagger container: PageEnterItem children inherit
-    // `visible` from it, so items reveal in sequence without per-item delays.
-    <PageEnter
-      ready
-      className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
-    >
-      {rooms.map((room, index) => (
-        <PageEnterItem index={index} key={`${room.site_id}:${room.room_id}`}>
+    <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+      {rooms.map((room) => (
+        <div key={`${room.site_id}:${room.room_id}`}>
           <RoomCard room={room} />
-        </PageEnterItem>
+        </div>
       ))}
-    </PageEnter>
+    </div>
   );
 });
 
@@ -41,23 +34,18 @@ export function HomePage() {
   const siteId = useSiteId();
 
   const query = useInfiniteQuery({
-    // The backend selects Bilibili's signed-in feed whenever it has a Cookie.
-    // Keeping this key stable prevents settings hydration from issuing both a
-    // public-feed request and an account-feed request on startup.
-    queryKey: ["recommend", siteId],
-    queryFn: ({ pageParam }) =>
-      invokeCmd<RoomListPage>("site_get_recommend", {
-        siteId,
-        page: pageParam,
-      }),
-    initialPageParam: 1,
-    getNextPageParam: nextRecommendPage,
-    ...BROWSING_LIST_QUERY_OPTIONS,
+    ...homeRecommendationsQueryOptions(siteId),
+    // Keep the current grid visible while a never-visited platform's first
+    // page is fetched. This avoids replacing usable content with a blank
+    // surface during a tab switch; the query cache still stores each platform
+    // separately under ["recommend", siteId].
+    placeholderData: keepPreviousData,
   });
-  const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = query;
+  const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = query;
 
   const pages = query.data?.pages;
   const rooms = useMemo(() => mergeRoomPages(pages), [pages]);
+  const hasNextPage = query.isPlaceholderData ? false : query.hasNextPage;
 
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     fetchNextPage,
@@ -79,7 +67,7 @@ export function HomePage() {
         pending={refreshing || query.isLoading}
         label="刷新推荐直播"
       />
-      <div key={siteId} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         {query.isLoading && (
           <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {Array.from({ length: 12 }).map((_, i) => (
@@ -108,7 +96,7 @@ export function HomePage() {
 
         {rooms.length > 0 && <RoomGrid rooms={rooms} />}
 
-        {query.hasNextPage && (
+        {hasNextPage && (
           <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
             {query.isFetchingNextPage && (
               <span

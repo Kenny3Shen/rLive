@@ -158,7 +158,9 @@ export function CategoryRoomsPage() {
         {rooms.length > 0 && (
           <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {rooms.map((room) => (
-              <RoomCard key={`${room.site_id}:${room.room_id}`} room={room} />
+              <div key={`${room.site_id}:${room.room_id}`}>
+                <RoomCard room={room} />
+              </div>
             ))}
           </div>
         )}

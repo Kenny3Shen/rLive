@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  horizontalSwipeDragOffset,
   isHorizontalSwipe,
   isHorizontalSwipeIgnoredTarget,
   nextIndexForHorizontalSwipe,
@@ -31,6 +32,19 @@ describe("horizontal tab swipe", () => {
 
   test("ignores only continuous editors, not ordinary buttons", () => {
     expect(isHorizontalSwipeIgnoredTarget(null)).toBe(false);
+  });
+
+  test("lets a page follow the finger while damping strip boundaries", () => {
+    expect(horizontalSwipeDragOffset(1, 3, -80, 360)).toBe(-80);
+    expect(horizontalSwipeDragOffset(1, 3, 80, 360)).toBe(80);
+    expect(horizontalSwipeDragOffset(0, 3, 80, 360)).toBeCloseTo(14.4);
+    expect(horizontalSwipeDragOffset(2, 3, -80, 360)).toBeCloseTo(-14.4);
+  });
+
+  test("caps page travel relative to both the surface and the global limit", () => {
+    expect(horizontalSwipeDragOffset(1, 3, -500, 300)).toBe(-96);
+    expect(horizontalSwipeDragOffset(1, 3, 500, 1_000)).toBe(132);
+    expect(horizontalSwipeDragOffset(-1, 3, 80, 360)).toBe(0);
   });
 });
 

@@ -8,9 +8,9 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
-import { PageEnter, PageEnterItem } from "@/shared/motion/PageEnter";
 import type { LiveCategory, LiveSubCategory } from "@/shared/types/live";
 import { Skeleton } from "@/components/ui/skeleton";
+import { preloadRouteModule } from "@/app/routeModules";
 import { categoryRoomsPath } from "./categoryRoute";
 import { normalizeImageUrl } from "@/lib/utils";
 
@@ -28,9 +28,10 @@ function allCategory(category: LiveCategory): LiveSubCategory {
 type CategoryTileProps = {
   category: LiveSubCategory;
   onClick: () => void;
+  onIntent: () => void;
 };
 
-function CategoryTile({ category, onClick }: CategoryTileProps) {
+function CategoryTile({ category, onClick, onIntent }: CategoryTileProps) {
   const iconSrc = normalizeImageUrl(category.pic);
 
   return (
@@ -38,6 +39,9 @@ function CategoryTile({ category, onClick }: CategoryTileProps) {
       type="button"
       title={`查看${category.name}`}
       onClick={onClick}
+      onPointerEnter={onIntent}
+      onPointerDown={onIntent}
+      onFocus={onIntent}
       className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-foreground transition-colors hover:bg-muted/65 focus-ring"
     >
       <span className="relative flex size-10 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border-subtle">
@@ -133,14 +137,8 @@ export function CategoryPage() {
         )}
 
         {categories.length > 0 && (
-          // Parent sections are the staggered units; `maxItems` keeps a long
-          // category list from animating every section on a platform switch.
-          // Keyed by platform because Shell's page wrapper no longer is: the
-          // scroller persists across a site switch, so the replay of this
-          // stagger has to be requested here rather than inherited from a
-          // route-level remount.
-          <PageEnter key={siteId} ready maxItems={8} className="flex flex-col gap-9">
-            {categories.map((parent, index) => {
+          <div className="flex flex-col gap-9">
+            {categories.map((parent) => {
               const expanded = expandedParents.has(parent.id);
               const children = parent.children.some((child) => child.id === "0")
                 ? parent.children
@@ -151,31 +149,30 @@ export function CategoryPage() {
               const canExpand = children.length > INITIAL_CATEGORY_COUNT;
 
               return (
-                <PageEnterItem index={index} key={parent.id}>
-                  <section aria-labelledby={`category-${parent.id}`}>
-                    <h2
-                      id={`category-${parent.id}`}
-                      className="mb-4 text-xl font-semibold tracking-tight text-foreground"
-                    >
-                      {parent.name}
-                    </h2>
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
-                      {visibleChildren.map((child) => (
-                        <CategoryTile
-                          key={child.id}
-                          category={child}
-                          onClick={() => navigate(categoryRoomsPath(child))}
-                        />
-                      ))}
-                      {canExpand && (
-                        <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
-                      )}
-                    </div>
-                  </section>
-                </PageEnterItem>
+                <section key={parent.id} aria-labelledby={`category-${parent.id}`}>
+                  <h2
+                    id={`category-${parent.id}`}
+                    className="mb-4 text-xl font-semibold tracking-tight text-foreground"
+                  >
+                    {parent.name}
+                  </h2>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
+                    {visibleChildren.map((child) => (
+                      <CategoryTile
+                        key={child.id}
+                        category={child}
+                        onClick={() => navigate(categoryRoomsPath(child))}
+                        onIntent={() => preloadRouteModule(categoryRoomsPath(child))}
+                      />
+                    ))}
+                    {canExpand && (
+                      <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
+                    )}
+                  </div>
+                </section>
               );
             })}
-          </PageEnter>
+          </div>
         )}
       </div>
     </PullToRefresh>

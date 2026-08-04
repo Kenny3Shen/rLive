@@ -17,6 +17,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { notify } from "@/components/ui/toast";
+import { preloadRouteModule } from "@/app/routeModules";
 import { formatOnline, normalizeImageUrl, cn } from "@/lib/utils";
 
 type RoomCardProps = {
@@ -26,6 +27,7 @@ type RoomCardProps = {
 export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
@@ -96,7 +98,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   });
 
   function openRoom() {
-    navigate(`/room/${room.site_id}/${encodeURIComponent(room.room_id)}`);
+    navigate(roomPath);
   }
 
   async function copyRoomId() {
@@ -142,6 +144,9 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           <button
             type="button"
             onClick={openRoom}
+            onPointerEnter={() => preloadRouteModule(roomPath)}
+            onPointerDown={() => preloadRouteModule(roomPath)}
+            onFocus={() => preloadRouteModule(roomPath)}
             className={cn(
               "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring max-md:active:scale-[0.97]",
               "hover:-translate-y-0.5",

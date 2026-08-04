@@ -337,20 +337,6 @@ html.overlay-window #root {
   @apply outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
 }
 
-@keyframes live-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
-@utility animate-live {
-  animation: live-pulse 1.6s ease-in-out infinite;
-}
-
 @keyframes spin-soft {
   to {
     transform: rotate(360deg);
@@ -361,101 +347,8 @@ html.overlay-window #root {
   animation: spin-soft 0.85s linear infinite;
 }
 
-@keyframes platform-logo {
-  0% {
-    opacity: 0.7;
-    transform: scale(0.88);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@utility animate-platform-logo {
-  animation: platform-logo 180ms ease-out both;
-}
-
-@keyframes platform-indicator {
-  from {
-    opacity: 0;
-    transform: scaleX(0.45);
-  }
-  to {
-    opacity: 1;
-    transform: scaleX(1);
-  }
-}
-
-@utility animate-platform-indicator {
-  animation: platform-indicator 180ms ease-out both;
-}
-
-/* A platform switch replaces the discovery query and card grid. Keep the
-   transition short, directional and entirely composited so it does not add
-   work to a busy canvas-danmaku/player frame. */
-@keyframes platform-page-enter {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 8px, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
-@utility animate-platform-page-enter {
-  animation: platform-page-enter 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-/* Tab navigation slides the incoming page in from the direction the user
-   moved through the history: forward entries enter from the right, backward
-   ones from the left. The travel distance is widened on touch so the motion
-   reads as an extension of the swipe gesture. */
-@keyframes tab-page-enter-forward {
-  from {
-    opacity: 0;
-    transform: translate3d(var(--tab-enter-x, 24px), 0, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes tab-page-enter-backward {
-  from {
-    opacity: 0;
-    transform: translate3d(calc(-1 * var(--tab-enter-x, 24px)), 0, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-.animate-tab-page-enter-forward {
-  animation: tab-page-enter-forward 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-.animate-tab-page-enter-backward {
-  animation: tab-page-enter-backward 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-tab-page-enter-forward,
-  .animate-tab-page-enter-backward {
-    animation: none;
-  }
-}
-
-@media (max-width: 767px) {
-  .animate-tab-page-enter-forward,
-  .animate-tab-page-enter-backward {
-    --tab-enter-x: 44px;
-  }
-}
+/* Discovery lists render directly. The only route-level motion left is the
+   directional history transition in Shell. */
 
 /* Drawer sheets travel in quickly on the Material out-going curve and leave
    on the accelerated one, so they feel immediate on touch while remaining

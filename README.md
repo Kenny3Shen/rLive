@@ -159,7 +159,7 @@ D:\dev\rLive\src-tauri\target\release\rlive.exe
 
 ## 技术边界
 
-B 站、抖音、斗鱼、虎牙均支持扫码或手动 Cookie。B 站、抖音、斗鱼和虎牙的单条发送与会话级自动发送共用 `danmaku_send_enabled`、Cookie、文本和冷却校验。斗鱼将本地提交、`chatres(res=0)` 与房间真实回显作为独立状态处理。
+B 站、抖音、斗鱼、虎牙均支持扫码或手动 Cookie。B 站、斗鱼和虎牙的单条发送与会话级自动发送共用 `danmaku_send_enabled`、Cookie、文本和冷却校验。斗鱼将本地提交、`chatres(res=0)` 与房间真实回显作为独立状态处理。
 
 不支持支付、送礼、批量发送、自动回复、未知结果自动重试或录制。
 

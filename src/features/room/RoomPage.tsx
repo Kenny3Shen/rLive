@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Ellipsis, Link2, Share2, UserRoundX } from "lucide-react";
@@ -80,8 +80,14 @@ export function RoomPage() {
       user_name: detail.user_name,
       watched_at: Date.now(),
     };
-    void invokeCmd("history_add", { item }).catch(() => {});
-  }, [detailQuery.data]);
+    void invokeCmd<void>("history_add", { item })
+      .then(() => qc.invalidateQueries({ queryKey: ["history"] }))
+      .catch(() => {
+        if (recordedHistoryRoomRef.current === roomKey) {
+          recordedHistoryRoomRef.current = null;
+        }
+      });
+  }, [detailQuery.data, qc]);
 
   const danmaku = useDanmakuConnection({
     siteId,
@@ -332,42 +338,6 @@ function RoomTopBar({
   rightSlot?: ReactNode;
 }) {
   const navigate = useNavigate();
-  const backButtonRef = useRef<HTMLButtonElement>(null);
-  const titleRef = useRef<HTMLParagraphElement>(null);
-  const reduceMotion = useReducedMotionPreference();
-
-  useLayoutEffect(() => {
-    const backButton = backButtonRef.current;
-    const roomTitle = titleRef.current;
-    if (reduceMotion || !backButton || !roomTitle) return;
-
-    const easing = "cubic-bezier(0.16, 1, 0.3, 1)";
-    const animations = [
-      backButton.animate(
-        [
-          { opacity: 0, transform: "translate3d(-12px, 0, 0)" },
-          { opacity: 1, transform: "translate3d(0, 0, 0)" },
-        ],
-        { duration: 320, easing, fill: "both" },
-      ),
-      roomTitle.animate(
-        [
-          { opacity: 0, transform: "translate3d(0, -6px, 0)" },
-          { opacity: 1, transform: "translate3d(0, 0, 0)" },
-        ],
-        { delay: 160, duration: 280, easing, fill: "both" },
-      ),
-    ];
-    // Let the regular hover transform control the back button after its
-    // entrance motion has finished.
-    animations.forEach((animation) => {
-      animation.addEventListener("finish", () => animation.cancel(), { once: true });
-    });
-
-    return () => {
-      animations.forEach((animation) => animation.cancel());
-    };
-  }, [reduceMotion]);
 
   function goBack() {
     if (returnToHome) {
@@ -388,7 +358,6 @@ function RoomTopBar({
         <TooltipTrigger
           render={
             <Button
-              ref={backButtonRef}
               variant="ghost"
               size="icon-sm"
               className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
@@ -402,7 +371,6 @@ function RoomTopBar({
         <TooltipContent side="bottom">返回上一页</TooltipContent>
       </Tooltip>
       <p
-        ref={titleRef}
         className="absolute inset-x-20 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
         title={title}
       >
@@ -473,22 +441,4 @@ function RoomMobileActions({
       </PopoverContent>
     </Popover>
   );
-}
-
-function useReducedMotionPreference() {
-  const [reduceMotion, setReduceMotion] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-
-  useEffect(() => {
-    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const updatePreference = () => setReduceMotion(query.matches);
-    updatePreference();
-    query.addEventListener("change", updatePreference);
-    return () => query.removeEventListener("change", updatePreference);
-  }, []);
-
-  return reduceMotion;
 }

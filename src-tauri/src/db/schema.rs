@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS history (
   PRIMARY KEY (site_id, room_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_history_recent
+  ON history (watched_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_history_site_recent
+  ON history (site_id, watched_at DESC);
+
 CREATE TABLE IF NOT EXISTS danmaku_send_history (
   site_id TEXT NOT NULL,
   content TEXT NOT NULL,

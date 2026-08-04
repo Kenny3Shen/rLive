@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { preloadRouteModule } from "@/app/routeModules";
 import { cn } from "@/lib/utils";
 import { useIptvController } from "./IptvController";
 import { IptvAvailabilityFab } from "./IptvHeaderControls";
@@ -205,6 +206,9 @@ function IptvChannelCard({
     <button
       type="button"
       onClick={() => onOpen(channel)}
+      onPointerEnter={() => preloadRouteModule("/iptv/play")}
+      onPointerDown={() => preloadRouteModule("/iptv/play")}
+      onFocus={() => preloadRouteModule("/iptv/play")}
       className={cn(
         "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring",
         "hover:-translate-y-0.5",

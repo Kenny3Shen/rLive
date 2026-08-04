@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { m } from "motion/react";
 import {
   ChevronRight,
   CirclePlay,
@@ -17,10 +18,11 @@ import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { usePlatformScope } from "@/shared/hooks/useSiteQuery";
 import { isMobileClient } from "@/shared/clientPlatform";
-import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { DanmakuSendHistoryItem, HistoryItem, SiteId } from "@/shared/types/live";
+import { groupHistoryByDate, type HistoryDateGroup } from "./historyGrouping";
 import { historyPlatformFromSearch, HISTORY_PLATFORM_PARAM } from "./historyRoute";
 import { useHistoryShellStore, type HistoryTab } from "./historyShellStore";
 import { Button } from "@/components/ui/button";
@@ -44,86 +46,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notify } from "@/components/ui/toast";
-import { SITE_LABELS } from "@/lib/utils";
+import { preloadRouteModule } from "@/app/routeModules";
 
 const HISTORY_TABS: readonly HistoryTab[] = ["watch", "danmaku"];
-
-type HistoryDateGroup<T> = {
-  key: string;
-  label: string;
-  items: T[];
-};
-
-type HistoryPlatformGroup<T> = {
-  siteId: SiteId;
-  count: number;
-  dates: HistoryDateGroup<T>[];
-};
-
-function startOfLocalDay(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
-function dateKey(timestamp: number): string {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return `invalid:${timestamp}`;
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
-}
-
-function dateLabel(timestamp: number, today: number, yesterday: number): string {
-  const day = startOfLocalDay(timestamp);
-  if (day === today) return "今天";
-  if (day === yesterday) return "昨天";
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime())
-    ? "未知日期"
-    : date.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
-}
-
-function groupHistory<T extends { site_id: SiteId }>(
-  items: readonly T[],
-  getTimestamp: (item: T) => number,
-  platformFilter: "all" | SiteId,
-  disabledSiteIds: unknown,
-): HistoryPlatformGroup<T>[] {
-  const visiblePlatforms = enabledSiteIds(disabledSiteIds).filter(
-    (siteId) => platformFilter === "all" || siteId === platformFilter,
-  );
-  const byPlatform = new Map<SiteId, T[]>();
-  for (const item of items) {
-    if (!isSiteEnabled(item.site_id, disabledSiteIds)) continue;
-    if (platformFilter !== "all" && item.site_id !== platformFilter) continue;
-    const current = byPlatform.get(item.site_id) ?? [];
-    current.push(item);
-    byPlatform.set(item.site_id, current);
-  }
-
-  const today = startOfLocalDay(Date.now());
-  const yesterday = today - 86_400_000;
-  return visiblePlatforms.flatMap((siteId) => {
-    const platformItems = byPlatform.get(siteId);
-    if (!platformItems || platformItems.length === 0) return [];
-    platformItems.sort((left, right) => getTimestamp(right) - getTimestamp(left));
-    const dateMap = new Map<string, T[]>();
-    for (const item of platformItems) {
-      const key = dateKey(getTimestamp(item));
-      const current = dateMap.get(key) ?? [];
-      current.push(item);
-      dateMap.set(key, current);
-    }
-    const dates = [...dateMap.entries()]
-      .map(([key, dateItems]) => ({
-        key,
-        label: dateLabel(getTimestamp(dateItems[0]!), today, yesterday),
-        items: dateItems,
-        timestamp: getTimestamp(dateItems[0]!),
-      }))
-      .sort((left, right) => right.timestamp - left.timestamp)
-      .map(({ key, label, items: dateItems }) => ({ key, label, items: dateItems }));
-    return [{ siteId, count: platformItems.length, dates }];
-  });
-}
 
 function formatTime(timestamp: number): string {
   const watchedAt = new Date(timestamp);
@@ -152,6 +77,7 @@ type HistoryCardProps = {
 
 function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   const title = item.title || "未命名直播间";
+  const roomPath = `/room/${item.site_id}/${encodeURIComponent(item.room_id)}`;
 
   return (
     <ContextMenu>
@@ -160,6 +86,9 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
           <button
             type="button"
             onClick={onOpen}
+            onPointerEnter={() => preloadRouteModule(roomPath)}
+            onPointerDown={() => preloadRouteModule(roomPath)}
+            onFocus={() => preloadRouteModule(roomPath)}
             className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
           />
         }
@@ -236,48 +165,35 @@ function DanmakuSendHistoryCard({ item }: { item: DanmakuSendHistoryItem }) {
   );
 }
 
-type HistoryPlatformSectionsProps<T extends { site_id: SiteId }> = {
-  groups: HistoryPlatformGroup<T>[];
+type HistoryTimelineProps<T extends { site_id: SiteId }> = {
+  groups: HistoryDateGroup<T>[];
+  headingIdPrefix: string;
   itemKey: (item: T) => string;
   renderItem: (item: T) => React.ReactNode;
 };
 
-function HistoryPlatformSections<T extends { site_id: SiteId }>({
+function HistoryTimeline<T extends { site_id: SiteId }>({
   groups,
+  headingIdPrefix,
   itemKey,
   renderItem,
-}: HistoryPlatformSectionsProps<T>) {
+}: HistoryTimelineProps<T>) {
   return (
-    <div className="flex flex-col gap-6">
-      {groups.map((group) => (
-        <section key={group.siteId} aria-labelledby={`history-platform-${group.siteId}`}>
-          <div className="mb-2.5 flex items-center gap-2 border-b border-border-subtle pb-2">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
-              <SiteLogo siteId={group.siteId} className="size-4" />
-            </span>
-            <h2
-              id={`history-platform-${group.siteId}`}
-              className="text-sm font-semibold text-foreground"
-            >
-              {SITE_LABELS[group.siteId] ?? group.siteId}
-            </h2>
-            <span className="text-xs text-muted-foreground">{group.count} 条</span>
-          </div>
-          <div className="flex flex-col gap-4">
-            {group.dates.map((date) => (
-              <div key={date.key}>
-                <h3 className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                  <span>{date.label}</span>
-                  <span className="h-px flex-1 bg-border-subtle" />
-                </h3>
-                <ul className="flex flex-col gap-2.5">
-                  {date.items.map((item) => (
-                    <li key={itemKey(item)}>{renderItem(item)}</li>
-                  ))}
-                </ul>
-              </div>
+    <div className="flex flex-col gap-4">
+      {groups.map((group, index) => (
+        <section key={group.key} aria-labelledby={`${headingIdPrefix}-${index}`}>
+          <h2
+            id={`${headingIdPrefix}-${index}`}
+            className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground"
+          >
+            <span>{group.label}</span>
+            <span className="h-px flex-1 bg-border-subtle" />
+          </h2>
+          <ul className="flex flex-col gap-2.5">
+            {group.items.map((item) => (
+              <li key={itemKey(item)}>{renderItem(item)}</li>
             ))}
-          </div>
+          </ul>
         </section>
       ))}
     </div>
@@ -290,14 +206,17 @@ export function HistoryPage() {
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<HistoryTab>("watch");
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
-  const historyPlatform = historyPlatformFromSearch(
-    searchParams.get(HISTORY_PLATFORM_PARAM),
-    disabledSiteIds,
-  );
+  const scopedPlatform = usePlatformScope();
+  const historyPlatform =
+    scopedPlatform ??
+    historyPlatformFromSearch(searchParams.get(HISTORY_PLATFORM_PARAM), disabledSiteIds);
 
   const watchHistoryQuery = useQuery({
-    queryKey: ["history"],
-    queryFn: () => invokeCmd<HistoryItem[]>("history_list"),
+    queryKey: ["history", historyPlatform],
+    queryFn: () =>
+      invokeCmd<HistoryItem[]>("history_list", {
+        siteId: historyPlatform === "all" ? null : historyPlatform,
+      }),
   });
 
   const danmakuSendHistoryQuery = useQuery({
@@ -309,7 +228,7 @@ export function HistoryPage() {
   const clearWatchHistoryMutation = useMutation({
     mutationFn: () => invokeCmd<void>("history_clear"),
     onSuccess: () => {
-      qc.setQueryData<HistoryItem[]>(["history"], []);
+      qc.setQueriesData<HistoryItem[]>({ queryKey: ["history"] }, []);
       useHistoryShellStore.getState().setClearOpen(false);
       void qc.invalidateQueries({ queryKey: ["history"] });
     },
@@ -328,7 +247,7 @@ export function HistoryPage() {
     mutationFn: ({ siteId, roomId }: { siteId: HistoryItem["site_id"]; roomId: string }) =>
       invokeCmd<void>("history_remove", { siteId, roomId }),
     onSuccess: (_result, { siteId, roomId }) => {
-      qc.setQueryData<HistoryItem[]>(["history"], (items) =>
+      qc.setQueriesData<HistoryItem[]>({ queryKey: ["history"] }, (items) =>
         items?.filter((item) => item.site_id !== siteId || item.room_id !== roomId),
       );
       void qc.invalidateQueries({ queryKey: ["history"] });
@@ -339,25 +258,25 @@ export function HistoryPage() {
     },
   });
 
-  const watchItems = useMemo(
-    () =>
-      (watchHistoryQuery.data ?? []).filter((item) => isSiteEnabled(item.site_id, disabledSiteIds)),
-    [disabledSiteIds, watchHistoryQuery.data],
-  );
-  const danmakuSendItems = useMemo(
-    () =>
-      (danmakuSendHistoryQuery.data ?? []).filter((item) =>
-        isSiteEnabled(item.site_id, disabledSiteIds),
-      ),
-    [danmakuSendHistoryQuery.data, disabledSiteIds],
-  );
   const watchGroups = useMemo(
-    () => groupHistory(watchItems, (item) => item.watched_at, historyPlatform, disabledSiteIds),
-    [disabledSiteIds, historyPlatform, watchItems],
+    () =>
+      groupHistoryByDate(
+        watchHistoryQuery.data ?? [],
+        (item) => item.watched_at,
+        historyPlatform,
+        disabledSiteIds,
+      ),
+    [disabledSiteIds, historyPlatform, watchHistoryQuery.data],
   );
   const danmakuGroups = useMemo(
-    () => groupHistory(danmakuSendItems, (item) => item.sent_at, historyPlatform, disabledSiteIds),
-    [danmakuSendItems, disabledSiteIds, historyPlatform],
+    () =>
+      groupHistoryByDate(
+        danmakuSendHistoryQuery.data ?? [],
+        (item) => item.sent_at,
+        historyPlatform,
+        disabledSiteIds,
+      ),
+    [danmakuSendHistoryQuery.data, disabledSiteIds, historyPlatform],
   );
   const canClear =
     activeTab === "watch"
@@ -419,7 +338,6 @@ export function HistoryPage() {
       resetActiveMutation: resetActiveClearMutation,
       clearActiveHistory,
     });
-    return () => useHistoryShellStore.getState().reset();
   }, [
     activeTab,
     canClear,
@@ -431,8 +349,13 @@ export function HistoryPage() {
     resetActiveClearMutation,
   ]);
 
+  useEffect(() => {
+    return () => useHistoryShellStore.getState().reset();
+  }, []);
+
   return (
     <PullToRefresh
+      data-horizontal-swipe-surface
       onRefresh={refreshActiveHistory}
       refreshing={historyRefreshing}
       className="mx-auto max-w-3xl"
@@ -468,93 +391,101 @@ export function HistoryPage() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="watch" className="mt-0">
-            {watchHistoryQuery.isLoading && <HistorySkeleton />}
+          <m.div
+            data-slot="horizontal-swipe-page"
+            style={historyTabSwipe.motionStyle}
+            className="min-w-0 transform-gpu"
+          >
+            <TabsContent value="watch" className="mt-0">
+              {watchHistoryQuery.isLoading && <HistorySkeleton />}
 
-            {watchHistoryQuery.isError && (
-              <ErrorState
-                error={watchHistoryQuery.error}
-                title="观看历史加载失败"
-                onRetry={() => void watchHistoryQuery.refetch()}
-              />
-            )}
-
-            {!watchHistoryQuery.isLoading &&
-              !watchHistoryQuery.isError &&
-              watchGroups.length === 0 && (
-                <Empty className="min-h-64 py-12">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Clock3 aria-hidden />
-                    </EmptyMedia>
-                    <EmptyTitle>暂无观看记录</EmptyTitle>
-                    <EmptyDescription>打开直播间后会自动记录在这里。</EmptyDescription>
-                  </EmptyHeader>
-                  <EmptyContent>
-                    <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                      <Home data-icon="inline-start" aria-hidden />
-                      去首页看看
-                    </Button>
-                  </EmptyContent>
-                </Empty>
+              {watchHistoryQuery.isError && (
+                <ErrorState
+                  error={watchHistoryQuery.error}
+                  title="观看历史加载失败"
+                  onRetry={() => void watchHistoryQuery.refetch()}
+                />
               )}
 
-            {watchGroups.length > 0 && (
-              <HistoryPlatformSections
-                groups={watchGroups}
-                itemKey={(item) => `${item.site_id}:${item.room_id}:${item.watched_at}`}
-                renderItem={(item) => (
-                  <HistoryCard
-                    item={item}
-                    onOpen={() =>
-                      navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
-                    }
-                    onRemove={() =>
-                      removeWatchHistoryMutation.mutate({
-                        siteId: item.site_id,
-                        roomId: item.room_id,
-                      })
-                    }
-                    isRemoving={removeWatchHistoryMutation.isPending}
-                  />
+              {!watchHistoryQuery.isLoading &&
+                !watchHistoryQuery.isError &&
+                watchGroups.length === 0 && (
+                  <Empty className="min-h-64 py-12">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <Clock3 aria-hidden />
+                      </EmptyMedia>
+                      <EmptyTitle>暂无观看记录</EmptyTitle>
+                      <EmptyDescription>打开直播间后会自动记录在这里。</EmptyDescription>
+                    </EmptyHeader>
+                    <EmptyContent>
+                      <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+                        <Home data-icon="inline-start" aria-hidden />
+                        去首页看看
+                      </Button>
+                    </EmptyContent>
+                  </Empty>
                 )}
-              />
-            )}
-          </TabsContent>
 
-          <TabsContent value="danmaku" className="mt-0">
-            {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
+              {watchGroups.length > 0 && (
+                <HistoryTimeline
+                  groups={watchGroups}
+                  headingIdPrefix="watch-history-date"
+                  itemKey={(item) => `${item.site_id}:${item.room_id}:${item.watched_at}`}
+                  renderItem={(item) => (
+                    <HistoryCard
+                      item={item}
+                      onOpen={() =>
+                        navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
+                      }
+                      onRemove={() =>
+                        removeWatchHistoryMutation.mutate({
+                          siteId: item.site_id,
+                          roomId: item.room_id,
+                        })
+                      }
+                      isRemoving={removeWatchHistoryMutation.isPending}
+                    />
+                  )}
+                />
+              )}
+            </TabsContent>
 
-            {danmakuSendHistoryQuery.isError && (
-              <ErrorState
-                error={danmakuSendHistoryQuery.error}
-                title="发送弹幕记录加载失败"
-                onRetry={() => void danmakuSendHistoryQuery.refetch()}
-              />
-            )}
+            <TabsContent value="danmaku" className="mt-0">
+              {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
 
-            {!danmakuSendHistoryQuery.isLoading &&
-              !danmakuSendHistoryQuery.isError &&
-              danmakuGroups.length === 0 && (
-                <Empty className="min-h-64 py-12">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <MessageSquareText aria-hidden />
-                    </EmptyMedia>
-                    <EmptyTitle>暂无发送弹幕记录</EmptyTitle>
-                    <EmptyDescription>成功发送的弹幕会保存在此设备上。</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
+              {danmakuSendHistoryQuery.isError && (
+                <ErrorState
+                  error={danmakuSendHistoryQuery.error}
+                  title="发送弹幕记录加载失败"
+                  onRetry={() => void danmakuSendHistoryQuery.refetch()}
+                />
               )}
 
-            {danmakuGroups.length > 0 && (
-              <HistoryPlatformSections
-                groups={danmakuGroups}
-                itemKey={(item) => `${item.site_id}:${item.sent_at}:${item.content}`}
-                renderItem={(item) => <DanmakuSendHistoryCard item={item} />}
-              />
-            )}
-          </TabsContent>
+              {!danmakuSendHistoryQuery.isLoading &&
+                !danmakuSendHistoryQuery.isError &&
+                danmakuGroups.length === 0 && (
+                  <Empty className="min-h-64 py-12">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <MessageSquareText aria-hidden />
+                      </EmptyMedia>
+                      <EmptyTitle>暂无发送弹幕记录</EmptyTitle>
+                      <EmptyDescription>成功发送的弹幕会保存在此设备上。</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+
+              {danmakuGroups.length > 0 && (
+                <HistoryTimeline
+                  groups={danmakuGroups}
+                  headingIdPrefix="danmaku-history-date"
+                  itemKey={(item) => `${item.site_id}:${item.sent_at}:${item.content}`}
+                  renderItem={(item) => <DanmakuSendHistoryCard item={item} />}
+                />
+              )}
+            </TabsContent>
+          </m.div>
         </Tabs>
       </div>
     </PullToRefresh>
