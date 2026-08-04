@@ -1,6 +1,5 @@
 import {
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
@@ -8,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { m } from "motion/react";
 import { SunMedium, Volume2 } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { siteSupportsSuperChat } from "./superChat";
@@ -43,8 +44,6 @@ export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settin
 // normal vertical scroll or a short finger adjustment from changing the tab.
 export const ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX = 48;
 const ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO = 1.25;
-const ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX = 8;
-const ROOM_SIDE_TAB_SWIPE_CLICK_SUPPRESSION_MS = 420;
 
 // Android uses a native bridge for the media stream and Activity brightness.
 // Browser previews keep the same gesture with a video/CSS fallback.
@@ -159,13 +158,6 @@ export function isPlayerStageDoubleTap(lastTapAt: number, now: number): boolean 
   return lastTapAt > 0 && now - lastTapAt <= PLAYER_STAGE_DOUBLE_TAP_MS;
 }
 
-type SideTabSwipeState = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  horizontal: boolean;
-};
-
 function isRoomSideTab(value: string): value is RoomSideTab {
   return ROOM_SIDE_TABS.includes(value as RoomSideTab);
 }
@@ -195,22 +187,6 @@ export function nextRoomSideTabForSwipe(
   if (currentIndex < 0) return null;
   const direction = deltaX < 0 ? 1 : -1;
   return ROOM_SIDE_TABS[currentIndex + direction] ?? null;
-}
-
-/**
- * Only continuous editors and sliders own the pointer. List rows, tab
- * triggers and ordinary buttons stay swipeable so the room bottom panel can
- * change tabs the way Simple Live's TabBarView does; a recognised swipe still
- * suppresses the synthetic click Android WebView may emit.
- */
-function isRoomSideTabSwipeIgnoredTarget(target: EventTarget | null): boolean {
-  const element =
-    target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
-  return Boolean(
-    element?.closest(
-      'input, textarea, select, [contenteditable="true"], [role="slider"], [role="combobox"], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
-    ),
-  );
 }
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
@@ -411,9 +387,6 @@ export function PlayerPane({
   const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
   const playerStageTapTimerRef = useRef<number | null>(null);
   const lastPlayerStageTapAtRef = useRef(0);
-  const sideTabSwipeRef = useRef<SideTabSwipeState | null>(null);
-  const sideTabSwipeClickSuppressionUntilRef = useRef(0);
-
   const player = useWebPlayer({
     playUrl,
     siteId,
@@ -694,102 +667,12 @@ export function PlayerPane({
     },
     [selectSideTab],
   );
-
-  const releaseSideTabSwipePointer = useCallback((element: HTMLDivElement, pointerId: number) => {
-    if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
-  }, []);
-
-  // Capture-phase handlers: ScrollArea / list rows otherwise claim the touch
-  // on Android and the parent never sees pointermove below the tab strip.
-  const handleSideTabSwipeStartCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    // Some Android WebViews report an empty pointerType for finger input.
-    const pointerType = event.pointerType as string;
-    if (
-      (pointerType !== "touch" && pointerType !== "") ||
-      !event.isPrimary ||
-      isRoomSideTabSwipeIgnoredTarget(event.target)
-    ) {
-      return;
-    }
-
-    sideTabSwipeRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      horizontal: false,
-    };
-  }, []);
-
-  const handleSideTabSwipeMoveCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const swipe = sideTabSwipeRef.current;
-    if (!swipe || swipe.pointerId !== event.pointerId) return;
-
-    const deltaX = event.clientX - swipe.startX;
-    const deltaY = event.clientY - swipe.startY;
-    const horizontalDistance = Math.abs(deltaX);
-    const verticalDistance = Math.abs(deltaY);
-
-    if (!swipe.horizontal) {
-      if (
-        verticalDistance >= ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX &&
-        verticalDistance >= horizontalDistance
-      ) {
-        sideTabSwipeRef.current = null;
-        return;
-      }
-      if (
-        horizontalDistance < ROOM_SIDE_TAB_SWIPE_LOCK_DISTANCE_PX ||
-        horizontalDistance <= verticalDistance * ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO
-      ) {
-        return;
-      }
-      swipe.horizontal = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-  }, []);
-
-  const handleSideTabSwipeEndCapture = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const swipe = sideTabSwipeRef.current;
-      if (!swipe || swipe.pointerId !== event.pointerId) return;
-
-      sideTabSwipeRef.current = null;
-      releaseSideTabSwipePointer(event.currentTarget, event.pointerId);
-      if (!swipe.horizontal) return;
-
-      const nextTab = nextRoomSideTabForSwipe(
-        activeSideTab,
-        event.clientX - swipe.startX,
-        event.clientY - swipe.startY,
-      );
-      sideTabSwipeClickSuppressionUntilRef.current =
-        Date.now() + ROOM_SIDE_TAB_SWIPE_CLICK_SUPPRESSION_MS;
-      event.preventDefault();
-      event.stopPropagation();
-      if (!nextTab) return;
-      selectSideTab(nextTab);
-    },
-    [activeSideTab, releaseSideTabSwipePointer, selectSideTab],
-  );
-
-  const handleSideTabSwipeClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (Date.now() >= sideTabSwipeClickSuppressionUntilRef.current) return;
-    event.preventDefault();
-    event.stopPropagation();
-  }, []);
-
-  const handleSideTabSwipeCancelCapture = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const swipe = sideTabSwipeRef.current;
-      if (!swipe || swipe.pointerId !== event.pointerId) return;
-      sideTabSwipeRef.current = null;
-      releaseSideTabSwipePointer(event.currentTarget, event.pointerId);
-    },
-    [releaseSideTabSwipePointer],
-  );
+  const sideTabSwipe = useHorizontalSwipe({
+    items: ROOM_SIDE_TABS,
+    value: activeSideTab,
+    onChange: selectSideTab,
+    enabled: sidePanelOpen,
+  });
 
   const clearPlayerEdgeGestureFeedbackTimer = useCallback(() => {
     if (playerEdgeGestureFeedbackTimerRef.current !== null) {
@@ -1454,8 +1337,9 @@ export function PlayerPane({
           aria-modal={mobileDrawerOpen ? true : undefined}
           role={mobileDrawerOpen ? "dialog" : undefined}
           data-room-side-tab-swipe-surface
+          data-horizontal-swipe-surface
           className={cn(
-            "flex shrink-0 flex-col bg-sidebar touch-pan-y overscroll-y-contain",
+            "flex shrink-0 flex-col overflow-hidden bg-sidebar touch-pan-y overscroll-y-contain",
             inlineCompactSidePanel
               ? "min-h-0 w-full flex-1 border-t border-border/80"
               : compactLandscapeViewport
@@ -1463,11 +1347,11 @@ export function PlayerPane({
                 : "w-[300px] border-l border-border/80 lg:w-[320px]",
             !sidePanelOpen && "hidden",
           )}
-          onPointerDownCapture={handleSideTabSwipeStartCapture}
-          onPointerMoveCapture={handleSideTabSwipeMoveCapture}
-          onPointerUpCapture={handleSideTabSwipeEndCapture}
-          onPointerCancelCapture={handleSideTabSwipeCancelCapture}
-          onClickCapture={handleSideTabSwipeClickCapture}
+          onPointerDownCapture={sideTabSwipe.onPointerDownCapture}
+          onPointerMoveCapture={sideTabSwipe.onPointerMoveCapture}
+          onPointerUpCapture={sideTabSwipe.onPointerUpCapture}
+          onPointerCancelCapture={sideTabSwipe.onPointerCancelCapture}
+          onClickCapture={sideTabSwipe.onClickCapture}
         >
           {mobileDrawerOpen && (
             <h2 id="room-side-panel-title" className="sr-only">
@@ -1496,7 +1380,11 @@ export function PlayerPane({
                 </TabsTrigger>
               </TabsList>
             </div>
-            <div className="relative flex min-h-0 flex-1">
+            <m.div
+              data-slot="horizontal-swipe-page"
+              style={sideTabSwipe.motionStyle}
+              className="relative flex min-h-0 flex-1 transform-gpu"
+            >
               <TabsContent
                 value="chat"
                 keepMounted
@@ -1530,7 +1418,7 @@ export function PlayerPane({
                   siteId={siteId}
                 />
               </TabsContent>
-            </div>
+            </m.div>
           </Tabs>
         </aside>
       )}

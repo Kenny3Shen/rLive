@@ -11,7 +11,7 @@
 | 房间详情与播放 | 已支持 | 解析网页和回流接口，提供上游实际下发的清晰度与播放地址。 |
 | 账号 | 已支持 | 可扫码登录或手动保存 Cookie；匿名浏览会建立短时网页会话。 |
 | 实时弹幕接收 | 已支持 | 本地计算短时 MSSDK 签名，直连官方 WSS，接收聊天、礼物、点赞、进场等事件。 |
-| 弹幕发送 | 已支持 | `douyin_danmaku_send_status` / `douyin_danmaku_send`；手动与会话级自动发送共用。 |
+| 弹幕发送 | 未支持 | 仅接收实时弹幕，不提供手动或会话级自动发送。 |
 
 ## rLive 接入接口
 
@@ -50,19 +50,9 @@
 
 签名在本机完成，不依赖外部签名服务。
 
-## 弹幕发送
+## 弹幕发送边界
 
-`danmaku_connect` 负责接收房间消息。`douyin_danmaku_send_status` 与 `douyin_danmaku_send` 是 rLive 内发送一条普通文本的接口；手动发送与房间内会话级自动发送均复用。
-
-发送前需要：
-
-1. 设置中开启默认关闭的本机 `danmaku_send_enabled`。
-2. 本机已保存抖音登录 Cookie（扫码或手动）。
-3. 有效数字房间号；命令会先解析房间详情，优先使用内部 `room_id`。
-4. 非空单行文本，最多 50 个 UTF-16 单元。
-5. 按房间 3 秒本机冷却。
-
-实现路径：本地生成 `user_unique_id` 与 MSSDK `signature`，再 `POST https://live.douyin.com/webcast/room/chat/`（表单字段 + Cookie + Origin/Referer）。Cookie 写请求禁止跟随重定向，也不自动重试；成功写入后才记入本机发送历史。
+`danmaku_connect` 仅负责接收房间消息。rLive 不提供抖音弹幕发送命令，播放器中也不会显示手动发送框、「+1」或会话级自动发送控制；保存的抖音 Cookie 仍可用于搜索、房间解析和实时弹幕接收。
 
 ## 限制与安全
 
@@ -72,6 +62,6 @@ Cookie、短时签名 URL 和上游原始响应均不写入日志或前端缓存
 
 - 站点与播放：`src-tauri/src/sites/douyin/mod.rs`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
-- 弹幕连接、帧解析与发送：`src-tauri/src/danmaku/douyin.rs`
+- 弹幕连接与帧解析：`src-tauri/src/danmaku/douyin.rs`
 - 本地签名：`src-tauri/src/danmaku/douyin_sign.rs`
 - MSSDK 脚本：`src-tauri/assets/douyin_webmssdk.js`

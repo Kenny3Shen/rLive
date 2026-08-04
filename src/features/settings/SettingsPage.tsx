@@ -19,6 +19,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { m } from "motion/react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
@@ -29,6 +30,15 @@ import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
+import {
+  AsrCaptionFontSizeField,
+  AsrWindowField,
+  DanmakuAppearanceResetButton,
+  DanmakuAppearanceSettingsFields,
+  DanmakuFilterSettingsFields,
+  DanmakuTrackSettingsFields,
+  SuperChatSettingsFields,
+} from "@/features/settings/PlaybackPreferenceFields";
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -52,7 +62,6 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
@@ -612,91 +621,6 @@ function DanmakuSendField() {
   );
 }
 
-const ASR_FONT_SIZE_MIN = 12;
-const ASR_FONT_SIZE_MAX = 48;
-const ASR_WINDOW_SECONDS_MIN = 1;
-const ASR_WINDOW_SECONDS_MAX = 6;
-
-function AsrCaptionFontSizeField() {
-  const fontSize = useSettingsStore((state) => state.asrFontSize);
-  const labelId = "asr-font-size-title";
-
-  return (
-    <Field orientation="responsive">
-      <FieldContent>
-        <FieldTitle id={labelId}>字幕字号</FieldTitle>
-        <FieldDescription>调整播放器字幕叠加层的字号，不影响弹幕字号。</FieldDescription>
-      </FieldContent>
-      <div className="flex min-w-52 items-center gap-3">
-        <Slider
-          aria-labelledby={labelId}
-          value={fontSize}
-          min={ASR_FONT_SIZE_MIN}
-          max={ASR_FONT_SIZE_MAX}
-          step={1}
-          onValueChange={(value) => {
-            const next = Number(value);
-            if (Number.isFinite(next)) useSettingsStore.setState({ asrFontSize: next });
-          }}
-          onValueCommitted={(value) => {
-            const next = Math.min(
-              ASR_FONT_SIZE_MAX,
-              Math.max(ASR_FONT_SIZE_MIN, Math.round(Number(value))),
-            );
-            useSettingsStore.setState({ asrFontSize: next });
-            void useSettingsStore.getState().persistToBackend({ asr_font_size: next });
-          }}
-        />
-        <Badge variant="secondary" className="min-w-14 justify-center tabular-nums">
-          {fontSize}px
-        </Badge>
-      </div>
-    </Field>
-  );
-}
-
-function AsrWindowField({ disabled }: { disabled: boolean }) {
-  const windowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
-  const setWindowSeconds = useSettingsStore((state) => state.setAsrWindowSeconds);
-  const [draft, setDraft] = useState(windowSeconds);
-  const labelId = "asr-window-title";
-
-  useEffect(() => setDraft(windowSeconds), [windowSeconds]);
-
-  return (
-    <Field orientation="responsive" data-disabled={disabled || undefined}>
-      <FieldContent>
-        <FieldTitle id={labelId}>语音字幕窗口</FieldTitle>
-        <FieldDescription>
-          每个窗口完成后立即显示字幕；窗口越短延迟越低，但上下文和识别稳定性可能下降。
-        </FieldDescription>
-      </FieldContent>
-      <div className="flex min-w-52 items-center gap-3">
-        <Slider
-          aria-labelledby={labelId}
-          value={draft}
-          min={ASR_WINDOW_SECONDS_MIN}
-          max={ASR_WINDOW_SECONDS_MAX}
-          step={0.1}
-          disabled={disabled}
-          onValueChange={(value) => {
-            const next = Number(value);
-            if (Number.isFinite(next)) setDraft(next);
-          }}
-          onValueCommitted={(value) => {
-            const next = Number(value);
-            setDraft(next);
-            void setWindowSeconds(next);
-          }}
-        />
-        <Badge variant="secondary" className="min-w-14 justify-center tabular-nums">
-          {Number.isInteger(draft) ? draft : draft.toFixed(1)}s
-        </Badge>
-      </div>
-    </Field>
-  );
-}
-
 function AsrModelField() {
   const enabled = useSettingsStore((state) => state.asrEnabled);
   const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
@@ -812,7 +736,7 @@ function AsrModelField() {
           />
         </Field>
 
-        <AsrWindowField disabled={!model.supported || pending} />
+        <AsrWindowField idPrefix="settings" layout="page" disabled={!model.supported || pending} />
       </FieldGroup>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -1167,6 +1091,7 @@ export function SettingsPage() {
 
   return (
     <div
+      data-horizontal-swipe-surface
       className="mx-auto flex min-h-full max-w-5xl flex-col gap-4 touch-pan-y"
       onPointerDownCapture={settingsCategorySwipe.onPointerDownCapture}
       onPointerMoveCapture={settingsCategorySwipe.onPointerMoveCapture}
@@ -1210,7 +1135,11 @@ export function SettingsPage() {
           ))}
         </TabsList>
 
-        <div className="min-w-0 flex-1">
+        <m.div
+          data-slot="horizontal-swipe-page"
+          style={settingsCategorySwipe.motionStyle}
+          className="min-w-0 flex-1 transform-gpu"
+        >
           {category === "playback" && (
             <TabsContent value="playback" className="mt-0">
               <SettingsContent title="播放">
@@ -1237,8 +1166,29 @@ export function SettingsPage() {
                   </Field>
                 </Section>
                 <Section title="语音字幕">
-                  <AsrCaptionFontSizeField />
+                  <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
                   <AsrModelField />
+                </Section>
+                <Section title="弹幕轨道">
+                  <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
+                </Section>
+                <Section title="弹幕文字与节奏">
+                  <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
+                  <Field orientation="responsive">
+                    <FieldContent>
+                      <FieldTitle>恢复弹幕默认设置</FieldTitle>
+                      <FieldDescription>
+                        重置轨道、文字、过滤和 SC 透明度，屏蔽词不会被清空。
+                      </FieldDescription>
+                    </FieldContent>
+                    <DanmakuAppearanceResetButton />
+                  </Field>
+                </Section>
+                <Section title="弹幕过滤">
+                  <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
+                </Section>
+                <Section title="醒目留言">
+                  <SuperChatSettingsFields idPrefix="settings" layout="page" />
                 </Section>
               </SettingsContent>
             </TabsContent>
@@ -1398,7 +1348,7 @@ export function SettingsPage() {
               </SettingsContent>
             </TabsContent>
           )}
-        </div>
+        </m.div>
       </Tabs>
     </div>
   );

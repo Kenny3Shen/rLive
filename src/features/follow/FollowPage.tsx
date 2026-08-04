@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CirclePlay, Clock3, Home, Star, UserRoundX } from "lucide-react";
@@ -7,7 +7,6 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
-import { usePageEntrance } from "@/shared/hooks/usePageEntrance";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
@@ -49,6 +48,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { notify } from "@/components/ui/toast";
+import { preloadRouteModule } from "@/app/routeModules";
+import { usePlatformScope } from "@/shared/hooks/useSiteQuery";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,17 +69,16 @@ export function FollowPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const qc = useQueryClient();
-  const pageRef = useRef<HTMLDivElement>(null);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const [pendingRemove, setPendingRemove] = useState<FollowUser | null>(null);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+  const scopedPlatform = usePlatformScope();
   // Status refresh is intentionally started only after the user enters the
   // dedicated follow page, so first-paint work stays focused on discovery.
   useFollowStatusRefresh();
-  const platformFilter = followPlatformFromSearch(
-    searchParams.get(FOLLOW_PLATFORM_PARAM),
-    disabledSiteIds,
-  );
+  const platformFilter =
+    scopedPlatform ??
+    followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM), disabledSiteIds);
 
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
@@ -159,11 +159,6 @@ export function FollowPage() {
     };
   }, [hasLiveDuration]);
 
-  usePageEntrance(pageRef, {
-    entryKey: `follow:${platformFilter}`,
-    ready: !followsQuery.isLoading,
-  });
-
   return (
     <PullToRefresh
       onRefresh={() => refreshMutation.mutateAsync()}
@@ -175,8 +170,8 @@ export function FollowPage() {
         pending={refreshMutation.isPending || followsQuery.isLoading}
         label="刷新关注列表"
       />
-      <div ref={pageRef} className="flex flex-col gap-3">
-        <div data-page-enter-heading>
+      <div className="flex flex-col gap-3">
+        <div>
           <PageHeader
             title="关注用户"
             description={
@@ -267,8 +262,9 @@ export function FollowPage() {
                 removeMutation.isPending &&
                 removeMutation.variables?.site_id === u.site_id &&
                 removeMutation.variables.room_id === u.room_id;
+              const roomPath = `/room/${u.site_id}/${encodeURIComponent(u.room_id)}`;
               return (
-                <li data-page-enter-item key={`${u.site_id}:${u.room_id}`} className="min-w-0">
+                <li key={`${u.site_id}:${u.room_id}`} className="min-w-0">
                   <ContextMenu>
                     <ContextMenuTrigger
                       render={
@@ -286,9 +282,10 @@ export function FollowPage() {
                         type="button"
                         className="absolute inset-0 rounded-xl outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
                         aria-label={`打开${u.user_name}的直播间`}
-                        onClick={() =>
-                          navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
-                        }
+                        onPointerEnter={() => preloadRouteModule(roomPath)}
+                        onPointerDown={() => preloadRouteModule(roomPath)}
+                        onFocus={() => preloadRouteModule(roomPath)}
+                        onClick={() => navigate(roomPath)}
                       />
 
                       <CardHeader className="pointer-events-none items-center gap-x-2.5">
@@ -352,9 +349,8 @@ export function FollowPage() {
                     <ContextMenuContent>
                       <ContextMenuGroup>
                         <ContextMenuItem
-                          onClick={() =>
-                            navigate(`/room/${u.site_id}/${encodeURIComponent(u.room_id)}`)
-                          }
+                          onFocus={() => preloadRouteModule(roomPath)}
+                          onClick={() => navigate(roomPath)}
                         >
                           <CirclePlay aria-hidden />
                           打开直播间

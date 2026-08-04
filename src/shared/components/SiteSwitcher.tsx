@@ -18,13 +18,7 @@ const FALLBACK_SITES: SiteInfo[] = [
   { id: "twitch", name: "Twitch", ready: true },
 ];
 
-const PLATFORM_ORDER: readonly SiteId[] = [
-  "bilibili",
-  "douyu",
-  "huya",
-  "douyin",
-  "twitch",
-];
+const PLATFORM_ORDER: readonly SiteId[] = ["bilibili", "douyu", "huya", "douyin", "twitch"];
 
 const platformOrderIndex = new Map<SiteId, number>(
   PLATFORM_ORDER.map((siteId, index) => [siteId, index]),
@@ -48,6 +42,8 @@ type SiteSwitcherProps = {
   includeAll?: boolean;
   /** Renders a controlled platform filter rather than the homepage selector. */
   filterMode?: boolean;
+  /** Preloads a destination before a pointer or keyboard activation. */
+  onValueIntent?: (value: SiteSwitcherValue) => void;
   className?: string;
 };
 
@@ -56,6 +52,7 @@ export function SiteSwitcher({
   onValueChange,
   includeAll = false,
   filterMode = false,
+  onValueIntent,
   className,
 }: SiteSwitcherProps) {
   const siteId = useSettingsStore((s) => s.siteId);
@@ -110,13 +107,16 @@ export function SiteSwitcher({
             aria-disabled={disabled}
             disabled={disabled}
             title={site.ready ? label : `${label}（即将支持）`}
+            onPointerEnter={() => onValueIntent?.(site.id)}
+            onPointerDown={() => onValueIntent?.(site.id)}
+            onFocus={() => onValueIntent?.(site.id)}
             onClick={() => {
               if (disabled) return;
               if (value === undefined && site.id !== "all") setSiteId(site.id);
               onValueChange?.(site.id);
             }}
             className={cn(
-              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-[color,background-color,transform] duration-200 focus-ring motion-safe:active:scale-[0.98]",
+              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-200 focus-ring",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
@@ -124,20 +124,15 @@ export function SiteSwitcher({
             )}
           >
             {site.id === "all" ? (
-              <LayoutGrid
-                className={cn("size-5 shrink-0", active && "motion-safe:animate-platform-logo")}
-              />
+              <LayoutGrid className="size-5 shrink-0" />
             ) : (
-              <SiteLogo
-                siteId={site.id}
-                className={cn(active && "motion-safe:animate-platform-logo")}
-              />
+              <SiteLogo siteId={site.id} />
             )}
             <span className="hidden sm:inline">{label}</span>
             {active && (
               <span
                 key={`${site.id}-indicator`}
-                className="absolute inset-x-3 -bottom-px h-0.5 rounded-full motion-safe:animate-platform-indicator"
+                className="absolute inset-x-3 -bottom-px h-0.5 rounded-full"
                 style={accent ? { backgroundColor: accent } : undefined}
               />
             )}

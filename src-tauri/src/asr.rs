@@ -21,6 +21,8 @@ const VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
 const VAD_MODEL_URL: &str = "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin?download=true";
 const VAD_MODEL_SIZE_BYTES: u64 = 885_098;
 const ASR_SAMPLE_RATE: i32 = 16_000;
+const ASR_THREAD_LIMIT: usize = 8;
+const VAD_THREAD_LIMIT: i32 = 2;
 // Live captions do not need the 512-token offline default. Keeping a bounded
 // decode budget prevents a pathological segment from monopolizing the single
 // session and lets the bounded latest-window queue preserve live playback.
@@ -755,7 +757,7 @@ impl AsrManager {
             if status.state != AsrModelState::Ready {
                 return Err(AppError::new("asr_not_ready", "语音字幕模型正在准备"));
             }
-            (status.vad_enabled, status.threads.max(1))
+            (status.vad_enabled, vad_thread_count_for_asr(status.threads))
         };
         let session = self
             .inner
@@ -887,11 +889,11 @@ fn asr_thread_count() -> i32 {
 }
 
 fn asr_thread_count_for_available(available: usize) -> i32 {
-    // Calls to one CrispASR session remain serialized, so using the complete
-    // logical processor set here does not create concurrent model instances.
-    // It gives ggml maximum intra-op parallelism while keeping a single model
-    // session serialized, so no additional worker pool is required.
-    i32::try_from(available.max(1)).unwrap_or(i32::MAX)
+    available.clamp(1, ASR_THREAD_LIMIT) as i32
+}
+
+fn vad_thread_count_for_asr(asr_threads: i32) -> i32 {
+    asr_threads.clamp(1, VAD_THREAD_LIMIT)
 }
 
 fn model_directory(app_data_dir: Option<&Path>) -> PathBuf {
@@ -975,7 +977,10 @@ async fn remove_incomplete_file(path: &Path, expected_size: u64) -> AppResult<()
 
 #[cfg(test)]
 mod tests {
-    use super::{asr_thread_count_for_available, centiseconds_to_millis, decode_base64_pcm};
+    use super::{
+        asr_thread_count_for_available, centiseconds_to_millis, decode_base64_pcm,
+        vad_thread_count_for_asr,
+    };
     use base64::Engine;
 
     #[test]
@@ -1001,9 +1006,17 @@ mod tests {
     }
 
     #[test]
-    fn uses_all_detected_logical_processors_without_a_fixed_cap() {
+    fn caps_asr_at_eight_threads() {
+        assert_eq!(asr_thread_count_for_available(0), 1);
         assert_eq!(asr_thread_count_for_available(1), 1);
-        assert_eq!(asr_thread_count_for_available(16), 16);
+        assert_eq!(asr_thread_count_for_available(8), 8);
+        assert_eq!(asr_thread_count_for_available(16), 8);
+    }
+
+    #[test]
+    fn caps_vad_at_two_threads_without_exceeding_asr() {
+        assert_eq!(vad_thread_count_for_asr(1), 1);
+        assert_eq!(vad_thread_count_for_asr(8), 2);
     }
 
     #[test]

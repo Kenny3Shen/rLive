@@ -116,6 +116,16 @@ fn stage_crispasr_runtime() -> io::Result<()> {
         // Windows bundler see crispasr.dll / ggml*.dll next to the exe.
         copy_with_retry(&source, &profile_dir.join(name))?;
         copy_with_retry(&source, &bundle_dir.join(name))?;
+        // A PE import table records the DLL's real file name, so a build that
+        // emitted libcrispasr.dll is linked against that name and the loader
+        // ignores the canonical copy above. Stage the original name as well
+        // when it differs; harmless elsewhere since Unix names match exactly.
+        if let Some(source_name) = source.file_name().and_then(|n| n.to_str()) {
+            if source_name != name {
+                copy_with_retry(&source, &profile_dir.join(source_name))?;
+                copy_with_retry(&source, &bundle_dir.join(source_name))?;
+            }
+        }
         if let Some(directory) = &android_jni_dir {
             let destination = directory.join(name);
             copy_with_retry(&source, &destination)?;
@@ -194,7 +204,14 @@ fn candidate_names(canonical: &str) -> Vec<String> {
     let mut names = vec![canonical.to_string()];
 
     if canonical.ends_with(".dll") {
-        // Windows builds use the MSVC DLL names exactly as requested.
+        // MSVC leaves shared libraries unprefixed, so the canonical name is
+        // usually what CMake emitted. ggml clears CMAKE_SHARED_LIBRARY_PREFIX
+        // for WIN32, but only inside its own directory scope — crispasr-lib
+        // lives in src/ and keeps the default prefix under toolchains where
+        // that prefix is "lib", yielding libcrispasr.dll. Probe both.
+        if !canonical.starts_with("lib") {
+            names.push(format!("lib{canonical}"));
+        }
     } else if let Some(stem) = canonical
         .strip_suffix(".so.1")
         .or_else(|| canonical.strip_suffix(".so.0"))

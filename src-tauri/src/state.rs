@@ -19,7 +19,6 @@ pub struct AppState {
     pub bilibili_send_limiter: BilibiliDanmakuSendLimiter,
     pub douyu_send_limiter: DouyuDanmakuSendLimiter,
     pub huya_send_limiter: HuyaDanmakuSendLimiter,
-    pub douyin_send_limiter: DouyinDanmakuSendLimiter,
     pub stream_proxy: StreamProxy,
     pub image_proxy: ImageProxy,
 }
@@ -150,48 +149,6 @@ impl HuyaDanmakuSendLimiter {
     }
 }
 
-/// Conservative per-room write gate for the Douyin sender.
-///
-/// Same local UX cooldown pattern as the other platforms: reserve before the
-/// HTTP write so a timeout cannot cause automatic retries of a possibly
-/// accepted message.
-pub struct DouyinDanmakuSendLimiter {
-    sent_at: Mutex<HashMap<String, Instant>>,
-}
-
-impl DouyinDanmakuSendLimiter {
-    const COOLDOWN: Duration = Duration::from_secs(3);
-
-    pub fn new() -> Self {
-        Self {
-            sent_at: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn reserve(&self, room_id: &str) -> AppResult<()> {
-        let now = Instant::now();
-        let mut sent_at = self
-            .sent_at
-            .lock()
-            .map_err(|_| AppError::new("send_limiter_lock", "发送状态暂不可用"))?;
-        sent_at.retain(|_, sent| now.duration_since(*sent) < Duration::from_secs(90));
-        if let Some(previous) = sent_at.get(room_id) {
-            let elapsed = now.duration_since(*previous);
-            if elapsed < Self::COOLDOWN {
-                let remaining = (Self::COOLDOWN - elapsed).as_secs().max(1);
-                return Err(AppError::new(
-                    "douyin_send_cooldown",
-                    format!("发送过快，请在约 {remaining} 秒后再试"),
-                )
-                .with_site("douyin")
-                .retryable());
-            }
-        }
-        sent_at.insert(room_id.to_string(), now);
-        Ok(())
-    }
-}
-
 impl AppState {
     /// Creates the application state using the platform-owned data directory
     /// when one is supplied by the mobile host.
@@ -211,7 +168,6 @@ impl AppState {
             bilibili_send_limiter: BilibiliDanmakuSendLimiter::new(),
             douyu_send_limiter: DouyuDanmakuSendLimiter::new(),
             huya_send_limiter: HuyaDanmakuSendLimiter::new(),
-            douyin_send_limiter: DouyinDanmakuSendLimiter::new(),
             stream_proxy: StreamProxy::new(),
             image_proxy: ImageProxy::new(),
         })
@@ -250,10 +206,7 @@ fn db_path(_app_data_dir: Option<&Path>) -> AppResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BilibiliDanmakuSendLimiter, DouyinDanmakuSendLimiter, DouyuDanmakuSendLimiter,
-        HuyaDanmakuSendLimiter,
-    };
+    use super::{BilibiliDanmakuSendLimiter, DouyuDanmakuSendLimiter, HuyaDanmakuSendLimiter};
 
     #[test]
     fn send_limiter_holds_the_same_room() {
@@ -274,14 +227,6 @@ mod tests {
     #[test]
     fn huya_send_limiter_holds_the_same_room() {
         let limiter = HuyaDanmakuSendLimiter::new();
-        limiter.reserve("1").unwrap();
-        assert!(limiter.reserve("1").is_err());
-        assert!(limiter.reserve("2").is_ok());
-    }
-
-    #[test]
-    fn douyin_send_limiter_holds_the_same_room() {
-        let limiter = DouyinDanmakuSendLimiter::new();
         limiter.reserve("1").unwrap();
         assert!(limiter.reserve("1").is_err());
         assert!(limiter.reserve("2").is_ok());

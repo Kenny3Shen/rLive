@@ -3,9 +3,10 @@
  * category room pages).
  *
  * Those are the most expensive browsing requests in the app and they change
- * slowly. Shell remounts a page whenever the route or the platform changes, so
- * with a bounded stale window nearly every visit — coming back from a room,
- * flipping between platforms — paid for a fresh round of IPC.
+ * slowly. Route components can unmount when the user changes views, and each
+ * platform has its own query key, so a bounded stale window would make many
+ * visits — coming back from a room, flipping between platforms — pay for a
+ * fresh round of IPC.
  *
  * Marking the data permanently fresh makes every later visit free. Freshness
  * stays entirely under explicit control:

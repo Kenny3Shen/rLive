@@ -12,6 +12,15 @@ import {
   splitGraphemes,
   utf16Units,
 } from "../src/features/room/danmaku/autoSend";
+import { getDanmakuSendConfig, isDanmakuSendSite } from "../src/features/room/danmaku/sending";
+
+describe("danmaku sending platform capability", () => {
+  test("keeps Douyin receive-only while preserving the supported senders", () => {
+    expect(["bilibili", "douyu", "huya"].every(isDanmakuSendSite)).toBe(true);
+    expect(isDanmakuSendSite("douyin")).toBe(false);
+    expect(getDanmakuSendConfig("douyin")).toBeNull();
+  });
+});
 
 describe("automatic danmaku text preparation", () => {
   test("collapses newlines and repeated whitespace into one sendable space", () => {

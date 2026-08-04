@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::db::history::{self, HistoryRecord};
 use crate::error::{AppError, AppResult};
+use crate::models::live::SiteId;
 use crate::state::AppState;
 
 fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Connection>> {
@@ -12,9 +13,15 @@ fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Co
 }
 
 #[tauri::command]
-pub fn history_list(state: State<'_, AppState>) -> AppResult<Vec<HistoryRecord>> {
+pub fn history_list(
+    state: State<'_, AppState>,
+    site_id: Option<SiteId>,
+) -> AppResult<Vec<HistoryRecord>> {
     let conn = lock_db(&state)?;
-    history::list(&conn)
+    match site_id {
+        Some(site_id) => history::list_for_site(&conn, site_id.as_str()),
+        None => history::list(&conn),
+    }
 }
 
 #[tauri::command]
