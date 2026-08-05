@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { m } from "motion/react";
 import {
   ChevronRight,
   CirclePlay,
@@ -13,7 +12,6 @@ import {
 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { PageHeader } from "@/shared/components/PageHeader";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { SiteLogo } from "@/shared/components/SiteLogo";
@@ -24,7 +22,11 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { DanmakuSendHistoryItem, HistoryItem, SiteId } from "@/shared/types/live";
 import { groupHistoryByDate, type HistoryDateGroup } from "./historyGrouping";
 import { historyPlatformFromSearch, HISTORY_PLATFORM_PARAM } from "./historyRoute";
-import { useHistoryShellStore, type HistoryTab } from "./historyShellStore";
+import {
+  createHistoryShellRegistrationId,
+  useHistoryShellStore,
+  type HistoryTab,
+} from "./historyShellStore";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -205,6 +207,7 @@ export function HistoryPage() {
   const qc = useQueryClient();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<HistoryTab>("watch");
+  const [shellRegistrationId] = useState(createHistoryShellRegistrationId);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const scopedPlatform = usePlatformScope();
   const historyPlatform =
@@ -328,7 +331,7 @@ export function HistoryPage() {
 
   useEffect(() => {
     const shell = useHistoryShellStore.getState();
-    shell.register({
+    shell.register(shellRegistrationId, {
       activeTab,
       canClear,
       clearPending,
@@ -347,11 +350,12 @@ export function HistoryPage() {
     clearPending,
     clearTitle,
     resetActiveClearMutation,
+    shellRegistrationId,
   ]);
 
   useEffect(() => {
-    return () => useHistoryShellStore.getState().reset();
-  }, []);
+    return () => useHistoryShellStore.getState().reset(shellRegistrationId);
+  }, [shellRegistrationId]);
 
   return (
     <PullToRefresh
@@ -373,9 +377,7 @@ export function HistoryPage() {
         }
         label="刷新历史记录"
       />
-      <div className="flex min-h-full flex-col gap-4 touch-pan-y">
-        <PageHeader title="历史记录" />
-
+      <div className="flex min-h-full flex-col touch-pan-y">
         <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-4">
           <TabsList
             aria-label="历史记录类型"
@@ -391,10 +393,10 @@ export function HistoryPage() {
             </TabsTrigger>
           </TabsList>
 
-          <m.div
+          <div
+            ref={historyTabSwipe.pageRef as React.Ref<HTMLDivElement>}
             data-slot="horizontal-swipe-page"
-            style={historyTabSwipe.motionStyle}
-            className="min-w-0 transform-gpu"
+            className="min-w-0"
           >
             <TabsContent value="watch" className="mt-0">
               {watchHistoryQuery.isLoading && <HistorySkeleton />}
@@ -485,7 +487,7 @@ export function HistoryPage() {
                 />
               )}
             </TabsContent>
-          </m.div>
+          </div>
         </Tabs>
       </div>
     </PullToRefresh>

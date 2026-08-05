@@ -105,6 +105,22 @@
   --danmaku-self-color: #ffd166;
 }
 
+/* The browser owns the old/new page snapshots. Suppress its default crossfade
+   while revealThemeAt() clips the new snapshot outwards from the toggle. */
+:root[data-theme-reveal="true"]::view-transition-old(root),
+:root[data-theme-reveal="true"]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+:root[data-theme-reveal="true"]::view-transition-old(root) {
+  z-index: 1;
+}
+
+:root[data-theme-reveal="true"]::view-transition-new(root) {
+  z-index: 2;
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans:
@@ -236,11 +252,18 @@ body {
   }
 
   .app-shell [data-slot="app-sidebar-preferences"] {
-    display: none;
+    display: flex;
+    width: 2.75rem;
+    flex: 0 0 2.75rem;
+    margin-bottom: 0;
   }
 
   .app-shell [data-slot="app-sidebar-label"] {
     display: none;
+  }
+
+  [data-slot="refresh-fab"] {
+    bottom: calc(3.5rem + env(safe-area-inset-bottom));
   }
 
   .app-shell [data-slot="app-header"] {
@@ -295,6 +318,7 @@ html[data-platform="android"] .app-shell {
   z-index: 60;
   width: auto;
   height: auto;
+  aspect-ratio: auto;
   max-width: none;
   max-height: none;
 }

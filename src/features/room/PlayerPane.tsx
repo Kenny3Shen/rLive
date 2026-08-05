@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { m } from "motion/react";
 import { SunMedium, Volume2 } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -18,7 +17,7 @@ import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
 import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
-import { PlayerControls } from "./PlayerControls";
+import { PlayerControls } from "@/shared/components/player/PlayerControls";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -30,6 +29,10 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import {
+  useCompactLandscapePlayerViewport,
+  useCompactPlayerViewport,
+} from "@/shared/hooks/usePlayerViewport";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -191,52 +194,11 @@ export function nextRoomSideTabForSwipe(
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
-const COMPACT_LANDSCAPE_VIEWPORT_QUERY =
-  "(orientation: landscape) and (max-height: 540px) and (pointer: coarse)";
-const COMPACT_VIEWPORT_QUERY = `(max-width: 767px), ${COMPACT_LANDSCAPE_VIEWPORT_QUERY}`;
 type OverlayInteractionSource = "controls" | "composer";
-
-function isCompactViewport(): boolean {
-  return typeof window !== "undefined" && window.matchMedia(COMPACT_VIEWPORT_QUERY).matches;
-}
-
-function useCompactViewport(): boolean {
-  const [compact, setCompact] = useState(isCompactViewport);
-
-  useEffect(() => {
-    const query = window.matchMedia(COMPACT_VIEWPORT_QUERY);
-    const update = () => setCompact(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return compact;
-}
-
-function isCompactLandscapeViewport(): boolean {
-  return (
-    typeof window !== "undefined" && window.matchMedia(COMPACT_LANDSCAPE_VIEWPORT_QUERY).matches
-  );
-}
 
 function isTouchPointer(pointerType: string): boolean {
   // A few Android WebViews expose an empty pointerType for finger input.
   return pointerType === "touch" || pointerType === "";
-}
-
-function useCompactLandscapeViewport(): boolean {
-  const [compactLandscape, setCompactLandscape] = useState(isCompactLandscapeViewport);
-
-  useEffect(() => {
-    const query = window.matchMedia(COMPACT_LANDSCAPE_VIEWPORT_QUERY);
-    const update = () => setCompactLandscape(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return compactLandscape;
 }
 
 /** Stop the canvas only while an overlay genuinely covers the video frame. */
@@ -343,14 +305,14 @@ export function PlayerPane({
   siteId,
   roomId,
 }: PlayerPaneProps) {
-  const compactViewport = useCompactViewport();
-  const compactLandscapeViewport = useCompactLandscapeViewport();
+  const compactViewport = useCompactPlayerViewport();
+  const compactLandscapeViewport = useCompactLandscapePlayerViewport();
   const androidClient = getClientPlatform() === "android";
   // Portrait phones use a normal video + chat stack, so new rooms immediately
   // expose the danmaku list. Short landscape screens stay viewing-first and
   // retain a dismissible overlay drawer instead.
   const [sidePanelOpen, setSidePanelOpen] = useState(() =>
-    sidePanelStartsOpen(isCompactLandscapeViewport()),
+    sidePanelStartsOpen(compactLandscapeViewport),
   );
   // PlayerPane is normally controlled by RoomPage, but keeping a local value
   // preserves the same tab behaviour for embedded/uncontrolled callers and
@@ -1380,9 +1342,9 @@ export function PlayerPane({
                 </TabsTrigger>
               </TabsList>
             </div>
-            <m.div
+            <div
+              ref={sideTabSwipe.pageRef as React.Ref<HTMLDivElement>}
               data-slot="horizontal-swipe-page"
-              style={sideTabSwipe.motionStyle}
               className="relative flex min-h-0 flex-1 transform-gpu"
             >
               <TabsContent
@@ -1418,7 +1380,7 @@ export function PlayerPane({
                   siteId={siteId}
                 />
               </TabsContent>
-            </m.div>
+            </div>
           </Tabs>
         </aside>
       )}

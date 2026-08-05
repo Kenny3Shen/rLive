@@ -36,6 +36,7 @@ export function RefreshFab({
       <TooltipTrigger
         render={
           <Button
+            data-slot="refresh-fab"
             type="button"
             aria-label={label}
             disabled={pending}
