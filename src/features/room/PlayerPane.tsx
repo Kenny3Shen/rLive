@@ -1130,7 +1130,7 @@ export function PlayerPane({
               <SuperChatOverlay
                 key={`sc:${roomSessionKey ?? "room"}`}
                 active={danmakuActive}
-                className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(12rem,calc(100%-1.5rem))]"
+                className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(240px,calc(100%-1.5rem))]"
               />
             )}
 
