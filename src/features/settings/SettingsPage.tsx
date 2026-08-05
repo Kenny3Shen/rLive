@@ -1015,6 +1015,10 @@ export function SettingsPage() {
   const setProxy = useSettingsStore((s) => s.setProxy);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
   const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
+  const playbackSmartLineSelection = useSettingsStore((s) => s.playbackSmartLineSelection);
+  const setPlaybackSmartLineSelection = useSettingsStore((s) => s.setPlaybackSmartLineSelection);
+  const playbackSoftSwitchEnabled = useSettingsStore((s) => s.playbackSoftSwitchEnabled);
+  const setPlaybackSoftSwitchEnabled = useSettingsStore((s) => s.setPlaybackSoftSwitchEnabled);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
   const [proxyDraft, setProxyDraft] = useState(proxy ?? "");
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
@@ -1268,6 +1272,32 @@ export function SettingsPage() {
                       <ToggleGroupItem value="mid">中间</ToggleGroupItem>
                       <ToggleGroupItem value="low">最低</ToggleGroupItem>
                     </ToggleGroup>
+                  </Field>
+                  <Field orientation="responsive">
+                    <FieldContent>
+                      <FieldTitle id="smart-line-selection-title">智能线路选择</FieldTitle>
+                      <FieldDescription>
+                        通过当前应用代理并发探测线路，优先选择可用且响应更快的来源。
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      aria-labelledby="smart-line-selection-title"
+                      checked={playbackSmartLineSelection}
+                      onCheckedChange={setPlaybackSmartLineSelection}
+                    />
+                  </Field>
+                  <Field orientation="responsive">
+                    <FieldContent>
+                      <FieldTitle id="soft-switch-title">软切换实验</FieldTitle>
+                      <FieldDescription>
+                        同协议换源时保留当前媒体元素和缓冲状态；失败会自动完整重建播放器。
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      aria-labelledby="soft-switch-title"
+                      checked={playbackSoftSwitchEnabled}
+                      onCheckedChange={setPlaybackSoftSwitchEnabled}
+                    />
                   </Field>
                 </Section>
                 <Section title="语音字幕">

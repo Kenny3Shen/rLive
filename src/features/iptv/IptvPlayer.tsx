@@ -84,7 +84,13 @@ function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function iptvPlaybackKind(url: string): XgPlaybackKind {
+export function iptvPlaybackKind(
+  source: string | Pick<IptvChannel, "url" | "protocol">,
+): XgPlaybackKind {
+  const url = typeof source === "string" ? source : source.url;
+  const protocol = typeof source === "string" ? undefined : source.protocol;
+  if (protocol === "flv" || protocol === "hls" || protocol === "native") return protocol;
+  if (protocol === "mpeg_ts") return "mpegts";
   if (isFlvStream(url)) return "flv";
   if (isMpegTransportStream(url)) return "mpegts";
   if (isProgressiveVideo(url)) return "native";
@@ -105,6 +111,7 @@ type IptvPlayerProps = {
 export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }: IptvPlayerProps) {
   const channelId = channel?.id ?? null;
   const channelUrl = channel?.url ?? null;
+  const channelProtocol = channel?.protocol;
   const channelHeaders = channel?.headers ?? EMPTY_HEADERS;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -542,7 +549,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     setPaused(true);
     setStatus("connecting");
     setError(null);
-    const playbackKind = iptvPlaybackKind(channelUrl);
+    const playbackKind = iptvPlaybackKind({ url: channelUrl, protocol: channelProtocol });
     const xgModulesPromise = loadXgPlayerModules(playbackKind);
     void xgModulesPromise.catch(() => {});
 
@@ -668,7 +675,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
       destroyMedia();
       void proxyQueue.enqueue(stopProxy);
     };
-  }, [channelHeaders, channelId, channelUrl, reconnectToken, reloadToken]);
+  }, [channelHeaders, channelId, channelProtocol, channelUrl, reconnectToken, reloadToken]);
 
   const statusText: Record<IptvPlaybackStatus, string> = {
     idle: "选择一个频道开始观看",

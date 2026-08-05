@@ -47,7 +47,18 @@ export type LiveRoomDetail = {
   raw: unknown;
 };
 
+export type PlaybackProtocol = "flv" | "hls" | "mpeg_ts" | "native" | "unknown";
+
+/** Structured playback candidate returned by the native site adapter. */
 export type PlayUrl = {
+  /** Stable within a quality payload; never contains a signed URL or request headers. */
+  source_id?: string;
+  /** Safe user-facing name supplied by the site adapter. */
+  label?: string;
+  /** Explicit protocol. Optional only for compatibility with older backends and tests. */
+  protocol?: PlaybackProtocol;
+  /** Lower values retain the platform's preferred ordering. */
+  priority?: number;
   url: string;
   headers: Record<string, string>;
 };
@@ -151,6 +162,10 @@ export type AppSettings = {
   danmaku_shield_words: string[];
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
   quality_level?: "high" | "mid" | "low";
+  /** Probe multiple live sources locally and use their health for selection/failover. */
+  playback_smart_line_selection?: boolean;
+  /** Experimental same-protocol xgplayer switchURL path; hard reload remains the fallback. */
+  playback_soft_switch_enabled?: boolean;
   /** Device-local permission for user-operated single-message senders. */
   danmaku_send_enabled?: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */

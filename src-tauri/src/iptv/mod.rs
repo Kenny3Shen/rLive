@@ -15,6 +15,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+use crate::models::live::PlaybackProtocol;
 
 const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHANNELS: usize = 4_000;
@@ -32,6 +33,7 @@ pub struct IptvChannel {
     pub group: String,
     pub logo: Option<String>,
     pub url: String,
+    pub protocol: PlaybackProtocol,
     /// The small allowlist of playback headers embedded in an M3U entry.
     /// These are forwarded by the localhost proxy to the stream and any HLS
     /// sub-resources, not persisted as account credentials.
@@ -383,12 +385,14 @@ fn parse_m3u(playlist: &str, base_url: &Url) -> Vec<IptvChannel> {
                 .map(|url| url.to_string())
         });
 
+        let stream_url = stream_url.to_string();
         channels.push(IptvChannel {
             id: channels.len().to_string(),
             name,
             group,
             logo,
-            url: stream_url.to_string(),
+            protocol: PlaybackProtocol::infer_from_url(&stream_url),
+            url: stream_url,
             headers: entry.headers,
         });
         if channels.len() >= MAX_CHANNELS {
@@ -479,6 +483,7 @@ mod tests {
     use reqwest::Url;
 
     use super::{IptvChannelAvailability, IptvChannelCheck, parse_m3u, probe_channel};
+    use crate::models::live::PlaybackProtocol;
 
     async fn probe_local_response(path: &str, response: &'static [u8]) -> IptvChannelAvailability {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -523,6 +528,7 @@ https://media.example.test/channel.m3u8
             "https://example.test/playlists/live/news.m3u8"
         );
         assert_eq!(channels[1].group, "未分组");
+        assert_eq!(channels[0].protocol, PlaybackProtocol::Hls);
     }
 
     #[test]

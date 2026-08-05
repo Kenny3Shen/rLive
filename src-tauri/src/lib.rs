@@ -55,7 +55,9 @@ use commands::site::{
     site_get_categories, site_get_category_rooms, site_get_play_qualities, site_get_play_urls,
     site_get_recommend, site_get_room_detail, site_list, site_search_rooms,
 };
-use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop};
+use commands::stream_proxy::{
+    stream_proxy_probe_sources, stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry,
+};
 use state::AppState;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -231,6 +233,8 @@ pub fn run() {
             iptv_check_channels,
             stream_proxy_start,
             stream_proxy_stop,
+            stream_proxy_probe_sources,
+            stream_proxy_telemetry,
             image_proxy_url,
             danmaku_connect,
             danmaku_disconnect,

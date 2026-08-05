@@ -7,6 +7,14 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { clampIndex } from "@/lib/playUrl";
 import { pickDefaultQualityIndex } from "./quality";
 import { nextFailoverAction } from "./failover";
+import {
+  lineDiagnostics,
+  nextRankedLineIndex,
+  rankPlaybackSourceIndices,
+  shouldAdoptProbeWinner,
+  type PlaybackLineDiagnostic,
+  type PlaybackSourceProbe,
+} from "./sourceSelection";
 
 const EMPTY_QUALITIES: LivePlayQuality[] = [];
 const EMPTY_PLAY_URLS: PlayUrl[] = [];
@@ -18,6 +26,8 @@ export type PlaybackController = {
   lines: PlayUrl[];
   lineIndex: number;
   playUrl: PlayUrl | null;
+  lineDiagnostics: PlaybackLineDiagnostic[];
+  linesTesting: boolean;
   loading: boolean;
   error: unknown;
   loadError: string | null;
@@ -42,17 +52,23 @@ export function usePlaybackController(opts: {
 }): PlaybackController {
   const { siteId, roomId, detail, enabled = true } = opts;
   const qualityLevel = useSettingsStore((s) => s.qualityLevel) as QualityLevel;
+  const smartLineSelection = useSettingsStore((s) => s.playbackSmartLineSelection);
 
   const [qualityIndex, setQualityIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const [sourceProbes, setSourceProbes] = useState<PlaybackSourceProbe[]>([]);
+  const [linesTesting, setLinesTesting] = useState(false);
   const retryCountRef = useRef(0);
   const twitchPlayUrlRenewalCountRef = useRef(0);
   const failoverTimerRef = useRef<number | null>(null);
   const appliedQualitiesKeyRef = useRef<string | null>(null);
   const lineIndexRef = useRef(0);
   const lineCountRef = useRef(0);
+  const rankedLineIndicesRef = useRef<number[]>([]);
+  const exhaustedLineIndicesRef = useRef(new Set<number>());
+  const hasPlayedRef = useRef(false);
 
   useEffect(() => {
     lineIndexRef.current = lineIndex;
@@ -73,6 +89,11 @@ export function usePlaybackController(opts: {
     appliedQualitiesKeyRef.current = null;
     retryCountRef.current = 0;
     twitchPlayUrlRenewalCountRef.current = 0;
+    exhaustedLineIndicesRef.current.clear();
+    rankedLineIndicesRef.current = [];
+    hasPlayedRef.current = false;
+    setSourceProbes([]);
+    setLinesTesting(false);
     setQualityIndex(0);
     setLineIndex(0);
     setLoadError(null);
@@ -120,6 +141,8 @@ export function usePlaybackController(opts: {
     setLineIndex(0);
     retryCountRef.current = 0;
     twitchPlayUrlRenewalCountRef.current = 0;
+    exhaustedLineIndicesRef.current.clear();
+    hasPlayedRef.current = false;
   }, [selectedQuality?.quality, selectedQuality?.data]);
 
   const playUrlQuery = useQuery({
@@ -142,6 +165,67 @@ export function usePlaybackController(opts: {
   const lines = playUrlQuery.data ?? EMPTY_PLAY_URLS;
   lineCountRef.current = lines.length;
   const playUrl = lines[clampIndex(lineIndex, lines.length)] ?? null;
+  const sourceProbeKey = useMemo(
+    () => lines.map((line, index) => `${line.source_id ?? index}:${line.url}`).join("|"),
+    [lines],
+  );
+
+  useEffect(() => {
+    rankedLineIndicesRef.current = lines.map((_, index) => index);
+    exhaustedLineIndicesRef.current.clear();
+    if (!smartLineSelection || lines.length <= 1) {
+      setSourceProbes([]);
+      setLinesTesting(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSourceProbes([]);
+    setLinesTesting(true);
+    void invokeCmd<PlaybackSourceProbe[]>("stream_proxy_probe_sources", { sources: lines })
+      .then((probes) => {
+        if (cancelled) return;
+        setSourceProbes(probes);
+        const rankedIndices = rankPlaybackSourceIndices(lines, probes);
+        rankedLineIndicesRef.current = rankedIndices;
+        const winnerIndex = rankedIndices[0];
+        const currentIndex = clampIndex(lineIndexRef.current, lines.length);
+        if (
+          winnerIndex != null &&
+          shouldAdoptProbeWinner({
+            currentIndex,
+            winnerIndex,
+            hasPlayed: hasPlayedRef.current,
+            probes,
+            sources: lines,
+          })
+        ) {
+          retryCountRef.current = 0;
+          twitchPlayUrlRenewalCountRef.current = 0;
+          exhaustedLineIndicesRef.current.clear();
+          setLoadError(null);
+          setLineIndex(winnerIndex);
+        }
+      })
+      .catch(() => {
+        // Playback remains on the platform order when diagnostics are not
+        // available (for example vite-only development or a transient proxy).
+      })
+      .finally(() => {
+        if (!cancelled) setLinesTesting(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lines, smartLineSelection, sourceProbeKey]);
+
+  const resolvedLineDiagnostics = useMemo(
+    () =>
+      smartLineSelection && (sourceProbes.length > 0 || linesTesting)
+        ? lineDiagnostics(lines, sourceProbes, linesTesting)
+        : [],
+    [lines, linesTesting, smartLineSelection, sourceProbes],
+  );
 
   useEffect(() => () => clearFailoverTimer(), [clearFailoverTimer]);
 
@@ -150,6 +234,8 @@ export function usePlaybackController(opts: {
       clearFailoverTimer();
       retryCountRef.current = 0;
       twitchPlayUrlRenewalCountRef.current = 0;
+      exhaustedLineIndicesRef.current.clear();
+      hasPlayedRef.current = false;
       setLoadError(null);
       setQualityIndex(index);
       setLineIndex(0);
@@ -162,6 +248,8 @@ export function usePlaybackController(opts: {
       clearFailoverTimer();
       retryCountRef.current = 0;
       twitchPlayUrlRenewalCountRef.current = 0;
+      exhaustedLineIndicesRef.current.clear();
+      hasPlayedRef.current = false;
       setLoadError(null);
       setLineIndex(index);
     },
@@ -172,6 +260,8 @@ export function usePlaybackController(opts: {
     clearFailoverTimer();
     retryCountRef.current = 0;
     twitchPlayUrlRenewalCountRef.current = 0;
+    exhaustedLineIndicesRef.current.clear();
+    hasPlayedRef.current = false;
     setLoadError(null);
     // A metadata refetch alone does not recreate an already-attached MSE
     // player when the CDN returns the same URL. Bump the session token first
@@ -183,6 +273,8 @@ export function usePlaybackController(opts: {
   const onPlayerPlaying = useCallback(() => {
     retryCountRef.current = 0;
     twitchPlayUrlRenewalCountRef.current = 0;
+    exhaustedLineIndicesRef.current.clear();
+    hasPlayedRef.current = true;
     setLoadError(null);
   }, []);
 
@@ -231,10 +323,20 @@ export function usePlaybackController(opts: {
         return;
       }
 
+      let rankedReplacement: number | null | undefined;
+      if (smartLineSelection && retryCountRef.current >= 2) {
+        exhaustedLineIndicesRef.current.add(lineIndexRef.current);
+        rankedReplacement = nextRankedLineIndex({
+          currentIndex: lineIndexRef.current,
+          rankedIndices: rankedLineIndicesRef.current,
+          exhaustedIndices: exhaustedLineIndicesRef.current,
+        });
+      }
       const action = nextFailoverAction({
         retryCount: retryCountRef.current,
         lineIndex: lineIndexRef.current,
         lineCount: lineCountRef.current,
+        ...(smartLineSelection ? { nextLineIndex: rankedReplacement } : {}),
       });
 
       if (action.type === "fail") {
@@ -258,7 +360,7 @@ export function usePlaybackController(opts: {
         apply();
       }
     },
-    [clearFailoverTimer, playUrlQuery, siteId],
+    [clearFailoverTimer, playUrlQuery, siteId, smartLineSelection],
   );
 
   const loading = qualitiesQuery.isLoading || (qualitiesQuery.isSuccess && playUrlQuery.isLoading);
@@ -282,6 +384,8 @@ export function usePlaybackController(opts: {
     lines,
     lineIndex: clampIndex(lineIndex, Math.max(lines.length, 1)),
     playUrl,
+    lineDiagnostics: resolvedLineDiagnostics,
+    linesTesting,
     loading,
     error,
     loadError,

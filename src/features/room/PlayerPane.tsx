@@ -36,6 +36,7 @@ import {
 } from "@/shared/hooks/usePlayerViewport";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
+import type { PlaybackLineDiagnostic } from "./playback/sourceSelection";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { siteSupportsSuperChat } from "./superChat";
 
@@ -256,7 +257,8 @@ type PlayerPaneProps = {
   qualities?: { quality: string }[];
   qualityIndex?: number;
   onQualityChange?: (index: number) => void;
-  lines?: { url: string }[];
+  lines?: PlayUrl[];
+  lineDiagnostics?: PlaybackLineDiagnostic[];
   lineIndex?: number;
   onLineChange?: (index: number) => void;
   /** Refresh the active stream metadata and rebuild the MSE session. */
@@ -293,6 +295,7 @@ export function PlayerPane({
   qualityIndex = 0,
   onQualityChange,
   lines = [],
+  lineDiagnostics = [],
   lineIndex = 0,
   onLineChange,
   onRefresh,
@@ -354,6 +357,7 @@ export function PlayerPane({
   const player = useWebPlayer({
     playUrl,
     siteId,
+    quality: qualities[qualityIndex]?.quality ?? null,
     sessionKey: roomSessionKey,
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
@@ -1242,6 +1246,7 @@ export function PlayerPane({
                 qualities={qualities}
                 qualityIndex={qualityIndex}
                 lines={lines}
+                lineDiagnostics={lineDiagnostics}
                 lineIndex={lineIndex}
                 fullscreen={player.mode === "fullscreen"}
                 // Capability is device-level and stable; keep the control

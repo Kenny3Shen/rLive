@@ -197,6 +197,8 @@ pub fn merge_into_db(
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
+    settings.playback_smart_line_selection = package.settings.playback_smart_line_selection;
+    settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
     // Do not copy `danmaku_send_enabled`, `asr_enabled`,
     // `asr_vad_enabled`, `asr_window_seconds`, or `iptv_custom_m3u_url`.
     // A profile is portable/untrusted input; importing it must not grant

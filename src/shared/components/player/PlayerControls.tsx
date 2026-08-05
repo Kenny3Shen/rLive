@@ -20,6 +20,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -29,6 +30,13 @@ import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
+import type { PlayUrl } from "@/shared/types/live";
+
+type LineDiagnostic =
+  | { state: "testing" }
+  | { state: "untested" }
+  | { state: "available"; ttfbMs: number | null }
+  | { state: "unavailable"; errorCode: string | null };
 
 export function danmakuControlPresentation(osdOn: boolean | undefined) {
   const enabled = Boolean(osdOn);
@@ -80,7 +88,8 @@ export type PlayerControlsProps = {
   asrBusy?: boolean;
   qualities?: { quality: string }[];
   qualityIndex?: number;
-  lines?: { url: string }[];
+  lines?: PlayUrl[];
+  lineDiagnostics?: LineDiagnostic[];
   lineIndex?: number;
   fullscreen?: boolean;
   pictureInPictureSupported?: boolean;
@@ -191,6 +200,7 @@ export function PlayerControls({
   qualities = [],
   qualityIndex = 0,
   lines = [],
+  lineDiagnostics = [],
   lineIndex = 0,
   fullscreen = false,
   pictureInPictureSupported = false,
@@ -290,9 +300,7 @@ export function PlayerControls({
   const streamSettingsDisabled = disabled || (qualities.length <= 1 && lines.length <= 1);
   const streamSettingsLabel = [
     qualities.length > 0 ? `清晰度 ${qualityLabel(qualityIndex)}` : null,
-    lines.length > 0 && lines[lineIndex]
-      ? `线路 ${lineLabel(lines[lineIndex].url, lineIndex)}`
-      : null,
+    lines.length > 0 && lines[lineIndex] ? `线路 ${lineLabel(lines[lineIndex], lineIndex)}` : null,
   ]
     .filter(Boolean)
     .join("，");
@@ -372,6 +380,7 @@ export function PlayerControls({
           </span>
           {lines.map((line, index) => {
             const selected = index === lineIndex;
+            const diagnostic = lineDiagnostics[index];
             return (
               <Button
                 key={`${line.url}-${index}`}
@@ -388,8 +397,25 @@ export function PlayerControls({
                   closeStreamSettings();
                 }}
               >
-                <span className="truncate">{lineLabel(line.url, index)}</span>
-                {selected && <Check data-icon="inline-end" aria-hidden />}
+                <span className="truncate">{lineLabel(line, index)}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {diagnostic?.state === "testing" && (
+                    <Badge variant="outline">
+                      <Spinner data-icon="inline-start" />
+                      测速中
+                    </Badge>
+                  )}
+                  {diagnostic?.state === "available" && (
+                    <Badge variant="secondary">
+                      {diagnostic.ttfbMs == null ? "可用" : `${diagnostic.ttfbMs} ms`}
+                    </Badge>
+                  )}
+                  {diagnostic?.state === "untested" && <Badge variant="outline">未测速</Badge>}
+                  {diagnostic?.state === "unavailable" && (
+                    <Badge variant="destructive">不可用</Badge>
+                  )}
+                  {selected && <Check data-icon="inline-end" aria-hidden />}
+                </span>
               </Button>
             );
           })}
@@ -438,11 +464,7 @@ export function PlayerControls({
                 size="icon-sm"
                 disabled={disabled}
                 aria-label={volumeControl.label}
-                className={cn(
-                  CONTROL_BUTTON_CLASS,
-                  CONTROL_ICON_CLASS,
-                  overlayButtonClass,
-                )}
+                className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
               />
             }
           >
@@ -464,10 +486,7 @@ export function PlayerControls({
               max={100}
               step={1}
               orientation="vertical"
-              className={cn(
-                "h-32",
-                compact && "h-20 [&_[data-base-ui-slider-control]]:min-h-20",
-              )}
+              className={cn("h-32", compact && "h-20 [&_[data-base-ui-slider-control]]:min-h-20")}
               aria-label="音量"
               aria-valuetext={`${volume}%`}
               onValueChange={(nextValue) => {

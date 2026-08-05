@@ -12,7 +12,7 @@
 | [虎牙平台 API 文档](zh/虎牙平台API文档.md) | 虎牙接口与弹幕收发 |
 | [抖音平台 API 文档](zh/抖音平台API文档.md) | 抖音接口与弹幕协议 |
 | [Twitch 平台 API 文档](zh/Twitch平台API文档.md) | Twitch 接口与聊天流 |
-| [播放器性能调研](zh/播放器性能调研.md) | 播放链路性能对比与结论 |
+| [播放器技术文档](zh/播放器技术文档.md) | 播放架构、结构化播放源、智能选线、遥测与性能改进 |
 | [发布流程](zh/发布流程.md) | 版本号、签名与发布流水线 |
 | [Android 开发（Windows）](zh/Android开发-Windows.md) | Windows 上 JDK/SDK/NDK 与真机 `android dev` |
 

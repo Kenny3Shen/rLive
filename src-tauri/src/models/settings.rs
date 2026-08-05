@@ -43,6 +43,14 @@ pub struct AppSettings {
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
     pub quality_level: String,
+    /// Probe playback candidates through the configured proxy and rank healthy
+    /// sources before automatic failover.
+    #[serde(default = "default_playback_smart_line_selection")]
+    pub playback_smart_line_selection: bool,
+    /// Experimental same-protocol `switchURL` path. Disabled until explicitly
+    /// enabled; the frontend retains its hard-reload fallback.
+    #[serde(default)]
+    pub playback_soft_switch_enabled: bool,
     /// Device-local permission for the user-operated single-message senders.
     /// It remains disabled until the user explicitly enables it in Settings and
     /// is not profile-imported. A Cookie and each platform's own validation
@@ -82,6 +90,10 @@ pub struct AppSettings {
 
 fn default_quality_level() -> String {
     "high".into()
+}
+
+fn default_playback_smart_line_selection() -> bool {
+    true
 }
 
 fn default_iptv_availability_auto_check() -> bool {
@@ -143,6 +155,8 @@ impl Default for AppSettings {
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
+            playback_smart_line_selection: default_playback_smart_line_selection(),
+            playback_soft_switch_enabled: false,
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_vad_enabled: false,
@@ -191,6 +205,8 @@ mod tests {
         assert!(settings.danmaku_filter_gifts);
         assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
+        assert!(settings.playback_smart_line_selection);
+        assert!(!settings.playback_soft_switch_enabled);
         assert!(!settings.asr_enabled);
         assert!(!settings.asr_vad_enabled);
         assert_eq!(settings.asr_window_seconds, 1.0);

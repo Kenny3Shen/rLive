@@ -243,6 +243,7 @@ export function RoomPage() {
           qualityIndex={playback.qualityIndex}
           onQualityChange={playback.onQualityChange}
           lines={playback.lines}
+          lineDiagnostics={playback.lineDiagnostics}
           lineIndex={playback.lineIndex}
           onLineChange={playback.onLineChange}
           onRefresh={playback.retryPlay}

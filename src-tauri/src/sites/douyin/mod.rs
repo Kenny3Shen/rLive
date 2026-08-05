@@ -584,15 +584,18 @@ impl LiveSite for DouyinSite {
         );
 
         let mut urls = Vec::new();
-        for value in values {
+        for (index, value) in values.iter().enumerate() {
             let url = json_str(value);
             if !is_http_url(&url) || urls.iter().any(|item: &PlayUrl| item.url == url) {
                 continue;
             }
-            urls.push(PlayUrl {
+            urls.push(PlayUrl::inferred(
+                format!("douyin:{}", index + 1),
+                format!("线路{}", index + 1),
+                index as u32,
                 url,
-                headers: headers.clone(),
-            });
+                headers.clone(),
+            ));
         }
         if urls.is_empty() {
             return Err(Self::err("抖音播放地址为空或已失效，请刷新直播间后重试"));

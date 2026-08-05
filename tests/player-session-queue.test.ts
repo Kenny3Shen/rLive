@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
 import {
+  canSoftSwitchPlaybackSource,
   hlsResponseStatus,
   isHlsStream,
   isTwitchCommercialBreak,
   nextHlsFatalRecoveryAction,
   playUrlKey,
   requestPlayerAutoplay,
+  webPlaybackKind,
 } from "../src/features/room/player/useWebPlayer";
 
 describe("player session queue", () => {
@@ -69,6 +71,51 @@ describe("player session queue", () => {
 
     expect(equivalent).toBe(first);
     expect(changed).not.toBe(first);
+  });
+
+  test("includes structured routing metadata in the semantic source key", () => {
+    const base = {
+      url: "https://cdn.example/live",
+      headers: { Referer: "https://example/" },
+      source_id: "primary",
+      protocol: "flv" as const,
+      priority: 0,
+    };
+
+    expect(playUrlKey({ ...base, label: "主线路" })).not.toBe(
+      playUrlKey({ ...base, label: "备用线路" }),
+    );
+    expect(playUrlKey({ ...base, label: "主线路" })).not.toBe(
+      playUrlKey({ ...base, label: "主线路", protocol: "hls" }),
+    );
+  });
+
+  test("soft-switches only a changed source handled by the same protocol plugin", () => {
+    const flvSource = { url: "https://cdn.example/live", headers: {}, protocol: "flv" as const };
+    const mpegTsSource = {
+      url: "https://cdn.example/opaque",
+      headers: {},
+      protocol: "mpeg_ts" as const,
+    };
+    expect(webPlaybackKind(mpegTsSource)).toBe("mpegts");
+    expect(
+      canSoftSwitchPlaybackSource({
+        enabled: true,
+        activeSourceKey: playUrlKey(flvSource),
+        targetSourceKey: playUrlKey({ ...flvSource, source_id: "backup" }),
+        activeKind: "flv",
+        targetKind: "flv",
+      }),
+    ).toBe(true);
+    expect(
+      canSoftSwitchPlaybackSource({
+        enabled: true,
+        activeSourceKey: playUrlKey(flvSource),
+        targetSourceKey: playUrlKey(mpegTsSource),
+        activeKind: "flv",
+        targetKind: "mpegts",
+      }),
+    ).toBe(false);
   });
 
   test("routes Twitch-style HLS manifests to the HLS player path", () => {
