@@ -1,12 +1,17 @@
-import { useCallback } from "react";
+import { useGSAP } from "@gsap/react";
 import { useQueryClient } from "@tanstack/react-query";
+import gsap from "gsap";
+import { useCallback, useRef, type MouseEvent } from "react";
+import { flushSync } from "react-dom";
 import { NavLink } from "react-router-dom";
 import { Heart, History, Home, LayoutGrid, Moon, Settings, Sun, Tv } from "lucide-react";
+import { revealThemeAt } from "@/app/theme";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
+import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_NAVIGATION_STATE } from "./sidebarNavigation";
@@ -90,6 +95,8 @@ function SidebarLink({
 }
 
 function AppearanceToggle() {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const switchingRef = useRef(false);
   const theme = useSettingsStore((state) => state.theme);
   const setTheme = useSettingsStore((state) => state.setTheme);
   const isDark =
@@ -97,17 +104,58 @@ function AppearanceToggle() {
   const nextTheme = isDark ? "light" : "dark";
   const label = isDark ? "切换为浅色模式" : "切换为深色模式";
   const Icon = isDark ? Sun : Moon;
+  const { contextSafe } = useGSAP({ scope: buttonRef });
+  const animateToggle = contextSafe((rotation: number) => {
+    const button = buttonRef.current;
+    if (!button || prefersReducedMotion()) return;
+
+    gsap.killTweensOf(button);
+    gsap.fromTo(
+      button,
+      { rotation, scale: 0.88, willChange: "transform" },
+      {
+        rotation: 0,
+        scale: 1,
+        duration: 0.34,
+        ease: "back.out(2)",
+        clearProps: "transform,willChange",
+      },
+    );
+  });
+
+  function handleThemeToggle(event: MouseEvent<HTMLButtonElement>) {
+    if (switchingRef.current) return;
+    switchingRef.current = true;
+
+    const button = event.currentTarget;
+    const rect = button.getBoundingClientRect();
+    const keyboardActivation = event.detail === 0;
+    const transition = revealThemeAt(
+      keyboardActivation
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : { x: event.clientX, y: event.clientY },
+      () => flushSync(() => setTheme(nextTheme)),
+    );
+
+    void transition.ready.then(() => animateToggle(isDark ? -18 : 18));
+    void transition.finished.then(() => {
+      switchingRef.current = false;
+    });
+  }
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Button
+            ref={buttonRef}
+            data-slot="appearance-toggle"
             variant="ghost"
             size="icon-sm"
-            className="size-8"
+            className="size-8 max-md:size-11 max-md:rounded-lg"
             aria-label={label}
-            onClick={() => setTheme(nextTheme)}
+            aria-pressed={isDark}
+            onClick={handleThemeToggle}
           />
         }
       >
@@ -145,7 +193,7 @@ export function Sidebar() {
       </nav>
       <div
         data-slot="app-sidebar-preferences"
-        className="mb-1.5 flex flex-col items-center max-md:hidden"
+        className="mb-1.5 flex flex-col items-center max-md:mb-0 max-md:w-11 max-md:flex-none"
       >
         <AppearanceToggle />
       </div>
