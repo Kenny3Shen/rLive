@@ -1,14 +1,17 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useGSAP } from "@gsap/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import gsap from "gsap";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Database,
   Download,
   ExternalLink,
   Info,
+  LogOut,
   MonitorPlay,
   Network,
   QrCode,
@@ -19,7 +22,6 @@ import {
   UserRound,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { m } from "motion/react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
@@ -29,6 +31,7 @@ import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
+import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
   AsrCaptionFontSizeField,
@@ -339,6 +342,8 @@ function AccountCard({
   const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const inputId = `${siteId}-cookie`;
 
@@ -442,14 +447,15 @@ function AccountCard({
 
   async function clearCookie() {
     setClearing(true);
-    setProfileError(null);
+    setLogoutError(null);
     try {
       await invokeCmd<void>("account_clear_cookie", { siteId });
       await applySavedCookie("已退出当前账号。");
       setCookieDraft("");
       setManualCookieLoaded(true);
+      setLogoutOpen(false);
     } catch (error) {
-      setProfileError(`退出登录失败：${errorMessage(error)}`);
+      setLogoutError(`退出登录失败：${errorMessage(error)}`);
     } finally {
       setClearing(false);
     }
@@ -505,15 +511,60 @@ function AccountCard({
             手动输入
           </Button>
           {hasCookie && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void clearCookie()}
-              disabled={clearing}
+            <AlertDialog
+              open={logoutOpen}
+              onOpenChange={(open) => {
+                if (clearing) return;
+                setLogoutOpen(open);
+                setLogoutError(null);
+              }}
             >
-              {clearing ? <Spinner data-icon="inline-start" /> : null}
-              退出登录
-            </Button>
+              <AlertDialogTrigger
+                render={
+                  <Button variant="destructive" size="sm">
+                    <LogOut data-icon="inline-start" aria-hidden />
+                    退出登录
+                  </Button>
+                }
+              />
+              <AlertDialogContent size="sm">
+                <AlertDialogHeader>
+                  <AlertDialogMedia className="bg-destructive/10 text-destructive">
+                    <LogOut aria-hidden />
+                  </AlertDialogMedia>
+                  <AlertDialogTitle>退出{title}登录？</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                {logoutError && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {logoutError}
+                  </p>
+                )}
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={clearing}>取消</AlertDialogCancel>
+                  <AlertDialogAction
+                    type="button"
+                    variant="destructive"
+                    disabled={clearing}
+                    onClick={() => void clearCookie()}
+                  >
+                    {clearing ? (
+                      <>
+                        <Spinner data-icon="inline-start" aria-hidden />
+                        正在退出…
+                      </>
+                    ) : (
+                      <>
+                        <LogOut data-icon="inline-start" aria-hidden />
+                        确认退出
+                      </>
+                    )}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
         </div>
       </Field>
@@ -958,6 +1009,7 @@ function AboutSettings() {
 }
 
 export function SettingsPage() {
+  const motionRootRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const proxy = useSettingsStore((s) => s.proxy);
   const setProxy = useSettingsStore((s) => s.setProxy);
@@ -980,6 +1032,55 @@ export function SettingsPage() {
     onChange: setCategory,
     enabled: isMobileClient(),
   });
+
+  useGSAP(
+    () => {
+      const root = motionRootRef.current;
+      if (!root || prefersReducedMotion()) return;
+      const targets = gsap.utils.toArray<HTMLElement>("[data-settings-intro]", root);
+      if (targets.length === 0) return;
+
+      const profile = motionProfile();
+      gsap.fromTo(
+        targets,
+        { autoAlpha: 0, y: 10, willChange: "transform,opacity" },
+        {
+          autoAlpha: 1,
+          y: 0,
+          duration: profile.enter.duration,
+          ease: profile.enter.ease,
+          stagger: 0.04,
+          clearProps: "transform,opacity,visibility,willChange",
+        },
+      );
+    },
+    { scope: motionRootRef },
+  );
+
+  useGSAP(
+    () => {
+      const panel = motionRootRef.current?.querySelector<HTMLElement>('[data-slot="tabs-content"]');
+      if (!panel || prefersReducedMotion()) return;
+
+      const profile = motionProfile();
+      gsap.fromTo(
+        panel,
+        { autoAlpha: 0, y: 8, willChange: "transform,opacity" },
+        {
+          autoAlpha: 1,
+          y: 0,
+          duration: profile.enter.duration,
+          ease: profile.enter.ease,
+          clearProps: "transform,opacity,visibility,willChange",
+        },
+      );
+    },
+    {
+      dependencies: [category],
+      scope: motionRootRef,
+      revertOnUpdate: true,
+    },
+  );
 
   useEffect(() => {
     setProxyDraft(proxy ?? "");
@@ -1091,6 +1192,7 @@ export function SettingsPage() {
 
   return (
     <div
+      ref={motionRootRef}
       data-horizontal-swipe-surface
       className="mx-auto flex min-h-full max-w-5xl flex-col gap-4 touch-pan-y"
       onPointerDownCapture={settingsCategorySwipe.onPointerDownCapture}
@@ -1099,7 +1201,9 @@ export function SettingsPage() {
       onPointerCancelCapture={settingsCategorySwipe.onPointerCancelCapture}
       onClickCapture={settingsCategorySwipe.onClickCapture}
     >
-      <PageHeader title="设置" className="mb-0" />
+      <div data-settings-intro>
+        <PageHeader title="设置" className="mb-0" />
+      </div>
 
       <Tabs
         value={category}
@@ -1109,6 +1213,7 @@ export function SettingsPage() {
       >
         <TabsList
           aria-label="设置分类"
+          data-settings-intro
           variant="line"
           className={cn(
             "shrink-0",
@@ -1135,10 +1240,10 @@ export function SettingsPage() {
           ))}
         </TabsList>
 
-        <m.div
+        <div
+          ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
           data-slot="horizontal-swipe-page"
-          style={settingsCategorySwipe.motionStyle}
-          className="min-w-0 flex-1 transform-gpu"
+          className="min-w-0 flex-1"
         >
           {category === "playback" && (
             <TabsContent value="playback" className="mt-0">
@@ -1348,7 +1453,7 @@ export function SettingsPage() {
               </SettingsContent>
             </TabsContent>
           )}
-        </m.div>
+        </div>
       </Tabs>
     </div>
   );

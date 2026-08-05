@@ -9,10 +9,10 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHistoryShellStore } from "./historyShellStore";
 
 export function HistoryHeaderControls() {
@@ -26,6 +26,7 @@ export function HistoryHeaderControls() {
   const setClearOpen = useHistoryShellStore((state) => state.setClearOpen);
   const resetActiveMutation = useHistoryShellStore((state) => state.resetActiveMutation);
   const clearActiveHistory = useHistoryShellStore((state) => state.clearActiveHistory);
+  const clearLabel = activeTab === "watch" ? "清空观看历史" : "清空发送弹幕记录";
 
   return (
     <AlertDialog
@@ -36,19 +37,28 @@ export function HistoryHeaderControls() {
         setClearOpen(open);
       }}
     >
-      <AlertDialogTrigger
-        render={
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canClear || clearPending}
-            aria-label={activeTab === "watch" ? "清空观看历史" : "清空发送弹幕记录"}
-          >
-            <Trash2 data-icon="inline-start" aria-hidden />
-            <span className="max-md:hidden">清空</span>
-          </Button>
-        }
-      />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={!canClear || clearPending}
+              aria-label={clearLabel}
+              aria-haspopup="dialog"
+              aria-expanded={clearOpen}
+              className="text-muted-foreground hover:text-destructive"
+              onClick={() => {
+                resetActiveMutation();
+                setClearOpen(true);
+              }}
+            />
+          }
+        >
+          {clearPending ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+        </TooltipTrigger>
+        <TooltipContent>{clearLabel}</TooltipContent>
+      </Tooltip>
       <AlertDialogContent size="sm">
         <AlertDialogHeader>
           <AlertDialogMedia className="bg-destructive/10 text-destructive">

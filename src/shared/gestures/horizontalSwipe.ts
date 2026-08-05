@@ -10,11 +10,19 @@ export const HORIZONTAL_SWIPE_MIN_DISTANCE_PX = 48;
 export const HORIZONTAL_SWIPE_DIRECTION_RATIO = 1.25;
 export const HORIZONTAL_SWIPE_LOCK_DISTANCE_PX = 10;
 export const HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS = 420;
-/** Keep enough of the current page visible that the gesture never reveals a blank screen. */
-export const HORIZONTAL_SWIPE_MAX_DRAG_PX = 132;
-/** The next page starts nearby after the active value changes, then settles into place. */
-export const HORIZONTAL_SWIPE_PAGE_ENTRY_PX = 56;
-const HORIZONTAL_SWIPE_MAX_DRAG_SURFACE_RATIO = 0.32;
+/**
+ * Hard ceiling for the follow-the-finger drag, in px. Sits above any realistic
+ * viewport width so the phone-style pan is bounded by the surface width (below),
+ * not by a fixed nudge — the page can track the finger all the way across.
+ */
+export const HORIZONTAL_SWIPE_MAX_DRAG_PX = 4096;
+/**
+ * Share of the surface the committed page starts from before settling in. `1`
+ * means the incoming page begins a full width off-screen, so the release plays
+ * as one continuous edge-to-edge pan rather than a short catch-up nudge.
+ */
+export const HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO = 1;
+const HORIZONTAL_SWIPE_MAX_DRAG_SURFACE_RATIO = 1;
 const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
 
 /** A deliberate horizontal drag wins over a diagonal or vertical gesture. */
@@ -60,9 +68,10 @@ export function nextItemForHorizontalSwipe<T>(
 /**
  * Horizontal offset used while a page follows the pointer.
  *
- * A valid direction follows the finger up to a viewport-relative cap. At the
- * first/last page the same movement is heavily damped, making the boundary
- * visible without suggesting that the strip wraps around.
+ * A valid direction follows the finger up to a full surface width, so the page
+ * can pan edge to edge like phone navigation. At the first/last page the same
+ * movement is heavily damped, making the boundary visible without suggesting
+ * that the strip wraps around.
  */
 export function horizontalSwipeDragOffset(
   currentIndex: number,

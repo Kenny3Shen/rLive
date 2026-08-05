@@ -41,9 +41,12 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeDragOffset(2, 3, -80, 360)).toBeCloseTo(-14.4);
   });
 
-  test("caps page travel relative to both the surface and the global limit", () => {
-    expect(horizontalSwipeDragOffset(1, 3, -500, 300)).toBe(-96);
-    expect(horizontalSwipeDragOffset(1, 3, 500, 1_000)).toBe(132);
+  test("caps page travel at a full surface width for the phone-style pan", () => {
+    // A full-width pan lets the page track the finger all the way across, so the
+    // surface width is the cap — not a fixed nudge.
+    expect(horizontalSwipeDragOffset(1, 3, -500, 300)).toBe(-300);
+    expect(horizontalSwipeDragOffset(1, 3, 500, 1_000)).toBe(500);
+    expect(horizontalSwipeDragOffset(1, 3, 1_500, 1_000)).toBe(1_000);
     expect(horizontalSwipeDragOffset(-1, 3, 80, 360)).toBe(0);
   });
 });

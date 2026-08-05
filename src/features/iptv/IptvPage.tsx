@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, CircleX, Play, Tv, X } from "lucide-react";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
@@ -17,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { preloadRouteModule } from "@/app/routeModules";
 import { cn } from "@/lib/utils";
+import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { useIptvController } from "./IptvController";
 import { IptvAvailabilityFab } from "./IptvHeaderControls";
 import type { IptvAvailabilityState } from "./availability";
@@ -35,6 +38,7 @@ function formatLatency(latencyMs: number): string {
  * never start a stream or claim a proxy session.
  */
 export function IptvPage() {
+  const motionRootRef = useRef<HTMLDivElement>(null);
   const {
     source,
     channels,
@@ -59,6 +63,44 @@ export function IptvPage() {
     setChannelLimit(CHANNEL_PAGE_SIZE);
   }, [availabilityFilter, keyword, selectedGroup, source.url]);
 
+  useGSAP(
+    () => {
+      const root = motionRootRef.current;
+      if (!root || prefersReducedMotion()) return;
+
+      const cards = gsap.utils
+        .toArray<HTMLElement>('[data-iptv-motion="channel"]', root)
+        .slice(0, 18);
+      const state = root.querySelector<HTMLElement>('[data-iptv-motion="state"]');
+      const targets = cards.length > 0 ? cards : state ? [state] : [];
+      if (targets.length === 0) return;
+
+      const profile = motionProfile();
+      gsap.fromTo(
+        targets,
+        { autoAlpha: 0, y: 10, willChange: "transform,opacity" },
+        {
+          autoAlpha: 1,
+          y: 0,
+          duration: profile.enter.duration,
+          ease: profile.enter.ease,
+          stagger: cards.length > 0 ? 0.018 : 0,
+          clearProps: "transform,opacity,visibility,willChange",
+        },
+      );
+    },
+    {
+      dependencies: [
+        source.url,
+        playlistQuery.isLoading,
+        playlistQuery.isError,
+        filteredChannels.length === 0,
+      ],
+      scope: motionRootRef,
+      revertOnUpdate: true,
+    },
+  );
+
   return (
     <PullToRefresh
       onRefresh={updateSource}
@@ -71,7 +113,7 @@ export function IptvPage() {
         label="更新 IPTV 频道源"
       />
       <IptvAvailabilityFab />
-      <div className="flex min-h-full flex-col gap-4 touch-pan-y">
+      <div ref={motionRootRef} className="flex min-h-full flex-col gap-4 touch-pan-y">
         {playlistQuery.isError && channels.length === 0 ? (
           <ErrorState
             error={playlistQuery.error}
@@ -79,7 +121,11 @@ export function IptvPage() {
             onRetry={() => void updateSource()}
           />
         ) : (
-          <section aria-label="IPTV 频道列表" className="flex min-h-[32rem] flex-col gap-4">
+          <section
+            aria-label="IPTV 频道列表"
+            data-iptv-motion="state"
+            className="flex min-h-[32rem] flex-col gap-4"
+          >
             {playlistQuery.isLoading ? (
               <IptvChannelGridSkeleton />
             ) : filteredChannels.length === 0 ? (
@@ -209,6 +255,7 @@ function IptvChannelCard({
       onPointerEnter={() => preloadRouteModule("/iptv/play")}
       onPointerDown={() => preloadRouteModule("/iptv/play")}
       onFocus={() => preloadRouteModule("/iptv/play")}
+      data-iptv-motion="channel"
       className={cn(
         "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring",
         "hover:-translate-y-0.5",

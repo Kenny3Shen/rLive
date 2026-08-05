@@ -8,7 +8,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AnimatePresence, m } from "motion/react";
 import {
   useLocation,
   useNavigate,
@@ -44,7 +43,8 @@ import {
   withFollowPlatform,
 } from "@/features/follow/followRoute";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
-import { motionProfile, tabVariants } from "@/shared/motion/tokens";
+import { PagePan } from "@/shared/motion/PagePan";
+import { PageZoom } from "@/shared/motion/PageZoom";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { enabledSiteIds } from "@/shared/siteId";
 import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQuery";
@@ -53,7 +53,7 @@ import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
-import { isSidebarNavigation } from "./sidebarNavigation";
+import { isSidebarNavigation, sidebarNavigationDirection } from "./sidebarNavigation";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 
 function RouteLoadingFallback() {
@@ -83,6 +83,8 @@ function RouteOutlet({
   useEffect(() => {
     if (!defer) return;
 
+    // Let the compositor start the page pan before React mounts the new route.
+    // A transition render can yield when the destination contains a large list.
     const frame = window.requestAnimationFrame(() => {
       startTransition(() => setReady(true));
     });
@@ -112,6 +114,7 @@ export function Shell() {
   const isImmersivePlayer = isRoom || isIptvPlayer;
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
+  const mobileClient = isMobileClient();
 
   // React Router records each pushState entry with an incrementing `idx`.
   // Comparing it across renders tells the tab transition which way the user
@@ -124,20 +127,30 @@ export function Shell() {
   const prevPathRef = useRef(pathname);
   const prevHistoryIndexRef = useRef(historyIndex);
   const directSidebarPathRef = useRef<string | null>(null);
+  const sidebarDirectionRef = useRef<1 | -1>(1);
+  const tabNavigationRef = useRef<{
+    pathname: string;
+    direction: "forward" | "backward";
+  } | null>(null);
   const pathChanged = pathname !== prevPathRef.current;
   if (pathChanged) {
-    directSidebarPathRef.current = isSidebarNavigation(navigationType, location.state)
-      ? pathname
-      : null;
+    const directSidebarNavigation = isSidebarNavigation(navigationType, location.state);
+    directSidebarPathRef.current = directSidebarNavigation ? pathname : null;
+    if (directSidebarNavigation) {
+      sidebarDirectionRef.current = sidebarNavigationDirection(prevPathRef.current, pathname);
+    }
+    const tabDirection =
+      navigationType === "POP" && historyIndex !== prevHistoryIndexRef.current
+        ? historyIndex > prevHistoryIndexRef.current
+          ? "forward"
+          : "backward"
+        : null;
+    tabNavigationRef.current = tabDirection ? { pathname, direction: tabDirection } : null;
   }
   const isDirectSidebarNavigation = directSidebarPathRef.current === pathname;
-  const isTabNavigation =
-    pathChanged && navigationType === "POP" && historyIndex !== prevHistoryIndexRef.current;
-  const tabDirection: "forward" | "backward" | null = isTabNavigation
-    ? historyIndex > prevHistoryIndexRef.current
-      ? "forward"
-      : "backward"
-    : null;
+  const tabNavigation = tabNavigationRef.current;
+  const isTabNavigation = tabNavigation?.pathname === pathname;
+  const tabDirection = isTabNavigation ? tabNavigation.direction : null;
   prevPathRef.current = pathname;
   prevHistoryIndexRef.current = historyIndex;
 
@@ -200,13 +213,6 @@ export function Shell() {
   // container, everything — during a site switch. Keeping the shell alive lets
   // the query cache replace only the route content.
   const pageMotionKey = pathname;
-  // Only history-driven changes animate. Ordinary route pushes replace their
-  // content directly so navigation never waits for a decorative entrance.
-  const profile = useMemo(() => motionProfile(), []);
-  const pageTransitionVariants = useMemo(
-    () => tabVariants(profile, tabDirection === "backward" ? -1 : 1),
-    [profile, tabDirection],
-  );
   const categoryHomePath = categoryHomePathAfterSiteChange(pathname);
   const followPlatforms = useMemo<FollowPlatformFilter[]>(
     () => ["all", ...sitePlatforms],
@@ -229,10 +235,6 @@ export function Shell() {
         ? "forward"
         : "backward"
       : "forward";
-  const platformTransitionVariants = useMemo(
-    () => tabVariants(profile, platformDirection === "backward" ? -1 : 1),
-    [platformDirection, profile],
-  );
   const preloadHomePlatform = useCallback(
     (nextSiteId: SiteId | "all") => {
       if (nextSiteId === "all" || pathname !== "/" || nextSiteId === activeSiteId) return;
@@ -294,7 +296,7 @@ export function Shell() {
 
   // Simple Live's home/category/search use TabBarView: a horizontal content
   // swipe changes the active platform. Keep that contract on touch clients.
-  const platformSwipeEnabled = showSiteSwitcher && isMobileClient();
+  const platformSwipeEnabled = showSiteSwitcher && mobileClient;
   const sitePlatformSwipe = useHorizontalSwipe({
     items: sitePlatforms,
     value: activeSiteId,
@@ -317,7 +319,7 @@ export function Shell() {
     items: iptvSourceOptions,
     value: iptvSource.id,
     onChange: handleIptvSourceChange,
-    enabled: isIptv && isMobileClient(),
+    enabled: isIptv && mobileClient,
   });
   const platformSwipe = isFollow
     ? followPlatformSwipe
@@ -325,6 +327,17 @@ export function Shell() {
       ? historyPlatformSwipe
       : sitePlatformSwipe;
   const contentSwipe = isIptv ? iptvSourceSwipe : platformSwipe;
+  const contentSwipePageRef = contentSwipe.pageRef;
+  const bindContentSwipePageRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) return;
+      contentSwipePageRef.current = node;
+      return () => {
+        if (contentSwipePageRef.current === node) contentSwipePageRef.current = null;
+      };
+    },
+    [contentSwipePageRef],
+  );
 
   // A manually opened URL may name a platform that has since been disabled.
   // Keep the page usable on its first render, then remove that stale filter
@@ -348,6 +361,13 @@ export function Shell() {
   // the incoming platform's list is different content, so leaving the viewport
   // parked mid-page would land the user in the middle of rooms they never saw.
   const pageScrollRef = useRef<HTMLDivElement | null>(null);
+  const bindPageScrollRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    pageScrollRef.current = node;
+    return () => {
+      if (pageScrollRef.current === node) pageScrollRef.current = null;
+    };
+  }, []);
   useEffect(() => {
     pageScrollRef.current?.scrollTo({ top: 0 });
   }, [pathname, platformForMotion]);
@@ -363,192 +383,189 @@ export function Shell() {
   );
   const pageScrollerClassName = cn(
     "relative h-full min-h-0",
-    // The scroller carries route transforms only for history/in-page motion.
-    // Sidebar destinations replace their content directly to avoid mounting
-    // both a heavy outgoing and incoming page during one click.
+    // The scroller stays inside the compositor-only page wrapper so translated
+    // content cannot enlarge the main pane or flash a second scrollbar.
     "overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] touch-pan-y md:p-5 md:pb-5",
   );
   const swipePage = (
-    <m.div
-      data-slot="app-swipe-page"
-      style={contentSwipe.motionStyle}
-      className="relative min-h-full transform-gpu"
-    >
+    <div ref={bindContentSwipePageRef} data-slot="app-swipe-page" className="relative min-h-full">
       {routeOutlet}
-    </m.div>
-  );
-  const platformPage = (
-    <div ref={pageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
-      <AnimatePresence mode="popLayout" initial={false}>
-        <m.div
-          key={`${pathname}:${platformForMotion}`}
-          data-slot="cached-platform-page"
-          variants={platformTransitionVariants}
-          initial="hidden"
-          animate="visible"
-          exit="exit"
-          className="relative min-h-full"
-        >
-          {swipePage}
-        </m.div>
-      </AnimatePresence>
     </div>
   );
+  const platformPage = (
+    <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
+      <PagePan
+        panKey={String(platformForMotion)}
+        direction={platformDirection === "backward" ? -1 : 1}
+        className="min-h-full"
+      >
+        {swipePage}
+      </PagePan>
+    </div>
+  );
+  const regularPage = showSiteSwitcher ? (
+    platformPage
+  ) : (
+    <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
+      {swipePage}
+    </div>
+  );
+  const routePanDirection = isDirectSidebarNavigation
+    ? sidebarDirectionRef.current
+    : tabDirection === "backward"
+      ? -1
+      : 1;
+  const routePanAxis = isDirectSidebarNavigation && !mobileClient ? "vertical" : "horizontal";
 
   return (
     <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
       <AppTitleBar />
-      <div className="flex min-h-0 min-w-0 flex-1">
-        {!isImmersivePlayer && <Sidebar />}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <IptvControllerProvider source={iptvSource} active={isIptv}>
-            {!isImmersivePlayer && (
-              <header
-                data-slot="app-header"
-                data-mobile-empty={showTopNavigation ? undefined : "true"}
-                className={cn(
-                  "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
-                  isIptv && "max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto]",
-                  !showTopNavigation && "max-md:hidden",
-                )}
-              >
-                {isIptv && (
-                  <div className="relative z-10 flex min-w-0 items-center">
-                    <IptvHeaderStatusControls />
-                  </div>
-                )}
-                <div
+      <PageZoom
+        zoomKey={isRoom ? pathname : "standard-shell"}
+        enabled={isRoom}
+        className="flex-1 overflow-hidden"
+      >
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {!isImmersivePlayer && <Sidebar />}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <IptvControllerProvider source={iptvSource} active={isIptv}>
+              {!isImmersivePlayer && (
+                <header
+                  data-slot="app-header"
+                  data-mobile-empty={showTopNavigation ? undefined : "true"}
                   className={cn(
-                    "pointer-events-none absolute inset-0 flex items-center justify-center",
-                    !isIptv &&
-                      "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
-                    isIptv &&
-                      "max-md:static max-md:inset-auto max-md:min-w-0 max-md:overflow-hidden",
+                    "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
+                    isIptv && "max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto]",
+                    !showTopNavigation && "max-md:hidden",
                   )}
                 >
-                  {showTopNavigation && (
-                    <div
-                      className={cn(
-                        "pointer-events-auto",
-                        isIptv ? "max-md:min-w-0 max-md:w-full" : "max-md:min-w-max",
-                      )}
-                    >
-                      {isIptv ? (
-                        <div
-                          data-horizontal-swipe-surface
-                          className="h-full min-w-0"
-                          onPointerDownCapture={iptvSourceSwipe.onPointerDownCapture}
-                          onPointerMoveCapture={iptvSourceSwipe.onPointerMoveCapture}
-                          onPointerUpCapture={iptvSourceSwipe.onPointerUpCapture}
-                          onPointerCancelCapture={iptvSourceSwipe.onPointerCancelCapture}
-                          onClickCapture={iptvSourceSwipe.onClickCapture}
-                        >
-                          <IptvSourceSwitcher
-                            sources={iptvSources}
-                            value={iptvSource.id}
-                            onValueChange={handleIptvSourceChange}
-                            className="h-full w-40 max-w-full lg:w-auto"
-                          />
-                        </div>
-                      ) : isFollow ? (
-                        <SiteSwitcher
-                          value={followPlatform}
-                          includeAll
-                          filterMode
-                          onValueChange={handleFollowPlatformChange}
-                        />
-                      ) : isHistory ? (
-                        <SiteSwitcher
-                          value={historyPlatform}
-                          includeAll
-                          filterMode
-                          onValueChange={handleHistoryPlatformChange}
-                        />
-                      ) : (
-                        <SiteSwitcher
-                          onValueIntent={preloadHomePlatform}
-                          onValueChange={(value) => {
-                            if (value === "all") return;
-                            handleSitePlatformChange(value);
-                          }}
-                        />
-                      )}
+                  {isIptv && (
+                    <div className="relative z-10 flex min-w-0 items-center">
+                      <IptvHeaderStatusControls />
                     </div>
                   )}
-                </div>
-                <div
-                  className={cn(
-                    "relative z-10 ml-auto flex min-w-0 items-center gap-1.5",
-                    isIptv && "max-md:ml-0",
-                  )}
-                >
-                  {isIptv ? (
-                    <IptvSearchInput
-                      keyword={iptvKeyword}
-                      onChange={handleIptvSearchChange}
-                      className="w-64 max-xl:w-48 max-md:w-[min(9rem,34vw)]"
-                    />
-                  ) : isHistory ? (
-                    <HistoryHeaderControls />
-                  ) : (
-                    <HeaderSearch />
-                  )}
-                </div>
-              </header>
-            )}
-            <main
-              data-slot="app-content"
-              data-immersive={isImmersivePlayer ? "true" : undefined}
-              className={cn(
-                "relative min-h-0 min-w-0 flex-1",
-                // The scroller lives on the animated page wrapper below, not here.
-                // A transform contributes to its container's scrollable overflow,
-                // so animating a child of an `overflow-auto` element would flash a
-                // scrollbar for the length of every transition. Clipping here and
-                // scrolling one level down keeps the travel invisible to layout.
-                // `relative` gives popLayout a positioning context for the
-                // outgoing page, so it cannot displace the incoming one.
-                isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
-              )}
-              data-horizontal-swipe-surface
-              onPointerDownCapture={contentSwipe.onPointerDownCapture}
-              onPointerMoveCapture={contentSwipe.onPointerMoveCapture}
-              onPointerUpCapture={contentSwipe.onPointerUpCapture}
-              onPointerCancelCapture={contentSwipe.onPointerCancelCapture}
-              onClickCapture={contentSwipe.onClickCapture}
-            >
-              {isImmersivePlayer ? (
-                // The player owns its own surface and must never be remounted or
-                // transformed mid-playback: a transform on an ancestor would make
-                // this the containing block for the fullscreen video element.
-                <div className={cn("relative h-full min-h-0 overflow-hidden")}>{routeOutlet}</div>
-              ) : showSiteSwitcher && !pathChanged && !isTabNavigation ? (
-                platformPage
-              ) : isDirectSidebarNavigation || !isTabNavigation ? (
-                <div ref={pageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
-                  {swipePage}
-                </div>
-              ) : (
-                // History navigation keeps the requested left/right page motion.
-                <AnimatePresence mode="popLayout" initial={false}>
-                  <m.div
-                    key={pageMotionKey}
-                    ref={pageScrollRef}
-                    data-slot="app-page"
-                    variants={pageTransitionVariants}
-                    initial="hidden"
-                    animate="visible"
-                    exit="exit"
-                    className={pageScrollerClassName}
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute inset-0 flex items-center justify-center",
+                      !isIptv &&
+                        "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
+                      isIptv &&
+                        "max-md:static max-md:inset-auto max-md:min-w-0 max-md:overflow-hidden",
+                    )}
                   >
-                    {swipePage}
-                  </m.div>
-                </AnimatePresence>
+                    {showTopNavigation && (
+                      <div
+                        className={cn(
+                          "pointer-events-auto",
+                          isIptv ? "max-md:min-w-0 max-md:w-full" : "max-md:min-w-max",
+                        )}
+                      >
+                        {isIptv ? (
+                          <div
+                            data-horizontal-swipe-surface
+                            className="h-full min-w-0"
+                            onPointerDownCapture={iptvSourceSwipe.onPointerDownCapture}
+                            onPointerMoveCapture={iptvSourceSwipe.onPointerMoveCapture}
+                            onPointerUpCapture={iptvSourceSwipe.onPointerUpCapture}
+                            onPointerCancelCapture={iptvSourceSwipe.onPointerCancelCapture}
+                            onClickCapture={iptvSourceSwipe.onClickCapture}
+                          >
+                            <IptvSourceSwitcher
+                              sources={iptvSources}
+                              value={iptvSource.id}
+                              onValueChange={handleIptvSourceChange}
+                              className="h-full w-40 max-w-full lg:w-auto"
+                            />
+                          </div>
+                        ) : isFollow ? (
+                          <SiteSwitcher
+                            value={followPlatform}
+                            includeAll
+                            filterMode
+                            onValueChange={handleFollowPlatformChange}
+                          />
+                        ) : isHistory ? (
+                          <SiteSwitcher
+                            value={historyPlatform}
+                            includeAll
+                            filterMode
+                            onValueChange={handleHistoryPlatformChange}
+                          />
+                        ) : (
+                          <SiteSwitcher
+                            onValueIntent={preloadHomePlatform}
+                            onValueChange={(value) => {
+                              if (value === "all") return;
+                              handleSitePlatformChange(value);
+                            }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    className={cn(
+                      "relative z-10 ml-auto flex min-w-0 items-center gap-1.5",
+                      isIptv && "max-md:ml-0",
+                    )}
+                  >
+                    {isIptv ? (
+                      <IptvSearchInput
+                        keyword={iptvKeyword}
+                        onChange={handleIptvSearchChange}
+                        className="w-64 max-xl:w-48 max-md:w-[min(9rem,34vw)]"
+                      />
+                    ) : isHistory ? (
+                      <HistoryHeaderControls />
+                    ) : (
+                      <HeaderSearch />
+                    )}
+                  </div>
+                </header>
               )}
-            </main>
-          </IptvControllerProvider>
+              <main
+                data-slot="app-content"
+                data-immersive={isImmersivePlayer ? "true" : undefined}
+                className={cn(
+                  "relative min-h-0 min-w-0 flex-1",
+                  // The scroller lives on the animated page wrapper below, not here.
+                  // A transform contributes to its container's scrollable overflow,
+                  // so animating a child of an `overflow-auto` element would flash a
+                  // scrollbar for the length of every transition. Clipping here and
+                  // scrolling one level down keeps the travel invisible to layout.
+                  // `relative` gives popLayout a positioning context for the
+                  // outgoing page, so it cannot displace the incoming one.
+                  isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
+                )}
+                data-horizontal-swipe-surface
+                onPointerDownCapture={contentSwipe.onPointerDownCapture}
+                onPointerMoveCapture={contentSwipe.onPointerMoveCapture}
+                onPointerUpCapture={contentSwipe.onPointerUpCapture}
+                onPointerCancelCapture={contentSwipe.onPointerCancelCapture}
+                onClickCapture={contentSwipe.onClickCapture}
+              >
+                {isImmersivePlayer ? (
+                  // PageZoom clears its compositor hints after entering. The
+                  // settled player therefore has no transformed ancestor that
+                  // could interfere with its fullscreen containing block.
+                  <div className="relative h-full min-h-0 overflow-hidden">{routeOutlet}</div>
+                ) : (
+                  <PagePan
+                    panKey={pageMotionKey}
+                    direction={routePanDirection}
+                    axis={routePanAxis}
+                    enabled={isDirectSidebarNavigation || isTabNavigation}
+                    className="h-full min-h-0"
+                    contentClassName="h-full min-h-0"
+                  >
+                    {regularPage}
+                  </PagePan>
+                )}
+              </main>
+            </IptvControllerProvider>
+          </div>
         </div>
-      </div>
+      </PageZoom>
     </div>
   );
 }

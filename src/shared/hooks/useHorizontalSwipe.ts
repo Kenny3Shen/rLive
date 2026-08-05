@@ -3,27 +3,20 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useLayoutEffect,
-  useMemo,
   useRef,
 } from "react";
-import {
-  animate,
-  type MotionStyle,
-  useMotionValue,
-  useReducedMotion,
-  useTransform,
-} from "motion/react";
+import gsap from "gsap";
 import {
   HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS,
   HORIZONTAL_SWIPE_DIRECTION_RATIO,
   HORIZONTAL_SWIPE_LOCK_DISTANCE_PX,
   HORIZONTAL_SWIPE_MAX_DRAG_PX,
-  HORIZONTAL_SWIPE_PAGE_ENTRY_PX,
+  HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO,
   horizontalSwipeDragOffset,
   isHorizontalSwipeIgnoredTarget,
   nextItemForHorizontalSwipe,
 } from "@/shared/gestures/horizontalSwipe";
-import { SPRING_SNAPPY } from "@/shared/motion/tokens";
+import { prefersReducedMotion, SWIPE_SETTLE } from "@/shared/motion/tokens";
 
 type SwipeState = {
   pointerId: number;
@@ -53,6 +46,11 @@ export type UseHorizontalSwipeOptions<T> = {
  * overflow lists) otherwise claim the gesture and the parent never sees
  * pointermove. `touch-action: pan-y` on the surface keeps vertical scrolling
  * native while leaving horizontal motion to this hook.
+ *
+ * Attach `pageRef` to the element that should travel. While a finger is down the
+ * offset is written with `gsap.set` — a direct transform write, no tween
+ * allocated per pointermove. Tweens are created only twice per gesture: once to
+ * settle back to rest, or once to pan the committed page into place.
  */
 export function useHorizontalSwipe<T>({
   items,
@@ -62,6 +60,7 @@ export function useHorizontalSwipe<T>({
   animate: shouldAnimate = true,
   isEqual = Object.is,
 }: UseHorizontalSwipeOptions<T>) {
+  const pageRef = useRef<HTMLElement | null>(null);
   const swipeRef = useRef<SwipeState | null>(null);
   const clickSuppressionUntilRef = useRef(0);
   const pendingDirectionRef = useRef<1 | -1 | null>(null);
@@ -70,30 +69,46 @@ export function useHorizontalSwipe<T>({
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const isEqualRef = useRef(isEqual);
-  const x = useMotionValue(0);
-  const reducedMotion = useReducedMotion();
-  const opacity = useTransform(
-    x,
-    [-HORIZONTAL_SWIPE_MAX_DRAG_PX, 0, HORIZONTAL_SWIPE_MAX_DRAG_PX],
-    [0.9, 1, 0.9],
-  );
-  const motionStyle = useMemo<MotionStyle>(() => ({ x, opacity }), [opacity, x]);
+  // Last observed surface width, so a committed swipe knows how far a full-width
+  // pan actually is. Also the cap for the follow-the-finger drag.
+  const surfaceWidthRef = useRef(0);
+  const offsetRef = useRef(0);
   itemsRef.current = items;
   valueRef.current = value;
   onChangeRef.current = onChange;
   isEqualRef.current = isEqual;
 
+  /** Immediate write during a drag: no tween, straight to the transform. */
+  const setOffset = useCallback((next: number) => {
+    offsetRef.current = next;
+    const el = pageRef.current;
+    if (el) gsap.set(el, { x: next, force3D: true });
+  }, []);
+
+  /** Return the settled page to normal layout painting instead of a permanent layer. */
+  const clearOffset = useCallback(() => {
+    offsetRef.current = 0;
+    const el = pageRef.current;
+    if (el) gsap.set(el, { clearProps: "transform,willChange" });
+  }, []);
+
+  /** Tween whatever offset the finger left behind back to rest. */
   const settleAtRest = useCallback(() => {
-    x.stop();
-    if (reducedMotion) {
-      x.jump(0);
+    const el = pageRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    if (prefersReducedMotion()) {
+      clearOffset();
       return;
     }
-    // Direct pointer updates carry high instantaneous velocity. Reset it before
-    // springing home so a short edge nudge cannot overshoot away from the page.
-    x.jump(x.get());
-    animate(x, 0, SPRING_SNAPPY);
-  }, [reducedMotion, x]);
+    offsetRef.current = 0;
+    gsap.to(el, {
+      x: 0,
+      ...SWIPE_SETTLE,
+      // The compositor hint is only worth carrying while something moves.
+      onComplete: clearOffset,
+    });
+  }, [clearOffset]);
 
   useLayoutEffect(() => {
     const previousValue = renderedValueRef.current;
@@ -110,26 +125,63 @@ export function useHorizontalSwipe<T>({
           : -1
         : null);
     pendingDirectionRef.current = null;
-    x.stop();
+    const el = pageRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
 
-    if (!shouldAnimate || reducedMotion || direction === null) {
-      x.jump(0);
+    // `shouldAnimate: false` means a parent PagePan owns the entry pan. Land at
+    // rest immediately: this element is shared by the outgoing and incoming
+    // pages, so any offset left here would ride on top of the parent's travel
+    // and leave a band of the old page on screen.
+    if (!shouldAnimate || prefersReducedMotion() || direction === null) {
+      clearOffset();
       return;
     }
 
     // The old page followed the finger out. Before the browser paints the new
-    // value, place it just across the opposite edge and settle it into view.
-    x.jump(direction * HORIZONTAL_SWIPE_PAGE_ENTRY_PX);
-    animate(x, 0, SPRING_SNAPPY);
-  }, [isEqual, items, reducedMotion, shouldAnimate, value, x]);
+    // value, place the incoming page a full surface width across the opposite
+    // edge and settle it in, so the release plays as one continuous pan rather
+    // than a short catch-up nudge.
+    const entry = surfaceWidthRef.current * HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO;
+    if (entry <= 0) {
+      clearOffset();
+      return;
+    }
+    gsap.fromTo(
+      el,
+      { x: direction * entry, force3D: true, willChange: "transform" },
+      {
+        x: 0,
+        force3D: true,
+        ...SWIPE_SETTLE,
+        onComplete: clearOffset,
+      },
+    );
+    offsetRef.current = 0;
+  }, [clearOffset, isEqual, items, shouldAnimate, value]);
 
   useLayoutEffect(() => {
     if (enabled) return;
     swipeRef.current = null;
     pendingDirectionRef.current = null;
-    x.stop();
-    x.jump(0);
-  }, [enabled, x]);
+    const el = pageRef.current;
+    if (!el) return;
+    gsap.killTweensOf(el);
+    clearOffset();
+  }, [clearOffset, enabled]);
+
+  // Kill anything still in flight when the surface goes away, so GSAP never
+  // ticks a detached node.
+  useLayoutEffect(
+    () => () => {
+      const el = pageRef.current;
+      if (el) {
+        gsap.killTweensOf(el);
+        gsap.set(el, { clearProps: "transform,willChange" });
+      }
+    },
+    [],
+  );
 
   const releasePointer = useCallback((element: HTMLElement, pointerId: number) => {
     if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
@@ -150,16 +202,15 @@ export function useHorizontalSwipe<T>({
       ) {
         return;
       }
-      x.stop();
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        startOffsetX: x.get(),
+        startOffsetX: offsetRef.current,
         horizontal: false,
       };
     },
-    [enabled, x],
+    [enabled],
   );
 
   const onPointerMoveCapture = useCallback(
@@ -188,10 +239,21 @@ export function useHorizontalSwipe<T>({
           return;
         }
         swipe.horizontal = true;
+        const el = pageRef.current;
+        if (el) {
+          const currentX = Number(gsap.getProperty(el, "x")) || 0;
+          gsap.killTweensOf(el);
+          offsetRef.current = currentX;
+          swipe.startOffsetX = currentX;
+          // A vertical gesture must never promote the whole scrolling page.
+          gsap.set(el, { willChange: "transform" });
+        }
         event.currentTarget.setPointerCapture(event.pointerId);
       }
 
-      if (!reducedMotion) {
+      if (!prefersReducedMotion()) {
+        const surfaceWidth = event.currentTarget.clientWidth;
+        surfaceWidthRef.current = surfaceWidth;
         const currentIndex = itemsRef.current.findIndex((item) =>
           isEqualRef.current(item, valueRef.current),
         );
@@ -199,21 +261,19 @@ export function useHorizontalSwipe<T>({
           currentIndex,
           itemsRef.current.length,
           deltaX,
-          event.currentTarget.clientWidth,
+          surfaceWidth,
         );
-        x.set(
-          Math.max(
-            -HORIZONTAL_SWIPE_MAX_DRAG_PX,
-            Math.min(HORIZONTAL_SWIPE_MAX_DRAG_PX, swipe.startOffsetX + dragOffset),
-          ),
-        );
+        // Bound by the live surface width (full-width pan), falling back to the
+        // absolute px ceiling only when the width is unknown.
+        const bound = surfaceWidth > 0 ? surfaceWidth : HORIZONTAL_SWIPE_MAX_DRAG_PX;
+        setOffset(Math.max(-bound, Math.min(bound, swipe.startOffsetX + dragOffset)));
       }
 
       // Stop children (ScrollArea, buttons) from treating this as a drag/scroll.
       event.preventDefault();
       event.stopPropagation();
     },
-    [reducedMotion, x],
+    [setOffset],
   );
 
   const onPointerUpCapture = useCallback(
@@ -281,7 +341,7 @@ export function useHorizontalSwipe<T>({
 
   if (!enabled) {
     return {
-      motionStyle,
+      pageRef,
       onPointerDownCapture: undefined,
       onPointerMoveCapture: undefined,
       onPointerUpCapture: undefined,
@@ -291,7 +351,7 @@ export function useHorizontalSwipe<T>({
   }
 
   return {
-    motionStyle,
+    pageRef,
     onPointerDownCapture,
     onPointerMoveCapture,
     onPointerUpCapture,

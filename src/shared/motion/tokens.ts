@@ -1,70 +1,94 @@
-import type { Transition, Variants } from "motion/react";
+import gsap from "gsap";
+import { useGSAP } from "@gsap/react";
 import { isMobileClient } from "@/shared/clientPlatform";
 
 /**
- * Shared motion vocabulary.
+ * Shared motion vocabulary, on GSAP.
  *
  * Two rules keep this affordable on a busy canvas-danmaku/player frame:
  *
- * 1. Only `opacity` and `transform` are ever animated, so every sequence stays
- *    on the compositor. No width/height/color/filter tweens.
- * 2. Durations stay short. Touch clients get a slightly wider travel and a
- *    faster settle so the next view is readable sooner under the thumb.
+ * 1. Only transforms and opacity are ever animated, so every sequence stays on
+ *    the compositor. No width/height/color/filter tweens.
+ * 2. Durations stay short. Touch clients get a faster settle so the next view is
+ *    readable sooner under the thumb.
  *
- * Page transitions use short duration-based easing; pointer-driven swipes use
- * the interruptible spring below so a gesture can settle without overshoot.
+ * Page transitions use short duration-based easing; pointer-driven swipes write
+ * the transform directly while a finger is down and only tween on release, so a
+ * gesture never allocates a tween per frame.
  */
 
-/** Material's decelerate curve — the one the previous CSS keyframes used. */
-export const EASE_OUT = [0.2, 0.8, 0.2, 1] as const;
+// `useGSAP` is a plugin as far as the core is concerned; registering it here —
+// the one module every animated surface imports — guarantees registration runs
+// before any hook does, which is the ordering the official React skill requires.
+gsap.registerPlugin(useGSAP);
+
+// Project-wide tween defaults. Individual tweens still override where they mean
+// something different, but this keeps one-off `gsap.to` calls on-brand.
+gsap.defaults({ duration: 0.26, ease: "power2.out" });
+
+/**
+ * Decelerate curve for entrances — the closest built-in to the previous
+ * `cubic-bezier(0.2, 0.8, 0.2, 1)` token. Built-in eases are preferred over
+ * CustomEase so no extra plugin has to be registered or shipped.
+ */
+export const EASE_OUT = "power2.out";
 /** Accelerate, for exits that should clear the screen without lingering. */
-export const EASE_IN = [0.4, 0, 1, 1] as const;
-/** Interruptible spring for pointer-driven and hover motion. */
-export const SPRING_SNAPPY: Transition = {
-  type: "spring",
-  stiffness: 520,
-  damping: 34,
-  mass: 0.7,
-};
+export const EASE_IN = "power2.in";
+/**
+ * Settle for pointer-driven motion. The old spring (stiffness 520, damping 34,
+ * mass 0.7) works out to a damping ratio of ~0.89 — just under critical, so it
+ * lands without visible overshoot. `power3.out` over this duration reads the
+ * same, and unlike a spring it has a known end time, which matters because the
+ * gesture layer needs to know when the page is back at rest.
+ */
+export const SWIPE_SETTLE = { duration: 0.42, ease: "power3.out" } as const;
+
+/**
+ * Extra travel applied to every full-page pan, as a share of its active axis.
+ *
+ * Deliberately just over 100%. The animated element is the padded content box
+ * inside the scroller, so its own size can be smaller than the clipped viewport
+ * because of padding. Translating exactly 100% can therefore leave a thin band
+ * of the outgoing page visible along the edge until it unmounts. The extra 10%
+ * clears that gutter on any realistic viewport.
+ */
+export const PAGE_PAN_PERCENT = 110;
 
 export type MotionProfile = {
-  /** Horizontal travel for a directional tab transition, in px. */
+  /** Page-pan travel as a percentage of the page's size on the active axis. */
   tabTravel: number;
-  enter: Transition;
-  exit: Transition;
+  enter: { duration: number; ease: string };
+  exit: { duration: number; ease: string };
 };
 
 const DESKTOP_PROFILE: MotionProfile = {
-  tabTravel: 24,
-  enter: { duration: 0.26, ease: EASE_OUT },
-  exit: { duration: 0.16, ease: EASE_IN },
+  // Full-surface pan: both pages move together as one continuous viewport.
+  tabTravel: PAGE_PAN_PERCENT,
+  enter: { duration: 0.28, ease: EASE_OUT },
+  exit: { duration: 0.28, ease: EASE_OUT },
 };
 
 const TOUCH_PROFILE: MotionProfile = {
-  // Touch navigation reads as an extension of the finger: further travel on the
-  // horizontal axis (matching the old 44px --tab-enter-x) but a shorter settle.
-  tabTravel: 44,
-  enter: { duration: 0.22, ease: EASE_OUT },
-  exit: { duration: 0.14, ease: EASE_IN },
+  // Touch navigation reads as an extension of the finger: the whole page tracks
+  // across the viewport, settling a touch faster than desktop.
+  tabTravel: PAGE_PAN_PERCENT,
+  enter: { duration: 0.24, ease: EASE_OUT },
+  exit: { duration: 0.24, ease: EASE_OUT },
 };
 
 export function motionProfile(mobile: boolean = isMobileClient()): MotionProfile {
   return mobile ? TOUCH_PROFILE : DESKTOP_PROFILE;
 }
 
-/** Directional variants for cached page navigation. */
-export function tabVariants(profile: MotionProfile, direction: 1 | -1): Variants {
-  return {
-    hidden: { opacity: 0, x: direction * profile.tabTravel },
-    visible: {
-      opacity: 1,
-      x: 0,
-      transition: profile.enter,
-    },
-    exit: {
-      opacity: 0,
-      x: -direction * profile.tabTravel,
-      transition: profile.exit,
-    },
-  };
+/**
+ * Live `prefers-reduced-motion` read.
+ *
+ * GSAP's `matchMedia` reverts animations created under a query when it stops
+ * matching, which suits declarative setup blocks. The gesture layer instead
+ * needs a plain boolean at the moment a pointer is released, so it reads the
+ * query directly rather than restructuring around a media context.
+ */
+export function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
