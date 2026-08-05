@@ -3,6 +3,7 @@ import {
   Captions,
   CaptionsOff,
   Check,
+  Headphones,
   Maximize2,
   MessageCircle,
   MessageCircleOff,
@@ -14,6 +15,7 @@ import {
   Play,
   RefreshCw,
   Settings,
+  VideoOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -37,6 +39,24 @@ export function danmakuControlPresentation(osdOn: boolean | undefined) {
   } as const;
 }
 
+export function audioOnlyControlPresentation(audioOnly: boolean) {
+  return {
+    enabled: audioOnly,
+    label: audioOnly ? "恢复画面" : "仅播声音",
+    icon: audioOnly ? "headphones" : "video-off",
+  } as const;
+}
+
+export function volumeControlPresentation(volume: number, muted = false) {
+  const isMuted = muted || volume === 0;
+  const roundedVolume = Math.round(volume);
+  return {
+    isMuted,
+    label: isMuted ? "调节音量（当前静音）" : `调节音量（当前 ${roundedVolume}%）`,
+    icon: isMuted ? "volume-x" : "volume-2",
+  } as const;
+}
+
 export function asrControlPresentation(enabled: boolean, busy: boolean) {
   return {
     enabled,
@@ -48,6 +68,7 @@ export type PlayerControlsProps = {
   paused: boolean;
   volume: number;
   muted?: boolean;
+  audioOnly?: boolean;
   sidePanelOpen?: boolean;
   /** Changes with the responsive side-panel presentation (rail vs. drawer). */
   sidePanelLabel?: string;
@@ -93,6 +114,7 @@ export type PlayerControlsProps = {
   onTogglePause: () => void;
   onVolume: (v: number) => void;
   onToggleMute: () => void;
+  onToggleAudioOnly?: () => void;
   onToggleSidePanel?: () => void;
   onToggleOsd?: () => void;
   onToggleAsr?: () => void;
@@ -157,6 +179,7 @@ export function PlayerControls({
   paused,
   volume,
   muted = false,
+  audioOnly = false,
   sidePanelOpen = false,
   sidePanelLabel,
   osdOn,
@@ -185,6 +208,7 @@ export function PlayerControls({
   onTogglePause,
   onVolume,
   onToggleMute,
+  onToggleAudioOnly,
   onToggleSidePanel,
   onToggleOsd,
   onToggleAsr,
@@ -207,10 +231,8 @@ export function PlayerControls({
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  const isMuted = muted || volume === 0;
-  const volumeLabel = "调节音量";
-  // Desktop shows keyboard hints（M）因为鼠标 hover tooltip 有空间；移动端屏小
-  // 又无物理键盘，提示串只会让 tooltip/aria-label 更长。compact 下精简到动词。
+  const volumeControl = volumeControlPresentation(volume, muted);
+  const isMuted = volumeControl.isMuted;
   const muteLabel = isMuted ? "取消静音" : "静音";
   const pauseLabel = compact ? "播放" : "播放（Space / K）";
   const pauseActiveLabel = compact ? "暂停" : "暂停（Space / K）";
@@ -291,6 +313,9 @@ export function PlayerControls({
   const DanmakuControlIcon =
     danmakuControl.icon === "message-circle" ? MessageCircle : MessageCircleOff;
   const asrControl = asrControlPresentation(asrOn, asrBusy);
+  const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
+  const AudioOnlyControlIcon = audioOnlyControl.icon === "headphones" ? Headphones : VideoOff;
+  const VolumeControlIcon = volumeControl.icon === "volume-x" ? VolumeX : Volume2;
   const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
   /** Shared body of the stream settings popover/drawer. */
   const streamSettingsBody = (
@@ -405,60 +430,83 @@ export function PlayerControls({
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
 
-        <Popover onOpenChange={(open) => setVolumeOpen(open)}>
+        <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
           <PopoverTrigger
             render={
               <Button
                 variant="ghost"
                 size="icon-sm"
                 disabled={disabled}
-                aria-label={volumeLabel}
+                aria-label={volumeControl.label}
                 className={cn(
                   CONTROL_BUTTON_CLASS,
                   CONTROL_ICON_CLASS,
-                  "max-md:hidden",
                   overlayButtonClass,
                 )}
               />
             }
           >
-            <Volume2 />
+            <VolumeControlIcon aria-hidden />
           </PopoverTrigger>
           <PopoverContent
             container={portalContainer}
             side="top"
             align="start"
             className={cn(
-              "w-auto p-3",
+              "w-auto items-center gap-2 p-2.5",
               overlay && "border border-white/10 bg-black/90 text-white shadow-xl",
             )}
           >
+            <PopoverTitle className="sr-only">音量</PopoverTitle>
             <Slider
               value={volume}
               min={0}
               max={100}
               step={1}
               orientation="vertical"
-              className="h-28"
+              className={cn(
+                "h-32",
+                compact && "h-20 [&_[data-base-ui-slider-control]]:min-h-20",
+              )}
               aria-label="音量"
               aria-valuetext={`${volume}%`}
               onValueChange={(nextValue) => {
                 onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
               }}
             />
+            <Separator className={cn("w-8", overlay && "bg-white/10")} />
+            <Button
+              type="button"
+              variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
+              size="icon-sm"
+              className={cn(
+                "size-8",
+                CONTROL_ICON_CLASS,
+                overlay && "text-white/90 hover:bg-white/12 hover:text-white",
+                isMuted && overlay && "bg-white/18 text-white",
+              )}
+              aria-label={muteLabel}
+              aria-pressed={isMuted}
+              onClick={onToggleMute}
+            >
+              <VolumeX aria-hidden />
+            </Button>
           </PopoverContent>
         </Popover>
 
-        <ControlButton
-          label={muteLabel}
-          className={overlayButtonClass}
-          disabled={disabled}
-          aria-pressed={isMuted}
-          onClick={onToggleMute}
-          tooltip={!compact}
-        >
-          {isMuted ? <VolumeX /> : <Volume2 />}
-        </ControlButton>
+        {onToggleAudioOnly && (
+          <ControlButton
+            label={audioOnlyControl.label}
+            variant={overlay ? "ghost" : audioOnly ? "secondary" : "ghost"}
+            className={cn(overlayButtonClass, audioOnly && overlay && "bg-white/18 text-white")}
+            disabled={disabled && !audioOnly}
+            aria-pressed={audioOnlyControl.enabled}
+            onClick={onToggleAudioOnly}
+            tooltip={!compact}
+          >
+            <AudioOnlyControlIcon aria-hidden />
+          </ControlButton>
+        )}
       </div>
 
       {loadError && (

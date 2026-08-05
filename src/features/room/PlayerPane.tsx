@@ -18,6 +18,7 @@ import { FollowPanel } from "./FollowPanel";
 import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -321,6 +322,7 @@ export function PlayerPane({
   const activeSideTab = sideTab ?? uncontrolledSideTab;
   const shouldMountSidePanel = sidePanelOpen || !compactViewport;
   const [osdOn, setOsdOn] = useState(true);
+  const [audioOnly, setAudioOnly] = useState(false);
   const [playerBrightness, setPlayerBrightness] = useState(100);
   const [playerEdgeGestureFeedback, setPlayerEdgeGestureFeedback] =
     useState<PlayerEdgeGestureFeedback | null>(null);
@@ -367,7 +369,7 @@ export function PlayerPane({
   });
   const changePlayerVolume = player.changeVolume;
   const togglePlayerFullscreen = player.toggleFullscreen;
-  useScreenWakeLock(player.running && !player.paused);
+  useScreenWakeLock(player.running && !player.paused && !audioOnly);
   // This stays above the conditional side panel, so hiding that panel never
   // silently stops a session the user explicitly enabled.
   const autoDanmakuSend = useAutoDanmakuSend({ siteId, roomId, roomSessionKey });
@@ -1040,6 +1042,7 @@ export function PlayerPane({
             ref={player.stageRef}
             data-player-stage
             data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
+            data-audio-only={audioOnly ? "true" : undefined}
             className={cn(
               "relative min-h-0 flex-1 overflow-hidden bg-black",
               androidClient && showHost && "touch-none",
@@ -1086,7 +1089,11 @@ export function PlayerPane({
               <div
                 ref={player.playerRootRef}
                 data-player-engine-root
-                className="absolute inset-0 size-full overflow-hidden bg-black"
+                aria-hidden={audioOnly}
+                className={cn(
+                  "absolute inset-0 size-full overflow-hidden bg-black",
+                  audioOnly && "invisible",
+                )}
               >
                 {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
                 <video
@@ -1098,12 +1105,13 @@ export function PlayerPane({
                   playsInline
                   autoPlay
                   controls={false}
+                  disablePictureInPicture={audioOnly}
                 />
               </div>
 
               {/* Floating danmaku shares the picture brightness, while the
                   controls and room information keep their normal contrast. */}
-              {showHost && osdOn && (
+              {showHost && osdOn && !audioOnly && (
                 <CanvasDanmaku
                   active={canvasActive}
                   sessionKey={danmakuSessionKey}
@@ -1112,32 +1120,39 @@ export function PlayerPane({
               )}
             </div>
 
-            {showHost && superChatEnabled && siteSupportsSuperChat(siteId) && (
+            {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
+
+            {showHost && !audioOnly && superChatEnabled && siteSupportsSuperChat(siteId) && (
               <SuperChatOverlay
                 key={`sc:${roomSessionKey ?? "room"}`}
                 active={danmakuActive}
-                className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(20rem,calc(100%-1.5rem))]"
+                className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(12rem,calc(100%-1.5rem))]"
               />
             )}
 
-            {showHost && (asr.captionsOn || asr.notice) && (asr.notice || asr.caption) && (
-              <div
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-                className="pointer-events-none absolute inset-x-4 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-20 flex justify-center"
-              >
-                <p
-                  className={cn(
-                    "line-clamp-2 max-w-[min(48rem,92%)] rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
-                    asr.noticeIsError && asr.notice && "border border-destructive/45 text-red-100",
-                  )}
-                  style={{ fontSize: `${asrFontSize}px` }}
+            {showHost &&
+              !audioOnly &&
+              (asr.captionsOn || asr.notice) &&
+              (asr.notice || asr.caption) && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className="pointer-events-none absolute inset-x-4 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-20 flex justify-center"
                 >
-                  {asr.notice ?? asr.caption}
-                </p>
-              </div>
-            )}
+                  <p
+                    className={cn(
+                      "line-clamp-2 max-w-[min(48rem,92%)] rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
+                      asr.noticeIsError &&
+                        asr.notice &&
+                        "border border-destructive/45 text-red-100",
+                    )}
+                    style={{ fontSize: `${asrFontSize}px` }}
+                  >
+                    {asr.notice ?? asr.caption}
+                  </p>
+                </div>
+              )}
 
             {showHost && !player.running && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
@@ -1209,6 +1224,7 @@ export function PlayerPane({
                 paused={player.paused}
                 volume={playerControlVolume}
                 muted={playerControlMuted}
+                audioOnly={audioOnly}
                 sidePanelOpen={sidePanelOpen}
                 sidePanelLabel={
                   compactViewport
@@ -1233,7 +1249,9 @@ export function PlayerPane({
                 // the chrome flicker. transportDisabled covers unusable states.
                 pictureInPictureSupported={player.pictureInPictureSupported}
                 pictureInPictureActive={player.pictureInPictureActive}
-                pictureInPictureDisabled={!player.running || player.mode === "fullscreen"}
+                pictureInPictureDisabled={
+                  !player.running || player.mode === "fullscreen" || audioOnly
+                }
                 loadError={loadError}
                 disabled={transportDisabled}
                 overlay
@@ -1267,6 +1285,13 @@ export function PlayerPane({
                     return;
                   }
                   player.toggleMute();
+                }}
+                onToggleAudioOnly={() => {
+                  const nextAudioOnly = !audioOnly;
+                  if (nextAudioOnly && player.pictureInPictureActive) {
+                    void player.togglePictureInPicture();
+                  }
+                  setAudioOnly(nextAudioOnly);
                 }}
                 onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
                 onToggleOsd={() => setOsdOn((v) => !v)}

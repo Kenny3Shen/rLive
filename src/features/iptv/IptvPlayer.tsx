@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useAndroidPlayerControls } from "@/features/room/player/androidPlayerControls";
@@ -38,6 +39,7 @@ import {
   type XgPlayerInstance,
 } from "@/features/room/player/xgPlayer";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { cn } from "@/lib/utils";
 import type { IptvChannel } from "./types";
 
 export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
@@ -123,6 +125,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const [paused, setPaused] = useState(true);
   const [volume, setVolume] = useState(80);
   const [muted, setMuted] = useState(false);
+  const [audioOnly, setAudioOnly] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
@@ -140,7 +143,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const playerControlMuted = nativePlayerControlsActive
     ? (androidPlayerControls.state?.mediaVolume ?? volume) <= 0
     : muted;
-  useScreenWakeLock(status === "playing");
+  useScreenWakeLock(status === "playing" && !audioOnly);
   useAndroidFullscreenOrientation({
     enabled: androidClient,
     fullscreen,
@@ -171,6 +174,11 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     video.volume = nativePlayerControlsActive ? 1 : Math.max(0, Math.min(1, volume / 100));
     video.muted = nativePlayerControlsActive ? false : muted;
   }, [muted, nativePlayerControlsActive, volume]);
+
+  useEffect(() => {
+    if (!audioOnly) return;
+    void exitPictureInPictureForVideo(getPictureInPictureDocument(), videoRef.current);
+  }, [audioOnly]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -677,6 +685,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         data-player-stage
         data-iptv-player-stage
         data-fullscreen={fullscreen ? "true" : undefined}
+        data-audio-only={audioOnly ? "true" : undefined}
         tabIndex={0}
         aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
         aria-keyshortcuts="Space K M F"
@@ -696,13 +705,18 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         <div
           ref={playerRootRef}
           data-player-engine-root
-          className="absolute inset-0 size-full overflow-hidden bg-black"
+          aria-hidden={audioOnly}
+          className={cn(
+            "absolute inset-0 size-full overflow-hidden bg-black",
+            audioOnly && "invisible",
+          )}
         >
           <video
             ref={videoRef}
             data-player-video
             playsInline
             tabIndex={-1}
+            disablePictureInPicture={audioOnly}
             className="absolute inset-0 size-full bg-black object-contain"
             onPlay={() => setPaused(false)}
             onPlaying={() => {
@@ -737,6 +751,8 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             }}
           />
         </div>
+
+        {channel && audioOnly && status === "playing" && <AudioOnlyIndicator />}
 
         {!channel && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
@@ -800,10 +816,11 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             paused={paused}
             volume={playerControlVolume}
             muted={playerControlMuted}
+            audioOnly={audioOnly}
             fullscreen={fullscreen}
             pictureInPictureSupported={pictureInPictureSupported}
             pictureInPictureActive={pictureInPictureActive}
-            pictureInPictureDisabled={status !== "playing" || fullscreen}
+            pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
             disabled={!channel || !mediaAvailable || status === "error"}
             overlay
             compact={compactViewport}
@@ -827,6 +844,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
               }
               toggleMute();
             }}
+            onToggleAudioOnly={() => setAudioOnly((current) => !current)}
             onTogglePictureInPicture={() => void togglePictureInPicture()}
             onToggleFullscreen={() => void toggleFullscreen()}
           />

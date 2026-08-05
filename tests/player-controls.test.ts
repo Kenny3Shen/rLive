@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { danmakuControlPresentation } from "../src/shared/components/player/PlayerControls";
+import {
+  audioOnlyControlPresentation,
+  danmakuControlPresentation,
+  volumeControlPresentation,
+} from "../src/shared/components/player/PlayerControls";
 import {
   canStartPlayerEdgeGesture,
   isPlayerStageDoubleTap,
@@ -37,6 +41,47 @@ describe("danmaku player control", () => {
       enabled: false,
       label: "开启弹幕",
       icon: "message-circle-off",
+    });
+  });
+});
+
+describe("audio-only player control", () => {
+  test("offers audio-only mode while the picture is visible", () => {
+    expect(audioOnlyControlPresentation(false)).toEqual({
+      enabled: false,
+      label: "仅播声音",
+      icon: "video-off",
+    });
+  });
+
+  test("offers picture restoration while audio-only mode is active", () => {
+    expect(audioOnlyControlPresentation(true)).toEqual({
+      enabled: true,
+      label: "恢复画面",
+      icon: "headphones",
+    });
+  });
+});
+
+describe("volume player control", () => {
+  test("uses the current volume icon and label for audible playback", () => {
+    expect(volumeControlPresentation(72, false)).toEqual({
+      isMuted: false,
+      label: "调节音量（当前 72%）",
+      icon: "volume-2",
+    });
+  });
+
+  test("uses the muted icon for both explicit mute and zero volume", () => {
+    expect(volumeControlPresentation(72, true)).toEqual({
+      isMuted: true,
+      label: "调节音量（当前静音）",
+      icon: "volume-x",
+    });
+    expect(volumeControlPresentation(0, false)).toEqual({
+      isMuted: true,
+      label: "调节音量（当前静音）",
+      icon: "volume-x",
     });
   });
 });
