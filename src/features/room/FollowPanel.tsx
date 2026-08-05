@@ -1,7 +1,7 @@
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, Home, Radio, RefreshCw } from "lucide-react";
+import { Clock3, Heart, Home, Radio, RefreshCw } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { FollowUser } from "@/shared/types/live";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -30,6 +30,7 @@ import {
   refreshFollows,
   useFollowStatusRefresh,
 } from "../follow/followRefresh";
+import { formatFollowLiveDuration } from "../follow/followRoute";
 
 function sortFollows(follows: FollowUser[]): FollowUser[] {
   return [...follows].sort((a, b) => {
@@ -93,6 +94,28 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
       ),
     [disabledSiteIds, followsQuery.data],
   );
+  const hasLiveDuration = follows.some(
+    (follow) => follow.live_status === true && follow.live_started_at != null,
+  );
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!hasLiveDuration) return;
+
+    let interval: number | undefined;
+    const updateClock = () => setNow(Date.now());
+    updateClock();
+    const untilNextMinute = 60_000 - (Date.now() % 60_000) + 50;
+    const timeout = window.setTimeout(() => {
+      updateClock();
+      interval = window.setInterval(updateClock, 60_000);
+    }, untilNextMinute);
+
+    return () => {
+      window.clearTimeout(timeout);
+      if (interval != null) window.clearInterval(interval);
+    };
+  }, [hasLiveDuration]);
 
   function switchRoom(user: FollowUser) {
     const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
@@ -158,6 +181,11 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
                 const isCurrentRoom =
                   user.site_id === routeSiteId && user.room_id === currentRoomId;
                 const avatar = normalizeImageUrl(user.face);
+                const platformName = SITE_LABELS[user.site_id] ?? user.site_id;
+                const liveDuration =
+                  user.live_status === true
+                    ? formatFollowLiveDuration(user.live_started_at, now)
+                    : null;
                 return (
                   <li key={`${user.site_id}:${user.room_id}`}>
                     <Button
@@ -184,8 +212,22 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
                             <Radio data-icon="inline-end" aria-hidden />
                           )}
                         </span>
-                        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                          {SITE_LABELS[user.site_id] ?? user.site_id} · 房间 {user.room_id}
+                        <span
+                          className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+                          title={
+                            liveDuration
+                              ? `${platformName} · 开播时长：${liveDuration}`
+                              : platformName
+                          }
+                        >
+                          <span className="shrink-0">{platformName}</span>
+                          {liveDuration && (
+                            <>
+                              <span aria-hidden>·</span>
+                              <Clock3 data-icon="inline-start" aria-hidden />
+                              <span className="truncate">已开播 {liveDuration}</span>
+                            </>
+                          )}
                         </span>
                       </span>
                       {statusBadge(user)}

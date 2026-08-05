@@ -22,6 +22,7 @@ export function RoomHostInfo({
 }: RoomHostInfoProps) {
   const userName = detail.user_name.trim() || "未知主播";
   const platformName = SITE_LABELS[detail.site_id] ?? detail.site_id;
+  const roomId = detail.room_id.trim() || "未知房间";
   const onlineLabel =
     Number.isFinite(detail.online) && detail.online >= 0 ? formatOnline(detail.online) : "—";
   const avatarLabel = `${userName} 的头像`;
@@ -30,7 +31,7 @@ export function RoomHostInfo({
     <section
       data-slot="room-host-info"
       className="shrink-0 border-b border-border px-2.5 py-2"
-      aria-label={`主播信息：${userName}，${platformName}，当前热度 ${onlineLabel}`}
+      aria-label={`主播信息：${userName}，${platformName}房间 ${roomId}，当前热度 ${onlineLabel}`}
     >
       <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -53,13 +54,13 @@ export function RoomHostInfo({
             </p>
             <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
               <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                <dt className="sr-only">所属平台</dt>
+                <dt className="sr-only">房间号</dt>
                 <dd
                   className="flex min-w-0 items-center gap-1.5"
-                  title={`所属平台：${platformName}`}
+                  title={`${platformName}房间号：${roomId}`}
                 >
                   <SiteLogo siteId={detail.site_id} className="size-3.5" />
-                  <span className="truncate">{platformName}</span>
+                  <span className="truncate tabular-nums">{roomId}</span>
                 </dd>
               </div>
               <div
