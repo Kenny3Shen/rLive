@@ -28,6 +28,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
+  const normalizedCover = normalizeImageUrl(room.cover);
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
@@ -155,9 +156,9 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         }
       >
         <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
-          {room.cover ? (
+          {normalizedCover ? (
             <img
-              src={normalizeImageUrl(room.cover)}
+              src={normalizedCover}
               alt=""
               loading="lazy"
               decoding="async"

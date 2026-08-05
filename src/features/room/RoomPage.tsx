@@ -9,7 +9,10 @@ import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/t
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
 import { RoomHostInfo } from "./RoomHostInfo";
-import { roomNavigationReturnsHome, roomSideTabFromNavigationState } from "./roomNavigation";
+import {
+  roomBackTargetFromNavigationState,
+  roomSideTabFromNavigationState,
+} from "./roomNavigation";
 import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
@@ -44,7 +47,7 @@ export function RoomPage() {
   const [followBusy, setFollowBusy] = useState(false);
   const [confirmUnfollowOpen, setConfirmUnfollowOpen] = useState(false);
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
-  const returnToHome = roomNavigationReturnsHome(location.state);
+  const backTarget = roomBackTargetFromNavigationState(location.state);
   const [sideTab, setSideTab] = useState<RoomSideTab>(requestedSideTab);
 
   // A regular room navigation starts at chat, while a navigation initiated by
@@ -171,7 +174,7 @@ export function RoomPage() {
   if (detailQuery.isLoading) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载中…" returnToHome={returnToHome} />
+        <RoomTopBar title="加载中…" backTarget={backTarget} />
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-8 text-primary" />
         </div>
@@ -182,7 +185,7 @@ export function RoomPage() {
   if (detailQuery.isError) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载失败" returnToHome={returnToHome} />
+        <RoomTopBar title="加载失败" backTarget={backTarget} />
         <div className="p-6">
           <ErrorState
             error={detailQuery.error}
@@ -215,7 +218,7 @@ export function RoomPage() {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <RoomTopBar
         title={detail.title || "直播间"}
-        returnToHome={returnToHome}
+        backTarget={backTarget}
         rightSlot={
           <div className="md:hidden">
             <RoomMobileActions
@@ -330,18 +333,18 @@ export function RoomPage() {
 
 function RoomTopBar({
   title,
-  returnToHome = false,
+  backTarget,
   rightSlot,
 }: {
   title: string;
-  returnToHome?: boolean;
+  backTarget?: "home" | "follow" | null;
   rightSlot?: ReactNode;
 }) {
   const navigate = useNavigate();
 
   function goBack() {
-    if (returnToHome) {
-      navigate("/", { replace: true });
+    if (backTarget === "home" || backTarget === "follow") {
+      navigate(backTarget === "follow" ? "/follow" : "/", { replace: true });
       return;
     }
     const historyState = window.history.state as { idx?: number } | null;

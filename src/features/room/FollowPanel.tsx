@@ -97,12 +97,10 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
   function switchRoom(user: FollowUser) {
     const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
     if (isCurrentRoom) return;
-    // A follow-sidebar switch is a replacement, not a new level in room
-    // navigation.  Keeping the old room in history made the room back button
-    // bounce between rooms instead of taking the user back to the home page.
-    // Carry the tab and explicit back target through the remount so multiple
-    // followed rooms can still be selected in succession.
-    navigate(`/room/${user.site_id}/${encodeURIComponent(user.room_id)}`, {
+    const roomPath = `/room/${user.site_id}/${encodeURIComponent(user.room_id)}`;
+    // Replacing avoids stacking rooms in history. The explicit target sends
+    // Back to the follow grid instead of bouncing through previous rooms.
+    navigate(roomPath, {
       replace: true,
       state: FOLLOW_ROOM_SWITCH_STATE,
     });
