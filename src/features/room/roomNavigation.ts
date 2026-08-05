@@ -2,13 +2,13 @@ import type { RoomSideTab } from "./PlayerPane";
 
 export type RoomNavigationState = {
   roomSideTab?: RoomSideTab;
-  roomBackTarget?: "home";
+  roomBackTarget?: "home" | "follow";
 };
 
 /** State carried by an in-room follow-list switch. */
 export const FOLLOW_ROOM_SWITCH_STATE: Readonly<RoomNavigationState> = {
   roomSideTab: "follow",
-  roomBackTarget: "home",
+  roomBackTarget: "follow",
 };
 
 export function roomSideTabFromNavigationState(state: unknown): RoomSideTab {
@@ -17,12 +17,15 @@ export function roomSideTabFromNavigationState(state: unknown): RoomSideTab {
   return tab === "chat" || tab === "settings" || tab === "follow" ? tab : "chat";
 }
 
-/** A follow-list switch returns to the home page instead of a prior room. */
+export function roomBackTargetFromNavigationState(
+  state: unknown,
+): RoomNavigationState["roomBackTarget"] | null {
+  if (!state || typeof state !== "object" || !("roomBackTarget" in state)) return null;
+  const target = (state as RoomNavigationState).roomBackTarget;
+  return target === "home" || target === "follow" ? target : null;
+}
+
+/** Kept for persisted navigation entries created by older app versions. */
 export function roomNavigationReturnsHome(state: unknown): boolean {
-  return (
-    !!state &&
-    typeof state === "object" &&
-    "roomBackTarget" in state &&
-    (state as RoomNavigationState).roomBackTarget === "home"
-  );
+  return roomBackTargetFromNavigationState(state) === "home";
 }
