@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { danmakuControlPresentation } from "../src/features/room/PlayerControls";
+import { danmakuControlPresentation } from "../src/shared/components/player/PlayerControls";
 import {
   canStartPlayerEdgeGesture,
   isPlayerStageDoubleTap,

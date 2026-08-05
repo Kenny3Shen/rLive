@@ -3,6 +3,7 @@ import type { IPlayerOptions } from "xgplayer";
 import { iptvPlaybackKind } from "../src/features/iptv/IptvPlayer";
 import {
   createXgPlayer,
+  getXgHlsCore,
   xgPlayerErrorMessage,
   type XgPlayerInstance,
   type XgPlayerModules,
@@ -61,5 +62,60 @@ describe("xgplayer transport selection", () => {
     expect(capturedOptions?.mediaEl).toBe(video);
     expect(capturedOptions?.width).toBe("100%");
     expect(capturedOptions?.height).toBe("100%");
+  });
+
+  test("passes HLS options through the official xgplayer-hls namespace", () => {
+    let capturedOptions: IPlayerOptions | null = null;
+
+    class PlayerStub {
+      media: HTMLMediaElement;
+
+      constructor(options: IPlayerOptions) {
+        capturedOptions = options;
+        this.media = options.mediaEl as HTMLMediaElement;
+      }
+
+      async play(): Promise<void> {}
+      pause(): void {}
+      destroy(): void {}
+      on(): void {}
+      getPlugin(): null {
+        return null;
+      }
+    }
+
+    const plugin = { isSupported: () => true };
+    const hls = { retryCount: 3, targetLatency: 3, maxLatency: 6 };
+    createXgPlayer(
+      {
+        Player: PlayerStub as XgPlayerModules["Player"],
+        plugin,
+      },
+      {
+        root: {} as HTMLElement,
+        video: { canPlayType: () => "" } as unknown as HTMLVideoElement,
+        url: "https://cdn.example/live.m3u8",
+        kind: "hls",
+        hls,
+      },
+    );
+
+    expect(capturedOptions?.plugins).toEqual([plugin]);
+    expect(capturedOptions?.hls).toEqual(hls);
+    expect("hlsJsPlugin" in (capturedOptions ?? {})).toBe(false);
+  });
+
+  test("reads the official HLS core from the lowercase plugin name", () => {
+    const core = { replay: async () => {} };
+    let requestedPlugin = "";
+    const player = {
+      getPlugin: (condition: string | Function) => {
+        requestedPlugin = String(condition);
+        return { core };
+      },
+    } as XgPlayerInstance;
+
+    expect(getXgHlsCore(player)).toBe(core);
+    expect(requestedPlugin).toBe("hls");
   });
 });

@@ -272,6 +272,7 @@ export function IptvPlayerPage() {
               channel={channel}
               reloadToken={reloadToken}
               onStatusChange={handlePlaybackStatus}
+              onReconnect={handleReconnect}
             />
           </div>
         </div>

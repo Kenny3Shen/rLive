@@ -13,7 +13,6 @@ import {
   getXgHlsCore,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
-  type XgHlsErrorData,
   type XgPlayerInstance,
 } from "./xgPlayer";
 
@@ -26,7 +25,7 @@ import {
  * bottom. A real window fullscreen covers the taskbar and the stage overlays
  * the room chrome as an in-page fixed layer.
  */
-function isTauriDesktop(): boolean {
+export function isTauriDesktop(): boolean {
   return (
     typeof window !== "undefined" &&
     "__TAURI_INTERNALS__" in window &&
@@ -69,11 +68,11 @@ export function canUsePictureInPicture(
   );
 }
 
-function getPictureInPictureDocument(): PictureInPictureDocument | null {
+export function getPictureInPictureDocument(): PictureInPictureDocument | null {
   return typeof document === "undefined" ? null : (document as PictureInPictureDocument);
 }
 
-async function exitPictureInPictureForVideo(
+export async function exitPictureInPictureForVideo(
   documentRef: PictureInPictureDocument | null,
   video: HTMLVideoElement | null,
 ): Promise<void> {
@@ -180,7 +179,7 @@ export async function toggleElementFullscreen(
   return true;
 }
 
-function getFullscreenDocument(): FullscreenDocument | null {
+export function getFullscreenDocument(): FullscreenDocument | null {
   return typeof document === "undefined" ? null : (document as FullscreenDocument);
 }
 
@@ -223,9 +222,9 @@ export type HlsFatalRecoveryAction =
   | { type: "refresh_play_url"; retryAfterMs: number };
 
 /**
- * hls.js has already exhausted its own request policy before exposing a fatal
- * error. Retry the loaded playlist once, then ask Twitch for a fresh signed
- * playlist instead of repeatedly loading an expired URL forever.
+ * xgplayer-hls has already exhausted its request retries before emitting a
+ * player error. Replay the current pipeline once, then ask Twitch for a fresh
+ * signed playlist instead of repeatedly loading an expired URL forever.
  */
 export function nextHlsFatalRecoveryAction(
   failureCount: number,
@@ -233,7 +232,7 @@ export function nextHlsFatalRecoveryAction(
   authorizationFailed = false,
 ): HlsFatalRecoveryAction {
   // A 401/403 on a Twitch media playlist is normally a short-lived signed
-  // URL expiring. Restarting hls.js against the same URL only repeats it.
+  // URL expiring. Replaying xgplayer-hls against the same URL only repeats it.
   if (authorizationFailed && !commercialBreak) {
     return { type: "refresh_play_url", retryAfterMs: 0 };
   }
@@ -255,11 +254,21 @@ export function isTwitchCommercialBreak(error: unknown): boolean {
   }
   if (!error || typeof error !== "object") return false;
   const value = error as {
+    message?: unknown;
+    errorMessage?: unknown;
     reason?: unknown;
+    originError?: unknown;
     error?: { message?: unknown };
     response?: { data?: unknown };
   };
-  const candidates = [value.reason, value.error?.message, value.response?.data];
+  const candidates = [
+    value.message,
+    value.errorMessage,
+    value.reason,
+    value.originError,
+    value.error?.message,
+    value.response?.data,
+  ];
   return candidates.some(
     (candidate) =>
       typeof candidate === "string" && /commercial\s+break\s+in\s+progress/i.test(candidate),
@@ -268,8 +277,25 @@ export function isTwitchCommercialBreak(error: unknown): boolean {
 
 export function hlsResponseStatus(error: unknown): number | null {
   if (!error || typeof error !== "object") return null;
-  const code = (error as { response?: { code?: unknown } }).response?.code;
-  return typeof code === "number" && Number.isFinite(code) ? code : null;
+  const value = error as {
+    httpCode?: unknown;
+    status?: unknown;
+    response?: { code?: unknown; status?: unknown };
+    ext?: { httpCode?: unknown; response?: { code?: unknown; status?: unknown } };
+  };
+  const candidates = [
+    value.httpCode,
+    value.status,
+    value.response?.status,
+    value.response?.code,
+    value.ext?.httpCode,
+    value.ext?.response?.status,
+    value.ext?.response?.code,
+  ];
+  const status = candidates.find(
+    (candidate): candidate is number => typeof candidate === "number" && Number.isFinite(candidate),
+  );
+  return status ?? null;
 }
 
 export function playUrlKey(playUrl: PlayUrl | null): string {
@@ -553,9 +579,21 @@ export function useWebPlayer(opts: {
             url: playLocal,
             kind: playbackKind,
             hls: {
-              enableWorker: true,
-              lowLatencyMode: true,
-              backBufferLength: 30,
+              retryCount: 3,
+              retryDelay: 1_000,
+              bufferBehind: 30,
+              targetLatency: 3,
+              maxLatency: 6,
+              mseLowLatency: true,
+              onPreM3U8Parse:
+                siteId === "twitch"
+                  ? (manifest: string) => {
+                      if (isTwitchCommercialBreak(manifest)) {
+                        throw new Error("Commercial break in progress");
+                      }
+                      return manifest;
+                    }
+                  : undefined,
             },
             flv: {
               isLive: true,
@@ -576,8 +614,8 @@ export function useWebPlayer(opts: {
             !cancelled && genRef.current === gen && playerRef.current === player;
           const hls = hlsSource ? getXgHlsCore(player) : null;
 
-          // Twitch needs the raw hls.js error payload for signed URL renewal.
-          // Other fatal protocol errors flow through xgplayer's unified event.
+          // Twitch needs one bounded in-place replay before requesting a new
+          // signed URL. Other protocol errors flow through xgplayer unchanged.
           if (!hls || siteId !== "twitch") {
             player.on("error", (error) => {
               if (!isCurrentPlayer()) return;
@@ -595,27 +633,32 @@ export function useWebPlayer(opts: {
 
           if (hls && siteId === "twitch") {
             let hlsFatalFailureCount = 0;
-            hls.on("hlsFragBuffered", () => {
+            player.on("playing", () => {
               if (isCurrentPlayer()) hlsFatalFailureCount = 0;
             });
-            hls.on("hlsError", (...args) => {
-              const data = args[1] as XgHlsErrorData | undefined;
-              if (!isCurrentPlayer() || !data?.fatal) return;
+            player.on("error", (cause) => {
+              if (!isCurrentPlayer()) return;
 
-              const commercialBreak = isTwitchCommercialBreak(data);
-              const responseStatus = hlsResponseStatus(data);
+              const commercialBreak = isTwitchCommercialBreak(cause);
+              const responseStatus = hlsResponseStatus(cause);
               const action = nextHlsFatalRecoveryAction(
                 ++hlsFatalFailureCount,
                 commercialBreak,
                 responseStatus === 401 || responseStatus === 403,
               );
-              // xgplayer-hls.js performs the first in-place network/media
-              // recovery. A repeated or authorized failure needs a new URL.
-              if (action.type === "restart") return;
+              if (action.type === "restart") {
+                setRunning(false);
+                void hls.replay().catch(() => {
+                  // replay() emits the resulting player error, which enters
+                  // this handler again and advances to signed URL renewal.
+                });
+                return;
+              }
 
+              const errorMessage = xgPlayerErrorMessage(cause, "Twitch HLS 连接中断");
               const message = commercialBreak
                 ? "Twitch 正在播放广告，广告结束后将自动恢复"
-                : `Twitch HLS 连接中断（${data.details ?? "未知错误"}），正在更新播放地址…`;
+                : `${errorMessage}，正在更新播放地址…`;
               playerRef.current = null;
               try {
                 player.destroy();

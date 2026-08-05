@@ -3,7 +3,7 @@
 //! Browser `<video>` / MSE cannot attach Bilibili `Referer` / `User-Agent` to
 //! media requests. This proxy binds `127.0.0.1:0`, forwards the live URL with
 //! the required headers, and returns a same-origin-friendly stream URL for
-//! mpegts.js / hls.js — no mpv HWND.
+//! xgplayer protocol plugins — no mpv HWND.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
@@ -235,7 +235,7 @@ impl StreamProxy {
                 AppError::new("stream_proxy_bind", e.to_string())
             })?
             .port();
-        // mpegts.js can issue several localhost requests for one live stream.
+        // MSE protocol plugins can issue several localhost requests for one live stream.
         // Build one client per proxy lifetime so those requests share its
         // connection pool instead of rebuilding TLS/pool state per request.
         let client = match build_stream_client(proxy) {

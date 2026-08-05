@@ -22,24 +22,13 @@ export type XgPlayerModules = {
   plugin?: XgStreamingPlugin;
 };
 
-export type XgHlsErrorData = {
-  type?: string;
-  details?: string;
-  fatal?: boolean;
-  reason?: string;
-  error?: { message?: unknown };
-  response?: { code?: unknown; data?: unknown };
-};
-
 export type XgHlsCore = {
-  on: (event: string, handler: (...args: unknown[]) => void) => void;
-  startLoad: () => void;
-  recoverMediaError: () => void;
+  replay: (isPlayEmit?: boolean) => Promise<void>;
 };
 
 let coreModulePromise: Promise<typeof import("xgplayer")> | null = null;
 let flvModulePromise: Promise<typeof import("xgplayer-flv")> | null = null;
-let hlsModulePromise: Promise<typeof import("xgplayer-hls.js")> | null = null;
+let hlsModulePromise: Promise<typeof import("xgplayer-hls")> | null = null;
 let mpegtsModulePromise: Promise<typeof import("xgplayer-mpegts.js")> | null = null;
 
 function loadCoreModule(): Promise<typeof import("xgplayer")> {
@@ -59,7 +48,7 @@ export async function loadXgPlayerModules(kind: XgPlaybackKind): Promise<XgPlaye
     };
   }
   if (kind === "hls") {
-    if (!hlsModulePromise) hlsModulePromise = import("xgplayer-hls.js");
+    if (!hlsModulePromise) hlsModulePromise = import("xgplayer-hls");
     const [core, { default: plugin }] = await Promise.all([corePromise, hlsModulePromise]);
     return {
       Player: core.SimplePlayer as unknown as XgPlayerConstructor,
@@ -125,17 +114,18 @@ export function createXgPlayer(
   };
 
   if (kind === "flv") playerOptions.flv = flv ?? {};
-  if (kind === "hls") {
-    playerOptions.hlsJsPlugin = { hlsOpts: hls ?? {} };
-  }
+  if (kind === "hls") playerOptions.hls = hls ?? {};
   if (kind === "mpegts") playerOptions.MpegtsPlugin = mpegts ?? {};
 
   return new modules.Player(playerOptions);
 }
 
 export function getXgHlsCore(player: XgPlayerInstance): XgHlsCore | null {
-  const plugin = player.getPlugin("HlsJsPlugin") as { hls?: XgHlsCore | null } | null;
-  return plugin?.hls ?? null;
+  const plugin = player.getPlugin("hls") as {
+    core?: XgHlsCore | null;
+    hls?: XgHlsCore | null;
+  } | null;
+  return plugin?.core ?? plugin?.hls ?? null;
 }
 
 export function xgPlayerErrorMessage(error: unknown, fallback = "播放失败"): string {
