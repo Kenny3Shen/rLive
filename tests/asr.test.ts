@@ -12,7 +12,7 @@ import {
   supportsLocalAsr,
   type AsrModelStatus,
 } from "../src/features/asr/model";
-import { asrControlPresentation } from "../src/features/room/PlayerControls";
+import { asrControlPresentation } from "../src/shared/components/player/PlayerControls";
 
 function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
   return {
