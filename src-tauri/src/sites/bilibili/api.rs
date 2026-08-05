@@ -500,9 +500,15 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
 
     Ok(urls
         .into_iter()
-        .map(|url| PlayUrl {
-            url,
-            headers: headers.clone(),
+        .enumerate()
+        .map(|(index, url)| {
+            PlayUrl::inferred(
+                format!("bilibili:{}", index + 1),
+                format!("线路{}", index + 1),
+                index as u32,
+                url,
+                headers.clone(),
+            )
         })
         .collect())
 }
@@ -779,6 +785,10 @@ mod tests {
         assert!(!urls[0].url.contains("mcdn"));
         assert!(urls[1].url.contains("mcdn"));
         assert!(urls[0].headers.contains_key("referer"));
+        assert_eq!(urls[0].source_id, "bilibili:1");
+        assert_eq!(urls[0].label, "线路1");
+        assert_eq!(urls[0].protocol, crate::models::live::PlaybackProtocol::Flv);
+        assert_eq!(urls[0].priority, 0);
     }
 
     #[test]

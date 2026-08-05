@@ -640,7 +640,7 @@ impl LiveSite for DouyuSite {
         headers.insert("referer".into(), format!("https://www.douyu.com/{room_id}"));
 
         let mut urls = Vec::new();
-        for cdn_v in cdns {
+        for (index, cdn_v) in cdns.into_iter().enumerate() {
             let cdn = json_str(&cdn_v);
             let body = format!("{sign}&cdn={cdn}&rate={rate}");
             let v = self
@@ -657,10 +657,13 @@ impl LiveSite for DouyuSite {
                 continue;
             }
             let url = format!("{rtmp_url}/{rtmp_live}");
-            urls.push(PlayUrl {
+            urls.push(PlayUrl::inferred(
+                format!("douyu:{cdn}"),
+                format!("线路{}", index + 1),
+                index as u32,
                 url,
-                headers: headers.clone(),
-            });
+                headers.clone(),
+            ));
         }
         if urls.is_empty() {
             return Err(Self::err("no douyu play urls"));

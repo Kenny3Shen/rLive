@@ -3,8 +3,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
-import type { PlayerEvent, PlayerUiMode } from "@/shared/types/player";
+import type { PlayerEvent, PlayerUiMode, StreamProxyTelemetry } from "@/shared/types/player";
 import type { AppError } from "@/shared/types/error";
+import { playbackProtocol, playbackSourceId } from "@/lib/playUrl";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
@@ -13,8 +15,18 @@ import {
   getXgHlsCore,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
+  type XgPlaybackKind,
   type XgPlayerInstance,
 } from "./xgPlayer";
+import {
+  createPlaybackTelemetrySession,
+  markTelemetryLongTask,
+  markTelemetryPlaying,
+  markTelemetryStalled,
+  markTelemetryWaiting,
+  samplePlaybackTelemetry,
+  type PlaybackTelemetrySession,
+} from "./playbackTelemetry";
 
 /**
  * Desktop Tauri (Windows/macOS/Linux) drives fullscreen through the native OS
@@ -306,7 +318,41 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
   return JSON.stringify([
     playUrl.url,
     Object.entries(playUrl.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    playUrl.source_id ?? null,
+    playUrl.label ?? null,
+    playUrl.protocol ?? null,
+    playUrl.priority ?? null,
   ]);
+}
+
+export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPlaybackKind {
+  switch (playbackProtocol(source)) {
+    case "hls":
+      return "hls";
+    case "mpeg_ts":
+      return "mpegts";
+    case "native":
+      return "native";
+    default:
+      return "flv";
+  }
+}
+
+export function canSoftSwitchPlaybackSource(input: {
+  enabled: boolean;
+  activeSourceKey: string;
+  targetSourceKey: string;
+  activeKind: XgPlaybackKind | null;
+  targetKind: XgPlaybackKind | null;
+}): boolean {
+  return Boolean(
+    input.enabled &&
+    input.activeSourceKey &&
+    input.targetSourceKey &&
+    input.activeSourceKey !== input.targetSourceKey &&
+    input.activeKind &&
+    input.activeKind === input.targetKind,
+  );
 }
 
 function playbackSourceFromKey(key: string): PlayUrl | null {
@@ -320,7 +366,21 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
       (entry): entry is [string, string] =>
         Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string",
     );
-    return { url: parsed[0], headers: Object.fromEntries(entries) };
+    return {
+      url: parsed[0],
+      headers: Object.fromEntries(entries),
+      source_id: typeof parsed[2] === "string" ? parsed[2] : undefined,
+      label: typeof parsed[3] === "string" ? parsed[3] : undefined,
+      protocol:
+        parsed[4] === "flv" ||
+        parsed[4] === "hls" ||
+        parsed[4] === "mpeg_ts" ||
+        parsed[4] === "native" ||
+        parsed[4] === "unknown"
+          ? parsed[4]
+          : undefined,
+      priority: typeof parsed[5] === "number" && Number.isFinite(parsed[5]) ? parsed[5] : undefined,
+    };
   } catch {
     return null;
   }
@@ -352,13 +412,23 @@ function createPlayerInstanceId(): string {
 export function useWebPlayer(opts: {
   playUrl: PlayUrl | null;
   siteId?: SiteId;
+  quality?: string | null;
   /** Rebuild even when two rooms happen to resolve to the same stream URL. */
   sessionKey?: string;
   reloadToken?: number;
   onMediaFailure?: (event: PlayerEvent) => void;
   onPlaying?: () => void;
 }): WebPlayerApi {
-  const { playUrl, siteId, sessionKey = "", reloadToken = 0, onMediaFailure, onPlaying } = opts;
+  const {
+    playUrl,
+    siteId,
+    quality = null,
+    sessionKey = "",
+    reloadToken = 0,
+    onMediaFailure,
+    onPlaying,
+  } = opts;
+  const softSwitchEnabled = useSettingsStore((state) => state.playbackSoftSwitchEnabled);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -368,6 +438,12 @@ export function useWebPlayer(opts: {
   const mediaLifecycleVersionRef = useRef(0);
   const volumeRef = useRef(80);
   const mutedRef = useRef(false);
+  const activeProxySessionIdRef = useRef<string | null>(null);
+  const activeSourceKeyRef = useRef("");
+  const activePlaybackKindRef = useRef<XgPlaybackKind | null>(null);
+  const telemetrySessionRef = useRef<PlaybackTelemetrySession | null>(null);
+  const softSwitchSequenceRef = useRef(0);
+  const qualityRef = useRef<string | null>(quality);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
@@ -381,6 +457,8 @@ export function useWebPlayer(opts: {
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [mediaKey, setMediaKey] = useState(0);
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  const [softFallbackToken, setSoftFallbackToken] = useState(0);
+  const [activeSourceKey, setActiveSourceKey] = useState("");
 
   if (playerInstanceIdRef.current === null) {
     playerInstanceIdRef.current = createPlayerInstanceId();
@@ -388,6 +466,7 @@ export function useWebPlayer(opts: {
 
   volumeRef.current = volume;
   mutedRef.current = muted;
+  qualityRef.current = quality;
 
   const onMediaFailureRef = useRef(onMediaFailure);
   const onPlayingRef = useRef(onPlaying);
@@ -431,6 +510,10 @@ export function useWebPlayer(opts: {
         /* ignore */
       }
     }
+    activeSourceKeyRef.current = "";
+    setActiveSourceKey("");
+    activePlaybackKindRef.current = null;
+    telemetrySessionRef.current = null;
     setRunning(false);
   }, []);
 
@@ -444,18 +527,53 @@ export function useWebPlayer(opts: {
     () => playbackSourceFromKey(playbackSourceKey),
     [playbackSourceKey],
   );
+  const retainedPlaybackSourceRef = useRef<{
+    roomKey: string;
+    sourceKey: string;
+    source: PlayUrl;
+  } | null>(null);
+  if (retainedPlaybackSourceRef.current?.roomKey !== sessionKey) {
+    retainedPlaybackSourceRef.current = null;
+  }
+  if (playbackSource) {
+    retainedPlaybackSourceRef.current = {
+      roomKey: sessionKey,
+      sourceKey: playbackSourceKey,
+      source: playbackSource,
+    };
+  }
+  // During a quality query the controller can briefly have no URL. Keep the
+  // active source alive so the soft-switch experiment does not introduce a
+  // black frame while the replacement metadata is loading.
+  const effectivePlaybackSource =
+    playbackSource ?? retainedPlaybackSourceRef.current?.source ?? null;
+  const effectivePlaybackSourceKey =
+    playbackSourceKey || retainedPlaybackSourceRef.current?.sourceKey || "";
+  const effectivePlaybackKind = effectivePlaybackSource
+    ? webPlaybackKind(effectivePlaybackSource)
+    : null;
+  const effectivePlaybackSourceRef = useRef<PlayUrl | null>(effectivePlaybackSource);
+  effectivePlaybackSourceRef.current = effectivePlaybackSource;
+  const hardStreamKey = softSwitchEnabled
+    ? `${sessionKey}::${effectivePlaybackKind ?? "none"}::${softFallbackToken}`
+    : `${streamKey}::${softFallbackToken}`;
 
   // Open / replace stream whenever the logical stream identity changes.
   useEffect(() => {
     let cancelled = false;
     const gen = ++genRef.current;
     const proxySessionId = `${playerInstanceIdRef.current}:${gen}`;
+    let playbackSource = effectivePlaybackSourceRef.current;
+    let sourceKey = playUrlKey(playbackSource);
 
     const stopProxy = async () => {
       try {
         await invokeCmd("stream_proxy_stop", { sessionId: proxySessionId });
       } catch {
         /* ignore */
+      }
+      if (activeProxySessionIdRef.current === proxySessionId) {
+        activeProxySessionIdRef.current = null;
       }
     };
 
@@ -477,8 +595,8 @@ export function useWebPlayer(opts: {
     setMuted(false);
     mutedRef.current = false;
 
-    const hlsSource = isHlsStream(playbackSource.url);
-    const playbackKind = hlsSource ? "hls" : "flv";
+    const playbackKind = webPlaybackKind(playbackSource);
+    const hlsSource = playbackKind === "hls";
     // Start fetching xgplayer and only the selected protocol plugin while the
     // serialized proxy queue tears down the previous session.
     const xgModulesPromise = loadXgPlayerModules(playbackKind);
@@ -528,11 +646,32 @@ export function useWebPlayer(opts: {
             } satisfies AppError;
           }
 
+          // The initial source can be superseded while modules are loading.
+          // Use the latest same-protocol candidate instead of briefly opening
+          // an obsolete line and immediately soft-switching it.
+          const latestSource = effectivePlaybackSourceRef.current;
+          if (latestSource && (playbackProtocol(latestSource) === "hls") === hlsSource) {
+            playbackSource = latestSource;
+            sourceKey = playUrlKey(latestSource);
+          }
+          const selectedSource = playbackSource;
+          if (!selectedSource) {
+            throw new Error("播放源已失效");
+          }
+          telemetrySessionRef.current = createPlaybackTelemetrySession({
+            sessionId: proxySessionId,
+            siteId: siteId ?? null,
+            sourceId: playbackSourceId(selectedSource, 0),
+            protocol: playbackProtocol(selectedSource),
+            quality: qualityRef.current,
+            switchMode: "hard",
+          });
+
           // 3) Fresh proxy (new port) + cache-bust query so the browser never
           // reuses a closed keep-alive to the previous listener.
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
-            url: playbackSource.url,
-            headers: playbackSource.headers,
+            url: selectedSource.url,
+            headers: selectedSource.headers,
             sessionId: proxySessionId,
             // Twitch and other HLS sites need the proxy to rewrite child
             // playlists, keys and segments to the same local session.
@@ -543,6 +682,7 @@ export function useWebPlayer(opts: {
             return;
           }
           const playLocal = `${localUrl}${localUrl.includes("?") ? "&" : "?"}t=${Date.now()}_${gen}`;
+          activeProxySessionIdRef.current = proxySessionId;
 
           // Hard-reset the element before either MSE player attaches. This is
           // also required for native HLS fallback after a previous MSE room.
@@ -578,6 +718,7 @@ export function useWebPlayer(opts: {
             video,
             url: playLocal,
             kind: playbackKind,
+            isLive: playbackKind !== "native",
             hls: {
               retryCount: 3,
               retryDelay: 1_000,
@@ -605,11 +746,31 @@ export function useWebPlayer(opts: {
               mseLowLatency: true,
               enableStartGapJump: true,
             },
+            mpegts: {
+              mediaDataSource: {
+                type: "mpegts",
+                isLive: true,
+                hasAudio: true,
+                hasVideo: true,
+              },
+              mpegtsConfig: {
+                enableWorker: false,
+                enableStashBuffer: true,
+                stashInitialSize: 384,
+                liveBufferLatencyChasing: true,
+                liveBufferLatencyMaxLatency: 3,
+                liveBufferLatencyMinRemain: 0.5,
+                autoCleanupSourceBuffer: true,
+              },
+            },
           });
 
           // Register ownership before autoplay: play() can remain pending until
           // the first live segment, while route cleanup must stay immediate.
           playerRef.current = player;
+          activeSourceKeyRef.current = sourceKey;
+          setActiveSourceKey(sourceKey);
+          activePlaybackKindRef.current = playbackKind;
           const isCurrentPlayer = () =>
             !cancelled && genRef.current === gen && playerRef.current === player;
           const hls = hlsSource ? getXgHlsCore(player) : null;
@@ -729,7 +890,101 @@ export function useWebPlayer(opts: {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [streamKey, reloadToken, destroyPlayer, playbackSource, siteId]);
+  }, [hardStreamKey, reloadToken, destroyPlayer, siteId]);
+
+  // Same-protocol source changes can retain the media element and MSE state.
+  // This remains opt-in because live CDN timestamp continuity is not uniform;
+  // any setup/switch failure increments the hard key and rebuilds cleanly.
+  useEffect(() => {
+    if (!effectivePlaybackSource) return;
+    if (
+      !canSoftSwitchPlaybackSource({
+        enabled: softSwitchEnabled,
+        activeSourceKey,
+        targetSourceKey: effectivePlaybackSourceKey,
+        activeKind: activePlaybackKindRef.current,
+        targetKind: effectivePlaybackKind,
+      })
+    ) {
+      return;
+    }
+
+    const player = playerRef.current;
+    const proxySessionId = activeProxySessionIdRef.current;
+    if (!player || !proxySessionId || typeof player.switchURL !== "function") {
+      setSoftFallbackToken((token) => token + 1);
+      return;
+    }
+
+    let cancelled = false;
+    const sequence = ++softSwitchSequenceRef.current;
+    const targetSource = effectivePlaybackSource;
+    const targetKey = effectivePlaybackSourceKey;
+    const targetKind = effectivePlaybackKind;
+
+    void proxyLifecycleQueue
+      .enqueue(async () => {
+        if (
+          cancelled ||
+          sequence !== softSwitchSequenceRef.current ||
+          playerRef.current !== player ||
+          activeProxySessionIdRef.current !== proxySessionId
+        ) {
+          return;
+        }
+
+        const localUrl = await invokeCmd<string>("stream_proxy_start", {
+          url: targetSource.url,
+          headers: targetSource.headers,
+          sessionId: proxySessionId,
+          hls: targetKind === "hls",
+        });
+        if (
+          cancelled ||
+          sequence !== softSwitchSequenceRef.current ||
+          playerRef.current !== player
+        ) {
+          return;
+        }
+        const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
+        telemetrySessionRef.current = createPlaybackTelemetrySession({
+          sessionId: `${proxySessionId}:soft:${sequence}`,
+          siteId: siteId ?? null,
+          sourceId: playbackSourceId(targetSource, 0),
+          protocol: playbackProtocol(targetSource),
+          quality: qualityRef.current,
+          switchMode: "soft",
+        });
+        await Promise.resolve(player.switchURL?.(localSource, { seamless: true }));
+        if (
+          cancelled ||
+          sequence !== softSwitchSequenceRef.current ||
+          playerRef.current !== player
+        ) {
+          return;
+        }
+        activeSourceKeyRef.current = targetKey;
+        setActiveSourceKey(targetKey);
+        activePlaybackKindRef.current = targetKind;
+        setLoadError(null);
+      })
+      .catch(() => {
+        if (cancelled || sequence !== softSwitchSequenceRef.current) return;
+        setLoadError(null);
+        setSoftFallbackToken((token) => token + 1);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSourceKey,
+    effectivePlaybackKind,
+    effectivePlaybackSource,
+    effectivePlaybackSourceKey,
+    siteId,
+    softSwitchEnabled,
+  ]);
 
   // Reflect transport controls onto the element.
   useEffect(() => {
@@ -762,18 +1017,30 @@ export function useWebPlayer(opts: {
     };
 
     const onPlay = () => {
+      const telemetry = telemetrySessionRef.current;
+      if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
       setRunning(true);
       setLoadError(null);
       onPlayingRef.current?.();
     };
     const onPlaying = () => {
+      const telemetry = telemetrySessionRef.current;
+      if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
       setRunning(true);
       setLoadError(null);
       onPlayingRef.current?.();
     };
     const onPause = () => setPaused(true);
+    const onWaiting = () => {
+      const telemetry = telemetrySessionRef.current;
+      if (telemetry) markTelemetryWaiting(telemetry, performance.now());
+    };
+    const onStalled = () => {
+      const telemetry = telemetrySessionRef.current;
+      if (telemetry) markTelemetryStalled(telemetry, performance.now());
+    };
     // Android fullscreen auto-rotation is decided from the decoded frame size,
     // so the ratio has to follow both the first metadata and later resolution
     // switches an adaptive ladder makes mid-stream.
@@ -796,6 +1063,8 @@ export function useWebPlayer(opts: {
     video.addEventListener("play", onPlay);
     video.addEventListener("playing", onPlaying);
     video.addEventListener("pause", onPause);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
     video.addEventListener("ended", onEnded);
     video.addEventListener("loadedmetadata", syncAspectRatio);
     video.addEventListener("resize", syncAspectRatio);
@@ -805,6 +1074,8 @@ export function useWebPlayer(opts: {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onPause);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("loadedmetadata", syncAspectRatio);
       video.removeEventListener("resize", syncAspectRatio);
@@ -812,6 +1083,59 @@ export function useWebPlayer(opts: {
       video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
     };
   }, [mediaKey, streamKey]);
+
+  useEffect(() => {
+    if (typeof PerformanceObserver === "undefined") return;
+    if (!PerformanceObserver.supportedEntryTypes?.includes("longtask")) return;
+    let observer: PerformanceObserver | null = null;
+    try {
+      observer = new PerformanceObserver((list) => {
+        const telemetry = telemetrySessionRef.current;
+        if (!telemetry) return;
+        for (const entry of list.getEntries()) {
+          markTelemetryLongTask(telemetry, entry.duration);
+        }
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {
+      observer?.disconnect();
+      return;
+    }
+    return () => observer?.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let sampling = false;
+    const sample = async () => {
+      if (cancelled || sampling) return;
+      const telemetry = telemetrySessionRef.current;
+      const video = videoRef.current;
+      const proxySessionId = activeProxySessionIdRef.current;
+      if (!telemetry || !video || !proxySessionId) return;
+      sampling = true;
+      let proxy: StreamProxyTelemetry | null = null;
+      try {
+        proxy = await invokeCmd<StreamProxyTelemetry | null>("stream_proxy_telemetry", {
+          sessionId: proxySessionId,
+        });
+      } catch {
+        // Browser previews and an already-closing native session still produce
+        // useful media-element metrics without proxy counters.
+      } finally {
+        sampling = false;
+      }
+      if (cancelled || telemetrySessionRef.current !== telemetry || videoRef.current !== video) {
+        return;
+      }
+      samplePlaybackTelemetry({ session: telemetry, video, proxy });
+    };
+    const interval = window.setInterval(() => void sample(), 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [hardStreamKey, mediaKey]);
 
   useEffect(() => {
     const onFs = () => {

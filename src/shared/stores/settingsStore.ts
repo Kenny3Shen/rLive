@@ -78,6 +78,8 @@ type SettingsState = {
   superChatOpacity: number;
   danmakuShieldWords: string[];
   qualityLevel: QualityLevel;
+  playbackSmartLineSelection: boolean;
+  playbackSoftSwitchEnabled: boolean;
   danmakuSendEnabled: boolean;
   /** True while the local multi-platform sending permission reaches the backend. */
   danmakuSendPending: boolean;
@@ -102,6 +104,8 @@ type SettingsState = {
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setProxy: (proxy: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
+  setPlaybackSmartLineSelection: (enabled: boolean) => void;
+  setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
@@ -134,6 +138,8 @@ const defaultSettings: AppSettings = {
   super_chat_opacity: 1,
   danmaku_shield_words: [],
   quality_level: "high",
+  playback_smart_line_selection: true,
+  playback_soft_switch_enabled: false,
   danmaku_send_enabled: false,
   asr_enabled: false,
   asr_vad_enabled: false,
@@ -160,6 +166,8 @@ function toAppSettings(state: SettingsState): AppSettings {
     super_chat_opacity: state.superChatOpacity,
     danmaku_shield_words: state.danmakuShieldWords,
     quality_level: state.qualityLevel,
+    playback_smart_line_selection: state.playbackSmartLineSelection,
+    playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_vad_enabled: state.asrVadEnabled,
@@ -188,6 +196,8 @@ export const useSettingsStore = create<SettingsState>()(
       superChatOpacity: 1,
       danmakuShieldWords: [],
       qualityLevel: "high",
+      playbackSmartLineSelection: true,
+      playbackSoftSwitchEnabled: false,
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
@@ -223,6 +233,18 @@ export const useSettingsStore = create<SettingsState>()(
       setQualityLevel: (qualityLevel) => {
         set({ qualityLevel });
         void get().persistToBackend({ quality_level: qualityLevel });
+      },
+      setPlaybackSmartLineSelection: (playbackSmartLineSelection) => {
+        set({ playbackSmartLineSelection });
+        void get().persistToBackend({
+          playback_smart_line_selection: playbackSmartLineSelection,
+        });
+      },
+      setPlaybackSoftSwitchEnabled: (playbackSoftSwitchEnabled) => {
+        set({ playbackSoftSwitchEnabled });
+        void get().persistToBackend({
+          playback_soft_switch_enabled: playbackSoftSwitchEnabled,
+        });
       },
       setSuperChatEnabled: (superChatEnabled) => {
         set({ superChatEnabled });
@@ -326,6 +348,8 @@ export const useSettingsStore = create<SettingsState>()(
           superChatOpacity: settings.super_chat_opacity ?? 1,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           qualityLevel: parseQualityLevel(settings.quality_level),
+          playbackSmartLineSelection: settings.playback_smart_line_selection ?? true,
+          playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled ?? false,
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled ?? false,

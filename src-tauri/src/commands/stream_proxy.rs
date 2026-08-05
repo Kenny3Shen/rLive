@@ -5,7 +5,17 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::error::AppResult;
+use crate::models::live::PlayUrl;
 use crate::state::AppState;
+use crate::stream_proxy::{StreamProxyProbe, StreamProxyTelemetry};
+
+fn configured_proxy(state: &State<'_, AppState>) -> AppResult<Option<String>> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| crate::error::AppError::new("db_lock_error", "database mutex poisoned"))?;
+    Ok(crate::settings::get(&conn)?.proxy)
+}
 
 #[tauri::command(async)]
 pub async fn stream_proxy_start(
@@ -30,13 +40,7 @@ pub async fn stream_proxy_start(
     // The browser only ever connects to this loopback listener. Its upstream
     // reqwest client must therefore receive the saved proxy explicitly; the
     // WebView's own networking configuration cannot route HLS subresources.
-    let proxy = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| crate::error::AppError::new("db_lock_error", "database mutex poisoned"))?;
-        crate::settings::get(&conn)?.proxy
-    };
+    let proxy = configured_proxy(&state)?;
     state
         .stream_proxy
         .start(
@@ -47,6 +51,26 @@ pub async fn stream_proxy_start(
             proxy.as_deref(),
         )
         .await
+}
+
+#[tauri::command(async)]
+pub async fn stream_proxy_probe_sources(
+    state: State<'_, AppState>,
+    sources: Vec<PlayUrl>,
+) -> AppResult<Vec<StreamProxyProbe>> {
+    let proxy = configured_proxy(&state)?;
+    crate::stream_proxy::probe_sources(sources, proxy.as_deref()).await
+}
+
+#[tauri::command]
+pub fn stream_proxy_telemetry(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<Option<StreamProxyTelemetry>> {
+    if session_id.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(state.stream_proxy.telemetry_for_session(&session_id))
 }
 
 #[tauri::command]

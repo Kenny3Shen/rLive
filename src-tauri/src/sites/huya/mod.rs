@@ -813,10 +813,11 @@ impl LiveSite for HuyaSite {
         headers.insert("referer".into(), "https://www.huya.com/".into());
 
         let mut urls = Vec::new();
-        for line in lines {
+        for (index, line) in lines.into_iter().enumerate() {
             let base = json_str(line.get("line").unwrap_or(&Value::Null));
             let stream = json_str(line.get("streamName").unwrap_or(&Value::Null));
             let anti = json_str(line.get("flvAntiCode").unwrap_or(&Value::Null));
+            let cdn_type = json_str(line.get("cdnType").unwrap_or(&Value::Null));
             if base.is_empty() || stream.is_empty() {
                 continue;
             }
@@ -831,10 +832,18 @@ impl LiveSite for HuyaSite {
             if bit_rate > 0 {
                 url.push_str(&format!("&ratio={bit_rate}"));
             }
-            urls.push(PlayUrl {
+            let source_id = if cdn_type.is_empty() {
+                format!("huya:{}", index + 1)
+            } else {
+                format!("huya:{cdn_type}")
+            };
+            urls.push(PlayUrl::inferred(
+                source_id,
+                format!("线路{}", index + 1),
+                index as u32,
                 url,
-                headers: headers.clone(),
-            });
+                headers.clone(),
+            ));
         }
         if urls.is_empty() {
             return Err(Self::err("no huya play urls"));

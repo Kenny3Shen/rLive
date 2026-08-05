@@ -159,10 +159,97 @@ fn is_plausible_live_started_at(value: i64) -> bool {
                 .saturating_add(FUTURE_GRACE_MILLIS)
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackProtocol {
+    Flv,
+    Hls,
+    MpegTs,
+    Native,
+    Unknown,
+}
+
+impl Default for PlaybackProtocol {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl PlaybackProtocol {
+    /// Infer a transport only as a compatibility fallback. Site adapters should
+    /// prefer explicit metadata whenever the upstream response exposes it.
+    pub fn infer_from_url(url: &str) -> Self {
+        let lower = url.to_ascii_lowercase();
+        if lower.contains(".m3u8")
+            || ["/hls/", "?hls=", "&hls=", "format=hls", "type=hls"]
+                .iter()
+                .any(|marker| lower.contains(marker))
+        {
+            Self::Hls
+        } else if lower.contains(".flv")
+            || ["format=flv", "type=flv"]
+                .iter()
+                .any(|marker| lower.contains(marker))
+        {
+            Self::Flv
+        } else if lower.contains(".ts")
+            || ["format=mpegts", "type=mpegts"]
+                .iter()
+                .any(|marker| lower.contains(marker))
+        {
+            Self::MpegTs
+        } else if [".mp4", ".webm", ".m4v"]
+            .iter()
+            .any(|suffix| lower.contains(suffix))
+        {
+            Self::Native
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
+/// A playback candidate with stable, non-secret routing metadata.
+///
+/// `source_id` is stable within a quality payload and deliberately excludes
+/// signed URLs. `priority` preserves the upstream platform's preferred order;
+/// runtime proxy probes may refine that order without mutating this contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayUrl {
+    #[serde(default)]
+    pub source_id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub protocol: PlaybackProtocol,
+    #[serde(default)]
+    pub priority: u32,
     pub url: String,
     pub headers: std::collections::HashMap<String, String>,
+}
+
+impl PlayUrl {
+    pub fn inferred(
+        source_id: impl Into<String>,
+        label: impl Into<String>,
+        priority: u32,
+        url: String,
+        headers: std::collections::HashMap<String, String>,
+    ) -> Self {
+        Self {
+            source_id: source_id.into(),
+            label: label.into(),
+            protocol: PlaybackProtocol::infer_from_url(&url),
+            priority,
+            url,
+            headers,
+        }
+    }
+
+    pub fn with_protocol(mut self, protocol: PlaybackProtocol) -> Self {
+        self.protocol = protocol;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

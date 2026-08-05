@@ -18,6 +18,12 @@ describe("xgplayer transport selection", () => {
     expect(iptvPlaybackKind("https://cdn.example/channel.m3u8")).toBe("hls");
     expect(iptvPlaybackKind("https://cdn.example/channel?id=1")).toBe("hls");
     expect(iptvPlaybackKind("https://cdn.example/archive.mp4")).toBe("native");
+    expect(
+      iptvPlaybackKind({
+        url: "https://cdn.example/opaque",
+        protocol: "mpeg_ts",
+      }),
+    ).toBe("mpegts");
   });
 
   test("normalizes xgplayer protocol and media errors", () => {

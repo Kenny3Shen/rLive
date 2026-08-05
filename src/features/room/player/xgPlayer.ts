@@ -6,6 +6,10 @@ export type XgPlayerInstance = {
   media: HTMLMediaElement;
   play: () => Promise<void> | null;
   pause: () => void;
+  switchURL?: (
+    url: string | object,
+    options?: { seamless?: boolean; startTime?: number; bitrate?: number },
+  ) => Promise<unknown> | null | void;
   destroy: () => void;
   on: (event: string, handler: (...args: unknown[]) => void) => void;
   getPlugin: (condition: string | Function) => unknown;

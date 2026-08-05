@@ -16,7 +16,7 @@
 | **抖音** 分类 / 推荐 / 房间 / 播放                                                                                     | 已完成；推荐 / 分类仅可靠支持 SSR 首屏；房间优先经 SSR 与公开 reflow 解析，搜索需完整登录 Cookie（可扫码或手动保存，仍可能受网页验证限制） |
 | **抖音** 实时弹幕                                                                                                       | 已完成；本机 MSSDK 签名直连 WSS，支持聊天 / 礼物 / 点赞 / 进场等常用事件             |
 | **Twitch** 直播列表 / 分类 / 搜索 / 房间 / HLS 播放 / 匿名 IRC 弹幕                                                     | 已完成；公开接口仅可靠支持首屏浏览，无翻页                                            |
-| 网页播放（`xgplayer` FLV / HLS 插件 + 本地 `stream_proxy`；底部透明控制条自动隐藏；仅播声音）                   | 已完成                                                                                |
+| 网页播放（`xgplayer` FLV / HLS / MPEG-TS 插件 + 本地 `stream_proxy`；结构化播放源、线路测速与智能故障转移） | 已完成；软切换为默认关闭的实验功能                                                    |
 | 本地语音字幕（CrispASR + Qwen3-ASR 0.6B Q4_K）                                                                         | 已完成；CPU 多线程、可选 Silero VAD、窗口与字号设置，模型按需下载                   |
 | 房间右栏（主播信息 + 弹幕 / 关注 / 设置）与 Canvas 飘屏弹幕                                                                   | 已完成                                                                                |
 | 弹幕选择操作                                                                                                                  | 已完成；点击普通弹幕可复制内容，或在支持发送的平台将相同内容作为「+1」单条发送        |
@@ -45,7 +45,7 @@
 | [docs/zh/虎牙平台API文档.md](docs/zh/虎牙平台API文档.md)                                 | 虎牙平台接入、播放与弹幕      |
 | [docs/zh/抖音平台API文档.md](docs/zh/抖音平台API文档.md)                                 | 抖音平台接入、本地签名与边界  |
 | [docs/zh/Twitch平台API文档.md](docs/zh/Twitch平台API文档.md)                             | Twitch 平台接入、HLS 与 IRC   |
-| [docs/zh/播放器性能调研.md](docs/zh/播放器性能调研.md)                                 | xgplayer / Rust 播放性能路线 |
+| [docs/zh/播放器技术文档.md](docs/zh/播放器技术文档.md)                                 | 播放架构、智能选线、遥测与性能改进 |
 | [docs/zh/发布流程.md](docs/zh/发布流程.md)                                             | Android 正式发布流程 |
 
 ---

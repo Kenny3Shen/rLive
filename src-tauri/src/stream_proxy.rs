@@ -8,15 +8,145 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use reqwest::{Client, Url};
+use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::error::{AppError, AppResult};
+use crate::models::live::{PlayUrl, PlaybackProtocol};
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PROBE_SOURCES: usize = 12;
+const MAX_PROBE_SAMPLE_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StreamProxyProbe {
+    pub source_id: String,
+    pub index: usize,
+    pub available: bool,
+    pub status: Option<u16>,
+    pub ttfb_ms: Option<u64>,
+    pub content_type: Option<String>,
+    pub sampled_bytes: u64,
+    pub error_code: Option<String>,
+}
+
+/// Probe playback candidates through the same configured upstream proxy used
+/// by the real relay. Results are returned in input order and contain no URL,
+/// Cookie, Referer, redirect target, or transport error text.
+pub async fn probe_sources(
+    sources: Vec<PlayUrl>,
+    proxy: Option<&str>,
+) -> AppResult<Vec<StreamProxyProbe>> {
+    let client = build_probe_client(proxy)?;
+    let probes =
+        futures_util::stream::iter(sources.into_iter().take(MAX_PROBE_SOURCES).enumerate().map(
+            |(index, source)| {
+                let client = client.clone();
+                async move { (index, probe_source(&client, index, source).await) }
+            },
+        ))
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+    let mut probes = probes;
+    probes.sort_by_key(|(index, _)| *index);
+    Ok(probes.into_iter().map(|(_, probe)| probe).collect())
+}
+
+async fn probe_source(client: &Client, index: usize, source: PlayUrl) -> StreamProxyProbe {
+    let source_id = if source.source_id.trim().is_empty() {
+        format!("source:{}", index + 1)
+    } else {
+        source.source_id.clone()
+    };
+    let mut result = StreamProxyProbe {
+        source_id,
+        index,
+        available: false,
+        status: None,
+        ttfb_ms: None,
+        content_type: None,
+        sampled_bytes: 0,
+        error_code: None,
+    };
+    let started = Instant::now();
+    let request = async {
+        let mut request = client.get(&source.url);
+        for (name, value) in &source.headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        request = request.header(reqwest::header::ACCEPT_ENCODING, "identity");
+        let response = request.send().await.map_err(|_| "network")?;
+        result.status = Some(response.status().as_u16());
+        result.content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or(value)
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .filter(|value| !value.is_empty());
+        if !response.status().is_success() {
+            return Err("http_status");
+        }
+
+        let mut body = response.bytes_stream();
+        let Some(chunk) = body.next().await else {
+            return Err("empty_body");
+        };
+        let chunk = chunk.map_err(|_| "network")?;
+        let sample = &chunk[..chunk.len().min(MAX_PROBE_SAMPLE_BYTES)];
+        result.sampled_bytes = sample.len() as u64;
+        result.ttfb_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        validate_probe_sample(source.protocol, result.content_type.as_deref(), sample)
+    };
+
+    match tokio::time::timeout(PROBE_TIMEOUT, request).await {
+        Ok(Ok(())) => result.available = true,
+        Ok(Err(code)) => result.error_code = Some(code.to_string()),
+        Err(_) => result.error_code = Some("timeout".into()),
+    }
+    result
+}
+
+fn validate_probe_sample(
+    protocol: PlaybackProtocol,
+    content_type: Option<&str>,
+    sample: &[u8],
+) -> Result<(), &'static str> {
+    if sample.is_empty() {
+        return Err("empty_body");
+    }
+    if content_type.is_some_and(|value| value.contains("text/html"))
+        || sample
+            .iter()
+            .copied()
+            .skip_while(u8::is_ascii_whitespace)
+            .take(16)
+            .collect::<Vec<_>>()
+            .starts_with(b"<!DOCTYPE")
+    {
+        return Err("html_response");
+    }
+    match protocol {
+        PlaybackProtocol::Hls if !looks_like_hls_manifest(sample) => Err("invalid_hls"),
+        PlaybackProtocol::Flv if !sample.starts_with(b"FLV") => Err("invalid_flv"),
+        PlaybackProtocol::MpegTs if sample.first() != Some(&0x47) => Err("invalid_mpeg_ts"),
+        _ => Ok(()),
+    }
+}
 
 /// Active proxy endpoint (one per app — single-room desktop client).
 pub struct StreamProxy {
@@ -59,6 +189,76 @@ struct ProxyInner {
     session_id: String,
     shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
+    telemetry: Arc<ProxyTelemetryCounters>,
+}
+
+#[derive(Debug)]
+struct ProxyTelemetryCounters {
+    started_at_ms: u64,
+    upstream_requests: AtomicU64,
+    upstream_failures: AtomicU64,
+    bytes_forwarded: AtomicU64,
+    first_response_ms: AtomicU64,
+    latest_response_ms: AtomicU64,
+}
+
+impl ProxyTelemetryCounters {
+    fn new() -> Self {
+        Self {
+            started_at_ms: unix_timestamp_ms(),
+            upstream_requests: AtomicU64::new(0),
+            upstream_failures: AtomicU64::new(0),
+            bytes_forwarded: AtomicU64::new(0),
+            first_response_ms: AtomicU64::new(0),
+            latest_response_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn record_response(&self, elapsed: Duration) {
+        let millis = elapsed.as_millis().min(u64::MAX as u128) as u64;
+        self.latest_response_ms.store(millis, Ordering::Relaxed);
+        let _ = self.first_response_ms.compare_exchange(
+            0,
+            millis.max(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+
+    fn record_bytes(&self, bytes: usize) {
+        self.bytes_forwarded
+            .fetch_add(bytes.min(u64::MAX as usize) as u64, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> StreamProxyTelemetry {
+        let optional = |value| (value > 0).then_some(value);
+        StreamProxyTelemetry {
+            started_at_ms: self.started_at_ms,
+            upstream_requests: self.upstream_requests.load(Ordering::Relaxed),
+            upstream_failures: self.upstream_failures.load(Ordering::Relaxed),
+            bytes_forwarded: self.bytes_forwarded.load(Ordering::Relaxed),
+            first_response_ms: optional(self.first_response_ms.load(Ordering::Relaxed)),
+            latest_response_ms: optional(self.latest_response_ms.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StreamProxyTelemetry {
+    pub started_at_ms: u64,
+    pub upstream_requests: u64,
+    pub upstream_failures: u64,
+    pub bytes_forwarded: u64,
+    pub first_response_ms: Option<u64>,
+    pub latest_response_ms: Option<u64>,
+}
+
+fn unix_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
 }
 
 /// The proxy rewrites HLS manifests to this localhost listener.  Only URLs
@@ -194,10 +394,25 @@ impl StreamProxy {
         // The matching session may still be awaiting TcpListener::bind.  Its
         // completion checks this generation before it can install a task.
         Self::advance_generation(&mut state);
-        state.pending = None;
-        Self::stop_active(&mut state);
-        self.port.store(0, Ordering::Release);
+        if owns_pending_proxy {
+            state.pending = None;
+        }
+        if owns_active_proxy {
+            Self::stop_active(&mut state);
+            self.port.store(0, Ordering::Release);
+        }
         true
+    }
+
+    /// Return only aggregate counters for the active owner. URLs and request
+    /// headers are intentionally absent from the diagnostics contract.
+    pub fn telemetry_for_session(&self, session_id: &str) -> Option<StreamProxyTelemetry> {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state
+            .inner
+            .as_ref()
+            .filter(|inner| inner.session_id == session_id)
+            .map(|inner| inner.telemetry.snapshot())
     }
 
     /// Start (or replace) a proxy for `url` with `headers`. Returns local play URL.
@@ -262,7 +477,9 @@ impl StreamProxy {
         }
 
         let hls_resources = Arc::new(HlsResources::new());
+        let telemetry = Arc::new(ProxyTelemetryCounters::new());
         let local_origin = Arc::<str>::from(format!("http://127.0.0.1:{port}"));
+        let task_telemetry = telemetry.clone();
         let task = tauri::async_runtime::spawn(async move {
             run_proxy_loop(
                 listener,
@@ -272,22 +489,28 @@ impl StreamProxy {
                 hls_resources,
                 local_origin,
                 force_hls,
+                task_telemetry,
                 shutdown_rx,
             )
             .await;
         });
+        // Keep the old listener alive until its replacement is completely
+        // bound and configured. This makes same-protocol soft switching
+        // transactional up to the xgplayer switchURL call.
+        Self::stop_active(&mut state);
         state.pending = None;
         state.inner = Some(ProxyInner {
             session_id,
             shutdown: shutdown_tx,
             task,
+            telemetry,
         });
         self.port.store(port, Ordering::Release);
         Ok(format!("http://127.0.0.1:{port}/live"))
     }
 
-    /// Stop the active task and reserve the next generation for `session_id`.
-    /// This is deliberately synchronous and contains no await points.
+    /// Reserve the next generation for `session_id`. The active listener stays
+    /// usable until the replacement has bound and built its network client.
     fn reserve_start(&self, session_id: &str) -> u64 {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let generation = Self::advance_generation(&mut state);
@@ -295,8 +518,6 @@ impl StreamProxy {
             generation,
             session_id: session_id.to_string(),
         });
-        Self::stop_active(&mut state);
-        self.port.store(0, Ordering::Release);
         generation
     }
 
@@ -334,13 +555,16 @@ mod tests {
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::Arc;
 
     use reqwest::Url;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{
-        HlsResources, ProxyInner, StreamProxy, looks_like_hls_manifest, rewrite_hls_manifest,
+        HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, looks_like_hls_manifest,
+        probe_sources, rewrite_hls_manifest, validate_probe_sample,
     };
+    use crate::models::live::{PlayUrl, PlaybackProtocol};
     use tokio::sync::watch;
 
     #[test]
@@ -356,6 +580,7 @@ mod tests {
                 session_id: "new-room:2".to_string(),
                 shutdown,
                 task,
+                telemetry: Arc::new(ProxyTelemetryCounters::new()),
             });
         }
 
@@ -369,6 +594,7 @@ mod tests {
                 .is_some()
         );
         assert!(proxy.stop_for_session("new-room:2"));
+        assert!(proxy.telemetry_for_session("new-room:2").is_none());
         assert!(
             proxy
                 .state
@@ -410,6 +636,36 @@ mod tests {
         let state = proxy.state.lock().unwrap_or_else(|p| p.into_inner());
         assert!(state.pending.is_none());
         assert_ne!(state.generation, generation);
+    }
+
+    #[test]
+    fn a_replacement_reservation_keeps_the_active_proxy_alive() {
+        let proxy = StreamProxy::new();
+        let (shutdown, _) = watch::channel(false);
+        let task = tauri::async_runtime::spawn(async {
+            std::future::pending::<()>().await;
+        });
+        {
+            let mut state = proxy.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.inner = Some(ProxyInner {
+                session_id: "room-a:1".into(),
+                shutdown,
+                task,
+                telemetry: Arc::new(ProxyTelemetryCounters::new()),
+            });
+        }
+
+        proxy.reserve_start("room-a:1");
+
+        assert!(
+            proxy
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .inner
+                .is_some()
+        );
+        proxy.stop();
     }
 
     #[test]
@@ -470,6 +726,34 @@ mod tests {
         assert!(!looks_like_hls_manifest(&[0x47, 0x40, 0x00, 0x10]));
     }
 
+    #[test]
+    fn probe_validation_rejects_login_pages_and_wrong_containers() {
+        assert_eq!(
+            validate_probe_sample(
+                PlaybackProtocol::Hls,
+                Some("application/vnd.apple.mpegurl"),
+                b"#EXTM3U\n#EXT-X-VERSION:3\n"
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_probe_sample(PlaybackProtocol::Flv, Some("video/x-flv"), b"FLV\x01"),
+            Ok(())
+        );
+        assert_eq!(
+            validate_probe_sample(
+                PlaybackProtocol::Unknown,
+                Some("text/html"),
+                b"<!DOCTYPE html>"
+            ),
+            Err("html_response")
+        );
+        assert_eq!(
+            validate_probe_sample(PlaybackProtocol::Hls, None, &[0x47, 0x40, 0, 0x10]),
+            Err("invalid_hls")
+        );
+    }
+
     #[tokio::test]
     async fn media_relay_uses_configured_http_proxy_for_upstream_streams() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -509,9 +793,67 @@ mod tests {
         let mut response = Vec::new();
         local_stream.read_to_end(&mut response).await.unwrap();
 
+        let telemetry = relay.telemetry_for_session(session_id).unwrap();
+        assert_eq!(telemetry.upstream_requests, 1);
+        assert_eq!(telemetry.upstream_failures, 0);
+        assert_eq!(telemetry.bytes_forwarded, 3);
+        assert!(telemetry.first_response_ms.is_some());
+        assert!(telemetry.latest_response_ms.is_some());
         relay.stop_for_session(session_id);
         server.join().unwrap();
         assert!(String::from_utf8_lossy(&response).ends_with("\r\n\r\nTS!"));
+    }
+
+    #[tokio::test]
+    async fn source_probe_uses_configured_proxy_without_exposing_source_secrets() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(
+                request
+                    .starts_with("GET http://media.invalid/live.flv?token=probe-secret HTTP/1.1")
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("cookie: session=private")
+            );
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: 5\r\nConnection: close\r\n\r\nFLV\x01\x05",
+                )
+                .unwrap();
+        });
+        let mut headers = HashMap::new();
+        headers.insert("cookie".into(), "session=private".into());
+
+        let probes = probe_sources(
+            vec![PlayUrl {
+                source_id: "probe:1".into(),
+                label: "测试线路".into(),
+                protocol: PlaybackProtocol::Flv,
+                priority: 0,
+                url: "http://media.invalid/live.flv?token=probe-secret".into(),
+                headers,
+            }],
+            Some(&format!("http://{address}")),
+        )
+        .await
+        .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(probes.len(), 1);
+        assert!(probes[0].available);
+        assert_eq!(probes[0].source_id, "probe:1");
+        assert_eq!(probes[0].sampled_bytes, 5);
+        let serialized = serde_json::to_string(&probes).unwrap();
+        assert!(!serialized.contains("media.invalid"));
+        assert!(!serialized.contains("probe-secret"));
+        assert!(!serialized.contains("session=private"));
     }
 }
 
@@ -531,6 +873,20 @@ fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
     .map_err(|_| AppError::new("stream_proxy_client", "媒体代理网络客户端初始化失败"))
 }
 
+fn build_probe_client(proxy: Option<&str>) -> AppResult<Client> {
+    crate::http_client::with_proxy(
+        Client::builder()
+            .use_native_tls()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(PROBE_TIMEOUT)
+            .pool_max_idle_per_host(4)
+            .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT),
+        proxy,
+    )?
+    .build()
+    .map_err(|_| AppError::new("stream_proxy_probe_client", "线路探测网络客户端初始化失败"))
+}
+
 async fn run_proxy_loop(
     listener: TcpListener,
     client: Client,
@@ -539,6 +895,7 @@ async fn run_proxy_loop(
     hls_resources: Arc<HlsResources>,
     local_origin: Arc<str>,
     force_hls: bool,
+    telemetry: Arc<ProxyTelemetryCounters>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
@@ -556,6 +913,7 @@ async fn run_proxy_loop(
                         let headers = headers.clone();
                         let hls_resources = hls_resources.clone();
                         let local_origin = local_origin.clone();
+                        let telemetry = telemetry.clone();
                         let force_hls = force_hls;
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) = handle_client(
@@ -566,9 +924,11 @@ async fn run_proxy_loop(
                                 hls_resources.as_ref(),
                                 local_origin.as_ref(),
                                 force_hls,
+                                telemetry.as_ref(),
                             )
                             .await
                             {
+                                telemetry.upstream_failures.fetch_add(1, Ordering::Relaxed);
                                 tracing::debug!(%e, "stream proxy client ended");
                             }
                         });
@@ -591,6 +951,7 @@ async fn handle_client(
     hls_resources: &HlsResources,
     local_origin: &str,
     force_hls: bool,
+    telemetry: &ProxyTelemetryCounters,
 ) -> Result<(), String> {
     // Read request head (we only need method/path; body unused for GET).
     let mut buf = [0u8; 4096];
@@ -645,7 +1006,10 @@ async fn handle_client(
         req = req.header(reqwest::header::RANGE, range);
     }
 
+    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+    let request_started = Instant::now();
     let upstream = req.send().await.map_err(|e| format!("upstream: {e}"))?;
+    telemetry.record_response(request_started.elapsed());
     let status = upstream.status().as_u16();
     let status_reason = upstream.status().canonical_reason().unwrap_or("OK");
     let upstream_url = upstream.url().clone();
@@ -682,6 +1046,7 @@ async fn handle_client(
 
     if !upstream.status().is_success() {
         let body = upstream.text().await.unwrap_or_default();
+        telemetry.record_bytes(body.len());
         let resp = format!(
             "HTTP/1.1 {status} Error\r\n\
              Content-Type: text/plain; charset=utf-8\r\n\
@@ -699,6 +1064,7 @@ async fn handle_client(
             .text()
             .await
             .map_err(|e| format!("read hls manifest: {e}"))?;
+        telemetry.record_bytes(manifest.len());
         write_hls_manifest(
             socket,
             status,
@@ -720,6 +1086,7 @@ async fn handle_client(
                 break;
             };
             let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
+            telemetry.record_bytes(chunk.len());
             prefix.extend_from_slice(&chunk);
         }
 
@@ -727,6 +1094,7 @@ async fn handle_client(
             const MAX_HLS_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
+                telemetry.record_bytes(chunk.len());
                 if prefix.len().saturating_add(chunk.len()) > MAX_HLS_MANIFEST_BYTES {
                     write_text_response(
                         socket,
@@ -768,6 +1136,7 @@ async fn handle_client(
         }
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
+            telemetry.record_bytes(chunk.len());
             if !chunk.is_empty() && socket.write_all(&chunk).await.is_err() {
                 break;
             }
@@ -790,6 +1159,7 @@ async fn handle_client(
     let mut stream = upstream.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
+        telemetry.record_bytes(chunk.len());
         if chunk.is_empty() {
             continue;
         }

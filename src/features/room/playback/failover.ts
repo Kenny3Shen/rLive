@@ -12,6 +12,8 @@ export type FailoverInput = {
   lineCount: number;
   /** Max retries of the *current* line before advancing (Simple Live uses 2). */
   maxRetries?: number;
+  /** Ranked replacement chosen by health policy. `null` means exhausted. */
+  nextLineIndex?: number | null;
 };
 
 export type FailoverAction =
@@ -37,6 +39,18 @@ export function nextFailoverAction(input: FailoverInput): FailoverAction {
       retryCount: nextRetry,
       lineIndex,
       delayMs,
+    };
+  }
+
+  if ("nextLineIndex" in input) {
+    if (input.nextLineIndex == null) {
+      return { type: "fail", message: "播放失败" };
+    }
+    return {
+      type: "next_line",
+      retryCount: 0,
+      lineIndex: Math.max(0, Math.min(input.nextLineIndex, lineCount - 1)),
+      delayMs: 0,
     };
   }
 

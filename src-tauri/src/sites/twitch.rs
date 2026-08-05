@@ -597,10 +597,16 @@ impl LiveSite for TwitchSite {
         let mut headers = HashMap::new();
         headers.insert("user-agent".into(), DEFAULT_USER_AGENT.into());
         headers.insert("referer".into(), format!("https://www.twitch.tv/{login}"));
-        Ok(vec![PlayUrl {
-            url: variant.url.clone(),
-            headers,
-        }])
+        Ok(vec![
+            PlayUrl::inferred(
+                format!("twitch:{selector}"),
+                "Twitch HLS",
+                0,
+                variant.url.clone(),
+                headers,
+            )
+            .with_protocol(crate::models::live::PlaybackProtocol::Hls),
+        ])
     }
 }
 

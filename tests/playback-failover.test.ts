@@ -53,6 +53,30 @@ describe("failover policy (Simple Live)", () => {
     });
     expect(action.type).toBe("fail");
   });
+
+  test("uses a health-ranked replacement instead of array order", () => {
+    expect(
+      nextFailoverAction({
+        retryCount: 2,
+        lineIndex: 2,
+        lineCount: 3,
+        nextLineIndex: 0,
+      }),
+    ).toEqual({
+      type: "next_line",
+      retryCount: 0,
+      lineIndex: 0,
+      delayMs: 0,
+    });
+    expect(
+      nextFailoverAction({
+        retryCount: 2,
+        lineIndex: 1,
+        lineCount: 3,
+        nextLineIndex: null,
+      }).type,
+    ).toBe("fail");
+  });
 });
 
 describe("quality preference", () => {
