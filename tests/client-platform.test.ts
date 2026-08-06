@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getClientPlatform, isMobileClient } from "../src/shared/clientPlatform";
+import { getClientPlatform, isMobileClient, isWindowsDesktop } from "../src/shared/clientPlatform";
 
 describe("client platform detection", () => {
   test("identifies Android from Client Hints or the current Android WebView user agent", () => {
@@ -37,5 +37,12 @@ describe("client platform detection", () => {
 
     expect(getClientPlatform(desktop)).toBe("desktop");
     expect(isMobileClient(desktop)).toBe(false);
+    expect(isWindowsDesktop(desktop)).toBe(true);
+    expect(
+      isWindowsDesktop({
+        userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        maxTouchPoints: 0,
+      }),
+    ).toBe(false);
   });
 });

@@ -45,3 +45,12 @@ export function isMobileClient(
 ): boolean {
   return getClientPlatform(navigatorRef) !== "desktop";
 }
+
+export function isWindowsDesktop(
+  navigatorRef: ClientNavigator | null | undefined = browserNavigator(),
+): boolean {
+  if (getClientPlatform(navigatorRef) !== "desktop") return false;
+  const platform = navigatorRef?.userAgentData?.platform?.toLowerCase() ?? "";
+  const userAgent = navigatorRef?.userAgent ?? "";
+  return platform === "windows" || /Windows NT/i.test(userAgent);
+}

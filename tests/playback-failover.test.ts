@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { nextFailoverAction } from "../src/features/room/playback/failover";
 import { pickDefaultQualityIndex, parseQualityLevel } from "../src/features/room/playback/quality";
+import { nextTwitchDecodeQualityIndex } from "../src/features/room/playback/usePlaybackController";
 import {
   createShieldMatcher,
   floatingDanmakuText,
@@ -91,6 +92,18 @@ describe("quality preference", () => {
   test("parseQualityLevel defaults to high", () => {
     expect(parseQualityLevel("mid")).toBe("mid");
     expect(parseQualityLevel("nope")).toBe("high");
+  });
+
+  test("skips to the next Twitch video quality after a decoder failure", () => {
+    const qualities = [
+      { quality: "1080p60 (source)" },
+      { quality: "720p60" },
+      { quality: "480p" },
+      { quality: "audio_only" },
+    ];
+    expect(nextTwitchDecodeQualityIndex(qualities, 0)).toBe(1);
+    expect(nextTwitchDecodeQualityIndex(qualities, 1)).toBe(2);
+    expect(nextTwitchDecodeQualityIndex(qualities, 2)).toBeNull();
   });
 });
 

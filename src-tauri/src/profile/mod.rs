@@ -50,6 +50,7 @@ impl ProfilePackage {
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.danmaku_send_enabled = false;
     settings.asr_enabled = false;
+    settings.asr_provider = "auto".into();
     settings.asr_vad_enabled = true;
     settings.asr_punctuation_enabled = true;
     settings.asr_speaker_diarization_enabled = false;
@@ -77,6 +78,7 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
         // changes cannot mistake these device-local choices for portable data.
         settings.remove("danmaku_send_enabled");
         settings.remove("asr_enabled");
+        settings.remove("asr_provider");
         settings.remove("asr_vad_enabled");
         settings.remove("asr_punctuation_enabled");
         settings.remove("asr_speaker_diarization_enabled");
@@ -206,7 +208,7 @@ pub fn merge_into_db(
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_smart_line_selection = package.settings.playback_smart_line_selection;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
-    // Do not copy `danmaku_send_enabled`, `asr_enabled`,
+    // Do not copy `danmaku_send_enabled`, `asr_enabled`, `asr_provider`,
     // `asr_vad_enabled`, `asr_punctuation_enabled`,
     // `asr_speaker_diarization_enabled`, `asr_hotwords`,
     // `asr_window_seconds`, or `iptv_custom_m3u_url`.

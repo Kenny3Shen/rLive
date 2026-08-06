@@ -8,7 +8,13 @@ import {
 } from "../danmaku/content";
 import { subscribeDanmakuBatches } from "../danmaku/eventBus";
 import { createShieldMatcher, shouldShowValidatedOnCanvas } from "../danmaku/filter";
-import { createEngine, type DanmakuEngine, type TrackItem } from "./danmakuEngine";
+import {
+  createEngine,
+  DANMAKU_SELF_BORDER_PADDING_X,
+  DANMAKU_SELF_BORDER_PADDING_Y,
+  type DanmakuEngine,
+  type TrackItem,
+} from "./danmakuEngine";
 import { cn } from "@/lib/utils";
 
 type CanvasDanmakuProps = {
@@ -44,19 +50,33 @@ const MAX_IMAGE_NATURAL_PIXELS = 1_048_576;
 // redraw substantially more expensive. Text remains crisp at this cap while
 // avoiding the quadratic pixel cost on high-DPI displays.
 const MAX_CANVAS_PIXEL_RATIO = 1.5;
-const SELF_DANMAKU_COLOR_VARIABLE = "--danmaku-self-color";
-
-function currentSelfDanmakuColor(): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  const color = window
-    .getComputedStyle(document.documentElement)
-    .getPropertyValue(SELF_DANMAKU_COLOR_VARIABLE)
-    .trim();
-  return color || undefined;
-}
+const SELF_DANMAKU_BORDER_COLOR = "rgba(255,255,255,0.82)";
+const SELF_DANMAKU_BORDER_WIDTH = 1.5;
 
 function canvasFont(fontWeight: number, fontSize: number): string {
   return `${fontWeight} ${fontSize}px ${DANMAKU_FONT_FAMILY}`;
+}
+
+function strokeSelfDanmakuBorder(
+  ctx: CanvasRenderingContext2D,
+  item: TrackItem,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): void {
+  if (!item.isSelf) return;
+  ctx.save();
+  ctx.strokeStyle = SELF_DANMAKU_BORDER_COLOR;
+  ctx.lineWidth = SELF_DANMAKU_BORDER_WIDTH;
+  ctx.lineJoin = "round";
+  ctx.strokeRect(
+    x - DANMAKU_SELF_BORDER_PADDING_X,
+    y - DANMAKU_SELF_BORDER_PADDING_Y,
+    width + DANMAKU_SELF_BORDER_PADDING_X * 2,
+    height + DANMAKU_SELF_BORDER_PADDING_Y * 2,
+  );
+  ctx.restore();
 }
 
 function richLineMetrics(
@@ -167,8 +187,8 @@ function createTextRaster(
   const lineWidth = Math.max(2, item.fontSize * 0.13);
   // Include stroke and shadow extents so cached text has the same readable
   // outline as the direct Canvas path without clipping at its edges.
-  const offsetX = Math.ceil(lineWidth + 5);
-  const offsetY = Math.ceil(lineWidth + 5);
+  const offsetX = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0));
+  const offsetY = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0));
   const width = textWidth + offsetX * 2;
   const height = Math.ceil(item.fontSize * 1.35) + offsetY * 2;
   const deviceWidth = Math.ceil(width * pixelRatio);
@@ -196,6 +216,7 @@ function createTextRaster(
   scratchContext.strokeStyle = "rgba(0,0,0,0.82)";
   scratchContext.lineWidth = lineWidth;
   scratchContext.fillStyle = item.color || "#fff";
+  strokeSelfDanmakuBorder(scratchContext, item, offsetX, offsetY, textWidth, item.fontSize * 1.35);
   scratchContext.strokeText(item.text, offsetX, offsetY);
   scratchContext.fillText(item.text, offsetX, offsetY);
 
@@ -233,8 +254,8 @@ function createRichRaster(
   if (!metrics) return null;
 
   const lineWidth = Math.max(2, item.fontSize * 0.13);
-  const offsetX = Math.ceil(lineWidth + 5);
-  const offsetY = Math.ceil(lineWidth + 5);
+  const offsetX = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0));
+  const offsetY = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0));
   const width = Math.ceil(metrics.contentWidth) + offsetX * 2;
   const height = Math.ceil(metrics.lineHeight) + offsetY * 2;
   const deviceWidth = Math.ceil(width * pixelRatio);
@@ -261,6 +282,14 @@ function createRichRaster(
   scratchContext.strokeStyle = "rgba(0,0,0,0.82)";
   scratchContext.lineWidth = lineWidth;
   scratchContext.fillStyle = item.color || "#fff";
+  strokeSelfDanmakuBorder(
+    scratchContext,
+    item,
+    offsetX,
+    offsetY,
+    metrics.contentWidth,
+    metrics.lineHeight,
+  );
   if (!drawRichDanmaku(scratchContext, item, offsetX, offsetY, fontWeight, imageForUrl)) {
     return null;
   }
@@ -295,7 +324,6 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   const mergeWindowSeconds = useSettingsStore((s) => s.danmakuMergeWindowSeconds);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
-  const theme = useSettingsStore((s) => s.theme);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const matchersRef = useRef({ shieldMatcher, filterGifts });
 
@@ -314,7 +342,6 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       fontWeight,
       aggregateRepeats: filterRepeats,
       aggregateWindowMs: mergeWindowSeconds * 1_000,
-      selfColor: currentSelfDanmakuColor(),
     });
   }
 
@@ -328,20 +355,9 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       fontWeight,
       aggregateRepeats: filterRepeats,
       aggregateWindowMs: mergeWindowSeconds * 1_000,
-      selfColor: currentSelfDanmakuColor(),
     });
     requestFrameRef.current();
-  }, [
-    fontSize,
-    speed,
-    opacity,
-    area,
-    lineCount,
-    fontWeight,
-    filterRepeats,
-    mergeWindowSeconds,
-    theme,
-  ]);
+  }, [fontSize, speed, opacity, area, lineCount, fontWeight, filterRepeats, mergeWindowSeconds]);
 
   useEffect(() => {
     if (!active) return;
@@ -656,10 +672,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           // the viewport.
           if (it.kind === "scroll" && (it.x >= width || it.x + it.width <= 0)) continue;
 
-          // The color is part of a raster's pixels. Include it in the key so
-          // a theme change can repaint an existing local-account item rather
-          // than reusing its old bitmap.
-          const paintKey = `${it.id}:${it.color}`;
+          const paintKey = `${it.id}:${it.color}:${it.isSelf ? "self" : "normal"}`;
           const richRasterKey = `${paintKey}:rich`;
           // A rich raster is self-contained, including its image pixels. Once
           // one exists we can continue drawing it even if its source image was
@@ -714,6 +727,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
             // Very long rich comments bypass the bounded bitmap cache, but
             // still retain their image emotes through this direct fallback.
             ctx.save();
+            ctx.font = canvasFont(currentFontWeight, it.fontSize);
             ctx.lineJoin = "round";
             ctx.shadowColor = "rgba(0,0,0,0.75)";
             ctx.shadowBlur = 2;
@@ -722,6 +736,17 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
             ctx.strokeStyle = "rgba(0,0,0,0.82)";
             ctx.lineWidth = Math.max(2, it.fontSize * 0.13);
             ctx.fillStyle = it.color || "#fff";
+            const richMetrics = richLineMetrics(ctx, it);
+            if (richMetrics) {
+              strokeSelfDanmakuBorder(
+                ctx,
+                it,
+                x,
+                it.y,
+                richMetrics.contentWidth,
+                richMetrics.lineHeight,
+              );
+            }
             const drewRich = drawRichDanmaku(ctx, it, x, it.y, currentFontWeight, imageForUrl);
             ctx.restore();
             if (drewRich) {
@@ -754,6 +779,14 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
             drawnColor = color;
             ctx.fillStyle = color;
           }
+          strokeSelfDanmakuBorder(
+            ctx,
+            it,
+            x,
+            it.y,
+            ctx.measureText(it.text).width,
+            it.fontSize * 1.35,
+          );
           ctx.strokeText(it.text, x, it.y);
           ctx.fillText(it.text, x, it.y);
         }

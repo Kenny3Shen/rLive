@@ -17,7 +17,7 @@
 | **抖音** 实时弹幕                                                                                                       | 已完成；本机 MSSDK 签名直连 WSS，支持聊天 / 礼物 / 点赞 / 进场等常用事件             |
 | **Twitch** 直播列表 / 分类 / 搜索 / 房间 / HLS 播放 / 匿名 IRC 弹幕                                                     | 已完成；公开接口仅可靠支持首屏浏览，无翻页                                            |
 | 网页播放（`xgplayer` FLV / HLS / MPEG-TS 插件 + 本地 `stream_proxy`；结构化播放源、线路测速与智能故障转移） | 已完成；软切换为默认关闭的实验功能                                                    |
-| 本地语音字幕（sherpa-onnx + streaming Zipformer）                                                                     | 已完成；中英双语实时识别、VAD/自动标点独立开关、本地热词、自动换行、稳定匿名说话人区分、CPU 多线程、模型按需下载 |
+| 本地语音字幕（sherpa-onnx + streaming Zipformer）                                                                     | 已完成；中英双语实时识别、VAD/自动标点独立开关、本地热词、自动换行、稳定匿名说话人区分、Windows NVIDIA CUDA/CPU、模型按需下载 |
 | 房间右栏（主播信息 + 弹幕 / 关注 / 设置）与 Canvas 飘屏弹幕                                                                   | 已完成                                                                                |
 | 弹幕选择操作                                                                                                                  | 已完成；点击普通弹幕可复制内容，或在支持发送的平台将相同内容作为「+1」单条发送        |
 | 房间内弹幕设置（区域 / 行数 / 透明度 / 字号 / 字重 / 速度 / 重复合并窗口 / 礼物信息过滤 / 屏蔽词 / SC / 自动发送）        | 已完成；重复合并窗口默认 10 秒、可调 5–30 秒；自动发送仅在 B 站 / 斗鱼 / 虎牙房间会话中生效 |
@@ -25,7 +25,7 @@
 | 关注 / 标签 / 开播刷新 / 房间内直接切换                                                                                       | 已完成                                                                                |
 | 观看历史                                                                                                                      | 已完成                                                                                |
 | IPTV：响应式频道发现 / 独立播放页 / 公开及设备私有 M3U 源 / 手动更新与可用性检测 / HLS、MPEG-TS、FLV 播放 / 跨端控制栏         | 已完成                                                                                |
-| 设置：侧栏亮 / 暗模式切换、代理、Cookie（B 站 / 抖音 / 斗鱼 / 虎牙扫码或手动输入）、IPTV M3U、清晰度、CPU ASR、项目链接、配置导入导出 | 已完成                                                                                |
+| 设置：侧栏亮 / 暗模式切换、代理、Cookie（B 站 / 抖音 / 斗鱼 / 虎牙扫码或手动输入）、IPTV M3U、清晰度、ASR 后端、项目链接、配置导入导出 | 已完成                                                                                |
 
 **当前不在范围内：** 电视端、多开房间、录制 / 下载、礼物 / 支付、批量发送、自动回复与自动重试。
 
@@ -67,7 +67,7 @@
 - [Rust](https://www.rust-lang.org/)
 - [bun](https://bun.sh/)
 - [Tauri 2 平台依赖](https://v2.tauri.app/start/prerequisites/)
-- ASR 使用 sherpa-onnx CPU 后端；桌面构建只需要平台对应的 Rust/C++ 工具链，Android 还需要 Android SDK、NDK 和 JDK
+- ASR 在 Linux、macOS、Android 使用 CPU；Windows 桌面默认构建 CUDA-capable shared runtime，可在「设置 → 播放 → 语音字幕」选择自动、CUDA 或 CPU。Windows CUDA 运行需要 Compute Capability 6.1 及以上的 NVIDIA GPU、兼容驱动、CUDA 11.x 与 x86-64 cuDNN 8.x；自动模式检测失败会回退 CPU。CUDA runtime 会增加桌面构建体积，构建 CPU-only Windows 版本可设置 `SHERPA_ONNX_GPU=0`
 
 ### Windows 推荐目录
 
@@ -102,7 +102,7 @@ cd src-tauri && cargo test --lib
 bun run tauri build
 ```
 
-ASR 固定使用 sherpa-onnx CPU provider。Rust 自动读取逻辑处理器数，Zipformer 最多使用 8 个线程，标点与可选 CAMPPlus 声纹模型最多使用 2 个线程；VAD 与自动标点默认开启，也可独立关闭；本地热词启用时使用 modified beam search。不提供 GPU 运行时切换。完整参数与 Android 命令见[本地语音字幕](docs/zh/本地语音字幕.md)。
+ASR 使用 sherpa-onnx streaming Zipformer。Linux、macOS 和 Android 固定使用 CPU；Windows 支持自动、CUDA、CPU 三种后端，自动模式优先 CUDA，运行库或驱动不可用时回退 CPU，实际 provider 会显示在设置页。识别、标点与可选 CAMPPlus 声纹模型使用同一 provider；当前 VAD 是 Zipformer 的 CPU endpoint 规则，不是独立 ONNX 模型。CPU provider 下各模型最多使用 8/2 个线程；本地热词启用时使用 modified beam search。完整参数与 Android 命令见[本地语音字幕](docs/zh/本地语音字幕.md)。
 
 ### Windows 交付（WSL → `D:\dev\rLive`）
 

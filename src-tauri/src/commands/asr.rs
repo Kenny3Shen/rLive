@@ -22,6 +22,7 @@ pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
         (
             settings.proxy,
             AsrRuntimeOptions {
+                provider: settings.asr_provider,
                 vad_enabled: settings.asr_vad_enabled,
                 punctuation_enabled: settings.asr_punctuation_enabled,
                 speaker_enabled: settings.asr_speaker_diarization_enabled,

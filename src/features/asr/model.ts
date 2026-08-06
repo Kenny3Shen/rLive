@@ -26,6 +26,7 @@ export type AsrModelStatus = {
   speaker_model_downloaded: boolean;
   speaker_model_size_bytes: number;
   threads: number;
+  provider: "cpu" | "cuda";
   message: string | null;
 };
 
@@ -138,7 +139,7 @@ export function describeAsrModelStatus(
         status.hotwords_count > 0 ? `${status.hotwords_count} 个热词` : null,
       ].filter((value): value is string => value !== null);
       return {
-        message: `Zipformer 中英双语模型已就绪（CPU / ${status.threads} 线程 + ${features.join(" + ")}）`,
+        message: `Zipformer 中英双语模型已就绪（${status.provider === "cuda" ? "NVIDIA CUDA" : "CPU"} / ${status.threads} 线程 + ${features.join(" + ")}）${status.message ? `；${status.message}` : ""}`,
         busy: false,
         error: false,
         progress: 100,

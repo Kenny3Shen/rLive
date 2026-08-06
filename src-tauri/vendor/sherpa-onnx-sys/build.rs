@@ -44,6 +44,7 @@ fn main() {
 fn try_main() -> Result<(), DynError> {
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_ARCHIVE_DIR");
+    println!("cargo:rerun-if-env-changed=SHERPA_ONNX_GPU");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
 
     if env::var_os("DOCS_RS").is_some() {
@@ -58,6 +59,13 @@ fn try_main() -> Result<(), DynError> {
     let lib_dir = resolve_lib_dir(link_mode, &target_os, &target_arch)?;
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    if target_os == "windows" {
+        if let Some(bin_dir) = lib_dir.parent().map(|parent| parent.join("bin")) {
+            if bin_dir.is_dir() {
+                println!("cargo:rustc-link-search=native={}", bin_dir.display());
+            }
+        }
+    }
 
     if target_os == "android" {
         stage_android_runtime_libs(&lib_dir, &target_arch)?;
@@ -75,7 +83,7 @@ fn try_main() -> Result<(), DynError> {
 
     match link_mode {
         LinkMode::Static => emit_static_link_directives(&target_os),
-        LinkMode::Shared => emit_shared_link_directives(),
+        LinkMode::Shared => emit_shared_link_directives(&target_os),
     }
 
     Ok(())
@@ -239,7 +247,13 @@ fn archive_name(
             format!("sherpa-onnx-v{version}-osx-arm64-shared-lib.tar.bz2")
         }
         (LinkMode::Shared, "windows", "x86_64") => {
-            format!("sherpa-onnx-v{version}-win-x64-shared-MT-Release-lib.tar.bz2")
+            if windows_gpu_enabled(target_os) {
+                format!(
+                    "sherpa-onnx-v{version}-win-x64-cuda.tar.bz2"
+                )
+            } else {
+                format!("sherpa-onnx-v{version}-win-x64-shared-MT-Release-lib.tar.bz2")
+            }
         }
         (LinkMode::Shared, "android", "aarch64" | "arm" | "x86" | "x86_64") => {
             format!("sherpa-onnx-v{version}-android.tar.bz2")
@@ -253,6 +267,16 @@ fn archive_name(
     };
 
     Ok(name)
+}
+
+fn windows_gpu_enabled(target_os: &str) -> bool {
+    if target_os != "windows" {
+        return false;
+    }
+
+    env::var("SHERPA_ONNX_GPU")
+        .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+        .unwrap_or(true)
 }
 
 fn android_abi(target_arch: &str) -> Result<&'static str, DynError> {
@@ -314,9 +338,15 @@ fn stage_android_runtime_libs(lib_dir: &Path, target_arch: &str) -> Result<(), D
     Ok(())
 }
 
-fn emit_shared_link_directives() {
+fn emit_shared_link_directives(target_os: &str) {
     println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
-    println!("cargo:rustc-link-lib=dylib=onnxruntime");
+    // The Windows CUDA archive ships `onnxruntime.dll` without its import
+    // library. `sherpa-onnx-c-api.dll` already records that DLL dependency,
+    // so linking the C API import library is sufficient on Windows. CPU and
+    // Android shared archives still provide/link `onnxruntime` explicitly.
+    if target_os != "windows" {
+        println!("cargo:rustc-link-lib=dylib=onnxruntime");
+    }
 }
 
 fn emit_static_link_directives(target_os: &str) {
@@ -479,10 +509,20 @@ fn write_reader_atomically(reader: &mut dyn io::Read, dst: &Path) -> Result<(), 
 }
 
 fn copy_windows_runtime_dlls(lib_dir: &Path) -> Result<(), DynError> {
-    let dlls: Vec<PathBuf> = fs::read_dir(lib_dir)?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.extension() == Some(OsStr::new("dll")))
-        .collect();
+    let mut dlls = Vec::new();
+    let mut search_dirs = vec![lib_dir.to_path_buf()];
+    if let Some(bin_dir) = lib_dir.parent().map(|parent| parent.join("bin")) {
+        if bin_dir.is_dir() {
+            search_dirs.push(bin_dir);
+        }
+    }
+    for directory in search_dirs {
+        dlls.extend(
+            fs::read_dir(directory)?
+                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                .filter(|path| path.extension() == Some(OsStr::new("dll"))),
+        );
+    }
 
     if dlls.is_empty() {
         println!(
@@ -500,6 +540,15 @@ fn copy_windows_runtime_dlls(lib_dir: &Path) -> Result<(), DynError> {
                 dll.file_name()
                     .ok_or_else(|| format!("Invalid DLL path: {}", dll.display()))?,
             );
+            // `tauri dev` can leave the current executable holding these
+            // files open. The archive is immutable for a given cache key, so
+            // an existing DLL with the same size is already the desired copy
+            // and does not need to be overwritten during a rebuild.
+            if dest.is_file()
+                && fs::metadata(&dest)?.len() == fs::metadata(dll)?.len()
+            {
+                continue;
+            }
             fs::copy(dll, &dest)?;
         }
     }

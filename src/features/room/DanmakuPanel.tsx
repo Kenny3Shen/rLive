@@ -5,7 +5,6 @@ import { invokeCmd } from "@/shared/api/tauri";
 import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
@@ -83,17 +82,14 @@ function DanmakuSender({
 }) {
   // Platform colours target the video overlay. On the light list surface the
   // common white default has no contrast, so fall back to `text-primary`.
-  const userColor =
-    event.is_self === true ? null : resolveDanmakuListUserColor(event.color, surface);
+  const userColor = resolveDanmakuListUserColor(event.color, surface);
 
   return (
     <>
-      {event.is_self === true && (
-        <Badge variant="default" className="mr-1.5 align-middle">
-          我
-        </Badge>
-      )}
-      <span className="mr-1.5 font-medium text-primary" style={userColor ? { color: userColor } : undefined}>
+      <span
+        className="mr-1.5 font-medium text-primary"
+        style={userColor ? { color: userColor } : undefined}
+      >
         {user}：
       </span>
     </>
@@ -193,7 +189,10 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   if (!message) {
     return (
       <div
-        className={cn("rounded-md px-1.5 py-1 leading-relaxed", event.is_self && "bg-primary/5")}
+        className={cn(
+          "rounded-md border border-transparent px-1.5 py-1 leading-relaxed",
+          event.is_self === true && "border-primary/60",
+        )}
       >
         <DanmakuSender event={event} user={user} surface={surface} />
         <DanmakuRichText
@@ -256,8 +255,8 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
         type="button"
         aria-label={`选择 ${user} 的弹幕`}
         className={cn(
-          "block w-full cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
-          event.is_self && "bg-primary/5 hover:bg-primary/10 aria-expanded:bg-primary/10",
+          "block w-full cursor-pointer appearance-none rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+          event.is_self === true && "border-primary/60",
         )}
       >
         <DanmakuSender event={event} user={user} surface={surface} />

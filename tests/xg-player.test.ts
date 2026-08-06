@@ -4,6 +4,7 @@ import { iptvPlaybackKind } from "../src/features/iptv/IptvPlayer";
 import {
   createXgPlayer,
   getXgHlsCore,
+  isXgPlayerDecodeError,
   xgPlayerErrorMessage,
   type XgPlayerInstance,
   type XgPlayerModules,
@@ -32,6 +33,23 @@ describe("xgplayer transport selection", () => {
       "decode failed",
     );
     expect(xgPlayerErrorMessage({}, "fallback")).toBe("fallback");
+  });
+
+  test("recognizes Chromium and xgplayer decoder failures", () => {
+    expect(isXgPlayerDecodeError({ errorCode: 5103 })).toBe(true);
+    expect(
+      isXgPlayerDecodeError({
+        message: "PipelineStatus::PIPELINE_ERROR_DECODE: Failed to send video packet",
+      }),
+    ).toBe(true);
+    expect(
+      isXgPlayerDecodeError(
+        "PipelineStatus::CHUNK_DEMUXER_ERROR_APPEND_FAILED: Failed to prepare video sample",
+      ),
+    ).toBe(true);
+    expect(isXgPlayerDecodeError({ errorCode: 2100, message: "bad network response" })).toBe(
+      false,
+    );
   });
 
   test("binds the media element to a dedicated root that fills its stage", () => {
