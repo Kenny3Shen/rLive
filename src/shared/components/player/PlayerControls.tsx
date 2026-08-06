@@ -254,7 +254,7 @@ export function PlayerControls({
       ? "退出全屏（F）"
       : "全屏（F）";
   const overlayButtonClass = overlay
-    ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
+    ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-visible:ring-white/70 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
     : undefined;
   // The fill itself comes from `glass-surface-overlay`; this only carries the
   // border, text colour and shadow so it cannot override the glass material.
@@ -427,13 +427,14 @@ export function PlayerControls({
   );
   return (
     <div
+      data-slot="player-controls-bar"
       className={cn(
-        "flex min-w-0 shrink-0 items-center gap-1 px-1.5 py-1 max-md:justify-between",
+        "flex min-w-0 shrink-0 items-center gap-1 max-md:justify-between",
         overlay
-          ? // Transparent chrome: the video is the background. Contrast comes
-            // from each glyph's own drop shadow, not a plate behind the bar.
-            "border-0 bg-transparent text-white shadow-none"
-          : "border-t border-border bg-card",
+          ? // The material reaches every player edge; safe-area spacing stays
+            // inside the surface so it never creates a visible gutter.
+            "glass-surface-overlay border-t border-white/12 bg-transparent pt-1 pr-[max(0.375rem,env(safe-area-inset-right))] pb-[max(0.25rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white"
+          : "border-t border-border bg-card px-1.5 py-1",
       )}
     >
       <div className="flex shrink-0 items-center gap-0.5">

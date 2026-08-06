@@ -1232,12 +1232,11 @@ export function PlayerPane({
               data-player-controls
               data-visible="true"
               className={cn(
-                // The player is busy with MSE + canvas danmaku. Keep this one
-                // transient layer composited: no layout property, blur, or
-                // gradient is animated when the controls auto-hide. The data
-                // attribute is changed imperatively above, avoiding a full
-                // PlayerPane reconciliation at the start of the fade.
-                "absolute inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom))] transform-gpu [backface-visibility:hidden] [will-change:transform,opacity] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0",
+                // Keep the filtered surface stationary: moving backdrop blur
+                // would resample the video on every transition frame. The data
+                // attribute changes imperatively, so this compositor-only fade
+                // also avoids reconciling the video, canvas and side panels.
+                "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={(event) => {

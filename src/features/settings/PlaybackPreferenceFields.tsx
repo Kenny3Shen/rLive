@@ -236,11 +236,7 @@ export function AsrChunkIntervalField({
     <PreferenceSliderField
       id={`${idPrefix}-asr-chunk-interval`}
       title="字幕更新间隔"
-      description={
-        layout === "page"
-          ? "Zipformer 会持续保留识别上下文；间隔越短，实时字幕刷新越快。"
-          : undefined
-      }
+      description={layout === "page" ? "间隔越短，实时字幕刷新越快。" : undefined}
       value={draft}
       min={ASR_CHUNK_SECONDS_MIN}
       max={ASR_CHUNK_SECONDS_MAX}
@@ -314,9 +310,7 @@ export function AsrHotwordsField({
       <FieldContent>
         <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
         {layout === "page" && (
-          <FieldDescription>
-            每行一个主播名、游戏名或频道专有词，最多 100 个且单项不超过 80 字；修改后会重新加载识别会话。
-          </FieldDescription>
+          <FieldDescription>主播名、游戏名或频道专有词，每行一个，最多 100 个。</FieldDescription>
         )}
       </FieldContent>
       <div className="w-full">
@@ -343,7 +337,11 @@ export function AsrHotwordsField({
             save(draft);
           }}
         />
-        {status && <FieldDescription role="status" aria-live="polite">{status}</FieldDescription>}
+        {status && (
+          <FieldDescription role="status" aria-live="polite">
+            {status}
+          </FieldDescription>
+        )}
       </div>
     </Field>
   );
@@ -370,7 +368,7 @@ export function SuperChatSettingsFields({
         <FieldContent>
           <FieldTitle id={enabledLabelId}>显示 SC 卡片</FieldTitle>
           {layout === "page" && (
-            <FieldDescription>在支持的平台上将醒目留言显示在播放器上方。</FieldDescription>
+            <FieldDescription>在支持的平台上显示醒目留言卡片。</FieldDescription>
           )}
         </FieldContent>
         <Switch aria-labelledby={enabledLabelId} checked={enabled} onCheckedChange={setEnabled} />
@@ -419,7 +417,7 @@ export function DanmakuTrackSettingsFields({
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-lines`}
         title="显示行数"
-        description={layout === "page" ? "设为自动时根据播放器高度计算可用轨道。" : undefined}
+        description={layout === "page" ? "自动按播放器高度计算。" : undefined}
         value={lineCount}
         min={0}
         max={20}
@@ -560,9 +558,7 @@ export function DanmakuFilterSettingsFields({
       >
         <FieldContent>
           <FieldTitle id={repeatLabelId}>合并重复消息</FieldTitle>
-          {layout === "page" && (
-            <FieldDescription>减少短时间内连续出现的相同弹幕。</FieldDescription>
-          )}
+          {layout === "page" && <FieldDescription>减少短时间内重复出现的弹幕。</FieldDescription>}
         </FieldContent>
         <Switch
           aria-labelledby={repeatLabelId}
@@ -576,7 +572,7 @@ export function DanmakuFilterSettingsFields({
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-merge-window`}
         title="合并窗口"
-        description={layout === "page" ? "在此时间内再次出现的相同弹幕会合并计数。" : undefined}
+        description={layout === "page" ? "相同弹幕在此时间内合并计数。" : undefined}
         value={mergeWindowSeconds}
         min={DANMAKU_MERGE_WINDOW_SECONDS_MIN}
         max={DANMAKU_MERGE_WINDOW_SECONDS_MAX}
@@ -601,7 +597,7 @@ export function DanmakuFilterSettingsFields({
         <FieldContent>
           <FieldTitle id={giftLabelId}>隐藏礼物信息</FieldTitle>
           {layout === "page" && (
-            <FieldDescription>从弹幕列表和播放器叠加层中隐藏礼物消息。</FieldDescription>
+            <FieldDescription>隐藏弹幕列表和叠加层中的礼物消息。</FieldDescription>
           )}
         </FieldContent>
         <Switch
