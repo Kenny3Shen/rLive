@@ -172,9 +172,11 @@ export type AppSettings = {
   danmaku_send_enabled?: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */
   asr_enabled?: boolean;
-  /** Device-local Silero VAD prefilter; excluded from profile import/export. */
+  /** Legacy VAD preference retained for compatibility; ignored by streaming Zipformer. */
   asr_vad_enabled?: boolean;
-  /** Device-local fixed live-caption window in seconds, limited to 1..=6. */
+  /** Device-local endpoint-level anonymous speaker differentiation. */
+  asr_speaker_diarization_enabled?: boolean;
+  /** Zipformer PCM chunk interval, persisted under the legacy field name. */
   asr_window_seconds?: number;
   /** Player subtitle font size in CSS pixels. */
   asr_font_size?: number;

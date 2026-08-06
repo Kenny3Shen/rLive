@@ -64,20 +64,18 @@ fn normalize_site_preferences(settings: &mut AppSettings) {
 
 fn normalize_asr_preferences(settings: &mut AppSettings) {
     if !settings.asr_window_seconds.is_finite() {
-        settings.asr_window_seconds = 1.0;
+        settings.asr_window_seconds = 0.2;
         return;
     }
-    let bounded = settings.asr_window_seconds.clamp(1.0, 6.0);
+    let bounded = settings.asr_window_seconds.clamp(0.2, 1.0);
     settings.asr_window_seconds = (bounded * 10.0).round() / 10.0;
 }
 
 fn normalize_danmaku_preferences(settings: &mut AppSettings) {
-    settings.danmaku_merge_window_seconds = settings
-        .danmaku_merge_window_seconds
-        .clamp(
-            DANMAKU_MERGE_WINDOW_SECONDS_MIN,
-            DANMAKU_MERGE_WINDOW_SECONDS_MAX,
-        );
+    settings.danmaku_merge_window_seconds = settings.danmaku_merge_window_seconds.clamp(
+        DANMAKU_MERGE_WINDOW_SECONDS_MIN,
+        DANMAKU_MERGE_WINDOW_SECONDS_MAX,
+    );
 }
 
 /// Load app settings from `settings_kv`, or return defaults if missing/invalid.

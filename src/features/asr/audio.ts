@@ -1,10 +1,7 @@
 export const ASR_SAMPLE_RATE = 16_000;
-export const ASR_MIN_SEGMENT_SECONDS = 1;
-export const ASR_MAX_SEGMENT_SECONDS = 6;
-export const ASR_DEFAULT_SEGMENT_SECONDS = 1;
-/** Default fixed live-caption window. Settings may change it within 1–6 seconds. */
-export const ASR_SEGMENT_SECONDS = ASR_DEFAULT_SEGMENT_SECONDS;
-export const ASR_OVERLAP_SECONDS = 0.25;
+export const ASR_MIN_CHUNK_SECONDS = 0.2;
+export const ASR_MAX_CHUNK_SECONDS = 1;
+export const ASR_DEFAULT_CHUNK_SECONDS = 0.2;
 
 const NATIVE_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
@@ -86,21 +83,51 @@ export function joinAsrCaptionText(segments: readonly { text: string }[]): strin
     .trim();
 }
 
+export function formatAsrCaptionSegment(segment: {
+  text: string;
+  speaker_id?: number | null;
+}): string {
+  const text = joinAsrCaptionText([{ text: segment.text }]);
+  if (!text) return "";
+  const speakerId = segment.speaker_id;
+  if (!Number.isInteger(speakerId) || (speakerId ?? 0) <= 0) return text;
+  return `说话人 ${speakerId}：${text}`;
+}
+
+export function appendAsrCaptionLine(
+  previous: string | null,
+  next: string,
+  maxChars = 90,
+): string {
+  const normalized = joinAsrCaptionText([{ text: next }]);
+  if (!normalized) return previous ?? "";
+
+  const lines = (previous ? previous.split("\n") : []).filter(Boolean);
+  lines.push(normalized);
+  const joined = lines.slice(-2).join("\n");
+  const characters = Array.from(joined);
+  if (characters.length <= maxChars) return joined;
+
+  const clipped = characters.slice(-maxChars);
+  const firstBoundary = clipped.findIndex((character) => /[，。！？；：,.!?;:\s]/u.test(character));
+  return clipped.slice(firstBoundary >= 0 ? firstBoundary + 1 : 0).join("").trimStart();
+}
+
 export type AudioCaptureSubscription = {
   release: () => void;
-  setSegmentSeconds: (seconds: number) => void;
+  setChunkSeconds: (seconds: number) => void;
 };
 
-function clampSegmentSeconds(seconds: number): number {
-  if (!Number.isFinite(seconds)) return ASR_SEGMENT_SECONDS;
-  return Math.min(ASR_MAX_SEGMENT_SECONDS, Math.max(ASR_MIN_SEGMENT_SECONDS, seconds));
+function clampChunkSeconds(seconds: number): number {
+  if (!Number.isFinite(seconds)) return ASR_DEFAULT_CHUNK_SECONDS;
+  return Math.min(ASR_MAX_CHUNK_SECONDS, Math.max(ASR_MIN_CHUNK_SECONDS, seconds));
 }
 
 class AudioCapturePipeline {
   private readonly listeners = new Set<PcmListener>();
   private buffer = new Float32Array();
   private totalSamples = 0;
-  private segmentSeconds = ASR_SEGMENT_SECONDS;
+  private chunkSeconds = ASR_DEFAULT_CHUNK_SECONDS;
   private monoScratch = new Float32Array();
   private disposed = false;
 
@@ -131,8 +158,8 @@ class AudioCapturePipeline {
     if (this.listeners.size === 0) this.resetBuffer();
   }
 
-  setSegmentSeconds(seconds: number): void {
-    this.segmentSeconds = clampSegmentSeconds(seconds);
+  setChunkSeconds(seconds: number): void {
+    this.chunkSeconds = clampChunkSeconds(seconds);
   }
 
   async dispose(): Promise<void> {
@@ -153,7 +180,7 @@ class AudioCapturePipeline {
     if (requiredSamples <= this.buffer.length) return;
     const capacity = Math.max(
       requiredSamples,
-      Math.ceil(this.context.sampleRate * ASR_MAX_SEGMENT_SECONDS) + 4096,
+      Math.ceil(this.context.sampleRate * ASR_MAX_CHUNK_SECONDS) + 4096,
     );
     const next = new Float32Array(capacity);
     next.set(this.buffer.subarray(0, this.totalSamples));
@@ -199,20 +226,15 @@ class AudioCapturePipeline {
     this.ensureBufferCapacity(this.totalSamples + chunk.length);
     this.buffer.set(chunk, this.totalSamples);
     this.totalSamples += chunk.length;
-    const segmentSamples = Math.max(1, Math.round(this.context.sampleRate * this.segmentSeconds));
-    const overlapSamples = Math.min(
-      segmentSamples - 1,
-      Math.max(0, Math.round(this.context.sampleRate * ASR_OVERLAP_SECONDS)),
-    );
+    const chunkSamples = Math.max(1, Math.round(this.context.sampleRate * this.chunkSeconds));
 
-    while (this.totalSamples >= segmentSamples && this.listeners.size > 0) {
-      const segment = this.buffer.slice(0, segmentSamples);
-      const retainedStart = segmentSamples - overlapSamples;
-      const retainedLength = this.totalSamples - retainedStart;
+    while (this.totalSamples >= chunkSamples && this.listeners.size > 0) {
+      const segment = this.buffer.slice(0, chunkSamples);
+      const retainedLength = this.totalSamples - chunkSamples;
       if (retainedLength > 0) {
-        this.buffer.copyWithin(0, retainedStart, this.totalSamples);
+        this.buffer.copyWithin(0, chunkSamples, this.totalSamples);
       }
-      this.totalSamples = Math.max(0, retainedLength);
+      this.totalSamples = retainedLength;
       const downsampled = downsamplePcm(segment, this.context.sampleRate);
       for (const listener of this.listeners) listener(downsampled);
     }
@@ -293,7 +315,7 @@ export async function subscribeToVideoPcm(
 
   let released = false;
   return {
-    setSegmentSeconds: (seconds) => pipeline.setSegmentSeconds(seconds),
+    setChunkSeconds: (seconds) => pipeline.setChunkSeconds(seconds),
     release: () => {
       if (released) return;
       released = true;

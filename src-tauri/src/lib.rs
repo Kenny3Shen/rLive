@@ -30,7 +30,7 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_media_volume,
     android_player_controls_set_orientation,
 };
-use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_transcribe};
+use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
     douyu_danmaku_send, douyu_danmaku_send_status, huya_danmaku_send, huya_danmaku_send_status,
@@ -210,6 +210,7 @@ pub fn run() {
             asr_get_status,
             asr_enable,
             asr_disable,
+            asr_reset_stream,
             asr_transcribe,
             account_get_cookie,
             account_get_profile,

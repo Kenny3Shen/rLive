@@ -35,7 +35,7 @@ import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
   AsrCaptionFontSizeField,
-  AsrWindowField,
+  AsrChunkIntervalField,
   DanmakuAppearanceResetButton,
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
@@ -674,10 +674,12 @@ function DanmakuSendField() {
 
 function AsrModelField() {
   const enabled = useSettingsStore((state) => state.asrEnabled);
-  const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
+  const speakerEnabled = useSettingsStore((state) => state.asrSpeakerDiarizationEnabled);
   const pending = useSettingsStore((state) => state.asrPending);
   const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
-  const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
+  const setSpeakerEnabled = useSettingsStore(
+    (state) => state.setAsrSpeakerDiarizationEnabled,
+  );
   const model = useAsrModelStatus({ enabled });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -707,10 +709,10 @@ function AsrModelField() {
     }
   }
 
-  async function applyVadEnabled(next: boolean) {
+  async function applySpeakerEnabled(next: boolean) {
     setActionError(null);
     try {
-      await setVadEnabled(next);
+      await setSpeakerEnabled(next);
       await model.refetch();
     } catch (error) {
       setActionError(errorMessage(error));
@@ -728,7 +730,7 @@ function AsrModelField() {
           data-invalid={invalid || undefined}
         >
           <FieldContent>
-            <FieldTitle id="asr-enabled-title">本地语音字幕（ASR）</FieldTitle>
+            <FieldTitle id="asr-enabled-title">流式语音字幕（Zipformer）</FieldTitle>
             {invalid ? (
               <FieldError role="status" aria-live="polite">
                 {actionError ?? presentation.message}
@@ -770,24 +772,29 @@ function AsrModelField() {
           </div>
         </Field>
 
-        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+        <Field
+          orientation="responsive"
+          data-disabled={!model.supported || !enabled || pending || undefined}
+        >
           <FieldContent>
-            <FieldTitle id="asr-vad-title">语音活动检测（VAD）</FieldTitle>
+            <FieldTitle id="asr-speaker-title">说话人区分</FieldTitle>
             <FieldDescription>
-              {model.status?.vad_model_downloaded
-                ? "使用 Silero 过滤无语音片段，减少无效推理和静音误识别"
-                : "首次开启会下载约 865 KiB 的 Silero 模型，并跳过无语音片段"}
+              在语句结束后识别匿名说话人，首次启用需额外下载约 27 MB 声纹模型。
             </FieldDescription>
           </FieldContent>
           <Switch
-            aria-labelledby="asr-vad-title"
-            checked={vadEnabled}
-            disabled={!model.supported || model.isPending || pending}
-            onCheckedChange={(checked) => void applyVadEnabled(checked)}
+            aria-labelledby="asr-speaker-title"
+            checked={speakerEnabled}
+            disabled={!model.supported || !enabled || model.isPending || pending}
+            onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
           />
         </Field>
 
-        <AsrWindowField idPrefix="settings" layout="page" disabled={!model.supported || pending} />
+        <AsrChunkIntervalField
+          idPrefix="settings"
+          layout="page"
+          disabled={!model.supported || pending}
+        />
       </FieldGroup>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -798,9 +805,10 @@ function AsrModelField() {
             </AlertDialogMedia>
             <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
             <AlertDialogDescription>
-              启用后将在后台下载约 631 MB 的 Qwen3-ASR Q4_K
-              本地模型。下载完成后会自动加载，模型文件保留在本机。若已开启 VAD，还会下载约 865 KiB
-              的 Silero 模型。
+              启用后将在后台下载约 {speakerEnabled ? "577" : "550"} MB 的 Zipformer
+              中英双语流式识别模型与中英标点模型
+              {speakerEnabled ? "、说话人声纹模型" : ""}。
+              下载和解压均在后台执行，完成后会自动加载，模型文件保留在本机。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1301,8 +1309,8 @@ export function SettingsPage() {
                   </Field>
                 </Section>
                 <Section title="语音字幕">
-                  <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
                   <AsrModelField />
+                  <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
                 </Section>
                 <Section title="弹幕轨道">
                   <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />

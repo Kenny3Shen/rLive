@@ -27,7 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   AsrCaptionFontSizeField,
-  AsrWindowField,
+  AsrChunkIntervalField,
   DanmakuAppearanceResetButton,
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
@@ -189,7 +189,8 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   const superChatEnabled = useSettingsStore((s) => s.superChatEnabled);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const asrFontSize = useSettingsStore((s) => s.asrFontSize);
-  const asrWindowSeconds = useSettingsStore((s) => s.asrWindowSeconds);
+  const asrChunkSeconds = useSettingsStore((s) => s.asrWindowSeconds);
+  const asrSpeakerEnabled = useSettingsStore((s) => s.asrSpeakerDiarizationEnabled);
   const asrPending = useSettingsStore((s) => s.asrPending);
 
   const trackSummary = `${Math.round(area * 100)}% · ${lineCount === 0 ? "自动" : `${lineCount} 行`}`;
@@ -201,7 +202,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
       : activeFilterCount > 0
         ? `${activeFilterCount} 项开启`
         : "未开启";
-  const captionSummary = `${asrFontSize}px · ${Number.isInteger(asrWindowSeconds) ? asrWindowSeconds : asrWindowSeconds.toFixed(1)}s`;
+  const captionSummary = `${asrFontSize}px · ${asrChunkSeconds.toFixed(1)}s 刷新${asrSpeakerEnabled ? " · 说话人" : ""}`;
 
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
@@ -216,7 +217,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
           <CardContent className="pt-3">
             <FieldGroup className="gap-2">
               <AsrCaptionFontSizeField idPrefix="room" layout="panel" />
-              <AsrWindowField idPrefix="room" layout="panel" disabled={asrPending} />
+              <AsrChunkIntervalField idPrefix="room" layout="panel" disabled={asrPending} />
             </FieldGroup>
           </CardContent>
         </Card>
