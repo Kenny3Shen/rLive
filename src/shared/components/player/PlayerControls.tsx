@@ -256,8 +256,10 @@ export function PlayerControls({
   const overlayButtonClass = overlay
     ? "rounded-lg text-white/90 hover:bg-transparent hover:text-white aria-expanded:bg-transparent aria-expanded:text-white focus-visible:ring-white/70 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
     : undefined;
+  // The fill itself comes from `glass-surface-overlay`; this only carries the
+  // border, text colour and shadow so it cannot override the glass material.
   const overlayStreamSettingsContentClass = overlay
-    ? "border border-white/10 bg-black/90 text-white shadow-xl"
+    ? "border border-white/10 text-white shadow-xl"
     : undefined;
   const overlayStreamSettingsOptionClass = overlay
     ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
@@ -474,9 +476,13 @@ export function PlayerControls({
             container={portalContainer}
             side="top"
             align="start"
+            glass
             className={cn(
               "w-auto items-center gap-2 p-2.5",
-              overlay && "border border-white/10 bg-black/90 text-white shadow-xl",
+              // Same material as the settings popup beside it, so the two
+              // control-bar popups read as one family.
+              overlay ? "glass-surface-overlay" : "glass-surface",
+              overlay && "border border-white/10 text-white shadow-xl",
             )}
           >
             <PopoverTitle className="sr-only">音量</PopoverTitle>
@@ -556,7 +562,13 @@ export function PlayerControls({
                 <DrawerContent
                   side={portrait ? "bottom" : "right"}
                   container={portalContainer}
-                  className={cn(overlayStreamSettingsContentClass)}
+                  glass={!overlay}
+                  className={cn(
+                    // Over video the drawer needs the darker tint, so it takes
+                    // the overlay material instead of the drawer's own `glass`.
+                    overlay && "glass-surface-overlay",
+                    overlayStreamSettingsContentClass,
+                  )}
                 >
                   <DrawerTitle
                     className={cn(
@@ -596,8 +608,10 @@ export function PlayerControls({
                   left: 12,
                 }}
                 sticky
+                glass
                 className={cn(
                   "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))] gap-0 overflow-y-auto p-1.5",
+                  overlay ? "glass-surface-overlay" : "glass-surface",
                   overlayStreamSettingsContentClass,
                 )}
               >
