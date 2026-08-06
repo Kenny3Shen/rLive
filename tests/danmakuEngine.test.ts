@@ -103,12 +103,13 @@ describe("danmaku engine", () => {
     ]);
   });
 
-  test("aggregates matching floating chat from different viewers for five seconds", () => {
+  test("aggregates matching floating chat inside the configured window", () => {
     const engine = createEngine({
       fontSize: 18,
       speed: 8,
       opacity: 1,
       aggregateRepeats: true,
+      aggregateWindowMs: 5_000,
     });
     engine.tick(0, 1280, 720);
 
@@ -121,6 +122,29 @@ describe("danmaku engine", () => {
     engine.push(chat("加油", 8_100, "观众丙"));
     expect(engine.visibleItems()).toHaveLength(2);
     expect(engine.visibleItems()[1]?.text).toBe("加油");
+  });
+
+  test("applies a changed aggregation window without recreating the engine", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+      aggregateWindowMs: 5_000,
+    });
+    engine.tick(0, 1280, 720);
+
+    engine.setOpts({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+      aggregateWindowMs: 10_000,
+    });
+    engine.push(chat("窗口已更新", 10_000, "观众甲"));
+    engine.push(chat("窗口已更新", 19_500, "观众乙"));
+
+    expect(engine.visibleItems().find((item) => item.text === "窗口已更新 ×2")).toBeDefined();
   });
 
   test("keeps a local account comment separate and gives it the self color", () => {

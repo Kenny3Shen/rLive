@@ -124,7 +124,9 @@ export function shouldShowInDanmakuPanel(
   return isDanmakuEvent(event) && shouldShowValidatedInDanmakuPanel(event, filterGifts);
 }
 
-export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 5_000;
+export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 10_000;
+export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS = 5_000;
+export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS = 30_000;
 const MAX_CONTENT_AGGREGATION_KEYS = 512;
 
 export type DanmakuContentAggregation = {
@@ -157,7 +159,7 @@ export function aggregatedDanmakuText(content: string, count: number): string {
 }
 
 /**
- * Maintains a bounded, sliding five-second content window. It deliberately
+ * Maintains a bounded, configurable sliding content window. It deliberately
  * ignores gifts and SC because those messages carry independent semantics.
  */
 export function createDanmakuContentAggregator(
@@ -165,7 +167,13 @@ export function createDanmakuContentAggregator(
   windowMs = DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
 ): DanmakuContentAggregator {
   const entries = new Map<string, { at: number; count: number }>();
-  const safeWindowMs = Math.max(0, Number.isFinite(windowMs) ? windowMs : 0);
+  const safeWindowMs = Math.min(
+    DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS,
+    Math.max(
+      DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS,
+      Number.isFinite(windowMs) ? Math.round(windowMs) : DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
+    ),
+  );
 
   const trimToCapacity = () => {
     while (entries.size > MAX_CONTENT_AGGREGATION_KEYS) {

@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
+  DANMAKU_MERGE_WINDOW_SECONDS_MAX,
+  DANMAKU_MERGE_WINDOW_SECONDS_MIN,
+  parseDanmakuMergeWindowSeconds,
+  useSettingsStore,
+} from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +46,7 @@ const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuFontWeight: 600,
   danmakuFilterRepeats: true,
   danmakuFilterGifts: true,
+  danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   superChatOpacity: 1,
 };
 
@@ -423,6 +430,7 @@ export function DanmakuAppearanceResetButton() {
       danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
       danmaku_filter_repeats: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterRepeats,
       danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
+      danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
       super_chat_opacity: DANMAKU_APPEARANCE_DEFAULTS.superChatOpacity,
     });
   }
@@ -444,6 +452,7 @@ export function DanmakuFilterSettingsFields({
 }) {
   const filterRepeats = useSettingsStore((state) => state.danmakuFilterRepeats);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
+  const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const shield = useShieldWordsDraft();
   const repeatLabelId = `${idPrefix}-danmaku-repeat-filter-label`;
   const giftLabelId = `${idPrefix}-danmaku-gift-filter-label`;
@@ -470,6 +479,27 @@ export function DanmakuFilterSettingsFields({
           }}
         />
       </Field>
+      <PreferenceSliderField
+        id={`${idPrefix}-danmaku-merge-window`}
+        title="合并窗口"
+        description={layout === "page" ? "在此时间内再次出现的相同弹幕会合并计数。" : undefined}
+        value={mergeWindowSeconds}
+        min={DANMAKU_MERGE_WINDOW_SECONDS_MIN}
+        max={DANMAKU_MERGE_WINDOW_SECONDS_MAX}
+        displayValue={`${mergeWindowSeconds} 秒`}
+        layout={layout}
+        disabled={!filterRepeats}
+        onPreview={(value) =>
+          useSettingsStore.setState({
+            danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(value),
+          })
+        }
+        onCommit={(value) => {
+          const next = parseDanmakuMergeWindowSeconds(value);
+          useSettingsStore.setState({ danmakuMergeWindowSeconds: next });
+          persist({ danmaku_merge_window_seconds: next });
+        }}
+      />
       <Field
         orientation={layout === "page" ? "responsive" : "horizontal"}
         className={fieldSurfaceClass(layout)}

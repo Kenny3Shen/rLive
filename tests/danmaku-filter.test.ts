@@ -3,6 +3,7 @@ import type { DanmakuEvent } from "../src/shared/types/live";
 import {
   aggregatedDanmakuText,
   createDanmakuContentAggregator,
+  DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
   createShieldMatcher,
   isDanmakuEvent,
   shouldShowInDanmakuPanel,
@@ -95,6 +96,15 @@ describe("danmaku display filter", () => {
       key: null,
       count: 1,
     });
+  });
+
+  test("uses a ten-second default merge window", () => {
+    expect(DANMAKU_CONTENT_AGGREGATION_WINDOW_MS).toBe(10_000);
+    const aggregator = createDanmakuContentAggregator(true);
+
+    expect(aggregator.aggregate(event({ ts: 1_000 })).count).toBe(1);
+    expect(aggregator.aggregate(event({ ts: 10_500 })).count).toBe(2);
+    expect(aggregator.aggregate(event({ ts: 21_000 })).count).toBe(1);
   });
 
   test("does not combine a local account comment with an identical viewer comment", () => {
