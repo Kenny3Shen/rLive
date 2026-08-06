@@ -217,7 +217,7 @@ function DanmakuQuickPicker({
           />
         }
       >
-        <SmilePlus data-icon="inline-start" aria-hidden />
+        <SmilePlus aria-hidden />
       </PopoverTrigger>
       <PopoverContent
         side="top"

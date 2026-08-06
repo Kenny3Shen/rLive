@@ -34,10 +34,14 @@ function DrawerContent({
   className,
   side = "bottom",
   container,
+  glass = false,
   ...props
 }: DialogPrimitive.Popup.Props & {
   side?: DrawerSide;
   container?: DialogPrimitive.Portal.Props["container"];
+  /* Opt into the frosted material. When set, the default `bg-popover` is
+     dropped so the glass `::before` fill shows the blurred backdrop through. */
+  glass?: boolean;
 }) {
   return (
     <DrawerPortal container={container}>
@@ -46,7 +50,9 @@ function DrawerContent({
         data-slot="drawer-content"
         data-side={side}
         className={cn(
-          "fixed z-50 bg-popover text-popover-foreground shadow-lg outline-none",
+          "fixed z-50 text-popover-foreground shadow-lg outline-none",
+          !glass && "bg-popover",
+          glass && "glass-surface",
           side === "bottom" &&
             "inset-x-0 bottom-0 max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl border border-border p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] data-open:animate-drawer-in-bottom data-closed:animate-drawer-out-bottom",
           side === "right" &&
