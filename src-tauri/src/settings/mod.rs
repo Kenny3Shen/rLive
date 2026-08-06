@@ -65,10 +65,25 @@ fn normalize_site_preferences(settings: &mut AppSettings) {
 fn normalize_asr_preferences(settings: &mut AppSettings) {
     if !settings.asr_window_seconds.is_finite() {
         settings.asr_window_seconds = 0.2;
-        return;
+    } else {
+        let bounded = settings.asr_window_seconds.clamp(0.2, 1.0);
+        settings.asr_window_seconds = (bounded * 10.0).round() / 10.0;
     }
-    let bounded = settings.asr_window_seconds.clamp(0.2, 1.0);
-    settings.asr_window_seconds = (bounded * 10.0).round() / 10.0;
+
+    let mut seen = HashSet::new();
+    settings.asr_hotwords.retain_mut(|word| {
+        *word = word
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        if word.is_empty() || word.chars().count() > 80 {
+            return false;
+        }
+        seen.insert(word.to_lowercase())
+    });
+    settings.asr_hotwords.truncate(100);
 }
 
 fn normalize_danmaku_preferences(settings: &mut AppSettings) {
@@ -155,6 +170,9 @@ mod tests {
         assert_eq!(s.danmaku_merge_window_seconds, 10);
         assert!(s.super_chat_enabled);
         assert_eq!(s.asr_font_size, 20);
+        assert!(s.asr_vad_enabled);
+        assert!(s.asr_punctuation_enabled);
+        assert!(s.asr_hotwords.is_empty());
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
     }
@@ -187,6 +205,28 @@ mod tests {
         settings.danmaku_merge_window_seconds = 60;
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 30);
+    }
+
+    #[test]
+    fn set_normalizes_local_asr_hotwords() {
+        let conn = open_in_memory().unwrap();
+        let mut settings = AppSettings {
+            asr_hotwords: vec![
+                " 主播昵称 ".into(),
+                "主播昵称".into(),
+                "GAME".into(),
+                "game".into(),
+                "\t".into(),
+            ],
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().asr_hotwords, vec!["主播昵称", "GAME"]);
+
+        settings.asr_hotwords = (0..120).map(|index| format!("热词{index}")).collect();
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().asr_hotwords.len(), 100);
     }
 
     #[test]

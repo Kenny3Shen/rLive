@@ -172,10 +172,14 @@ export type AppSettings = {
   danmaku_send_enabled?: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */
   asr_enabled?: boolean;
-  /** Legacy VAD preference retained for compatibility; ignored by streaming Zipformer. */
+  /** Enable silence-based endpoint/VAD rules; defaults to true. */
   asr_vad_enabled?: boolean;
+  /** Enable the optional local CT-Transformer punctuation model; defaults to true. */
+  asr_punctuation_enabled?: boolean;
   /** Device-local endpoint-level anonymous speaker differentiation. */
   asr_speaker_diarization_enabled?: boolean;
+  /** Device-local domain phrases used by Zipformer hotword biasing. */
+  asr_hotwords?: string[];
   /** Zipformer PCM chunk interval, persisted under the legacy field name. */
   asr_window_seconds?: number;
   /** Player subtitle font size in CSS pixels. */

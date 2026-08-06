@@ -100,7 +100,9 @@ type SettingsState = {
   danmakuSendPending: boolean;
   asrEnabled: boolean;
   asrVadEnabled: boolean;
+  asrPunctuationEnabled: boolean;
   asrSpeakerDiarizationEnabled: boolean;
+  asrHotwords: string[];
   asrWindowSeconds: number;
   asrFontSize: number;
   /** True while the device-local ASR choice reaches the Rust backend. */
@@ -127,7 +129,9 @@ type SettingsState = {
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrVadEnabled: (enabled: boolean) => Promise<void>;
+  setAsrPunctuationEnabled: (enabled: boolean) => Promise<void>;
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => Promise<void>;
+  setAsrHotwords: (hotwords: string[]) => Promise<void>;
   setAsrWindowSeconds: (seconds: number) => Promise<void>;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
@@ -160,8 +164,10 @@ const defaultSettings: AppSettings = {
   playback_soft_switch_enabled: false,
   danmaku_send_enabled: false,
   asr_enabled: false,
-  asr_vad_enabled: false,
+  asr_vad_enabled: true,
+  asr_punctuation_enabled: true,
   asr_speaker_diarization_enabled: false,
+  asr_hotwords: [],
   asr_window_seconds: ASR_WINDOW_SECONDS_DEFAULT,
   asr_font_size: ASR_FONT_SIZE_DEFAULT,
   iptv_custom_m3u_url: null,
@@ -191,7 +197,9 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_vad_enabled: state.asrVadEnabled,
+    asr_punctuation_enabled: state.asrPunctuationEnabled,
     asr_speaker_diarization_enabled: state.asrSpeakerDiarizationEnabled,
+    asr_hotwords: state.asrHotwords,
     asr_window_seconds: state.asrWindowSeconds,
     asr_font_size: state.asrFontSize,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
@@ -223,8 +231,10 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
-      asrVadEnabled: false,
+      asrVadEnabled: true,
+      asrPunctuationEnabled: true,
       asrSpeakerDiarizationEnabled: false,
+      asrHotwords: [],
       asrWindowSeconds: ASR_WINDOW_SECONDS_DEFAULT,
       asrFontSize: ASR_FONT_SIZE_DEFAULT,
       asrPending: false,
@@ -311,9 +321,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       setAsrVadEnabled: async (asrVadEnabled) => {
-        const epoch = ++asrSettingEpoch;
         const previous = get().asrVadEnabled;
         if (asrVadEnabled === previous) return;
+        const epoch = ++asrSettingEpoch;
         set({ asrVadEnabled, asrPending: true });
         try {
           await get().persistToBackend({ asr_vad_enabled: asrVadEnabled });
@@ -328,10 +338,28 @@ export const useSettingsStore = create<SettingsState>()(
           if (epoch === asrSettingEpoch) set({ asrPending: false });
         }
       },
-      setAsrSpeakerDiarizationEnabled: async (asrSpeakerDiarizationEnabled) => {
+      setAsrPunctuationEnabled: async (asrPunctuationEnabled) => {
+        const previous = get().asrPunctuationEnabled;
+        if (asrPunctuationEnabled === previous) return;
         const epoch = ++asrSettingEpoch;
+        set({ asrPunctuationEnabled, asrPending: true });
+        try {
+          await get().persistToBackend({ asr_punctuation_enabled: asrPunctuationEnabled });
+          if (get().asrEnabled) await invokeCmd("asr_enable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrPunctuationEnabled: previous });
+            await get().persistToBackend({ asr_punctuation_enabled: previous });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) set({ asrPending: false });
+        }
+      },
+      setAsrSpeakerDiarizationEnabled: async (asrSpeakerDiarizationEnabled) => {
         const previous = get().asrSpeakerDiarizationEnabled;
         if (asrSpeakerDiarizationEnabled === previous) return;
+        const epoch = ++asrSettingEpoch;
         set({ asrSpeakerDiarizationEnabled, asrPending: true });
         try {
           await get().persistToBackend({
@@ -344,6 +372,31 @@ export const useSettingsStore = create<SettingsState>()(
             await get().persistToBackend({
               asr_speaker_diarization_enabled: previous,
             });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) set({ asrPending: false });
+        }
+      },
+      setAsrHotwords: async (asrHotwords) => {
+        const normalized = Array.from(
+          new Set(
+            asrHotwords
+              .map((word) => word.replace(/[\r\n\t]/g, " ").trim())
+              .filter((word) => word.length > 0 && Array.from(word).length <= 80),
+          ),
+        ).slice(0, 100);
+        const previous = get().asrHotwords;
+        if (JSON.stringify(normalized) === JSON.stringify(previous)) return;
+        const epoch = ++asrSettingEpoch;
+        set({ asrHotwords: normalized, asrPending: true });
+        try {
+          await get().persistToBackend({ asr_hotwords: normalized });
+          if (get().asrEnabled) await invokeCmd("asr_enable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrHotwords: previous });
+            await get().persistToBackend({ asr_hotwords: previous });
           }
           throw error;
         } finally {
@@ -401,9 +454,11 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled ?? false,
-          asrVadEnabled: settings.asr_vad_enabled ?? false,
+          asrVadEnabled: settings.asr_vad_enabled ?? true,
+          asrPunctuationEnabled: settings.asr_punctuation_enabled ?? true,
           asrSpeakerDiarizationEnabled:
             settings.asr_speaker_diarization_enabled ?? false,
+          asrHotwords: settings.asr_hotwords ?? [],
           asrWindowSeconds: parseAsrWindowSeconds(settings.asr_window_seconds),
           asrFontSize: parseAsrFontSize(settings.asr_font_size),
           asrPending: false,

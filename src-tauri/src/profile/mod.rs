@@ -50,8 +50,10 @@ impl ProfilePackage {
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.danmaku_send_enabled = false;
     settings.asr_enabled = false;
-    settings.asr_vad_enabled = false;
+    settings.asr_vad_enabled = true;
+    settings.asr_punctuation_enabled = true;
     settings.asr_speaker_diarization_enabled = false;
+    settings.asr_hotwords.clear();
     settings.asr_window_seconds = Default::default();
     settings.iptv_custom_m3u_url = None;
 }
@@ -76,7 +78,9 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
         settings.remove("danmaku_send_enabled");
         settings.remove("asr_enabled");
         settings.remove("asr_vad_enabled");
+        settings.remove("asr_punctuation_enabled");
         settings.remove("asr_speaker_diarization_enabled");
+        settings.remove("asr_hotwords");
         settings.remove("asr_window_seconds");
         settings.remove("iptv_custom_m3u_url");
     }
@@ -203,7 +207,8 @@ pub fn merge_into_db(
     settings.playback_smart_line_selection = package.settings.playback_smart_line_selection;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
     // Do not copy `danmaku_send_enabled`, `asr_enabled`,
-    // `asr_vad_enabled`, `asr_speaker_diarization_enabled`,
+    // `asr_vad_enabled`, `asr_punctuation_enabled`,
+    // `asr_speaker_diarization_enabled`, `asr_hotwords`,
     // `asr_window_seconds`, or `iptv_custom_m3u_url`.
     // A profile is portable/untrusted input; importing it must not grant
     // sending consent, enable this device's local ASR model, or replace this
@@ -246,6 +251,8 @@ mod tests {
         package.settings.danmaku_send_enabled = true;
         package.settings.asr_enabled = true;
         package.settings.asr_vad_enabled = true;
+        package.settings.asr_punctuation_enabled = false;
+        package.settings.asr_hotwords = vec!["本地热词".into()];
         package.settings.asr_speaker_diarization_enabled = true;
         package.settings.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
 
@@ -255,14 +262,18 @@ mod tests {
         assert!(!settings.contains_key("danmaku_send_enabled"));
         assert!(!settings.contains_key("asr_enabled"));
         assert!(!settings.contains_key("asr_vad_enabled"));
+        assert!(!settings.contains_key("asr_punctuation_enabled"));
         assert!(!settings.contains_key("asr_speaker_diarization_enabled"));
+        assert!(!settings.contains_key("asr_hotwords"));
         assert!(!settings.contains_key("iptv_custom_m3u_url"));
 
         let text = encode_package(&package).unwrap();
         assert!(!text.contains("danmaku_send_enabled"));
         assert!(!text.contains("asr_enabled"));
         assert!(!text.contains("asr_vad_enabled"));
+        assert!(!text.contains("asr_punctuation_enabled"));
         assert!(!text.contains("asr_speaker_diarization_enabled"));
+        assert!(!text.contains("asr_hotwords"));
         assert!(!text.contains("iptv_custom_m3u_url"));
     }
 
@@ -288,7 +299,9 @@ mod tests {
 
         assert!(!package.settings.danmaku_send_enabled);
         assert!(!package.settings.asr_enabled);
-        assert!(!package.settings.asr_vad_enabled);
+        assert!(package.settings.asr_vad_enabled);
+        assert!(package.settings.asr_punctuation_enabled);
+        assert!(package.settings.asr_hotwords.is_empty());
         assert!(!package.settings.asr_speaker_diarization_enabled);
         assert!(package.settings.iptv_custom_m3u_url.is_none());
     }
@@ -369,6 +382,8 @@ mod tests {
         local.danmaku_send_enabled = true;
         local.asr_enabled = true;
         local.asr_vad_enabled = true;
+        local.asr_punctuation_enabled = false;
+        local.asr_hotwords = vec!["本地热词".into()];
         local.asr_speaker_diarization_enabled = true;
         local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
         settings::set(&conn, &local).unwrap();
@@ -387,6 +402,8 @@ mod tests {
         assert!(after.danmaku_send_enabled);
         assert!(after.asr_enabled);
         assert!(after.asr_vad_enabled);
+        assert!(!after.asr_punctuation_enabled);
+        assert_eq!(after.asr_hotwords, vec!["本地热词"]);
         assert!(after.asr_speaker_diarization_enabled);
         assert_eq!(
             after.iptv_custom_m3u_url.as_deref(),

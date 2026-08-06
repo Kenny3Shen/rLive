@@ -8,6 +8,7 @@ import {
   encodePcmBase64,
   formatAsrCaptionSegment,
   joinAsrCaptionText,
+  selectAudioCaptureBackend,
 } from "../src/features/asr/audio";
 import {
   describeAsrModelStatus,
@@ -23,6 +24,9 @@ function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
     total_bytes: 575_992_102,
     model_size_bytes: 575_992_102,
     speaker_enabled: false,
+    vad_enabled: true,
+    punctuation_enabled: true,
+    hotwords_count: 0,
     speaker_model_downloaded: false,
     speaker_model_size_bytes: 28_281_164,
     threads: 4,
@@ -54,7 +58,7 @@ describe("ASR model status", () => {
         enabled: true,
         supported: true,
       }).message,
-    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + 自动标点）");
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + VAD + 自动标点）");
   });
 
   test("keeps the downloaded model when the feature is disabled", () => {
@@ -72,7 +76,7 @@ describe("ASR model status", () => {
         enabled: true,
         supported: true,
       }).message,
-    ).toBe("Zipformer 中英双语模型已就绪（CPU / 6 线程 + 自动标点）");
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 6 线程 + VAD + 自动标点）");
   });
 
   test("reports speaker differentiation in the ready state", () => {
@@ -81,7 +85,21 @@ describe("ASR model status", () => {
         enabled: true,
         supported: true,
       }).message,
-    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + 自动标点 + 说话人区分）");
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + VAD + 自动标点 + 说话人区分）");
+  });
+
+  test("reports independently disabled VAD, punctuation, and local hotwords", () => {
+    expect(
+      describeAsrModelStatus(
+        modelStatus({
+          state: "ready",
+          vad_enabled: false,
+          punctuation_enabled: false,
+          hotwords_count: 3,
+        }),
+        { enabled: true, supported: true },
+      ).message,
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + 关闭 VAD + 原始文本 + 3 个热词）");
   });
 
   test("uses the native download stage message", () => {
@@ -155,6 +173,18 @@ describe("streaming ASR chunks", () => {
     expect(ASR_DEFAULT_CHUNK_SECONDS).toBe(0.2);
     expect(ASR_MIN_CHUNK_SECONDS).toBe(0.2);
     expect(ASR_MAX_CHUNK_SECONDS).toBe(1);
+  });
+
+  test("prefers AudioWorklet and keeps a legacy WebView fallback", () => {
+    expect(selectAudioCaptureBackend({ audioWorklet: true, audioWorkletNode: true })).toBe(
+      "audio-worklet",
+    );
+    expect(selectAudioCaptureBackend({ audioWorklet: false, audioWorkletNode: true })).toBe(
+      "script-processor",
+    );
+    expect(selectAudioCaptureBackend({ audioWorklet: true, audioWorkletNode: false })).toBe(
+      "script-processor",
+    );
   });
 });
 

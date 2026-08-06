@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::asr::{AsrModelStatus, AsrTranscribeResult, decode_base64_pcm};
+use crate::asr::{AsrModelStatus, AsrRuntimeOptions, AsrTranscribeResult, decode_base64_pcm};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -13,15 +13,23 @@ pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
 /// immediately so selecting the setting never blocks the UI thread.
 #[tauri::command]
 pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
-    let (proxy, speaker_diarization_enabled) = {
+    let (proxy, options) = {
         let conn = state
             .db
             .lock()
             .map_err(|_| AppError::new("db_lock_error", "读取代理设置失败"))?;
         let settings = crate::settings::get(&conn)?;
-        (settings.proxy, settings.asr_speaker_diarization_enabled)
+        (
+            settings.proxy,
+            AsrRuntimeOptions {
+                vad_enabled: settings.asr_vad_enabled,
+                punctuation_enabled: settings.asr_punctuation_enabled,
+                speaker_enabled: settings.asr_speaker_diarization_enabled,
+                hotwords: settings.asr_hotwords,
+            },
+        )
     };
-    state.asr.enable(proxy, speaker_diarization_enabled)
+    state.asr.enable(proxy, options)
 }
 
 #[tauri::command]
