@@ -323,9 +323,9 @@ html[data-platform="android"] .app-shell {
   max-height: none;
 }
 
-/* Room grids can retain many cards after infinite scrolling. Chromium can
-   skip offscreen layout/paint for each complete card while preserving a stable
-   placeholder size for scrolling. */
+/* Room and IPTV channel grids can retain many cards after infinite scrolling or
+   a "show more" page. Chromium can skip offscreen layout/paint for each complete
+   card while preserving a stable placeholder size for scrolling. */
 .room-card {
   content-visibility: auto;
   contain-intrinsic-size: auto 13rem;

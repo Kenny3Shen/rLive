@@ -159,6 +159,7 @@ flowchart TD
 - 移动端点击底部导航：进行横向平移。
 - 浏览器/系统前进后退：根据 React Router history index 选择横向方向。
 - 首页、关注、历史等平台切换：内层 `PagePan` 进行横向平移。
+- IPTV 源切换：与平台切换共用同一套 `PagePan` 横向平移（分组统一为 group，平台与 IPTV 源走同一路径）。
 - 不属于上述来源的普通内容更新：直接替换，不自动添加整页动画。
 
 直接侧栏导航时，`RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，使 compositor 先启动平移，避免大列表首帧卡住。
@@ -176,7 +177,9 @@ flowchart TD
 
 不要在 `onComplete` 中先恢复出场节点的 opacity 再卸载，这会导致最后一帧闪出直播内容。退出 subtree 只在最终帧之后删除。
 
-当前 Zoom 只覆盖 `/room/*`；IPTV 的 `/iptv/play` 是独立沉浸式页面，但不复用直播间 Zoom key。
+Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两者共用同一套进出动画，但 `zoomKey` 取各自的 pathname，因此直播间与 IPTV 播放页之间切换不会被当成同一个页面而跳过过渡。不要让两者共用一个固定 key。
+
+沉浸式播放页只有 Zoom 一层路由动画。`Shell` 中沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支，二者互斥，不会叠加。
 
 房间 A 通过右侧关注栏切换到房间 B 时使用 replace，避免历史栈在房间之间来回跳转；B 的返回目标固定为 `/follow`，退出仍由同一个 `PageZoom` 处理。
 
@@ -199,9 +202,10 @@ flowchart TD
 
 IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由层：
 
-- IPTV 只动画首批最多 18 个频道卡片，使用 `autoAlpha`、`y: 10` 和 `0.018s` stagger；加载、错误或空状态变化时可重新运行。
 - 设置页首次对标题和分类导航使用 `y: 10`、`0.04s` stagger；切换设置分类时只对 `TabsContent` 使用 `y: 8` 入场。
-- 两者完成后都通过 `clearProps` 归还 transform、opacity、visibility 和 `will-change`。
+- 设置页完成后通过 `clearProps` 归还 transform、opacity、visibility 和 `will-change`。
+- IPTV 之前对首批 18 张频道卡片的 GSAP stagger 入场已移除，频道网格与其他卡片页面（首页、分类、搜索、关注）保持一致，路由导航层面的位移由 `PagePan` 统一承担。
+- 频道卡片复用 `.room-card`，共享其 `content-visibility: auto` 长列表优化和移动端按压 `max-md:active:scale-[0.97]` 反馈。
 
 长列表不得为所有项目同时创建 tween。优先只动画首屏或有界数量；无限滚动追加内容默认直接出现，避免动画持续争用播放器和 Canvas 帧预算。
 
@@ -325,7 +329,8 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 | --- | --- |
 | `PagePan` | 立即移除 outgoing，直接显示新页 |
 | `PageZoom` | 跳过进入/退出 tween 并立即完成页面切换 |
-| IPTV/设置入场 | 不创建 tween |
+| IPTV 频道网格入场 | 无 tween，内容由 PagePan 平移进入 |
+| 设置入场 | 不创建 tween |
 | 横向 swipe | 保留切换语义，清除跟随 transform，不执行回弹动画 |
 | 主题切换 | 不创建 View Transition，直接应用新主题 |
 | 播放器控制条 | 使用 `motion-reduce:transition-none` |

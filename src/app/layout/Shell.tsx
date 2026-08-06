@@ -169,13 +169,19 @@ export function Shell() {
         : sitePlatforms[0]!,
     [selectedSiteId, sitePlatforms],
   );
+  // Routes carrying the live-platform strip. This gates the platform swipe and
+  // the `SiteSwitcher` itself, so IPTV must stay out of it: IPTV has its own
+  // source strip and its own swipe.
   const showSiteSwitcher =
     pathname === "/" ||
     pathname.startsWith("/category") ||
     pathname.startsWith("/search") ||
     isFollow ||
     isHistory;
-  const showTopNavigation = showSiteSwitcher || isIptv;
+  // Routes whose content pans between groups. Same motion for live platforms
+  // and IPTV sources — one pan, two kinds of grouping.
+  const showGroupSwitcher = showSiteSwitcher || isIptv;
+  const showTopNavigation = showGroupSwitcher;
   const iptvSourceId = isIptv ? searchParams.get("source") : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
@@ -205,9 +211,13 @@ export function Shell() {
     disabledSiteIds,
   );
   const platformForMotion = isFollow ? followPlatform : isHistory ? historyPlatform : activeSiteId;
-  const previousPlatformRef = useRef<PlatformScopeValue>(platformForMotion);
-  const previousPlatform = previousPlatformRef.current;
-  previousPlatformRef.current = platformForMotion;
+  // The grouping a page pans between. Live routes travel between platforms;
+  // IPTV travels between playlist sources. Both are the same gesture and the
+  // same header slot, so they share one pan rather than each owning a scheme.
+  const groupForMotion: string = isIptv ? iptvSource.id : String(platformForMotion);
+  const previousGroupRef = useRef<string>(groupForMotion);
+  const previousGroup = previousGroupRef.current;
+  previousGroupRef.current = groupForMotion;
   // Keyed on the route alone, deliberately. Including the platform here would
   // unmount and rebuild the entire scroller subtree — the grid, the scroll
   // container, everything — during a site switch. Keeping the shell alive lets
@@ -227,11 +237,16 @@ export function Shell() {
     : isHistory
       ? historyPlatforms
       : sitePlatforms;
-  const previousPlatformIndex = platformStrip.indexOf(previousPlatform);
-  const currentPlatformIndex = platformStrip.indexOf(platformForMotion);
-  const platformDirection: "forward" | "backward" =
-    currentPlatformIndex >= 0 && previousPlatformIndex >= 0
-      ? currentPlatformIndex >= previousPlatformIndex
+  // One ordered strip per surface, compared as strings so platforms and IPTV
+  // source ids share the same direction rule.
+  const groupStrip: readonly string[] = isIptv
+    ? iptvSourceOptions
+    : platformStrip.map(String);
+  const previousGroupIndex = groupStrip.indexOf(previousGroup);
+  const currentGroupIndex = groupStrip.indexOf(groupForMotion);
+  const groupDirection: "forward" | "backward" =
+    currentGroupIndex >= 0 && previousGroupIndex >= 0
+      ? currentGroupIndex >= previousGroupIndex
         ? "forward"
         : "backward"
       : "forward";
@@ -392,19 +407,19 @@ export function Shell() {
       {routeOutlet}
     </div>
   );
-  const platformPage = (
+  const groupPage = (
     <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
       <PagePan
-        panKey={String(platformForMotion)}
-        direction={platformDirection === "backward" ? -1 : 1}
+        panKey={groupForMotion}
+        direction={groupDirection === "backward" ? -1 : 1}
         className="min-h-full"
       >
         {swipePage}
       </PagePan>
     </div>
   );
-  const regularPage = showSiteSwitcher ? (
-    platformPage
+  const regularPage = showGroupSwitcher ? (
+    groupPage
   ) : (
     <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
       {swipePage}
@@ -421,8 +436,11 @@ export function Shell() {
     <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
       <AppTitleBar />
       <PageZoom
-        zoomKey={isRoom ? pathname : "standard-shell"}
-        enabled={isRoom}
+        // Both immersive players zoom, each keyed on its own pathname so a
+        // room and the IPTV player are never collapsed into one page — that
+        // shared key, not the zoom itself, was the thing to avoid.
+        zoomKey={isImmersivePlayer ? pathname : "standard-shell"}
+        enabled={isImmersivePlayer}
         className="flex-1 overflow-hidden"
       >
         <div className="flex min-h-0 min-w-0 flex-1">
