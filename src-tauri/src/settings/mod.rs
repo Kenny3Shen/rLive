@@ -6,6 +6,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::AppSettings;
 
 const SETTINGS_KEY: &str = "app_settings";
+const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 5;
+const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 
 /// Repairs platform visibility preferences from hand-edited or future settings
 /// records. The UI prevents this state already, but settings are imported and
@@ -69,6 +71,15 @@ fn normalize_asr_preferences(settings: &mut AppSettings) {
     settings.asr_window_seconds = (bounded * 10.0).round() / 10.0;
 }
 
+fn normalize_danmaku_preferences(settings: &mut AppSettings) {
+    settings.danmaku_merge_window_seconds = settings
+        .danmaku_merge_window_seconds
+        .clamp(
+            DANMAKU_MERGE_WINDOW_SECONDS_MIN,
+            DANMAKU_MERGE_WINDOW_SECONDS_MAX,
+        );
+}
+
 /// Load app settings from `settings_kv`, or return defaults if missing/invalid.
 pub fn get(conn: &Connection) -> AppResult<AppSettings> {
     Ok(get_with_status(conn)?.0)
@@ -92,6 +103,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
         Some(json) => match serde_json::from_str(&json) {
             Ok(mut settings) => {
                 normalize_site_preferences(&mut settings);
+                normalize_danmaku_preferences(&mut settings);
                 normalize_asr_preferences(&mut settings);
                 Ok((settings, true))
             }
@@ -105,6 +117,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
 pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
     normalize_site_preferences(&mut normalized);
+    normalize_danmaku_preferences(&mut normalized);
     normalize_asr_preferences(&mut normalized);
     let json = serde_json::to_string(&normalized).map_err(|e| {
         AppError::new(
@@ -141,6 +154,7 @@ mod tests {
         assert_eq!(s.danmaku_font_weight, 600);
         assert!(s.danmaku_filter_repeats);
         assert!(s.danmaku_filter_gifts);
+        assert_eq!(s.danmaku_merge_window_seconds, 10);
         assert!(s.super_chat_enabled);
         assert_eq!(s.asr_font_size, 20);
         assert!(s.danmaku_shield_words.is_empty());
@@ -159,6 +173,22 @@ mod tests {
         let (back, has_saved_settings) = get_with_status(&conn).unwrap();
         assert!(has_saved_settings);
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn set_clamps_danmaku_merge_window() {
+        let conn = open_in_memory().unwrap();
+        let mut settings = AppSettings {
+            danmaku_merge_window_seconds: 1,
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 5);
+
+        settings.danmaku_merge_window_seconds = 60;
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 30);
     }
 
     #[test]

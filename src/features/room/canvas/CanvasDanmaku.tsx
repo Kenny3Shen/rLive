@@ -292,6 +292,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   const lineCount = useSettingsStore((s) => s.danmakuLineCount);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
   const filterRepeats = useSettingsStore((s) => s.danmakuFilterRepeats);
+  const mergeWindowSeconds = useSettingsStore((s) => s.danmakuMergeWindowSeconds);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const theme = useSettingsStore((s) => s.theme);
@@ -312,6 +313,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       lineCount,
       fontWeight,
       aggregateRepeats: filterRepeats,
+      aggregateWindowMs: mergeWindowSeconds * 1_000,
       selfColor: currentSelfDanmakuColor(),
     });
   }
@@ -325,10 +327,21 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       lineCount,
       fontWeight,
       aggregateRepeats: filterRepeats,
+      aggregateWindowMs: mergeWindowSeconds * 1_000,
       selfColor: currentSelfDanmakuColor(),
     });
     requestFrameRef.current();
-  }, [fontSize, speed, opacity, area, lineCount, fontWeight, filterRepeats, theme]);
+  }, [
+    fontSize,
+    speed,
+    opacity,
+    area,
+    lineCount,
+    fontWeight,
+    filterRepeats,
+    mergeWindowSeconds,
+    theme,
+  ]);
 
   useEffect(() => {
     if (!active) return;

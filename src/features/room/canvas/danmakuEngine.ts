@@ -1,6 +1,9 @@
 import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 import {
   createDanmakuContentAggregator,
+  DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS,
+  DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
+  DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS,
   floatingDanmakuText,
   shouldShowOnCanvas,
 } from "../danmaku/filter";
@@ -89,8 +92,10 @@ export type DanmakuEngineOptions = {
   lineCount?: number;
   /** CSS-compatible canvas font weight. */
   fontWeight?: number;
-  /** Combine matching normal-chat content into one floating item for five seconds. */
+  /** Combine matching normal-chat content into one floating item. */
   aggregateRepeats?: boolean;
+  /** Sliding window for `aggregateRepeats`, in milliseconds. */
+  aggregateWindowMs?: number;
   /** Distinct canvas-safe color used for messages from the local account. */
   selfColor?: string;
   /** Test/diagnostic only: collect scheduling counters without production overhead. */
@@ -234,6 +239,14 @@ function clampOpacity(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function clampAggregateWindowMs(value: number | undefined): number {
+  if (!Number.isFinite(value)) return DANMAKU_CONTENT_AGGREGATION_WINDOW_MS;
+  return Math.min(
+    DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS,
+    Math.max(DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS, Math.round(value as number)),
+  );
+}
+
 function clampArea(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_SCROLL_AREA_RATIO;
   return Math.max(0.1, Math.min(1, value ?? DEFAULT_SCROLL_AREA_RATIO));
@@ -327,8 +340,9 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let maxLineCount = clampLineCount(opts.lineCount);
   let currentFontWeight = clampFontWeight(opts.fontWeight);
   let aggregateRepeats = opts.aggregateRepeats === true;
+  let aggregateWindowMs = clampAggregateWindowMs(opts.aggregateWindowMs);
   let currentSelfColor = selfDanmakuColor(opts.selfColor);
-  let contentAggregator = createDanmakuContentAggregator(aggregateRepeats);
+  let contentAggregator = createDanmakuContentAggregator(aggregateRepeats, aggregateWindowMs);
   const aggregationTargets = new Map<string, AggregationTarget>();
   let items: EngineTrackItem[] = [];
   let pending: PendingScroll[] = [];
@@ -918,6 +932,10 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       const nextScrollArea = clampArea(nextOpts.area);
       const nextLineCount = clampLineCount(nextOpts.lineCount);
       const nextAggregateRepeats = nextOpts.aggregateRepeats ?? aggregateRepeats;
+      const nextAggregateWindowMs =
+        nextOpts.aggregateWindowMs === undefined
+          ? aggregateWindowMs
+          : clampAggregateWindowMs(nextOpts.aggregateWindowMs);
       const nextSelfColor = selfDanmakuColor(nextOpts.selfColor ?? currentSelfColor);
       if (
         nextFontSize !== fontSize ||
@@ -946,9 +964,13 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
           if (item.isSelf) item.color = currentSelfColor;
         }
       }
-      if (nextAggregateRepeats !== aggregateRepeats) {
+      if (
+        nextAggregateRepeats !== aggregateRepeats ||
+        nextAggregateWindowMs !== aggregateWindowMs
+      ) {
         aggregateRepeats = nextAggregateRepeats;
-        contentAggregator = createDanmakuContentAggregator(aggregateRepeats);
+        aggregateWindowMs = nextAggregateWindowMs;
+        contentAggregator = createDanmakuContentAggregator(aggregateRepeats, aggregateWindowMs);
         aggregationTargets.clear();
       }
     },

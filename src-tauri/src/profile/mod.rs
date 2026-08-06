@@ -195,6 +195,7 @@ pub fn merge_into_db(
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
+    settings.danmaku_merge_window_seconds = package.settings.danmaku_merge_window_seconds;
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_smart_line_selection = package.settings.playback_smart_line_selection;

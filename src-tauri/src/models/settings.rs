@@ -30,6 +30,11 @@ pub struct AppSettings {
     /// Suppress consecutive duplicate chat messages in the visual clients.
     #[serde(default = "default_danmaku_filter_repeats")]
     pub danmaku_filter_repeats: bool,
+    /// Sliding window used to merge duplicate chat messages, in seconds.
+    /// Only meaningful while `danmaku_filter_repeats` is enabled; normalized
+    /// to 5 ..= 30 at the settings persistence boundary.
+    #[serde(default = "default_danmaku_merge_window_seconds")]
+    pub danmaku_merge_window_seconds: u32,
     /// Whether gift-related messages should be hidden from the danmaku stream.
     #[serde(default = "default_danmaku_filter_gifts")]
     pub danmaku_filter_gifts: bool,
@@ -120,6 +125,10 @@ fn default_danmaku_filter_gifts() -> bool {
     true
 }
 
+fn default_danmaku_merge_window_seconds() -> u32 {
+    10
+}
+
 fn default_asr_font_size() -> u32 {
     20
 }
@@ -151,6 +160,7 @@ impl Default for AppSettings {
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
             danmaku_filter_gifts: default_danmaku_filter_gifts(),
+            danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
             super_chat_opacity: default_super_chat_opacity(),
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
@@ -203,6 +213,7 @@ mod tests {
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
         assert!(settings.danmaku_filter_gifts);
+        assert_eq!(settings.danmaku_merge_window_seconds, 10);
         assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.playback_smart_line_selection);

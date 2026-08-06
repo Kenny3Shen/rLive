@@ -53,6 +53,20 @@ function parseAsrFontSize(value: unknown): number {
   return Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(numeric)));
 }
 
+export const DANMAKU_MERGE_WINDOW_SECONDS_MIN = 5;
+export const DANMAKU_MERGE_WINDOW_SECONDS_MAX = 30;
+export const DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT = 10;
+
+/** Whole seconds inside 5..=30; a legacy or corrupt record falls back to 10s. */
+export function parseDanmakuMergeWindowSeconds(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(numeric)) return DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT;
+  return Math.min(
+    DANMAKU_MERGE_WINDOW_SECONDS_MAX,
+    Math.max(DANMAKU_MERGE_WINDOW_SECONDS_MIN, Math.round(numeric)),
+  );
+}
+
 function parseAsrWindowSeconds(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric)) return ASR_WINDOW_SECONDS_DEFAULT;
@@ -74,6 +88,7 @@ type SettingsState = {
   danmakuFontWeight: number;
   danmakuFilterRepeats: boolean;
   danmakuFilterGifts: boolean;
+  danmakuMergeWindowSeconds: number;
   superChatEnabled: boolean;
   superChatOpacity: number;
   danmakuShieldWords: string[];
@@ -134,6 +149,7 @@ const defaultSettings: AppSettings = {
   danmaku_font_weight: 600,
   danmaku_filter_repeats: true,
   danmaku_filter_gifts: true,
+  danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
   super_chat_opacity: 1,
   danmaku_shield_words: [],
@@ -162,6 +178,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_font_weight: state.danmakuFontWeight,
     danmaku_filter_repeats: state.danmakuFilterRepeats,
     danmaku_filter_gifts: state.danmakuFilterGifts,
+    danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
     super_chat_enabled: state.superChatEnabled,
     super_chat_opacity: state.superChatOpacity,
     danmaku_shield_words: state.danmakuShieldWords,
@@ -192,6 +209,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuFontWeight: 600,
       danmakuFilterRepeats: true,
       danmakuFilterGifts: true,
+      danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
       superChatOpacity: 1,
       danmakuShieldWords: [],
@@ -344,6 +362,9 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuFontWeight: settings.danmaku_font_weight,
           danmakuFilterRepeats: settings.danmaku_filter_repeats,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
+          danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(
+            settings.danmaku_merge_window_seconds,
+          ),
           superChatEnabled: settings.super_chat_enabled ?? true,
           superChatOpacity: settings.super_chat_opacity ?? 1,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],

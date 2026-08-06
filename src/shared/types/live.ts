@@ -155,6 +155,8 @@ export type AppSettings = {
   danmaku_font_weight: number;
   danmaku_filter_repeats: boolean;
   danmaku_filter_gifts: boolean;
+  /** Merge window for duplicate chat messages in seconds, limited to 5..=30. */
+  danmaku_merge_window_seconds?: number;
   /** Show supported-platform Super Chat cards over the player. */
   super_chat_enabled?: boolean;
   /** SC card transparency 0.0 ..= 1.0 */
