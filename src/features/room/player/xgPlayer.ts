@@ -1,6 +1,6 @@
 import type { IPlayerOptions } from "xgplayer";
 
-export type XgPlaybackKind = "flv" | "hls" | "mpegts" | "native";
+export type XgPlaybackKind = "flv" | "hls" | "hlsjs" | "mpegts" | "native";
 
 export type XgPlayerInstance = {
   media: HTMLMediaElement;
@@ -26,13 +26,15 @@ export type XgPlayerModules = {
   plugin?: XgStreamingPlugin;
 };
 
-export type XgHlsCore = {
-  replay: (isPlayEmit?: boolean) => Promise<void>;
+export type XgHlsJsCore = {
+  startLoad: (startPosition?: number) => void;
+  recoverMediaError: () => void;
 };
 
 let coreModulePromise: Promise<typeof import("xgplayer")> | null = null;
 let flvModulePromise: Promise<typeof import("xgplayer-flv")> | null = null;
 let hlsModulePromise: Promise<typeof import("xgplayer-hls")> | null = null;
+let hlsJsModulePromise: Promise<typeof import("xgplayer-hls.js")> | null = null;
 let mpegtsModulePromise: Promise<typeof import("xgplayer-mpegts.js")> | null = null;
 
 function loadCoreModule(): Promise<typeof import("xgplayer")> {
@@ -54,6 +56,14 @@ export async function loadXgPlayerModules(kind: XgPlaybackKind): Promise<XgPlaye
   if (kind === "hls") {
     if (!hlsModulePromise) hlsModulePromise = import("xgplayer-hls");
     const [core, { default: plugin }] = await Promise.all([corePromise, hlsModulePromise]);
+    return {
+      Player: core.SimplePlayer as unknown as XgPlayerConstructor,
+      plugin: plugin as unknown as XgStreamingPlugin,
+    };
+  }
+  if (kind === "hlsjs") {
+    if (!hlsJsModulePromise) hlsJsModulePromise = import("xgplayer-hls.js");
+    const [core, { default: plugin }] = await Promise.all([corePromise, hlsJsModulePromise]);
     return {
       Player: core.SimplePlayer as unknown as XgPlayerConstructor,
       plugin: plugin as unknown as XgStreamingPlugin,
@@ -81,22 +91,23 @@ export function createXgPlayer(
     isLive?: boolean;
     flv?: Record<string, unknown>;
     hls?: Record<string, unknown>;
+    hlsJs?: Record<string, unknown>;
     mpegts?: Record<string, unknown>;
   },
 ): XgPlayerInstance {
-  const { root, video, url, kind, isLive = true, flv, hls, mpegts } = options;
+  const { root, video, url, kind, isLive = true, flv, hls, hlsJs, mpegts } = options;
   const pluginSupported = modules.plugin?.isSupported?.() ?? true;
   const nativeHlsSupported = Boolean(video.canPlayType("application/vnd.apple.mpegurl"));
 
   if ((kind === "flv" || kind === "mpegts") && !pluginSupported) {
     throw new Error("当前环境不支持 MSE 直播播放");
   }
-  if (kind === "hls" && !pluginSupported && !nativeHlsSupported) {
+  if ((kind === "hls" || kind === "hlsjs") && !pluginSupported && !nativeHlsSupported) {
     throw new Error("当前环境不支持 HLS 直播播放");
   }
 
   const plugins = modules.plugin && pluginSupported ? [modules.plugin] : [];
-  const playerOptions: IPlayerOptions = {
+  const playerOptions: IPlayerOptions & { hlsJsPlugin?: Record<string, unknown> } = {
     el: root,
     mediaEl: video,
     url,
@@ -119,17 +130,29 @@ export function createXgPlayer(
 
   if (kind === "flv") playerOptions.flv = flv ?? {};
   if (kind === "hls") playerOptions.hls = hls ?? {};
+  if (kind === "hlsjs") playerOptions.hlsJsPlugin = hlsJs ?? {};
   if (kind === "mpegts") playerOptions.MpegtsPlugin = mpegts ?? {};
 
   return new modules.Player(playerOptions);
 }
 
-export function getXgHlsCore(player: XgPlayerInstance): XgHlsCore | null {
-  const plugin = player.getPlugin("hls") as {
-    core?: XgHlsCore | null;
-    hls?: XgHlsCore | null;
+export function getXgHlsJsCore(player: XgPlayerInstance): XgHlsJsCore | null {
+  const plugin = player.getPlugin("HlsJsPlugin") as {
+    hls?: XgHlsJsCore | null;
   } | null;
-  return plugin?.core ?? plugin?.hls ?? null;
+  if (!plugin) return null;
+  if (plugin.hls) return plugin.hls;
+
+  // xgplayer starts protocol plugins from Player.start(). Keep recovery calls
+  // valid when this helper runs before the hls.js instance has been attached.
+  return {
+    startLoad: (startPosition?: number) => {
+      plugin.hls?.startLoad(startPosition);
+    },
+    recoverMediaError: () => {
+      plugin.hls?.recoverMediaError();
+    },
+  };
 }
 
 export function xgPlayerErrorMessage(error: unknown, fallback = "播放失败"): string {
@@ -180,10 +203,11 @@ export function isXgPlayerDecodeError(error: unknown): boolean {
     value.message,
     value.mediaError?.message,
     value.originError?.message,
-  ].some((message) =>
-    typeof message === "string" &&
-    /chunk_demuxer_error_append_failed|pipeline_error_decode|media_err_decode|decod(?:e|ing|er)/i.test(
-      message,
-    ),
+  ].some(
+    (message) =>
+      typeof message === "string" &&
+      /chunk_demuxer_error_append_failed|pipeline_error_decode|media_err_decode|decod(?:e|ing|er)/i.test(
+        message,
+      ),
   );
 }

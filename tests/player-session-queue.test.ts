@@ -119,9 +119,15 @@ describe("player session queue", () => {
     ).toBe(false);
   });
 
-  test("routes Twitch-style HLS manifests to the HLS player path", () => {
+  test("routes Twitch HLS through hls.js without changing other HLS sites", () => {
     expect(isHlsStream("https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one")).toBe(true);
     expect(isHlsStream("https://cdn.example.test/live.flv")).toBe(false);
+    const source = {
+      url: "https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one",
+      protocol: "hls" as const,
+    };
+    expect(webPlaybackKind(source, "twitch")).toBe("hlsjs");
+    expect(webPlaybackKind(source, "bilibili")).toBe("hls");
   });
 
   test("does not mark a play() call healthy before the first decoded frame", () => {
