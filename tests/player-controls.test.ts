@@ -10,6 +10,7 @@ import {
   isPlayerStageTap,
   isVerticalPlayerEdgeGesture,
   nextRoomSideTabForSwipe,
+  playerBrightnessShadeOpacity,
   playerEdgeGestureDragExtent,
   playerEdgeGestureForStart,
   playerEdgeGestureValue,
@@ -124,6 +125,14 @@ describe("Android player edge gestures", () => {
   test("assigns brightness to the left half and volume to the right half", () => {
     expect(playerEdgeGestureForStart(80, 20, 400)).toBe("brightness");
     expect(playerEdgeGestureForStart(260, 20, 400)).toBe("volume");
+  });
+
+  test("maps fallback brightness to a bounded black-overlay opacity", () => {
+    expect(playerBrightnessShadeOpacity(100)).toBe(0);
+    expect(playerBrightnessShadeOpacity(40)).toBe(0.6);
+    expect(playerBrightnessShadeOpacity(0)).toBe(1);
+    expect(playerBrightnessShadeOpacity(-20)).toBe(1);
+    expect(playerBrightnessShadeOpacity(120)).toBe(0);
   });
 
   test("requires a deliberate vertical movement and clamps the resulting value", () => {

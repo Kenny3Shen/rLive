@@ -406,9 +406,9 @@ html.overlay-window #root {
   }
 }
 
-/* Same material over video. The frame behind is bright and moving, so the fill
-   is a touch heavier and tinted dark to hold label contrast, and the blur is
-   stronger to keep motion from showing through as visible detail. */
+/* Same material over video. Keep the blur deliberately lighter than app glass:
+   every decoded frame changes the backdrop, so a large radius would make an
+   open player popover repeatedly sample a costly moving surface. */
 @utility glass-surface-overlay {
   position: relative;
   isolation: isolate;
@@ -418,7 +418,7 @@ html.overlay-window #root {
     inset 0 1px 0 oklch(1 0 0 / 0.1);
 
   @supports (backdrop-filter: blur(1px)) {
-    backdrop-filter: blur(28px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(140%);
   }
 
   &::before {
@@ -435,6 +435,18 @@ html.overlay-window #root {
     &::before {
       background-color: oklch(0.16 0.012 265 / 0.94);
     }
+  }
+}
+
+/* Mobile WebViews share the GPU with video decode and Canvas danmaku. Prefer a
+   denser translucent fill there instead of continuously filtering video. */
+@media (pointer: coarse), (update: slow) {
+  .glass-surface-overlay {
+    backdrop-filter: none;
+  }
+
+  .glass-surface-overlay::before {
+    background-color: oklch(0.16 0.012 265 / 0.86);
   }
 }
 
@@ -504,6 +516,16 @@ html.overlay-window #root {
 
 @utility animate-drawer-out-right {
   animation: drawer-out-right 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin-soft,
+  .animate-drawer-in-bottom,
+  .animate-drawer-out-bottom,
+  .animate-drawer-in-right,
+  .animate-drawer-out-right {
+    animation: none;
+  }
 }
 
 @layer base {

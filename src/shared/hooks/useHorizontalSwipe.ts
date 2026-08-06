@@ -23,6 +23,7 @@ type SwipeState = {
   startX: number;
   startY: number;
   startOffsetX: number;
+  surfaceWidth: number;
   horizontal: boolean;
 };
 
@@ -73,29 +74,62 @@ export function useHorizontalSwipe<T>({
   // pan actually is. Also the cap for the follow-the-finger drag.
   const surfaceWidthRef = useRef(0);
   const offsetRef = useRef(0);
+  const pendingOffsetRef = useRef<number | null>(null);
+  const offsetFrameRef = useRef<number | null>(null);
   itemsRef.current = items;
   valueRef.current = value;
   onChangeRef.current = onChange;
   isEqualRef.current = isEqual;
 
-  /** Immediate write during a drag: no tween, straight to the transform. */
-  const setOffset = useCallback((next: number) => {
-    offsetRef.current = next;
+  const flushOffset = useCallback(() => {
+    offsetFrameRef.current = null;
+    const next = pendingOffsetRef.current;
+    pendingOffsetRef.current = null;
     const el = pageRef.current;
-    if (el) gsap.set(el, { x: next, force3D: true });
+    if (el && next !== null) gsap.set(el, { x: next, force3D: true });
   }, []);
+
+  const cancelPendingOffset = useCallback(() => {
+    if (offsetFrameRef.current !== null) {
+      window.cancelAnimationFrame(offsetFrameRef.current);
+      offsetFrameRef.current = null;
+    }
+    pendingOffsetRef.current = null;
+  }, []);
+
+  const flushPendingOffset = useCallback(() => {
+    if (offsetFrameRef.current !== null) {
+      window.cancelAnimationFrame(offsetFrameRef.current);
+      offsetFrameRef.current = null;
+    }
+    flushOffset();
+  }, [flushOffset]);
+
+  /** Coalesce high-polling pointer events into one compositor write per frame. */
+  const setOffset = useCallback(
+    (next: number) => {
+      offsetRef.current = next;
+      pendingOffsetRef.current = next;
+      if (offsetFrameRef.current === null) {
+        offsetFrameRef.current = window.requestAnimationFrame(flushOffset);
+      }
+    },
+    [flushOffset],
+  );
 
   /** Return the settled page to normal layout painting instead of a permanent layer. */
   const clearOffset = useCallback(() => {
+    cancelPendingOffset();
     offsetRef.current = 0;
     const el = pageRef.current;
     if (el) gsap.set(el, { clearProps: "transform,willChange" });
-  }, []);
+  }, [cancelPendingOffset]);
 
   /** Tween whatever offset the finger left behind back to rest. */
   const settleAtRest = useCallback(() => {
     const el = pageRef.current;
     if (!el) return;
+    flushPendingOffset();
     gsap.killTweensOf(el);
     if (prefersReducedMotion()) {
       clearOffset();
@@ -108,7 +142,7 @@ export function useHorizontalSwipe<T>({
       // The compositor hint is only worth carrying while something moves.
       onComplete: clearOffset,
     });
-  }, [clearOffset]);
+  }, [clearOffset, flushPendingOffset]);
 
   useLayoutEffect(() => {
     const previousValue = renderedValueRef.current;
@@ -127,6 +161,7 @@ export function useHorizontalSwipe<T>({
     pendingDirectionRef.current = null;
     const el = pageRef.current;
     if (!el) return;
+    cancelPendingOffset();
     gsap.killTweensOf(el);
 
     // `shouldAnimate: false` means a parent PagePan owns the entry pan. Land at
@@ -158,7 +193,7 @@ export function useHorizontalSwipe<T>({
       },
     );
     offsetRef.current = 0;
-  }, [clearOffset, isEqual, items, shouldAnimate, value]);
+  }, [cancelPendingOffset, clearOffset, isEqual, items, shouldAnimate, value]);
 
   useLayoutEffect(() => {
     if (enabled) return;
@@ -166,21 +201,23 @@ export function useHorizontalSwipe<T>({
     pendingDirectionRef.current = null;
     const el = pageRef.current;
     if (!el) return;
+    cancelPendingOffset();
     gsap.killTweensOf(el);
     clearOffset();
-  }, [clearOffset, enabled]);
+  }, [cancelPendingOffset, clearOffset, enabled]);
 
   // Kill anything still in flight when the surface goes away, so GSAP never
   // ticks a detached node.
   useLayoutEffect(
     () => () => {
+      cancelPendingOffset();
       const el = pageRef.current;
       if (el) {
         gsap.killTweensOf(el);
         gsap.set(el, { clearProps: "transform,willChange" });
       }
     },
-    [],
+    [cancelPendingOffset],
   );
 
   const releasePointer = useCallback((element: HTMLElement, pointerId: number) => {
@@ -202,13 +239,16 @@ export function useHorizontalSwipe<T>({
       ) {
         return;
       }
+      const surfaceWidth = event.currentTarget.clientWidth;
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         startOffsetX: offsetRef.current,
+        surfaceWidth,
         horizontal: false,
       };
+      surfaceWidthRef.current = surfaceWidth;
     },
     [enabled],
   );
@@ -252,8 +292,7 @@ export function useHorizontalSwipe<T>({
       }
 
       if (!prefersReducedMotion()) {
-        const surfaceWidth = event.currentTarget.clientWidth;
-        surfaceWidthRef.current = surfaceWidth;
+        const surfaceWidth = swipe.surfaceWidth;
         const currentIndex = itemsRef.current.findIndex((item) =>
           isEqualRef.current(item, valueRef.current),
         );

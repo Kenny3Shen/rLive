@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -50,29 +51,96 @@ export function PullToRefresh({
   ...props
 }: PullToRefreshProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const indicatorRef = useRef<HTMLDivElement | null>(null);
+  const indicatorBodyRef = useRef<HTMLDivElement | null>(null);
+  const refreshIconRef = useRef<SVGSVGElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const pullRef = useRef<PullState | null>(null);
   const distanceRef = useRef(0);
-  const [distance, setDistance] = useState(0);
+  const pendingDistanceRef = useRef(0);
+  const pendingDraggingRef = useRef(false);
+  const distanceFrameRef = useRef<number | null>(null);
   const [localRefreshing, setLocalRefreshing] = useState(false);
   // Parent often passes `false`; `??` would ignore localRefreshing. OR them.
   const refreshing = Boolean(refreshingProp) || localRefreshing;
   const disabledRef = useRef(disabled);
   const refreshingRef = useRef(refreshing);
+  const refreshingPropRef = useRef(Boolean(refreshingProp));
   const onRefreshRef = useRef(onRefresh);
   disabledRef.current = disabled;
   refreshingRef.current = refreshing;
+  refreshingPropRef.current = Boolean(refreshingProp);
   onRefreshRef.current = onRefresh;
 
-  const updateDistance = useCallback((next: number) => {
-    distanceRef.current = next;
-    setDistance(next);
+  const applyDistance = useCallback((distance: number, dragging: boolean) => {
+    const indicator = indicatorRef.current;
+    const indicatorBody = indicatorBodyRef.current;
+    const refreshIcon = refreshIconRef.current;
+    const content = contentRef.current;
+    const isRefreshing = refreshingRef.current;
+    const indicatorOffset = isRefreshing ? Math.max(distance, 44) : distance;
+    const transitionDuration = dragging ? "0ms" : "";
+
+    if (indicator) {
+      indicator.style.transitionDuration = transitionDuration;
+      indicator.style.opacity = indicatorOffset > 0 ? "1" : "0";
+      indicator.style.transform = `translate3d(0, ${Math.max(0, indicatorOffset - 36)}px, 0)`;
+      indicator.setAttribute("aria-hidden", indicatorOffset > 0 ? "false" : "true");
+    }
+    if (indicatorBody) {
+      indicatorBody.dataset.armed =
+        isRefreshing || isPullToRefreshArmed(distance) ? "true" : "false";
+    }
+    if (refreshIcon) {
+      refreshIcon.style.transitionDuration = transitionDuration;
+      refreshIcon.style.transform = `rotate(${Math.min(
+        180,
+        (distance / PULL_TO_REFRESH_MAX_PX) * 180,
+      )}deg)`;
+    }
+    if (content) {
+      content.style.transitionDuration = transitionDuration;
+      content.style.transform =
+        indicatorOffset > 0 ? `translate3d(0, ${indicatorOffset * 0.35}px, 0)` : "";
+    }
   }, []);
+
+  const flushDistanceWrite = useCallback(() => {
+    distanceFrameRef.current = null;
+    applyDistance(pendingDistanceRef.current, pendingDraggingRef.current);
+  }, [applyDistance]);
+
+  const updateDistance = useCallback(
+    (next: number, dragging = false) => {
+      distanceRef.current = next;
+      pendingDistanceRef.current = next;
+      pendingDraggingRef.current = dragging;
+      if (distanceFrameRef.current === null) {
+        distanceFrameRef.current = window.requestAnimationFrame(flushDistanceWrite);
+      }
+    },
+    [flushDistanceWrite],
+  );
+
+  const cancelDistanceWrite = useCallback(() => {
+    if (distanceFrameRef.current !== null) {
+      window.cancelAnimationFrame(distanceFrameRef.current);
+      distanceFrameRef.current = null;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    // Re-apply after React swaps the idle arrow for the loading glyph, without
+    // putting the high-frequency drag distance back into component state.
+    applyDistance(distanceRef.current, false);
+  }, [applyDistance, refreshing]);
 
   const triggerRefresh = useCallback(async () => {
     if (disabledRef.current || refreshingRef.current) {
       updateDistance(0);
       return;
     }
+    refreshingRef.current = true;
     setLocalRefreshing(true);
     updateDistance(PULL_TO_REFRESH_MAX_PX * 0.55);
     try {
@@ -81,6 +149,7 @@ export function PullToRefresh({
       // Queries and mutations own their visible error state/toast. The gesture
       // still needs to settle without leaking an unhandled rejection.
     } finally {
+      refreshingRef.current = refreshingPropRef.current;
       setLocalRefreshing(false);
       updateDistance(0);
       pullRef.current = null;
@@ -134,7 +203,7 @@ export function PullToRefresh({
 
       // Non-passive listener: stop the page scroller from eating the overscroll.
       event.preventDefault();
-      updateDistance(pullToRefreshDistance(deltaY));
+      updateDistance(pullToRefreshDistance(deltaY), true);
     };
 
     const onTouchEnd = () => {
@@ -164,11 +233,13 @@ export function PullToRefresh({
       scrollParent.removeEventListener("touchmove", onTouchMove, true);
       scrollParent.removeEventListener("touchend", onTouchEnd, true);
       scrollParent.removeEventListener("touchcancel", onTouchCancel, true);
+      pullRef.current = null;
+      cancelDistanceWrite();
+      distanceRef.current = 0;
+      pendingDistanceRef.current = 0;
+      applyDistance(0, false);
     };
-  }, [disabled, triggerRefresh, updateDistance]);
-
-  const armed = isPullToRefreshArmed(distance) || refreshing;
-  const indicatorOffset = refreshing ? Math.max(distance, 44) : distance;
+  }, [applyDistance, cancelDistanceWrite, disabled, triggerRefresh, updateDistance]);
 
   return (
     <div
@@ -177,39 +248,29 @@ export function PullToRefresh({
       {...props}
     >
       <div
-        aria-hidden={indicatorOffset <= 0}
-        className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center transition-[opacity,transform] duration-150",
-          indicatorOffset > 0 ? "opacity-100" : "opacity-0",
-        )}
-        style={{
-          transform: `translateY(${Math.max(0, indicatorOffset - 36)}px)`,
-        }}
+        ref={indicatorRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center opacity-0 transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none"
       >
         <div
-          className={cn(
-            "flex size-9 items-center justify-center rounded-full border border-border-subtle bg-card/95 text-muted-foreground shadow-sm",
-            armed && "border-primary/30 text-primary",
-          )}
+          ref={indicatorBodyRef}
+          data-armed={refreshing ? "true" : "false"}
+          className="flex size-9 items-center justify-center rounded-full border border-border-subtle bg-card/95 text-muted-foreground shadow-sm data-[armed=true]:border-primary/30 data-[armed=true]:text-primary"
         >
           {refreshing ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden />
+            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
           ) : (
             <RefreshCw
-              className="size-4 transition-transform"
-              style={{
-                transform: `rotate(${Math.min(180, (distance / PULL_TO_REFRESH_MAX_PX) * 180)}deg)`,
-              }}
+              ref={refreshIconRef}
+              className="size-4 transition-transform duration-150 ease-out motion-reduce:transition-none"
               aria-hidden
             />
           )}
         </div>
       </div>
       <div
-        className="flex min-h-full flex-col"
-        style={
-          indicatorOffset > 0 ? { transform: `translateY(${indicatorOffset * 0.35}px)` } : undefined
-        }
+        ref={contentRef}
+        className="flex min-h-full flex-col transition-transform duration-150 ease-out motion-reduce:transition-none"
       >
         {children}
       </div>
