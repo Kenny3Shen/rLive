@@ -48,6 +48,7 @@ const ASR_PROVIDER_CPU: &str = "cpu";
 const ASR_PROVIDER_CUDA: &str = "cuda";
 // The v1.13.4 Windows CUDA archive used by this project contains SASS for
 // Pascal (sm_61) and newer NVIDIA architectures.
+#[cfg(any(windows, test))]
 const CUDA_MIN_COMPUTE_CAPABILITY: (i32, i32) = (6, 1);
 
 const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
@@ -1429,6 +1430,7 @@ fn cuda_provider_fallback_message() -> String {
     "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
 }
 
+#[cfg(any(windows, test))]
 fn cuda_compute_capability_supported(major: i32, minor: i32) -> bool {
     (major, minor) >= CUDA_MIN_COMPUTE_CAPABILITY
 }

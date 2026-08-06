@@ -16,7 +16,7 @@ pub struct SiteInfo {
     pub ready: bool,
 }
 
-fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::LiveSite>> {
+fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::traits::LiveSite>> {
     // A site instance can make several dependent requests (Twitch bootstrap,
     // GraphQL, room data, then its HLS master playlist). Snapshot the cookie
     // and proxy together so every request in that chain follows the setting.
