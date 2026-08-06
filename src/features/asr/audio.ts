@@ -4,8 +4,21 @@ export const ASR_MAX_CHUNK_SECONDS = 1;
 export const ASR_DEFAULT_CHUNK_SECONDS = 0.2;
 
 const NATIVE_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+const PCM_CAPTURE_WORKLET_URL = new URL("./pcmCapture.worklet.js?no-inline", import.meta.url);
+const PCM_CAPTURE_PROCESSOR_NAME = "rlive-pcm-capture";
 
 type PcmListener = (pcm: Float32Array) => void;
+
+export type AudioCaptureBackend = "audio-worklet" | "script-processor";
+
+export function selectAudioCaptureBackend(environment: {
+  audioWorklet: boolean;
+  audioWorkletNode: boolean;
+}): AudioCaptureBackend {
+  return environment.audioWorklet && environment.audioWorkletNode
+    ? "audio-worklet"
+    : "script-processor";
+}
 
 export function downsamplePcm(
   input: Float32Array,
@@ -123,6 +136,15 @@ function clampChunkSeconds(seconds: number): number {
   return Math.min(ASR_MAX_CHUNK_SECONDS, Math.max(ASR_MIN_CHUNK_SECONDS, seconds));
 }
 
+type CaptureProcessor =
+  | { kind: "audio-worklet"; node: AudioWorkletNode }
+  | { kind: "script-processor"; node: ScriptProcessorNode };
+
+type WorkletPcmMessage = {
+  type: "pcm";
+  samples: Float32Array;
+};
+
 class AudioCapturePipeline {
   private readonly listeners = new Set<PcmListener>();
   private buffer = new Float32Array();
@@ -135,9 +157,13 @@ class AudioCapturePipeline {
     readonly video: HTMLVideoElement,
     readonly context: AudioContext,
     private readonly source: MediaElementAudioSourceNode,
-    private readonly processor: ScriptProcessorNode,
+    private readonly processor: CaptureProcessor,
   ) {
-    this.processor.onaudioprocess = (event) => this.handleAudioProcess(event);
+    if (this.processor.kind === "audio-worklet") {
+      this.processor.node.port.onmessage = (event) => this.handleWorkletMessage(event);
+    } else {
+      this.processor.node.onaudioprocess = (event) => this.handleAudioProcess(event);
+    }
   }
 
   get listenerCount(): number {
@@ -149,27 +175,46 @@ class AudioCapturePipeline {
   }
 
   addListener(listener: PcmListener): void {
-    if (this.listeners.size === 0) this.resetBuffer();
+    const firstListener = this.listeners.size === 0;
     this.listeners.add(listener);
+    if (firstListener) this.setCaptureActive(true);
   }
 
   removeListener(listener: PcmListener): void {
     this.listeners.delete(listener);
-    if (this.listeners.size === 0) this.resetBuffer();
+    if (this.listeners.size === 0) this.setCaptureActive(false);
   }
 
   setChunkSeconds(seconds: number): void {
     this.chunkSeconds = clampChunkSeconds(seconds);
+    if (this.processor.kind === "audio-worklet") {
+      this.processor.node.port.postMessage({
+        type: "set_chunk_seconds",
+        seconds: this.chunkSeconds,
+      });
+    }
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    this.processor.onaudioprocess = null;
-    this.processor.disconnect();
+    if (this.processor.kind === "audio-worklet") {
+      this.processor.node.port.onmessage = null;
+      this.processor.node.port.postMessage({ type: "set_active", active: false });
+    } else {
+      this.processor.node.onaudioprocess = null;
+    }
+    this.processor.node.disconnect();
     this.source.disconnect();
     this.resetBuffer();
     await this.context.close().catch(() => {});
+  }
+
+  private setCaptureActive(active: boolean): void {
+    this.resetBuffer();
+    if (this.processor.kind === "audio-worklet") {
+      this.processor.node.port.postMessage({ type: "set_active", active });
+    }
   }
 
   private resetBuffer(): void {
@@ -222,6 +267,13 @@ class AudioCapturePipeline {
     this.append(mono);
   }
 
+  private handleWorkletMessage(event: MessageEvent<unknown>): void {
+    if (this.disposed || this.listeners.size === 0) return;
+    const message = event.data as Partial<WorkletPcmMessage> | null;
+    if (message?.type !== "pcm" || !(message.samples instanceof Float32Array)) return;
+    this.emitPcm(message.samples);
+  }
+
   private append(chunk: Float32Array): void {
     this.ensureBufferCapacity(this.totalSamples + chunk.length);
     this.buffer.set(chunk, this.totalSamples);
@@ -235,9 +287,13 @@ class AudioCapturePipeline {
         this.buffer.copyWithin(0, chunkSamples, this.totalSamples);
       }
       this.totalSamples = retainedLength;
-      const downsampled = downsamplePcm(segment, this.context.sampleRate);
-      for (const listener of this.listeners) listener(downsampled);
+      this.emitPcm(segment);
     }
+  }
+
+  private emitPcm(segment: Float32Array): void {
+    const downsampled = downsamplePcm(segment, this.context.sampleRate);
+    for (const listener of this.listeners) listener(downsampled);
   }
 }
 
@@ -261,10 +317,44 @@ async function createAudioCapturePipeline(video: HTMLVideoElement): Promise<Audi
   if (context.state === "closed") throw new Error("音频采集上下文不可用");
 
   const source = context.createMediaElementSource(video);
-  const processor = context.createScriptProcessor(4096, 2, 2);
-  source.connect(processor);
-  processor.connect(context.destination);
-  return new AudioCapturePipeline(video, context, source, processor);
+  let processor: CaptureProcessor | null = null;
+  const backend = selectAudioCaptureBackend({
+    audioWorklet: typeof context.audioWorklet?.addModule === "function",
+    audioWorkletNode: typeof AudioWorkletNode === "function",
+  });
+
+  if (backend === "audio-worklet") {
+    try {
+      await context.audioWorklet.addModule(PCM_CAPTURE_WORKLET_URL.href);
+      processor = {
+        kind: "audio-worklet",
+        node: new AudioWorkletNode(context, PCM_CAPTURE_PROCESSOR_NAME, {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+          processorOptions: { chunkSeconds: ASR_DEFAULT_CHUNK_SECONDS },
+        }),
+      };
+    } catch {
+      // Older or policy-restricted WebViews can expose AudioWorklet but fail
+      // to load its module. Preserve local captions through the legacy path.
+    }
+  }
+
+  processor ??= {
+    kind: "script-processor",
+    node: context.createScriptProcessor(4096, 2, 2),
+  };
+  try {
+    source.connect(processor.node);
+    processor.node.connect(context.destination);
+    return new AudioCapturePipeline(video, context, source, processor);
+  } catch (error) {
+    source.disconnect();
+    processor.node.disconnect();
+    await context.close().catch(() => {});
+    throw error;
+  }
 }
 
 function pipelineEntry(video: HTMLVideoElement): PipelineEntry {

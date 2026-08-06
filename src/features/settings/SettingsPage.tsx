@@ -36,6 +36,7 @@ import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model"
 import {
   AsrCaptionFontSizeField,
   AsrChunkIntervalField,
+  AsrHotwordsField,
   DanmakuAppearanceResetButton,
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
@@ -674,9 +675,15 @@ function DanmakuSendField() {
 
 function AsrModelField() {
   const enabled = useSettingsStore((state) => state.asrEnabled);
+  const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
+  const punctuationEnabled = useSettingsStore((state) => state.asrPunctuationEnabled);
   const speakerEnabled = useSettingsStore((state) => state.asrSpeakerDiarizationEnabled);
   const pending = useSettingsStore((state) => state.asrPending);
   const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
+  const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
+  const setPunctuationEnabled = useSettingsStore(
+    (state) => state.setAsrPunctuationEnabled,
+  );
   const setSpeakerEnabled = useSettingsStore(
     (state) => state.setAsrSpeakerDiarizationEnabled,
   );
@@ -719,8 +726,35 @@ function AsrModelField() {
     }
   }
 
+  async function applyVadEnabled(next: boolean) {
+    setActionError(null);
+    try {
+      await setVadEnabled(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function applyPunctuationEnabled(next: boolean) {
+    setActionError(null);
+    try {
+      await setPunctuationEnabled(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
   const invalid = presentation.error || actionError !== null;
   const busy = pending || (enabled && presentation.busy);
+  const estimatedDownloadSize = punctuationEnabled
+    ? speakerEnabled
+      ? "577"
+      : "550"
+    : speakerEnabled
+      ? "515"
+      : "488";
   return (
     <>
       <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
@@ -774,21 +808,63 @@ function AsrModelField() {
 
         <Field
           orientation="responsive"
-          data-disabled={!model.supported || !enabled || pending || undefined}
+          data-disabled={!model.supported || pending || undefined}
+        >
+          <FieldContent>
+            <FieldTitle id="asr-vad-title">VAD（静音端点检测）</FieldTitle>
+            <FieldDescription>
+              默认开启；关闭后仍会按最长 20 秒语句切分，但不再根据静音提前结束。
+            </FieldDescription>
+          </FieldContent>
+          <Switch
+            aria-labelledby="asr-vad-title"
+            checked={vadEnabled}
+            disabled={!model.supported || model.isPending || pending}
+            onCheckedChange={(checked) => void applyVadEnabled(checked)}
+          />
+        </Field>
+
+        <Field
+          orientation="responsive"
+          data-disabled={!model.supported || pending || undefined}
+        >
+          <FieldContent>
+            <FieldTitle id="asr-punctuation-title">自动标点</FieldTitle>
+            <FieldDescription>
+              默认开启；关闭后不下载或加载 CT-Transformer，字幕保留 Zipformer 原始文本。
+            </FieldDescription>
+          </FieldContent>
+          <Switch
+            aria-labelledby="asr-punctuation-title"
+            checked={punctuationEnabled}
+            disabled={!model.supported || model.isPending || pending}
+            onCheckedChange={(checked) => void applyPunctuationEnabled(checked)}
+          />
+        </Field>
+
+        <Field
+          orientation="responsive"
+          data-disabled={!model.supported || pending || undefined}
         >
           <FieldContent>
             <FieldTitle id="asr-speaker-title">说话人区分</FieldTitle>
             <FieldDescription>
-              在语句结束后识别匿名说话人，首次启用需额外下载约 27 MB 声纹模型。
+              在语句结束后识别匿名说话人，短句会沿用最近稳定标签；首次启用需额外下载约 27 MB 声纹模型。
             </FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-speaker-title"
             checked={speakerEnabled}
-            disabled={!model.supported || !enabled || model.isPending || pending}
+            disabled={!model.supported || model.isPending || pending}
             onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
           />
         </Field>
+
+        <AsrHotwordsField
+          idPrefix="settings"
+          layout="page"
+          disabled={!model.supported || pending}
+        />
 
         <AsrChunkIntervalField
           idPrefix="settings"
@@ -805,8 +881,8 @@ function AsrModelField() {
             </AlertDialogMedia>
             <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
             <AlertDialogDescription>
-              启用后将在后台下载约 {speakerEnabled ? "577" : "550"} MB 的 Zipformer
-              中英双语流式识别模型与中英标点模型
+              启用后将在后台下载约 {estimatedDownloadSize} MB 的 Zipformer
+              中英双语流式识别模型{punctuationEnabled ? "与中英标点模型" : ""}
               {speakerEnabled ? "、说话人声纹模型" : ""}。
               下载和解压均在后台执行，完成后会自动加载，模型文件保留在本机。
             </AlertDialogDescription>

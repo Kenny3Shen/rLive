@@ -66,15 +66,21 @@ pub struct AppSettings {
     /// disabled by default so first launch never downloads model data.
     #[serde(default)]
     pub asr_enabled: bool,
-    /// Legacy compatibility field from the former CrispASR backend. Streaming
-    /// Zipformer performs endpoint detection internally, so this is ignored.
-    #[serde(default)]
+    /// Enable Zipformer's silence-based endpoint/VAD rules. Defaults to true;
+    /// disabling it keeps only the maximum utterance length boundary.
+    #[serde(default = "default_asr_vad_enabled")]
     pub asr_vad_enabled: bool,
+    /// Enable the optional CT-Transformer punctuation model. Defaults to true.
+    #[serde(default = "default_asr_punctuation_enabled")]
+    pub asr_punctuation_enabled: bool,
     /// Optional endpoint-level speaker differentiation. This setting is
     /// device-local because enabling it downloads and loads an additional
     /// speaker embedding model.
     #[serde(default)]
     pub asr_speaker_diarization_enabled: bool,
+    /// Device-local domain phrases (主播名、游戏名等), one phrase per item.
+    #[serde(default)]
+    pub asr_hotwords: Vec<String>,
     /// Device-local streaming PCM chunk interval in seconds, clamped to
     /// 0.2..=1.0 with one decimal place. The persisted field name is retained
     /// for compatibility with existing settings records.
@@ -143,6 +149,14 @@ fn default_asr_window_seconds() -> f32 {
     0.2
 }
 
+fn default_asr_punctuation_enabled() -> bool {
+    true
+}
+
+fn default_asr_vad_enabled() -> bool {
+    true
+}
+
 fn default_super_chat_enabled() -> bool {
     true
 }
@@ -175,8 +189,10 @@ impl Default for AppSettings {
             playback_soft_switch_enabled: false,
             danmaku_send_enabled: false,
             asr_enabled: false,
-            asr_vad_enabled: false,
+            asr_vad_enabled: true,
+            asr_punctuation_enabled: default_asr_punctuation_enabled(),
             asr_speaker_diarization_enabled: false,
+            asr_hotwords: Vec::new(),
             asr_window_seconds: default_asr_window_seconds(),
             asr_font_size: default_asr_font_size(),
             iptv_custom_m3u_url: None,
@@ -226,8 +242,10 @@ mod tests {
         assert!(settings.playback_smart_line_selection);
         assert!(!settings.playback_soft_switch_enabled);
         assert!(!settings.asr_enabled);
-        assert!(!settings.asr_vad_enabled);
+        assert!(settings.asr_vad_enabled);
+        assert!(settings.asr_punctuation_enabled);
         assert!(!settings.asr_speaker_diarization_enabled);
+        assert!(settings.asr_hotwords.is_empty());
         assert_eq!(settings.asr_window_seconds, 0.2);
         assert!(settings.iptv_custom_m3u_url.is_none());
         assert!(settings.iptv_availability_auto_check);

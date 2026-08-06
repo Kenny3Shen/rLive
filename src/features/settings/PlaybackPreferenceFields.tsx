@@ -131,7 +131,7 @@ function normalizeShieldWords(value: string): string[] {
     .map((word) => word.trim())
     .filter((word) => {
       const key = word.toLowerCase();
-      if (!key || seen.has(key)) return false;
+      if (!key || Array.from(word).length > 80 || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
@@ -254,6 +254,98 @@ export function AsrChunkIntervalField({
         void setChunkSeconds(value);
       }}
     />
+  );
+}
+
+function normalizeAsrHotwords(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/\r?\n|,/)
+    .map((word) => word.replace(/[\t]/g, " ").trim())
+    .filter((word) => {
+      const key = word.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 100);
+}
+
+export function AsrHotwordsField({
+  idPrefix,
+  layout,
+  disabled = false,
+}: {
+  idPrefix: string;
+  layout: PlaybackSettingsFieldLayout;
+  disabled?: boolean;
+}) {
+  const hotwords = useSettingsStore((state) => state.asrHotwords);
+  const setHotwords = useSettingsStore((state) => state.setAsrHotwords);
+  const [draft, setDraft] = useState(hotwords.join("\n"));
+  const [status, setStatus] = useState<string | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setDraft(hotwords.join("\n"));
+  }, [hotwords]);
+
+  useEffect(
+    () => () => {
+      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    },
+    [],
+  );
+
+  function save(value: string) {
+    const next = normalizeAsrHotwords(value);
+    setStatus("正在保存热词…");
+    void setHotwords(next)
+      .then(() => setStatus(next.length > 0 ? `已保存 ${next.length} 个热词` : "热词已清空"))
+      .catch(() => setStatus("热词保存失败，请重试"));
+  }
+
+  return (
+    <Field
+      orientation={layout === "page" ? "responsive" : "vertical"}
+      data-disabled={disabled || undefined}
+      className={fieldSurfaceClass(layout)}
+    >
+      <FieldContent>
+        <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
+        {layout === "page" && (
+          <FieldDescription>
+            每行一个主播名、游戏名或频道专有词，最多 100 个且单项不超过 80 字；修改后会重新加载识别会话。
+          </FieldDescription>
+        )}
+      </FieldContent>
+      <div className="w-full">
+        <Textarea
+          id={`${idPrefix}-asr-hotwords`}
+          value={draft}
+          rows={layout === "page" ? 4 : 3}
+          placeholder={layout === "page" ? "例如：\n主播昵称\n游戏名称" : "主播名、游戏名…"}
+          disabled={disabled}
+          spellCheck={false}
+          onChange={(event) => {
+            const value = event.target.value;
+            setDraft(value);
+            setStatus("修改将在停止输入后保存");
+            if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+            saveTimerRef.current = window.setTimeout(() => {
+              saveTimerRef.current = null;
+              save(value);
+            }, 600);
+          }}
+          onBlur={() => {
+            if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+            saveTimerRef.current = null;
+            save(draft);
+          }}
+        />
+        {status && <FieldDescription role="status" aria-live="polite">{status}</FieldDescription>}
+      </div>
+    </Field>
   );
 }
 

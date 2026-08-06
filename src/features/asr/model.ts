@@ -20,6 +20,9 @@ export type AsrModelStatus = {
   total_bytes: number | null;
   model_size_bytes: number;
   speaker_enabled: boolean;
+  vad_enabled: boolean;
+  punctuation_enabled: boolean;
+  hotwords_count: number;
   speaker_model_downloaded: boolean;
   speaker_model_size_bytes: number;
   threads: number;
@@ -127,13 +130,20 @@ export function describeAsrModelStatus(
       };
     case "loading":
       return { message: "模型已下载，正在加载…", busy: true, error: false, progress: 100 };
-    case "ready":
+    case "ready": {
+      const features = [
+        status.vad_enabled ? "VAD" : "关闭 VAD",
+        status.punctuation_enabled ? "自动标点" : "原始文本",
+        status.speaker_enabled ? "说话人区分" : null,
+        status.hotwords_count > 0 ? `${status.hotwords_count} 个热词` : null,
+      ].filter((value): value is string => value !== null);
       return {
-        message: `Zipformer 中英双语模型已就绪（CPU / ${status.threads} 线程 + 自动标点${status.speaker_enabled ? " + 说话人区分" : ""}）`,
+        message: `Zipformer 中英双语模型已就绪（CPU / ${status.threads} 线程 + ${features.join(" + ")}）`,
         busy: false,
         error: false,
         progress: 100,
       };
+    }
     case "error":
       return {
         message: status.message ?? "模型准备失败，请重试",

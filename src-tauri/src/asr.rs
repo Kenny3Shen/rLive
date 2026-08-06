@@ -31,11 +31,12 @@ const PUNCTUATION_DIR_NAME: &str =
     "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8";
 const PUNCTUATION_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2";
 const PUNCTUATION_ARCHIVE_SIZE_BYTES: u64 = 64_717_756;
-const MODEL_SIZE_BYTES: u64 = MODEL_ARCHIVE_SIZE_BYTES + PUNCTUATION_ARCHIVE_SIZE_BYTES;
 
 const SPEAKER_MODEL_FILE: &str = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
 const SPEAKER_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
 const SPEAKER_MODEL_SIZE_BYTES: u64 = 28_281_164;
+const HOTWORDS_FILE: &str = "hotwords.txt";
+const HOTWORDS_SCORE: f32 = 2.0;
 
 const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
 const DECODER_FILE: &str = "decoder-epoch-99-avg-1.onnx";
@@ -46,6 +47,9 @@ const PUNCTUATION_FILE: &str = "model.int8.onnx";
 const ASR_SAMPLE_RATE: i32 = 16_000;
 const ASR_THREAD_LIMIT: usize = 8;
 const SPEAKER_MATCH_THRESHOLD: f32 = 0.55;
+const SPEAKER_SWITCH_THRESHOLD: f32 = 0.68;
+const SPEAKER_NEW_CLUSTER_THRESHOLD: f32 = 0.35;
+const SPEAKER_MIN_UTTERANCE_SAMPLES: usize = 9_600;
 const MAX_SPEAKER_CLUSTERS: usize = 8;
 const SPEAKER_CENTROID_HISTORY: u32 = 8;
 
@@ -56,6 +60,7 @@ const SPEAKER_CENTROID_HISTORY: u32 = 8;
 const ENDPOINT_RULE1_MIN_TRAILING_SILENCE: f32 = 2.4;
 const ENDPOINT_RULE2_MIN_TRAILING_SILENCE: f32 = 0.8;
 const ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH: f32 = 20.0;
+const ENDPOINT_DISABLED_TRAILING_SILENCE: f32 = 3_600.0;
 
 const MAX_PCM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BASE64_PCM_BYTES: usize = ((MAX_PCM_BYTES + 2) / 3) * 4;
@@ -79,6 +84,9 @@ pub struct AsrModelStatus {
     pub total_bytes: Option<u64>,
     pub model_size_bytes: u64,
     pub speaker_enabled: bool,
+    pub vad_enabled: bool,
+    pub punctuation_enabled: bool,
+    pub hotwords_count: u32,
     pub speaker_model_downloaded: bool,
     pub speaker_model_size_bytes: u64,
     pub threads: i32,
@@ -86,18 +94,44 @@ pub struct AsrModelStatus {
 }
 
 impl AsrModelStatus {
-    fn new(state: AsrModelState, speaker_enabled: bool, speaker_model_downloaded: bool) -> Self {
-        let model_size_bytes = configured_model_size(speaker_enabled);
+    fn new(
+        state: AsrModelState,
+        options: &AsrRuntimeOptions,
+        speaker_model_downloaded: bool,
+    ) -> Self {
+        let model_size_bytes = configured_model_size(options);
         Self {
             state,
             downloaded_bytes: 0,
             total_bytes: Some(model_size_bytes),
             model_size_bytes,
-            speaker_enabled,
+            speaker_enabled: options.speaker_enabled,
+            vad_enabled: options.vad_enabled,
+            punctuation_enabled: options.punctuation_enabled,
+            hotwords_count: options.hotwords.len() as u32,
             speaker_model_downloaded,
             speaker_model_size_bytes: SPEAKER_MODEL_SIZE_BYTES,
             threads: asr_thread_count(),
             message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsrRuntimeOptions {
+    pub vad_enabled: bool,
+    pub punctuation_enabled: bool,
+    pub speaker_enabled: bool,
+    pub hotwords: Vec<String>,
+}
+
+impl Default for AsrRuntimeOptions {
+    fn default() -> Self {
+        Self {
+            vad_enabled: true,
+            punctuation_enabled: true,
+            speaker_enabled: false,
+            hotwords: Vec::new(),
         }
     }
 }
@@ -130,6 +164,7 @@ struct ModelAssets {
     punctuation_root: PathBuf,
     punctuation: PathBuf,
     speaker: PathBuf,
+    hotwords: PathBuf,
 }
 
 impl ModelAssets {
@@ -143,6 +178,7 @@ impl ModelAssets {
             tokens: root.join(TOKENS_FILE),
             punctuation: punctuation_root.join(PUNCTUATION_FILE),
             speaker: model_dir.join(SPEAKER_MODEL_FILE),
+            hotwords: model_dir.join(HOTWORDS_FILE),
             punctuation_root,
             root,
         }
@@ -151,16 +187,11 @@ impl ModelAssets {
     /// Every graph and the token table must be a non-empty file. The archive
     /// carries no per-file manifest, so presence plus non-emptiness is the
     /// strongest cheap check available; a corrupt graph surfaces at load.
-    fn is_complete(&self) -> bool {
-        [
-            &self.encoder,
-            &self.decoder,
-            &self.joiner,
-            &self.tokens,
-            &self.punctuation,
-        ]
-        .iter()
-        .all(|path| file_is_non_empty(path))
+    fn is_complete(&self, punctuation_enabled: bool) -> bool {
+        [&self.encoder, &self.decoder, &self.joiner, &self.tokens]
+            .iter()
+            .all(|path| file_is_non_empty(path))
+            && (!punctuation_enabled || self.punctuation_is_complete())
     }
 
     fn recognizer_is_complete(&self) -> bool {
@@ -177,22 +208,23 @@ impl ModelAssets {
         file_has_size(&self.speaker, SPEAKER_MODEL_SIZE_BYTES)
     }
 
-    fn required_assets_complete(&self, speaker_enabled: bool) -> bool {
-        self.is_complete() && (!speaker_enabled || self.speaker_is_complete())
+    fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
+        self.is_complete(options.punctuation_enabled)
+            && (!options.speaker_enabled || self.speaker_is_complete())
     }
 
-    fn downloaded_bytes(&self, speaker_enabled: bool) -> u64 {
+    fn downloaded_bytes(&self, options: &AsrRuntimeOptions) -> u64 {
         let recognizer = if self.recognizer_is_complete() {
             MODEL_ARCHIVE_SIZE_BYTES
         } else {
             0
         };
-        let punctuation = if self.punctuation_is_complete() {
+        let punctuation = if options.punctuation_enabled && self.punctuation_is_complete() {
             PUNCTUATION_ARCHIVE_SIZE_BYTES
         } else {
             0
         };
-        let speaker = if speaker_enabled && self.speaker_is_complete() {
+        let speaker = if options.speaker_enabled && self.speaker_is_complete() {
             SPEAKER_MODEL_SIZE_BYTES
         } else {
             0
@@ -214,11 +246,13 @@ struct SpeakerCluster {
 #[derive(Debug, Default)]
 struct SpeakerClusters {
     clusters: Vec<SpeakerCluster>,
+    last_assignment: Option<u32>,
 }
 
 impl SpeakerClusters {
     fn reset(&mut self) {
         self.clusters.clear();
+        self.last_assignment = None;
     }
 
     fn classify(&mut self, embedding: &[f32]) -> Option<u32> {
@@ -233,6 +267,18 @@ impl SpeakerClusters {
         if let Some((index, score)) = best
             && score >= SPEAKER_MATCH_THRESHOLD
         {
+            let candidate_id = index as u32 + 1;
+            // Keep the previous label when an embedding is near the cluster
+            // boundary. A second, clearly separated voice can still switch
+            // immediately, while noisy short endpoints no longer make the
+            // visible number oscillate between two speakers.
+            let selected_id = self
+                .last_assignment
+                .filter(|previous| *previous != candidate_id && score < SPEAKER_SWITCH_THRESHOLD)
+                .unwrap_or(candidate_id);
+            if selected_id != candidate_id {
+                return Some(selected_id);
+            }
             let cluster = &mut self.clusters[index];
             let history = cluster.observations.min(SPEAKER_CENTROID_HISTORY) as f32;
             for (centroid, sample) in cluster.centroid.iter_mut().zip(&normalized) {
@@ -242,7 +288,15 @@ impl SpeakerClusters {
                 cluster.centroid = updated;
             }
             cluster.observations = cluster.observations.saturating_add(1);
-            return Some(index as u32 + 1);
+            self.last_assignment = Some(selected_id);
+            return Some(selected_id);
+        }
+
+        if let Some((_, score)) = best
+            && score >= SPEAKER_NEW_CLUSTER_THRESHOLD
+            && let Some(previous) = self.last_assignment
+        {
+            return Some(previous);
         }
 
         if self.clusters.len() >= MAX_SPEAKER_CLUSTERS {
@@ -252,7 +306,9 @@ impl SpeakerClusters {
             centroid: normalized,
             observations: 1,
         });
-        Some(self.clusters.len() as u32)
+        let id = self.clusters.len() as u32;
+        self.last_assignment = Some(id);
+        Some(id)
     }
 }
 
@@ -278,6 +334,9 @@ impl NativeSpeakerSession {
     }
 
     fn classify(&mut self, pcm: &[f32]) -> Option<u32> {
+        if pcm.len() < SPEAKER_MIN_UTTERANCE_SAMPLES {
+            return self.clusters.last_assignment;
+        }
         let stream = self.extractor.create_stream()?;
         stream.accept_waveform(ASR_SAMPLE_RATE, pcm);
         stream.input_finished();
@@ -302,7 +361,7 @@ impl NativeSpeakerSession {
 struct NativeAsrSession {
     recognizer: OnlineRecognizer,
     stream: OnlineStream,
-    punctuation: OfflinePunctuation,
+    punctuation: Option<OfflinePunctuation>,
     speaker: Option<NativeSpeakerSession>,
     /// Total samples accepted since the last reset, used to place captions on a
     /// timeline relative to the start of the current stream.
@@ -317,7 +376,11 @@ struct NativeAsrSession {
 unsafe impl Send for NativeAsrSession {}
 
 impl NativeAsrSession {
-    fn open(assets: &ModelAssets, threads: i32, speaker_enabled: bool) -> Result<Self, String> {
+    fn open(
+        assets: &ModelAssets,
+        threads: i32,
+        options: &AsrRuntimeOptions,
+    ) -> Result<Self, String> {
         let mut config = OnlineRecognizerConfig::default();
         config.model_config.transducer.encoder = Some(ModelAssets::as_string(&assets.encoder));
         config.model_config.transducer.decoder = Some(ModelAssets::as_string(&assets.decoder));
@@ -325,27 +388,54 @@ impl NativeAsrSession {
         config.model_config.tokens = Some(ModelAssets::as_string(&assets.tokens));
         config.model_config.num_threads = threads;
         config.model_config.debug = false;
-        // Greedy decoding keeps per-window latency predictable; beam search
-        // would raise cost on exactly the devices that are already marginal.
-        config.decoding_method = Some("greedy_search".to_string());
-        // Defaults leave every rule at 0.0, which disables endpointing
-        // entirely, so the utterance boundaries must be configured explicitly.
+        // Contextual hotwords are supported by sherpa-onnx only in modified
+        // beam search. Keep the cheaper greedy path when no local domain terms
+        // are configured, and use a small beam when they are present.
+        config.decoding_method = Some(if options.hotwords.is_empty() {
+            "greedy_search".to_string()
+        } else {
+            config.max_active_paths = 4;
+            "modified_beam_search".to_string()
+        });
+        // The wrapper defaults endpointing itself to disabled. The C API treats
+        // a zero rule value as "use the native default", so VAD-off uses an
+        // intentionally unreachable silence duration while preserving rule 3.
         config.enable_endpoint = true;
-        config.rule1_min_trailing_silence = ENDPOINT_RULE1_MIN_TRAILING_SILENCE;
-        config.rule2_min_trailing_silence = ENDPOINT_RULE2_MIN_TRAILING_SILENCE;
+        config.rule1_min_trailing_silence = if options.vad_enabled {
+            ENDPOINT_RULE1_MIN_TRAILING_SILENCE
+        } else {
+            ENDPOINT_DISABLED_TRAILING_SILENCE
+        };
+        config.rule2_min_trailing_silence = if options.vad_enabled {
+            ENDPOINT_RULE2_MIN_TRAILING_SILENCE
+        } else {
+            ENDPOINT_DISABLED_TRAILING_SILENCE
+        };
         config.rule3_min_utterance_length = ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH;
+        if !options.hotwords.is_empty() {
+            config.hotwords_file = Some(ModelAssets::as_string(&assets.hotwords));
+            config.hotwords_score = HOTWORDS_SCORE;
+        }
 
         let recognizer = OnlineRecognizer::create(&config)
             .ok_or_else(|| "sherpa-onnx could not create the streaming recognizer".to_string())?;
         let stream = recognizer.create_stream();
 
-        let mut punctuation_config = OfflinePunctuationConfig::default();
-        punctuation_config.model.ct_transformer = Some(ModelAssets::as_string(&assets.punctuation));
-        punctuation_config.model.num_threads = threads.clamp(1, 2);
-        punctuation_config.model.debug = false;
-        let punctuation = OfflinePunctuation::create(&punctuation_config)
-            .ok_or_else(|| "sherpa-onnx could not create the punctuation model".to_string())?;
-        let speaker = if speaker_enabled {
+        let punctuation = if options.punctuation_enabled {
+            let mut punctuation_config = OfflinePunctuationConfig::default();
+            punctuation_config.model.ct_transformer =
+                Some(ModelAssets::as_string(&assets.punctuation));
+            punctuation_config.model.num_threads = threads.clamp(1, 2);
+            punctuation_config.model.debug = false;
+            Some(
+                OfflinePunctuation::create(&punctuation_config).ok_or_else(|| {
+                    "sherpa-onnx could not create the punctuation model".to_string()
+                })?,
+            )
+        } else {
+            None
+        };
+        let speaker = if options.speaker_enabled {
             Some(NativeSpeakerSession::open(&assets.speaker, threads)?)
         } else {
             None
@@ -437,7 +527,8 @@ impl NativeAsrSession {
 
     fn add_punctuation(&self, text: &str) -> String {
         self.punctuation
-            .add_punctuation(text)
+            .as_ref()
+            .and_then(|punctuation| punctuation.add_punctuation(text))
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| text.to_owned())
     }
@@ -455,6 +546,7 @@ struct AsrInner {
     requested: std::sync::atomic::AtomicBool,
     request_generation: std::sync::atomic::AtomicU64,
     control: Mutex<()>,
+    runtime_options: Mutex<Option<AsrRuntimeOptions>>,
     prepare_lock: tokio::sync::Mutex<()>,
     session: Mutex<Option<NativeAsrSession>>,
 }
@@ -465,16 +557,17 @@ impl AsrManager {
         let assets = ModelAssets::new(&model_dir);
 
         let speaker_model_downloaded = assets.speaker_is_complete();
+        let default_options = AsrRuntimeOptions::default();
         let mut status = AsrModelStatus::new(
-            if assets.is_complete() {
+            if assets.is_complete(default_options.punctuation_enabled) {
                 AsrModelState::Downloaded
             } else {
                 AsrModelState::NotDownloaded
             },
-            false,
+            &default_options,
             speaker_model_downloaded,
         );
-        status.downloaded_bytes = assets.downloaded_bytes(false);
+        status.downloaded_bytes = assets.downloaded_bytes(&default_options);
 
         Self {
             inner: Arc::new(AsrInner {
@@ -484,6 +577,7 @@ impl AsrManager {
                 requested: std::sync::atomic::AtomicBool::new(false),
                 request_generation: std::sync::atomic::AtomicU64::new(0),
                 control: Mutex::new(()),
+                runtime_options: Mutex::new(None),
                 prepare_lock: tokio::sync::Mutex::new(()),
                 session: Mutex::new(None),
             }),
@@ -498,20 +592,44 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))
     }
 
+    fn write_hotwords_file(&self, hotwords: &[String]) -> AppResult<()> {
+        std::fs::create_dir_all(&self.inner.model_dir)
+            .map_err(|_| AppError::new("asr_hotwords_dir", "无法创建热词配置目录"))?;
+        if hotwords.is_empty() {
+            let _ = std::fs::remove_file(&self.inner.assets.hotwords);
+            let _ = std::fs::remove_file(self.inner.assets.hotwords.with_extension("txt.part"));
+            return Ok(());
+        }
+
+        let partial = self.inner.assets.hotwords.with_extension("txt.part");
+        let content = hotwords.join("\n");
+        std::fs::write(&partial, format!("{content}\n"))
+            .map_err(|_| AppError::new("asr_hotwords_write", "无法保存本地热词配置"))?;
+        if std::fs::rename(&partial, &self.inner.assets.hotwords).is_err() {
+            let _ = std::fs::remove_file(&self.inner.assets.hotwords);
+            std::fs::rename(&partial, &self.inner.assets.hotwords)
+                .map_err(|_| AppError::new("asr_hotwords_write", "无法替换本地热词配置"))?;
+        }
+        Ok(())
+    }
+
     pub fn enable(
         &self,
         proxy: Option<String>,
-        speaker_enabled: bool,
+        mut options: AsrRuntimeOptions,
     ) -> AppResult<AsrModelStatus> {
         use std::sync::atomic::Ordering;
+
+        normalize_hotwords(&mut options.hotwords);
 
         let _control = self
             .inner
             .control
             .lock()
             .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
+        self.write_hotwords_file(&options.hotwords)?;
         let was_requested = self.inner.requested.swap(true, Ordering::AcqRel);
-        let model_exists = self.inner.assets.required_assets_complete(speaker_enabled);
+        let model_exists = self.inner.assets.required_assets_complete(&options);
         let next_state = if model_exists {
             AsrModelState::Loading
         } else {
@@ -525,7 +643,12 @@ impl AsrManager {
                 .lock()
                 .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))?;
 
-            let same_configuration = status.speaker_enabled == speaker_enabled;
+            let same_configuration = self
+                .inner
+                .runtime_options
+                .lock()
+                .map(|current| current.as_ref() == Some(&options))
+                .unwrap_or(false);
             if was_requested && same_configuration && status.state == AsrModelState::Ready {
                 return Ok(status.clone());
             }
@@ -545,21 +668,25 @@ impl AsrManager {
                 .fetch_add(1, Ordering::AcqRel)
                 .wrapping_add(1);
             status.state = next_state;
-            status.speaker_enabled = speaker_enabled;
+            status.speaker_enabled = options.speaker_enabled;
+            status.vad_enabled = options.vad_enabled;
+            status.punctuation_enabled = options.punctuation_enabled;
+            status.hotwords_count = options.hotwords.len() as u32;
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = configured_model_size(speaker_enabled);
-            status.downloaded_bytes = self.inner.assets.downloaded_bytes(speaker_enabled);
+            status.model_size_bytes = configured_model_size(&options);
+            status.downloaded_bytes = self.inner.assets.downloaded_bytes(&options);
             status.total_bytes = Some(status.model_size_bytes);
             status.threads = asr_thread_count();
             status.message = None;
+            if let Ok(mut current) = self.inner.runtime_options.lock() {
+                *current = Some(options.clone());
+            }
             generation
         };
 
         let manager = self.clone();
         tauri::async_runtime::spawn(async move {
-            manager
-                .prepare_model(proxy, generation, speaker_enabled)
-                .await;
+            manager.prepare_model(proxy, generation, options).await;
         });
 
         self.status()
@@ -575,6 +702,9 @@ impl AsrManager {
                 .lock()
                 .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
             self.inner.requested.store(false, Ordering::Release);
+            if let Ok(mut options) = self.inner.runtime_options.lock() {
+                *options = None;
+            }
             self.inner
                 .request_generation
                 .fetch_add(1, Ordering::AcqRel)
@@ -621,14 +751,19 @@ impl AsrManager {
         Ok(())
     }
 
-    async fn prepare_model(&self, proxy: Option<String>, generation: u64, speaker_enabled: bool) {
+    async fn prepare_model(
+        &self,
+        proxy: Option<String>,
+        generation: u64,
+        options: AsrRuntimeOptions,
+    ) {
         let _prepare = self.inner.prepare_lock.lock().await;
         if !self.request_is_current(generation) {
             return;
         }
 
         let model_ready = match self
-            .ensure_model_assets(proxy.as_deref(), generation, speaker_enabled)
+            .ensure_model_assets(proxy.as_deref(), generation, &options)
             .await
         {
             Ok(ready) => ready,
@@ -645,9 +780,10 @@ impl AsrManager {
             return;
         }
 
-        self.set_loading_status(generation, speaker_enabled);
+        self.set_loading_status(generation, &options);
         let assets = self.inner.assets.clone();
         let threads = asr_thread_count();
+        let session_options = options.clone();
         let manager = self.clone();
         let load_result = tokio::task::spawn_blocking(move || {
             let mut guard = manager
@@ -658,7 +794,7 @@ impl AsrManager {
             let previous = guard.take();
             drop(guard);
             drop(previous);
-            NativeAsrSession::open(&assets, threads, speaker_enabled)
+            NativeAsrSession::open(&assets, threads, &session_options)
         })
         .await;
 
@@ -696,9 +832,12 @@ impl AsrManager {
 
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Ready;
-            status.speaker_enabled = speaker_enabled;
+            status.speaker_enabled = options.speaker_enabled;
+            status.vad_enabled = options.vad_enabled;
+            status.punctuation_enabled = options.punctuation_enabled;
+            status.hotwords_count = options.hotwords.len() as u32;
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = configured_model_size(speaker_enabled);
+            status.model_size_bytes = configured_model_size(&options);
             status.downloaded_bytes = status.model_size_bytes;
             status.total_bytes = Some(status.model_size_bytes);
             status.message = None;
@@ -709,16 +848,16 @@ impl AsrManager {
         &self,
         proxy: Option<&str>,
         generation: u64,
-        speaker_enabled: bool,
+        options: &AsrRuntimeOptions,
     ) -> AppResult<bool> {
         if !self.request_is_current(generation) {
             return Ok(false);
         }
-        if self.inner.assets.required_assets_complete(speaker_enabled) {
+        if self.inner.assets.required_assets_complete(options) {
             return Ok(true);
         }
 
-        let total_size = configured_model_size(speaker_enabled);
+        let total_size = configured_model_size(options);
 
         tokio::fs::create_dir_all(&self.inner.model_dir)
             .await
@@ -752,7 +891,8 @@ impl AsrManager {
             return Ok(false);
         }
 
-        if !self.inner.assets.punctuation_is_complete()
+        if options.punctuation_enabled
+            && !self.inner.assets.punctuation_is_complete()
             && !self
                 .download_and_extract_archive(
                     proxy,
@@ -769,15 +909,15 @@ impl AsrManager {
         {
             return Ok(false);
         }
-        if !self.inner.assets.punctuation_is_complete() {
+        if options.punctuation_enabled && !self.inner.assets.punctuation_is_complete() {
             return Err(AppError::new("asr_model_extract", "标点模型解压结果不完整"));
         }
 
-        if !self.inner.assets.is_complete() {
+        if !self.inner.assets.is_complete(options.punctuation_enabled) {
             return Err(AppError::new("asr_model_extract", "字幕模型解压结果不完整"));
         }
 
-        if speaker_enabled && !self.inner.assets.speaker_is_complete() {
+        if options.speaker_enabled && !self.inner.assets.speaker_is_complete() {
             let partial_path = self
                 .inner
                 .model_dir
@@ -790,7 +930,12 @@ impl AsrManager {
                     SPEAKER_MODEL_URL,
                     &partial_path,
                     SPEAKER_MODEL_SIZE_BYTES,
-                    MODEL_SIZE_BYTES,
+                    MODEL_ARCHIVE_SIZE_BYTES
+                        + if options.punctuation_enabled {
+                            PUNCTUATION_ARCHIVE_SIZE_BYTES
+                        } else {
+                            0
+                        },
                     total_size,
                     generation,
                     "说话人声纹模型",
@@ -823,7 +968,7 @@ impl AsrManager {
             });
         }
 
-        if !self.inner.assets.required_assets_complete(speaker_enabled) {
+        if !self.inner.assets.required_assets_complete(options) {
             return Err(AppError::new("asr_model_download", "字幕模型文件不完整"));
         }
         Ok(true)
@@ -1038,11 +1183,14 @@ impl AsrManager {
         self.is_requested() && self.generation_is_current(generation)
     }
 
-    fn set_loading_status(&self, generation: u64, speaker_enabled: bool) {
-        let total_size = configured_model_size(speaker_enabled);
+    fn set_loading_status(&self, generation: u64, options: &AsrRuntimeOptions) {
+        let total_size = configured_model_size(options);
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Loading;
-            status.speaker_enabled = speaker_enabled;
+            status.speaker_enabled = options.speaker_enabled;
+            status.vad_enabled = options.vad_enabled;
+            status.punctuation_enabled = options.punctuation_enabled;
+            status.hotwords_count = options.hotwords.len() as u32;
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
             status.model_size_bytes = total_size;
             status.downloaded_bytes = total_size;
@@ -1053,9 +1201,14 @@ impl AsrManager {
 
     fn set_idle_status(&self) {
         self.update_status(|status| {
-            let speaker_enabled = status.speaker_enabled;
-            let model_exists = self.inner.assets.required_assets_complete(speaker_enabled);
-            let total_size = configured_model_size(speaker_enabled);
+            let options = AsrRuntimeOptions {
+                vad_enabled: status.vad_enabled,
+                punctuation_enabled: status.punctuation_enabled,
+                speaker_enabled: status.speaker_enabled,
+                hotwords: Vec::new(),
+            };
+            let model_exists = self.inner.assets.required_assets_complete(&options);
+            let total_size = configured_model_size(&options);
             status.state = if model_exists {
                 AsrModelState::Downloaded
             } else {
@@ -1063,7 +1216,7 @@ impl AsrManager {
             };
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
             status.model_size_bytes = total_size;
-            status.downloaded_bytes = self.inner.assets.downloaded_bytes(speaker_enabled);
+            status.downloaded_bytes = self.inner.assets.downloaded_bytes(&options);
             status.total_bytes = Some(total_size);
             status.message = None;
         });
@@ -1126,13 +1279,35 @@ fn samples_to_millis(samples: u64) -> u64 {
     samples.saturating_mul(1_000) / ASR_SAMPLE_RATE as u64
 }
 
-fn configured_model_size(speaker_enabled: bool) -> u64 {
-    MODEL_SIZE_BYTES
-        + if speaker_enabled {
+fn configured_model_size(options: &AsrRuntimeOptions) -> u64 {
+    MODEL_ARCHIVE_SIZE_BYTES
+        + if options.punctuation_enabled {
+            PUNCTUATION_ARCHIVE_SIZE_BYTES
+        } else {
+            0
+        }
+        + if options.speaker_enabled {
             SPEAKER_MODEL_SIZE_BYTES
         } else {
             0
         }
+}
+
+fn normalize_hotwords(hotwords: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    hotwords.retain_mut(|word| {
+        *word = word
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        if word.is_empty() || word.chars().count() > 80 {
+            return false;
+        }
+        seen.insert(word.to_lowercase())
+    });
+    hotwords.truncate(100);
 }
 
 fn normalize_embedding(embedding: &[f32]) -> Option<Vec<f32>> {
@@ -1246,9 +1421,9 @@ async fn remove_dir_if_present(path: &Path) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MODEL_SIZE_BYTES, SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters,
-        asr_thread_count_for_available, configured_model_size, decode_base64_pcm,
-        samples_to_millis,
+        AsrRuntimeOptions, MODEL_ARCHIVE_SIZE_BYTES, PUNCTUATION_ARCHIVE_SIZE_BYTES,
+        SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters, asr_thread_count_for_available,
+        configured_model_size, decode_base64_pcm, normalize_hotwords, samples_to_millis,
     };
     use base64::Engine;
 
@@ -1299,6 +1474,14 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_previous_speaker_for_an_ambiguous_embedding() {
+        let mut clusters = SpeakerClusters::default();
+        assert_eq!(clusters.classify(&[1.0, 0.0]), Some(1));
+        assert_eq!(clusters.classify(&[0.5, 0.866]), Some(1));
+        assert_eq!(clusters.clusters.len(), 1);
+    }
+
+    #[test]
     fn rejects_invalid_speaker_embeddings() {
         let mut clusters = SpeakerClusters::default();
         assert_eq!(clusters.classify(&[]), None);
@@ -1318,10 +1501,39 @@ mod tests {
 
     #[test]
     fn includes_the_optional_speaker_model_in_download_size() {
-        assert_eq!(configured_model_size(false), MODEL_SIZE_BYTES);
+        let default_options = AsrRuntimeOptions::default();
         assert_eq!(
-            configured_model_size(true),
-            MODEL_SIZE_BYTES + SPEAKER_MODEL_SIZE_BYTES
+            configured_model_size(&default_options),
+            MODEL_ARCHIVE_SIZE_BYTES + PUNCTUATION_ARCHIVE_SIZE_BYTES
         );
+        let punctuation_off = AsrRuntimeOptions {
+            punctuation_enabled: false,
+            ..default_options.clone()
+        };
+        assert_eq!(
+            configured_model_size(&punctuation_off),
+            MODEL_ARCHIVE_SIZE_BYTES
+        );
+        let speaker_on = AsrRuntimeOptions {
+            speaker_enabled: true,
+            ..default_options
+        };
+        assert_eq!(
+            configured_model_size(&speaker_on),
+            MODEL_ARCHIVE_SIZE_BYTES + PUNCTUATION_ARCHIVE_SIZE_BYTES + SPEAKER_MODEL_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn normalizes_and_bounds_local_hotwords() {
+        let mut hotwords = vec![
+            " 主播昵称 ".to_string(),
+            "主播昵称".to_string(),
+            "GAME".to_string(),
+            "game".to_string(),
+            "\t".to_string(),
+        ];
+        normalize_hotwords(&mut hotwords);
+        assert_eq!(hotwords, vec!["主播昵称", "GAME"]);
     }
 }
