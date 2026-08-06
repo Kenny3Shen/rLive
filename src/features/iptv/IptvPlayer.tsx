@@ -115,6 +115,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const channelHeaders = channel?.headers ?? EMPTY_HEADERS;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
+  const controlsVisibleRef = useRef(true);
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<XgPlayerInstance | null>(null);
@@ -138,7 +139,6 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
-  const [controlsVisible, setControlsVisible] = useState(true);
   const [controlsInteractionOpen, setControlsInteractionOpen] = useState(false);
   const compactViewport = useCompactPlayerViewport();
   const androidClient = getClientPlatform() === "android";
@@ -254,20 +254,33 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     controlsHideTimerRef.current = null;
   }, []);
 
+  const setControlVisibility = useCallback((visible: boolean) => {
+    if (controlsVisibleRef.current === visible) return;
+    controlsVisibleRef.current = visible;
+
+    // Keep control chrome state out of React's media subtree so showing or
+    // hiding it cannot compete with video decoding on the transition frame.
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.dataset.visible = visible ? "true" : "false";
+    controls.setAttribute("aria-hidden", String(!visible));
+    controls.toggleAttribute("inert", !visible);
+  }, []);
+
   const scheduleControlsHide = useCallback(() => {
     clearControlsHideTimer();
-    setControlsVisible(true);
+    setControlVisibility(true);
     if (status !== "playing" || paused || controlsInteractionOpen) return;
     controlsHideTimerRef.current = window.setTimeout(() => {
       controlsHideTimerRef.current = null;
-      setControlsVisible(false);
+      setControlVisibility(false);
     }, CONTROLS_HIDE_DELAY_MS);
-  }, [clearControlsHideTimer, controlsInteractionOpen, paused, status]);
+  }, [clearControlsHideTimer, controlsInteractionOpen, paused, setControlVisibility, status]);
 
   const holdControlsVisible = useCallback(() => {
     clearControlsHideTimer();
-    setControlsVisible(true);
-  }, [clearControlsHideTimer]);
+    setControlVisibility(true);
+  }, [clearControlsHideTimer, setControlVisibility]);
 
   useEffect(() => {
     scheduleControlsHide();
@@ -800,8 +813,9 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         <div
           ref={controlsRef}
           data-player-controls
-          data-visible={controlsVisible ? "true" : "false"}
-          className="absolute inset-x-0 bottom-0 z-30 px-3 pb-[env(safe-area-inset-bottom)] transform-gpu transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:translate-y-2 data-[visible=false]:opacity-0"
+          data-visible="true"
+          aria-hidden="false"
+          className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
           onPointerEnter={holdControlsVisible}
           onPointerMove={(event) => {
             event.stopPropagation();

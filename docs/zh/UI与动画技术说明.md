@@ -321,7 +321,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
 - 下拉刷新与横向滑动的连续输入通过 RAF 合并，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。
 - 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
-- 视频上的 `glass-surface-overlay` 使用较小 blur；coarse pointer 或 slow-update 设备关闭 backdrop blur，改用更实的半透明背景。
+- 播放器控制栏、音量和播放设置弹层共用 `glass-surface-overlay`；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不移动 blur 采样区域，也不触发播放器 React 重渲染。coarse pointer 或 slow-update 设备关闭 backdrop blur，改用更实的半透明背景。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，实际纵向滚动留给 `app-page`。
 - fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 和页面动画完成时必须恢复普通绘制。
 
@@ -415,4 +415,4 @@ bash scripts/sync-to-windows.sh
 | `src/shared/hooks/useHorizontalSwipe.ts` | 触摸跟随、回弹、切换和清理 |
 | `src/shared/gestures/horizontalSwipe.ts` | swipe 阈值、边界阻尼和纯逻辑 |
 | `src/features/iptv/IptvPage.tsx` | 有界频道卡片入场 |
-| `src/features/settings/SettingsPage.tsx` | 设置首页和分类内容入场 |
+| `src/features/settings/SettingsPage.tsx` | 三栏设置中心、分类导航、设置搜索和分类内容入场 |

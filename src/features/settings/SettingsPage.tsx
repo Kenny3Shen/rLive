@@ -4,7 +4,16 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import gsap from "gsap";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  type FormEvent,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Database,
@@ -17,9 +26,12 @@ import {
   QrCode,
   Radio,
   RefreshCw,
+  Search,
+  SearchX,
   ShieldAlert,
   Upload,
   UserRound,
+  X,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -46,7 +58,6 @@ import {
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Field,
   FieldContent,
@@ -67,9 +78,15 @@ import {
 } from "@/components/ui/input-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import {
   Dialog,
   DialogContent,
@@ -127,6 +144,29 @@ const settingsCategories: {
 const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
+const settingsCategorySearchText: Record<SettingsCategory, string> = {
+  playback:
+    "播放 播放质量 清晰度 智能线路 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
+  platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
+  network: "网络 代理 iptv IPTV M3U 源 地址",
+  account:
+    "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
+  data: "数据 导入 导出 配置 档案",
+  about: "关于 rLive 项目主页 github 免责声明",
+};
+
+const SettingsSearchContext = createContext("");
+
+function searchTokens(value: string): string[] {
+  return value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+}
+
+function matchesSearch(value: string, query: string): boolean {
+  const tokens = searchTokens(query);
+  const haystack = value.toLocaleLowerCase();
+  return tokens.every((token) => haystack.includes(token));
+}
+
 function errorMessage(cause: unknown): string {
   return typeof cause === "object" && cause && "message" in cause
     ? String((cause as { message: string }).message)
@@ -167,14 +207,29 @@ function isHostedQrImageUrl(value: string): boolean {
   }
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  keywords,
+  children,
+}: {
+  title: string;
+  keywords?: string;
+  children: React.ReactNode;
+}) {
+  const query = useContext(SettingsSearchContext);
+  if (!matchesSearch(`${title} ${keywords ?? ""}`, query)) return null;
+
   return (
-    <section data-slot="settings-section">
-      <Separator />
-      <FieldSet className="gap-0 py-1">
-        <FieldLegend variant="label" className="px-4 pt-3 pb-2">
-          {title}
-        </FieldLegend>
+    <section
+      data-slot="settings-section"
+      className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm shadow-black/10"
+    >
+      <FieldSet className="gap-0 py-0">
+        <div className="border-b border-border-subtle bg-muted/20 px-4 py-2.5">
+          <FieldLegend variant="label" className="m-0 text-sm font-semibold text-foreground">
+            {title}
+          </FieldLegend>
+        </div>
         <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
           {children}
         </FieldGroup>
@@ -681,12 +736,8 @@ function AsrModelField() {
   const pending = useSettingsStore((state) => state.asrPending);
   const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
   const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
-  const setPunctuationEnabled = useSettingsStore(
-    (state) => state.setAsrPunctuationEnabled,
-  );
-  const setSpeakerEnabled = useSettingsStore(
-    (state) => state.setAsrSpeakerDiarizationEnabled,
-  );
+  const setPunctuationEnabled = useSettingsStore((state) => state.setAsrPunctuationEnabled);
+  const setSpeakerEnabled = useSettingsStore((state) => state.setAsrSpeakerDiarizationEnabled);
   const model = useAsrModelStatus({ enabled });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -806,15 +857,10 @@ function AsrModelField() {
           </div>
         </Field>
 
-        <Field
-          orientation="responsive"
-          data-disabled={!model.supported || pending || undefined}
-        >
+        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
             <FieldTitle id="asr-vad-title">VAD（静音端点检测）</FieldTitle>
-            <FieldDescription>
-              默认开启；关闭后仍会按最长 20 秒语句切分，但不再根据静音提前结束。
-            </FieldDescription>
+            <FieldDescription>关闭后按最长 20 秒切分，不再提前检测静音。</FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-vad-title"
@@ -824,15 +870,10 @@ function AsrModelField() {
           />
         </Field>
 
-        <Field
-          orientation="responsive"
-          data-disabled={!model.supported || pending || undefined}
-        >
+        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
             <FieldTitle id="asr-punctuation-title">自动标点</FieldTitle>
-            <FieldDescription>
-              默认开启；关闭后不下载或加载 CT-Transformer，字幕保留 Zipformer 原始文本。
-            </FieldDescription>
+            <FieldDescription>关闭后不加载标点模型，字幕保留原始文本。</FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-punctuation-title"
@@ -842,15 +883,10 @@ function AsrModelField() {
           />
         </Field>
 
-        <Field
-          orientation="responsive"
-          data-disabled={!model.supported || pending || undefined}
-        >
+        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
             <FieldTitle id="asr-speaker-title">说话人区分</FieldTitle>
-            <FieldDescription>
-              在语句结束后识别匿名说话人，短句会沿用最近稳定标签；首次启用需额外下载约 27 MB 声纹模型。
-            </FieldDescription>
+            <FieldDescription>识别匿名说话人；首次启用需额外下载约 27 MB 模型。</FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-speaker-title"
@@ -881,8 +917,8 @@ function AsrModelField() {
             </AlertDialogMedia>
             <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
             <AlertDialogDescription>
-              启用后将在后台下载约 {estimatedDownloadSize} MB 的 Zipformer
-              中英双语流式识别模型{punctuationEnabled ? "与中英标点模型" : ""}
+              启用后将在后台下载约 {estimatedDownloadSize} MB 的 Zipformer 中英双语流式识别模型
+              {punctuationEnabled ? "与中英标点模型" : ""}
               {speakerEnabled ? "、说话人声纹模型" : ""}。
               下载和解压均在后台执行，完成后会自动加载，模型文件保留在本机。
             </AlertDialogDescription>
@@ -1003,7 +1039,7 @@ function PlatformEnablementField() {
   const enabled = enabledSiteIds(disabledSiteIds);
 
   return (
-    <Section title="直播平台">
+    <Section title="直播平台" keywords="bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch">
       {LIVE_SITE_IDS.map((siteId) => {
         const isEnabled = enabled.includes(siteId);
         const isLastEnabled = isEnabled && enabled.length === 1;
@@ -1043,7 +1079,7 @@ function AboutSettings() {
   return (
     <div className="flex flex-col gap-4">
       <AlertDialog>
-        <Section title="关于 rLive">
+        <Section title="关于 rLive" keywords="项目主页 github 免责声明">
           <Field orientation="horizontal">
             <FieldTitle id="project-homepage">项目主页</FieldTitle>
             <Button onClick={openProjectHomepage} variant="outline">
@@ -1111,6 +1147,7 @@ export function SettingsPage() {
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [category, setCategory] = useState<SettingsCategory>("playback");
+  const [searchQuery, setSearchQuery] = useState("");
   const compactLayout = useCompactSettingsLayout();
   const categoryTabRefs = useRef(new Map<SettingsCategory, HTMLButtonElement | null>());
   const settingsCategoryValues = useMemo(() => settingsCategories.map((item) => item.value), []);
@@ -1120,6 +1157,20 @@ export function SettingsPage() {
     onChange: setCategory,
     enabled: isMobileClient(),
   });
+  const normalizedSearchQuery = searchQuery.trim();
+
+  useEffect(() => {
+    if (
+      !normalizedSearchQuery ||
+      matchesSearch(settingsCategorySearchText[category], normalizedSearchQuery)
+    ) {
+      return;
+    }
+    const firstMatch = settingsCategories.find(({ value }) =>
+      matchesSearch(settingsCategorySearchText[value], normalizedSearchQuery),
+    );
+    if (firstMatch) setCategory(firstMatch.value);
+  }, [category, normalizedSearchQuery]);
 
   useGSAP(
     () => {
@@ -1282,7 +1333,7 @@ export function SettingsPage() {
     <div
       ref={motionRootRef}
       data-horizontal-swipe-surface
-      className="mx-auto flex min-h-full max-w-5xl flex-col gap-4 touch-pan-y"
+      className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 touch-pan-y"
       onPointerDownCapture={settingsCategorySwipe.onPointerDownCapture}
       onPointerMoveCapture={settingsCategorySwipe.onPointerMoveCapture}
       onPointerUpCapture={settingsCategorySwipe.onPointerUpCapture}
@@ -1290,296 +1341,366 @@ export function SettingsPage() {
       onClickCapture={settingsCategorySwipe.onClickCapture}
     >
       <div data-settings-intro>
-        <PageHeader title="设置" className="mb-0" />
+        <PageHeader
+          title="设置"
+          description="管理播放器、字幕、网络与账号偏好"
+          className="mb-0"
+          actions={
+            <InputGroup className="w-full sm:w-72">
+              <InputGroupAddon align="inline-start">
+                <Search aria-hidden />
+              </InputGroupAddon>
+              <InputGroupInput
+                aria-label="搜索设置"
+                placeholder="搜索设置"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+              {searchQuery && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label="清除设置搜索"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <X aria-hidden />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+          }
+        />
       </div>
 
-      <Tabs
-        value={category}
-        orientation={compactLayout ? "horizontal" : "vertical"}
-        className={cn("gap-5", compactLayout ? "min-h-0" : "min-h-[32rem]")}
-        onValueChange={(value) => setCategory(value as SettingsCategory)}
-      >
-        <TabsList
-          aria-label="设置分类"
-          data-settings-intro
-          variant="line"
-          className={cn(
-            "shrink-0",
-            compactLayout
-              ? "scroll-fade-x sticky top-0 h-12! w-full flex-row! justify-start overflow-x-auto bg-background"
-              : "w-40 items-stretch",
-          )}
+      <SettingsSearchContext.Provider value={normalizedSearchQuery}>
+        <Tabs
+          value={category}
+          orientation={compactLayout ? "horizontal" : "vertical"}
+          className={cn("gap-6", compactLayout ? "min-h-0" : "min-h-[32rem] gap-8")}
+          onValueChange={(value) => setCategory(value as SettingsCategory)}
         >
-          {settingsCategories.map(({ value, label, icon: Icon }) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              ref={(node) => {
-                categoryTabRefs.current.set(value, node);
-              }}
+          <div
+            className={cn("shrink-0", !compactLayout && "w-48 border-r border-border-subtle pr-5")}
+          >
+            <TabsList
+              aria-label="设置分类"
+              data-settings-intro
+              variant={compactLayout ? "line" : "default"}
               className={cn(
-                "h-11 shrink-0 gap-2 px-3 py-2",
-                compactLayout ? "w-auto! flex-none! justify-center text-center" : "text-left",
+                compactLayout
+                  ? "scroll-fade-x sticky top-0 h-12! w-full flex-row! justify-start overflow-x-auto bg-background"
+                  : "w-full items-stretch",
               )}
             >
-              <Icon aria-hidden />
-              <span>{label}</span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+              {settingsCategories.map(({ value, label, icon: Icon }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  ref={(node) => {
+                    categoryTabRefs.current.set(value, node);
+                  }}
+                  className={cn(
+                    "h-11 shrink-0 gap-2 px-3 py-2",
+                    compactLayout ? "w-auto! flex-none! justify-center text-center" : "text-left",
+                  )}
+                >
+                  <Icon aria-hidden />
+                  <span>{label}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
-        <div
-          ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
-          data-slot="horizontal-swipe-page"
-          className="min-w-0 flex-1"
-        >
-          {category === "playback" && (
-            <TabsContent value="playback" className="mt-0">
-              <SettingsContent title="播放">
-                <Section title="播放质量">
-                  <Field orientation="responsive">
-                    <FieldTitle id="quality-label">优先清晰度</FieldTitle>
-                    <ToggleGroup
-                      aria-labelledby="quality-label"
-                      value={[qualityLevel]}
-                      variant="outline"
-                      size="sm"
-                      spacing={1}
-                      onValueChange={(values) => {
-                        const next = values[0];
-                        if (next === "high" || next === "mid" || next === "low") {
-                          setQualityLevel(next);
-                        }
-                      }}
-                    >
-                      <ToggleGroupItem value="high">最高</ToggleGroupItem>
-                      <ToggleGroupItem value="mid">中间</ToggleGroupItem>
-                      <ToggleGroupItem value="low">最低</ToggleGroupItem>
-                    </ToggleGroup>
-                  </Field>
-                  <Field orientation="responsive">
-                    <FieldContent>
-                      <FieldTitle id="smart-line-selection-title">智能线路选择</FieldTitle>
-                      <FieldDescription>
-                        通过当前应用代理并发探测线路，优先选择可用且响应更快的来源。
-                      </FieldDescription>
-                    </FieldContent>
-                    <Switch
-                      aria-labelledby="smart-line-selection-title"
-                      checked={playbackSmartLineSelection}
-                      onCheckedChange={setPlaybackSmartLineSelection}
-                    />
-                  </Field>
-                  <Field orientation="responsive">
-                    <FieldContent>
-                      <FieldTitle id="soft-switch-title">软切换实验</FieldTitle>
-                      <FieldDescription>
-                        同协议换源时保留当前媒体元素和缓冲状态；失败会自动完整重建播放器。
-                      </FieldDescription>
-                    </FieldContent>
-                    <Switch
-                      aria-labelledby="soft-switch-title"
-                      checked={playbackSoftSwitchEnabled}
-                      onCheckedChange={setPlaybackSoftSwitchEnabled}
-                    />
-                  </Field>
-                </Section>
-                <Section title="语音字幕">
-                  <AsrModelField />
-                  <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
-                </Section>
-                <Section title="弹幕轨道">
-                  <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
-                </Section>
-                <Section title="弹幕文字与节奏">
-                  <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
-                  <Field orientation="responsive">
-                    <FieldContent>
-                      <FieldTitle>恢复弹幕默认设置</FieldTitle>
-                      <FieldDescription>
-                        重置轨道、文字、过滤和 SC 透明度，屏蔽词不会被清空。
-                      </FieldDescription>
-                    </FieldContent>
-                    <DanmakuAppearanceResetButton />
-                  </Field>
-                </Section>
-                <Section title="弹幕过滤">
-                  <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
-                </Section>
-                <Section title="醒目留言">
-                  <SuperChatSettingsFields idPrefix="settings" layout="page" />
-                </Section>
-              </SettingsContent>
-            </TabsContent>
-          )}
-
-          {category === "platform" && (
-            <TabsContent value="platform" className="mt-0">
-              <SettingsContent title="平台">
-                <PlatformEnablementField />
-              </SettingsContent>
-            </TabsContent>
-          )}
-
-          {category === "network" && (
-            <TabsContent value="network" className="mt-0">
-              <SettingsContent title="网络">
-                <Section title="代理">
-                  <Field data-invalid={proxyError ? true : undefined}>
-                    <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
-                    <FieldContent>
-                      <form
-                        className="w-full"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          saveProxy();
+          <div
+            ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
+            data-slot="horizontal-swipe-page"
+            className="min-w-0 w-full max-w-4xl flex-1"
+          >
+            {category === "playback" && (
+              <TabsContent value="playback" className="mt-0">
+                <SettingsContent title="播放">
+                  <Section title="播放质量" keywords="清晰度 智能线路 软切换 线路">
+                    <Field orientation="responsive">
+                      <FieldTitle id="quality-label">优先清晰度</FieldTitle>
+                      <ToggleGroup
+                        aria-labelledby="quality-label"
+                        value={[qualityLevel]}
+                        variant="outline"
+                        size="sm"
+                        spacing={1}
+                        onValueChange={(values) => {
+                          const next = values[0];
+                          if (next === "high" || next === "mid" || next === "low") {
+                            setQualityLevel(next);
+                          }
                         }}
                       >
-                        <InputGroup>
-                          <InputGroupInput
-                            id="proxy"
-                            type="text"
-                            inputMode="url"
-                            autoCapitalize="none"
-                            value={proxyDraft}
-                            onChange={(event) => {
-                              setProxyDraft(event.target.value);
-                              setProxyError(null);
-                              setProxyStatus(null);
-                            }}
-                            placeholder="http://127.0.0.1:7890"
-                            aria-invalid={proxyError ? true : undefined}
-                          />
-                          <InputGroupAddon align="inline-end">
-                            <InputGroupButton type="submit" variant="secondary" size="sm">
-                              保存
-                            </InputGroupButton>
-                          </InputGroupAddon>
-                        </InputGroup>
-                      </form>
-                      {proxyError ? (
-                        <FieldError>{proxyError}</FieldError>
-                      ) : (
-                        proxyStatus && (
-                          <FieldDescription role="status" aria-live="polite">
-                            {proxyStatus}
-                          </FieldDescription>
-                        )
-                      )}
-                    </FieldContent>
-                  </Field>
-                </Section>
-                <Section title="IPTV 源">
-                  <IptvCustomM3uUrlField />
-                </Section>
-              </SettingsContent>
-            </TabsContent>
-          )}
+                        <ToggleGroupItem value="high">最高</ToggleGroupItem>
+                        <ToggleGroupItem value="mid">中间</ToggleGroupItem>
+                        <ToggleGroupItem value="low">最低</ToggleGroupItem>
+                      </ToggleGroup>
+                    </Field>
+                    <Field orientation="responsive">
+                      <FieldContent>
+                        <FieldTitle id="smart-line-selection-title">智能线路选择</FieldTitle>
+                        <FieldDescription>自动选择最快可用线路。</FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        aria-labelledby="smart-line-selection-title"
+                        checked={playbackSmartLineSelection}
+                        onCheckedChange={setPlaybackSmartLineSelection}
+                      />
+                    </Field>
+                    <Field orientation="responsive">
+                      <FieldContent>
+                        <FieldTitle id="soft-switch-title">软切换实验</FieldTitle>
+                        <FieldDescription>
+                          同协议换源时保留缓冲，失败后自动重建播放器。
+                        </FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        aria-labelledby="soft-switch-title"
+                        checked={playbackSoftSwitchEnabled}
+                        onCheckedChange={setPlaybackSoftSwitchEnabled}
+                      />
+                    </Field>
+                  </Section>
+                  <Section
+                    title="语音字幕"
+                    keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔"
+                  >
+                    <AsrModelField />
+                    <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
+                  </Section>
+                  <Section title="弹幕轨道" keywords="弹幕 轨道 区域 行数">
+                    <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
+                  </Section>
+                  <Section title="弹幕文字与节奏" keywords="弹幕 文字 透明度 字号 速度 字重">
+                    <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
+                    <Field orientation="responsive">
+                      <FieldContent>
+                        <FieldTitle>恢复弹幕默认设置</FieldTitle>
+                        <FieldDescription>
+                          重置轨道、文字、过滤和 SC 透明度，屏蔽词不会被清空。
+                        </FieldDescription>
+                      </FieldContent>
+                      <DanmakuAppearanceResetButton />
+                    </Field>
+                  </Section>
+                  <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并">
+                    <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
+                  </Section>
+                  <Section title="醒目留言" keywords="醒目留言 sc 透明度">
+                    <SuperChatSettingsFields idPrefix="settings" layout="page" />
+                  </Section>
+                </SettingsContent>
+              </TabsContent>
+            )}
 
-          {category === "account" && (
-            <TabsContent value="account" className="mt-0">
-              <SettingsContent title="账号">
-                <Section title="发送权限">
-                  <DanmakuSendField />
-                </Section>
-                <Section title="平台账号">
-                  <AccountCard
-                    siteId="bilibili"
-                    title="哔哩哔哩"
-                    placeholder="SESSDATA=…; bili_jct=…"
-                    qrLogin
-                  />
-                  <AccountCard
-                    siteId="douyu"
-                    title="斗鱼"
-                    placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
-                    qrLogin
-                  />
-                  <AccountCard
-                    siteId="huya"
-                    title="虎牙"
-                    placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
-                    qrLogin
-                  />
-                  <AccountCard
-                    siteId="douyin"
-                    title="抖音"
-                    placeholder="sessionid=…; ttwid=…; msToken=…"
-                    qrLogin
-                  />
-                </Section>
-              </SettingsContent>
-            </TabsContent>
-          )}
+            {category === "platform" && (
+              <TabsContent value="platform" className="mt-0">
+                <SettingsContent title="平台">
+                  <PlatformEnablementField />
+                </SettingsContent>
+              </TabsContent>
+            )}
 
-          {category === "data" && (
-            <TabsContent value="data" className="mt-0">
-              <SettingsContent title="数据">
-                <Section title="导入 / 导出">
-                  <Field data-invalid={profileError ? true : undefined}>
-                    <FieldContent>
-                      <FieldTitle>配置档案</FieldTitle>
-                      <div className="mt-1 flex flex-wrap gap-2">
-                        <Button
-                          onClick={() => void chooseProfileForExport()}
-                          disabled={profileAction !== null}
+            {category === "network" && (
+              <TabsContent value="network" className="mt-0">
+                <SettingsContent title="网络">
+                  <Section title="代理" keywords="代理 地址">
+                    <Field data-invalid={proxyError ? true : undefined}>
+                      <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
+                      <FieldContent>
+                        <form
+                          className="w-full"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            saveProxy();
+                          }}
                         >
-                          {profileAction === "export" ? (
-                            <Spinner data-icon="inline-start" />
-                          ) : (
-                            <Download data-icon="inline-start" aria-hidden />
-                          )}
-                          {profileAction === "export" ? "正在导出…" : "导出配置"}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => void chooseProfileForImport()}
-                          disabled={profileAction !== null}
-                        >
-                          {profileAction === "import" ? (
-                            <Spinner data-icon="inline-start" />
-                          ) : (
-                            <Upload data-icon="inline-start" aria-hidden />
-                          )}
-                          {profileAction === "import" ? "正在导入…" : "导入配置"}
-                        </Button>
-                      </div>
-                      {profileError ? (
-                        <FieldError>{profileError}</FieldError>
-                      ) : (
-                        profileStatus && (
-                          <FieldDescription role="status" aria-live="polite">
-                            {profileStatus}
-                          </FieldDescription>
-                        )
-                      )}
-                    </FieldContent>
-                  </Field>
-                </Section>
-              </SettingsContent>
-            </TabsContent>
-          )}
+                          <InputGroup>
+                            <InputGroupInput
+                              id="proxy"
+                              type="text"
+                              inputMode="url"
+                              autoCapitalize="none"
+                              value={proxyDraft}
+                              onChange={(event) => {
+                                setProxyDraft(event.target.value);
+                                setProxyError(null);
+                                setProxyStatus(null);
+                              }}
+                              placeholder="http://127.0.0.1:7890"
+                              aria-invalid={proxyError ? true : undefined}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupButton type="submit" variant="secondary" size="sm">
+                                保存
+                              </InputGroupButton>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </form>
+                        {proxyError ? (
+                          <FieldError>{proxyError}</FieldError>
+                        ) : (
+                          proxyStatus && (
+                            <FieldDescription role="status" aria-live="polite">
+                              {proxyStatus}
+                            </FieldDescription>
+                          )
+                        )}
+                      </FieldContent>
+                    </Field>
+                  </Section>
+                  <Section title="IPTV 源" keywords="iptv IPTV M3U 源 地址">
+                    <IptvCustomM3uUrlField />
+                  </Section>
+                </SettingsContent>
+              </TabsContent>
+            )}
 
-          {category === "about" && (
-            <TabsContent value="about" className="mt-0">
-              <SettingsContent title="关于">
-                <AboutSettings />
-              </SettingsContent>
-            </TabsContent>
-          )}
-        </div>
-      </Tabs>
+            {category === "account" && (
+              <TabsContent value="account" className="mt-0">
+                <SettingsContent title="账号">
+                  <Section title="发送权限" keywords="发送 弹幕 权限">
+                    <DanmakuSendField />
+                  </Section>
+                  <Section
+                    title="平台账号"
+                    keywords="账号 平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码"
+                  >
+                    <AccountCard
+                      siteId="bilibili"
+                      title="哔哩哔哩"
+                      placeholder="SESSDATA=…; bili_jct=…"
+                      qrLogin
+                    />
+                    <AccountCard
+                      siteId="douyu"
+                      title="斗鱼"
+                      placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
+                      qrLogin
+                    />
+                    <AccountCard
+                      siteId="huya"
+                      title="虎牙"
+                      placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
+                      qrLogin
+                    />
+                    <AccountCard
+                      siteId="douyin"
+                      title="抖音"
+                      placeholder="sessionid=…; ttwid=…; msToken=…"
+                      qrLogin
+                    />
+                  </Section>
+                </SettingsContent>
+              </TabsContent>
+            )}
+
+            {category === "data" && (
+              <TabsContent value="data" className="mt-0">
+                <SettingsContent title="数据">
+                  <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
+                    <Field data-invalid={profileError ? true : undefined}>
+                      <FieldContent>
+                        <FieldTitle>配置档案</FieldTitle>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          <Button
+                            onClick={() => void chooseProfileForExport()}
+                            disabled={profileAction !== null}
+                          >
+                            {profileAction === "export" ? (
+                              <Spinner data-icon="inline-start" />
+                            ) : (
+                              <Download data-icon="inline-start" aria-hidden />
+                            )}
+                            {profileAction === "export" ? "正在导出…" : "导出配置"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => void chooseProfileForImport()}
+                            disabled={profileAction !== null}
+                          >
+                            {profileAction === "import" ? (
+                              <Spinner data-icon="inline-start" />
+                            ) : (
+                              <Upload data-icon="inline-start" aria-hidden />
+                            )}
+                            {profileAction === "import" ? "正在导入…" : "导入配置"}
+                          </Button>
+                        </div>
+                        {profileError ? (
+                          <FieldError>{profileError}</FieldError>
+                        ) : (
+                          profileStatus && (
+                            <FieldDescription role="status" aria-live="polite">
+                              {profileStatus}
+                            </FieldDescription>
+                          )
+                        )}
+                      </FieldContent>
+                    </Field>
+                  </Section>
+                </SettingsContent>
+              </TabsContent>
+            )}
+
+            {category === "about" && (
+              <TabsContent value="about" className="mt-0">
+                <SettingsContent title="关于">
+                  <AboutSettings />
+                </SettingsContent>
+              </TabsContent>
+            )}
+          </div>
+        </Tabs>
+      </SettingsSearchContext.Provider>
     </div>
   );
 }
 
 function SettingsContent({ title, children }: { title: string; children: React.ReactNode }) {
+  const query = useContext(SettingsSearchContext);
+  const hasCategoryMatch = matchesSearch(settingsCategorySearchText[titleToCategory(title)], query);
+
   return (
-    <Card size="sm" className="gap-0 py-0">
-      <CardHeader className="py-4">
-        <CardTitle>{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="px-0">{children}</CardContent>
-    </Card>
+    <div data-slot="settings-content" className="flex min-w-0 flex-col gap-4">
+      <div className="flex items-baseline gap-3 border-b border-border-subtle pb-3">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
+        {query && <span className="text-xs text-muted-foreground">筛选结果</span>}
+      </div>
+      {hasCategoryMatch ? (
+        children
+      ) : (
+        <Empty className="min-h-64 border border-dashed border-border-subtle bg-muted/10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <SearchX aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>没有匹配的设置</EmptyTitle>
+            <EmptyDescription>试试其他关键词，或清除搜索继续浏览。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </div>
   );
+}
+
+function titleToCategory(title: string): SettingsCategory {
+  switch (title) {
+    case "播放":
+      return "playback";
+    case "平台":
+      return "platform";
+    case "网络":
+      return "network";
+    case "账号":
+      return "account";
+    case "数据":
+      return "data";
+    default:
+      return "about";
+  }
 }
