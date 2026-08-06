@@ -190,7 +190,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - surface 使用 `touch-pan-y`；纵向手势仍交给浏览器滚动。
 - 移动距离达到 `10px` 后才锁定方向，横向距离需大于纵向的 `1.25` 倍。
 - 完成切换需要至少 `48px` 的有效横向移动。
-- 拖动时通过 `gsap.set()` 直接写 `x`，每个 pointermove 不创建 tween。
+- 手势开始时读取一次 surface 宽度；拖动期间将高频 pointermove 合并到 `requestAnimationFrame`，每帧最多通过一次 `gsap.set()` 写入 `x`，且不创建 tween。
 - 到达首尾边界时只保留 `0.18` 倍位移，表达不可继续而不是循环。
 - 释放后使用 `SWIPE_SETTLE` 回到原位或让新页从完整一屏外进入。
 - Slider、Input、Textarea、Select、可编辑区域和 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管。
@@ -231,6 +231,7 @@ CSS 只承担无需 JavaScript 编排的短状态：
 - `animate-spin-soft`：加载图标的连续旋转。
 - `animate-drawer-in/out-bottom/right`：Base UI Drawer 的开关状态，进入 `240ms`，退出 `200ms`。
 - `tw-animate-css`：Dialog、Popover、Tooltip 等基础 Overlay 状态。
+- Drawer、Dialog、AlertDialog、Popover、Tooltip 和自定义 keyframes 均提供 `motion-reduce:animate-none` 或全局 reduced-motion 回退。
 
 CSS 动画不会自动经过 `prefersReducedMotion()`。新增或修改关键帧时，必须单独使用 `motion-reduce:*` 或 `@media (prefers-reduced-motion: reduce)` 提供回退；不能假设 GSAP 的检查会覆盖 CSS。
 
@@ -318,6 +319,9 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 相同列表效果使用一个 tween 加 `stagger`，不要为每项创建独立 delay；动画目标数量必须有界。
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
+- 下拉刷新与横向滑动的连续输入通过 RAF 合并，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。
+- 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
+- 视频上的 `glass-surface-overlay` 使用较小 blur；coarse pointer 或 slow-update 设备关闭 backdrop blur，改用更实的半透明背景。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，实际纵向滚动留给 `app-page`。
 - fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 和页面动画完成时必须恢复普通绘制。
 

@@ -81,11 +81,6 @@ type PlayerEdgeGestureState = {
   native: boolean;
 };
 
-type PlayerEdgeGestureFeedback = {
-  kind: PlayerEdgeGesture;
-  value: number;
-};
-
 type PlayerStageTapState = {
   pointerId: number;
   startX: number;
@@ -100,6 +95,12 @@ export function playerEdgeGestureForStart(
   stageWidth: number,
 ): PlayerEdgeGesture {
   return clientX - stageLeft < Math.max(0, stageWidth) / 2 ? "brightness" : "volume";
+}
+
+/** Convert the 0-100 fallback brightness into a compositor-only black overlay. */
+export function playerBrightnessShadeOpacity(value: number): number {
+  const brightness = Math.max(0, Math.min(100, value));
+  return (100 - brightness) / 100;
 }
 
 /** A deliberate vertical drag wins over a diagonal or horizontal gesture. */
@@ -326,9 +327,6 @@ export function PlayerPane({
   const shouldMountSidePanel = sidePanelOpen || !compactViewport;
   const [osdOn, setOsdOn] = useState(true);
   const [audioOnly, setAudioOnly] = useState(false);
-  const [playerBrightness, setPlayerBrightness] = useState(100);
-  const [playerEdgeGestureFeedback, setPlayerEdgeGestureFeedback] =
-    useState<PlayerEdgeGestureFeedback | null>(null);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
@@ -349,7 +347,13 @@ export function PlayerPane({
     composer: false,
   });
   const playerBrightnessRef = useRef(100);
+  const brightnessShadeRef = useRef<HTMLDivElement | null>(null);
   const playerEdgeGestureRef = useRef<PlayerEdgeGestureState | null>(null);
+  const playerEdgeGestureFeedbackRef = useRef<HTMLDivElement | null>(null);
+  const playerEdgeGestureBrightnessIconRef = useRef<SVGSVGElement | null>(null);
+  const playerEdgeGestureVolumeIconRef = useRef<SVGSVGElement | null>(null);
+  const playerEdgeGestureLabelRef = useRef<HTMLSpanElement | null>(null);
+  const playerEdgeGestureValueRef = useRef<HTMLElement | null>(null);
   const playerEdgeGestureFeedbackTimerRef = useRef<number | null>(null);
   const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
   const playerStageTapTimerRef = useRef<number | null>(null);
@@ -651,11 +655,26 @@ export function PlayerPane({
 
   const showPlayerEdgeGestureFeedback = useCallback(
     (kind: PlayerEdgeGesture, value: number) => {
-      setPlayerEdgeGestureFeedback({ kind, value });
+      const feedback = playerEdgeGestureFeedbackRef.current;
+      const brightnessIcon = playerEdgeGestureBrightnessIconRef.current;
+      const volumeIcon = playerEdgeGestureVolumeIconRef.current;
+      const label = playerEdgeGestureLabelRef.current;
+      const valueNode = playerEdgeGestureValueRef.current;
+      if (feedback) {
+        feedback.dataset.kind = kind;
+        feedback.dataset.playerEdgeGestureFeedback = kind;
+        feedback.dataset.visible = "true";
+      }
+      if (brightnessIcon) brightnessIcon.style.display = kind === "brightness" ? "" : "none";
+      if (volumeIcon) volumeIcon.style.display = kind === "volume" ? "" : "none";
+      if (label) label.textContent = kind === "brightness" ? "亮度" : "音量";
+      if (valueNode) valueNode.textContent = `${value}%`;
       clearPlayerEdgeGestureFeedbackTimer();
       playerEdgeGestureFeedbackTimerRef.current = window.setTimeout(() => {
         playerEdgeGestureFeedbackTimerRef.current = null;
-        setPlayerEdgeGestureFeedback(null);
+        if (playerEdgeGestureFeedbackRef.current) {
+          playerEdgeGestureFeedbackRef.current.dataset.visible = "false";
+        }
       }, PLAYER_EDGE_GESTURE_FEEDBACK_DURATION_MS);
     },
     [clearPlayerEdgeGestureFeedbackTimer],
@@ -665,7 +684,9 @@ export function PlayerPane({
     const nextValue = Math.max(0, Math.min(100, Math.round(value)));
     if (playerBrightnessRef.current === nextValue) return;
     playerBrightnessRef.current = nextValue;
-    setPlayerBrightness(nextValue);
+    if (brightnessShadeRef.current) {
+      brightnessShadeRef.current.style.opacity = String(playerBrightnessShadeOpacity(nextValue));
+    }
   }, []);
 
   const releasePlayerEdgeGesturePointer = useCallback(
@@ -938,6 +959,12 @@ export function PlayerPane({
   useEffect(() => clearPlayerEdgeGestureFeedbackTimer, [clearPlayerEdgeGestureFeedbackTimer]);
   useEffect(() => clearPlayerStageTapTimer, [clearPlayerStageTapTimer]);
 
+  useEffect(() => {
+    if (!androidClient || !androidPlayerControls.supported) return;
+    playerBrightnessRef.current = 100;
+    if (brightnessShadeRef.current) brightnessShadeRef.current.style.opacity = "0";
+  }, [androidClient, androidPlayerControls.supported]);
+
   const focusFirstControl = useCallback(() => {
     // A hidden transparent bar must not be in the tab sequence.  After Tab
     // reveals it, explicitly put focus on its first usable control instead of
@@ -1084,12 +1111,7 @@ export function PlayerPane({
               </div>
             )}
 
-            <div
-              className="absolute inset-0"
-              style={{
-                filter: `brightness(${androidClient && androidPlayerControls.supported ? 1 : playerBrightness / 100})`,
-              }}
-            >
+            <div className="absolute inset-0">
               <div
                 ref={player.playerRootRef}
                 data-player-engine-root
@@ -1122,6 +1144,14 @@ export function PlayerPane({
                   className="z-10"
                 />
               )}
+              {/* Dimming only needs alpha composition. A full-surface CSS
+                  brightness filter would re-filter both video and Canvas on
+                  every gesture step in browser/bridge-fallback playback. */}
+              <div
+                ref={brightnessShadeRef}
+                className="pointer-events-none absolute inset-0 z-[11] bg-black opacity-0"
+                aria-hidden="true"
+              />
             </div>
 
             {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
@@ -1164,32 +1194,32 @@ export function PlayerPane({
               </div>
             )}
 
-            {playerEdgeGestureFeedback && (
-              <div
-                aria-hidden="true"
-                data-player-edge-gesture-feedback={playerEdgeGestureFeedback.kind}
-                className={cn(
-                  "pointer-events-none absolute top-1/2 z-20 -translate-y-1/2",
-                  playerEdgeGestureFeedback.kind === "brightness"
-                    ? "left-[max(1.25rem,env(safe-area-inset-left))]"
-                    : "right-[max(1.25rem,env(safe-area-inset-right))]",
-                )}
-              >
-                <div className="flex min-w-20 flex-col items-center gap-1 rounded-2xl border border-white/12 bg-black/72 px-3 py-2.5 text-white shadow-lg">
-                  {playerEdgeGestureFeedback.kind === "brightness" ? (
-                    <SunMedium className="size-5" />
-                  ) : (
-                    <Volume2 className="size-5" />
-                  )}
-                  <span className="text-[11px] text-white/70">
-                    {playerEdgeGestureFeedback.kind === "brightness" ? "亮度" : "音量"}
-                  </span>
-                  <strong className="text-sm font-semibold tabular-nums">
-                    {playerEdgeGestureFeedback.value}%
-                  </strong>
-                </div>
+            <div
+              ref={playerEdgeGestureFeedbackRef}
+              aria-hidden="true"
+              data-kind="brightness"
+              data-player-edge-gesture-feedback="brightness"
+              data-visible="false"
+              className="pointer-events-none absolute top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity duration-100 ease-out data-[kind=brightness]:left-[max(1.25rem,env(safe-area-inset-left))] data-[kind=volume]:right-[max(1.25rem,env(safe-area-inset-right))] data-[visible=true]:opacity-100 motion-reduce:transition-none"
+            >
+              <div className="flex min-w-20 flex-col items-center gap-1 rounded-2xl border border-white/12 bg-black/72 px-3 py-2.5 text-white shadow-lg">
+                <SunMedium ref={playerEdgeGestureBrightnessIconRef} className="size-5" />
+                <Volume2
+                  ref={playerEdgeGestureVolumeIconRef}
+                  className="size-5"
+                  style={{ display: "none" }}
+                />
+                <span ref={playerEdgeGestureLabelRef} className="text-[11px] text-white/70">
+                  亮度
+                </span>
+                <strong
+                  ref={playerEdgeGestureValueRef}
+                  className="text-sm font-semibold tabular-nums"
+                >
+                  100%
+                </strong>
               </div>
-            )}
+            </div>
 
             <div
               ref={controlsRef}
@@ -1375,7 +1405,7 @@ export function PlayerPane({
             <div
               ref={sideTabSwipe.pageRef as React.Ref<HTMLDivElement>}
               data-slot="horizontal-swipe-page"
-              className="relative flex min-h-0 flex-1 transform-gpu"
+              className="relative flex min-h-0 flex-1"
             >
               <TabsContent
                 value="chat"
