@@ -3,7 +3,7 @@ import type { IPlayerOptions } from "xgplayer";
 import { iptvPlaybackKind } from "../src/features/iptv/IptvPlayer";
 import {
   createXgPlayer,
-  getXgHlsCore,
+  getXgHlsJsCore,
   isXgPlayerDecodeError,
   xgPlayerErrorMessage,
   type XgPlayerInstance,
@@ -47,9 +47,7 @@ describe("xgplayer transport selection", () => {
         "PipelineStatus::CHUNK_DEMUXER_ERROR_APPEND_FAILED: Failed to prepare video sample",
       ),
     ).toBe(true);
-    expect(isXgPlayerDecodeError({ errorCode: 2100, message: "bad network response" })).toBe(
-      false,
-    );
+    expect(isXgPlayerDecodeError({ errorCode: 2100, message: "bad network response" })).toBe(false);
   });
 
   test("binds the media element to a dedicated root that fills its stage", () => {
@@ -129,17 +127,92 @@ describe("xgplayer transport selection", () => {
     expect("hlsJsPlugin" in (capturedOptions ?? {})).toBe(false);
   });
 
-  test("reads the official HLS core from the lowercase plugin name", () => {
-    const core = { replay: async () => {} };
+  test("passes hls.js options through the Twitch plugin namespace", () => {
+    let capturedOptions: (IPlayerOptions & { hlsJsPlugin?: Record<string, unknown> }) | null = null;
+
+    class PlayerStub {
+      media: HTMLMediaElement;
+
+      constructor(options: IPlayerOptions) {
+        capturedOptions = options;
+        this.media = options.mediaEl as HTMLMediaElement;
+      }
+
+      async play(): Promise<void> {}
+      pause(): void {}
+      destroy(): void {}
+      on(): void {}
+      getPlugin(): null {
+        return null;
+      }
+    }
+
+    const plugin = { isSupported: () => true };
+    const hlsJs = { hlsOpts: { lowLatencyMode: false } };
+    createXgPlayer(
+      {
+        Player: PlayerStub as XgPlayerModules["Player"],
+        plugin,
+      },
+      {
+        root: {} as HTMLElement,
+        video: { canPlayType: () => "" } as unknown as HTMLVideoElement,
+        url: "https://cdn.example/live.m3u8",
+        kind: "hlsjs",
+        hlsJs,
+      },
+    );
+
+    expect(capturedOptions?.plugins).toEqual([plugin]);
+    expect(capturedOptions?.hlsJsPlugin).toEqual(hlsJs);
+    expect("hls" in (capturedOptions ?? {})).toBe(false);
+  });
+
+  test("reads the hls.js core from its plugin wrapper", () => {
+    const core = { startLoad: () => {}, recoverMediaError: () => {} };
     let requestedPlugin = "";
     const player = {
       getPlugin: (condition: string | Function) => {
         requestedPlugin = String(condition);
-        return { core };
+        return { hls: core };
       },
     } as XgPlayerInstance;
 
-    expect(getXgHlsCore(player)).toBe(core);
-    expect(requestedPlugin).toBe("hls");
+    expect(getXgHlsJsCore(player)).toBe(core);
+    expect(requestedPlugin).toBe("HlsJsPlugin");
+  });
+
+  test("keeps hls.js recovery calls safe before the core is attached", () => {
+    let core: {
+      startLoad: (startPosition?: number) => void;
+      recoverMediaError: () => void;
+    } | null = null;
+    const player = {
+      getPlugin: () => ({
+        get hls() {
+          return core;
+        },
+      }),
+    } as XgPlayerInstance;
+
+    const deferredCore = getXgHlsJsCore(player);
+    expect(deferredCore).not.toBeNull();
+    expect(() => deferredCore?.startLoad()).not.toThrow();
+    expect(() => deferredCore?.recoverMediaError()).not.toThrow();
+
+    let startPosition: number | undefined;
+    let recovered = false;
+    core = {
+      startLoad: (position) => {
+        startPosition = position;
+      },
+      recoverMediaError: () => {
+        recovered = true;
+      },
+    };
+    deferredCore?.startLoad(7);
+    deferredCore?.recoverMediaError();
+    expect(startPosition).toBe(7);
+    expect(recovered).toBe(true);
   });
 });

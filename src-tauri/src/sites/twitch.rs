@@ -1213,6 +1213,16 @@ mod tests {
     }
 
     #[test]
+    fn requests_av1_and_h264_twitch_variants_for_webview_playback() {
+        let url = usher_master_url("demo", "signature", "token").expect("master URL");
+        let supported_codecs = url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "supported_codecs").then(|| value.into_owned()));
+
+        assert_eq!(supported_codecs.as_deref(), Some("av1,h264"));
+    }
+
+    #[test]
     fn keeps_quality_mapping_when_master_playlist_reorders_variants() {
         let master = Url::parse("https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=x").unwrap();
         let initial_manifest = concat!(

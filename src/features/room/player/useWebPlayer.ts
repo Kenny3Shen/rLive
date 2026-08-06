@@ -12,7 +12,7 @@ import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
   createXgPlayer,
-  getXgHlsCore,
+  getXgHlsJsCore,
   isXgPlayerDecodeError,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
@@ -246,9 +246,9 @@ export type HlsFatalRecoveryAction =
   | { type: "refresh_play_url"; retryAfterMs: number };
 
 /**
- * xgplayer-hls has already exhausted its request retries before emitting a
- * player error. Replay the current pipeline once, then ask Twitch for a fresh
- * signed playlist instead of repeatedly loading an expired URL forever.
+ * hls.js has already attempted its built-in recovery before the player error
+ * reaches this boundary. Retry once, then ask Twitch for a fresh signed URL
+ * instead of repeatedly loading an expired URL forever.
  */
 export function nextHlsFatalRecoveryAction(
   failureCount: number,
@@ -256,7 +256,7 @@ export function nextHlsFatalRecoveryAction(
   authorizationFailed = false,
 ): HlsFatalRecoveryAction {
   // A 401/403 on a Twitch media playlist is normally a short-lived signed
-  // URL expiring. Replaying xgplayer-hls against the same URL only repeats it.
+  // URL expiring. Replaying against the same URL only repeats the failure.
   if (authorizationFailed && !commercialBreak) {
     return { type: "refresh_play_url", retryAfterMs: 0 };
   }
@@ -337,10 +337,13 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
   ]);
 }
 
-export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPlaybackKind {
+export function webPlaybackKind(
+  source: Pick<PlayUrl, "url" | "protocol">,
+  siteId?: SiteId,
+): XgPlaybackKind {
   switch (playbackProtocol(source)) {
     case "hls":
-      return "hls";
+      return siteId === "twitch" ? "hlsjs" : "hls";
     case "mpeg_ts":
       return "mpegts";
     case "native":
@@ -562,7 +565,7 @@ export function useWebPlayer(opts: {
   const effectivePlaybackSourceKey =
     playbackSourceKey || retainedPlaybackSourceRef.current?.sourceKey || "";
   const effectivePlaybackKind = effectivePlaybackSource
-    ? webPlaybackKind(effectivePlaybackSource)
+    ? webPlaybackKind(effectivePlaybackSource, siteId)
     : null;
   const effectivePlaybackSourceRef = useRef<PlayUrl | null>(effectivePlaybackSource);
   effectivePlaybackSourceRef.current = effectivePlaybackSource;
@@ -607,8 +610,8 @@ export function useWebPlayer(opts: {
     setMuted(false);
     mutedRef.current = false;
 
-    const playbackKind = webPlaybackKind(playbackSource);
-    const hlsSource = playbackKind === "hls";
+    const playbackKind = webPlaybackKind(playbackSource, siteId);
+    const hlsSource = playbackKind === "hls" || playbackKind === "hlsjs";
     // Start fetching xgplayer and only the selected protocol plugin while the
     // serialized proxy queue tears down the previous session.
     const xgModulesPromise = loadXgPlayerModules(playbackKind);
@@ -749,6 +752,18 @@ export function useWebPlayer(opts: {
                     }
                   : undefined,
             },
+            hlsJs: {
+              hlsOpts: {
+                lowLatencyMode: false,
+                backBufferLength: 30,
+                maxBufferLength: 30,
+                liveSyncDurationCount: 3,
+                liveMaxLatencyDurationCount: 6,
+                manifestLoadingMaxRetry: 3,
+                levelLoadingMaxRetry: 3,
+                fragLoadingMaxRetry: 3,
+              },
+            },
             flv: {
               isLive: true,
               retryCount: 3,
@@ -786,11 +801,12 @@ export function useWebPlayer(opts: {
           activePlaybackKindRef.current = playbackKind;
           const isCurrentPlayer = () =>
             !cancelled && genRef.current === gen && playerRef.current === player;
-          const hls = hlsSource ? getXgHlsCore(player) : null;
+          const hlsJs = playbackKind === "hlsjs" ? getXgHlsJsCore(player) : null;
 
-          // Twitch needs one bounded in-place replay before requesting a new
-          // signed URL. Other protocol errors flow through xgplayer unchanged.
-          if (!hls || siteId !== "twitch") {
+          // Twitch lets hls.js perform one bounded in-place recovery before
+          // requesting a new signed URL. Other protocol errors flow through
+          // xgplayer unchanged.
+          if (!hlsJs || siteId !== "twitch") {
             player.on("error", (error) => {
               if (!isCurrentPlayer()) return;
               const message = xgPlayerErrorMessage(error);
@@ -805,55 +821,14 @@ export function useWebPlayer(opts: {
             });
           }
 
-          if (hls && siteId === "twitch") {
+          if (hlsJs && siteId === "twitch") {
+            const hlsJsCore = hlsJs;
             let hlsFatalFailureCount = 0;
             let decoderFailureReported = false;
             if (import.meta.env.DEV) {
-              let pendingFirstVideoSample: {
-                codec?: unknown;
-                sampleCount: number;
-                firstKeyframe: boolean;
-                firstPts?: unknown;
-                firstDts?: unknown;
-              } | null = null;
-              player.on("core_event", (event) => {
-                if (!isCurrentPlayer() || !event || typeof event !== "object") return;
-                const coreEvent = event as {
-                  eventName?: unknown;
-                  start?: unknown;
-                  end?: unknown;
-                  videoTrack?: {
-                    codec?: unknown;
-                    samples?: Array<{
-                      keyframe?: unknown;
-                      pts?: unknown;
-                      dts?: unknown;
-                    }>;
-                  };
-                };
-                if (coreEvent.eventName === "core.demuxedtrack") {
-                  const firstSample = coreEvent.videoTrack?.samples?.[0];
-                  if (!firstSample) return;
-                  pendingFirstVideoSample = {
-                    codec: coreEvent.videoTrack?.codec,
-                    sampleCount: coreEvent.videoTrack?.samples?.length ?? 0,
-                    firstKeyframe: Boolean(firstSample.keyframe),
-                    firstPts: firstSample.pts,
-                    firstDts: firstSample.dts,
-                  };
-                  console.debug("[rLive][Twitch MSE] demuxed video segment", {
-                    ...pendingFirstVideoSample,
-                  });
-                  return;
-                }
-                if (coreEvent.eventName === "core.appendbuffer") {
-                  console.debug("[rLive][Twitch MSE] appended video segment", {
-                    start: coreEvent.start,
-                    end: coreEvent.end,
-                    ...pendingFirstVideoSample,
-                  });
-                  pendingFirstVideoSample = null;
-                }
+              player.on("media_info", (info) => {
+                if (!isCurrentPlayer()) return;
+                console.debug("[rLive][Twitch hls.js] media info", info);
               });
             }
             function failDecoder() {
@@ -886,10 +861,16 @@ export function useWebPlayer(opts: {
             player.on("playing", () => {
               if (isCurrentPlayer()) hlsFatalFailureCount = 0;
             });
-            player.on("error", (cause) => {
+            function handleFatalHlsFailure(cause: unknown, recoveryAlreadyStarted = false) {
               if (!isCurrentPlayer()) return;
 
-              const errorMessage = xgPlayerErrorMessage(cause, "Twitch HLS 连接中断");
+              const hlsJsDetails =
+                cause && typeof cause === "object" && "errorDetails" in cause
+                  ? String((cause as { errorDetails?: unknown }).errorDetails ?? "")
+                  : "";
+              const errorMessage = hlsJsDetails
+                ? `Twitch HLS ${hlsJsDetails}`
+                : xgPlayerErrorMessage(cause, "Twitch HLS 连接中断");
               if (isXgPlayerDecodeError(cause)) {
                 failDecoder();
                 return;
@@ -904,10 +885,13 @@ export function useWebPlayer(opts: {
               );
               if (action.type === "restart") {
                 setRunning(false);
-                void hls.replay().catch(() => {
-                  // replay() emits the resulting player error, which enters
-                  // this handler again and advances to signed URL renewal.
-                });
+                if (!recoveryAlreadyStarted) {
+                  try {
+                    hlsJsCore.startLoad();
+                  } catch {
+                    // A subsequent hls.js fatal event advances to URL renewal.
+                  }
+                }
                 return;
               }
 
@@ -931,6 +915,27 @@ export function useWebPlayer(opts: {
                 refreshPlayUrl: true,
                 retryAfterMs: action.retryAfterMs,
               });
+            }
+            player.on("HLS_ERROR", (cause) => {
+              if (!isCurrentPlayer() || !cause || typeof cause !== "object") return;
+              const event = cause as {
+                errorType?: unknown;
+                errorDetails?: unknown;
+                errorFatal?: unknown;
+              };
+              if (import.meta.env.DEV) {
+                console.debug("[rLive][Twitch hls.js] error", event);
+              }
+              if (event.errorFatal !== true) return;
+              const type = String(event.errorType ?? "").toLowerCase();
+              if (type !== "networkerror" && type !== "mediaerror") return;
+              // The plugin starts its built-in recovery immediately after
+              // emitting HLS_ERROR. Defer our retry accounting so destroying
+              // a failed player cannot invalidate that synchronous callback.
+              window.setTimeout(() => handleFatalHlsFailure(event, true), 0);
+            });
+            player.on("error", (cause) => {
+              handleFatalHlsFailure(cause);
             });
           }
 
@@ -1033,7 +1038,7 @@ export function useWebPlayer(opts: {
           url: targetSource.url,
           headers: targetSource.headers,
           sessionId: proxySessionId,
-          hls: targetKind === "hls",
+          hls: targetKind === "hls" || targetKind === "hlsjs",
         });
         if (
           cancelled ||
