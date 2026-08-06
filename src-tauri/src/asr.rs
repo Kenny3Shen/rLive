@@ -15,6 +15,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+#[cfg(windows)]
+use libloading::Library;
+#[cfg(windows)]
+use std::sync::OnceLock;
+
 use serde::Serialize;
 use sherpa_onnx::{
     OfflinePunctuation, OfflinePunctuationConfig, OnlineRecognizer, OnlineRecognizerConfig,
@@ -38,10 +43,18 @@ const SPEAKER_MODEL_SIZE_BYTES: u64 = 28_281_164;
 const HOTWORDS_FILE: &str = "hotwords.txt";
 const HOTWORDS_SCORE: f32 = 2.0;
 
+const ASR_PROVIDER_AUTO: &str = "auto";
+const ASR_PROVIDER_CPU: &str = "cpu";
+const ASR_PROVIDER_CUDA: &str = "cuda";
+// The v1.13.4 Windows CUDA archive used by this project contains SASS for
+// Pascal (sm_61) and newer NVIDIA architectures.
+const CUDA_MIN_COMPUTE_CAPABILITY: (i32, i32) = (6, 1);
+
 const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
 const DECODER_FILE: &str = "decoder-epoch-99-avg-1.onnx";
 const JOINER_FILE: &str = "joiner-epoch-99-avg-1.int8.onnx";
 const TOKENS_FILE: &str = "tokens.txt";
+const BPE_VOCAB_FILE: &str = "bpe.vocab";
 const PUNCTUATION_FILE: &str = "model.int8.onnx";
 
 const ASR_SAMPLE_RATE: i32 = 16_000;
@@ -90,6 +103,9 @@ pub struct AsrModelStatus {
     pub speaker_model_downloaded: bool,
     pub speaker_model_size_bytes: u64,
     pub threads: i32,
+    /// Provider used by the loaded ASR, punctuation and speaker models:
+    /// `cpu` or `cuda`.
+    pub provider: String,
     pub message: Option<String>,
 }
 
@@ -112,13 +128,17 @@ impl AsrModelStatus {
             speaker_model_downloaded,
             speaker_model_size_bytes: SPEAKER_MODEL_SIZE_BYTES,
             threads: asr_thread_count(),
-            message: None,
+            provider: effective_asr_provider(&options.provider).to_string(),
+            message: asr_provider_fallback_message(&options.provider),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRuntimeOptions {
+    /// `auto` selects CUDA on Windows when the staged runtime and NVIDIA
+    /// driver are loadable; otherwise it uses CPU.
+    pub provider: String,
     pub vad_enabled: bool,
     pub punctuation_enabled: bool,
     pub speaker_enabled: bool,
@@ -128,6 +148,7 @@ pub struct AsrRuntimeOptions {
 impl Default for AsrRuntimeOptions {
     fn default() -> Self {
         Self {
+            provider: ASR_PROVIDER_AUTO.to_string(),
             vad_enabled: true,
             punctuation_enabled: true,
             speaker_enabled: false,
@@ -161,6 +182,7 @@ struct ModelAssets {
     decoder: PathBuf,
     joiner: PathBuf,
     tokens: PathBuf,
+    bpe_vocab: PathBuf,
     punctuation_root: PathBuf,
     punctuation: PathBuf,
     speaker: PathBuf,
@@ -176,6 +198,7 @@ impl ModelAssets {
             decoder: root.join(DECODER_FILE),
             joiner: root.join(JOINER_FILE),
             tokens: root.join(TOKENS_FILE),
+            bpe_vocab: root.join(BPE_VOCAB_FILE),
             punctuation: punctuation_root.join(PUNCTUATION_FILE),
             speaker: model_dir.join(SPEAKER_MODEL_FILE),
             hotwords: model_dir.join(HOTWORDS_FILE),
@@ -184,20 +207,24 @@ impl ModelAssets {
         }
     }
 
-    /// Every graph and the token table must be a non-empty file. The archive
-    /// carries no per-file manifest, so presence plus non-emptiness is the
-    /// strongest cheap check available; a corrupt graph surfaces at load.
+    /// Every recognizer asset and the token table must be a non-empty file.
+    /// The archive carries no per-file manifest, so presence plus
+    /// non-emptiness is the strongest cheap check available; a corrupt graph
+    /// surfaces at load.
     fn is_complete(&self, punctuation_enabled: bool) -> bool {
-        [&self.encoder, &self.decoder, &self.joiner, &self.tokens]
-            .iter()
-            .all(|path| file_is_non_empty(path))
-            && (!punctuation_enabled || self.punctuation_is_complete())
+        self.recognizer_is_complete() && (!punctuation_enabled || self.punctuation_is_complete())
     }
 
     fn recognizer_is_complete(&self) -> bool {
-        [&self.encoder, &self.decoder, &self.joiner, &self.tokens]
-            .iter()
-            .all(|path| file_is_non_empty(path))
+        [
+            &self.encoder,
+            &self.decoder,
+            &self.joiner,
+            &self.tokens,
+            &self.bpe_vocab,
+        ]
+        .iter()
+        .all(|path| file_is_non_empty(path))
     }
 
     fn punctuation_is_complete(&self) -> bool {
@@ -318,12 +345,12 @@ struct NativeSpeakerSession {
 }
 
 impl NativeSpeakerSession {
-    fn open(model: &Path, threads: i32) -> Result<Self, String> {
+    fn open(model: &Path, threads: i32, provider: &str) -> Result<Self, String> {
         let config = SpeakerEmbeddingExtractorConfig {
             model: Some(ModelAssets::as_string(model)),
             num_threads: threads.clamp(1, 2),
             debug: false,
-            provider: Some("cpu".to_string()),
+            provider: Some(provider.to_string()),
         };
         let extractor = SpeakerEmbeddingExtractor::create(&config)
             .ok_or_else(|| "sherpa-onnx could not create the speaker model".to_string())?;
@@ -361,6 +388,7 @@ impl NativeSpeakerSession {
 struct NativeAsrSession {
     recognizer: OnlineRecognizer,
     stream: OnlineStream,
+    provider: String,
     punctuation: Option<OfflinePunctuation>,
     speaker: Option<NativeSpeakerSession>,
     /// Total samples accepted since the last reset, used to place captions on a
@@ -381,6 +409,7 @@ impl NativeAsrSession {
         threads: i32,
         options: &AsrRuntimeOptions,
     ) -> Result<Self, String> {
+        let provider = effective_asr_provider(&options.provider);
         let mut config = OnlineRecognizerConfig::default();
         config.model_config.transducer.encoder = Some(ModelAssets::as_string(&assets.encoder));
         config.model_config.transducer.decoder = Some(ModelAssets::as_string(&assets.decoder));
@@ -388,6 +417,7 @@ impl NativeAsrSession {
         config.model_config.tokens = Some(ModelAssets::as_string(&assets.tokens));
         config.model_config.num_threads = threads;
         config.model_config.debug = false;
+        config.model_config.provider = Some(provider.to_string());
         // Contextual hotwords are supported by sherpa-onnx only in modified
         // beam search. Keep the cheaper greedy path when no local domain terms
         // are configured, and use a small beam when they are present.
@@ -413,6 +443,12 @@ impl NativeAsrSession {
         };
         config.rule3_min_utterance_length = ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH;
         if !options.hotwords.is_empty() {
+            // This bilingual model uses CJK characters plus SentencePiece BPE
+            // pieces for Latin text. Without the BPE vocabulary, an English
+            // hotword such as "ft" is treated as one CJK token and sherpa-onnx
+            // logs an OOV warning.
+            config.model_config.modeling_unit = Some("cjkchar+bpe".to_string());
+            config.model_config.bpe_vocab = Some(ModelAssets::as_string(&assets.bpe_vocab));
             config.hotwords_file = Some(ModelAssets::as_string(&assets.hotwords));
             config.hotwords_score = HOTWORDS_SCORE;
         }
@@ -427,6 +463,7 @@ impl NativeAsrSession {
                 Some(ModelAssets::as_string(&assets.punctuation));
             punctuation_config.model.num_threads = threads.clamp(1, 2);
             punctuation_config.model.debug = false;
+            punctuation_config.model.provider = Some(provider.to_string());
             Some(
                 OfflinePunctuation::create(&punctuation_config).ok_or_else(|| {
                     "sherpa-onnx could not create the punctuation model".to_string()
@@ -436,7 +473,11 @@ impl NativeAsrSession {
             None
         };
         let speaker = if options.speaker_enabled {
-            Some(NativeSpeakerSession::open(&assets.speaker, threads)?)
+            Some(NativeSpeakerSession::open(
+                &assets.speaker,
+                threads,
+                provider,
+            )?)
         } else {
             None
         };
@@ -444,6 +485,7 @@ impl NativeAsrSession {
         Ok(Self {
             recognizer,
             stream,
+            provider: provider.to_string(),
             punctuation,
             speaker,
             accepted_samples: 0,
@@ -677,7 +719,8 @@ impl AsrManager {
             status.downloaded_bytes = self.inner.assets.downloaded_bytes(&options);
             status.total_bytes = Some(status.model_size_bytes);
             status.threads = asr_thread_count();
-            status.message = None;
+            status.provider = effective_asr_provider(&options.provider).to_string();
+            status.message = asr_provider_fallback_message(&options.provider);
             if let Ok(mut current) = self.inner.runtime_options.lock() {
                 *current = Some(options.clone());
             }
@@ -816,6 +859,7 @@ impl AsrManager {
             drop(session);
             return;
         }
+        let active_provider = session.provider.clone();
 
         let Ok(mut guard) = self.inner.session.lock() else {
             tracing::warn!("ASR session mutex poisoned while loading model");
@@ -840,7 +884,8 @@ impl AsrManager {
             status.model_size_bytes = configured_model_size(&options);
             status.downloaded_bytes = status.model_size_bytes;
             status.total_bytes = Some(status.model_size_bytes);
-            status.message = None;
+            status.provider = active_provider.clone();
+            status.message = asr_provider_fallback_message(&options.provider);
         });
     }
 
@@ -1195,13 +1240,15 @@ impl AsrManager {
             status.model_size_bytes = total_size;
             status.downloaded_bytes = total_size;
             status.total_bytes = Some(total_size);
-            status.message = None;
+            status.provider = effective_asr_provider(&options.provider).to_string();
+            status.message = asr_provider_fallback_message(&options.provider);
         });
     }
 
     fn set_idle_status(&self) {
         self.update_status(|status| {
             let options = AsrRuntimeOptions {
+                provider: ASR_PROVIDER_AUTO.to_owned(),
                 vad_enabled: status.vad_enabled,
                 punctuation_enabled: status.punctuation_enabled,
                 speaker_enabled: status.speaker_enabled,
@@ -1218,6 +1265,7 @@ impl AsrManager {
             status.model_size_bytes = total_size;
             status.downloaded_bytes = self.inner.assets.downloaded_bytes(&options);
             status.total_bytes = Some(total_size);
+            status.provider = effective_asr_provider(&options.provider).to_string();
             status.message = None;
         });
     }
@@ -1339,6 +1387,147 @@ fn asr_thread_count() -> i32 {
     asr_thread_count_for_available(available)
 }
 
+fn normalize_asr_provider(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
+        ASR_PROVIDER_CUDA => ASR_PROVIDER_CUDA,
+        _ => ASR_PROVIDER_AUTO,
+    }
+}
+
+fn effective_asr_provider(preference: &str) -> &'static str {
+    match normalize_asr_provider(preference) {
+        ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
+        ASR_PROVIDER_CUDA | ASR_PROVIDER_AUTO if cuda_runtime_available() => ASR_PROVIDER_CUDA,
+        _ => ASR_PROVIDER_CPU,
+    }
+}
+
+fn asr_provider_fallback_message(preference: &str) -> Option<String> {
+    let normalized = normalize_asr_provider(preference);
+    if normalized != ASR_PROVIDER_CPU && effective_asr_provider(normalized) == ASR_PROVIDER_CPU {
+        Some(cuda_provider_fallback_message())
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn cuda_provider_fallback_message() -> String {
+    if let Some((major, minor)) = cuda_compute_capability() {
+        if !cuda_compute_capability_supported(major, minor) {
+            return format!(
+                "当前 NVIDIA GPU Compute Capability {major}.{minor}，官方 CUDA 运行库要求 6.1 及以上，已回退 CPU"
+            );
+        }
+    }
+    "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
+}
+
+#[cfg(not(windows))]
+fn cuda_provider_fallback_message() -> String {
+    "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
+}
+
+fn cuda_compute_capability_supported(major: i32, minor: i32) -> bool {
+    (major, minor) >= CUDA_MIN_COMPUTE_CAPABILITY
+}
+
+#[cfg(windows)]
+fn cuda_compute_capability() -> Option<(i32, i32)> {
+    static CAPABILITY: OnceLock<Option<(i32, i32)>> = OnceLock::new();
+
+    *CAPABILITY.get_or_init(|| {
+        type CuInit = unsafe extern "system" fn(u32) -> i32;
+        type CuDeviceGet = unsafe extern "system" fn(*mut i32, i32) -> i32;
+        type CuDeviceComputeCapability = unsafe extern "system" fn(*mut i32, *mut i32, i32) -> i32;
+
+        let driver = unsafe { Library::new("nvcuda.dll").ok()? };
+        let cu_init = unsafe { driver.get::<CuInit>(b"cuInit\0").ok()? };
+        let cu_device_get = unsafe { driver.get::<CuDeviceGet>(b"cuDeviceGet\0").ok()? };
+        let cu_device_compute_capability = unsafe {
+            driver
+                .get::<CuDeviceComputeCapability>(b"cuDeviceComputeCapability\0")
+                .ok()?
+        };
+
+        if unsafe { cu_init(0) } != 0 {
+            return None;
+        }
+        let mut device = 0;
+        if unsafe { cu_device_get(&mut device, 0) } != 0 {
+            return None;
+        }
+        let mut major = 0;
+        let mut minor = 0;
+        if unsafe { cu_device_compute_capability(&mut major, &mut minor, device) } != 0 {
+            return None;
+        }
+        Some((major, minor))
+    })
+}
+
+#[cfg(windows)]
+fn cuda_runtime_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+    *AVAILABLE.get_or_init(|| {
+        if !cuda_compute_capability()
+            .is_some_and(|(major, minor)| cuda_compute_capability_supported(major, minor))
+        {
+            return false;
+        }
+
+        let executable_dir = std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(Path::to_path_buf));
+        let provider_is_staged = executable_dir.as_ref().is_some_and(|directory| {
+            directory.join("onnxruntime_providers_cuda.dll").is_file()
+                && directory.join("onnxruntime_providers_shared.dll").is_file()
+        });
+        if !provider_is_staged {
+            return false;
+        }
+
+        fn can_load(name: &str, executable_dir: Option<&Path>) -> bool {
+            let mut candidates = Vec::new();
+            if let Some(directory) = executable_dir {
+                candidates.push(directory.join(name));
+            }
+            if let Some(cuda_path) = std::env::var_os("CUDA_PATH") {
+                let cuda_path = PathBuf::from(cuda_path);
+                candidates.push(cuda_path.join("bin").join("x64").join(name));
+                candidates.push(cuda_path.join("bin").join(name));
+            }
+            candidates.push(PathBuf::from(name));
+
+            candidates
+                .into_iter()
+                .any(|candidate| unsafe { Library::new(candidate).is_ok() })
+        }
+
+        // CUDA provider DLLs are initialized by ONNX Runtime and cannot be
+        // probed with LoadLibrary in isolation. Validate the staged provider
+        // files and the independently loadable driver/runtime dependencies.
+        [
+            "nvcuda.dll",
+            "cublasLt64_11.dll",
+            "cublas64_11.dll",
+            "cufft64_10.dll",
+            "cudart64_110.dll",
+            "cudnn64_8.dll",
+            "onnxruntime_providers_shared.dll",
+        ]
+        .into_iter()
+        .all(|name| can_load(name, executable_dir.as_deref()))
+    })
+}
+
+#[cfg(not(windows))]
+fn cuda_runtime_available() -> bool {
+    false
+}
+
 fn asr_thread_count_for_available(available: usize) -> i32 {
     available.clamp(1, ASR_THREAD_LIMIT) as i32
 }
@@ -1423,7 +1612,8 @@ mod tests {
     use super::{
         AsrRuntimeOptions, MODEL_ARCHIVE_SIZE_BYTES, PUNCTUATION_ARCHIVE_SIZE_BYTES,
         SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters, asr_thread_count_for_available,
-        configured_model_size, decode_base64_pcm, normalize_hotwords, samples_to_millis,
+        configured_model_size, cuda_compute_capability_supported, decode_base64_pcm,
+        normalize_asr_provider, normalize_hotwords, samples_to_millis,
     };
     use base64::Engine;
 
@@ -1456,6 +1646,22 @@ mod tests {
         assert_eq!(asr_thread_count_for_available(1), 1);
         assert_eq!(asr_thread_count_for_available(8), 8);
         assert_eq!(asr_thread_count_for_available(16), 8);
+    }
+
+    #[test]
+    fn normalizes_unknown_asr_provider_to_auto() {
+        assert_eq!(normalize_asr_provider("cuda"), "cuda");
+        assert_eq!(normalize_asr_provider("CPU"), "cpu");
+        assert_eq!(normalize_asr_provider("driver-dependent"), "auto");
+    }
+
+    #[test]
+    fn rejects_cuda_devices_below_the_prebuilt_runtime_architecture() {
+        assert!(!cuda_compute_capability_supported(6, 0));
+        assert!(cuda_compute_capability_supported(6, 1));
+        assert!(!cuda_compute_capability_supported(5, 2));
+        assert!(cuda_compute_capability_supported(7, 5));
+        assert!(cuda_compute_capability_supported(8, 6));
     }
 
     #[test]

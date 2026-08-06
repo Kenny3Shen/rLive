@@ -37,12 +37,12 @@ import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
-import type { SiteId } from "@/shared/types/live";
+import type { AsrProvider, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
-import { isMobileClient } from "@/shared/clientPlatform";
+import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
 import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
@@ -146,7 +146,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
-    "播放 播放质量 清晰度 智能线路 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
+    "播放 播放质量 清晰度 智能线路 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址",
   account:
@@ -730,11 +730,13 @@ function DanmakuSendField() {
 
 function AsrModelField() {
   const enabled = useSettingsStore((state) => state.asrEnabled);
+  const provider = useSettingsStore((state) => state.asrProvider);
   const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
   const punctuationEnabled = useSettingsStore((state) => state.asrPunctuationEnabled);
   const speakerEnabled = useSettingsStore((state) => state.asrSpeakerDiarizationEnabled);
   const pending = useSettingsStore((state) => state.asrPending);
   const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
+  const setProvider = useSettingsStore((state) => state.setAsrProvider);
   const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
   const setPunctuationEnabled = useSettingsStore((state) => state.setAsrPunctuationEnabled);
   const setSpeakerEnabled = useSettingsStore((state) => state.setAsrSpeakerDiarizationEnabled);
@@ -771,6 +773,16 @@ function AsrModelField() {
     setActionError(null);
     try {
       await setSpeakerEnabled(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function applyProvider(next: AsrProvider) {
+    setActionError(null);
+    try {
+      await setProvider(next);
       await model.refetch();
     } catch (error) {
       setActionError(errorMessage(error));
@@ -815,7 +827,7 @@ function AsrModelField() {
           data-invalid={invalid || undefined}
         >
           <FieldContent>
-            <FieldTitle id="asr-enabled-title">流式语音字幕（Zipformer）</FieldTitle>
+            <FieldTitle id="asr-enabled-title">语音字幕</FieldTitle>
             {invalid ? (
               <FieldError role="status" aria-live="polite">
                 {actionError ?? presentation.message}
@@ -860,7 +872,7 @@ function AsrModelField() {
         <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
             <FieldTitle id="asr-vad-title">VAD（静音端点检测）</FieldTitle>
-            <FieldDescription>关闭后按最长 20 秒切分，不再提前检测静音。</FieldDescription>
+            <FieldDescription>关闭后仅按最长 20 秒切分。</FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-vad-title"
@@ -870,10 +882,39 @@ function AsrModelField() {
           />
         </Field>
 
+        {isWindowsDesktop() && (
+          <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+            <FieldContent>
+              <FieldTitle id="asr-provider-title">推理后端</FieldTitle>
+              <FieldDescription>
+                自动优先使用 CUDA，不可用时回退 CPU。
+              </FieldDescription>
+            </FieldContent>
+            <ToggleGroup
+              aria-labelledby="asr-provider-title"
+              value={[provider]}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              disabled={!model.supported || model.isPending || pending}
+              onValueChange={(values) => {
+                const next = values[0];
+                if (next === "auto" || next === "cpu" || next === "cuda") {
+                  void applyProvider(next);
+                }
+              }}
+            >
+              <ToggleGroupItem value="auto">自动</ToggleGroupItem>
+              <ToggleGroupItem value="cuda">CUDA</ToggleGroupItem>
+              <ToggleGroupItem value="cpu">CPU</ToggleGroupItem>
+            </ToggleGroup>
+          </Field>
+        )}
+
         <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
             <FieldTitle id="asr-punctuation-title">自动标点</FieldTitle>
-            <FieldDescription>关闭后不加载标点模型，字幕保留原始文本。</FieldDescription>
+            <FieldDescription>关闭后保留原始文本。</FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-punctuation-title"
@@ -886,7 +927,7 @@ function AsrModelField() {
         <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
             <FieldTitle id="asr-speaker-title">说话人区分</FieldTitle>
-            <FieldDescription>识别匿名说话人；首次启用需额外下载约 27 MB 模型。</FieldDescription>
+            <FieldDescription>首次启用需下载约 27 MB。</FieldDescription>
           </FieldContent>
           <Switch
             aria-labelledby="asr-speaker-title"
@@ -899,7 +940,7 @@ function AsrModelField() {
         <AsrHotwordsField
           idPrefix="settings"
           layout="page"
-          disabled={!model.supported || pending}
+          disabled={!model.supported}
         />
 
         <AsrChunkIntervalField
@@ -917,10 +958,7 @@ function AsrModelField() {
             </AlertDialogMedia>
             <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
             <AlertDialogDescription>
-              启用后将在后台下载约 {estimatedDownloadSize} MB 的 Zipformer 中英双语流式识别模型
-              {punctuationEnabled ? "与中英标点模型" : ""}
-              {speakerEnabled ? "、说话人声纹模型" : ""}。
-              下载和解压均在后台执行，完成后会自动加载，模型文件保留在本机。
+              将下载约 {estimatedDownloadSize} MB 模型，完成后自动启用并保留在本机。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1467,7 +1505,7 @@ export function SettingsPage() {
                   </Section>
                   <Section
                     title="语音字幕"
-                    keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔"
+                    keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端"
                   >
                     <AsrModelField />
                     <AsrCaptionFontSizeField idPrefix="settings" layout="page" />

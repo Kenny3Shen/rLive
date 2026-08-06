@@ -63,6 +63,10 @@ fn normalize_site_preferences(settings: &mut AppSettings) {
 }
 
 fn normalize_asr_preferences(settings: &mut AppSettings) {
+    if !matches!(settings.asr_provider.as_str(), "auto" | "cpu" | "cuda") {
+        settings.asr_provider = "auto".to_owned();
+    }
+
     if !settings.asr_window_seconds.is_finite() {
         settings.asr_window_seconds = 0.2;
     } else {
@@ -172,6 +176,7 @@ mod tests {
         assert_eq!(s.asr_font_size, 20);
         assert!(s.asr_vad_enabled);
         assert!(s.asr_punctuation_enabled);
+        assert_eq!(s.asr_provider, "auto");
         assert!(s.asr_hotwords.is_empty());
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
@@ -227,6 +232,22 @@ mod tests {
         settings.asr_hotwords = (0..120).map(|index| format!("热词{index}")).collect();
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().asr_hotwords.len(), 100);
+    }
+
+    #[test]
+    fn set_normalizes_asr_provider() {
+        let conn = open_in_memory().unwrap();
+        let mut settings = AppSettings {
+            asr_provider: "unsupported".into(),
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().asr_provider, "auto");
+
+        settings.asr_provider = "cuda".into();
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().asr_provider, "cuda");
     }
 
     #[test]

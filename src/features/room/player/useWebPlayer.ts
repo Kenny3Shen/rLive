@@ -13,6 +13,7 @@ import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
   createXgPlayer,
   getXgHlsCore,
+  isXgPlayerDecodeError,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
@@ -225,6 +226,17 @@ export type WebPlayerApi = {
 /** Whether a live URL requires xgplayer's HLS plugin rather than its FLV plugin. */
 export function isHlsStream(url: string): boolean {
   return /\.m3u8(?:[?#]|$)/i.test(url) || /[/?&=_-]hls(?:[/?&=_-]|$)/i.test(url);
+}
+
+/**
+ * `HTMLMediaElement.play()` clears `paused` before the first frame is ready.
+ * Treating that intermediate state as healthy resets the Twitch renewal budget
+ * while the stream is still loading and can create an endless reload loop.
+ */
+export function hasStartedPlayback(
+  video: Pick<HTMLMediaElement, "paused" | "readyState">,
+): boolean {
+  return !video.paused && video.readyState >= 2;
 }
 
 const TWITCH_COMMERCIAL_RETRY_DELAY_MS = 8_000;
@@ -645,6 +657,7 @@ export function useWebPlayer(opts: {
               retryable: true,
             } satisfies AppError;
           }
+          const activeVideo = video;
 
           // The initial source can be superseded while modules are loading.
           // Use the latest same-protocol candidate instead of briefly opening
@@ -794,11 +807,93 @@ export function useWebPlayer(opts: {
 
           if (hls && siteId === "twitch") {
             let hlsFatalFailureCount = 0;
+            let decoderFailureReported = false;
+            if (import.meta.env.DEV) {
+              let pendingFirstVideoSample: {
+                codec?: unknown;
+                sampleCount: number;
+                firstKeyframe: boolean;
+                firstPts?: unknown;
+                firstDts?: unknown;
+              } | null = null;
+              player.on("core_event", (event) => {
+                if (!isCurrentPlayer() || !event || typeof event !== "object") return;
+                const coreEvent = event as {
+                  eventName?: unknown;
+                  start?: unknown;
+                  end?: unknown;
+                  videoTrack?: {
+                    codec?: unknown;
+                    samples?: Array<{
+                      keyframe?: unknown;
+                      pts?: unknown;
+                      dts?: unknown;
+                    }>;
+                  };
+                };
+                if (coreEvent.eventName === "core.demuxedtrack") {
+                  const firstSample = coreEvent.videoTrack?.samples?.[0];
+                  if (!firstSample) return;
+                  pendingFirstVideoSample = {
+                    codec: coreEvent.videoTrack?.codec,
+                    sampleCount: coreEvent.videoTrack?.samples?.length ?? 0,
+                    firstKeyframe: Boolean(firstSample.keyframe),
+                    firstPts: firstSample.pts,
+                    firstDts: firstSample.dts,
+                  };
+                  console.debug("[rLive][Twitch MSE] demuxed video segment", {
+                    ...pendingFirstVideoSample,
+                  });
+                  return;
+                }
+                if (coreEvent.eventName === "core.appendbuffer") {
+                  console.debug("[rLive][Twitch MSE] appended video segment", {
+                    start: coreEvent.start,
+                    end: coreEvent.end,
+                    ...pendingFirstVideoSample,
+                  });
+                  pendingFirstVideoSample = null;
+                }
+              });
+            }
+            function failDecoder() {
+              if (decoderFailureReported || !isCurrentPlayer()) return;
+              decoderFailureReported = true;
+              activeVideo.removeEventListener("error", onNativeMediaError);
+              // Replaying or renewing the same rendition cannot change a
+              // browser codec decision. Let the controller move to a lower
+              // Twitch video variant instead of burning the URL retry budget.
+              playerRef.current = null;
+              try {
+                player.destroy();
+              } catch {
+                /* A fatal decoder error can already have released internals. */
+              }
+              setLoadError(null);
+              setRunning(false);
+              onMediaFailureRef.current?.({
+                epoch: gen,
+                generation: gen,
+                kind: "error",
+                message: "当前 Twitch 清晰度无法解码",
+                decodeError: true,
+              });
+            }
+            function onNativeMediaError() {
+              if (activeVideo.error?.code === 3) failDecoder();
+            }
+            activeVideo.addEventListener("error", onNativeMediaError);
             player.on("playing", () => {
               if (isCurrentPlayer()) hlsFatalFailureCount = 0;
             });
             player.on("error", (cause) => {
               if (!isCurrentPlayer()) return;
+
+              const errorMessage = xgPlayerErrorMessage(cause, "Twitch HLS 连接中断");
+              if (isXgPlayerDecodeError(cause)) {
+                failDecoder();
+                return;
+              }
 
               const commercialBreak = isTwitchCommercialBreak(cause);
               const responseStatus = hlsResponseStatus(cause);
@@ -816,10 +911,10 @@ export function useWebPlayer(opts: {
                 return;
               }
 
-              const errorMessage = xgPlayerErrorMessage(cause, "Twitch HLS 连接中断");
               const message = commercialBreak
                 ? "Twitch 正在播放广告，广告结束后将自动恢复"
                 : `${errorMessage}，正在更新播放地址…`;
+              activeVideo.removeEventListener("error", onNativeMediaError);
               playerRef.current = null;
               try {
                 player.destroy();
@@ -846,15 +941,16 @@ export function useWebPlayer(opts: {
           requestPlayerAutoplay(player, video, isCurrentPlayer, recoverMutedAutoplay);
 
           // If we already have frames, mark running; otherwise wait for play event.
-          if (!video.paused && video.readyState >= 2) {
+          if (hasStartedPlayback(video)) {
             setRunning(true);
             setLoadError(null);
             onPlayingRef.current?.();
           } else {
-            // Give the protocol plugin a moment; spinner stays until 'playing'.
+            // Give the protocol plugin a moment; do not clear retry budgets
+            // until the element has decoded at least one frame.
             window.setTimeout(() => {
               if (cancelled || genRef.current !== gen) return;
-              if (playerRef.current === player && !video.paused) {
+              if (playerRef.current === player && hasStartedPlayback(video)) {
                 setRunning(true);
                 setLoadError(null);
                 onPlayingRef.current?.();
@@ -1017,12 +1113,7 @@ export function useWebPlayer(opts: {
     };
 
     const onPlay = () => {
-      const telemetry = telemetrySessionRef.current;
-      if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
-      setRunning(true);
-      setLoadError(null);
-      onPlayingRef.current?.();
     };
     const onPlaying = () => {
       const telemetry = telemetrySessionRef.current;

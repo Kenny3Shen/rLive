@@ -201,7 +201,7 @@ export function AsrCaptionFontSizeField({
     <PreferenceSliderField
       id={`${idPrefix}-asr-font-size`}
       title="字幕字号"
-      description={layout === "page" ? "调整播放器字幕叠加层的字号，不影响弹幕字号。" : undefined}
+      description={layout === "page" ? "播放器字幕字号。" : undefined}
       value={fontSize}
       min={ASR_FONT_SIZE_MIN}
       max={ASR_FONT_SIZE_MAX}
@@ -236,7 +236,7 @@ export function AsrChunkIntervalField({
     <PreferenceSliderField
       id={`${idPrefix}-asr-chunk-interval`}
       title="字幕更新间隔"
-      description={layout === "page" ? "间隔越短，实时字幕刷新越快。" : undefined}
+      description={layout === "page" ? "越短，刷新越快。" : undefined}
       value={draft}
       min={ASR_CHUNK_SECONDS_MIN}
       max={ASR_CHUNK_SECONDS_MAX}
@@ -281,68 +281,107 @@ export function AsrHotwordsField({
   const [draft, setDraft] = useState(hotwords.join("\n"));
   const [status, setStatus] = useState<string | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const pendingWordsRef = useRef(hotwords);
+  const editingRef = useRef(false);
+  const composingRef = useRef(false);
+  const revisionRef = useRef(0);
+  const savePendingRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    setDraft(hotwords.join("\n"));
+    if (!editingRef.current) {
+      pendingWordsRef.current = hotwords;
+      setDraft(hotwords.join("\n"));
+    }
   }, [hotwords]);
+
+  function clearSaveTimer() {
+    if (saveTimerRef.current === null) return;
+    window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+  }
+
+  function savePending(revision: number) {
+    if (revision !== revisionRef.current || composingRef.current) return;
+    const next = pendingWordsRef.current;
+    const current = useSettingsStore.getState().asrHotwords;
+    if (sameWords(next, current)) return;
+
+    setStatus("正在保存热词…");
+    void setHotwords(next)
+      .then(() => {
+        if (revision === revisionRef.current) {
+          editingRef.current = false;
+          setDraft(next.join("\n"));
+          setStatus(next.length > 0 ? `已自动保存 ${next.length} 个热词` : "热词已清空");
+        }
+      })
+      .catch(() => {
+        if (revision === revisionRef.current) {
+          setStatus("热词保存失败，请重试");
+        }
+      });
+  }
+
+  savePendingRef.current = () => savePending(revisionRef.current);
+
+  function scheduleSave() {
+    clearSaveTimer();
+    if (composingRef.current) return;
+    const revision = revisionRef.current;
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      savePending(revision);
+    }, 350);
+  }
 
   useEffect(
     () => () => {
-      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+      clearSaveTimer();
+      if (!composingRef.current) savePendingRef.current?.();
     },
     [],
   );
 
-  function save(value: string) {
-    const next = normalizeAsrHotwords(value);
-    setStatus("正在保存热词…");
-    void setHotwords(next)
-      .then(() => setStatus(next.length > 0 ? `已保存 ${next.length} 个热词` : "热词已清空"))
-      .catch(() => setStatus("热词保存失败，请重试"));
+  function update(value: string) {
+    editingRef.current = true;
+    revisionRef.current += 1;
+    pendingWordsRef.current = normalizeAsrHotwords(value);
+    setDraft(value);
+    setStatus(composingRef.current ? "输入完成后自动保存" : "修改后将自动保存");
+    scheduleSave();
   }
 
   return (
-    <Field
-      orientation={layout === "page" ? "responsive" : "vertical"}
-      data-disabled={disabled || undefined}
-      className={fieldSurfaceClass(layout)}
-    >
+    <Field data-disabled={disabled || undefined} className={fieldSurfaceClass(layout)}>
+      <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
       <FieldContent>
-        <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
-        {layout === "page" && (
-          <FieldDescription>主播名、游戏名或频道专有词，每行一个，最多 100 个。</FieldDescription>
-        )}
-      </FieldContent>
-      <div className="w-full">
+        {layout === "page" && <FieldDescription>每行一个，最多 100 个。</FieldDescription>}
         <Textarea
           id={`${idPrefix}-asr-hotwords`}
           value={draft}
-          rows={layout === "page" ? 4 : 3}
-          placeholder={layout === "page" ? "例如：\n主播昵称\n游戏名称" : "主播名、游戏名…"}
+          rows={layout === "page" ? 5 : 4}
+          placeholder="每行一个词，也可用逗号分隔"
+          className="resize-y"
           disabled={disabled}
           spellCheck={false}
-          onChange={(event) => {
-            const value = event.target.value;
-            setDraft(value);
-            setStatus("修改将在停止输入后保存");
-            if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-            saveTimerRef.current = window.setTimeout(() => {
-              saveTimerRef.current = null;
-              save(value);
-            }, 600);
+          onCompositionStart={() => {
+            composingRef.current = true;
+            clearSaveTimer();
+            setStatus("输入完成后自动保存");
           }}
+          onCompositionEnd={() => {
+            composingRef.current = false;
+            scheduleSave();
+          }}
+          onChange={(event) => update(event.target.value)}
           onBlur={() => {
-            if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-            saveTimerRef.current = null;
-            save(draft);
+            if (composingRef.current) return;
+            clearSaveTimer();
+            savePending(revisionRef.current);
           }}
         />
-        {status && (
-          <FieldDescription role="status" aria-live="polite">
-            {status}
-          </FieldDescription>
-        )}
-      </div>
+        {status && <FieldDescription role="status">{status}</FieldDescription>}
+      </FieldContent>
     </Field>
   );
 }

@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { clampIndex } from "@/lib/playUrl";
 import { pickDefaultQualityIndex } from "./quality";
 import { nextFailoverAction } from "./failover";
+import { isXgPlayerDecodeError } from "../player/xgPlayer";
 import {
   lineDiagnostics,
   nextRankedLineIndex,
@@ -19,6 +20,17 @@ import {
 const EMPTY_QUALITIES: LivePlayQuality[] = [];
 const EMPTY_PLAY_URLS: PlayUrl[] = [];
 const MAX_TWITCH_PLAY_URL_RENEWALS = 3;
+
+/** Return the next Twitch video rendition after a browser decode failure. */
+export function nextTwitchDecodeQualityIndex(
+  qualities: Pick<LivePlayQuality, "quality">[],
+  currentIndex: number,
+): number | null {
+  for (let index = Math.max(0, currentIndex) + 1; index < qualities.length; index += 1) {
+    if (!/audio[ _-]?only/i.test(qualities[index]?.quality ?? "")) return index;
+  }
+  return null;
+}
 
 export type PlaybackController = {
   qualities: LivePlayQuality[];
@@ -283,6 +295,24 @@ export function usePlaybackController(opts: {
       if (event.kind !== "error" && event.kind !== "eof") return;
       clearFailoverTimer();
 
+      const message = event.message?.trim() ?? "";
+      const isDecodeError = event.decodeError === true || isXgPlayerDecodeError(message);
+      if (event.kind === "error" && siteId === "twitch" && isDecodeError) {
+        const fallbackQualityIndex = nextTwitchDecodeQualityIndex(qualities, qualityIndex);
+        if (fallbackQualityIndex != null) {
+          retryCountRef.current = 0;
+          twitchPlayUrlRenewalCountRef.current = 0;
+          exhaustedLineIndicesRef.current.clear();
+          hasPlayedRef.current = false;
+          setLoadError(null);
+          setQualityIndex(fallbackQualityIndex);
+          setLineIndex(0);
+          return;
+        }
+        setLoadError("当前 Twitch 清晰度无法解码，请手动选择较低画质");
+        return;
+      }
+
       if (event.refreshPlayUrl && siteId === "twitch") {
         if (twitchPlayUrlRenewalCountRef.current >= MAX_TWITCH_PLAY_URL_RENEWALS) {
           setLoadError("Twitch 播放地址多次更新失败，请点击刷新后重试");
@@ -340,7 +370,7 @@ export function usePlaybackController(opts: {
       });
 
       if (action.type === "fail") {
-        setLoadError(event.message?.trim() || action.message);
+        setLoadError(message || action.message);
         return;
       }
 
@@ -360,7 +390,7 @@ export function usePlaybackController(opts: {
         apply();
       }
     },
-    [clearFailoverTimer, playUrlQuery, siteId, smartLineSelection],
+    [clearFailoverTimer, playUrlQuery, qualities, qualityIndex, siteId, smartLineSelection],
   );
 
   const loading = qualitiesQuery.isLoading || (qualitiesQuery.isSuccess && playUrlQuery.isLoading);

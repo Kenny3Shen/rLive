@@ -8,7 +8,7 @@ import {
   resolveStartupSiteId,
   updateDisabledSiteIds,
 } from "../siteId";
-import type { AppSettings, SiteId } from "../types/live";
+import type { AppSettings, AsrProvider, SiteId } from "../types/live";
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -38,6 +38,10 @@ function isThemeMode(v: string): v is ThemeMode {
 function parseQualityLevel(value: unknown): QualityLevel {
   if (value === "mid" || value === "low" || value === "high") return value;
   return "high";
+}
+
+function parseAsrProvider(value: unknown): AsrProvider {
+  return value === "cpu" || value === "cuda" ? value : "auto";
 }
 
 const ASR_FONT_SIZE_MIN = 12;
@@ -99,6 +103,7 @@ type SettingsState = {
   /** True while the local multi-platform sending permission reaches the backend. */
   danmakuSendPending: boolean;
   asrEnabled: boolean;
+  asrProvider: AsrProvider;
   asrVadEnabled: boolean;
   asrPunctuationEnabled: boolean;
   asrSpeakerDiarizationEnabled: boolean;
@@ -128,6 +133,7 @@ type SettingsState = {
   setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
+  setAsrProvider: (provider: AsrProvider) => Promise<void>;
   setAsrVadEnabled: (enabled: boolean) => Promise<void>;
   setAsrPunctuationEnabled: (enabled: boolean) => Promise<void>;
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => Promise<void>;
@@ -164,6 +170,7 @@ const defaultSettings: AppSettings = {
   playback_soft_switch_enabled: false,
   danmaku_send_enabled: false,
   asr_enabled: false,
+  asr_provider: "auto",
   asr_vad_enabled: true,
   asr_punctuation_enabled: true,
   asr_speaker_diarization_enabled: false,
@@ -196,6 +203,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
+    asr_provider: state.asrProvider,
     asr_vad_enabled: state.asrVadEnabled,
     asr_punctuation_enabled: state.asrPunctuationEnabled,
     asr_speaker_diarization_enabled: state.asrSpeakerDiarizationEnabled,
@@ -231,6 +239,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
+      asrProvider: "auto",
       asrVadEnabled: true,
       asrPunctuationEnabled: true,
       asrSpeakerDiarizationEnabled: false,
@@ -318,6 +327,24 @@ export const useSettingsStore = create<SettingsState>()(
           if (epoch === asrSettingEpoch) {
             set({ asrPending: false });
           }
+        }
+      },
+      setAsrProvider: async (asrProvider) => {
+        const previous = get().asrProvider;
+        if (asrProvider === previous) return;
+        const epoch = ++asrSettingEpoch;
+        set({ asrProvider, asrPending: true });
+        try {
+          await get().persistToBackend({ asr_provider: asrProvider });
+          if (get().asrEnabled) await invokeCmd("asr_enable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrProvider: previous });
+            await get().persistToBackend({ asr_provider: previous });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) set({ asrPending: false });
         }
       },
       setAsrVadEnabled: async (asrVadEnabled) => {
@@ -454,6 +481,7 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled ?? false,
+          asrProvider: parseAsrProvider(settings.asr_provider),
           asrVadEnabled: settings.asr_vad_enabled ?? true,
           asrPunctuationEnabled: settings.asr_punctuation_enabled ?? true,
           asrSpeakerDiarizationEnabled:

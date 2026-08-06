@@ -61,10 +61,6 @@
   /* A physical dimming layer: it stays neutral while every surface beneath it
      continues to come from the active light/dark token set. */
   --overlay: oklch(0 0 0 / 0.44);
-  /* Canvas cannot consume Tailwind utility classes. This stays a real CSS
-     color so local-account danmaku can use the same semantic identity in the
-     WebGL-free canvas renderer. */
-  --danmaku-self-color: #765a00;
 }
 
 .dark {
@@ -102,7 +98,6 @@
   --card-elevated: oklch(0.22 0.015 265);
   --border-subtle: oklch(0.26 0.012 265);
   --sidebar-active: oklch(0.26 0.02 265);
-  --danmaku-self-color: #ffd166;
 }
 
 /* The browser owns the old/new page snapshots. Suppress its default crossfade

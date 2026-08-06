@@ -144,3 +144,46 @@ export function xgPlayerErrorMessage(error: unknown, fallback = "播放失败"):
     value.errorMessage ?? value.message ?? value.mediaError?.message ?? value.originError?.message;
   return typeof message === "string" && message.trim() ? message : fallback;
 }
+
+/**
+ * Chromium reports HLS/MSE decoder failures through several layers: the
+ * native media error uses code 3, while xgplayer-hls may surface code 5103 or
+ * only preserve the browser's pipeline message. Keep the check structural so
+ * Twitch can lower an incompatible rendition without treating a network
+ * failure as a codec problem.
+ */
+export function isXgPlayerDecodeError(error: unknown): boolean {
+  if (typeof error === "string") {
+    return /chunk_demuxer_error_append_failed|pipeline_error_decode|media_err_decode|decod(?:e|ing|er)/i.test(
+      error,
+    );
+  }
+  if (!error || typeof error !== "object") return false;
+
+  const value = error as {
+    errorCode?: unknown;
+    errorType?: unknown;
+    errorMessage?: unknown;
+    message?: unknown;
+    mediaError?: { code?: unknown; message?: unknown } | null;
+    originError?: { message?: unknown } | null;
+  };
+  const code = Number(value.errorCode);
+  const mediaCode = Number(value.mediaError?.code);
+  if (code === 5103 || mediaCode === 3) return true;
+
+  const type = typeof value.errorType === "string" ? value.errorType.toLowerCase() : "";
+  if (type === "decoder" || type === "decode") return true;
+
+  return [
+    value.errorMessage,
+    value.message,
+    value.mediaError?.message,
+    value.originError?.message,
+  ].some((message) =>
+    typeof message === "string" &&
+    /chunk_demuxer_error_append_failed|pipeline_error_decode|media_err_decode|decod(?:e|ing|er)/i.test(
+      message,
+    ),
+  );
+}

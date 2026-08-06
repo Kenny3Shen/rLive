@@ -53,14 +53,16 @@ export function RoomHostInfo({
               {userName}
             </p>
             <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
-              <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+              <div className="flex min-w-0 items-center gap-1.5">
                 <dt className="sr-only">房间号</dt>
                 <dd
                   className="flex min-w-0 items-center gap-1.5"
                   title={`${platformName}房间号：${roomId}`}
                 >
                   <SiteLogo siteId={detail.site_id} className="size-3.5" />
-                  <span className="truncate tabular-nums">{roomId}</span>
+                  <span className="block truncate text-xs font-semibold leading-4 tracking-normal text-foreground tabular-nums">
+                    {roomId}
+                  </span>
                 </dd>
               </div>
               <div
@@ -69,7 +71,9 @@ export function RoomHostInfo({
               >
                 <dt className="sr-only">当前热度</dt>
                 <Flame aria-hidden="true" className="size-3.5 text-accent" />
-                <dd className="font-semibold tabular-nums">{onlineLabel}</dd>
+                <dd className="text-xs font-semibold leading-4 tracking-normal tabular-nums">
+                  {onlineLabel}
+                </dd>
               </div>
             </dl>
           </div>

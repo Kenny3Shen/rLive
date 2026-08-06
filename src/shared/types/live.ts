@@ -172,6 +172,8 @@ export type AppSettings = {
   danmaku_send_enabled?: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */
   asr_enabled?: boolean;
+  /** Device-local Zipformer provider: auto, cpu, or cuda (Windows CUDA build). */
+  asr_provider?: AsrProvider;
   /** Enable silence-based endpoint/VAD rules; defaults to true. */
   asr_vad_enabled?: boolean;
   /** Enable the optional local CT-Transformer punctuation model; defaults to true. */
@@ -193,3 +195,5 @@ export type AppSettings = {
   /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */
   disabled_site_ids?: SiteId[];
 };
+
+export type AsrProvider = "auto" | "cpu" | "cuda";

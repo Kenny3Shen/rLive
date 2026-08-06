@@ -66,6 +66,9 @@ pub struct AppSettings {
     /// disabled by default so first launch never downloads model data.
     #[serde(default)]
     pub asr_enabled: bool,
+    /// Device-local ASR execution provider: `auto`, `cpu`, or `cuda`.
+    #[serde(default = "default_asr_provider")]
+    pub asr_provider: String,
     /// Enable Zipformer's silence-based endpoint/VAD rules. Defaults to true;
     /// disabling it keeps only the maximum utterance length boundary.
     #[serde(default = "default_asr_vad_enabled")]
@@ -149,6 +152,10 @@ fn default_asr_window_seconds() -> f32 {
     0.2
 }
 
+fn default_asr_provider() -> String {
+    "auto".into()
+}
+
 fn default_asr_punctuation_enabled() -> bool {
     true
 }
@@ -189,6 +196,7 @@ impl Default for AppSettings {
             playback_soft_switch_enabled: false,
             danmaku_send_enabled: false,
             asr_enabled: false,
+            asr_provider: default_asr_provider(),
             asr_vad_enabled: true,
             asr_punctuation_enabled: default_asr_punctuation_enabled(),
             asr_speaker_diarization_enabled: false,
@@ -242,6 +250,7 @@ mod tests {
         assert!(settings.playback_smart_line_selection);
         assert!(!settings.playback_soft_switch_enabled);
         assert!(!settings.asr_enabled);
+        assert_eq!(settings.asr_provider, "auto");
         assert!(settings.asr_vad_enabled);
         assert!(settings.asr_punctuation_enabled);
         assert!(!settings.asr_speaker_diarization_enabled);

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
 import {
   canSoftSwitchPlaybackSource,
+  hasStartedPlayback,
   hlsResponseStatus,
   isHlsStream,
   isTwitchCommercialBreak,
@@ -121,6 +122,12 @@ describe("player session queue", () => {
   test("routes Twitch-style HLS manifests to the HLS player path", () => {
     expect(isHlsStream("https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one")).toBe(true);
     expect(isHlsStream("https://cdn.example.test/live.flv")).toBe(false);
+  });
+
+  test("does not mark a play() call healthy before the first decoded frame", () => {
+    expect(hasStartedPlayback({ paused: false, readyState: 1 })).toBe(false);
+    expect(hasStartedPlayback({ paused: true, readyState: 4 })).toBe(false);
+    expect(hasStartedPlayback({ paused: false, readyState: 2 })).toBe(true);
   });
 
   test("renews a Twitch HLS URL after one exhausted in-place recovery", () => {

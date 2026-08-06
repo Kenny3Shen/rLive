@@ -30,6 +30,7 @@ function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
     speaker_model_downloaded: false,
     speaker_model_size_bytes: 28_281_164,
     threads: 4,
+    provider: "cpu",
     message: null,
     ...patch,
   };
@@ -86,6 +87,15 @@ describe("ASR model status", () => {
         supported: true,
       }).message,
     ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + VAD + 自动标点 + 说话人区分）");
+  });
+
+  test("reports the active CUDA provider", () => {
+    expect(
+      describeAsrModelStatus(modelStatus({ state: "ready", provider: "cuda" }), {
+        enabled: true,
+        supported: true,
+      }).message,
+    ).toBe("Zipformer 中英双语模型已就绪（NVIDIA CUDA / 4 线程 + VAD + 自动标点）");
   });
 
   test("reports independently disabled VAD, punctuation, and local hotwords", () => {

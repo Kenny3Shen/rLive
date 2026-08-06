@@ -4,6 +4,7 @@
 #   - VS Build Tools: D:\VS\BuildTools (vcvars64.bat)
 #   - Rust: D:\dev\rust\{cargo,rustup}  (or CARGO_HOME / RUSTUP_HOME)
 #   - bun and/or Node.js
+#   - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x runtime and a compatible NVIDIA driver
 #
 # Usage:
 #   cd D:\dev\rLive
@@ -127,7 +128,12 @@ if ($projectProcesses.Count -gt 0) {
     }
 }
 
-Write-Host "CrispASR backend: CPU"
+$env:SHERPA_ONNX_GPU = if ($env:SHERPA_ONNX_GPU) { $env:SHERPA_ONNX_GPU } else { "1" }
+if ($env:SHERPA_ONNX_GPU -eq "0") {
+    Write-Host "ASR native backend: CPU-only override (SHERPA_ONNX_GPU=0)"
+} else {
+    Write-Host "ASR native backend: CUDA-capable shared runtime (provider auto-selects CUDA/CPU)"
+}
 
 # Prefer local CLI via package.json script: "tauri": "tauri"
 # (winget bun often has no bunx.exe; `bun x tauri` may not resolve the binary either)

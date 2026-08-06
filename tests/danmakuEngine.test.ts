@@ -147,13 +147,12 @@ describe("danmaku engine", () => {
     expect(engine.visibleItems().find((item) => item.text === "窗口已更新 ×2")).toBeDefined();
   });
 
-  test("keeps a local account comment separate and gives it the self color", () => {
+  test("keeps a local account comment separate without changing its color", () => {
     const engine = createEngine({
       fontSize: 18,
       speed: 8,
       opacity: 1,
       aggregateRepeats: true,
-      selfColor: "#fedcba",
     });
     engine.tick(0, 1280, 720);
 
@@ -162,8 +161,12 @@ describe("danmaku engine", () => {
 
     const items = engine.visibleItems();
     expect(items).toHaveLength(2);
-    expect(items.find((item) => item.isSelf)?.color).toBe("#fedcba");
+    expect(items.find((item) => item.isSelf)?.color).toBe("#ffffff");
+    expect(items.find((item) => item.isSelf)?.isSelf).toBe(true);
     expect(items.find((item) => !item.isSelf)?.color).toBe("#abcdef");
+    expect(items.find((item) => item.isSelf)?.width).toBeGreaterThan(
+      items.find((item) => !item.isSelf)?.width ?? 0,
+    );
   });
 
   test("keeps a growing aggregate clear of its leading lane item", () => {

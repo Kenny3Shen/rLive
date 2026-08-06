@@ -12,6 +12,8 @@ export type PlayerEvent = {
   refreshPlayUrl?: boolean;
   /** Optional delay before refreshing a source that is temporarily unavailable. */
   retryAfterMs?: number;
+  /** The browser rejected the media because the selected rendition is not decodable. */
+  decodeError?: boolean;
 };
 
 /** Preferred starting clarity when a room opens (Simple Live qualityLevel). */

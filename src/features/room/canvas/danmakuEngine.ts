@@ -96,8 +96,6 @@ export type DanmakuEngineOptions = {
   aggregateRepeats?: boolean;
   /** Sliding window for `aggregateRepeats`, in milliseconds. */
   aggregateWindowMs?: number;
-  /** Distinct canvas-safe color used for messages from the local account. */
-  selfColor?: string;
   /** Test/diagnostic only: collect scheduling counters without production overhead. */
   debug?: boolean;
 };
@@ -122,7 +120,10 @@ type EngineTrackItem = TrackItem & {
   aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
 };
 
-type AggregationTarget = Pick<TrackItem, "id" | "text" | "richSpans" | "width" | "fontSize"> & {
+type AggregationTarget = Pick<
+  TrackItem,
+  "id" | "text" | "richSpans" | "width" | "fontSize" | "isSelf"
+> & {
   active: boolean;
   aggregationKey?: string;
   aggregationBaseId?: string;
@@ -143,7 +144,8 @@ const TOP_DURATION_MS = 3000;
 const DEFAULT_SCROLL_AREA_RATIO = 0.9;
 const SPAWN_PADDING = 12;
 const TOP_PADDING = 12;
-const DEFAULT_SELF_DANMAKU_COLOR = "#ffd166";
+export const DANMAKU_SELF_BORDER_PADDING_X = 4;
+export const DANMAKU_SELF_BORDER_PADDING_Y = 3;
 // A fixed suffix reservation lets an aggregated item reveal a growing count
 // without moving into either neighbour on its lane. The cap is far beyond a
 // practical five-second burst; pathological counts use the `+` form.
@@ -214,15 +216,17 @@ function measureTrackWidth(
   text: string,
   richSpans: readonly DanmakuContentSpan[] | undefined,
   fontSize: number,
+  isSelf = false,
 ): number {
+  const borderSpace = isSelf ? DANMAKU_SELF_BORDER_PADDING_X * 2 : 0;
   const textWidth = measureWidth(text, fontSize);
-  if (!richSpans) return textWidth;
+  if (!richSpans) return textWidth + borderSpace;
 
   // The canvas draws the original text while an image-emote CDN request is
   // pending or has failed. A raw Bilibili token such as `[xxx_问号]` can be
   // much wider than its final 1.35em image, so reserve both forms to avoid a
   // temporary collision with another item in the same lane.
-  return Math.max(textWidth, measureRichWidth(richSpans, fontSize));
+  return Math.max(textWidth, measureRichWidth(richSpans, fontSize)) + borderSpace;
 }
 
 function speedPx(logical: number, fontSize: number): number {
@@ -263,11 +267,6 @@ function clampFontWeight(value: number | undefined): number {
   if (weight < 550) return 500;
   if (weight < 650) return 600;
   return 700;
-}
-
-function selfDanmakuColor(value: string | undefined): string {
-  const color = value?.trim();
-  return color || DEFAULT_SELF_DANMAKU_COLOR;
 }
 
 /** First-fit order from the top edge down, matching Simple Live's tracks. */
@@ -341,7 +340,6 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let currentFontWeight = clampFontWeight(opts.fontWeight);
   let aggregateRepeats = opts.aggregateRepeats === true;
   let aggregateWindowMs = clampAggregateWindowMs(opts.aggregateWindowMs);
-  let currentSelfColor = selfDanmakuColor(opts.selfColor);
   let contentAggregator = createDanmakuContentAggregator(aggregateRepeats, aggregateWindowMs);
   const aggregationTargets = new Map<string, AggregationTarget>();
   let items: EngineTrackItem[] = [];
@@ -417,7 +415,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     // count changes have no visual effect and should not churn raster keys.
     if (target.text === nextText) return;
     const nextRichSpans = richSpansWithAggregateSuffix(target.aggregationBaseRichSpans, count);
-    const nextWidth = measureTrackWidth(nextText, nextRichSpans, target.fontSize);
+    const nextWidth = measureTrackWidth(nextText, nextRichSpans, target.fontSize, target.isSelf);
     // The initial item reserves room for the largest display suffix. Keeping
     // its bounds fixed avoids widening left into the leading comment or right
     // into a later comment on the same lane.
@@ -786,7 +784,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const itemFontSize = fontSize;
     const id = `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`;
     const isSelf = ev.is_self === true;
-    const color = isSelf ? currentSelfColor : ev.color || (isTop ? "#ffb020" : "#ffffff");
+    const color = ev.color || (isTop ? "#ffb020" : "#ffffff");
     const baseRichSpans = floatingRichSpans(ev);
     const richSpans = richSpansWithAggregateSuffix(baseRichSpans, aggregation.count);
     const aggregationReservedWidth = aggregation.key
@@ -794,9 +792,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
           aggregatedText(baseText, MAX_AGGREGATED_DISPLAY_COUNT + 1),
           richSpansWithAggregateSuffix(baseRichSpans, MAX_AGGREGATED_DISPLAY_COUNT + 1),
           itemFontSize,
+          isSelf,
         )
       : undefined;
-    const width = aggregationReservedWidth ?? measureTrackWidth(text, richSpans, itemFontSize);
+    const width =
+      aggregationReservedWidth ?? measureTrackWidth(text, richSpans, itemFontSize, isSelf);
     const speed = speedPx(logicalSpeed, itemFontSize);
 
     if (isTop) {
@@ -936,7 +936,6 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         nextOpts.aggregateWindowMs === undefined
           ? aggregateWindowMs
           : clampAggregateWindowMs(nextOpts.aggregateWindowMs);
-      const nextSelfColor = selfDanmakuColor(nextOpts.selfColor ?? currentSelfColor);
       if (
         nextFontSize !== fontSize ||
         nextScrollArea !== scrollArea ||
@@ -955,15 +954,6 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       scrollArea = nextScrollArea;
       maxLineCount = nextLineCount;
       currentFontWeight = clampFontWeight(nextOpts.fontWeight);
-      if (nextSelfColor !== currentSelfColor) {
-        currentSelfColor = nextSelfColor;
-        for (const item of items) {
-          if (item.isSelf) item.color = currentSelfColor;
-        }
-        for (const item of pending) {
-          if (item.isSelf) item.color = currentSelfColor;
-        }
-      }
       if (
         nextAggregateRepeats !== aggregateRepeats ||
         nextAggregateWindowMs !== aggregateWindowMs
