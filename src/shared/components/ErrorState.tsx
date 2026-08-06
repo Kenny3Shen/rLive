@@ -1,11 +1,13 @@
 import { AlertCircle, RotateCcw } from "lucide-react";
 import type { AppError } from "@/shared/types/error";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type ErrorStateProps = {
   error: unknown;
   onRetry?: () => void;
   title?: string;
+  className?: string;
 };
 
 function messageFromError(error: unknown): string {
@@ -23,14 +25,17 @@ function codeFromError(error: unknown): string | null {
   return null;
 }
 
-export function ErrorState({ error, onRetry, title = "出了点问题" }: ErrorStateProps) {
+export function ErrorState({ error, onRetry, title = "出了点问题", className }: ErrorStateProps) {
   const message = messageFromError(error);
   const code = codeFromError(error);
 
   return (
     <div
       role="alert"
-      className="flex flex-col items-start gap-3 rounded-xl border border-danger/25 bg-danger/10 px-4 py-5"
+      className={cn(
+        "flex flex-col items-start gap-3 rounded-xl border border-danger/25 bg-danger/10 px-4 py-5",
+        className,
+      )}
     >
       <div className="flex items-start gap-2.5">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />

@@ -1101,7 +1101,12 @@ export function PlayerPane({
             {!loading && displayError != null && (
               <div className="absolute inset-0 z-20 flex items-center justify-center p-6">
                 <div className="w-full max-w-md">
-                  <ErrorState error={displayError} title="播放不可用" onRetry={onRetry} />
+                  <ErrorState
+                    error={displayError}
+                    title="播放不可用"
+                    onRetry={onRetry}
+                    className="bg-card shadow-2xl shadow-black/50"
+                  />
                 </div>
               </div>
             )}
