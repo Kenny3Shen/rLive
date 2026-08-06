@@ -66,12 +66,18 @@ pub struct AppSettings {
     /// disabled by default so first launch never downloads model data.
     #[serde(default)]
     pub asr_enabled: bool,
-    /// Device-local Silero VAD prefilter. Disabled by default; when enabled it
-    /// skips Qwen3 inference for chunks where CrispASR detects no speech.
+    /// Legacy compatibility field from the former CrispASR backend. Streaming
+    /// Zipformer performs endpoint detection internally, so this is ignored.
     #[serde(default)]
     pub asr_vad_enabled: bool,
-    /// Device-local fixed live-caption window in seconds, clamped to 1.0..=6.0
-    /// with one decimal place.
+    /// Optional endpoint-level speaker differentiation. This setting is
+    /// device-local because enabling it downloads and loads an additional
+    /// speaker embedding model.
+    #[serde(default)]
+    pub asr_speaker_diarization_enabled: bool,
+    /// Device-local streaming PCM chunk interval in seconds, clamped to
+    /// 0.2..=1.0 with one decimal place. The persisted field name is retained
+    /// for compatibility with existing settings records.
     #[serde(default = "default_asr_window_seconds")]
     pub asr_window_seconds: f32,
     /// Player subtitle font size in CSS pixels.
@@ -134,7 +140,7 @@ fn default_asr_font_size() -> u32 {
 }
 
 fn default_asr_window_seconds() -> f32 {
-    1.0
+    0.2
 }
 
 fn default_super_chat_enabled() -> bool {
@@ -170,6 +176,7 @@ impl Default for AppSettings {
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_vad_enabled: false,
+            asr_speaker_diarization_enabled: false,
             asr_window_seconds: default_asr_window_seconds(),
             asr_font_size: default_asr_font_size(),
             iptv_custom_m3u_url: None,
@@ -220,7 +227,8 @@ mod tests {
         assert!(!settings.playback_soft_switch_enabled);
         assert!(!settings.asr_enabled);
         assert!(!settings.asr_vad_enabled);
-        assert_eq!(settings.asr_window_seconds, 1.0);
+        assert!(!settings.asr_speaker_diarization_enabled);
+        assert_eq!(settings.asr_window_seconds, 0.2);
         assert!(settings.iptv_custom_m3u_url.is_none());
         assert!(settings.iptv_availability_auto_check);
         assert_eq!(settings.iptv_availability_auto_check_interval_hours, 1);

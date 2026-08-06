@@ -1,0 +1,52 @@
+{
+  "servers": {
+    "rust-analyzer": {
+      "command": "rust-analyzer",
+      "args": [],
+      "fileTypes": [".rs"],
+      "rootMarkers": ["Cargo.toml", "rust-toolchain", "rust-toolchain.toml"],
+      "settings": {
+        "rust-analyzer": {
+          "cargo": {
+            "allFeatures": false,
+            "buildScripts": {
+              "enable": true
+            }
+          },
+          "checkOnSave": {
+            "command": "clippy"
+          },
+          "procMacro": {
+            "enable": true
+          }
+        }
+      },
+      "capabilities": {
+        "flycheck": true,
+        "runnables": true,
+        "relatedTests": true
+      }
+    },
+    "typescript-language-server": {
+      "command": "typescript-language-server",
+      "args": ["--stdio", "--tsserver-path", "./node_modules/@typescript/typescript-linux-x64/lib/tsc"],
+      "fileTypes": [".ts", ".tsx", ".js", ".jsx"],
+      "rootMarkers": ["tsconfig.json", "jsconfig.json", "package.json"],
+      "settings": {
+        "typescript": {
+          "suggest": {
+            "completeFunctionCalls": true
+          }
+        }
+      }
+    },
+    "oxlint": {
+      "command": "oxlint",
+      "args": ["--lsp"],
+      "fileTypes": [".ts", ".tsx", ".js", ".jsx"],
+      "rootMarkers": [".oxlintrc.json", "package.json", "tsconfig.json"],
+      "isLinter": true
+    }
+  },
+  "idleTimeoutMs": 600000
+}

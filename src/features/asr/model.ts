@@ -8,7 +8,7 @@ export type AsrModelState =
   | "not_downloaded"
   | "downloaded"
   | "downloading"
-  | "downloading_vad"
+  | "extracting"
   | "loading"
   | "ready"
   | "error"
@@ -19,9 +19,9 @@ export type AsrModelStatus = {
   downloaded_bytes: number;
   total_bytes: number | null;
   model_size_bytes: number;
-  vad_model_size_bytes: number;
-  vad_enabled: boolean;
-  vad_model_downloaded: boolean;
+  speaker_enabled: boolean;
+  speaker_model_downloaded: boolean;
+  speaker_model_size_bytes: number;
   threads: number;
   message: string | null;
 };
@@ -47,7 +47,8 @@ export function supportsLocalAsr(environment?: {
 export function asrDownloadProgress(status: AsrModelStatus | null): number | null {
   if (
     !status ||
-    (status.state !== "downloading" && status.state !== "downloading_vad")
+    status.state !== "downloading" &&
+    status.state !== "extracting"
   ) {
     return null;
   }
@@ -111,27 +112,24 @@ export function describeAsrModelStatus(
       const total = status.total_bytes ?? status.model_size_bytes;
       const detail = `${formatAsrBytes(status.downloaded_bytes)} / ${formatAsrBytes(total)}`;
       return {
-        message: `正在下载模型 ${progress ?? 0}%（${detail}）`,
+        message: `${status.message ?? "正在下载模型…"} ${progress ?? 0}%（${detail}）`,
         busy: true,
         error: false,
         progress,
       };
     }
-    case "downloading_vad": {
-      const total = status.total_bytes ?? status.vad_model_size_bytes;
-      const detail = `${formatAsrBytes(status.downloaded_bytes)} / ${formatAsrBytes(total)}`;
+    case "extracting":
       return {
-        message: `正在下载 Silero VAD ${progress ?? 0}%（${detail}）`,
+        message: status.message ?? "正在后台解压字幕模型…",
         busy: true,
         error: false,
-        progress,
+        progress: progress ?? 0,
       };
-    }
     case "loading":
       return { message: "模型已下载，正在加载…", busy: true, error: false, progress: 100 };
     case "ready":
       return {
-        message: `模型已就绪（CPU / ${status.threads} 线程${status.vad_enabled ? " + VAD" : ""}），可在播放页开启字幕`,
+        message: `Zipformer 中英双语模型已就绪（CPU / ${status.threads} 线程 + 自动标点${status.speaker_enabled ? " + 说话人区分" : ""}）`,
         busy: false,
         error: false,
         progress: 100,
@@ -178,7 +176,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
       if (
         !state ||
         state === "downloading" ||
-        state === "downloading_vad" ||
+        state === "extracting" ||
         state === "loading"
       ) {
         return 500;

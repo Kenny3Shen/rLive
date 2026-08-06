@@ -406,7 +406,7 @@ export function PlayerPane({
     featureEnabled: asrEnabled,
     settingPending: asrPending,
     mediaAvailable: showHost,
-    windowSeconds: asrWindowSeconds,
+    chunkSeconds: asrWindowSeconds,
   });
   // Android routes loudness through STREAM_MUSIC. Use native state whenever the
   // bridge is supported, even before the first getState resolves, so UI and
@@ -1167,7 +1167,7 @@ export function PlayerPane({
             {showHost &&
               !audioOnly &&
               (asr.captionsOn || asr.notice) &&
-              (asr.notice || asr.caption) && (
+              (asr.notice || asr.caption || asr.partial) && (
                 <div
                   role="status"
                   aria-live="polite"
@@ -1176,14 +1176,20 @@ export function PlayerPane({
                 >
                   <p
                     className={cn(
-                      "line-clamp-2 max-w-[min(48rem,92%)] rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
+                      "flex max-h-[3.25em] min-w-0 max-w-[min(48rem,92%)] flex-col justify-end overflow-hidden rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
                       asr.noticeIsError &&
                         asr.notice &&
                         "border border-destructive/45 text-red-100",
                     )}
                     style={{ fontSize: `${asrFontSize}px` }}
                   >
-                    {asr.notice ?? asr.caption}
+                    {asr.notice ?? (
+                      <span className="block shrink-0 whitespace-pre-line break-words">
+                        {asr.caption}
+                        {asr.caption && asr.partial ? "\n" : null}
+                        {asr.partial ? <span className="text-white/60">{asr.partial}</span> : null}
+                      </span>
+                    )}
                   </p>
                 </div>
               )}

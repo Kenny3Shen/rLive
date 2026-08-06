@@ -34,8 +34,8 @@ const FONT_WEIGHTS = [
 
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
-const ASR_WINDOW_SECONDS_MIN = 1;
-const ASR_WINDOW_SECONDS_MAX = 6;
+const ASR_CHUNK_SECONDS_MIN = 0.2;
+const ASR_CHUNK_SECONDS_MAX = 1;
 
 const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuOpacity: 1,
@@ -217,7 +217,7 @@ export function AsrCaptionFontSizeField({
   );
 }
 
-export function AsrWindowField({
+export function AsrChunkIntervalField({
   idPrefix,
   layout,
   disabled = false,
@@ -226,22 +226,24 @@ export function AsrWindowField({
   layout: PlaybackSettingsFieldLayout;
   disabled?: boolean;
 }) {
-  const windowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
-  const setWindowSeconds = useSettingsStore((state) => state.setAsrWindowSeconds);
-  const [draft, setDraft] = useState(windowSeconds);
+  const chunkSeconds = useSettingsStore((state) => state.asrWindowSeconds);
+  const setChunkSeconds = useSettingsStore((state) => state.setAsrWindowSeconds);
+  const [draft, setDraft] = useState(chunkSeconds);
 
-  useEffect(() => setDraft(windowSeconds), [windowSeconds]);
+  useEffect(() => setDraft(chunkSeconds), [chunkSeconds]);
 
   return (
     <PreferenceSliderField
-      id={`${idPrefix}-asr-window`}
-      title="语音字幕窗口"
+      id={`${idPrefix}-asr-chunk-interval`}
+      title="字幕更新间隔"
       description={
-        layout === "page" ? "窗口越短延迟越低，越长则上下文和识别稳定性通常更好。" : undefined
+        layout === "page"
+          ? "Zipformer 会持续保留识别上下文；间隔越短，实时字幕刷新越快。"
+          : undefined
       }
       value={draft}
-      min={ASR_WINDOW_SECONDS_MIN}
-      max={ASR_WINDOW_SECONDS_MAX}
+      min={ASR_CHUNK_SECONDS_MIN}
+      max={ASR_CHUNK_SECONDS_MAX}
       step={0.1}
       displayValue={`${Number.isInteger(draft) ? draft : draft.toFixed(1)}s`}
       layout={layout}
@@ -249,7 +251,7 @@ export function AsrWindowField({
       onPreview={setDraft}
       onCommit={(value) => {
         setDraft(value);
-        void setWindowSeconds(value);
+        void setChunkSeconds(value);
       }}
     />
   );

@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  ASR_DEFAULT_SEGMENT_SECONDS,
-  ASR_MAX_SEGMENT_SECONDS,
-  ASR_MIN_SEGMENT_SECONDS,
+  ASR_DEFAULT_CHUNK_SECONDS,
+  ASR_MAX_CHUNK_SECONDS,
+  ASR_MIN_CHUNK_SECONDS,
+  appendAsrCaptionLine,
   downsamplePcm,
   encodePcmBase64,
+  formatAsrCaptionSegment,
   joinAsrCaptionText,
 } from "../src/features/asr/audio";
 import {
@@ -18,11 +20,11 @@ function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
   return {
     state: "not_downloaded",
     downloaded_bytes: 0,
-    total_bytes: 631_026_336,
-    model_size_bytes: 631_026_336,
-    vad_model_size_bytes: 885_098,
-    vad_enabled: false,
-    vad_model_downloaded: false,
+    total_bytes: 575_992_102,
+    model_size_bytes: 575_992_102,
+    speaker_enabled: false,
+    speaker_model_downloaded: false,
+    speaker_model_size_bytes: 28_281_164,
     threads: 4,
     message: null,
     ...patch,
@@ -40,7 +42,7 @@ describe("ASR model status", () => {
     const downloading = describeAsrModelStatus(
       modelStatus({
         state: "downloading",
-        downloaded_bytes: 315_513_168,
+        downloaded_bytes: 287_996_051,
       }),
       { enabled: true, supported: true },
     );
@@ -52,7 +54,7 @@ describe("ASR model status", () => {
         enabled: true,
         supported: true,
       }).message,
-    ).toBe("模型已就绪（CPU / 4 线程），可在播放页开启字幕");
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + 自动标点）");
   });
 
   test("keeps the downloaded model when the feature is disabled", () => {
@@ -70,28 +72,45 @@ describe("ASR model status", () => {
         enabled: true,
         supported: true,
       }).message,
-    ).toBe("模型已就绪（CPU / 6 线程），可在播放页开启字幕");
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 6 线程 + 自动标点）");
   });
 
-  test("reports VAD download progress and active filtering", () => {
+  test("reports speaker differentiation in the ready state", () => {
     expect(
-      describeAsrModelStatus(
-        modelStatus({
-          state: "downloading_vad",
-          downloaded_bytes: 442_549,
-          total_bytes: 885_098,
-          vad_enabled: true,
-        }),
-        { enabled: true, supported: true },
-      ).message,
-    ).toContain("Silero VAD 50%");
+      describeAsrModelStatus(modelStatus({ state: "ready", speaker_enabled: true }), {
+        enabled: true,
+        supported: true,
+      }).message,
+    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + 自动标点 + 说话人区分）");
+  });
 
-    expect(
-      describeAsrModelStatus(
-        modelStatus({ state: "ready", vad_enabled: true, vad_model_downloaded: true }),
-        { enabled: true, supported: true },
-      ).message,
-    ).toBe("模型已就绪（CPU / 4 线程 + VAD），可在播放页开启字幕");
+  test("uses the native download stage message", () => {
+    const presentation = describeAsrModelStatus(
+      modelStatus({
+        state: "downloading",
+        downloaded_bytes: 590_000_000,
+        total_bytes: 604_273_266,
+        model_size_bytes: 604_273_266,
+        speaker_enabled: true,
+        message: "正在下载说话人声纹模型…",
+      }),
+      { enabled: true, supported: true },
+    );
+    expect(presentation.message).toContain("正在下载说话人声纹模型…");
+  });
+
+  test("keeps a renderable presentation while extracting in the background", () => {
+    const presentation = describeAsrModelStatus(
+      modelStatus({
+        state: "extracting",
+        downloaded_bytes: 575_992_102,
+        message: "正在解压 Zipformer 识别模型…",
+      }),
+      { enabled: true, supported: true },
+    );
+    expect(presentation.message).toBe("正在解压 Zipformer 识别模型…");
+    expect(presentation.busy).toBe(true);
+    expect(presentation.progress).toBe(100);
   });
 });
 
@@ -117,13 +136,25 @@ describe("ASR audio transport", () => {
     expect(joinAsrCaptionText([{ text: "你好" }, { text: "世界。" }])).toBe("你好世界。");
     expect(joinAsrCaptionText([{ text: "hello" }, { text: "world" }])).toBe("hello world");
   });
+
+  test("keeps finalized utterances on separate subtitle lines", () => {
+    const first = appendAsrCaptionLine(null, "你好。 ");
+    expect(appendAsrCaptionLine(first, "How are you?")).toBe("你好。\nHow are you?");
+  });
+
+  test("formats only finalized segments with a valid speaker id", () => {
+    expect(formatAsrCaptionSegment({ text: "你好。", speaker_id: 1 })).toBe(
+      "说话人 1：你好。",
+    );
+    expect(formatAsrCaptionSegment({ text: "你好。", speaker_id: null })).toBe("你好。");
+  });
 });
 
-describe("fixed ASR windows", () => {
-  test("use a one-second default and a 1–6 second settings range", () => {
-    expect(ASR_DEFAULT_SEGMENT_SECONDS).toBe(1);
-    expect(ASR_MIN_SEGMENT_SECONDS).toBe(1);
-    expect(ASR_MAX_SEGMENT_SECONDS).toBe(6);
+describe("streaming ASR chunks", () => {
+  test("use a low-latency 0.2–1.0 second range", () => {
+    expect(ASR_DEFAULT_CHUNK_SECONDS).toBe(0.2);
+    expect(ASR_MIN_CHUNK_SECONDS).toBe(0.2);
+    expect(ASR_MAX_CHUNK_SECONDS).toBe(1);
   });
 });
 

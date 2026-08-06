@@ -1,6 +1,8 @@
 # Qwen3-ASR Streaming C API 暴露流程
 
-本文记录将 Qwen3-ASR 的逐 token streaming 从 CrispASR CLI 暴露给 Rust/Tauri（以及未来 WASM）的实施边界和建议流程。它是接口设计文档，不表示当前 rLive 已经启用逐 token 字幕；当前客户端使用设置中的固定 `1–6 秒`窗口（默认 `1 秒`）完成一次 `asr_transcribe` 后更新字幕。
+> 历史设计记录：当前 rLive 已改用 sherpa-onnx streaming Zipformer，本方案不再是运行时实现。现行链路见[本地语音字幕](本地语音字幕.md)。
+
+本文保留当时将 Qwen3-ASR 逐 token streaming 从 CrispASR CLI 暴露给 Rust/Tauri（以及未来 WASM）的实施边界和建议流程，供追溯旧方案使用。
 
 ## 现状核对
 
@@ -16,7 +18,7 @@
 
 需要同时定义两种“流式”，不要混为一个 API：
 
-1. **窗口级流式音频**：每 1–6 秒提交一个 PCM 窗口，窗口完成 encoder 后开始解码；这是当前 rLive 的实现，延迟可控、改动小。
+1. **窗口级流式音频**：每 1–6 秒提交一个 PCM 窗口，窗口完成 encoder 后开始解码；这是当时 rLive 的实现，延迟可控、改动小。
 2. **窗口内逐 token 流式解码**：同一个窗口的 encoder/prefill 完成后，每产生一个文本 token 就通知上层；它可以让字幕更早出现，但不能在 encoder 尚未完成时可靠地产生 token。
 
 Qwen3-ASR 属于第二种能力。它不是传统 CTC/Transducer 的逐帧增量模型，不能只把 `step_ms` 调小就得到相同效果。

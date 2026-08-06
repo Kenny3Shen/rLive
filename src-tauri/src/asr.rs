@@ -1,32 +1,62 @@
-//! Local Qwen3-ASR model lifecycle and transcription service.
+//! Local streaming ASR model lifecycle and transcription service (sherpa-onnx).
 //!
 //! The model is deliberately neither downloaded nor loaded at application
 //! startup. A user must opt in through Settings before `enable` starts its
 //! background task. Audio is supplied by the web player as 16 kHz mono f32 PCM.
+//!
+//! This uses a streaming zipformer transducer through `OnlineRecognizer`. One
+//! long-lived stream accumulates state across IPC windows, so every window
+//! returns the evolving hypothesis for the current utterance plus any
+//! utterances that endpointing just finalized. Silero VAD is not needed:
+//! endpoint rules already decide where an utterance ends. When optional speaker
+//! differentiation is enabled, each finalized utterance is classified from its
+//! cached PCM with a CAMPPlus speaker embedding model.
 
-use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use sherpa_onnx::{
+    OfflinePunctuation, OfflinePunctuationConfig, OnlineRecognizer, OnlineRecognizerConfig,
+    OnlineStream, SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
+};
 
 use crate::error::{AppError, AppResult};
 
-const MODEL_FILE_NAME: &str = "qwen3-asr-0.6b-q4_k.gguf";
-const MODEL_URL: &str = "https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/58bd3202f835f46b24b17142cb503b0860c737a5/qwen3-asr-0.6b-q4_k.gguf?download=true";
-// Published by the model repository. A complete-size check prevents a partial
-// transfer from ever being loaded; the final rename makes replacement atomic.
-const MODEL_SIZE_BYTES: u64 = 631_026_336;
-const VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
-const VAD_MODEL_URL: &str = "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin?download=true";
-const VAD_MODEL_SIZE_BYTES: u64 = 885_098;
+const MODEL_DIR_NAME: &str = "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20";
+const MODEL_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2";
+const MODEL_ARCHIVE_SIZE_BYTES: u64 = 511_274_346;
+
+const PUNCTUATION_DIR_NAME: &str =
+    "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8";
+const PUNCTUATION_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2";
+const PUNCTUATION_ARCHIVE_SIZE_BYTES: u64 = 64_717_756;
+const MODEL_SIZE_BYTES: u64 = MODEL_ARCHIVE_SIZE_BYTES + PUNCTUATION_ARCHIVE_SIZE_BYTES;
+
+const SPEAKER_MODEL_FILE: &str = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
+const SPEAKER_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
+const SPEAKER_MODEL_SIZE_BYTES: u64 = 28_281_164;
+
+const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
+const DECODER_FILE: &str = "decoder-epoch-99-avg-1.onnx";
+const JOINER_FILE: &str = "joiner-epoch-99-avg-1.int8.onnx";
+const TOKENS_FILE: &str = "tokens.txt";
+const PUNCTUATION_FILE: &str = "model.int8.onnx";
+
 const ASR_SAMPLE_RATE: i32 = 16_000;
 const ASR_THREAD_LIMIT: usize = 8;
-const VAD_THREAD_LIMIT: i32 = 2;
-// Live captions do not need the 512-token offline default. Keeping a bounded
-// decode budget prevents a pathological segment from monopolizing the single
-// session and lets the bounded latest-window queue preserve live playback.
-const LIVE_MAX_NEW_TOKENS: i32 = 256;
+const SPEAKER_MATCH_THRESHOLD: f32 = 0.55;
+const MAX_SPEAKER_CLUSTERS: usize = 8;
+const SPEAKER_CENTROID_HISTORY: u32 = 8;
+
+// Endpoint rules. `OnlineRecognizerConfig::default()` leaves these at 0.0,
+// which disables endpointing entirely, so they must be set explicitly.
+// rule1 fires on trailing silence with no decoded text, rule2 on trailing
+// silence after text, rule3 on a maximum utterance length.
+const ENDPOINT_RULE1_MIN_TRAILING_SILENCE: f32 = 2.4;
+const ENDPOINT_RULE2_MIN_TRAILING_SILENCE: f32 = 0.8;
+const ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH: f32 = 20.0;
+
 const MAX_PCM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BASE64_PCM_BYTES: usize = ((MAX_PCM_BYTES + 2) / 3) * 4;
 
@@ -36,7 +66,7 @@ pub enum AsrModelState {
     NotDownloaded,
     Downloaded,
     Downloading,
-    DownloadingVad,
+    Extracting,
     Loading,
     Ready,
     Error,
@@ -48,23 +78,24 @@ pub struct AsrModelStatus {
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
     pub model_size_bytes: u64,
-    pub vad_model_size_bytes: u64,
-    pub vad_enabled: bool,
-    pub vad_model_downloaded: bool,
+    pub speaker_enabled: bool,
+    pub speaker_model_downloaded: bool,
+    pub speaker_model_size_bytes: u64,
     pub threads: i32,
     pub message: Option<String>,
 }
 
 impl AsrModelStatus {
-    fn new(state: AsrModelState) -> Self {
+    fn new(state: AsrModelState, speaker_enabled: bool, speaker_model_downloaded: bool) -> Self {
+        let model_size_bytes = configured_model_size(speaker_enabled);
         Self {
             state,
             downloaded_bytes: 0,
-            total_bytes: Some(MODEL_SIZE_BYTES),
-            model_size_bytes: MODEL_SIZE_BYTES,
-            vad_model_size_bytes: VAD_MODEL_SIZE_BYTES,
-            vad_enabled: false,
-            vad_model_downloaded: false,
+            total_bytes: Some(model_size_bytes),
+            model_size_bytes,
+            speaker_enabled,
+            speaker_model_downloaded,
+            speaker_model_size_bytes: SPEAKER_MODEL_SIZE_BYTES,
             threads: asr_thread_count(),
             message: None,
         }
@@ -76,141 +107,339 @@ pub struct AsrCaptionSegment {
     pub text: String,
     pub start_ms: u64,
     pub end_ms: u64,
+    pub speaker_id: Option<u32>,
 }
 
-/// Minimal owner around CrispASR's CPU session C ABI.
+/// One window's worth of streaming output: utterances that endpointing just
+/// finalized, plus the still-evolving hypothesis for the current utterance.
+#[derive(Debug, Clone, Serialize)]
+pub struct AsrTranscribeResult {
+    pub segments: Vec<AsrCaptionSegment>,
+    pub partial: Option<String>,
+}
+
+/// Paths to every asset the recognizer needs. Kept together so readiness is a
+/// single check rather than four independent ones scattered across the file.
+#[derive(Clone)]
+struct ModelAssets {
+    root: PathBuf,
+    encoder: PathBuf,
+    decoder: PathBuf,
+    joiner: PathBuf,
+    tokens: PathBuf,
+    punctuation_root: PathBuf,
+    punctuation: PathBuf,
+    speaker: PathBuf,
+}
+
+impl ModelAssets {
+    fn new(model_dir: &Path) -> Self {
+        let root = model_dir.join(MODEL_DIR_NAME);
+        let punctuation_root = model_dir.join(PUNCTUATION_DIR_NAME);
+        Self {
+            encoder: root.join(ENCODER_FILE),
+            decoder: root.join(DECODER_FILE),
+            joiner: root.join(JOINER_FILE),
+            tokens: root.join(TOKENS_FILE),
+            punctuation: punctuation_root.join(PUNCTUATION_FILE),
+            speaker: model_dir.join(SPEAKER_MODEL_FILE),
+            punctuation_root,
+            root,
+        }
+    }
+
+    /// Every graph and the token table must be a non-empty file. The archive
+    /// carries no per-file manifest, so presence plus non-emptiness is the
+    /// strongest cheap check available; a corrupt graph surfaces at load.
+    fn is_complete(&self) -> bool {
+        [
+            &self.encoder,
+            &self.decoder,
+            &self.joiner,
+            &self.tokens,
+            &self.punctuation,
+        ]
+        .iter()
+        .all(|path| file_is_non_empty(path))
+    }
+
+    fn recognizer_is_complete(&self) -> bool {
+        [&self.encoder, &self.decoder, &self.joiner, &self.tokens]
+            .iter()
+            .all(|path| file_is_non_empty(path))
+    }
+
+    fn punctuation_is_complete(&self) -> bool {
+        file_is_non_empty(&self.punctuation)
+    }
+
+    fn speaker_is_complete(&self) -> bool {
+        file_has_size(&self.speaker, SPEAKER_MODEL_SIZE_BYTES)
+    }
+
+    fn required_assets_complete(&self, speaker_enabled: bool) -> bool {
+        self.is_complete() && (!speaker_enabled || self.speaker_is_complete())
+    }
+
+    fn downloaded_bytes(&self, speaker_enabled: bool) -> u64 {
+        let recognizer = if self.recognizer_is_complete() {
+            MODEL_ARCHIVE_SIZE_BYTES
+        } else {
+            0
+        };
+        let punctuation = if self.punctuation_is_complete() {
+            PUNCTUATION_ARCHIVE_SIZE_BYTES
+        } else {
+            0
+        };
+        let speaker = if speaker_enabled && self.speaker_is_complete() {
+            SPEAKER_MODEL_SIZE_BYTES
+        } else {
+            0
+        };
+        recognizer + punctuation + speaker
+    }
+
+    fn as_string(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+}
+
+#[derive(Debug)]
+struct SpeakerCluster {
+    centroid: Vec<f32>,
+    observations: u32,
+}
+
+#[derive(Debug, Default)]
+struct SpeakerClusters {
+    clusters: Vec<SpeakerCluster>,
+}
+
+impl SpeakerClusters {
+    fn reset(&mut self) {
+        self.clusters.clear();
+    }
+
+    fn classify(&mut self, embedding: &[f32]) -> Option<u32> {
+        let normalized = normalize_embedding(embedding)?;
+        let best = self
+            .clusters
+            .iter()
+            .enumerate()
+            .map(|(index, cluster)| (index, cosine_similarity(&cluster.centroid, &normalized)))
+            .max_by(|left, right| left.1.total_cmp(&right.1));
+
+        if let Some((index, score)) = best
+            && score >= SPEAKER_MATCH_THRESHOLD
+        {
+            let cluster = &mut self.clusters[index];
+            let history = cluster.observations.min(SPEAKER_CENTROID_HISTORY) as f32;
+            for (centroid, sample) in cluster.centroid.iter_mut().zip(&normalized) {
+                *centroid = (*centroid * history + sample) / (history + 1.0);
+            }
+            if let Some(updated) = normalize_embedding(&cluster.centroid) {
+                cluster.centroid = updated;
+            }
+            cluster.observations = cluster.observations.saturating_add(1);
+            return Some(index as u32 + 1);
+        }
+
+        if self.clusters.len() >= MAX_SPEAKER_CLUSTERS {
+            return None;
+        }
+        self.clusters.push(SpeakerCluster {
+            centroid: normalized,
+            observations: 1,
+        });
+        Some(self.clusters.len() as u32)
+    }
+}
+
+struct NativeSpeakerSession {
+    extractor: SpeakerEmbeddingExtractor,
+    clusters: SpeakerClusters,
+}
+
+impl NativeSpeakerSession {
+    fn open(model: &Path, threads: i32) -> Result<Self, String> {
+        let config = SpeakerEmbeddingExtractorConfig {
+            model: Some(ModelAssets::as_string(model)),
+            num_threads: threads.clamp(1, 2),
+            debug: false,
+            provider: Some("cpu".to_string()),
+        };
+        let extractor = SpeakerEmbeddingExtractor::create(&config)
+            .ok_or_else(|| "sherpa-onnx could not create the speaker model".to_string())?;
+        Ok(Self {
+            extractor,
+            clusters: SpeakerClusters::default(),
+        })
+    }
+
+    fn classify(&mut self, pcm: &[f32]) -> Option<u32> {
+        let stream = self.extractor.create_stream()?;
+        stream.accept_waveform(ASR_SAMPLE_RATE, pcm);
+        stream.input_finished();
+        if !self.extractor.is_ready(&stream) {
+            return None;
+        }
+        let embedding = self.extractor.compute(&stream)?;
+        self.clusters.classify(&embedding)
+    }
+
+    fn reset(&mut self) {
+        self.clusters.reset();
+    }
+}
+
+/// Owns the recognizer plus the single long-lived stream that carries decoder
+/// state across IPC windows.
+///
+/// A streaming transducer only produces incremental text if one stream is fed
+/// continuously, so the stream is created once at load and reset only at an
+/// endpoint or when the player switches sources.
 struct NativeAsrSession {
-    handle: *mut crispasr_sys::CrispasrSession,
+    recognizer: OnlineRecognizer,
+    stream: OnlineStream,
+    punctuation: OfflinePunctuation,
+    speaker: Option<NativeSpeakerSession>,
+    /// Total samples accepted since the last reset, used to place captions on a
+    /// timeline relative to the start of the current stream.
+    accepted_samples: u64,
+    /// Sample position where the current utterance began.
+    utterance_start_samples: u64,
+    /// PCM since the last endpoint. It is bounded by endpoint rule 3 and is
+    /// consumed only after a final sentence exists.
+    utterance_pcm: Vec<f32>,
 }
 
 unsafe impl Send for NativeAsrSession {}
 
 impl NativeAsrSession {
-    fn open(model_path: &Path, threads: i32) -> Result<Self, String> {
-        let path = CString::new(model_path.to_string_lossy().as_bytes())
-            .map_err(|error| format!("invalid model path: {error}"))?;
-        let handle = unsafe { crispasr_sys::crispasr_session_open(path.as_ptr(), threads) };
-        if handle.is_null() {
-            return Err("CrispASR could not open Qwen3-ASR CPU session".into());
-        }
-        let max_tokens_rc = unsafe {
-            crispasr_sys::crispasr_session_set_max_new_tokens(handle, LIVE_MAX_NEW_TOKENS)
+    fn open(assets: &ModelAssets, threads: i32, speaker_enabled: bool) -> Result<Self, String> {
+        let mut config = OnlineRecognizerConfig::default();
+        config.model_config.transducer.encoder = Some(ModelAssets::as_string(&assets.encoder));
+        config.model_config.transducer.decoder = Some(ModelAssets::as_string(&assets.decoder));
+        config.model_config.transducer.joiner = Some(ModelAssets::as_string(&assets.joiner));
+        config.model_config.tokens = Some(ModelAssets::as_string(&assets.tokens));
+        config.model_config.num_threads = threads;
+        config.model_config.debug = false;
+        // Greedy decoding keeps per-window latency predictable; beam search
+        // would raise cost on exactly the devices that are already marginal.
+        config.decoding_method = Some("greedy_search".to_string());
+        // Defaults leave every rule at 0.0, which disables endpointing
+        // entirely, so the utterance boundaries must be configured explicitly.
+        config.enable_endpoint = true;
+        config.rule1_min_trailing_silence = ENDPOINT_RULE1_MIN_TRAILING_SILENCE;
+        config.rule2_min_trailing_silence = ENDPOINT_RULE2_MIN_TRAILING_SILENCE;
+        config.rule3_min_utterance_length = ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH;
+
+        let recognizer = OnlineRecognizer::create(&config)
+            .ok_or_else(|| "sherpa-onnx could not create the streaming recognizer".to_string())?;
+        let stream = recognizer.create_stream();
+
+        let mut punctuation_config = OfflinePunctuationConfig::default();
+        punctuation_config.model.ct_transformer = Some(ModelAssets::as_string(&assets.punctuation));
+        punctuation_config.model.num_threads = threads.clamp(1, 2);
+        punctuation_config.model.debug = false;
+        let punctuation = OfflinePunctuation::create(&punctuation_config)
+            .ok_or_else(|| "sherpa-onnx could not create the punctuation model".to_string())?;
+        let speaker = if speaker_enabled {
+            Some(NativeSpeakerSession::open(&assets.speaker, threads)?)
+        } else {
+            None
         };
-        if max_tokens_rc != 0 {
-            unsafe { crispasr_sys::crispasr_session_close(handle) };
-            return Err(format!(
-                "CrispASR could not configure live decode budget (rc={max_tokens_rc})"
-            ));
-        }
-        Ok(Self { handle })
+
+        Ok(Self {
+            recognizer,
+            stream,
+            punctuation,
+            speaker,
+            accepted_samples: 0,
+            utterance_start_samples: 0,
+            utterance_pcm: Vec::new(),
+        })
     }
 
-    fn transcribe(
-        &self,
-        pcm: &[f32],
-        vad_model_path: Option<&Path>,
-        vad_threads: i32,
-    ) -> Result<Vec<AsrCaptionSegment>, String> {
-        let n_samples = i32::try_from(pcm.len()).map_err(|_| "PCM segment is too large")?;
-        let result = if let Some(vad_model_path) = vad_model_path {
-            let vad_path = CString::new(vad_model_path.to_string_lossy().as_bytes())
-                .map_err(|error| format!("invalid VAD model path: {error}"))?;
-            // Scale VAD thresholds with the live window so future shorter
-            // windows cannot silently inherit an overly large minimum.
-            let window_ms = ((n_samples as i64 * 1_000) / ASR_SAMPLE_RATE as i64)
-                .clamp(1, i32::MAX as i64) as i32;
-            let opts = crispasr_sys::CrispasrVadAbiOpts {
-                threshold: 0.5,
-                min_speech_duration_ms: (window_ms / 2).clamp(80, 250),
-                min_silence_duration_ms: (window_ms / 4).clamp(50, 100),
-                speech_pad_ms: 30,
-                chunk_seconds: 30,
-                n_threads: vad_threads,
-            };
-            let mut spans = std::ptr::null_mut();
-            let slice_count = unsafe {
-                crispasr_sys::crispasr_vad_slices(
-                    vad_path.as_ptr(),
-                    pcm.as_ptr(),
-                    n_samples,
-                    ASR_SAMPLE_RATE,
-                    opts.threshold,
-                    opts.min_speech_duration_ms,
-                    opts.min_silence_duration_ms,
-                    opts.speech_pad_ms,
-                    opts.chunk_seconds as f32,
-                    opts.n_threads,
-                    &mut spans,
-                )
-            };
-            if !spans.is_null() {
-                unsafe { crispasr_sys::crispasr_vad_free(spans) };
-            }
-            if slice_count < 0 {
-                return Err(format!("CrispASR VAD failed with code {slice_count}"));
-            }
-            // The session helper falls back to plain ASR for an empty slice
-            // list. Preflight explicitly so silent live chunks skip Qwen3.
-            if slice_count == 0 {
-                return Ok(Vec::new());
-            }
-            unsafe {
-                crispasr_sys::crispasr_session_transcribe_vad(
-                    self.handle,
-                    pcm.as_ptr(),
-                    n_samples,
-                    ASR_SAMPLE_RATE,
-                    vad_path.as_ptr(),
-                    &opts,
-                )
-            }
-        } else {
-            unsafe {
-                crispasr_sys::crispasr_session_transcribe(self.handle, pcm.as_ptr(), n_samples)
-            }
-        };
-        if result.is_null() {
-            return Err("CrispASR transcription returned no result".into());
+    /// Drop decoder state so a new playback session never continues the
+    /// previous stream's utterance.
+    fn reset_stream(&mut self) {
+        self.recognizer.reset(&self.stream);
+        self.accepted_samples = 0;
+        self.utterance_start_samples = 0;
+        self.utterance_pcm.clear();
+        if let Some(speaker) = self.speaker.as_mut() {
+            speaker.reset();
         }
-        struct ResultGuard(*mut crispasr_sys::CrispasrSessionResult);
-        impl Drop for ResultGuard {
-            fn drop(&mut self) {
-                unsafe { crispasr_sys::crispasr_session_result_free(self.0) };
-            }
-        }
-        let result = ResultGuard(result);
-        let count = unsafe { crispasr_sys::crispasr_session_result_n_segments(result.0) }.max(0);
-        let mut segments = Vec::with_capacity(count as usize);
-        for index in 0..count {
-            let text_ptr =
-                unsafe { crispasr_sys::crispasr_session_result_segment_text(result.0, index) };
-            if text_ptr.is_null() {
-                continue;
-            }
-            let text = unsafe { CStr::from_ptr(text_ptr) }
-                .to_string_lossy()
-                .trim()
-                .to_owned();
-            if text.is_empty() {
-                continue;
-            }
-            let start_cs =
-                unsafe { crispasr_sys::crispasr_session_result_segment_t0(result.0, index) };
-            let end_cs =
-                unsafe { crispasr_sys::crispasr_session_result_segment_t1(result.0, index) };
-            segments.push(AsrCaptionSegment {
-                text,
-                start_ms: centiseconds_to_millis(start_cs),
-                end_ms: centiseconds_to_millis(end_cs),
+    }
+
+    /// Feed one window and drain whatever the recognizer can decode from it.
+    ///
+    /// Returns any utterance finalized by endpointing during this window along
+    /// with the current hypothesis, which the UI renders as provisional text.
+    fn transcribe(&mut self, pcm: &[f32]) -> Result<AsrTranscribeResult, String> {
+        if pcm.is_empty() {
+            return Ok(AsrTranscribeResult {
+                segments: Vec::new(),
+                partial: None,
             });
         }
-        Ok(segments)
-    }
-}
 
-impl Drop for NativeAsrSession {
-    fn drop(&mut self) {
-        unsafe { crispasr_sys::crispasr_session_close(self.handle) };
+        self.stream.accept_waveform(ASR_SAMPLE_RATE, pcm);
+        self.accepted_samples = self.accepted_samples.saturating_add(pcm.len() as u64);
+        self.utterance_pcm.extend_from_slice(pcm);
+
+        let mut segments = Vec::new();
+        // Decode everything currently buffered. A single window can cross an
+        // endpoint, so the boundary check happens inside the loop.
+        while self.recognizer.is_ready(&self.stream) {
+            self.recognizer.decode(&self.stream);
+
+            if self.recognizer.is_endpoint(&self.stream) {
+                let text = self.current_text();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    let speaker_id = self
+                        .speaker
+                        .as_mut()
+                        .and_then(|speaker| speaker.classify(&self.utterance_pcm));
+                    segments.push(AsrCaptionSegment {
+                        text: self.add_punctuation(trimmed),
+                        start_ms: samples_to_millis(self.utterance_start_samples),
+                        end_ms: samples_to_millis(self.accepted_samples),
+                        speaker_id,
+                    });
+                }
+                self.recognizer.reset(&self.stream);
+                self.utterance_start_samples = self.accepted_samples;
+                self.utterance_pcm.clear();
+            }
+        }
+
+        let text = self.current_text();
+        let trimmed = text.trim();
+        let partial = if trimmed.is_empty() {
+            None
+        } else {
+            Some(self.add_punctuation(trimmed))
+        };
+
+        Ok(AsrTranscribeResult { segments, partial })
+    }
+
+    fn current_text(&self) -> String {
+        self.recognizer
+            .get_result(&self.stream)
+            .map(|result| result.text)
+            .unwrap_or_default()
+    }
+
+    fn add_punctuation(&self, text: &str) -> String {
+        self.punctuation
+            .add_punctuation(text)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| text.to_owned())
     }
 }
 
@@ -220,8 +449,8 @@ pub struct AsrManager {
 }
 
 struct AsrInner {
-    model_path: PathBuf,
-    vad_model_path: PathBuf,
+    model_dir: PathBuf,
+    assets: ModelAssets,
     status: Mutex<AsrModelStatus>,
     requested: std::sync::atomic::AtomicBool,
     request_generation: std::sync::atomic::AtomicU64,
@@ -233,32 +462,24 @@ struct AsrInner {
 impl AsrManager {
     pub fn new(app_data_dir: Option<&Path>) -> Self {
         let model_dir = model_directory(app_data_dir);
-        let model_path = model_dir.join(MODEL_FILE_NAME);
-        let vad_model_path = model_dir.join(VAD_MODEL_FILE_NAME);
-        let vad_model_downloaded = vad_model_file_is_complete(&vad_model_path);
+        let assets = ModelAssets::new(&model_dir);
 
-        let status = if model_file_is_complete(&model_path) {
-            AsrModelStatus {
-                state: AsrModelState::Downloaded,
-                downloaded_bytes: MODEL_SIZE_BYTES,
-                total_bytes: Some(MODEL_SIZE_BYTES),
-                model_size_bytes: MODEL_SIZE_BYTES,
-                vad_model_size_bytes: VAD_MODEL_SIZE_BYTES,
-                vad_enabled: false,
-                vad_model_downloaded,
-                threads: asr_thread_count(),
-                message: None,
-            }
-        } else {
-            let mut status = AsrModelStatus::new(AsrModelState::NotDownloaded);
-            status.vad_model_downloaded = vad_model_downloaded;
-            status
-        };
+        let speaker_model_downloaded = assets.speaker_is_complete();
+        let mut status = AsrModelStatus::new(
+            if assets.is_complete() {
+                AsrModelState::Downloaded
+            } else {
+                AsrModelState::NotDownloaded
+            },
+            false,
+            speaker_model_downloaded,
+        );
+        status.downloaded_bytes = assets.downloaded_bytes(false);
 
         Self {
             inner: Arc::new(AsrInner {
-                model_path,
-                vad_model_path,
+                model_dir,
+                assets,
                 status: Mutex::new(status),
                 requested: std::sync::atomic::AtomicBool::new(false),
                 request_generation: std::sync::atomic::AtomicU64::new(0),
@@ -277,7 +498,11 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))
     }
 
-    pub fn enable(&self, proxy: Option<String>, vad_enabled: bool) -> AppResult<AsrModelStatus> {
+    pub fn enable(
+        &self,
+        proxy: Option<String>,
+        speaker_enabled: bool,
+    ) -> AppResult<AsrModelStatus> {
         use std::sync::atomic::Ordering;
 
         let _control = self
@@ -286,14 +511,9 @@ impl AsrManager {
             .lock()
             .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
         let was_requested = self.inner.requested.swap(true, Ordering::AcqRel);
-        let model_exists = model_file_is_complete(&self.inner.model_path);
-        let vad_model_exists = vad_model_file_is_complete(&self.inner.vad_model_path);
+        let model_exists = self.inner.assets.required_assets_complete(speaker_enabled);
         let next_state = if model_exists {
-            if vad_enabled && !vad_model_exists {
-                AsrModelState::DownloadingVad
-            } else {
-                AsrModelState::Loading
-            }
+            AsrModelState::Loading
         } else {
             AsrModelState::Downloading
         };
@@ -305,17 +525,15 @@ impl AsrManager {
                 .lock()
                 .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))?;
 
-            let same_vad = status.vad_enabled == vad_enabled;
-            if was_requested && same_vad && status.state == AsrModelState::Ready {
+            let same_configuration = status.speaker_enabled == speaker_enabled;
+            if was_requested && same_configuration && status.state == AsrModelState::Ready {
                 return Ok(status.clone());
             }
             if was_requested
-                && same_vad
+                && same_configuration
                 && matches!(
                     status.state,
-                    AsrModelState::Downloading
-                        | AsrModelState::DownloadingVad
-                        | AsrModelState::Loading
+                    AsrModelState::Downloading | AsrModelState::Extracting | AsrModelState::Loading
                 )
             {
                 return Ok(status.clone());
@@ -327,18 +545,11 @@ impl AsrManager {
                 .fetch_add(1, Ordering::AcqRel)
                 .wrapping_add(1);
             status.state = next_state;
-            status.downloaded_bytes = if next_state == AsrModelState::Loading {
-                MODEL_SIZE_BYTES
-            } else {
-                0
-            };
-            status.total_bytes = Some(if next_state == AsrModelState::DownloadingVad {
-                VAD_MODEL_SIZE_BYTES
-            } else {
-                MODEL_SIZE_BYTES
-            });
-            status.vad_enabled = vad_enabled;
-            status.vad_model_downloaded = vad_model_exists;
+            status.speaker_enabled = speaker_enabled;
+            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
+            status.model_size_bytes = configured_model_size(speaker_enabled);
+            status.downloaded_bytes = self.inner.assets.downloaded_bytes(speaker_enabled);
+            status.total_bytes = Some(status.model_size_bytes);
             status.threads = asr_thread_count();
             status.message = None;
             generation
@@ -346,7 +557,9 @@ impl AsrManager {
 
         let manager = self.clone();
         tauri::async_runtime::spawn(async move {
-            manager.prepare_model(proxy, vad_enabled, generation).await;
+            manager
+                .prepare_model(proxy, generation, speaker_enabled)
+                .await;
         });
 
         self.status()
@@ -375,7 +588,7 @@ impl AsrManager {
                 .lock()
                 .map_err(|_| AppError::new("asr_session_lock", "语音字幕模型暂不可用"))?;
             // Dropping the session releases the model's resident memory while
-            // leaving a verified on-disk model available for the next enable.
+            // leaving verified on-disk assets available for the next enable.
             *session = None;
             Ok::<(), AppError>(())
         })
@@ -393,45 +606,47 @@ impl AsrManager {
         self.status()
     }
 
-    async fn prepare_model(&self, proxy: Option<String>, vad_enabled: bool, generation: u64) {
+    /// Drop buffered detector audio without unloading the model. Called when
+    /// the player switches rooms or streams so captions never splice audio
+    /// from two different sessions into one segment.
+    pub fn reset_stream(&self) -> AppResult<()> {
+        let mut session = self
+            .inner
+            .session
+            .lock()
+            .map_err(|_| AppError::new("asr_session_lock", "语音字幕模型暂不可用"))?;
+        if let Some(session) = session.as_mut() {
+            session.reset_stream();
+        }
+        Ok(())
+    }
+
+    async fn prepare_model(&self, proxy: Option<String>, generation: u64, speaker_enabled: bool) {
         let _prepare = self.inner.prepare_lock.lock().await;
         if !self.request_is_current(generation) {
             return;
         }
 
-        let model_ready = match self.ensure_model_file(proxy.as_deref(), generation).await {
+        let model_ready = match self
+            .ensure_model_assets(proxy.as_deref(), generation, speaker_enabled)
+            .await
+        {
             Ok(ready) => ready,
             Err(error) => {
-                tracing::warn!(error = %error, "ASR model download failed");
-                self.set_error_status_for_request(generation, "模型下载失败，请检查网络后重试");
+                tracing::warn!(error = %error, "ASR model preparation failed");
+                self.set_error_status_for_request(
+                    generation,
+                    "模型准备失败，请检查网络或存储空间后重试",
+                );
                 return;
             }
         };
         if !model_ready || !self.request_is_current(generation) {
             return;
         }
-        if vad_enabled {
-            let vad_ready = match self
-                .ensure_vad_model_file(proxy.as_deref(), generation)
-                .await
-            {
-                Ok(ready) => ready,
-                Err(error) => {
-                    tracing::warn!(error = %error, "VAD model download failed");
-                    self.set_error_status_for_request(
-                        generation,
-                        "VAD 模型下载失败，请检查网络后重试",
-                    );
-                    return;
-                }
-            };
-            if !vad_ready || !self.request_is_current(generation) {
-                return;
-            }
-        }
 
-        self.set_loading_status(generation);
-        let model_path = self.inner.model_path.clone();
+        self.set_loading_status(generation, speaker_enabled);
+        let assets = self.inner.assets.clone();
         let threads = asr_thread_count();
         let manager = self.clone();
         let load_result = tokio::task::spawn_blocking(move || {
@@ -440,13 +655,10 @@ impl AsrManager {
                 .session
                 .lock()
                 .map_err(|_| "ASR session lock is unavailable".to_string())?;
-            if guard.as_ref().is_some() {
-                return Ok(None);
-            }
             let previous = guard.take();
             drop(guard);
             drop(previous);
-            NativeAsrSession::open(&model_path, threads).map(Some)
+            NativeAsrSession::open(&assets, threads, speaker_enabled)
         })
         .await;
 
@@ -469,108 +681,226 @@ impl AsrManager {
             return;
         }
 
-        if let Some(session) = session {
-            let Ok(mut guard) = self.inner.session.lock() else {
-                tracing::warn!("ASR session mutex poisoned while loading model");
-                self.set_error_status_for_request(generation, "模型状态暂不可用，请重新启用后重试");
-                return;
-            };
-            if !self.request_is_current(generation) {
-                drop(guard);
-                drop(session);
-                return;
-            }
-            *guard = Some(session);
+        let Ok(mut guard) = self.inner.session.lock() else {
+            tracing::warn!("ASR session mutex poisoned while loading model");
+            self.set_error_status_for_request(generation, "模型状态暂不可用，请重新启用后重试");
+            return;
+        };
+        if !self.request_is_current(generation) {
+            drop(guard);
+            drop(session);
+            return;
         }
+        *guard = Some(session);
+        drop(guard);
 
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Ready;
-            status.downloaded_bytes = MODEL_SIZE_BYTES;
-            status.total_bytes = Some(MODEL_SIZE_BYTES);
-            status.vad_enabled = vad_enabled;
-            status.vad_model_downloaded = vad_model_file_is_complete(&self.inner.vad_model_path);
+            status.speaker_enabled = speaker_enabled;
+            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
+            status.model_size_bytes = configured_model_size(speaker_enabled);
+            status.downloaded_bytes = status.model_size_bytes;
+            status.total_bytes = Some(status.model_size_bytes);
             status.message = None;
         });
     }
 
-    async fn ensure_model_file(&self, proxy: Option<&str>, generation: u64) -> AppResult<bool> {
+    async fn ensure_model_assets(
+        &self,
+        proxy: Option<&str>,
+        generation: u64,
+        speaker_enabled: bool,
+    ) -> AppResult<bool> {
         if !self.request_is_current(generation) {
             return Ok(false);
         }
-        if model_file_is_complete(&self.inner.model_path) {
+        if self.inner.assets.required_assets_complete(speaker_enabled) {
             return Ok(true);
         }
 
-        let model_dir = self
-            .inner
-            .model_path
-            .parent()
-            .ok_or_else(|| AppError::new("asr_model_path", "模型目录无效"))?;
-        tokio::fs::create_dir_all(model_dir)
+        let total_size = configured_model_size(speaker_enabled);
+
+        tokio::fs::create_dir_all(&self.inner.model_dir)
             .await
             .map_err(|_| AppError::new("asr_model_dir", "无法创建模型目录"))?;
 
-        let partial_path = self.inner.model_path.with_extension("gguf.part");
-        remove_file_if_present(&partial_path).await?;
-        // Atomic replacement only works on Windows when the target does not
-        // already exist. A mismatched final file is never a usable model.
-        remove_incomplete_model_file(&self.inner.model_path).await?;
-
-        let result = self
-            .download_model_file(proxy, &partial_path, generation)
-            .await;
-        if result.is_err() {
-            if let Err(error) = remove_file_if_present(&partial_path).await {
-                tracing::warn!(%error, "failed to clean up ASR partial model");
-            }
+        if !self.inner.assets.recognizer_is_complete()
+            && !self
+                .download_and_extract_archive(
+                    proxy,
+                    generation,
+                    MODEL_ARCHIVE_URL,
+                    MODEL_ARCHIVE_SIZE_BYTES,
+                    0,
+                    "streaming-zipformer.tar.bz2.part",
+                    &self.inner.assets.root,
+                    "Zipformer 识别模型",
+                    total_size,
+                )
+                .await?
+        {
+            return Ok(false);
         }
-        result
+        if !self.inner.assets.recognizer_is_complete() {
+            return Err(AppError::new(
+                "asr_model_extract",
+                "Zipformer 模型解压结果不完整",
+            ));
+        }
+
+        if !self.request_is_current(generation) {
+            return Ok(false);
+        }
+
+        if !self.inner.assets.punctuation_is_complete()
+            && !self
+                .download_and_extract_archive(
+                    proxy,
+                    generation,
+                    PUNCTUATION_ARCHIVE_URL,
+                    PUNCTUATION_ARCHIVE_SIZE_BYTES,
+                    MODEL_ARCHIVE_SIZE_BYTES,
+                    "punctuation-ct-transformer.tar.bz2.part",
+                    &self.inner.assets.punctuation_root,
+                    "中英标点模型",
+                    total_size,
+                )
+                .await?
+        {
+            return Ok(false);
+        }
+        if !self.inner.assets.punctuation_is_complete() {
+            return Err(AppError::new("asr_model_extract", "标点模型解压结果不完整"));
+        }
+
+        if !self.inner.assets.is_complete() {
+            return Err(AppError::new("asr_model_extract", "字幕模型解压结果不完整"));
+        }
+
+        if speaker_enabled && !self.inner.assets.speaker_is_complete() {
+            let partial_path = self
+                .inner
+                .model_dir
+                .join(format!("{SPEAKER_MODEL_FILE}.part"));
+            remove_file_if_present(&partial_path).await?;
+            remove_file_if_present(&self.inner.assets.speaker).await?;
+            let downloaded = self
+                .download_model_file(
+                    proxy,
+                    SPEAKER_MODEL_URL,
+                    &partial_path,
+                    SPEAKER_MODEL_SIZE_BYTES,
+                    MODEL_SIZE_BYTES,
+                    total_size,
+                    generation,
+                    "说话人声纹模型",
+                )
+                .await;
+            match downloaded {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = remove_file_if_present(&partial_path).await;
+                    return Ok(false);
+                }
+                Err(error) => {
+                    if let Err(cleanup_error) = remove_file_if_present(&partial_path).await {
+                        tracing::warn!(%cleanup_error, "failed to clean up speaker model download");
+                    }
+                    return Err(error);
+                }
+            }
+            if !self.request_is_current(generation) {
+                let _ = remove_file_if_present(&partial_path).await;
+                return Ok(false);
+            }
+            tokio::fs::rename(&partial_path, &self.inner.assets.speaker)
+                .await
+                .map_err(|_| AppError::new("asr_model_write", "说话人声纹模型文件替换失败"))?;
+            self.update_status_for_request(generation, |status| {
+                status.speaker_model_downloaded = true;
+                status.downloaded_bytes = total_size;
+                status.total_bytes = Some(total_size);
+            });
+        }
+
+        if !self.inner.assets.required_assets_complete(speaker_enabled) {
+            return Err(AppError::new("asr_model_download", "字幕模型文件不完整"));
+        }
+        Ok(true)
     }
 
-    async fn ensure_vad_model_file(&self, proxy: Option<&str>, generation: u64) -> AppResult<bool> {
-        if !self.request_is_current(generation) {
-            return Ok(false);
-        }
-        if vad_model_file_is_complete(&self.inner.vad_model_path) {
-            return Ok(true);
-        }
+    #[allow(clippy::too_many_arguments)]
+    async fn download_and_extract_archive(
+        &self,
+        proxy: Option<&str>,
+        generation: u64,
+        url: &str,
+        expected_size: u64,
+        progress_offset: u64,
+        archive_name: &str,
+        extracted_root: &Path,
+        label: &str,
+        total_size: u64,
+    ) -> AppResult<bool> {
+        let archive_path = self.inner.model_dir.join(archive_name);
+        remove_file_if_present(&archive_path).await?;
+        // Never mix files from an interrupted extraction with a fresh archive.
+        remove_dir_if_present(extracted_root).await?;
 
-        let model_dir = self
-            .inner
-            .vad_model_path
-            .parent()
-            .ok_or_else(|| AppError::new("asr_vad_model_path", "VAD 模型目录无效"))?;
-        tokio::fs::create_dir_all(model_dir)
-            .await
-            .map_err(|_| AppError::new("asr_model_dir", "无法创建模型目录"))?;
-
-        let partial_path = self.inner.vad_model_path.with_extension("bin.part");
-        remove_file_if_present(&partial_path).await?;
-        remove_incomplete_file(&self.inner.vad_model_path, VAD_MODEL_SIZE_BYTES).await?;
+        let result = self
+            .download_model_file(
+                proxy,
+                url,
+                &archive_path,
+                expected_size,
+                progress_offset,
+                total_size,
+                generation,
+                label,
+            )
+            .await;
+        match result {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = remove_file_if_present(&archive_path).await;
+                return Ok(false);
+            }
+            Err(error) => {
+                if let Err(cleanup_error) = remove_file_if_present(&archive_path).await {
+                    tracing::warn!(%cleanup_error, "failed to clean up ASR partial archive");
+                }
+                return Err(error);
+            }
+        }
 
         self.update_status_for_request(generation, |status| {
-            status.state = AsrModelState::DownloadingVad;
-            status.downloaded_bytes = 0;
-            status.total_bytes = Some(VAD_MODEL_SIZE_BYTES);
-            status.message = None;
+            status.state = AsrModelState::Extracting;
+            status.downloaded_bytes = progress_offset.saturating_add(expected_size);
+            status.total_bytes = Some(total_size);
+            status.message = Some(format!("正在解压{label}…"));
         });
 
-        let result = self
-            .download_vad_model_file(proxy, &partial_path, generation)
-            .await;
-        if result.is_err() {
-            if let Err(error) = remove_file_if_present(&partial_path).await {
-                tracing::warn!(%error, "failed to clean up partial VAD model");
-            }
-        }
-        result
+        let model_dir = self.inner.model_dir.clone();
+        let archive = archive_path.clone();
+        let extracted = tokio::task::spawn_blocking(move || extract_tar_bz2(&archive, &model_dir))
+            .await
+            .map_err(|_| AppError::new("asr_model_extract", "模型解压任务失败"))?;
+        let _ = remove_file_if_present(&archive_path).await;
+        extracted?;
+        Ok(self.request_is_current(generation))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn download_model_file(
         &self,
         proxy: Option<&str>,
+        url: &str,
         partial_path: &Path,
+        expected_size: u64,
+        progress_offset: u64,
+        total_size: u64,
         generation: u64,
+        label: &str,
     ) -> AppResult<bool> {
         if !self.request_is_current(generation) {
             return Ok(false);
@@ -578,17 +908,17 @@ impl AsrManager {
 
         let client = asr_download_client(proxy)?;
         let response = client
-            .get(MODEL_URL)
+            .get(url)
             .send()
             .await
             .map_err(|_| AppError::new("asr_model_download", "模型下载请求失败"))?
             .error_for_status()
             .map_err(|_| AppError::new("asr_model_download", "模型下载服务返回错误"))?;
-
-        if let Some(length) = response.content_length() {
-            if length != MODEL_SIZE_BYTES {
-                return Err(AppError::new("asr_model_size", "模型文件大小与预期不符"));
-            }
+        if response
+            .content_length()
+            .is_some_and(|length| length != expected_size)
+        {
+            return Err(AppError::new("asr_model_size", "模型文件大小与预期不符"));
         }
 
         use futures_util::StreamExt;
@@ -609,24 +939,22 @@ impl AsrManager {
             }
             let chunk = chunk.map_err(|_| AppError::new("asr_model_download", "模型下载中断"))?;
             downloaded = downloaded.saturating_add(chunk.len() as u64);
-            if downloaded > MODEL_SIZE_BYTES {
+            if downloaded > expected_size {
                 drop(file);
-                let _ = tokio::fs::remove_file(&partial_path).await;
+                let _ = tokio::fs::remove_file(partial_path).await;
                 return Err(AppError::new("asr_model_size", "模型文件大小超出预期"));
             }
             file.write_all(&chunk)
                 .await
                 .map_err(|_| AppError::new("asr_model_write", "写入模型文件失败"))?;
 
-            if downloaded == MODEL_SIZE_BYTES
-                || last_progress.elapsed() >= std::time::Duration::from_millis(250)
-            {
+            if last_progress.elapsed() >= std::time::Duration::from_millis(250) {
                 last_progress = std::time::Instant::now();
                 self.update_status_for_request(generation, |status| {
                     status.state = AsrModelState::Downloading;
-                    status.downloaded_bytes = downloaded;
-                    status.total_bytes = Some(MODEL_SIZE_BYTES);
-                    status.message = None;
+                    status.downloaded_bytes = progress_offset.saturating_add(downloaded);
+                    status.total_bytes = Some(total_size);
+                    status.message = Some(format!("正在下载{label}…"));
                 });
             }
         }
@@ -636,107 +964,22 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_model_write", "保存模型文件失败"))?;
         drop(file);
 
-        if downloaded != MODEL_SIZE_BYTES {
-            return Err(AppError::new("asr_model_size", "模型下载不完整"));
+        if downloaded != expected_size {
+            return Err(AppError::new("asr_model_size", "模型文件下载不完整"));
         }
         if !self.request_is_current(generation) {
             let _ = tokio::fs::remove_file(&partial_path).await;
             return Ok(false);
         }
-
-        tokio::fs::rename(&partial_path, &self.inner.model_path)
-            .await
-            .map_err(|_| AppError::new("asr_model_write", "模型文件替换失败"))?;
         Ok(true)
     }
 
-    async fn download_vad_model_file(
-        &self,
-        proxy: Option<&str>,
-        partial_path: &Path,
-        generation: u64,
-    ) -> AppResult<bool> {
-        if !self.request_is_current(generation) {
-            return Ok(false);
-        }
-
-        let response = asr_download_client(proxy)?
-            .get(VAD_MODEL_URL)
-            .send()
-            .await
-            .map_err(|_| AppError::new("asr_vad_download", "VAD 模型下载请求失败"))?
-            .error_for_status()
-            .map_err(|_| AppError::new("asr_vad_download", "VAD 模型下载服务返回错误"))?;
-        if response
-            .content_length()
-            .is_some_and(|length| length != VAD_MODEL_SIZE_BYTES)
-        {
-            return Err(AppError::new(
-                "asr_vad_model_size",
-                "VAD 模型文件大小与预期不符",
-            ));
-        }
-
-        use futures_util::StreamExt;
-        use tokio::io::AsyncWriteExt;
-
-        let mut stream = response.bytes_stream();
-        let mut file = tokio::fs::File::create(partial_path)
-            .await
-            .map_err(|_| AppError::new("asr_vad_model_write", "无法写入 VAD 模型临时文件"))?;
-        let mut downloaded = 0_u64;
-
-        while let Some(chunk) = stream.next().await {
-            if !self.request_is_current(generation) {
-                drop(file);
-                let _ = tokio::fs::remove_file(partial_path).await;
-                return Ok(false);
-            }
-            let chunk = chunk.map_err(|_| AppError::new("asr_vad_download", "VAD 模型下载中断"))?;
-            downloaded = downloaded.saturating_add(chunk.len() as u64);
-            if downloaded > VAD_MODEL_SIZE_BYTES {
-                drop(file);
-                let _ = tokio::fs::remove_file(partial_path).await;
-                return Err(AppError::new(
-                    "asr_vad_model_size",
-                    "VAD 模型文件大小超出预期",
-                ));
-            }
-            file.write_all(&chunk)
-                .await
-                .map_err(|_| AppError::new("asr_vad_model_write", "写入 VAD 模型失败"))?;
-            self.update_status_for_request(generation, |status| {
-                status.state = AsrModelState::DownloadingVad;
-                status.downloaded_bytes = downloaded;
-                status.total_bytes = Some(VAD_MODEL_SIZE_BYTES);
-                status.message = None;
-            });
-        }
-
-        file.flush()
-            .await
-            .map_err(|_| AppError::new("asr_vad_model_write", "保存 VAD 模型失败"))?;
-        drop(file);
-        if downloaded != VAD_MODEL_SIZE_BYTES {
-            return Err(AppError::new("asr_vad_model_size", "VAD 模型下载不完整"));
-        }
-        if !self.request_is_current(generation) {
-            let _ = tokio::fs::remove_file(partial_path).await;
-            return Ok(false);
-        }
-
-        tokio::fs::rename(partial_path, &self.inner.vad_model_path)
-            .await
-            .map_err(|_| AppError::new("asr_vad_model_write", "VAD 模型文件替换失败"))?;
-        self.update_status_for_request(generation, |status| {
-            status.vad_model_downloaded = true;
-        });
-        Ok(true)
-    }
-
-    pub async fn transcribe_pcm(&self, pcm: Vec<f32>) -> AppResult<Vec<AsrCaptionSegment>> {
+    pub async fn transcribe_pcm(&self, pcm: Vec<f32>) -> AppResult<AsrTranscribeResult> {
         if pcm.is_empty() {
-            return Ok(Vec::new());
+            return Ok(AsrTranscribeResult {
+                segments: Vec::new(),
+                partial: None,
+            });
         }
         let manager = self.clone();
         tokio::task::spawn_blocking(move || manager.transcribe_pcm_blocking(&pcm))
@@ -744,11 +987,11 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_task_failed", "语音识别任务失败"))?
     }
 
-    fn transcribe_pcm_blocking(&self, pcm: &[f32]) -> AppResult<Vec<AsrCaptionSegment>> {
+    fn transcribe_pcm_blocking(&self, pcm: &[f32]) -> AppResult<AsrTranscribeResult> {
         if !self.is_requested() {
             return Err(AppError::new("asr_disabled", "语音字幕未启用"));
         }
-        let (vad_enabled, vad_threads) = {
+        {
             let status = self
                 .inner
                 .status
@@ -757,29 +1000,25 @@ impl AsrManager {
             if status.state != AsrModelState::Ready {
                 return Err(AppError::new("asr_not_ready", "语音字幕模型正在准备"));
             }
-            (status.vad_enabled, vad_thread_count_for_asr(status.threads))
-        };
-        let session = self
+        }
+        let mut session = self
             .inner
             .session
             .lock()
             .map_err(|_| AppError::new("asr_session_lock", "语音字幕模型暂不可用"))?;
         let session = session
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| AppError::new("asr_not_ready", "语音字幕模型正在准备"))?;
-        let vad_model_path = vad_enabled.then_some(self.inner.vad_model_path.as_path());
-        let segments = session
-            .transcribe(pcm, vad_model_path, vad_threads)
-            .map_err(|error| {
-                tracing::warn!(%error, "ASR transcription failed");
-                AppError::new("asr_transcribe_failed", "语音识别失败，请稍后重试")
-            })?;
+        let result = session.transcribe(pcm).map_err(|error| {
+            tracing::warn!(%error, "ASR transcription failed");
+            AppError::new("asr_transcribe_failed", "语音识别失败，请稍后重试")
+        })?;
 
         if !self.is_requested() {
             return Err(AppError::new("asr_disabled", "语音字幕已关闭"));
         }
 
-        Ok(segments)
+        Ok(result)
     }
 
     fn is_requested(&self) -> bool {
@@ -799,27 +1038,33 @@ impl AsrManager {
         self.is_requested() && self.generation_is_current(generation)
     }
 
-    fn set_loading_status(&self, generation: u64) {
+    fn set_loading_status(&self, generation: u64, speaker_enabled: bool) {
+        let total_size = configured_model_size(speaker_enabled);
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Loading;
-            status.downloaded_bytes = MODEL_SIZE_BYTES;
-            status.total_bytes = Some(MODEL_SIZE_BYTES);
+            status.speaker_enabled = speaker_enabled;
+            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
+            status.model_size_bytes = total_size;
+            status.downloaded_bytes = total_size;
+            status.total_bytes = Some(total_size);
             status.message = None;
         });
     }
 
     fn set_idle_status(&self) {
-        let model_exists = model_file_is_complete(&self.inner.model_path);
-        let vad_model_exists = vad_model_file_is_complete(&self.inner.vad_model_path);
         self.update_status(|status| {
+            let speaker_enabled = status.speaker_enabled;
+            let model_exists = self.inner.assets.required_assets_complete(speaker_enabled);
+            let total_size = configured_model_size(speaker_enabled);
             status.state = if model_exists {
                 AsrModelState::Downloaded
             } else {
                 AsrModelState::NotDownloaded
             };
-            status.downloaded_bytes = if model_exists { MODEL_SIZE_BYTES } else { 0 };
-            status.total_bytes = Some(MODEL_SIZE_BYTES);
-            status.vad_model_downloaded = vad_model_exists;
+            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
+            status.model_size_bytes = total_size;
+            status.downloaded_bytes = self.inner.assets.downloaded_bytes(speaker_enabled);
+            status.total_bytes = Some(total_size);
             status.message = None;
         });
     }
@@ -877,8 +1122,39 @@ pub fn decode_base64_pcm(encoded: &str) -> AppResult<Vec<f32>> {
     Ok(pcm)
 }
 
-fn centiseconds_to_millis(centiseconds: i64) -> u64 {
-    u64::try_from(centiseconds).unwrap_or(0).saturating_mul(10)
+fn samples_to_millis(samples: u64) -> u64 {
+    samples.saturating_mul(1_000) / ASR_SAMPLE_RATE as u64
+}
+
+fn configured_model_size(speaker_enabled: bool) -> u64 {
+    MODEL_SIZE_BYTES
+        + if speaker_enabled {
+            SPEAKER_MODEL_SIZE_BYTES
+        } else {
+            0
+        }
+}
+
+fn normalize_embedding(embedding: &[f32]) -> Option<Vec<f32>> {
+    if embedding.is_empty() || embedding.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let norm_squared = embedding.iter().map(|value| value * value).sum::<f32>();
+    if !norm_squared.is_finite() || norm_squared <= f32::EPSILON {
+        return None;
+    }
+    let norm = norm_squared.sqrt();
+    Some(embedding.iter().map(|value| value / norm).collect())
+}
+
+fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
+    if left.is_empty() || left.len() != right.len() {
+        return f32::NEG_INFINITY;
+    }
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| left * right)
+        .sum()
 }
 
 fn asr_thread_count() -> i32 {
@@ -890,10 +1166,6 @@ fn asr_thread_count() -> i32 {
 
 fn asr_thread_count_for_available(available: usize) -> i32 {
     available.clamp(1, ASR_THREAD_LIMIT) as i32
-}
-
-fn vad_thread_count_for_asr(asr_threads: i32) -> i32 {
-    asr_threads.clamp(1, VAD_THREAD_LIMIT)
 }
 
 fn model_directory(app_data_dir: Option<&Path>) -> PathBuf {
@@ -917,12 +1189,19 @@ fn model_directory(app_data_dir: Option<&Path>) -> PathBuf {
     }
 }
 
-fn model_file_is_complete(path: &Path) -> bool {
-    file_has_size(path, MODEL_SIZE_BYTES)
+fn extract_tar_bz2(archive: &Path, destination: &Path) -> AppResult<()> {
+    let file = std::fs::File::open(archive)
+        .map_err(|_| AppError::new("asr_model_extract", "无法打开模型压缩包"))?;
+    let decoder = bzip2::read::BzDecoder::new(std::io::BufReader::new(file));
+    let mut tar = tar::Archive::new(decoder);
+    tar.unpack(destination)
+        .map_err(|_| AppError::new("asr_model_extract", "模型解压失败"))
 }
 
-fn vad_model_file_is_complete(path: &Path) -> bool {
-    file_has_size(path, VAD_MODEL_SIZE_BYTES)
+fn file_is_non_empty(path: &Path) -> bool {
+    path.metadata()
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
 }
 
 fn file_has_size(path: &Path, expected_size: u64) -> bool {
@@ -938,8 +1217,8 @@ fn asr_download_client(proxy: Option<&str>) -> AppResult<reqwest::Client> {
         reqwest::Client::builder()
             .use_native_tls()
             .connect_timeout(Duration::from_secs(15))
-            // Reqwest has no total timeout by default, which is important for
-            // a 631 MB model. A per-read timeout still catches stalled links.
+            // Reqwest has no total timeout by default. A per-read timeout still
+            // catches stalled links during the roughly 550 MiB model transfer.
             .read_timeout(Duration::from_secs(60))
             .user_agent("rLive ASR model downloader"),
         proxy,
@@ -956,30 +1235,20 @@ async fn remove_file_if_present(path: &Path) -> AppResult<()> {
     }
 }
 
-async fn remove_incomplete_model_file(path: &Path) -> AppResult<()> {
-    remove_incomplete_file(path, MODEL_SIZE_BYTES).await
-}
-
-async fn remove_incomplete_file(path: &Path, expected_size: u64) -> AppResult<()> {
-    if !path.exists() || file_has_size(path, expected_size) {
-        return Ok(());
+async fn remove_dir_if_present(path: &Path) -> AppResult<()> {
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(AppError::new("asr_model_write", "无法清理旧模型目录")),
     }
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(|_| AppError::new("asr_model_path", "模型文件状态无效"))?;
-    if !metadata.is_file() {
-        return Err(AppError::new("asr_model_path", "模型文件路径无效"));
-    }
-    tokio::fs::remove_file(path)
-        .await
-        .map_err(|_| AppError::new("asr_model_write", "无法替换不完整模型文件"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        asr_thread_count_for_available, centiseconds_to_millis, decode_base64_pcm,
-        vad_thread_count_for_asr,
+        MODEL_SIZE_BYTES, SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters,
+        asr_thread_count_for_available, configured_model_size, decode_base64_pcm,
+        samples_to_millis,
     };
     use base64::Engine;
 
@@ -1000,9 +1269,10 @@ mod tests {
     }
 
     #[test]
-    fn converts_non_finite_or_negative_times_safely() {
-        assert_eq!(centiseconds_to_millis(-1), 0);
-        assert_eq!(centiseconds_to_millis(123), 1_230);
+    fn converts_sample_positions_to_milliseconds() {
+        assert_eq!(samples_to_millis(0), 0);
+        assert_eq!(samples_to_millis(16_000), 1_000);
+        assert_eq!(samples_to_millis(8_000), 500);
     }
 
     #[test]
@@ -1014,14 +1284,44 @@ mod tests {
     }
 
     #[test]
-    fn caps_vad_at_two_threads_without_exceeding_asr() {
-        assert_eq!(vad_thread_count_for_asr(1), 1);
-        assert_eq!(vad_thread_count_for_asr(8), 2);
+    fn groups_similar_speaker_embeddings() {
+        let mut clusters = SpeakerClusters::default();
+        assert_eq!(clusters.classify(&[1.0, 0.0, 0.0]), Some(1));
+        assert_eq!(clusters.classify(&[0.99, 0.08, 0.0]), Some(1));
+        assert_eq!(clusters.clusters.len(), 1);
     }
 
     #[test]
-    fn crispasr_vad_options_match_the_c_abi() {
-        assert_eq!(std::mem::size_of::<crispasr_sys::CrispasrVadAbiOpts>(), 24);
-        assert_eq!(std::mem::align_of::<crispasr_sys::CrispasrVadAbiOpts>(), 4);
+    fn creates_a_new_speaker_for_orthogonal_embeddings() {
+        let mut clusters = SpeakerClusters::default();
+        assert_eq!(clusters.classify(&[1.0, 0.0]), Some(1));
+        assert_eq!(clusters.classify(&[0.0, 1.0]), Some(2));
+    }
+
+    #[test]
+    fn rejects_invalid_speaker_embeddings() {
+        let mut clusters = SpeakerClusters::default();
+        assert_eq!(clusters.classify(&[]), None);
+        assert_eq!(clusters.classify(&[0.0, 0.0]), None);
+        assert_eq!(clusters.classify(&[f32::NAN, 1.0]), None);
+        assert!(clusters.clusters.is_empty());
+    }
+
+    #[test]
+    fn resets_speaker_numbering_for_a_new_stream() {
+        let mut clusters = SpeakerClusters::default();
+        assert_eq!(clusters.classify(&[1.0, 0.0]), Some(1));
+        assert_eq!(clusters.classify(&[0.0, 1.0]), Some(2));
+        clusters.reset();
+        assert_eq!(clusters.classify(&[0.0, 1.0]), Some(1));
+    }
+
+    #[test]
+    fn includes_the_optional_speaker_model_in_download_size() {
+        assert_eq!(configured_model_size(false), MODEL_SIZE_BYTES);
+        assert_eq!(
+            configured_model_size(true),
+            MODEL_SIZE_BYTES + SPEAKER_MODEL_SIZE_BYTES
+        );
     }
 }

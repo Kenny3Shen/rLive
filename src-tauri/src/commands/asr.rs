@@ -1,14 +1,8 @@
-use serde::Serialize;
 use tauri::State;
 
-use crate::asr::{AsrCaptionSegment, AsrModelStatus, decode_base64_pcm};
+use crate::asr::{AsrModelStatus, AsrTranscribeResult, decode_base64_pcm};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-
-#[derive(Debug, Serialize)]
-pub struct AsrTranscribeResponse {
-    pub segments: Vec<AsrCaptionSegment>,
-}
 
 #[tauri::command]
 pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
@@ -19,15 +13,15 @@ pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
 /// immediately so selecting the setting never blocks the UI thread.
 #[tauri::command]
 pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
-    let (proxy, vad_enabled) = {
+    let (proxy, speaker_diarization_enabled) = {
         let conn = state
             .db
             .lock()
             .map_err(|_| AppError::new("db_lock_error", "读取代理设置失败"))?;
         let settings = crate::settings::get(&conn)?;
-        (settings.proxy, settings.asr_vad_enabled)
+        (settings.proxy, settings.asr_speaker_diarization_enabled)
     };
-    state.asr.enable(proxy, vad_enabled)
+    state.asr.enable(proxy, speaker_diarization_enabled)
 }
 
 #[tauri::command]
@@ -35,12 +29,19 @@ pub async fn asr_disable(state: State<'_, AppState>) -> AppResult<AsrModelStatus
     state.asr.disable().await
 }
 
+/// Drop streaming decoder state without unloading the model. The player calls
+/// this when switching rooms or streams so one caption never continues an
+/// utterance that belongs to a previous session.
+#[tauri::command]
+pub fn asr_reset_stream(state: State<'_, AppState>) -> AppResult<()> {
+    state.asr.reset_stream()
+}
+
 #[tauri::command]
 pub async fn asr_transcribe(
     state: State<'_, AppState>,
     pcm_base64: String,
-) -> AppResult<AsrTranscribeResponse> {
+) -> AppResult<AsrTranscribeResult> {
     let pcm = decode_base64_pcm(&pcm_base64)?;
-    let segments = state.asr.transcribe_pcm(pcm).await?;
-    Ok(AsrTranscribeResponse { segments })
+    state.asr.transcribe_pcm(pcm).await
 }

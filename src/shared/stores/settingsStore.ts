@@ -43,9 +43,9 @@ function parseQualityLevel(value: unknown): QualityLevel {
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
 const ASR_FONT_SIZE_DEFAULT = 20;
-const ASR_WINDOW_SECONDS_MIN = 1;
-const ASR_WINDOW_SECONDS_MAX = 6;
-const ASR_WINDOW_SECONDS_DEFAULT = 1;
+const ASR_WINDOW_SECONDS_MIN = 0.2;
+const ASR_WINDOW_SECONDS_MAX = 1;
+const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
 function parseAsrFontSize(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
@@ -100,6 +100,7 @@ type SettingsState = {
   danmakuSendPending: boolean;
   asrEnabled: boolean;
   asrVadEnabled: boolean;
+  asrSpeakerDiarizationEnabled: boolean;
   asrWindowSeconds: number;
   asrFontSize: number;
   /** True while the device-local ASR choice reaches the Rust backend. */
@@ -126,6 +127,7 @@ type SettingsState = {
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrVadEnabled: (enabled: boolean) => Promise<void>;
+  setAsrSpeakerDiarizationEnabled: (enabled: boolean) => Promise<void>;
   setAsrWindowSeconds: (seconds: number) => Promise<void>;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
@@ -159,6 +161,7 @@ const defaultSettings: AppSettings = {
   danmaku_send_enabled: false,
   asr_enabled: false,
   asr_vad_enabled: false,
+  asr_speaker_diarization_enabled: false,
   asr_window_seconds: ASR_WINDOW_SECONDS_DEFAULT,
   asr_font_size: ASR_FONT_SIZE_DEFAULT,
   iptv_custom_m3u_url: null,
@@ -188,6 +191,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_vad_enabled: state.asrVadEnabled,
+    asr_speaker_diarization_enabled: state.asrSpeakerDiarizationEnabled,
     asr_window_seconds: state.asrWindowSeconds,
     asr_font_size: state.asrFontSize,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
@@ -220,6 +224,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuSendPending: false,
       asrEnabled: false,
       asrVadEnabled: false,
+      asrSpeakerDiarizationEnabled: false,
       asrWindowSeconds: ASR_WINDOW_SECONDS_DEFAULT,
       asrFontSize: ASR_FONT_SIZE_DEFAULT,
       asrPending: false,
@@ -323,6 +328,28 @@ export const useSettingsStore = create<SettingsState>()(
           if (epoch === asrSettingEpoch) set({ asrPending: false });
         }
       },
+      setAsrSpeakerDiarizationEnabled: async (asrSpeakerDiarizationEnabled) => {
+        const epoch = ++asrSettingEpoch;
+        const previous = get().asrSpeakerDiarizationEnabled;
+        if (asrSpeakerDiarizationEnabled === previous) return;
+        set({ asrSpeakerDiarizationEnabled, asrPending: true });
+        try {
+          await get().persistToBackend({
+            asr_speaker_diarization_enabled: asrSpeakerDiarizationEnabled,
+          });
+          if (get().asrEnabled) await invokeCmd("asr_enable");
+        } catch (error) {
+          if (epoch === asrSettingEpoch) {
+            set({ asrSpeakerDiarizationEnabled: previous });
+            await get().persistToBackend({
+              asr_speaker_diarization_enabled: previous,
+            });
+          }
+          throw error;
+        } finally {
+          if (epoch === asrSettingEpoch) set({ asrPending: false });
+        }
+      },
       setAsrWindowSeconds: async (seconds) => {
         const next = parseAsrWindowSeconds(seconds);
         const previous = get().asrWindowSeconds;
@@ -375,6 +402,8 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled ?? false,
           asrVadEnabled: settings.asr_vad_enabled ?? false,
+          asrSpeakerDiarizationEnabled:
+            settings.asr_speaker_diarization_enabled ?? false,
           asrWindowSeconds: parseAsrWindowSeconds(settings.asr_window_seconds),
           asrFontSize: parseAsrFontSize(settings.asr_font_size),
           asrPending: false,

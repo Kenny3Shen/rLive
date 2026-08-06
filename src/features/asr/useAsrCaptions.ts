@@ -3,8 +3,9 @@ import { isTauri } from "@tauri-apps/api/core";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import {
+  appendAsrCaptionLine,
   encodePcmBase64,
-  joinAsrCaptionText,
+  formatAsrCaptionSegment,
   subscribeToVideoPcm,
   type AudioCaptureSubscription,
 } from "./audio";
@@ -14,12 +15,18 @@ type AsrCaptionSegment = {
   text: string;
   start_ms: number;
   end_ms: number;
+  speaker_id: number | null;
 };
 
 type AsrTranscribeResponse = {
+  /** Endpointed utterances, safe to append to the committed line. */
   segments: AsrCaptionSegment[];
+  /** Current in-flight hypothesis; replaced on every window. */
+  partial: string | null;
 };
 
+/** Committed captions older than this are dropped from the visible line. */
+const CAPTION_RETENTION_MS = 12_000;
 type TranscriptionJob = {
   pcm: Float32Array;
   epoch: number;
@@ -39,13 +46,14 @@ export function useAsrCaptions(options: {
   featureEnabled: boolean;
   settingPending: boolean;
   mediaAvailable: boolean;
-  windowSeconds: number;
+  chunkSeconds: number;
 }) {
   const clientPlatform = getClientPlatform();
   const localAsrClient = clientPlatform === "desktop" || clientPlatform === "android";
   const model = useAsrModelStatus({ enabled: options.featureEnabled });
   const [captionsOn, setCaptionsOn] = useState(false);
   const [caption, setCaption] = useState<string | null>(null);
+  const [partial, setPartial] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -53,7 +61,7 @@ export function useAsrCaptions(options: {
   const pendingJobRef = useRef<TranscriptionJob | null>(null);
   const workerRunningRef = useRef(false);
   const captionTimerRef = useRef<number | null>(null);
-  const segmentSetterRef = useRef<((seconds: number) => void) | null>(null);
+  const chunkSetterRef = useRef<((seconds: number) => void) | null>(null);
 
   const clearCaptionTimer = useCallback(() => {
     if (captionTimerRef.current !== null) {
@@ -75,15 +83,27 @@ export function useAsrCaptions(options: {
             pcmBase64: encodePcmBase64(job.pcm),
           });
           if (job.epoch !== epochRef.current) continue;
-          const text = joinAsrCaptionText(response.segments);
           setNotice(null);
-          if (!text) continue;
-          setCaption(text);
+
+          // The live hypothesis changes on every window, including back to
+          // empty once an utterance is committed.
+          setPartial(response.partial?.trim() || null);
+
+          if (response.segments.length === 0) continue;
+          setCaption((current) =>
+            response.segments.reduce(
+              (committed, segment) =>
+                appendAsrCaptionLine(committed || null, formatAsrCaptionSegment(segment)),
+              current ?? "",
+            ),
+          );
+          // Only the committed line expires; the partial is superseded by the
+          // next window rather than timed out.
           clearCaptionTimer();
           captionTimerRef.current = window.setTimeout(() => {
             setCaption(null);
             captionTimerRef.current = null;
-          }, 8_000);
+          }, CAPTION_RETENTION_MS);
         } catch (error) {
           if (job.epoch !== epochRef.current) continue;
           setNotice(`语音识别失败：${errorMessage(error)}`);
@@ -100,6 +120,7 @@ export function useAsrCaptions(options: {
     if (!options.featureEnabled || !model.supported) {
       setCaptionsOn(false);
       setCaption(null);
+      setPartial(null);
       setNotice(null);
       setCaptureError(null);
       pendingJobRef.current = null;
@@ -110,13 +131,17 @@ export function useAsrCaptions(options: {
 
   useEffect(() => {
     setCaption(null);
+    setPartial(null);
     setNotice(null);
     setCaptureError(null);
     pendingJobRef.current = null;
     epochRef.current += 1;
-    segmentSetterRef.current = null;
+    chunkSetterRef.current = null;
     clearCaptionTimer();
-  }, [clearCaptionTimer, options.mediaKey, options.sessionKey]);
+    // Streaming decode keeps state across windows, so a new room or media
+    // element must clear it or the next caption resumes mid-utterance.
+    if (model.supported) void invokeCmd("asr_reset_stream").catch(() => {});
+  }, [clearCaptionTimer, model.supported, options.mediaKey, options.sessionKey]);
 
   useEffect(() => {
     if (
@@ -146,8 +171,8 @@ export function useAsrCaptions(options: {
           return;
         }
         subscription = nextSubscription;
-        segmentSetterRef.current = nextSubscription.setSegmentSeconds;
-        nextSubscription.setSegmentSeconds(options.windowSeconds);
+        chunkSetterRef.current = nextSubscription.setChunkSeconds;
+        nextSubscription.setChunkSeconds(options.chunkSeconds);
         setCaptureError(null);
       })
       .catch((error) => {
@@ -161,8 +186,8 @@ export function useAsrCaptions(options: {
     return () => {
       cancelled = true;
       subscription?.release();
-      if (subscription && segmentSetterRef.current === subscription.setSegmentSeconds) {
-        segmentSetterRef.current = null;
+      if (subscription && chunkSetterRef.current === subscription.setChunkSeconds) {
+        chunkSetterRef.current = null;
       }
       if (epoch === epochRef.current) epochRef.current += 1;
       pendingJobRef.current = null;
@@ -173,7 +198,7 @@ export function useAsrCaptions(options: {
     model.supported,
     options.featureEnabled,
     options.mediaAvailable,
-    options.windowSeconds,
+    options.chunkSeconds,
     options.mediaKey,
     options.sessionKey,
     options.videoRef,
@@ -181,8 +206,8 @@ export function useAsrCaptions(options: {
   ]);
 
   useEffect(() => {
-    segmentSetterRef.current?.(options.windowSeconds);
-  }, [options.windowSeconds]);
+    chunkSetterRef.current?.(options.chunkSeconds);
+  }, [options.chunkSeconds]);
 
   useEffect(() => () => clearCaptionTimer(), [clearCaptionTimer]);
 
@@ -205,11 +230,13 @@ export function useAsrCaptions(options: {
         setCaptureError(null);
       } else {
         setCaption(null);
+        setPartial(null);
         setNotice(null);
         setCaptureError(null);
         pendingJobRef.current = null;
         epochRef.current += 1;
         clearCaptionTimer();
+        void invokeCmd("asr_reset_stream").catch(() => {});
       }
       return next;
     });
@@ -251,6 +278,7 @@ export function useAsrCaptions(options: {
     desktopClient: localAsrClient,
     captionsOn,
     caption,
+    partial,
     notice,
     noticeIsError: notice !== null,
     processing,
