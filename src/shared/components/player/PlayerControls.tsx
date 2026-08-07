@@ -20,13 +20,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -470,12 +464,7 @@ export function PlayerControls({
         orientation="horizontal"
         data-disabled={asrSettingsPending || !onAsrSpeakerDiarizationEnabledChange || undefined}
       >
-        <FieldContent>
-          <FieldLabel htmlFor="player-caption-speaker-diarization">说话人区分</FieldLabel>
-          <FieldDescription className={cn("text-xs", overlay && "text-white/60")}>
-            为稳定字幕添加匿名编号
-          </FieldDescription>
-        </FieldContent>
+        <FieldLabel htmlFor="player-caption-speaker-diarization">说话人区分</FieldLabel>
         <Switch
           id="player-caption-speaker-diarization"
           size="sm"
@@ -499,12 +488,7 @@ export function PlayerControls({
       <Separator className={cn(overlay && "bg-white/10")} />
 
       <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
-          <FieldDescription className={cn("text-xs", overlay && "text-white/60")}>
-            稳定字幕将发送到 Google 翻译
-          </FieldDescription>
-        </FieldContent>
+        <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
         <Switch
           id="player-caption-translation"
           size="sm"
@@ -920,7 +904,10 @@ export function PlayerControls({
           className={overlayButtonClass}
           disabled={disabled}
           aria-pressed={fullscreen}
-          onClick={onToggleFullscreen}
+          onClick={(event) => {
+            if (event.detail > 0) event.currentTarget.blur();
+            onToggleFullscreen();
+          }}
           tooltip={!compact}
         >
           {fullscreen ? (

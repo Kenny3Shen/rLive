@@ -40,6 +40,12 @@ import {
   type XgPlayerInstance,
 } from "@/features/room/player/xgPlayer";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import {
+  createNativeFullscreenSession,
+  restoreNativePlayerMaximizedState,
+  setNativePlayerFullscreen,
+  toggleNativePlayerFullscreen,
+} from "@/shared/nativePlayerFullscreen";
 import { cn } from "@/lib/utils";
 import type { IptvChannel } from "./types";
 
@@ -127,6 +133,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const previousVolumeRef = useRef(80);
   const retryAttemptRef = useRef(0);
   const autoReconnectRef = useRef<(message: string) => void>(() => {});
+  const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
   const [reconnectToken, setReconnectToken] = useState(0);
   const [status, setStatus] = useState<IptvPlaybackStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -232,6 +239,12 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         const syncFullscreen = async () => {
           try {
             const active = await appWindow.isFullscreen();
+            if (!active) {
+              await restoreNativePlayerMaximizedState(
+                appWindow,
+                nativeFullscreenSessionRef.current,
+              );
+            }
             if (!disposed) setFullscreen(active);
           } catch {
             // The native window can be mid-teardown during route navigation.
@@ -341,8 +354,10 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     if (isTauriDesktop()) {
       try {
         const appWindow = getCurrentWindow();
-        const next = !(await appWindow.isFullscreen());
-        await appWindow.setFullscreen(next);
+        const next = await toggleNativePlayerFullscreen(
+          appWindow,
+          nativeFullscreenSessionRef.current,
+        );
         setFullscreen(next);
         setFullscreenError(null);
       } catch (cause) {
@@ -366,7 +381,9 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
       void (async () => {
         try {
           const appWindow = getCurrentWindow();
-          if (await appWindow.isFullscreen()) await appWindow.setFullscreen(false);
+          if (await appWindow.isFullscreen()) {
+            await setNativePlayerFullscreen(appWindow, false, nativeFullscreenSessionRef.current);
+          }
           setFullscreen(false);
         } catch {
           // The platform shortcut can still leave fullscreen on its own.

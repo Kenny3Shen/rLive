@@ -7,6 +7,12 @@ import type { PlayerEvent, PlayerUiMode, StreamProxyTelemetry } from "@/shared/t
 import type { AppError } from "@/shared/types/error";
 import { playbackProtocol, playbackSourceId } from "@/lib/playUrl";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  createNativeFullscreenSession,
+  restoreNativePlayerMaximizedState,
+  setNativePlayerFullscreen,
+  toggleNativePlayerFullscreen,
+} from "@/shared/nativePlayerFullscreen";
 import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
@@ -509,6 +515,7 @@ export function useWebPlayer(opts: {
   const softSwitchSequenceRef = useRef(0);
   const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
   const qualityRef = useRef<string | null>(quality);
+  const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
@@ -1395,6 +1402,12 @@ export function useWebPlayer(opts: {
         const sync = async () => {
           try {
             const fullscreen = await appWindow.isFullscreen();
+            if (!fullscreen) {
+              await restoreNativePlayerMaximizedState(
+                appWindow,
+                nativeFullscreenSessionRef.current,
+              );
+            }
             if (!disposed) setMode(fullscreen ? "fullscreen" : "windowed");
           } catch {
             /* The window may be mid-teardown during a route change. */
@@ -1470,8 +1483,10 @@ export function useWebPlayer(opts: {
     if (isTauriDesktop()) {
       try {
         const appWindow = getCurrentWindow();
-        const next = !(await appWindow.isFullscreen());
-        await appWindow.setFullscreen(next);
+        const next = await toggleNativePlayerFullscreen(
+          appWindow,
+          nativeFullscreenSessionRef.current,
+        );
         setMode(next ? "fullscreen" : "windowed");
         setFullscreenError(null);
       } catch (e) {
@@ -1514,7 +1529,7 @@ export function useWebPlayer(opts: {
           try {
             const appWindow = getCurrentWindow();
             if (await appWindow.isFullscreen()) {
-              await appWindow.setFullscreen(false);
+              await setNativePlayerFullscreen(appWindow, false, nativeFullscreenSessionRef.current);
               setMode("windowed");
             }
           } catch {
