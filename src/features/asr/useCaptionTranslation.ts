@@ -70,31 +70,36 @@ export function useCaptionTranslation(options: {
         const job = pendingJobsRef.current.shift();
         if (!job || job.epoch !== epochRef.current) continue;
 
-        for (const segment of job.segments) {
-          try {
-            const text = await captionTranslationClient.translate(segment.text, job.from, job.to);
-            if (job.epoch !== epochRef.current) break;
+        try {
+          const translatedSegments = await captionTranslationClient.translateBatch(
+            job.segments.map((segment) => segment.text),
+            job.from,
+            job.to,
+          );
+          if (job.epoch !== epochRef.current) continue;
 
-            const remainingMs = job.expiresAt - Date.now();
-            if (remainingMs <= 0) continue;
+          const remainingMs = job.expiresAt - Date.now();
+          if (remainingMs <= 0) continue;
+          for (const [index, segment] of job.segments.entries()) {
+            const text = translatedSegments[index];
+            if (!text) continue;
             setTranslatedCaption((current) =>
               appendAsrCaptionLine(current, formatAsrCaptionSegment({ ...segment, text })),
             );
-            setTranslationNotice(null);
-            clearCaptionTimer();
-            captionTimerRef.current = window.setTimeout(() => {
-              setTranslatedCaption(null);
-              captionTimerRef.current = null;
-            }, remainingMs);
-          } catch (error) {
-            if (job.epoch !== epochRef.current) break;
-            const failure = describeCaptionTranslationFailure(error);
-            setTranslationNotice(failure.message);
-            if (failure.kind === "rate_limited") {
-              rateLimitedRef.current = true;
-              pendingJobsRef.current = [];
-            }
-            break;
+          }
+          setTranslationNotice(null);
+          clearCaptionTimer();
+          captionTimerRef.current = window.setTimeout(() => {
+            setTranslatedCaption(null);
+            captionTimerRef.current = null;
+          }, remainingMs);
+        } catch (error) {
+          if (job.epoch !== epochRef.current) continue;
+          const failure = describeCaptionTranslationFailure(error);
+          setTranslationNotice(failure.message);
+          if (failure.kind === "rate_limited") {
+            rateLimitedRef.current = true;
+            pendingJobsRef.current = [];
           }
         }
       }
@@ -110,7 +115,7 @@ export function useCaptionTranslation(options: {
       if (
         !options.active ||
         !options.enabled ||
-        options.from === options.to ||
+        (options.from === options.to && options.from !== "auto") ||
         segments.length === 0 ||
         rateLimitedRef.current
       ) {

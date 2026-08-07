@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -7,6 +7,8 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import type { FollowUser, LiveRoomDetail, LiveRoomItem } from "@/shared/types/live";
 import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
+import { FollowGroupPickerDialog } from "@/features/follow/FollowGroupPickerDialog";
+import { tagIdsForFollowGroup } from "@/features/follow/followGroups";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,6 +31,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const queryClient = useQueryClient();
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
   const normalizedCover = normalizeImageUrl(room.cover);
+  const [pendingFollowUser, setPendingFollowUser] = useState<FollowUser | null>(null);
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
@@ -53,7 +56,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   }
 
   const followMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (groupId: string | null) => {
       const [detail, follows] = await Promise.all([
         getRoomDetail(),
         followsQuery.data
@@ -69,11 +72,19 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
       );
 
       if (existing) {
+        if (groupId != null) {
+          await invokeCmd("follow_set_tags", {
+            siteId: detail.site_id,
+            roomId: detail.room_id,
+            tagIds: tagIdsForFollowGroup(groupId),
+          });
+          return { action: "followed" as const };
+        }
         await invokeCmd("follow_remove", {
           siteId: detail.site_id,
           roomId: detail.room_id,
         });
-        return false;
+        return { action: "unfollowed" as const };
       }
 
       const user: FollowUser = {
@@ -81,17 +92,24 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         room_id: detail.room_id,
         user_name: detail.user_name,
         face: detail.user_avatar,
-        tag_ids: [],
+        tag_ids: groupId == null ? [] : tagIdsForFollowGroup(groupId),
         live_status: detail.status,
         live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
         updated_at: Date.now(),
       };
+      if (groupId == null) return { action: "choose-group" as const, user };
+
       await invokeCmd("follow_add", { user });
-      return true;
+      return { action: "followed" as const };
     },
-    onSuccess: (followed) => {
+    onSuccess: (result) => {
+      if (result.action === "choose-group") {
+        setPendingFollowUser(result.user);
+        return;
+      }
       void queryClient.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
-      notify.success(followed ? "已关注主播" : "已取消关注");
+      if (result.action === "followed") setPendingFollowUser(null);
+      notify.success(result.action === "followed" ? "已关注主播" : "已取消关注");
     },
     onError: () => {
       notify.error("关注操作失败", "请检查网络后重试。");
@@ -200,7 +218,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         <ContextMenuGroup>
           <ContextMenuItem
             disabled={followMutation.isPending || followsQuery.isLoading}
-            onClick={() => followMutation.mutate()}
+            onClick={() => followMutation.mutate(null)}
           >
             {isFollowed ? <StarOff aria-hidden /> : <Star aria-hidden />}
             {isFollowed ? "取消关注" : "关注主播"}
@@ -211,6 +229,16 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           </ContextMenuItem>
         </ContextMenuGroup>
       </ContextMenuContent>
+
+      <FollowGroupPickerDialog
+        open={pendingFollowUser != null}
+        subjectName={pendingFollowUser?.user_name ?? room.user_name}
+        pending={followMutation.isPending && followMutation.variables != null}
+        onOpenChange={(open) => {
+          if (!open) setPendingFollowUser(null);
+        }}
+        onConfirm={(groupId) => followMutation.mutateAsync(groupId).then(() => undefined)}
+      />
     </ContextMenu>
   );
 });

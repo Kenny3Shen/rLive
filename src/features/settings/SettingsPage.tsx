@@ -1538,7 +1538,7 @@ export function SettingsPage() {
                       <FieldContent>
                         <FieldTitle id="soft-switch-title">软切换</FieldTitle>
                         <FieldDescription>
-                          同协议换源时保留缓冲，失败后自动重建播放器。
+                          HLS、MPEG-TS 同协议换源时保留缓冲；FLV 为稳定性始终完整重建。
                         </FieldDescription>
                       </FieldContent>
                       <Switch

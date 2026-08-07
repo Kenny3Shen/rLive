@@ -363,12 +363,24 @@ export function PlayerPane({
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
   const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrSpeakerDiarizationEnabled = useSettingsStore(
+    (state) => state.asrSpeakerDiarizationEnabled,
+  );
   const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
   const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
   const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
+  const playbackStallAutoSwitchEnabled = useSettingsStore(
+    (state) => state.playbackStallAutoSwitchEnabled,
+  );
   const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
   const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
   const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
+  const setAsrSpeakerDiarizationEnabled = useSettingsStore(
+    (state) => state.setAsrSpeakerDiarizationEnabled,
+  );
+  const setPlaybackStallAutoSwitchEnabled = useSettingsStore(
+    (state) => state.setPlaybackStallAutoSwitchEnabled,
+  );
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
@@ -1333,7 +1345,10 @@ export function PlayerPane({
                       <span className="flex shrink-0 flex-col gap-0.5 whitespace-pre-line break-words">
                         {asr.caption ? <span>{asr.caption}</span> : null}
                         {asr.translatedCaption ? (
-                          <span lang={asrTranslationTo} className="text-white/82">
+                          <span
+                            lang={asrTranslationTo === "auto" ? undefined : asrTranslationTo}
+                            className="text-white/82"
+                          >
                             {asr.translatedCaption}
                           </span>
                         ) : null}
@@ -1437,11 +1452,14 @@ export function PlayerPane({
                 asrTranslationFrom={asrTranslationFrom}
                 asrTranslationTo={asrTranslationTo}
                 asrTranslationBusy={asr.translationPending}
+                asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+                asrSettingsPending={asrPending}
                 qualities={qualities}
                 qualityIndex={qualityIndex}
                 lines={lines}
                 lineDiagnostics={lineDiagnostics}
                 lineIndex={lineIndex}
+                stallAutoSwitchEnabled={playbackStallAutoSwitchEnabled}
                 fullscreen={player.mode === "fullscreen"}
                 // Capability is device-level and stable; keep the control
                 // mounted so reconnect loops (loading toggling) cannot make
@@ -1488,8 +1506,10 @@ export function PlayerPane({
                 onAsrTranslationEnabledChange={setAsrTranslationEnabled}
                 onAsrTranslationFromChange={setAsrTranslationFrom}
                 onAsrTranslationToChange={setAsrTranslationTo}
+                onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
                 onQualityChange={onQualityChange ?? (() => {})}
                 onLineChange={onLineChange ?? (() => {})}
+                onStallAutoSwitchEnabledChange={setPlaybackStallAutoSwitchEnabled}
                 onTogglePictureInPicture={handleTogglePictureInPicture}
                 onToggleFullscreen={() => void player.toggleFullscreen()}
               />

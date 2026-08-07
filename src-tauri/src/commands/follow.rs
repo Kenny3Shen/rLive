@@ -133,14 +133,21 @@ pub fn tag_list(state: State<'_, AppState>) -> AppResult<Vec<TagRecord>> {
 }
 
 #[tauri::command]
-pub fn tag_upsert(state: State<'_, AppState>, name: String) -> AppResult<TagRecord> {
-    let id = uuid::Uuid::new_v4().to_string();
+pub fn tag_upsert(
+    state: State<'_, AppState>,
+    name: String,
+    id: Option<String>,
+) -> AppResult<TagRecord> {
+    let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let tag = TagRecord {
         id,
         name: name.trim().to_string(),
     };
     if tag.name.is_empty() {
         return Err(AppError::new("invalid_tag", "tag name is empty"));
+    }
+    if tag.name.chars().count() > 32 {
+        return Err(AppError::new("invalid_tag", "tag name is too long"));
     }
     let conn = lock_db(&state)?;
     follow::upsert_tag(&conn, tag.clone())?;
@@ -149,11 +156,8 @@ pub fn tag_upsert(state: State<'_, AppState>, name: String) -> AppResult<TagReco
 
 #[tauri::command]
 pub fn tag_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    let conn = lock_db(&state)?;
-    // tags table has no dedicated remove helper — execute here
-    conn.execute("DELETE FROM tags WHERE id = ?1", rusqlite::params![id])
-        .map_err(crate::db::schema::map_db_err)?;
-    Ok(())
+    let mut conn = lock_db(&state)?;
+    follow::remove_tag(&mut conn, &id)
 }
 
 #[tauri::command]

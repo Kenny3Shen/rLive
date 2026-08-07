@@ -7,7 +7,7 @@ import {
   shouldAdoptProbeWinner,
   type PlaybackSourceProbe,
 } from "../src/features/room/playback/sourceSelection";
-import { lineLabel, playbackProtocol, playbackSourceId } from "../src/lib/playUrl";
+import { lineLabel, lineName, playbackProtocol, playbackSourceId } from "../src/lib/playUrl";
 
 const sources: PlayUrl[] = [
   {
@@ -56,6 +56,10 @@ function probe(
 describe("structured playback sources", () => {
   test("explicit protocol and safe label win over URL guessing", () => {
     expect(playbackProtocol(sources[1])).toBe("hls");
+    expect(lineName(sources[1], 1)).toBe("备用线路");
+    expect(lineName("https://example.test/live.flv", 0)).toBe("线路1");
+    expect(lineName({ ...sources[1], label: "Twitch HLS" }, 1)).toBe("Twitch");
+    expect(lineName({ ...sources[0], label: "主线路（FLV）" }, 0)).toBe("主线路");
     expect(lineLabel(sources[1], 1)).toBe("备用线路（HLS）");
     expect(lineLabel("https://example.test/live.flv", 0)).toBe("线路1（FLV）");
     expect(playbackSourceId({ url: "x" }, 2)).toBe("source:3");

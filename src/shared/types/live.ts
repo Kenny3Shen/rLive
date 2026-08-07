@@ -144,6 +144,7 @@ export type DanmakuFavoriteItem = {
 };
 
 export type CaptionTranslationLanguage =
+  | "auto"
   | "ar"
   | "de"
   | "en"
@@ -166,7 +167,7 @@ export type CaptionTranslationLanguage =
   | "zh-CN"
   | "zh-TW";
 
-export type CaptionTranslationSourceLanguage = "auto" | CaptionTranslationLanguage;
+export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
 export type AppSettings = {
   theme: "system" | "light" | "dark";
@@ -193,6 +194,8 @@ export type AppSettings = {
   playback_smart_line_selection?: boolean;
   /** Same-protocol xgplayer switchURL path; hard reload remains the fallback. */
   playback_soft_switch_enabled?: boolean;
+  /** Switch to another live source after sustained playback stalling. */
+  playback_stall_auto_switch_enabled?: boolean;
   /** Device-local permission for user-operated single-message senders. */
   danmaku_send_enabled?: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */
@@ -215,7 +218,7 @@ export type AppSettings = {
   asr_translation_enabled?: boolean;
   /** Google Translate source language, or auto detection. */
   asr_translation_from?: CaptionTranslationSourceLanguage;
-  /** Google Translate target language. */
+  /** Google Translate target language, or automatic selection. */
   asr_translation_to?: CaptionTranslationLanguage;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;

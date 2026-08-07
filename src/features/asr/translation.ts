@@ -1,20 +1,34 @@
-import { translate } from "@vitalets/google-translate-api";
+import translate from "google-translate-api-x";
+import fetchThroughTauri from "@/shared/api/tauriFetch";
 import type {
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
 } from "@/shared/types/live";
 
+type TranslateInput = string | string[];
+type TranslateResult = { text: string } | { text: string }[];
+
 type TranslateImplementation = (
-  text: string,
+  text: TranslateInput,
   options: {
     from: CaptionTranslationSourceLanguage;
     to: CaptionTranslationLanguage;
-    fetchOptions?: { signal: AbortSignal };
+    signal: AbortSignal;
   },
-) => Promise<{ text: string }>;
+) => Promise<TranslateResult>;
 
-const googleTranslate: TranslateImplementation = (text, options) =>
-  translate(text, options as never);
+const googleTranslate: TranslateImplementation = async (text, options) => {
+  const result = await translate(text, {
+    from: options.from,
+    to: options.to,
+    forceBatch: true,
+    requestFunction: fetchThroughTauri,
+    requestOptions: { signal: options.signal },
+  });
+  return Array.isArray(result)
+    ? result.map((translation) => ({ text: translation.text }))
+    : { text: result.text };
+};
 
 export type CaptionTranslationFailureKind = "rate_limited" | "timeout" | "unavailable";
 
@@ -23,14 +37,30 @@ export type CaptionTranslationFailure = {
   message: string;
 };
 
+function translationErrorStatus(error: unknown): unknown {
+  const pending = [error];
+  const visited = new Set<unknown>();
+  while (pending.length > 0 && visited.size < 8) {
+    const current = pending.shift();
+    if (visited.has(current)) continue;
+    visited.add(current);
+    if (typeof current !== "object" || current === null) continue;
+    const record = current as Record<string, unknown>;
+    const status = record.status ?? record.statusCode;
+    if (status !== undefined) return status;
+    pending.push(record.cause, record.response);
+  }
+  return undefined;
+}
+
 export function describeCaptionTranslationFailure(error: unknown): CaptionTranslationFailure {
   const record =
     typeof error === "object" && error !== null ? (error as Record<string, unknown>) : null;
-  const status = record?.status ?? record?.statusCode;
+  const status = translationErrorStatus(error);
   if (status === 429 || record?.name === "TooManyRequestsError") {
     return {
       kind: "rate_limited",
-      message: "翻译请求过于频繁，已保留原字幕。关闭后重新开启可重试。",
+      message: "Google 翻译请求受限，已保留原字幕。稍后重试或更换应用代理。",
     };
   }
   if (record?.name === "CaptionTranslationTimeoutError") {
@@ -60,29 +90,64 @@ export class CaptionTranslationClient {
     from: CaptionTranslationSourceLanguage,
     to: CaptionTranslationLanguage,
   ): Promise<string> {
-    const text = input.trim();
-    if (!text || from === to) return text;
+    return (await this.translateBatch([input], from, to))[0] ?? "";
+  }
 
-    const key = `${from}\u0000${to}\u0000${text}`;
-    const cached = this.cache.get(key);
-    if (cached !== undefined) {
-      this.cache.delete(key);
-      this.cache.set(key, cached);
-      return cached;
+  async translateBatch(
+    inputs: readonly string[],
+    from: CaptionTranslationSourceLanguage,
+    to: CaptionTranslationLanguage,
+  ): Promise<string[]> {
+    const texts = inputs.map((input) => input.trim());
+    if (from === to && from !== "auto") return texts;
+
+    const translated = texts.map(() => "");
+    const missing = new Map<string, { text: string; indexes: number[] }>();
+    for (const [index, text] of texts.entries()) {
+      if (!text) {
+        translated[index] = "";
+        continue;
+      }
+
+      const key = `${from}\u0000${to}\u0000${text}`;
+      const cached = this.cache.get(key);
+      if (cached !== undefined) {
+        this.cache.delete(key);
+        this.cache.set(key, cached);
+        translated[index] = cached;
+        continue;
+      }
+
+      const entry = missing.get(key);
+      if (entry) entry.indexes.push(index);
+      else missing.set(key, { text, indexes: [index] });
     }
+
+    if (missing.size === 0) return translated;
+
+    const entries = [...missing.entries()];
+    const payload = entries.map(([, entry]) => entry.text);
+    const input: TranslateInput = payload.length === 1 ? payload[0] : payload;
 
     const controller = new AbortController();
     const timeout = globalThis.setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const result = await this.translateImplementation(text, {
+      const result = await this.translateImplementation(input, {
         from,
         to,
-        fetchOptions: { signal: controller.signal },
+        signal: controller.signal,
       });
-      const translated = result.text.trim();
-      if (!translated) throw new Error("Google Translate returned an empty caption");
+      const results = Array.isArray(result) ? result : [result];
+      if (results.length !== entries.length) {
+        throw new Error("Google Translate returned an incomplete caption batch");
+      }
 
-      this.cache.set(key, translated);
+      for (const [index, [key, entry]] of entries.entries()) {
+        const resultText = results[index]?.text.trim();
+        if (!resultText) throw new Error("Google Translate returned an empty caption");
+        this.cache.set(key, resultText);
+        for (const outputIndex of entry.indexes) translated[outputIndex] = resultText;
+      }
       while (this.cache.size > this.cacheLimit) {
         const oldest = this.cache.keys().next().value;
         if (oldest === undefined) break;

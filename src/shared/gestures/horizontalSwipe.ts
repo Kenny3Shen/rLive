@@ -106,7 +106,8 @@ export function horizontalSwipeCommitOffset(
 }
 
 /**
- * Continuous horizontal gestures (sliders, text fields) own the pointer.
+ * Continuous horizontal gestures (sliders, text fields) and explicit drag
+ * handles own the pointer.
  * Ordinary buttons and list rows stay swipeable; a recognised swipe suppresses
  * the synthetic click that Android WebView may still emit.
  */
@@ -116,7 +117,7 @@ export function isHorizontalSwipeIgnoredTarget(target: EventTarget | null): bool
     target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   return Boolean(
     element?.closest(
-      'input, textarea, select, [contenteditable="true"], [role="slider"], [role="combobox"], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
+      'input, textarea, select, [contenteditable="true"], [role="slider"], [role="combobox"], [data-dnd-handle], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
     ),
   );
 }
