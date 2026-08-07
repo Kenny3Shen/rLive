@@ -6,6 +6,8 @@ import {
   getXgHlsCore,
   getXgMpegtsCore,
   isXgPlayerDecodeError,
+  switchXgPlaybackSource,
+  xgPlaybackSwitchOptions,
   xgPlayerErrorMessage,
   type XgPlayerInstance,
   type XgPlayerModules,
@@ -206,18 +208,73 @@ describe("xgplayer transport selection", () => {
     expect(requestedPlugin).toBe("HlsJsPlugin");
   });
 
-  test("reads the mpegts.js core from its plugin wrapper", () => {
-    const core = { on: () => {} };
+  test("reattaches mpegts.js subscriptions after a soft URL switch", () => {
+    const firstHandlers = new Map<string, (...args: unknown[]) => void>();
+    const secondHandlers = new Map<string, (...args: unknown[]) => void>();
+    const detached: string[] = [];
+    const firstCore = {
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        firstHandlers.set(event, handler);
+      },
+      off: (event: string) => detached.push(event),
+    };
+    const secondCore = {
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        secondHandlers.set(event, handler);
+      },
+    };
+    const playerHandlers = new Map<string, (...args: unknown[]) => void>();
+    const plugin: { mpegts: typeof firstCore | typeof secondCore } = { mpegts: firstCore };
     let requestedPlugin = "";
     const player = {
       getPlugin: (condition: string | Function) => {
         requestedPlugin = String(condition);
-        return { mpegts: core };
+        return plugin;
+      },
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        playerHandlers.set(event, handler);
       },
     } as XgPlayerInstance;
 
-    expect(getXgMpegtsCore(player)).toBe(core);
+    const core = getXgMpegtsCore(player);
+    core?.on("loading_complete", () => {});
+    expect(firstHandlers.has("loading_complete")).toBe(true);
+    plugin.mpegts = secondCore;
+    playerHandlers.get("urlchange")?.();
+
+    expect(detached).toEqual(["loading_complete"]);
+    expect(secondHandlers.has("loading_complete")).toBe(true);
     expect(requestedPlugin).toBe("MpegtsPlugin");
+  });
+
+  test("keeps repeated FLV switches on the mpegts player without seamless timestamps", async () => {
+    const calls: Array<{ url: string; options: unknown }> = [];
+    const player = {
+      switchURL: async (url: string | object, options?: unknown) => {
+        calls.push({ url: String(url), options });
+      },
+    } as XgPlayerInstance;
+
+    for (let index = 0; index < 25; index += 1) {
+      await switchXgPlaybackSource(player, `https://cdn.example/line-${index}.flv`, "flv");
+    }
+
+    expect(calls).toHaveLength(25);
+    expect(calls.every(({ options }) => JSON.stringify(options) === '{"seamless":false}')).toBe(
+      true,
+    );
+    expect(xgPlaybackSwitchOptions("hls")).toEqual({ seamless: true });
+    expect(xgPlaybackSwitchOptions("mpegts")).toEqual({ seamless: true });
+  });
+
+  test("times out a soft switch that never reaches canplay", async () => {
+    const player = {
+      switchURL: () => new Promise(() => {}),
+    } as XgPlayerInstance;
+
+    await expect(
+      switchXgPlaybackSource(player, "https://cdn.example/stuck.flv", "flv", 1),
+    ).rejects.toThrow("软切换等待媒体就绪超时");
   });
 
   test("defers mpegts.js subscriptions until the core is attached", async () => {

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
 import {
+  BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS,
+  BILIBILI_HLS_STALL_SWITCH_DELAY_MS,
   canSoftSwitchPlaybackSource,
   hasStartedPlayback,
   hlsResponseStatus,
@@ -9,9 +11,11 @@ import {
   liveFlvPlaybackOptions,
   nextHlsFatalRecoveryAction,
   PLAYBACK_STALL_SWITCH_DELAY_MS,
+  playbackStallSwitchDelayMs,
   playUrlKey,
   requestPlayerAutoplay,
   shouldUsePlaybackSoftSwitch,
+  shouldEscalateNonTwitchHlsFatal,
   shouldReportPlaybackStall,
   webPlaybackKind,
 } from "../src/features/room/player/useWebPlayer";
@@ -123,11 +127,12 @@ describe("player session queue", () => {
     ).toBe(false);
   });
 
-  test("hard-switches FLV lines on every platform while retaining safe protocol switching", () => {
-    expect(shouldUsePlaybackSoftSwitch(true, "flv")).toBe(false);
+  test("soft-switches all streaming protocols while excluding native media", () => {
+    expect(shouldUsePlaybackSoftSwitch(true, "flv")).toBe(true);
     expect(shouldUsePlaybackSoftSwitch(true, "hls")).toBe(true);
     expect(shouldUsePlaybackSoftSwitch(true, "mpegts")).toBe(true);
     expect(shouldUsePlaybackSoftSwitch(false, "hls")).toBe(false);
+    expect(shouldUsePlaybackSoftSwitch(true, "native")).toBe(false);
     expect(shouldUsePlaybackSoftSwitch(true, null)).toBe(false);
   });
 
@@ -168,18 +173,48 @@ describe("player session queue", () => {
 
   test("reports only sustained stalls without media progress", () => {
     expect(PLAYBACK_STALL_SWITCH_DELAY_MS).toBe(8_000);
+    expect(playbackStallSwitchDelayMs("bilibili", "hls")).toBe(BILIBILI_HLS_STALL_SWITCH_DELAY_MS);
+    expect(playbackStallSwitchDelayMs("bilibili", "flv")).toBe(PLAYBACK_STALL_SWITCH_DELAY_MS);
+    expect(shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20 }, 20)).toBe(
+      true,
+    );
+    expect(shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20.3 }, 20)).toBe(
+      false,
+    );
+    expect(shouldReportPlaybackStall({ paused: true, ended: false, currentTime: 20 }, 20)).toBe(
+      false,
+    );
+    expect(shouldReportPlaybackStall({ paused: false, ended: true, currentTime: 20 }, 20)).toBe(
+      false,
+    );
+  });
+
+  test("lets Bilibili hls.js recover in place before rebuilding playback", () => {
+    const firstFailureAt = 1_000;
     expect(
-      shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20 }, 20),
+      shouldEscalateNonTwitchHlsFatal({
+        siteId: "bilibili",
+        failureCount: 2,
+        firstFailureAt,
+        now: firstFailureAt + BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS - 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEscalateNonTwitchHlsFatal({
+        siteId: "bilibili",
+        failureCount: 4,
+        firstFailureAt,
+        now: firstFailureAt + BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS,
+      }),
     ).toBe(true);
     expect(
-      shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20.3 }, 20),
-    ).toBe(false);
-    expect(
-      shouldReportPlaybackStall({ paused: true, ended: false, currentTime: 20 }, 20),
-    ).toBe(false);
-    expect(
-      shouldReportPlaybackStall({ paused: false, ended: true, currentTime: 20 }, 20),
-    ).toBe(false);
+      shouldEscalateNonTwitchHlsFatal({
+        siteId: "huya",
+        failureCount: 2,
+        firstFailureAt,
+        now: firstFailureAt,
+      }),
+    ).toBe(true);
   });
 
   test("renews a Twitch HLS URL after one exhausted in-place recovery", () => {

@@ -8,7 +8,7 @@ export type XgPlayerInstance = {
   pause: () => void;
   switchURL?: (
     url: string | object,
-    options?: { seamless?: boolean; startTime?: number; bitrate?: number },
+    options?: { seamless?: boolean; currentTime?: number; bitrate?: number },
   ) => Promise<unknown> | null | void;
   destroy: () => void;
   on: (event: string, handler: (...args: unknown[]) => void) => void;
@@ -124,11 +124,10 @@ export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {
     mpegts?: XgMpegtsCore | null;
   } | null;
   if (!plugin) return null;
-  if (plugin.mpegts) return plugin.mpegts;
 
-  // Player.start() invokes beforePlayerInit in a microtask, so the plugin can
-  // exist briefly before its mpegts.js instance. Defer subscriptions and also
-  // reattach them when switchURL replaces the underlying core.
+  // The plugin destroys and replaces its mpegts.js instance on every URL
+  // change. Keep subscriptions attached to that current instance even when
+  // the first core was already present when this helper was called.
   return {
     on: (event, handler) => {
       let attachedCore: XgMpegtsCore | null = null;
@@ -139,11 +138,46 @@ export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {
         core.on(event, handler);
         attachedCore = core;
       };
+      attach();
       void Promise.resolve().then(attach);
       player.on("ready", attach);
       player.on("urlchange", attach);
     },
   };
+}
+
+export function xgPlaybackSwitchOptions(kind: XgPlaybackKind): { seamless: boolean } {
+  // xgplayer-mpegts.js recreates its own transmuxer/MSE state on URL_CHANGE.
+  // Keep the outer player and media element, but do not request timestamp-
+  // seamless behavior across independent FLV CDNs.
+  return { seamless: kind !== "flv" };
+}
+
+export const XG_PLAYBACK_SWITCH_TIMEOUT_MS = 12_000;
+
+export async function switchXgPlaybackSource(
+  player: XgPlayerInstance,
+  url: string,
+  kind: XgPlaybackKind,
+  timeoutMs = XG_PLAYBACK_SWITCH_TIMEOUT_MS,
+): Promise<void> {
+  if (typeof player.switchURL !== "function") {
+    throw new Error("当前播放器不支持软切换");
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(player.switchURL(url, xgPlaybackSwitchOptions(kind))),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("软切换等待媒体就绪超时")),
+          Math.max(0, timeoutMs),
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 export function getXgHlsCore(player: XgPlayerInstance): XgHlsCore | null {

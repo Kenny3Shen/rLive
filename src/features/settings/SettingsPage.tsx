@@ -147,7 +147,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
-    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 智能线路 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
+    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址",
   account:
@@ -1221,8 +1221,6 @@ export function SettingsPage() {
   const setProxy = useSettingsStore((s) => s.setProxy);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
   const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
-  const playbackSmartLineSelection = useSettingsStore((s) => s.playbackSmartLineSelection);
-  const setPlaybackSmartLineSelection = useSettingsStore((s) => s.setPlaybackSmartLineSelection);
   const playbackSoftSwitchEnabled = useSettingsStore((s) => s.playbackSoftSwitchEnabled);
   const setPlaybackSoftSwitchEnabled = useSettingsStore((s) => s.setPlaybackSoftSwitchEnabled);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
@@ -1502,7 +1500,7 @@ export function SettingsPage() {
               <TabsContent value="playback" className="mt-0">
                 <SettingsContent title="播放">
                   <AppearanceSettings />
-                  <Section title="播放质量" keywords="清晰度 智能线路 软切换 线路">
+                  <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
                     <Field orientation="responsive">
                       <FieldTitle id="quality-label">优先清晰度</FieldTitle>
                       <ToggleGroup
@@ -1525,20 +1523,9 @@ export function SettingsPage() {
                     </Field>
                     <Field orientation="responsive">
                       <FieldContent>
-                        <FieldTitle id="smart-line-selection-title">智能线路选择</FieldTitle>
-                        <FieldDescription>自动选择最快可用线路。</FieldDescription>
-                      </FieldContent>
-                      <Switch
-                        aria-labelledby="smart-line-selection-title"
-                        checked={playbackSmartLineSelection}
-                        onCheckedChange={setPlaybackSmartLineSelection}
-                      />
-                    </Field>
-                    <Field orientation="responsive">
-                      <FieldContent>
                         <FieldTitle id="soft-switch-title">软切换</FieldTitle>
                         <FieldDescription>
-                          HLS、MPEG-TS 同协议换源时保留缓冲；FLV 为稳定性始终完整重建。
+                          同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。
                         </FieldDescription>
                       </FieldContent>
                       <Switch
