@@ -18,6 +18,7 @@ import {
 } from "./danmakuEngine";
 import {
   canvasFrameIsDue,
+  danmakuCanvasPixelRatio,
   MOBILE_DANMAKU_FRAME_INTERVAL_MS,
   nextCanvasFrameDeadline,
 } from "./framePacing";
@@ -52,10 +53,6 @@ const MAX_RASTER_CACHE_PIXELS = 8_000_000;
 const MAX_RASTER_CACHE_ITEMS = 96;
 const MAX_IMAGE_CACHE_ITEMS = 128;
 const MAX_IMAGE_NATURAL_PIXELS = 1_048_576;
-// Rendering at a native 2×/3× backing scale makes every full-canvas clear and
-// redraw substantially more expensive. Text remains crisp at this cap while
-// avoiding the quadratic pixel cost on high-DPI displays.
-const MAX_CANVAS_PIXEL_RATIO = 1.5;
 const SELF_DANMAKU_BORDER_COLOR = "rgba(255,255,255,0.82)";
 const SELF_DANMAKU_BORDER_WIDTH = 1.5;
 
@@ -391,14 +388,18 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const mobileClient = isMobileClient();
+    const ctx = canvas.getContext("2d", {
+      alpha: true,
+      desynchronized: mobileClient,
+    });
     if (!ctx) return;
 
     let raf: number | null = null;
     let last = performance.now();
     let lastFrameAt = last;
     let nextFrameDeadline = 0;
-    const frameIntervalMs = isMobileClient() ? MOBILE_DANMAKU_FRAME_INTERVAL_MS : 0;
+    const frameIntervalMs = mobileClient ? MOBILE_DANMAKU_FRAME_INTERVAL_MS : 0;
     let ro: ResizeObserver | null = null;
     let resizeRaf: number | null = null;
     let stopped = false;
@@ -591,10 +592,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       if (stopped) return;
       const parent = canvas.parentElement;
       if (!parent) return;
-      const nextPixelRatio = Math.min(
-        Math.max(window.devicePixelRatio || 1, 1),
-        MAX_CANVAS_PIXEL_RATIO,
-      );
+      const nextPixelRatio = danmakuCanvasPixelRatio(window.devicePixelRatio, mobileClient);
       const nextWidth = parent.clientWidth;
       const nextHeight = parent.clientHeight;
       const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
