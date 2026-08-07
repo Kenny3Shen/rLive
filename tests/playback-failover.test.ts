@@ -4,7 +4,6 @@ import { pickDefaultQualityIndex, parseQualityLevel } from "../src/features/room
 import {
   isDuplicatePlaybackFailure,
   matchingQualityIndex,
-  nextStallReplacementLineIndex,
   nextTwitchDecodeQualityIndex,
   playbackWasStable,
   playerRebuildRetryLimit,
@@ -110,24 +109,6 @@ describe("failover policy (Simple Live)", () => {
     const refreshed = [{ quality: "原画" }, { quality: "高清" }, { quality: "流畅" }];
     expect(matchingQualityIndex(refreshed, "高清", 0)).toBe(1);
     expect(matchingQualityIndex(refreshed, "已下线画质", 2)).toBe(2);
-  });
-
-  test("switches a sustained stall to the next ranked non-exhausted line", () => {
-    const input = {
-      enabled: true,
-      hasPlayed: true,
-      lineCount: 3,
-      currentIndex: 2,
-      rankedIndices: [2, 0, 1],
-      exhaustedIndices: new Set([2]),
-    };
-    expect(nextStallReplacementLineIndex(input)).toBe(0);
-    expect(nextStallReplacementLineIndex({ ...input, enabled: false })).toBeNull();
-    expect(nextStallReplacementLineIndex({ ...input, hasPlayed: false })).toBeNull();
-    expect(nextStallReplacementLineIndex({ ...input, lineCount: 1 })).toBeNull();
-    expect(
-      nextStallReplacementLineIndex({ ...input, exhaustedIndices: new Set([0, 1, 2]) }),
-    ).toBeNull();
   });
 });
 

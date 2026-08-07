@@ -194,7 +194,7 @@ export type AppSettings = {
   playback_smart_line_selection?: boolean;
   /** Same-protocol xgplayer switchURL path; hard reload remains the fallback. */
   playback_soft_switch_enabled?: boolean;
-  /** Switch to another live source after sustained playback stalling. */
+  /** Legacy compatibility field; sustained stalls no longer trigger automatic switching. */
   playback_stall_auto_switch_enabled?: boolean;
   /** Device-local permission for user-operated single-message senders. */
   danmaku_send_enabled?: boolean;

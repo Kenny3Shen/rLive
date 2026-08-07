@@ -5,8 +5,8 @@ import {
   Check,
   Headphones,
   Maximize2,
-  MessageCircle,
-  MessageCircleOff,
+  MessageSquareOff,
+  MessageSquareText,
   Minimize2,
   PanelRightClose,
   PanelRightOpen,
@@ -60,7 +60,7 @@ export function danmakuControlPresentation(osdOn: boolean | undefined) {
   return {
     enabled,
     label: enabled ? "关闭弹幕" : "开启弹幕",
-    icon: enabled ? "message-circle" : "message-circle-off",
+    icon: enabled ? "message-square-text" : "message-square-off",
   } as const;
 }
 
@@ -117,7 +117,6 @@ export type PlayerControlsProps = {
   qualityIndex?: number;
   lines?: PlayUrl[];
   lineIndex?: number;
-  stallAutoSwitchEnabled?: boolean;
   fullscreen?: boolean;
   pictureInPictureSupported?: boolean;
   pictureInPictureActive?: boolean;
@@ -160,7 +159,6 @@ export type PlayerControlsProps = {
   onAsrSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
-  onStallAutoSwitchEnabledChange?: (enabled: boolean) => void;
   onTogglePictureInPicture?: () => void;
   onToggleFullscreen: () => void;
 };
@@ -240,7 +238,6 @@ export function PlayerControls({
   qualityIndex = 0,
   lines = [],
   lineIndex = 0,
-  stallAutoSwitchEnabled = true,
   fullscreen = false,
   pictureInPictureSupported = false,
   pictureInPictureActive = false,
@@ -267,7 +264,6 @@ export function PlayerControls({
   onAsrSpeakerDiarizationEnabledChange,
   onQualityChange,
   onLineChange,
-  onStallAutoSwitchEnabledChange,
   onTogglePictureInPicture,
   onToggleFullscreen,
 }: PlayerControlsProps) {
@@ -354,9 +350,7 @@ export function PlayerControls({
   };
 
   const hasStreamSettings = qualities.length > 0 || lines.length > 0;
-  const stallAutoSwitchAvailable = Boolean(onStallAutoSwitchEnabledChange);
-  const streamSettingsDisabled =
-    disabled || (!stallAutoSwitchAvailable && qualities.length <= 1 && lines.length <= 1);
+  const streamSettingsDisabled = disabled || (qualities.length <= 1 && lines.length <= 1);
   const streamSettingsLabel = [
     qualities.length > 0 ? `清晰度 ${qualityLabel(qualityIndex)}` : null,
     lines.length > 0 && lines[lineIndex] ? `线路 ${lineName(lines[lineIndex], lineIndex)}` : null,
@@ -378,7 +372,7 @@ export function PlayerControls({
   } as const;
   const danmakuControl = danmakuControlPresentation(osdOn);
   const DanmakuControlIcon =
-    danmakuControl.icon === "message-circle" ? MessageCircle : MessageCircleOff;
+    danmakuControl.icon === "message-square-text" ? MessageSquareText : MessageSquareOff;
   const asrControl = asrControlPresentation(asrOn, asrBusy);
   const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
   const AudioOnlyControlIcon = audioOnlyControl.icon === "headphones" ? Headphones : VideoOff;
@@ -463,21 +457,6 @@ export function PlayerControls({
             );
           })}
         </div>
-      )}
-
-      {stallAutoSwitchAvailable && (
-        <>
-          <Separator className={cn("my-1 max-md:my-0.5", overlay && "bg-white/10")} />
-          <Field orientation="horizontal" className="px-2 py-1.5">
-            <FieldLabel htmlFor="player-stall-auto-switch">卡顿自动换线</FieldLabel>
-            <Switch
-              id="player-stall-auto-switch"
-              size="sm"
-              checked={stallAutoSwitchEnabled}
-              onCheckedChange={onStallAutoSwitchEnabledChange}
-            />
-          </Field>
-        </>
       )}
     </>
   );
@@ -839,11 +818,13 @@ export function PlayerControls({
             variant="ghost"
             className={overlayButtonClass}
             disabled={disabled}
+            data-slot="danmaku-toggle"
+            data-state={danmakuControl.enabled ? "on" : "off"}
             aria-pressed={danmakuControl.enabled}
             onClick={onToggleOsd}
             tooltip={!compact}
           >
-            <DanmakuControlIcon data-icon="inline-start" aria-hidden />
+            <DanmakuControlIcon aria-hidden />
           </ControlButton>
         )}
         {showSecondaryControls && asrVisible && onToggleAsr && (
