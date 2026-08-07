@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Ellipsis, Link2, Share2, UserRoundX } from "lucide-react";
@@ -70,6 +70,12 @@ export function RoomPage() {
         roomId,
       }),
   });
+  const refetchRoomDetail = detailQuery.refetch;
+  const refreshPlaybackDetail = useCallback(async () => {
+    const result = await refetchRoomDetail();
+    if (result.isError) throw result.error;
+    return result.data;
+  }, [refetchRoomDetail]);
 
   useEffect(() => {
     const detail = detailQuery.data;
@@ -107,6 +113,7 @@ export function RoomPage() {
     siteId,
     roomId,
     detail: detailQuery.data,
+    refreshDetail: refreshPlaybackDetail,
     enabled: !!detailQuery.data,
   });
 

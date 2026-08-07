@@ -6,9 +6,11 @@ import {
   hlsResponseStatus,
   isHlsStream,
   isTwitchCommercialBreak,
+  liveFlvPlaybackOptions,
   nextHlsFatalRecoveryAction,
   playUrlKey,
   requestPlayerAutoplay,
+  shouldUsePlaybackSoftSwitch,
   webPlaybackKind,
 } from "../src/features/room/player/useWebPlayer";
 
@@ -119,15 +121,41 @@ describe("player session queue", () => {
     ).toBe(false);
   });
 
-  test("routes Twitch HLS through hls.js without changing other HLS sites", () => {
+  test("hard-switches FLV lines on every platform while retaining safe protocol switching", () => {
+    expect(shouldUsePlaybackSoftSwitch(true, "flv")).toBe(false);
+    expect(shouldUsePlaybackSoftSwitch(true, "hls")).toBe(true);
+    expect(shouldUsePlaybackSoftSwitch(true, "mpegts")).toBe(true);
+    expect(shouldUsePlaybackSoftSwitch(false, "hls")).toBe(false);
+    expect(shouldUsePlaybackSoftSwitch(true, null)).toBe(false);
+  });
+
+  test("uses a jitter-tolerant FLV profile without dropping the tighter mobile budget", () => {
+    expect(liveFlvPlaybackOptions(false)).toMatchObject({
+      mediaDataSource: { type: "flv", isLive: true },
+      mpegtsConfig: {
+        liveBufferLatencyMinRemain: 1,
+        liveBufferLatencyMaxLatency: 5,
+        autoCleanupMaxBackwardDuration: 15,
+      },
+    });
+    expect(liveFlvPlaybackOptions(true)).toMatchObject({
+      mediaDataSource: { type: "flv", isLive: true },
+      mpegtsConfig: {
+        liveBufferLatencyMinRemain: 1.5,
+        liveBufferLatencyMaxLatency: 6,
+        autoCleanupMaxBackwardDuration: 20,
+      },
+    });
+  });
+
+  test("routes every HLS site through the same hls.js playback kind", () => {
     expect(isHlsStream("https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one")).toBe(true);
     expect(isHlsStream("https://cdn.example.test/live.flv")).toBe(false);
     const source = {
       url: "https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one",
       protocol: "hls" as const,
     };
-    expect(webPlaybackKind(source, "twitch")).toBe("hlsjs");
-    expect(webPlaybackKind(source, "bilibili")).toBe("hls");
+    expect(webPlaybackKind(source)).toBe("hls");
   });
 
   test("does not mark a play() call healthy before the first decoded frame", () => {

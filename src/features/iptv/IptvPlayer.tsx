@@ -33,6 +33,7 @@ import {
 } from "@/features/room/player/useWebPlayer";
 import {
   createXgPlayer,
+  getXgMpegtsCore,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
@@ -619,22 +620,33 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             kind: playbackKind,
             isLive: playbackKind !== "native",
             hls: {
-              retryCount: 3,
-              retryDelay: 1_000,
-              bufferBehind: 30,
-              targetLatency: 3,
-              maxLatency: 6,
-              mseLowLatency: true,
+              hlsOpts: {
+                lowLatencyMode: false,
+                backBufferLength: 30,
+                maxBufferLength: 30,
+                liveSyncDurationCount: 3,
+                liveMaxLatencyDurationCount: 6,
+                manifestLoadingMaxRetry: 3,
+                levelLoadingMaxRetry: 3,
+                fragLoadingMaxRetry: 3,
+              },
             },
             flv: {
-              isLive: true,
-              retryCount: 3,
-              retryDelay: 1_000,
-              bufferBehind: 15,
-              maxLatency: 3,
-              targetLatency: 0.5,
-              mseLowLatency: true,
-              enableStartGapJump: true,
+              mediaDataSource: {
+                type: "flv",
+                isLive: true,
+                hasAudio: true,
+                hasVideo: true,
+              },
+              mpegtsConfig: {
+                enableWorker: false,
+                enableStashBuffer: true,
+                stashInitialSize: 384,
+                liveBufferLatencyChasing: true,
+                liveBufferLatencyMaxLatency: 3,
+                liveBufferLatencyMinRemain: 0.5,
+                autoCleanupSourceBuffer: true,
+              },
             },
             mpegts: {
               mediaDataSource: {
@@ -663,7 +675,29 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             reportError(xgPlayerErrorMessage(cause, fallback));
           };
           player.on("error", reportXgError);
-          if (playbackKind === "mpegts") player.on("mpegts_error", reportXgError);
+          if (playbackKind === "flv" || playbackKind === "mpegts") {
+            player.on("mpegts_error", reportXgError);
+            getXgMpegtsCore(player)?.on("loading_complete", () => {
+              if (playerRef.current === player) reportError("直播流已结束");
+            });
+          }
+          if (playbackKind === "hls") {
+            let fatalFailureCount = 0;
+            player.on("playing", () => {
+              if (playerRef.current === player) fatalFailureCount = 0;
+            });
+            player.on("HLS_ERROR", (cause) => {
+              if (playerRef.current !== player || !cause || typeof cause !== "object") return;
+              const event = cause as { errorType?: unknown; errorFatal?: unknown };
+              if (event.errorFatal !== true) return;
+              const type = String(event.errorType ?? "").toLowerCase();
+              if (type !== "networkerror" && type !== "mediaerror") return;
+              // HlsJsPlugin performs one immediate in-place recovery.
+              if (++fatalFailureCount > 1) {
+                window.setTimeout(() => reportXgError(event), 0);
+              }
+            });
+          }
           startPlayback(player);
         } catch (cause) {
           if (disposed || generationRef.current !== generation) return;

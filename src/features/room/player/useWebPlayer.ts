@@ -12,7 +12,8 @@ import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
   createXgPlayer,
-  getXgHlsJsCore,
+  getXgHlsCore,
+  getXgMpegtsCore,
   isXgPlayerDecodeError,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
@@ -337,13 +338,10 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
   ]);
 }
 
-export function webPlaybackKind(
-  source: Pick<PlayUrl, "url" | "protocol">,
-  siteId?: SiteId,
-): XgPlaybackKind {
+export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPlaybackKind {
   switch (playbackProtocol(source)) {
     case "hls":
-      return siteId === "twitch" ? "hlsjs" : "hls";
+      return "hls";
     case "mpeg_ts":
       return "mpegts";
     case "native":
@@ -351,6 +349,40 @@ export function webPlaybackKind(
     default:
       return "flv";
   }
+}
+
+/**
+ * Keep a modest latency and cleanup window for continuous FLV. Mobile receives
+ * a wider live window for its tighter decode and scheduling budget.
+ */
+export function liveFlvPlaybackOptions(mobileClient: boolean): Record<string, unknown> {
+  return {
+    mediaDataSource: {
+      type: "flv",
+      isLive: true,
+      hasAudio: true,
+      hasVideo: true,
+    },
+    mpegtsConfig: {
+      enableWorker: false,
+      enableStashBuffer: true,
+      stashInitialSize: 384,
+      liveBufferLatencyChasing: true,
+      liveBufferLatencyMaxLatency: mobileClient ? 6 : 5,
+      liveBufferLatencyMinRemain: mobileClient ? 1.5 : 1,
+      autoCleanupSourceBuffer: true,
+      autoCleanupMaxBackwardDuration: mobileClient ? 20 : 15,
+      autoCleanupMinBackwardDuration: mobileClient ? 10 : 8,
+    },
+  };
+}
+
+/** FLV CDNs do not guarantee timestamp continuity across lines or reconnects. */
+export function shouldUsePlaybackSoftSwitch(
+  configured: boolean,
+  playbackKind: XgPlaybackKind | null,
+): boolean {
+  return configured && playbackKind != null && playbackKind !== "flv";
 }
 
 export function canSoftSwitchPlaybackSource(input: {
@@ -443,7 +475,9 @@ export function useWebPlayer(opts: {
     onMediaFailure,
     onPlaying,
   } = opts;
-  const softSwitchEnabled = useSettingsStore((state) => state.playbackSoftSwitchEnabled);
+  const softSwitchConfigured = useSettingsStore((state) => state.playbackSoftSwitchEnabled);
+  const clientPlatform = getClientPlatform();
+  const mobileClient = clientPlatform !== "desktop";
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -565,8 +599,12 @@ export function useWebPlayer(opts: {
   const effectivePlaybackSourceKey =
     playbackSourceKey || retainedPlaybackSourceRef.current?.sourceKey || "";
   const effectivePlaybackKind = effectivePlaybackSource
-    ? webPlaybackKind(effectivePlaybackSource, siteId)
+    ? webPlaybackKind(effectivePlaybackSource)
     : null;
+  const softSwitchEnabled = shouldUsePlaybackSoftSwitch(
+    softSwitchConfigured,
+    effectivePlaybackKind,
+  );
   const effectivePlaybackSourceRef = useRef<PlayUrl | null>(effectivePlaybackSource);
   effectivePlaybackSourceRef.current = effectivePlaybackSource;
   const hardStreamKey = softSwitchEnabled
@@ -610,8 +648,8 @@ export function useWebPlayer(opts: {
     setMuted(false);
     mutedRef.current = false;
 
-    const playbackKind = webPlaybackKind(playbackSource, siteId);
-    const hlsSource = playbackKind === "hls" || playbackKind === "hlsjs";
+    const playbackKind = webPlaybackKind(playbackSource);
+    const hlsSource = playbackKind === "hls";
     // Start fetching xgplayer and only the selected protocol plugin while the
     // serialized proxy queue tears down the previous session.
     const xgModulesPromise = loadXgPlayerModules(playbackKind);
@@ -736,23 +774,6 @@ export function useWebPlayer(opts: {
             kind: playbackKind,
             isLive: playbackKind !== "native",
             hls: {
-              retryCount: 3,
-              retryDelay: 1_000,
-              bufferBehind: 30,
-              targetLatency: 3,
-              maxLatency: 6,
-              mseLowLatency: true,
-              onPreM3U8Parse:
-                siteId === "twitch"
-                  ? (manifest: string) => {
-                      if (isTwitchCommercialBreak(manifest)) {
-                        throw new Error("Commercial break in progress");
-                      }
-                      return manifest;
-                    }
-                  : undefined,
-            },
-            hlsJs: {
               hlsOpts: {
                 lowLatencyMode: false,
                 backBufferLength: 30,
@@ -764,16 +785,7 @@ export function useWebPlayer(opts: {
                 fragLoadingMaxRetry: 3,
               },
             },
-            flv: {
-              isLive: true,
-              retryCount: 3,
-              retryDelay: 1_000,
-              bufferBehind: 10,
-              maxLatency: 2.5,
-              targetLatency: 0.4,
-              mseLowLatency: true,
-              enableStartGapJump: true,
-            },
+            flv: liveFlvPlaybackOptions(mobileClient),
             mpegts: {
               mediaDataSource: {
                 type: "mpegts",
@@ -801,13 +813,29 @@ export function useWebPlayer(opts: {
           activePlaybackKindRef.current = playbackKind;
           const isCurrentPlayer = () =>
             !cancelled && genRef.current === gen && playerRef.current === player;
-          const hlsJs = playbackKind === "hlsjs" ? getXgHlsJsCore(player) : null;
+          const hlsCore = playbackKind === "hls" ? getXgHlsCore(player) : null;
+          const mpegtsCore =
+            playbackKind === "flv" || playbackKind === "mpegts" ? getXgMpegtsCore(player) : null;
 
-          // Twitch lets hls.js perform one bounded in-place recovery before
-          // requesting a new signed URL. Other protocol errors flow through
-          // xgplayer unchanged.
-          if (!hlsJs || siteId !== "twitch") {
-            player.on("error", (error) => {
+          if (mpegtsCore) {
+            mpegtsCore.on("loading_complete", () => {
+              if (!isCurrentPlayer()) return;
+              setLoadError(null);
+              setRunning(false);
+              onMediaFailureRef.current?.({
+                epoch: gen,
+                generation: gen,
+                kind: "eof",
+                message: "直播流已结束",
+                refreshPlayUrl: playbackKind === "flv",
+              });
+            });
+          }
+
+          // HLS fatal events use their protocol-specific recovery below.
+          // Non-HLS errors continue through xgplayer's standard event path.
+          if (!hlsCore) {
+            const reportPlayerError = (error: unknown) => {
               if (!isCurrentPlayer()) return;
               const message = xgPlayerErrorMessage(error);
               setLoadError(message);
@@ -818,11 +846,64 @@ export function useWebPlayer(opts: {
                 kind: "error",
                 message,
               });
-            });
+            };
+            player.on("error", reportPlayerError);
+            if (playbackKind === "flv" || playbackKind === "mpegts") {
+              player.on("mpegts_error", reportPlayerError);
+            }
           }
 
-          if (hlsJs && siteId === "twitch") {
-            const hlsJsCore = hlsJs;
+          if (hlsCore && siteId !== "twitch") {
+            let hlsFatalFailureCount = 0;
+            player.on("playing", () => {
+              if (isCurrentPlayer()) hlsFatalFailureCount = 0;
+            });
+            const reportHlsFailure = (cause: unknown, refreshPlayUrl = false) => {
+              if (!isCurrentPlayer()) return;
+              const message = xgPlayerErrorMessage(cause, "HLS 连接中断");
+              setRunning(false);
+              if (refreshPlayUrl) {
+                playerRef.current = null;
+                try {
+                  player.destroy();
+                } catch {
+                  /* A fatal HLS error can already have released internals. */
+                }
+                setLoadError(null);
+              } else {
+                setLoadError(message);
+              }
+              onMediaFailureRef.current?.({
+                epoch: gen,
+                generation: gen,
+                kind: "error",
+                message,
+                refreshPlayUrl,
+              });
+            };
+            player.on("HLS_ERROR", (cause) => {
+              if (!isCurrentPlayer() || !cause || typeof cause !== "object") return;
+              const event = cause as {
+                errorType?: unknown;
+                errorFatal?: unknown;
+              };
+              if (event.errorFatal !== true) return;
+              const type = String(event.errorType ?? "").toLowerCase();
+              if (type !== "networkerror" && type !== "mediaerror") return;
+              // HlsJsPlugin immediately calls startLoad/recoverMediaError for
+              // the first fatal event. Escalate only when that recovery also
+              // fails, then obtain fresh site metadata and rebuild the player.
+              if (++hlsFatalFailureCount <= 1) {
+                setRunning(false);
+                return;
+              }
+              window.setTimeout(() => reportHlsFailure(event, true), 0);
+            });
+            player.on("error", (cause) => reportHlsFailure(cause));
+          }
+
+          if (hlsCore && siteId === "twitch") {
+            const twitchHlsCore = hlsCore;
             let hlsFatalFailureCount = 0;
             let decoderFailureReported = false;
             if (import.meta.env.DEV) {
@@ -887,7 +968,7 @@ export function useWebPlayer(opts: {
                 setRunning(false);
                 if (!recoveryAlreadyStarted) {
                   try {
-                    hlsJsCore.startLoad();
+                    twitchHlsCore.startLoad();
                   } catch {
                     // A subsequent hls.js fatal event advances to URL renewal.
                   }
@@ -991,7 +1072,7 @@ export function useWebPlayer(opts: {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [hardStreamKey, reloadToken, destroyPlayer, siteId]);
+  }, [hardStreamKey, reloadToken, destroyPlayer, mobileClient, siteId]);
 
   // Same-protocol source changes can retain the media element and MSE state.
   // Live CDN timestamp continuity is not uniform, so any setup/switch failure
@@ -1038,7 +1119,7 @@ export function useWebPlayer(opts: {
           url: targetSource.url,
           headers: targetSource.headers,
           sessionId: proxySessionId,
-          hls: targetKind === "hls" || targetKind === "hlsjs",
+          hls: targetKind === "hls",
         });
         if (
           cancelled ||
@@ -1103,6 +1184,8 @@ export function useWebPlayer(opts: {
       setPictureInPictureActive(false);
       return;
     }
+    const generation = genRef.current;
+    const playbackKind = effectivePlaybackKind;
 
     const pictureInPictureDocument = getPictureInPictureDocument();
     const syncPictureInPicture = () => {
@@ -1147,11 +1230,19 @@ export function useWebPlayer(opts: {
     const onEnterPictureInPicture = () => syncPictureInPicture();
     const onLeavePictureInPicture = () => syncPictureInPicture();
     const onEnded = () => {
+      if (
+        videoRef.current !== video ||
+        genRef.current !== generation ||
+        playerRef.current?.media !== video
+      ) {
+        return;
+      }
       onMediaFailureRef.current?.({
-        epoch: genRef.current,
-        generation: genRef.current,
+        epoch: generation,
+        generation,
         kind: "eof",
-        message: "stream ended",
+        message: "直播流已结束",
+        refreshPlayUrl: playbackKind === "flv",
       });
     };
     syncPictureInPicture();
@@ -1178,7 +1269,7 @@ export function useWebPlayer(opts: {
       video.removeEventListener("enterpictureinpicture", onEnterPictureInPicture);
       video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
     };
-  }, [mediaKey, streamKey]);
+  }, [effectivePlaybackKind, mediaKey, streamKey]);
 
   useEffect(() => {
     if (typeof PerformanceObserver === "undefined") return;

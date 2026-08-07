@@ -16,7 +16,7 @@
 | **抖音** 分类 / 推荐 / 房间 / 播放                                                                                     | 已完成；推荐 / 分类仅可靠支持 SSR 首屏；房间优先经 SSR 与公开 reflow 解析，搜索需完整登录 Cookie（可扫码或手动保存，仍可能受网页验证限制） |
 | **抖音** 实时弹幕                                                                                                       | 已完成；本机 MSSDK 签名直连 WSS，支持聊天 / 礼物 / 点赞 / 进场等常用事件             |
 | **Twitch** 直播列表 / 分类 / 搜索 / 房间 / HLS 播放 / 匿名 IRC 弹幕                                                     | 已完成；公开接口仅可靠支持首屏浏览，无翻页                                            |
-| 网页播放（`xgplayer` FLV / HLS / MPEG-TS 插件 + 本地 `stream_proxy`；Twitch HLS 使用 `hls.js` 验证路径；结构化播放源、线路测速与智能故障转移） | 已完成；软切换默认开启，同协议换源失败时自动硬回退                                    |
+| 网页播放（`xgplayer` + `mpegts.js` / `hls.js` 两个流媒体内核 + 本地 `stream_proxy`；结构化播放源、线路测速与智能故障转移） | 已完成；HLS / MPEG-TS 默认软切换并自动硬回退，FLV 始终完整重建；斗鱼流结束时自动续签 |
 | 本地语音字幕（sherpa-onnx + streaming Zipformer）                                                                     | 已完成；仅支持 Tauri 桌面端，提供中英双语实时识别、VAD/自动标点独立开关、本地热词、双语翻译字幕、稳定匿名说话人区分、Windows NVIDIA CUDA/CPU、模型按需下载 |
 | 房间右栏（主播信息 + 弹幕 / 关注 / 设置）与 Canvas 飘屏弹幕                                                                   | 已完成                                                                                |
 | 弹幕选择操作                                                                                                                  | 已完成；点击普通弹幕可复制内容，或在支持发送的平台将相同内容作为「+1」单条发送        |
@@ -148,7 +148,7 @@ D:\dev\rLive\src-tauri\target\release\rlive.exe
 | ------ | ------------------------------------------------------------------------------------------------------------------- |
 | 界面   | React + Tailwind v4 + shadcn/ui，中文主界面                                                                         |
 | 业务壳 | 首页 / 关注 / 分类 / 历史 / IPTV 频道首页 / IPTV 播放页 / 设置 / 房间页                                             |
-| 播放   | `xgplayer` + FLV / HLS / MPEG-TS 协议插件；Twitch 通过 `xgplayer-hls.js` 使用 `hls.js`；Rust `stream_proxy` 同源代理拉流                              |
+| 播放   | `xgplayer` + `xgplayer-mpegts.js` / `mpegts.js` + `xgplayer-hls.js` / `hls.js`；Rust `stream_proxy` 同源代理拉流                              |
 | 站点   | Rust`LiveSite`：bilibili / huya / douyu / douyin / twitch（Twitch 仅可靠支持首屏浏览） |
 | 弹幕   | Rust WebSocket → Tauri 事件 → 批处理列表 + 按需 Canvas + 播放器 SC 卡片 + 设置 / 关注侧栏                         |
 | 字幕   | Web Audio → 16 kHz PCM → sherpa-onnx 常驻 Zipformer stream → CT-Transformer 标点 / 可选 CAMPPlus 匿名说话人聚类 → 可选 Google final 字幕翻译 → 双语字幕叠加层 |

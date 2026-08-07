@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { nextFailoverAction } from "../src/features/room/playback/failover";
 import { pickDefaultQualityIndex, parseQualityLevel } from "../src/features/room/playback/quality";
-import { nextTwitchDecodeQualityIndex } from "../src/features/room/playback/usePlaybackController";
+import {
+  isDuplicatePlaybackFailure,
+  matchingQualityIndex,
+  nextTwitchDecodeQualityIndex,
+  playbackWasStable,
+  playerRebuildRetryLimit,
+} from "../src/features/room/playback/usePlaybackController";
 import {
   createShieldMatcher,
   floatingDanmakuText,
@@ -77,6 +83,32 @@ describe("failover policy (Simple Live)", () => {
         nextLineIndex: null,
       }).type,
     ).toBe("fail");
+  });
+
+  test("limits redundant full-player retries after the FLV plugin has already retried", () => {
+    expect(playerRebuildRetryLimit("douyu")).toBe(1);
+    expect(playerRebuildRetryLimit("huya")).toBe(1);
+    expect(playerRebuildRetryLimit("bilibili")).toBe(2);
+  });
+
+  test("only resets a failure budget after uninterrupted stable playback", () => {
+    expect(playbackWasStable(null, 31_000)).toBe(false);
+    expect(playbackWasStable(1_000, 30_999)).toBe(false);
+    expect(playbackWasStable(1_000, 31_000)).toBe(true);
+  });
+
+  test("coalesces duplicate player errors without hiding a new line failure", () => {
+    const previous = { epoch: 4, generation: 8, lineIndex: 0, at: 1_000 };
+    const event = { epoch: 4, generation: 8 };
+    expect(isDuplicatePlaybackFailure(previous, event, 0, 1_500)).toBe(true);
+    expect(isDuplicatePlaybackFailure(previous, event, 1, 1_500)).toBe(false);
+    expect(isDuplicatePlaybackFailure(previous, event, 0, 1_800)).toBe(false);
+  });
+
+  test("preserves a selected quality across refreshed signing metadata", () => {
+    const refreshed = [{ quality: "原画" }, { quality: "高清" }, { quality: "流畅" }];
+    expect(matchingQualityIndex(refreshed, "高清", 0)).toBe(1);
+    expect(matchingQualityIndex(refreshed, "已下线画质", 2)).toBe(2);
   });
 });
 
