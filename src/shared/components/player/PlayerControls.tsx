@@ -93,6 +93,10 @@ export function showSecondaryPlayerControls(compact: boolean, portrait: boolean)
   return !(compact && portrait);
 }
 
+export function showPlayerControlsCenterSlot(compact: boolean, fullscreen: boolean): boolean {
+  return !compact || fullscreen;
+}
+
 export type PlayerControlsProps = {
   paused: boolean;
   volume: number;
@@ -729,7 +733,9 @@ export function PlayerControls({
         </span>
       )}
 
-      <div className="hidden min-w-0 flex-1 justify-center px-1 md:flex">{centerSlot}</div>
+      {showPlayerControlsCenterSlot(compact, fullscreen) && (
+        <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
+      )}
 
       <div className="player-controls-actions ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1 max-md:overflow-visible">
         {hasStreamSettings &&

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
+  showPlayerControlsCenterSlot,
   showSecondaryPlayerControls,
   volumeControlPresentation,
 } from "../src/shared/components/player/PlayerControls";
@@ -16,6 +17,7 @@ import {
   playerEdgeGestureForStart,
   playerEdgeGestureValue,
   PLAYER_STAGE_DOUBLE_TAP_MS,
+  showDanmakuComposerInPlayerControls,
   shouldRunDanmakuCanvas,
   sidePanelStartsOpen,
 } from "../src/features/room/PlayerPane";
@@ -89,6 +91,18 @@ describe("volume player control", () => {
 });
 
 describe("mobile player layout", () => {
+  test("centers the composer in compact chrome only while fullscreen", () => {
+    expect(showPlayerControlsCenterSlot(true, false)).toBe(false);
+    expect(showPlayerControlsCenterSlot(true, true)).toBe(true);
+    expect(showPlayerControlsCenterSlot(false, false)).toBe(true);
+  });
+
+  test("moves the portrait composer into player chrome while fullscreen", () => {
+    expect(showDanmakuComposerInPlayerControls(true, false)).toBe(false);
+    expect(showDanmakuComposerInPlayerControls(true, true)).toBe(true);
+    expect(showDanmakuComposerInPlayerControls(false, false)).toBe(true);
+  });
+
   test("keeps secondary controls out of portrait chrome and restores them in landscape", () => {
     expect(showSecondaryPlayerControls(true, true)).toBe(false);
     expect(showSecondaryPlayerControls(true, false)).toBe(true);

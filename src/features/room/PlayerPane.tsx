@@ -248,6 +248,13 @@ export function sidePanelStartsOpen(compactLandscapeViewport: boolean): boolean 
   return !compactLandscapeViewport;
 }
 
+export function showDanmakuComposerInPlayerControls(
+  inlineCompactSidePanel: boolean,
+  fullscreen: boolean,
+): boolean {
+  return !inlineCompactSidePanel || fullscreen;
+}
+
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(
@@ -1464,7 +1471,10 @@ export function PlayerPane({
                 compact={compactViewport}
                 portalContainer={player.stageRef}
                 centerSlot={
-                  !inlineCompactSidePanel ? (
+                  showDanmakuComposerInPlayerControls(
+                    inlineCompactSidePanel,
+                    player.mode === "fullscreen",
+                  ) ? (
                     <DanmakuComposer
                       siteId={siteId}
                       roomId={roomId}
