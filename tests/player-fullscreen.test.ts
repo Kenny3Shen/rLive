@@ -8,6 +8,45 @@ import {
   fullscreenPlayerOrientation,
   videoAspectRatio,
 } from "../src/features/room/player/androidOrientation";
+import {
+  createNativeFullscreenSession,
+  restoreNativePlayerMaximizedState,
+  setNativePlayerFullscreen,
+  type NativePlayerWindow,
+} from "../src/shared/nativePlayerFullscreen";
+
+function fakeNativeWindow({
+  fullscreen = false,
+  maximized = false,
+}: {
+  fullscreen?: boolean;
+  maximized?: boolean;
+} = {}): { appWindow: NativePlayerWindow; calls: string[] } {
+  const calls: string[] = [];
+  const appWindow: NativePlayerWindow = {
+    async isFullscreen() {
+      calls.push("isFullscreen");
+      return fullscreen;
+    },
+    async isMaximized() {
+      calls.push("isMaximized");
+      return maximized;
+    },
+    async setFullscreen(next) {
+      calls.push(`setFullscreen:${next}`);
+      fullscreen = next;
+    },
+    async unmaximize() {
+      calls.push("unmaximize");
+      maximized = false;
+    },
+    async maximize() {
+      calls.push("maximize");
+      maximized = true;
+    },
+  };
+  return { appWindow, calls };
+}
 
 describe("player fullscreen compatibility", () => {
   test("uses the standard Fullscreen API when it is available", async () => {
@@ -51,6 +90,41 @@ describe("player fullscreen compatibility", () => {
 
   test("does not pretend fullscreen succeeded when no API is exposed", async () => {
     await expect(toggleElementFullscreen({}, {})).resolves.toBe(false);
+  });
+});
+
+describe("Windows native player fullscreen", () => {
+  test("clears maximized state before fullscreen and restores it on exit", async () => {
+    const { appWindow, calls } = fakeNativeWindow({ maximized: true });
+    const session = createNativeFullscreenSession();
+
+    await setNativePlayerFullscreen(appWindow, true, session, true);
+    expect(calls).toEqual(["isMaximized", "unmaximize", "isMaximized", "setFullscreen:true"]);
+    expect(session.restoreMaximized).toBe(true);
+
+    calls.length = 0;
+    await setNativePlayerFullscreen(appWindow, false, session, true);
+    expect(calls).toEqual(["setFullscreen:false", "isFullscreen", "maximize"]);
+    expect(session.restoreMaximized).toBe(false);
+  });
+
+  test("does not alter a window that was not maximized", async () => {
+    const { appWindow, calls } = fakeNativeWindow();
+
+    await setNativePlayerFullscreen(appWindow, true, createNativeFullscreenSession(), true);
+
+    expect(calls).toEqual(["isMaximized", "setFullscreen:true"]);
+  });
+
+  test("restores maximized state after an external fullscreen exit", async () => {
+    const { appWindow, calls } = fakeNativeWindow();
+    const session = createNativeFullscreenSession();
+    session.restoreMaximized = true;
+
+    await restoreNativePlayerMaximizedState(appWindow, session, true);
+
+    expect(calls).toEqual(["maximize"]);
+    expect(session.restoreMaximized).toBe(false);
   });
 });
 
