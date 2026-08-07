@@ -52,9 +52,9 @@ pub struct AppSettings {
     /// sources before automatic failover.
     #[serde(default = "default_playback_smart_line_selection")]
     pub playback_smart_line_selection: bool,
-    /// Experimental same-protocol `switchURL` path. Disabled until explicitly
-    /// enabled; the frontend retains its hard-reload fallback.
-    #[serde(default)]
+    /// Same-protocol `switchURL` path. The frontend retains its hard-reload
+    /// fallback for incompatible protocols and failed switches.
+    #[serde(default = "default_playback_soft_switch_enabled")]
     pub playback_soft_switch_enabled: bool,
     /// Device-local permission for the user-operated single-message senders.
     /// It remains disabled until the user explicitly enables it in Settings and
@@ -123,6 +123,10 @@ fn default_quality_level() -> String {
 }
 
 fn default_playback_smart_line_selection() -> bool {
+    true
+}
+
+fn default_playback_soft_switch_enabled() -> bool {
     true
 }
 
@@ -211,7 +215,7 @@ impl Default for AppSettings {
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
             playback_smart_line_selection: default_playback_smart_line_selection(),
-            playback_soft_switch_enabled: false,
+            playback_soft_switch_enabled: default_playback_soft_switch_enabled(),
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: default_asr_provider(),
@@ -269,7 +273,7 @@ mod tests {
         assert!(settings.super_chat_enabled);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.playback_smart_line_selection);
-        assert!(!settings.playback_soft_switch_enabled);
+        assert!(settings.playback_soft_switch_enabled);
         assert!(!settings.asr_enabled);
         assert_eq!(settings.asr_provider, "auto");
         assert!(settings.asr_vad_enabled);

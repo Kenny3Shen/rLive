@@ -11,7 +11,13 @@ type ThemeRevealOrigin = {
 };
 
 let activeThemeTransition: ViewTransition | null = null;
-let activeThemeAnimation: Animation | null = null;
+
+const THEME_REVEAL_PROPERTIES = [
+  "--theme-reveal-x",
+  "--theme-reveal-y",
+  "--theme-reveal-radius",
+  "--theme-reveal-duration",
+] as const;
 
 export function applyTheme(theme: ThemeMode) {
   const root = document.documentElement;
@@ -20,7 +26,17 @@ export function applyTheme(theme: ThemeMode) {
   root.classList.toggle("dark", dark);
 }
 
+function clearThemeRevealStyles(root: HTMLElement) {
+  delete root.dataset.themeReveal;
+  for (const property of THEME_REVEAL_PROPERTIES) {
+    root.style.removeProperty(property);
+  }
+}
+
 function updateThemeImmediately(updateTheme: () => void): ThemeRevealTransition {
+  activeThemeTransition?.skipTransition();
+  activeThemeTransition = null;
+  clearThemeRevealStyles(document.documentElement);
   updateTheme();
   const complete = Promise.resolve();
   return { ready: complete, finished: complete };
@@ -36,7 +52,6 @@ export function revealThemeAt(
     return updateThemeImmediately(updateTheme);
   }
 
-  activeThemeAnimation?.cancel();
   activeThemeTransition?.skipTransition();
 
   const root = document.documentElement;
@@ -47,58 +62,40 @@ export function revealThemeAt(
     Math.max(y, window.innerHeight - y),
   );
 
+  root.style.setProperty("--theme-reveal-x", `${x}px`);
+  root.style.setProperty("--theme-reveal-y", `${y}px`);
+  root.style.setProperty("--theme-reveal-radius", `${Math.ceil(radius) + 2}px`);
+  root.style.setProperty(
+    "--theme-reveal-duration",
+    window.matchMedia("(pointer: coarse)").matches ? "420ms" : "520ms",
+  );
   root.dataset.themeReveal = "true";
 
   let transition: ViewTransition;
   try {
     transition = document.startViewTransition(updateTheme);
   } catch {
-    delete root.dataset.themeReveal;
+    clearThemeRevealStyles(root);
     return updateThemeImmediately(updateTheme);
   }
 
   activeThemeTransition = transition;
 
+  // The reveal itself is one CSS animation on the new snapshot. Keeping the
+  // timing inside the View Transition pseudo-tree makes `finished` the single
+  // source of truth instead of racing a separate WAAPI Animation.
   const ready = transition.ready
-    .then(() => {
-      if (activeThemeTransition !== transition) return;
-
-      activeThemeAnimation = root.animate(
-        {
-          clipPath: [
-            `circle(0px at ${x}px ${y}px)`,
-            `circle(${Math.ceil(radius) + 2}px at ${x}px ${y}px)`,
-          ],
-        },
-        {
-          duration: window.matchMedia("(pointer: coarse)").matches ? 420 : 520,
-          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-          fill: "both",
-          pseudoElement: "::view-transition-new(root)",
-        },
-      );
-    })
     .catch(() => {
       if (activeThemeTransition === transition) transition.skipTransition();
-    });
+    })
+    .then(() => undefined);
 
   const finished = transition.finished
     .catch(() => undefined)
-    .then(
-      () =>
-        new Promise<void>((resolve) => {
-          // Let the live document paint the settled token set before restoring
-          // ordinary component transitions. Otherwise Chromium can create a
-          // fresh batch of color/control transitions as the snapshots leave.
-          window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-        }),
-    )
     .then(() => {
       if (activeThemeTransition !== transition) return;
-      activeThemeAnimation?.cancel();
-      activeThemeAnimation = null;
       activeThemeTransition = null;
-      delete root.dataset.themeReveal;
+      clearThemeRevealStyles(root);
     });
 
   return { ready, finished };

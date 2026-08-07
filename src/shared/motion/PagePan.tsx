@@ -1,4 +1,5 @@
-import { startTransition, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { motionProfile, prefersReducedMotion } from "./tokens";
 
@@ -127,22 +128,22 @@ export function PagePan({
     );
 
     let disposed = false;
-    let releaseFrame: number | null = null;
     void Promise.all([incomingAnimation.finished, leavingAnimation.finished])
       .then(() => {
         if (disposed) return;
-        // Let the compositor paint the final frame before React deletes the
-        // outgoing subtree and the incoming surface returns to normal painting.
-        releaseFrame = window.requestAnimationFrame(() => {
-          releaseFrame = null;
-          if (disposed) return;
-          incomingAnimation.cancel();
-          incoming.style.willChange = incomingWillChange;
-          startTransition(() => {
-            setTransition((current) =>
-              current.outgoing === outgoing ? { ...current, outgoing: null } : current,
-            );
-          });
+        // Persist the offscreen exit position before React synchronously drops
+        // the old subtree. Some Android compositors otherwise paint the
+        // animation's canceled origin for one frame during effect cleanup.
+        try {
+          leavingAnimation.commitStyles();
+        } catch {
+          // Older WebViews can lack commitStyles(); the synchronous removal
+          // below still leaves no scheduled frame between cancel and unmount.
+        }
+        flushSync(() => {
+          setTransition((current) =>
+            current.outgoing === outgoing ? { ...current, outgoing: null } : current,
+          );
         });
       })
       .catch(() => {
@@ -151,7 +152,6 @@ export function PagePan({
 
     return () => {
       disposed = true;
-      if (releaseFrame !== null) window.cancelAnimationFrame(releaseFrame);
       incomingAnimation.cancel();
       leavingAnimation.cancel();
       incoming.style.willChange = incomingWillChange;

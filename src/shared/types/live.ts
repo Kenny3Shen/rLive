@@ -191,7 +191,7 @@ export type AppSettings = {
   quality_level?: "high" | "mid" | "low";
   /** Probe multiple live sources locally and use their health for selection/failover. */
   playback_smart_line_selection?: boolean;
-  /** Experimental same-protocol xgplayer switchURL path; hard reload remains the fallback. */
+  /** Same-protocol xgplayer switchURL path; hard reload remains the fallback. */
   playback_soft_switch_enabled?: boolean;
   /** Device-local permission for user-operated single-message senders. */
   danmaku_send_enabled?: boolean;

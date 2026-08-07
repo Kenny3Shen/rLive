@@ -100,11 +100,28 @@
   --sidebar-active: oklch(0.26 0.02 265);
 }
 
-/* The browser owns the old/new page snapshots. Suppress its default crossfade
-   while revealThemeAt() clips the new snapshot outwards from the toggle. */
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0 at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh));
+  }
+
+  to {
+    clip-path: circle(
+      var(--theme-reveal-radius, 100vmax) at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh)
+    );
+  }
+}
+
+/* One View Transition animation owns the complete theme change. Disable the
+   browser's 250ms root-group interpolation and old-snapshot crossfade, then
+   reveal the settled new snapshot with a single CSS timeline. */
+:root[data-theme-reveal="true"]::view-transition-group(root),
+:root[data-theme-reveal="true"]::view-transition-old(root) {
+  animation: none;
+}
+
 :root[data-theme-reveal="true"]::view-transition-old(root),
 :root[data-theme-reveal="true"]::view-transition-new(root) {
-  animation: none;
   mix-blend-mode: normal;
 }
 
@@ -113,6 +130,7 @@
 }
 
 :root[data-theme-reveal="true"]::view-transition-new(root) {
+  animation: theme-reveal var(--theme-reveal-duration, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
   z-index: 2;
 }
 
