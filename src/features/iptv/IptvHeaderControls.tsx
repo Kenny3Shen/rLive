@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { Activity, ListFilter, Radio, Search, X } from "lucide-react";
+import { Activity, Heart, ListFilter, Radio, Search, X } from "lucide-react";
 import {
   InputGroup,
   InputGroupAddon,
@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIptvController } from "./IptvController";
 import type { IptvAvailabilityFilter } from "./availability";
@@ -144,45 +145,72 @@ function availabilityFilterLabel(filter: IptvAvailabilityFilter): string {
   return "全部状态";
 }
 
-/** Filters for the IPTV content, owned by Shell's left rail. */
-export function IptvHeaderStatusControls({ className }: { className?: string }) {
+type IptvHeaderStatusControlsProps = {
+  className?: string;
+  /** Include the channel-group selector in the control stack. */
+  showGroup?: boolean;
+  /** Use the compact application-header button treatment. */
+  compact?: boolean;
+};
+
+/** Filters for the IPTV content, shared by the page rail and mobile toolbar. */
+export function IptvHeaderStatusControls({
+  className,
+  showGroup = true,
+  compact = true,
+}: IptvHeaderStatusControlsProps) {
   const {
     groupOptions,
     selectedGroup,
     navigateHome,
     availabilityFilter,
     setAvailabilityFilter,
+    favoriteOnly,
+    setFavoriteOnly,
+    favoriteCount,
     hasFilters,
     clearFilters,
   } = useIptvController();
 
   return (
-    <div className={cn("flex min-w-0 items-center gap-1", className)}>
-      <Select
-        value={selectedGroup}
-        onValueChange={(value) => navigateHome({ group: value ?? "all" })}
-      >
-        <SelectTrigger
-          size="sm"
-          className="w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
-          aria-label="频道分类"
-          title={selectedGroup === "all" ? "全部分类" : selectedGroup}
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-1",
+        !compact && "flex-col items-stretch gap-2",
+        className,
+      )}
+    >
+      {showGroup && (
+        <Select
+          value={selectedGroup}
+          onValueChange={(value) => navigateHome({ group: value ?? "all" })}
         >
-          <ListFilter data-icon="inline-start" aria-hidden />
-          <SelectValue>{selectedGroup === "all" ? "全部分类" : selectedGroup}</SelectValue>
-        </SelectTrigger>
-        <SelectContent align="start">
-          <SelectGroup>
-            <SelectItem value="all">全部分类</SelectItem>
-            {groupOptions.map((group) => (
-              <SelectItem key={group.value} value={group.value}>
-                <span className="min-w-0 flex-1 truncate">{group.value}</span>
-                <span className="text-xs text-muted-foreground">{group.count}</span>
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
+          <SelectTrigger
+            size="sm"
+            className={cn(
+              compact
+                ? "w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
+                : "w-full",
+            )}
+            aria-label="频道分类"
+            title={selectedGroup === "all" ? "全部分类" : selectedGroup}
+          >
+            <ListFilter data-icon="inline-start" aria-hidden />
+            <SelectValue>{selectedGroup === "all" ? "全部分类" : selectedGroup}</SelectValue>
+          </SelectTrigger>
+          <SelectContent align="start">
+            <SelectGroup>
+              <SelectItem value="all">全部分类</SelectItem>
+              {groupOptions.map((group) => (
+                <SelectItem key={group.value} value={group.value}>
+                  <span className="min-w-0 flex-1 truncate">{group.value}</span>
+                  <span className="text-xs text-muted-foreground">{group.count}</span>
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      )}
 
       <Select
         value={availabilityFilter}
@@ -192,7 +220,11 @@ export function IptvHeaderStatusControls({ className }: { className?: string }) 
       >
         <SelectTrigger
           size="sm"
-          className="w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
+          className={cn(
+            compact
+              ? "w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
+              : "w-full",
+          )}
           aria-label="可用状态"
           title={availabilityFilterLabel(availabilityFilter)}
         >
@@ -208,6 +240,26 @@ export function IptvHeaderStatusControls({ className }: { className?: string }) 
           </SelectGroup>
         </SelectContent>
       </Select>
+
+      <Toggle
+        variant="outline"
+        size="sm"
+        pressed={favoriteOnly}
+        onPressedChange={setFavoriteOnly}
+        aria-label="只看关注频道"
+        title={`只看关注频道（${favoriteCount}）`}
+        className={cn(
+          compact ? "max-lg:size-8 max-lg:px-0" : "w-full justify-start",
+          favoriteOnly && "text-primary",
+        )}
+      >
+        <Heart
+          className={cn(favoriteOnly && "fill-current")}
+          data-icon="inline-start"
+          aria-hidden
+        />
+        <span className={cn(compact && "max-lg:hidden")}>关注 {favoriteCount}</span>
+      </Toggle>
 
       {hasFilters && (
         <Button

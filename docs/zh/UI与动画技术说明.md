@@ -160,6 +160,8 @@ flowchart TD
 - 浏览器/系统前进后退：根据 React Router history index 选择横向方向。
 - 首页、关注、历史等平台切换：内层 `PagePan` 进行横向平移。
 - IPTV 源切换：与平台切换共用同一套 `PagePan` 横向平移（分组统一为 group，平台与 IPTV 源走同一路径）。
+- 关注页「直播关注 / IPTV 频道」切换：由作用域化 `useGSAP` 对入场内容执行短距离淡入平移，Shell 保持同一内容容器，避免重挂载丢失前一页签状态。
+- IPTV 关注来源与分组切换：Shell 顶栏复用发现页的频道源控件并更新 `source` 查询参数；桌面左侧分组栏与移动端横向分组条更新 `group`，`IptvFollowView` 内层 `PagePan` 保留旧频道列表并按分组顺序平移。
 - 不属于上述来源的普通内容更新：直接替换，不自动添加整页动画。
 
 直接侧栏导航时，`RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，使 compositor 先启动平移，避免大列表首帧卡住。
@@ -339,6 +341,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 | `PagePan` | 立即移除 outgoing，直接显示新页 |
 | `PageZoom` | 跳过进入/退出 tween 并立即完成页面切换 |
 | IPTV 频道网格入场 | 无 tween，内容由 PagePan 平移进入 |
+| 关注类型与 IPTV 关注分组 | 跳过 GSAP 入场与 PagePan 平移，直接显示目标内容 |
 | 设置入场 | 不创建 tween |
 | 横向 swipe | 保留切换语义，清除跟随 transform，不执行回弹动画 |
 | 主题切换 | 不创建 View Transition，直接应用新主题 |

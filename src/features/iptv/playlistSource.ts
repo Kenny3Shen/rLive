@@ -37,6 +37,53 @@ export const builtInSources: readonly PlaylistSource[] = [
 
 export const DEFAULT_PLAYLIST_SOURCE = builtInSources[0];
 
+/**
+ * Keep favorites from different custom playlists separate without persisting
+ * the private M3U address itself as a source identifier. This hash is only a
+ * deterministic local namespace; channel URLs remain the actual identities.
+ */
+export function iptvFavoriteSourceId(source: PlaylistSource): string {
+  if (source.id !== "custom") return source.id;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.url.length; index += 1) {
+    hash ^= source.url.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `custom:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+export function iptvFavoriteSourceIdFromRoute(value: string | null): string | null {
+  const sourceId = value?.trim();
+  return sourceId && sourceId.length <= 64 ? sourceId : null;
+}
+
+export function playlistSourceForFavorite(
+  sourceId: string,
+  customUrl: string | null | undefined,
+): PlaylistSource {
+  const builtIn = builtInSources.find((source) => source.id === sourceId);
+  if (builtIn) return builtIn;
+
+  const configuredCustom = playlistSourceFromRoute("custom", customUrl);
+  if (configuredCustom.id === "custom" && iptvFavoriteSourceId(configuredCustom) === sourceId) {
+    return configuredCustom;
+  }
+
+  return {
+    id: "custom",
+    label: sourceId.startsWith("custom:") ? "自定义列表" : "其他频道源",
+    description: "已关注频道快照",
+    url: "",
+  };
+}
+
+export function iptvFavoriteSourceLabel(sourceId: string): string {
+  return (
+    builtInSources.find((source) => source.id === sourceId)?.label ??
+    (sourceId.startsWith("custom:") ? "自定义列表" : "其他频道源")
+  );
+}
+
 export function isHttpUrl(value: string | null | undefined): value is string {
   if (!value) return false;
   try {

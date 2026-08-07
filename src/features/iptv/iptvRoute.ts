@@ -9,6 +9,7 @@ type IptvHomePathOptions = {
 type IptvPlayerPathOptions = {
   source: PlaylistSource;
   channelUrl: string;
+  favoriteSourceId?: string;
   group?: string | null;
   query?: string | null;
 };
@@ -39,21 +40,23 @@ export function iptvHomePath({ source, group, query }: IptvHomePathOptions = {})
 export function iptvPlayerPath({
   source,
   channelUrl,
+  favoriteSourceId,
   group,
   query,
 }: IptvPlayerPathOptions): string {
   const params = new URLSearchParams({ channel: channelUrl });
   withSource(params, source);
+  withValue(params, "favoriteSource", favoriteSourceId);
   if (group && group !== "all") withValue(params, "group", group);
   withValue(params, "q", query);
   return `/iptv/play?${params.toString()}`;
 }
 
-/** Only honour in-app IPTV discovery return paths from navigation state. */
+/** Only honour local pages that can open IPTV playback as return targets. */
 export function iptvReturnPathFromState(state: unknown): string | null {
   if (!state || typeof state !== "object" || !("returnTo" in state)) return null;
   const value = state.returnTo;
   if (typeof value !== "string") return null;
   const pathname = value.split(/[?#]/, 1)[0];
-  return pathname === "/iptv" ? value : null;
+  return pathname === "/iptv" || pathname === "/follow" ? value : null;
 }

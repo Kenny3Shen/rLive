@@ -24,6 +24,7 @@ describe("sidebar navigation transitions", () => {
     expect(sidebarNavigationDirection("/", "/history")).toBe(1);
     expect(sidebarNavigationDirection("/settings", "/follow")).toBe(-1);
     expect(sidebarNavigationDirection("/category/game", "/iptv")).toBe(1);
+    expect(sidebarNavigationDirection("/iptv", "/history")).toBe(1);
   });
 
   test("defaults unknown source routes to the forward direction", () => {

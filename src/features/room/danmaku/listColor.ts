@@ -24,7 +24,8 @@ function opaqueHex(color: string): string | null {
   const trimmed = color.trim();
   if (!HEX_COLOR.test(trimmed)) return null;
   const hex = trimmed.slice(1);
-  const full = hex.length === 3 || hex.length === 4 ? [...hex].map((part) => `${part}${part}`).join("") : hex;
+  const full =
+    hex.length === 3 || hex.length === 4 ? [...hex].map((part) => `${part}${part}`).join("") : hex;
   return `#${full.slice(0, 6).toLowerCase()}`;
 }
 

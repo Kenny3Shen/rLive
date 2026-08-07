@@ -2,8 +2,21 @@ import { isSiteEnabled } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
 
 export type FollowPlatformFilter = SiteId | "all";
+export type FollowView = "live" | "iptv";
 
 export const FOLLOW_PLATFORM_PARAM = "platform";
+export const FOLLOW_VIEW_PARAM = "view";
+
+export function followViewFromSearch(value: string | null): FollowView {
+  return value === "iptv" ? "iptv" : "live";
+}
+
+export function withFollowView(searchParams: URLSearchParams, view: FollowView): URLSearchParams {
+  const next = new URLSearchParams(searchParams);
+  if (view === "live") next.delete(FOLLOW_VIEW_PARAM);
+  else next.set(FOLLOW_VIEW_PARAM, view);
+  return next;
+}
 
 /**
  * Keeps the follow-page platform selection valid when a URL is opened or

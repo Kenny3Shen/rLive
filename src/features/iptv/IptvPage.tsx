@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { CircleCheck, CircleX, Play, Tv, X } from "lucide-react";
+import { CircleCheck, CircleX, Folder, Heart, Inbox, Layers3, Tv, X } from "lucide-react";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Empty,
   EmptyContent,
@@ -15,14 +23,55 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
 import { cn } from "@/lib/utils";
 import { useIptvController } from "./IptvController";
-import { IptvAvailabilityFab } from "./IptvHeaderControls";
+import { IptvAvailabilityFab, IptvHeaderStatusControls } from "./IptvHeaderControls";
+import type { IptvGroupOption } from "./filterChannels";
 import type { IptvAvailabilityState } from "./availability";
 import type { IptvChannel } from "./types";
 
 const CHANNEL_PAGE_SIZE = 120;
+
+type IptvGroupTargetProps = {
+  value: string;
+  label: string;
+  count: number;
+  selected: boolean;
+  onSelect: () => void;
+};
+
+function IptvGroupTarget({ value, label, count, selected, onSelect }: IptvGroupTargetProps) {
+  const Icon = value === "all" ? Layers3 : value === "未分组" ? Inbox : Folder;
+
+  return (
+    <Button
+      type="button"
+      variant={selected ? "secondary" : "ghost"}
+      size="sm"
+      aria-current={selected ? "page" : undefined}
+      className="w-full justify-start gap-2 px-2.5"
+      onClick={onSelect}
+      title={label}
+    >
+      <Icon data-icon="inline-start" aria-hidden />
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{count}</span>
+    </Button>
+  );
+}
+
+function groupTargets(channelsCount: number, options: readonly IptvGroupOption[]) {
+  return [
+    { value: "all", label: "全部频道", count: channelsCount },
+    ...options.map((group) => ({
+      value: group.value,
+      label: group.value,
+      count: group.count,
+    })),
+  ];
+}
 
 function formatLatency(latencyMs: number): string {
   if (latencyMs < 1_000) return `${Math.max(1, Math.round(latencyMs))} ms`;
@@ -45,13 +94,20 @@ export function IptvPage() {
     channels,
     selectedGroup,
     keyword,
+    groupOptions,
     availabilityFilter,
     filteredChannels,
     availabilityByUrl,
+    favoriteOnly,
+    favoritesQuery,
+    favoritePendingUrl,
+    isFavorite,
+    toggleFavorite,
     playlistQuery,
     hasFilters,
     updateSource,
     clearFilters,
+    navigateHome,
     openChannel,
   } = useIptvController();
   const [channelLimit, setChannelLimit] = useState(CHANNEL_PAGE_SIZE);
@@ -59,10 +115,16 @@ export function IptvPage() {
     () => filteredChannels.slice(0, channelLimit),
     [channelLimit, filteredChannels],
   );
+  const targets = useMemo(
+    () => groupTargets(channels.length, groupOptions),
+    [channels.length, groupOptions],
+  );
+  const selectedGroupLabel =
+    targets.find((target) => target.value === selectedGroup)?.label ?? "全部频道";
 
   useEffect(() => {
     setChannelLimit(CHANNEL_PAGE_SIZE);
-  }, [availabilityFilter, keyword, selectedGroup, source.url]);
+  }, [availabilityFilter, favoriteOnly, keyword, selectedGroup, source.url]);
 
   return (
     <PullToRefresh
@@ -83,58 +145,111 @@ export function IptvPage() {
             title="IPTV 频道列表加载失败"
             onRetry={() => void updateSource()}
           />
+        ) : favoriteOnly && favoritesQuery.isError ? (
+          <ErrorState
+            error={favoritesQuery.error}
+            title="IPTV 关注列表加载失败"
+            onRetry={() => void favoritesQuery.refetch()}
+          />
         ) : (
-          <section aria-label="IPTV 频道列表" className="flex min-h-[32rem] flex-col gap-4">
-            {playlistQuery.isLoading ? (
-              <IptvChannelGridSkeleton />
-            ) : filteredChannels.length === 0 ? (
-              <Empty className="min-h-64 py-12">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Tv aria-hidden />
-                  </EmptyMedia>
-                  <EmptyTitle>没有符合条件的频道</EmptyTitle>
-                  <EmptyDescription>调整搜索、分类或可用状态后再试。</EmptyDescription>
-                </EmptyHeader>
-                {hasFilters && (
-                  <EmptyContent>
-                    <Button variant="outline" size="sm" onClick={clearFilters}>
-                      <X data-icon="inline-start" aria-hidden />
-                      清除筛选
-                    </Button>
-                  </EmptyContent>
-                )}
-              </Empty>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                  {displayedChannels.map((channel) => (
-                    <IptvChannelCard
-                      key={`${channel.id}:${channel.url}`}
-                      channel={channel}
-                      availability={availabilityByUrl.get(channel.url)}
-                      onOpen={openChannel}
-                    />
-                  ))}
-                </div>
+          <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
+            <aside
+              aria-label="IPTV 频道分组"
+              className="sticky top-3 hidden max-h-[calc(100dvh-9rem)] min-w-0 flex-col gap-1 overflow-hidden border-r border-border pr-3 md:flex"
+            >
+              <div className="mb-1 shrink-0 px-2">
+                <span className="text-xs font-medium text-muted-foreground">频道分组</span>
+              </div>
+              <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain py-0.5">
+                {targets.map((target) => (
+                  <IptvGroupTarget
+                    key={target.value}
+                    {...target}
+                    selected={selectedGroup === target.value}
+                    onSelect={() => navigateHome({ group: target.value })}
+                  />
+                ))}
+              </nav>
+              <div className="mt-2 shrink-0 border-t border-border-subtle pt-3">
+                <IptvHeaderStatusControls showGroup={false} compact={false} />
+              </div>
+            </aside>
 
-                {displayedChannels.length < filteredChannels.length && (
-                  <div className="flex flex-col items-center gap-2 py-2">
-                    <p className="text-xs text-muted-foreground">
-                      已显示 {displayedChannels.length} / {filteredChannels.length} 个频道
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setChannelLimit((current) => current + CHANNEL_PAGE_SIZE)}
-                    >
-                      显示更多
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
+            <section
+              aria-label="IPTV 频道列表"
+              className="flex min-h-[32rem] min-w-0 flex-col gap-4"
+            >
+              <div className="md:hidden">
+                <IptvHeaderStatusControls showGroup compact={false} />
+              </div>
+
+              <div className="flex min-h-9 flex-wrap items-end justify-between gap-2 border-b border-border pb-2">
+                <div className="min-w-0">
+                  <h1 className="truncate text-sm font-semibold">{selectedGroupLabel}</h1>
+                  <p className="text-xs tabular-nums text-muted-foreground">
+                    {filteredChannels.length} 个频道
+                  </p>
+                </div>
+              </div>
+
+              {playlistQuery.isLoading || (favoriteOnly && favoritesQuery.isLoading) ? (
+                <IptvChannelGridSkeleton />
+              ) : filteredChannels.length === 0 ? (
+                <Empty className="min-h-64 py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Tv aria-hidden />
+                    </EmptyMedia>
+                    <EmptyTitle>没有符合条件的频道</EmptyTitle>
+                    <EmptyDescription>
+                      {favoriteOnly
+                        ? "当前来源还没有符合条件的关注频道。"
+                        : "调整搜索、分类或可用状态后再试。"}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  {hasFilters && (
+                    <EmptyContent>
+                      <Button variant="outline" size="sm" onClick={clearFilters}>
+                        <X data-icon="inline-start" aria-hidden />
+                        清除筛选
+                      </Button>
+                    </EmptyContent>
+                  )}
+                </Empty>
+              ) : (
+                <>
+                  <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+                    {displayedChannels.map((channel) => (
+                      <IptvChannelCard
+                        key={`${channel.id}:${channel.url}`}
+                        channel={channel}
+                        availability={availabilityByUrl.get(channel.url)}
+                        isFavorite={isFavorite(channel)}
+                        favoritePending={favoritePendingUrl === channel.url}
+                        onOpen={openChannel}
+                        onToggleFavorite={toggleFavorite}
+                      />
+                    ))}
+                  </ul>
+
+                  {displayedChannels.length < filteredChannels.length && (
+                    <div className="flex flex-col items-center gap-2 py-2">
+                      <p className="text-xs text-muted-foreground">
+                        已显示 {displayedChannels.length} / {filteredChannels.length} 个频道
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setChannelLimit((current) => current + CHANNEL_PAGE_SIZE)}
+                      >
+                        显示更多
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
+          </div>
         )}
       </div>
     </PullToRefresh>
@@ -143,13 +258,25 @@ export function IptvPage() {
 
 function IptvChannelGridSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
       {Array.from({ length: 12 }).map((_, index) => (
-        <div key={index} className="flex flex-col gap-2">
-          <Skeleton className="aspect-video w-full rounded-xl" />
-          <Skeleton className="h-3.5 w-4/5" />
-          <Skeleton className="h-3 w-1/2" />
-        </div>
+        <Card key={index} size="sm" className="gap-2">
+          <CardHeader className="items-center gap-x-2.5">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Skeleton className="size-10 shrink-0 rounded-lg" />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-3/5" />
+                <Skeleton className="h-3 w-4/5" />
+              </div>
+            </div>
+            <CardAction className="self-center">
+              <Skeleton className="size-7 rounded-lg" />
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex min-h-5 items-center gap-1.5">
+            <Skeleton className="h-5 w-14 rounded-full" />
+          </CardContent>
+        </Card>
       ))}
     </div>
   );
@@ -158,7 +285,7 @@ function IptvChannelGridSkeleton() {
 function IptvAvailabilityBadge({ availability }: { availability: IptvAvailabilityState }) {
   if (availability.status === "checking") {
     return (
-      <Badge variant="outline" className="absolute top-2 left-2 shadow-sm">
+      <Badge variant="outline">
         <Spinner data-icon="inline-start" aria-hidden />
         检测中
       </Badge>
@@ -166,22 +293,14 @@ function IptvAvailabilityBadge({ availability }: { availability: IptvAvailabilit
   }
   if (availability.status === "available") {
     return (
-      <Badge
-        variant="secondary"
-        className="absolute top-2 left-2 shadow-sm"
-        title={`响应耗时 ${formatLatency(availability.latencyMs)}`}
-      >
+      <Badge variant="secondary" title={`响应耗时 ${formatLatency(availability.latencyMs)}`}>
         <CircleCheck className="text-success" data-icon="inline-start" aria-hidden />
         可用 · {formatLatency(availability.latencyMs)}
       </Badge>
     );
   }
   return (
-    <Badge
-      variant="destructive"
-      className="absolute top-2 left-2 shadow-sm"
-      title={availability.message ?? "频道当前不可用"}
-    >
+    <Badge variant="destructive" title={availability.message ?? "频道当前不可用"}>
       <CircleX data-icon="inline-start" aria-hidden />
       不可用
     </Badge>
@@ -191,11 +310,17 @@ function IptvAvailabilityBadge({ availability }: { availability: IptvAvailabilit
 function IptvChannelCard({
   channel,
   availability,
+  isFavorite,
+  favoritePending,
   onOpen,
+  onToggleFavorite,
 }: {
   channel: IptvChannel;
   availability: IptvAvailabilityState | undefined;
+  isFavorite: boolean;
+  favoritePending: boolean;
   onOpen: (channel: IptvChannel) => void;
+  onToggleFavorite: (channel: IptvChannel) => void;
 }) {
   const group = channel.group || "未分组";
   const availabilityLabel =
@@ -208,46 +333,82 @@ function IptvChannelCard({
           : "";
 
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(channel)}
-      onPointerEnter={() => preloadRouteModule("/iptv/play")}
-      onPointerDown={() => preloadRouteModule("/iptv/play")}
-      onFocus={() => preloadRouteModule("/iptv/play")}
-      className={cn(
-        "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring max-md:active:scale-[0.97]",
-        "hover:-translate-y-0.5",
-      )}
-      aria-label={`播放 ${channel.name}${availabilityLabel}`}
-    >
-      <div className="relative aspect-video overflow-hidden rounded-xl bg-muted shadow-md shadow-black/20 ring-1 ring-border/70">
-        {channel.logo ? (
-          <img
-            src={channel.logo}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            className="size-full object-contain p-5 transition duration-300 group-hover:scale-[1.04] sm:p-6"
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center text-muted-foreground">
-            <Tv className="size-8" aria-hidden />
+    <li className="min-w-0">
+      <Card
+        size="sm"
+        className="relative h-full gap-2 py-3 transition-[background-color,box-shadow] hover:bg-card-elevated hover:ring-foreground/20"
+      >
+        <button
+          type="button"
+          onClick={() => onOpen(channel)}
+          onPointerEnter={() => preloadRouteModule("/iptv/play")}
+          onPointerDown={() => preloadRouteModule("/iptv/play")}
+          onFocus={() => preloadRouteModule("/iptv/play")}
+          className="absolute inset-0 rounded-xl outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          aria-label={`播放 ${channel.name}${availabilityLabel}`}
+        />
+
+        <CardHeader className="pointer-events-none items-center gap-x-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border-subtle">
+              {channel.logo ? (
+                <img
+                  src={channel.logo}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="size-full object-contain p-1"
+                />
+              ) : (
+                <Tv className="size-5 text-muted-foreground" aria-hidden />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <CardTitle className="truncate" title={channel.name}>
+                {channel.name || "未命名频道"}
+              </CardTitle>
+              <CardDescription className="truncate" title={group}>
+                {group}
+              </CardDescription>
+            </div>
           </div>
-        )}
-        {availability && <IptvAvailabilityBadge availability={availability} />}
-        <span className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-full bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100">
-          <Play className="size-3.5 fill-current" aria-hidden />
-        </span>
-      </div>
-      <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
-        <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
-          {channel.name || "未命名频道"}
-        </p>
-        <p className="truncate text-xs text-muted-foreground" title={group}>
-          {group}
-        </p>
-      </div>
-    </button>
+
+          <CardAction className="pointer-events-auto relative z-10 self-center">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={favoritePending}
+                    onClick={() => onToggleFavorite(channel)}
+                    aria-label={`${isFavorite ? "取消关注" : "关注"} ${channel.name}`}
+                    aria-pressed={isFavorite}
+                    className={cn(isFavorite && "text-primary hover:text-primary")}
+                  />
+                }
+              >
+                {favoritePending ? (
+                  <Spinner aria-hidden />
+                ) : (
+                  <Heart className={cn(isFavorite && "fill-current")} aria-hidden />
+                )}
+              </TooltipTrigger>
+              <TooltipContent>{isFavorite ? "取消关注" : "关注频道"}</TooltipContent>
+            </Tooltip>
+          </CardAction>
+        </CardHeader>
+
+        <CardContent className="pointer-events-none flex min-h-5 min-w-0 items-center gap-1.5 overflow-hidden">
+          {availability ? (
+            <IptvAvailabilityBadge availability={availability} />
+          ) : (
+            <Badge variant="outline">未检测</Badge>
+          )}
+        </CardContent>
+      </Card>
+    </li>
   );
 }

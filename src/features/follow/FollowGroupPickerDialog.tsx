@@ -180,7 +180,11 @@ export function FollowGroupPickerDialog({
             disabled={busy || groupsQuery.isLoading}
             onClick={() => void onConfirm(selectedGroupId)}
           >
-            {pending ? <Spinner data-icon="inline-start" aria-hidden /> : <Heart data-icon="inline-start" />}
+            {pending ? (
+              <Spinner data-icon="inline-start" aria-hidden />
+            ) : (
+              <Heart data-icon="inline-start" />
+            )}
             确认关注
           </Button>
         </DialogFooter>

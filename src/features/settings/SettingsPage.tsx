@@ -1360,6 +1360,8 @@ export function SettingsPage() {
     try {
       const r = await invokeCmd<{
         follows: number;
+        iptv_favorites?: number;
+        iptv_favorite_groups?: number;
         tags: number;
         history: number;
         settings: boolean;
@@ -1369,7 +1371,9 @@ export function SettingsPage() {
       // cached page stale and immediately refresh pages currently on screen,
       // so the shell cannot show an old platform or stale local data.
       await queryClient.invalidateQueries({ refetchType: "active" });
-      setProfileStatus(`已导入：${r.follows} 个关注、${r.tags} 个标签、${r.history} 条历史记录。`);
+      setProfileStatus(
+        `已导入：${r.follows} 个主播关注、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,
+      );
     } catch (cause) {
       setProfileError(`导入失败：${errorMessage(cause)}`);
     } finally {

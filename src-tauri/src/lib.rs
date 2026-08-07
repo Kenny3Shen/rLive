@@ -48,7 +48,11 @@ use commands::follow::{
 };
 use commands::history::{history_add, history_clear, history_list, history_remove};
 use commands::image_proxy::image_proxy_url;
-use commands::iptv::{iptv_check_channels, iptv_load_playlist};
+use commands::iptv::{
+    iptv_check_channels, iptv_favorite_add, iptv_favorite_group_list, iptv_favorite_group_remove,
+    iptv_favorite_group_upsert, iptv_favorite_list, iptv_favorite_remove, iptv_favorite_set_group,
+    iptv_load_playlist,
+};
 use commands::profile::{profile_export, profile_import};
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -233,6 +237,13 @@ pub fn run() {
             history_remove,
             iptv_load_playlist,
             iptv_check_channels,
+            iptv_favorite_list,
+            iptv_favorite_add,
+            iptv_favorite_remove,
+            iptv_favorite_group_list,
+            iptv_favorite_group_upsert,
+            iptv_favorite_group_remove,
+            iptv_favorite_set_group,
             stream_proxy_start,
             stream_proxy_stop,
             stream_proxy_probe_sources,
