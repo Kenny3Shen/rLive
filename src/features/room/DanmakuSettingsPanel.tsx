@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import type { SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -192,6 +193,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   const asrChunkSeconds = useSettingsStore((s) => s.asrWindowSeconds);
   const asrSpeakerEnabled = useSettingsStore((s) => s.asrSpeakerDiarizationEnabled);
   const asrPending = useSettingsStore((s) => s.asrPending);
+  const mobileClient = isMobileClient();
 
   const trackSummary = `${Math.round(area * 100)}% · ${lineCount === 0 ? "自动" : `${lineCount} 行`}`;
   const appearanceSummary = `${fontSize}px · ${speed}/10`;
@@ -207,20 +209,22 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
       <div className="flex flex-col gap-3 px-3 py-3">
-        <Card size="sm">
-          <CardHeader className="border-b">
-            <CardTitle>语音字幕</CardTitle>
-            <CardAction>
-              <Badge variant="outline">{captionSummary}</Badge>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="pt-3">
-            <FieldGroup className="gap-2">
-              <AsrCaptionFontSizeField idPrefix="room" layout="panel" />
-              <AsrChunkIntervalField idPrefix="room" layout="panel" disabled={asrPending} />
-            </FieldGroup>
-          </CardContent>
-        </Card>
+        {!mobileClient && (
+          <Card size="sm">
+            <CardHeader className="border-b">
+              <CardTitle>语音字幕</CardTitle>
+              <CardAction>
+                <Badge variant="outline">{captionSummary}</Badge>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="pt-3">
+              <FieldGroup className="gap-2">
+                <AsrCaptionFontSizeField idPrefix="room" layout="panel" />
+                <AsrChunkIntervalField idPrefix="room" layout="panel" disabled={asrPending} />
+              </FieldGroup>
+            </CardContent>
+          </Card>
+        )}
 
         {siteSupportsSuperChat(siteId) && (
           <Card size="sm">

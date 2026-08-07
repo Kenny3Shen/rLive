@@ -18,6 +18,10 @@ export default defineConfig(({ command }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // The translation package is written for Node and imports node-fetch.
+      // Route that one transport through Tauri's scoped Rust HTTP client so
+      // translate.google.com is reachable without WebView CORS exceptions.
+      "node-fetch": path.resolve(__dirname, "src/shared/api/tauriFetch.ts"),
     },
   },
   // Vite 8 + Rolldown: keep dependency prebundle tight for Tauri desktop.

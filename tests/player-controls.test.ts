@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
+  showSecondaryPlayerControls,
   volumeControlPresentation,
 } from "../src/shared/components/player/PlayerControls";
 import {
@@ -88,6 +89,12 @@ describe("volume player control", () => {
 });
 
 describe("mobile player layout", () => {
+  test("keeps secondary controls out of portrait chrome and restores them in landscape", () => {
+    expect(showSecondaryPlayerControls(true, true)).toBe(false);
+    expect(showSecondaryPlayerControls(true, false)).toBe(true);
+    expect(showSecondaryPlayerControls(false, true)).toBe(true);
+  });
+
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {
     expect(sidePanelStartsOpen(false)).toBe(true);
     expect(sidePanelStartsOpen(true)).toBe(false);

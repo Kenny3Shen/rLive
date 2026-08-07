@@ -190,9 +190,10 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - surface 使用 `touch-pan-y`；纵向手势仍交给浏览器滚动。
 - 移动距离达到 `10px` 后才锁定方向，横向距离需大于纵向的 `1.25` 倍。
 - 完成切换需要至少 `48px` 的有效横向移动。
-- 手势开始时读取一次 surface 宽度；拖动期间将高频 pointermove 合并到 `requestAnimationFrame`，每帧最多通过一次 `gsap.set()` 写入 `x`，且不创建 tween。
+- 手势开始时一次性读取 surface 宽度、活动索引和减少动态效果偏好；拖动期间将高频 pointermove 合并到 `requestAnimationFrame`，每帧最多通过同一个 `gsap.quickSetter()` 写入 `x`，不重复创建 setter 或 tween。
 - 到达首尾边界时只保留 `0.18` 倍位移，表达不可继续而不是循环。
 - 释放后使用 `SWIPE_SETTLE` 回到原位或让新页从完整一屏外进入。
+- 移动端相邻平台页为无缝预览保持挂载，但使用 layout/paint/style containment 隔离；完全离屏页的 CSS animation 暂停，成为活动页后自动恢复。
 - Slider、Input、Textarea、Select、可编辑区域和 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管。
 - 已识别 swipe 后短暂抑制合成 click，避免 Android WebView 误触当前控件。
 
@@ -202,7 +203,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 
 IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由层：
 
-- 设置页首次对标题和分类导航使用 `y: 10`、`0.04s` stagger；切换设置分类时只对 `TabsContent` 使用 `y: 8` 入场。
+- 设置页不显示 Shell 或内容级顶部 header，搜索框并入分类导航；首次进入时对分类与搜索导航使用 `y: 10`，切换设置分类时只对 `TabsContent` 使用 `y: 8` 入场。
 - 设置页完成后通过 `clearProps` 归还 transform、opacity、visibility 和 `will-change`。
 - IPTV 之前对首批 18 张频道卡片的 GSAP stagger 入场已移除，频道网格与其他卡片页面（首页、分类、搜索、关注）保持一致，路由导航层面的位移由 `PagePan` 统一承担。
 - 频道卡片复用 `.room-card`，共享其 `content-visibility: auto` 长列表优化和移动端按压 `max-md:active:scale-[0.97]` 反馈。
@@ -319,7 +320,9 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 相同列表效果使用一个 tween 加 `stagger`，不要为每项创建独立 delay；动画目标数量必须有界。
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
+- 移动端高刷设备的 Canvas 弹幕绘制上限为 60 FPS；运动时间按真实帧间隔推进，不执行补帧突发，桌面端仍跟随浏览器刷新率。
 - 下拉刷新与横向滑动的连续输入通过 RAF 合并，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。
+- 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
 - 播放器控制栏、音量和播放设置弹层共用 `glass-surface-overlay`；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不移动 blur 采样区域，也不触发播放器 React 重渲染。coarse pointer 或 slow-update 设备关闭 backdrop blur，改用更实的半透明背景。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，实际纵向滚动留给 `app-page`。

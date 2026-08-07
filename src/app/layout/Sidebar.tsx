@@ -193,7 +193,7 @@ export function Sidebar() {
       </nav>
       <div
         data-slot="app-sidebar-preferences"
-        className="mb-1.5 flex flex-col items-center max-md:mb-0 max-md:w-11 max-md:flex-none"
+        className="mb-1.5 flex flex-col items-center max-md:hidden"
       >
         <AppearanceToggle />
       </div>

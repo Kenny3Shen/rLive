@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/empty";
 import { notify } from "@/components/ui/toast";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -69,6 +70,7 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
   }>();
   const currentRoomId = routeRoomId ? decodeURIComponent(routeRoomId) : undefined;
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+  const showRefreshButton = !isMobileClient();
 
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
@@ -240,29 +242,31 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
         </PullToRefresh>
       </ScrollArea>
 
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              size="icon-lg"
-              className="absolute right-3 bottom-3 rounded-full"
-              disabled={refreshMutation.isPending || followsQuery.isLoading}
-              aria-label={refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
-              onClick={() => refreshMutation.mutate()}
-            />
-          }
-        >
-          {refreshMutation.isPending ? (
-            <Spinner data-icon="inline-start" aria-hidden />
-          ) : (
-            <RefreshCw data-icon="inline-start" aria-hidden />
-          )}
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          {refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
-        </TooltipContent>
-      </Tooltip>
+      {showRefreshButton && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="icon-lg"
+                className="absolute right-3 bottom-3 rounded-full"
+                disabled={refreshMutation.isPending || followsQuery.isLoading}
+                aria-label={refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
+                onClick={() => refreshMutation.mutate()}
+              />
+            }
+          >
+            {refreshMutation.isPending ? (
+              <Spinner data-icon="inline-start" aria-hidden />
+            ) : (
+              <RefreshCw data-icon="inline-start" aria-hidden />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="left">
+            {refreshMutation.isPending ? "正在刷新关注状态" : "刷新关注状态"}
+          </TooltipContent>
+        </Tooltip>
+      )}
     </section>
   );
 });

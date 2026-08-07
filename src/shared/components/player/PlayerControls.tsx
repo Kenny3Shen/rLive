@@ -21,16 +21,40 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineLabel } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
-import type { PlayUrl } from "@/shared/types/live";
+import {
+  TRANSLATION_LANGUAGE_OPTIONS,
+  TRANSLATION_SOURCE_LANGUAGE_OPTIONS,
+} from "@/shared/translation/languages";
+import type {
+  CaptionTranslationLanguage,
+  CaptionTranslationSourceLanguage,
+  PlayUrl,
+} from "@/shared/types/live";
 
 type LineDiagnostic =
   | { state: "testing" }
@@ -72,6 +96,10 @@ export function asrControlPresentation(enabled: boolean, busy: boolean) {
   } as const;
 }
 
+export function showSecondaryPlayerControls(compact: boolean, portrait: boolean): boolean {
+  return !(compact && portrait);
+}
+
 export type PlayerControlsProps = {
   paused: boolean;
   volume: number;
@@ -86,6 +114,10 @@ export type PlayerControlsProps = {
   asrLabel?: string;
   asrDisabled?: boolean;
   asrBusy?: boolean;
+  asrTranslationEnabled?: boolean;
+  asrTranslationFrom?: CaptionTranslationSourceLanguage;
+  asrTranslationTo?: CaptionTranslationLanguage;
+  asrTranslationBusy?: boolean;
   qualities?: { quality: string }[];
   qualityIndex?: number;
   lines?: PlayUrl[];
@@ -127,6 +159,9 @@ export type PlayerControlsProps = {
   onToggleSidePanel?: () => void;
   onToggleOsd?: () => void;
   onToggleAsr?: () => void;
+  onAsrTranslationEnabledChange?: (enabled: boolean) => void;
+  onAsrTranslationFromChange?: (from: CaptionTranslationSourceLanguage) => void;
+  onAsrTranslationToChange?: (to: CaptionTranslationLanguage) => void;
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
   onTogglePictureInPicture?: () => void;
@@ -145,11 +180,12 @@ type ControlButtonProps = Omit<
 
 /**
  * Video chrome reads from further away than in-page buttons, so the glyphs run
- * one step above the shared button default (size-4).
+ * one small step above the shared button default (size-4).
  */
-const CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-5";
-/** Keep the larger glyphs from crowding their own hit target. */
-const CONTROL_BUTTON_CLASS = "size-9 max-md:size-11 max-md:touch-manipulation";
+const CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-4.5";
+/** Player chrome stays compact even when the shared coarse-pointer floor is 44px. */
+const CONTROL_BUTTON_CLASS =
+  "size-9 [@media(pointer:coarse)]:size-9! [@media(pointer:coarse)]:min-h-9! [@media(pointer:coarse)]:min-w-9! [@media(pointer:coarse)]:touch-manipulation";
 
 function ControlButton({
   label,
@@ -197,6 +233,10 @@ export function PlayerControls({
   asrLabel = asrOn ? "关闭语音字幕" : "开启语音字幕",
   asrDisabled = false,
   asrBusy = false,
+  asrTranslationEnabled = false,
+  asrTranslationFrom = "auto",
+  asrTranslationTo = "zh-CN",
+  asrTranslationBusy = false,
   qualities = [],
   qualityIndex = 0,
   lines = [],
@@ -222,6 +262,9 @@ export function PlayerControls({
   onToggleSidePanel,
   onToggleOsd,
   onToggleAsr,
+  onAsrTranslationEnabledChange,
+  onAsrTranslationFromChange,
+  onAsrTranslationToChange,
   onQualityChange,
   onLineChange,
   onTogglePictureInPicture,
@@ -229,6 +272,7 @@ export function PlayerControls({
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
+  const [asrSettingsOpen, setAsrSettingsOpen] = useState(false);
   // Mobile settings open as a drawer: bottom sheet in portrait, right side in
   // landscape. Track orientation so the drawer matches the current posture.
   const [portrait, setPortrait] = useState<boolean>(
@@ -241,6 +285,8 @@ export function PlayerControls({
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
+  const showSecondaryControls = showSecondaryPlayerControls(compact, portrait);
+  const mobilePortrait = !showSecondaryControls;
   const volumeControl = volumeControlPresentation(volume, muted);
   const isMuted = volumeControl.isMuted;
   const muteLabel = isMuted ? "取消静音" : "静音";
@@ -264,11 +310,17 @@ export function PlayerControls({
   const overlayStreamSettingsOptionClass = overlay
     ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
     : undefined;
-  const overlayInteractionOpen = volumeOpen || streamSettingsOpen;
+  const overlayInteractionOpen = volumeOpen || streamSettingsOpen || asrSettingsOpen;
 
   useEffect(() => {
     onOverlayInteractionChange?.(overlayInteractionOpen);
   }, [onOverlayInteractionChange, overlayInteractionOpen]);
+
+  useEffect(() => {
+    if (!mobilePortrait) return;
+    setVolumeOpen(false);
+    setAsrSettingsOpen(false);
+  }, [mobilePortrait]);
 
   useEffect(
     () => () => {
@@ -278,15 +330,16 @@ export function PlayerControls({
   );
 
   useEffect(() => {
-    if (!volumeOpen && !streamSettingsOpen) return;
+    if (!volumeOpen && !streamSettingsOpen && !asrSettingsOpen) return;
     const closeOnAndroidBack = (event: Event) => {
       event.preventDefault();
       setVolumeOpen(false);
       setStreamSettingsOpen(false);
+      setAsrSettingsOpen(false);
     };
     window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
     return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-  }, [streamSettingsOpen, volumeOpen]);
+  }, [asrSettingsOpen, streamSettingsOpen, volumeOpen]);
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
@@ -425,15 +478,122 @@ export function PlayerControls({
       )}
     </>
   );
+  const translationSettingsBody = (
+    <FieldGroup className="gap-3">
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
+          <FieldDescription className={cn("text-xs", overlay && "text-white/60")}>
+            稳定字幕将发送到 Google 翻译
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          id="player-caption-translation"
+          size="sm"
+          checked={asrTranslationEnabled}
+          disabled={!onAsrTranslationEnabledChange}
+          onCheckedChange={onAsrTranslationEnabledChange}
+        />
+      </Field>
+
+      <Separator className={cn(overlay && "bg-white/10")} />
+
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
+        <Select
+          items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
+          value={asrTranslationFrom}
+          onValueChange={(value) => {
+            if (value) onAsrTranslationFromChange?.(value);
+          }}
+        >
+          <SelectTrigger
+            id="player-caption-translation-from"
+            size="sm"
+            className={cn("w-32", overlay && "hover:bg-white/12 focus-visible:ring-white/70")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent
+            container={portalContainer}
+            side="top"
+            align="end"
+            alignItemWithTrigger={false}
+            glass={overlay}
+            className={cn(
+              "max-h-64",
+              overlay && "glass-surface-overlay border-white/10 text-white",
+            )}
+          >
+            <SelectGroup>
+              {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
+                <SelectItem
+                  key={language.value}
+                  value={language.value}
+                  disabled={language.value === asrTranslationTo}
+                  className={overlayStreamSettingsOptionClass}
+                >
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
+        <Select
+          items={TRANSLATION_LANGUAGE_OPTIONS}
+          value={asrTranslationTo}
+          onValueChange={(value) => {
+            if (value) onAsrTranslationToChange?.(value);
+          }}
+        >
+          <SelectTrigger
+            id="player-caption-translation-to"
+            size="sm"
+            className={cn("w-32", overlay && "hover:bg-white/12 focus-visible:ring-white/70")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent
+            container={portalContainer}
+            side="top"
+            align="end"
+            alignItemWithTrigger={false}
+            glass={overlay}
+            className={cn(
+              "max-h-64",
+              overlay && "glass-surface-overlay border-white/10 text-white",
+            )}
+          >
+            <SelectGroup>
+              {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
+                <SelectItem
+                  key={language.value}
+                  value={language.value}
+                  disabled={language.value === asrTranslationFrom}
+                  className={overlayStreamSettingsOptionClass}
+                >
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+    </FieldGroup>
+  );
   return (
     <div
       data-slot="player-controls-bar"
       className={cn(
-        "flex min-w-0 shrink-0 items-center gap-1 max-md:justify-between",
+        "flex min-w-0 shrink-0 items-center gap-1 max-md:gap-0.5 max-md:justify-between",
         overlay
           ? // The material reaches every player edge; safe-area spacing stays
             // inside the surface so it never creates a visible gutter.
-            "glass-surface-overlay border-t border-white/12 bg-transparent pt-1 pr-[max(0.375rem,env(safe-area-inset-right))] pb-[max(0.25rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white"
+            "glass-surface-overlay border-t border-white/12 bg-transparent pt-1 pr-[max(0.375rem,env(safe-area-inset-right))] pb-[max(0.25rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white max-md:pt-0.5 max-md:pb-[max(0.125rem,env(safe-area-inset-bottom))]"
           : "border-t border-border bg-card px-1.5 py-1",
       )}
     >
@@ -459,68 +619,70 @@ export function PlayerControls({
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
 
-        <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
-          <PopoverTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                disabled={disabled}
-                aria-label={volumeControl.label}
-                className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
-              />
-            }
-          >
-            <VolumeControlIcon aria-hidden />
-          </PopoverTrigger>
-          <PopoverContent
-            container={portalContainer}
-            side="top"
-            align="start"
-            glass
-            className={cn(
-              "w-auto items-center gap-2 p-2.5",
-              // Same material as the settings popup beside it, so the two
-              // control-bar popups read as one family.
-              overlay ? "glass-surface-overlay" : "glass-surface",
-              overlay && "border border-white/10 text-white shadow-xl",
-            )}
-          >
-            <PopoverTitle className="sr-only">音量</PopoverTitle>
-            <Slider
-              value={volume}
-              min={0}
-              max={100}
-              step={1}
-              orientation="vertical"
-              className={cn("h-32", compact && "h-20 [&_[data-base-ui-slider-control]]:min-h-20")}
-              aria-label="音量"
-              aria-valuetext={`${volume}%`}
-              onValueChange={(nextValue) => {
-                onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
-              }}
-            />
-            <Separator className={cn("w-8", overlay && "bg-white/10")} />
-            <Button
-              type="button"
-              variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
-              size="icon-sm"
-              className={cn(
-                "size-8",
-                CONTROL_ICON_CLASS,
-                overlay && "text-white/90 hover:bg-white/12 hover:text-white",
-                isMuted && overlay && "bg-white/18 text-white",
-              )}
-              aria-label={muteLabel}
-              aria-pressed={isMuted}
-              onClick={onToggleMute}
+        {showSecondaryControls && (
+          <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={disabled}
+                  aria-label={volumeControl.label}
+                  className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
+                />
+              }
             >
-              <VolumeX aria-hidden />
-            </Button>
-          </PopoverContent>
-        </Popover>
+              <VolumeControlIcon aria-hidden />
+            </PopoverTrigger>
+            <PopoverContent
+              container={portalContainer}
+              side="top"
+              align="start"
+              glass
+              className={cn(
+                "w-auto items-center gap-2 p-2.5",
+                // Same material as the settings popup beside it, so the two
+                // control-bar popups read as one family.
+                overlay ? "glass-surface-overlay" : "glass-surface",
+                overlay && "border border-white/10 text-white shadow-xl",
+              )}
+            >
+              <PopoverTitle className="sr-only">音量</PopoverTitle>
+              <Slider
+                value={volume}
+                min={0}
+                max={100}
+                step={1}
+                orientation="vertical"
+                className={cn("h-32", compact && "h-20 [&_[data-base-ui-slider-control]]:min-h-20")}
+                aria-label="音量"
+                aria-valuetext={`${volume}%`}
+                onValueChange={(nextValue) => {
+                  onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
+                }}
+              />
+              <Separator className={cn("w-8", overlay && "bg-white/10")} />
+              <Button
+                type="button"
+                variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
+                size="icon-sm"
+                className={cn(
+                  "size-8",
+                  CONTROL_ICON_CLASS,
+                  overlay && "text-white/90 hover:bg-white/12 hover:text-white",
+                  isMuted && overlay && "bg-white/18 text-white",
+                )}
+                aria-label={muteLabel}
+                aria-pressed={isMuted}
+                onClick={onToggleMute}
+              >
+                <VolumeX aria-hidden />
+              </Button>
+            </PopoverContent>
+          </Popover>
+        )}
 
-        {onToggleAudioOnly && (
+        {showSecondaryControls && onToggleAudioOnly && (
           <ControlButton
             label={audioOnlyControl.label}
             variant={overlay ? "ghost" : audioOnly ? "secondary" : "ghost"}
@@ -629,7 +791,7 @@ export function PlayerControls({
             </Popover>
           ))}
 
-        {onToggleOsd && (
+        {showSecondaryControls && onToggleOsd && (
           <ControlButton
             label={danmakuControl.label}
             variant="ghost"
@@ -642,30 +804,63 @@ export function PlayerControls({
             <DanmakuControlIcon data-icon="inline-start" aria-hidden />
           </ControlButton>
         )}
-        {asrVisible && onToggleAsr && (
-          <ControlButton
-            label={asrLabel}
-            variant="ghost"
-            className={cn(
-              overlayButtonClass,
-              asrDisabled && "pointer-events-auto opacity-50",
-              asrOn && !overlay && "text-primary",
-            )}
-            aria-disabled={asrDisabled}
-            aria-pressed={asrOn}
-            onClick={asrDisabled ? undefined : onToggleAsr}
-            tooltip={!compact}
-          >
-            {asrControl.icon === "spinner" ? (
-              <Spinner aria-hidden />
-            ) : asrControl.icon === "captions" ? (
-              <Captions data-icon="inline-start" aria-hidden />
-            ) : (
-              <CaptionsOff data-icon="inline-start" aria-hidden />
-            )}
-          </ControlButton>
+        {showSecondaryControls && asrVisible && onToggleAsr && (
+          <Popover open={asrSettingsOpen} onOpenChange={setAsrSettingsOpen}>
+            <PopoverTrigger
+              openOnHover
+              delay={120}
+              closeDelay={180}
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className={cn(
+                    CONTROL_BUTTON_CLASS,
+                    CONTROL_ICON_CLASS,
+                    overlayButtonClass,
+                    asrDisabled && "pointer-events-auto opacity-50",
+                    asrOn && !overlay && "text-primary",
+                  )}
+                  aria-label={asrLabel}
+                  aria-disabled={asrDisabled}
+                  aria-pressed={asrOn}
+                  onClick={asrDisabled ? undefined : onToggleAsr}
+                >
+                  {asrControl.icon === "spinner" ? (
+                    <Spinner aria-hidden />
+                  ) : asrControl.icon === "captions" ? (
+                    <Captions data-icon="inline-start" aria-hidden />
+                  ) : (
+                    <CaptionsOff data-icon="inline-start" aria-hidden />
+                  )}
+                </Button>
+              }
+            />
+            <PopoverContent
+              container={portalContainer}
+              side="top"
+              align="end"
+              collisionBoundary={
+                typeof document !== "undefined" ? document.documentElement : undefined
+              }
+              collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
+              sticky
+              glass
+              className={cn(
+                "w-72",
+                overlay ? "glass-surface-overlay" : "glass-surface",
+                overlayStreamSettingsContentClass,
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <PopoverTitle>字幕翻译</PopoverTitle>
+                {asrTranslationBusy && <Spinner aria-label="正在翻译字幕" />}
+              </div>
+              {translationSettingsBody}
+            </PopoverContent>
+          </Popover>
         )}
-        {!compact && onToggleSidePanel && (
+        {showSecondaryControls && onToggleSidePanel && (
           <ControlButton
             label={resolvedSidePanelLabel}
             variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
@@ -677,7 +872,7 @@ export function PlayerControls({
             {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
           </ControlButton>
         )}
-        {pictureInPictureSupported && onTogglePictureInPicture && (
+        {showSecondaryControls && pictureInPictureSupported && onTogglePictureInPicture && (
           <ControlButton
             label={pictureInPictureActive ? "退出画中画" : "画中画"}
             className={overlayButtonClass}

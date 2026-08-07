@@ -4,6 +4,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import gsap from "gsap";
+import { flushSync } from "react-dom";
 import {
   createContext,
   type FormEvent,
@@ -35,11 +36,11 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { revealThemeAt } from "@/app/theme";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { PageHeader } from "@/shared/components/PageHeader";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
@@ -146,7 +147,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
-    "播放 播放质量 清晰度 智能线路 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
+    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 智能线路 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址",
   account:
@@ -419,7 +420,9 @@ function AccountCard({
       return;
     }
     try {
-      const next = await invokeCmd<AccountProfile>("account_get_profile", { siteId });
+      const next = await invokeCmd<AccountProfile>("account_get_profile", {
+        siteId,
+      });
       setProfile(next);
     } catch (error) {
       setProfile(null);
@@ -886,9 +889,7 @@ function AsrModelField() {
           <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
             <FieldContent>
               <FieldTitle id="asr-provider-title">推理后端</FieldTitle>
-              <FieldDescription>
-                自动优先使用 CUDA，不可用时回退 CPU。
-              </FieldDescription>
+              <FieldDescription>自动优先使用 CUDA，不可用时回退 CPU。</FieldDescription>
             </FieldContent>
             <ToggleGroup
               aria-labelledby="asr-provider-title"
@@ -937,11 +938,7 @@ function AsrModelField() {
           />
         </Field>
 
-        <AsrHotwordsField
-          idPrefix="settings"
-          layout="page"
-          disabled={!model.supported}
-        />
+        <AsrHotwordsField idPrefix="settings" layout="page" disabled={!model.supported} />
 
         <AsrChunkIntervalField
           idPrefix="settings"
@@ -1053,7 +1050,10 @@ function isHttpM3uUrl(value: string): boolean {
   }
 }
 
-function normalizeHttpProxy(value: string): { value: string | null; error: string | null } {
+function normalizeHttpProxy(value: string): {
+  value: string | null;
+  error: string | null;
+} {
   const trimmed = value.trim();
   if (!trimmed) return { value: null, error: null };
 
@@ -1067,7 +1067,10 @@ function normalizeHttpProxy(value: string): { value: string | null; error: strin
     }
     return { value: parsed.href, error: null };
   } catch {
-    return { value: null, error: "请输入有效的代理地址，例如 http://127.0.0.1:7890" };
+    return {
+      value: null,
+      error: "请输入有效的代理地址，例如 http://127.0.0.1:7890",
+    };
   }
 }
 
@@ -1101,6 +1104,51 @@ function PlatformEnablementField() {
           </Field>
         );
       })}
+    </Section>
+  );
+}
+
+function AppearanceSettings() {
+  const switchRef = useRef<HTMLButtonElement>(null);
+  const switchingRef = useRef(false);
+  const theme = useSettingsStore((s) => s.theme);
+  const setTheme = useSettingsStore((s) => s.setTheme);
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" &&
+      typeof document !== "undefined" &&
+      document.documentElement.classList.contains("dark"));
+
+  function handleThemeChange(checked: boolean) {
+    if (checked === isDark || switchingRef.current) return;
+    switchingRef.current = true;
+
+    const rect = switchRef.current?.getBoundingClientRect();
+    const transition = revealThemeAt(
+      rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+      () => flushSync(() => setTheme(checked ? "dark" : "light")),
+    );
+
+    void transition.finished.finally(() => {
+      switchingRef.current = false;
+    });
+  }
+
+  return (
+    <Section title="外观" keywords="主题 深色 暗色 浅色 亮色">
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle id="dark-mode-label">深色模式</FieldTitle>
+        </FieldContent>
+        <Switch
+          ref={switchRef}
+          aria-labelledby="dark-mode-label"
+          checked={isDark}
+          onCheckedChange={handleThemeChange}
+        />
+      </Field>
     </Section>
   );
 }
@@ -1187,13 +1235,14 @@ export function SettingsPage() {
   const [category, setCategory] = useState<SettingsCategory>("playback");
   const [searchQuery, setSearchQuery] = useState("");
   const compactLayout = useCompactSettingsLayout();
+  const mobileClient = isMobileClient();
   const categoryTabRefs = useRef(new Map<SettingsCategory, HTMLButtonElement | null>());
   const settingsCategoryValues = useMemo(() => settingsCategories.map((item) => item.value), []);
   const settingsCategorySwipe = useHorizontalSwipe({
     items: settingsCategoryValues,
     value: category,
     onChange: setCategory,
-    enabled: isMobileClient(),
+    enabled: mobileClient,
   });
   const normalizedSearchQuery = searchQuery.trim();
 
@@ -1378,13 +1427,23 @@ export function SettingsPage() {
       onPointerCancelCapture={settingsCategorySwipe.onPointerCancelCapture}
       onClickCapture={settingsCategorySwipe.onClickCapture}
     >
-      <div data-settings-intro>
-        <PageHeader
-          title="设置"
-          description="管理播放器、字幕、网络与账号偏好"
-          className="mb-0"
-          actions={
-            <InputGroup className="w-full sm:w-72">
+      <h1 className="sr-only">设置</h1>
+
+      <SettingsSearchContext.Provider value={normalizedSearchQuery}>
+        <Tabs
+          value={category}
+          orientation={compactLayout ? "horizontal" : "vertical"}
+          className={cn("gap-6", compactLayout ? "min-h-0" : "min-h-[32rem] gap-8")}
+          onValueChange={(value) => setCategory(value as SettingsCategory)}
+        >
+          <div
+            data-settings-intro
+            className={cn(
+              "flex shrink-0 flex-col gap-3",
+              !compactLayout && "w-48 border-r border-border-subtle pr-5",
+            )}
+          >
+            <InputGroup className={cn("w-full", compactLayout ? "order-2" : "order-1")}>
               <InputGroupAddon align="inline-start">
                 <Search aria-hidden />
               </InputGroupAddon>
@@ -1406,28 +1465,13 @@ export function SettingsPage() {
                 </InputGroupAddon>
               )}
             </InputGroup>
-          }
-        />
-      </div>
-
-      <SettingsSearchContext.Provider value={normalizedSearchQuery}>
-        <Tabs
-          value={category}
-          orientation={compactLayout ? "horizontal" : "vertical"}
-          className={cn("gap-6", compactLayout ? "min-h-0" : "min-h-[32rem] gap-8")}
-          onValueChange={(value) => setCategory(value as SettingsCategory)}
-        >
-          <div
-            className={cn("shrink-0", !compactLayout && "w-48 border-r border-border-subtle pr-5")}
-          >
             <TabsList
               aria-label="设置分类"
-              data-settings-intro
               variant={compactLayout ? "line" : "default"}
               className={cn(
                 compactLayout
-                  ? "scroll-fade-x sticky top-0 h-12! w-full flex-row! justify-start overflow-x-auto bg-background"
-                  : "w-full items-stretch",
+                  ? "scroll-fade-x order-1 sticky top-0 h-12! w-full flex-row! justify-start overflow-x-auto bg-background"
+                  : "order-2 w-full items-stretch",
               )}
             >
               {settingsCategories.map(({ value, label, icon: Icon }) => (
@@ -1457,6 +1501,7 @@ export function SettingsPage() {
             {category === "playback" && (
               <TabsContent value="playback" className="mt-0">
                 <SettingsContent title="播放">
+                  <AppearanceSettings />
                   <Section title="播放质量" keywords="清晰度 智能线路 软切换 线路">
                     <Field orientation="responsive">
                       <FieldTitle id="quality-label">优先清晰度</FieldTitle>
@@ -1503,13 +1548,15 @@ export function SettingsPage() {
                       />
                     </Field>
                   </Section>
-                  <Section
-                    title="语音字幕"
-                    keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端"
-                  >
-                    <AsrModelField />
-                    <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
-                  </Section>
+                  {!mobileClient && (
+                    <Section
+                      title="语音字幕"
+                      keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端"
+                    >
+                      <AsrModelField />
+                      <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
+                    </Section>
+                  )}
                   <Section title="弹幕轨道" keywords="弹幕 轨道 区域 行数">
                     <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
                   </Section>

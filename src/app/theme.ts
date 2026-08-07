@@ -84,6 +84,15 @@ export function revealThemeAt(
 
   const finished = transition.finished
     .catch(() => undefined)
+    .then(
+      () =>
+        new Promise<void>((resolve) => {
+          // Let the live document paint the settled token set before restoring
+          // ordinary component transitions. Otherwise Chromium can create a
+          // fresh batch of color/control transitions as the snapshots leave.
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+        }),
+    )
     .then(() => {
       if (activeThemeTransition !== transition) return;
       activeThemeAnimation?.cancel();

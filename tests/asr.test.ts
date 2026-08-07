@@ -37,10 +37,19 @@ function modelStatus(patch: Partial<AsrModelStatus>): AsrModelStatus {
 }
 
 describe("ASR model status", () => {
-  test("is available in a Tauri desktop and Android client", () => {
-    expect(supportsLocalAsr({ tauriRuntime: true, platform: "desktop" })).toBe(true);
-    expect(supportsLocalAsr({ tauriRuntime: false, platform: "desktop" })).toBe(false);
-    expect(supportsLocalAsr({ tauriRuntime: true, platform: "android" })).toBe(true);
+  test("is available only in a Tauri desktop client", () => {
+    expect(supportsLocalAsr({ tauriRuntime: true, platform: "desktop" })).toBe(
+      true,
+    );
+    expect(supportsLocalAsr({ tauriRuntime: false, platform: "desktop" })).toBe(
+      false,
+    );
+    expect(supportsLocalAsr({ tauriRuntime: true, platform: "android" })).toBe(
+      false,
+    );
+    expect(supportsLocalAsr({ tauriRuntime: true, platform: "ios" })).toBe(
+      false,
+    );
   });
 
   test("reports bounded download progress and ready state", () => {
@@ -82,20 +91,30 @@ describe("ASR model status", () => {
 
   test("reports speaker differentiation in the ready state", () => {
     expect(
-      describeAsrModelStatus(modelStatus({ state: "ready", speaker_enabled: true }), {
-        enabled: true,
-        supported: true,
-      }).message,
-    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + VAD + 自动标点 + 说话人区分）");
+      describeAsrModelStatus(
+        modelStatus({ state: "ready", speaker_enabled: true }),
+        {
+          enabled: true,
+          supported: true,
+        },
+      ).message,
+    ).toBe(
+      "Zipformer 中英双语模型已就绪（CPU / 4 线程 + VAD + 自动标点 + 说话人区分）",
+    );
   });
 
   test("reports the active CUDA provider", () => {
     expect(
-      describeAsrModelStatus(modelStatus({ state: "ready", provider: "cuda" }), {
-        enabled: true,
-        supported: true,
-      }).message,
-    ).toBe("Zipformer 中英双语模型已就绪（NVIDIA CUDA / 4 线程 + VAD + 自动标点）");
+      describeAsrModelStatus(
+        modelStatus({ state: "ready", provider: "cuda" }),
+        {
+          enabled: true,
+          supported: true,
+        },
+      ).message,
+    ).toBe(
+      "Zipformer 中英双语模型已就绪（NVIDIA CUDA / 4 线程 + VAD + 自动标点）",
+    );
   });
 
   test("reports independently disabled VAD, punctuation, and local hotwords", () => {
@@ -109,7 +128,9 @@ describe("ASR model status", () => {
         }),
         { enabled: true, supported: true },
       ).message,
-    ).toBe("Zipformer 中英双语模型已就绪（CPU / 4 线程 + 关闭 VAD + 原始文本 + 3 个热词）");
+    ).toBe(
+      "Zipformer 中英双语模型已就绪（CPU / 4 线程 + 关闭 VAD + 原始文本 + 3 个热词）",
+    );
   });
 
   test("uses the native download stage message", () => {
@@ -154,27 +175,37 @@ describe("ASR audio transport", () => {
   test("encodes f32 samples as little-endian base64", () => {
     const encoded = encodePcmBase64(new Float32Array([1, -0.5]));
     const binary = atob(encoded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0),
+    );
     const view = new DataView(bytes.buffer);
     expect(view.getFloat32(0, true)).toBe(1);
     expect(view.getFloat32(4, true)).toBe(-0.5);
   });
 
   test("joins segment text without adding spaces between Chinese characters", () => {
-    expect(joinAsrCaptionText([{ text: "你好" }, { text: "世界。" }])).toBe("你好世界。");
-    expect(joinAsrCaptionText([{ text: "hello" }, { text: "world" }])).toBe("hello world");
+    expect(joinAsrCaptionText([{ text: "你好" }, { text: "世界。" }])).toBe(
+      "你好世界。",
+    );
+    expect(joinAsrCaptionText([{ text: "hello" }, { text: "world" }])).toBe(
+      "hello world",
+    );
   });
 
   test("keeps finalized utterances on separate subtitle lines", () => {
     const first = appendAsrCaptionLine(null, "你好。 ");
-    expect(appendAsrCaptionLine(first, "How are you?")).toBe("你好。\nHow are you?");
+    expect(appendAsrCaptionLine(first, "How are you?")).toBe(
+      "你好。\nHow are you?",
+    );
   });
 
   test("formats only finalized segments with a valid speaker id", () => {
     expect(formatAsrCaptionSegment({ text: "你好。", speaker_id: 1 })).toBe(
       "说话人 1：你好。",
     );
-    expect(formatAsrCaptionSegment({ text: "你好。", speaker_id: null })).toBe("你好。");
+    expect(formatAsrCaptionSegment({ text: "你好。", speaker_id: null })).toBe(
+      "你好。",
+    );
   });
 });
 
@@ -186,15 +217,21 @@ describe("streaming ASR chunks", () => {
   });
 
   test("prefers AudioWorklet and keeps a legacy WebView fallback", () => {
-    expect(selectAudioCaptureBackend({ audioWorklet: true, audioWorkletNode: true })).toBe(
-      "audio-worklet",
-    );
-    expect(selectAudioCaptureBackend({ audioWorklet: false, audioWorkletNode: true })).toBe(
-      "script-processor",
-    );
-    expect(selectAudioCaptureBackend({ audioWorklet: true, audioWorkletNode: false })).toBe(
-      "script-processor",
-    );
+    expect(
+      selectAudioCaptureBackend({ audioWorklet: true, audioWorkletNode: true }),
+    ).toBe("audio-worklet");
+    expect(
+      selectAudioCaptureBackend({
+        audioWorklet: false,
+        audioWorkletNode: true,
+      }),
+    ).toBe("script-processor");
+    expect(
+      selectAudioCaptureBackend({
+        audioWorklet: true,
+        audioWorkletNode: false,
+      }),
+    ).toBe("script-processor");
   });
 });
 

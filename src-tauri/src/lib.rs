@@ -173,6 +173,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
     // Android-only: brightness / STREAM_MUSIC volume for player edge gestures.
     // Desktop and browser builds keep the existing web player controls.

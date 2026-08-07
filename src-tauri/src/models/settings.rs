@@ -92,6 +92,16 @@ pub struct AppSettings {
     /// Player subtitle font size in CSS pixels.
     #[serde(default = "default_asr_font_size")]
     pub asr_font_size: u32,
+    /// Device-local consent for sending committed ASR captions to Google
+    /// Translate. Disabled by default because subtitle text leaves the device.
+    #[serde(default)]
+    pub asr_translation_enabled: bool,
+    /// Google Translate source language, or `auto` for language detection.
+    #[serde(default = "default_asr_translation_from")]
+    pub asr_translation_from: String,
+    /// Google Translate target language.
+    #[serde(default = "default_asr_translation_to")]
+    pub asr_translation_to: String,
     /// Optional custom IPTV M3U address for this device.
     ///
     /// A playlist URL can identify a private source or include an access token,
@@ -156,6 +166,14 @@ fn default_asr_provider() -> String {
     "auto".into()
 }
 
+fn default_asr_translation_from() -> String {
+    "auto".into()
+}
+
+fn default_asr_translation_to() -> String {
+    "zh-CN".into()
+}
+
 fn default_asr_punctuation_enabled() -> bool {
     true
 }
@@ -203,6 +221,9 @@ impl Default for AppSettings {
             asr_hotwords: Vec::new(),
             asr_window_seconds: default_asr_window_seconds(),
             asr_font_size: default_asr_font_size(),
+            asr_translation_enabled: false,
+            asr_translation_from: default_asr_translation_from(),
+            asr_translation_to: default_asr_translation_to(),
             iptv_custom_m3u_url: None,
             iptv_availability_auto_check: true,
             iptv_availability_auto_check_interval_hours: 1,

@@ -116,6 +116,16 @@
   z-index: 2;
 }
 
+/* Theme-token changes must already be settled in the new snapshot. Components
+   with transition-colors/transition-all would otherwise keep interpolating
+   behind the circular reveal and become visible as a second animation. */
+:root[data-theme-reveal="true"] *,
+:root[data-theme-reveal="true"] *::before,
+:root[data-theme-reveal="true"] *::after {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans:
@@ -324,6 +334,19 @@ html[data-platform="android"] .app-shell {
 .room-card {
   content-visibility: auto;
   contain-intrinsic-size: auto 13rem;
+}
+
+/* Adjacent mobile platform pages remain mounted for the finger-following
+   preview. Isolate their layout/paint work and stop fully offscreen loaders
+   from consuming animation frames until that panel becomes active. */
+[data-slot="app-swipe-panel"] {
+  contain: layout paint style;
+}
+
+[data-slot="app-swipe-panel"][aria-hidden="true"] *,
+[data-slot="app-swipe-panel"][aria-hidden="true"] *::before,
+[data-slot="app-swipe-panel"][aria-hidden="true"] *::after {
+  animation-play-state: paused !important;
 }
 
 /* The native danmaku window is transparent. Keep its top-level surface clear

@@ -11,7 +11,7 @@ import {
   HORIZONTAL_SWIPE_DIRECTION_RATIO,
   HORIZONTAL_SWIPE_LOCK_DISTANCE_PX,
   HORIZONTAL_SWIPE_MAX_DRAG_PX,
-  HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO,
+  horizontalSwipeCommitOffset,
   horizontalSwipeDragOffset,
   isHorizontalSwipeIgnoredTarget,
   nextItemForHorizontalSwipe,
@@ -24,8 +24,13 @@ type SwipeState = {
   startY: number;
   startOffsetX: number;
   surfaceWidth: number;
+  itemIndex: number;
+  itemCount: number;
+  reducedMotion: boolean;
   horizontal: boolean;
 };
+
+type SwipeOffsetSetter = (value: number) => void;
 
 const HORIZONTAL_SWIPE_SURFACE_SELECTOR = "[data-horizontal-swipe-surface]";
 
@@ -49,9 +54,9 @@ export type UseHorizontalSwipeOptions<T> = {
  * native while leaving horizontal motion to this hook.
  *
  * Attach `pageRef` to the element that should travel. While a finger is down the
- * offset is written with `gsap.set` — a direct transform write, no tween
- * allocated per pointermove. Tweens are created only twice per gesture: once to
- * settle back to rest, or once to pan the committed page into place.
+ * offset is written through one reused `gsap.quickSetter`, so pointermove never
+ * allocates a tween. A tween is created only when the page settles back to rest
+ * or the committed page pans into place.
  */
 export function useHorizontalSwipe<T>({
   items,
@@ -76,6 +81,8 @@ export function useHorizontalSwipe<T>({
   const offsetRef = useRef(0);
   const pendingOffsetRef = useRef<number | null>(null);
   const offsetFrameRef = useRef<number | null>(null);
+  const offsetSetterRef = useRef<SwipeOffsetSetter | null>(null);
+  const offsetSetterElementRef = useRef<HTMLElement | null>(null);
   itemsRef.current = items;
   valueRef.current = value;
   onChangeRef.current = onChange;
@@ -86,7 +93,12 @@ export function useHorizontalSwipe<T>({
     const next = pendingOffsetRef.current;
     pendingOffsetRef.current = null;
     const el = pageRef.current;
-    if (el && next !== null) gsap.set(el, { x: next, force3D: true });
+    if (!el || next === null) return;
+    if (!offsetSetterRef.current || offsetSetterElementRef.current !== el) {
+      offsetSetterElementRef.current = el;
+      offsetSetterRef.current = gsap.quickSetter(el, "x", "px") as SwipeOffsetSetter;
+    }
+    offsetSetterRef.current(next);
   }, []);
 
   const cancelPendingOffset = useCallback(() => {
@@ -121,6 +133,8 @@ export function useHorizontalSwipe<T>({
   const clearOffset = useCallback(() => {
     cancelPendingOffset();
     offsetRef.current = 0;
+    offsetSetterRef.current = null;
+    offsetSetterElementRef.current = null;
     const el = pageRef.current;
     if (el) gsap.set(el, { clearProps: "transform,willChange" });
   }, [cancelPendingOffset]);
@@ -151,8 +165,9 @@ export function useHorizontalSwipe<T>({
 
     const previousIndex = items.findIndex((item) => isEqual(item, previousValue));
     const nextIndex = items.findIndex((item) => isEqual(item, value));
+    const pendingDirection = pendingDirectionRef.current;
     const direction =
-      pendingDirectionRef.current ??
+      pendingDirection ??
       (previousIndex >= 0 && nextIndex >= 0 && previousIndex !== nextIndex
         ? nextIndex > previousIndex
           ? 1
@@ -177,14 +192,19 @@ export function useHorizontalSwipe<T>({
     // value, place the incoming page a full surface width across the opposite
     // edge and settle it in, so the release plays as one continuous pan rather
     // than a short catch-up nudge.
-    const entry = surfaceWidthRef.current * HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO;
-    if (entry <= 0) {
+    const surfaceWidth = surfaceWidthRef.current;
+    if (surfaceWidth <= 0) {
       clearOffset();
       return;
     }
+    const startOffset = horizontalSwipeCommitOffset(
+      pendingDirection === null ? 0 : offsetRef.current,
+      direction,
+      surfaceWidth,
+    );
     gsap.fromTo(
       el,
-      { x: direction * entry, force3D: true, willChange: "transform" },
+      { x: startOffset, force3D: true, willChange: "transform" },
       {
         x: 0,
         force3D: true,
@@ -240,12 +260,16 @@ export function useHorizontalSwipe<T>({
         return;
       }
       const surfaceWidth = event.currentTarget.clientWidth;
+      const currentItems = itemsRef.current;
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         startOffsetX: offsetRef.current,
         surfaceWidth,
+        itemIndex: currentItems.findIndex((item) => isEqualRef.current(item, valueRef.current)),
+        itemCount: currentItems.length,
+        reducedMotion: prefersReducedMotion(),
         horizontal: false,
       };
       surfaceWidthRef.current = surfaceWidth;
@@ -286,19 +310,16 @@ export function useHorizontalSwipe<T>({
           offsetRef.current = currentX;
           swipe.startOffsetX = currentX;
           // A vertical gesture must never promote the whole scrolling page.
-          gsap.set(el, { willChange: "transform" });
+          gsap.set(el, { force3D: true, willChange: "transform" });
         }
         event.currentTarget.setPointerCapture(event.pointerId);
       }
 
-      if (!prefersReducedMotion()) {
+      if (!swipe.reducedMotion) {
         const surfaceWidth = swipe.surfaceWidth;
-        const currentIndex = itemsRef.current.findIndex((item) =>
-          isEqualRef.current(item, valueRef.current),
-        );
         const dragOffset = horizontalSwipeDragOffset(
-          currentIndex,
-          itemsRef.current.length,
+          swipe.itemIndex,
+          swipe.itemCount,
           deltaX,
           surfaceWidth,
         );

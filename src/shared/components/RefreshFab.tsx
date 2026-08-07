@@ -1,9 +1,11 @@
+import { createContext, useContext, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { isMobileClient } from "@/shared/clientPlatform";
 
 type RefreshFabProps = {
   onRefresh: () => void | Promise<unknown>;
@@ -13,12 +15,27 @@ type RefreshFabProps = {
   className?: string;
 };
 
+const RefreshFabVisibilityContext = createContext(true);
+
+export function RefreshFabVisibilityProvider({
+  visible,
+  children,
+}: {
+  visible: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <RefreshFabVisibilityContext.Provider value={visible}>
+      {children}
+    </RefreshFabVisibilityContext.Provider>
+  );
+}
+
 /**
- * Floating manual-refresh control for list pages.
+ * Desktop manual-refresh control for list pages.
  *
  * List queries deliberately never refetch on their own after the first visit,
- * so this button (and the touch pull-to-refresh gesture) is how a user asks for
- * new data.
+ * so desktop clients use this button while mobile clients use pull-to-refresh.
  *
  * It renders into `document.body`: the page wrapper in Shell keeps a composited
  * transform from its entrance animation, which would otherwise turn into the
@@ -31,6 +48,9 @@ export function RefreshFab({
   label = "刷新",
   className,
 }: RefreshFabProps) {
+  const visible = useContext(RefreshFabVisibilityContext);
+  if (!visible || isMobileClient()) return null;
+
   return createPortal(
     <Tooltip>
       <TooltipTrigger

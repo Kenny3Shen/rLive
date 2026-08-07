@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createEngine } from "../src/features/room/canvas/danmakuEngine";
+import {
+  canvasFrameIsDue,
+  MOBILE_DANMAKU_FRAME_INTERVAL_MS,
+  nextCanvasFrameDeadline,
+} from "../src/features/room/canvas/framePacing";
 
 function chat(content: string, ts: number, user = "观众") {
   return {
@@ -24,6 +29,26 @@ function richChat(content: string, ts: number, user = "观众") {
     ],
   };
 }
+
+describe("mobile canvas frame pacing", () => {
+  test("turns 120 Hz callbacks into an even 60 FPS paint cadence", () => {
+    let deadline = 0;
+    let paints = 0;
+    for (let frame = 0; frame <= 12; frame += 1) {
+      const now = frame * (1_000 / 120);
+      if (!canvasFrameIsDue(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS)) continue;
+      paints += 1;
+      deadline = nextCanvasFrameDeadline(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
+    }
+    expect(paints).toBe(7);
+  });
+
+  test("resets its deadline after a long stall instead of catching up in a burst", () => {
+    const next = nextCanvasFrameDeadline(1_000, 100, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
+    expect(next).toBeCloseTo(1_000 + MOBILE_DANMAKU_FRAME_INTERVAL_MS);
+    expect(canvasFrameIsDue(1_000, next, MOBILE_DANMAKU_FRAME_INTERVAL_MS)).toBe(false);
+  });
+});
 
 describe("danmaku engine", () => {
   test("reports when the canvas can safely stop requesting animation frames", () => {
