@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { isTauri } from "@tauri-apps/api/core";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
+import type {
+  CaptionTranslationLanguage,
+  CaptionTranslationSourceLanguage,
+} from "@/shared/types/live";
 import {
   appendAsrCaptionLine,
   encodePcmBase64,
@@ -10,6 +14,7 @@ import {
   type AudioCaptureSubscription,
 } from "./audio";
 import { describeAsrModelStatus, useAsrModelStatus } from "./model";
+import { useCaptionTranslation } from "./useCaptionTranslation";
 
 type AsrCaptionSegment = {
   text: string;
@@ -47,9 +52,12 @@ export function useAsrCaptions(options: {
   settingPending: boolean;
   mediaAvailable: boolean;
   chunkSeconds: number;
+  translationEnabled: boolean;
+  translationFrom: CaptionTranslationSourceLanguage;
+  translationTo: CaptionTranslationLanguage;
 }) {
   const clientPlatform = getClientPlatform();
-  const localAsrClient = clientPlatform === "desktop" || clientPlatform === "android";
+  const localAsrClient = clientPlatform === "desktop";
   const model = useAsrModelStatus({ enabled: options.featureEnabled });
   const [captionsOn, setCaptionsOn] = useState(false);
   const [caption, setCaption] = useState<string | null>(null);
@@ -62,6 +70,15 @@ export function useAsrCaptions(options: {
   const workerRunningRef = useRef(false);
   const captionTimerRef = useRef<number | null>(null);
   const chunkSetterRef = useRef<((seconds: number) => void) | null>(null);
+  const translation = useCaptionTranslation({
+    active: captionsOn,
+    enabled: options.translationEnabled,
+    from: options.translationFrom,
+    to: options.translationTo,
+    mediaKey: options.mediaKey,
+    sessionKey: options.sessionKey,
+  });
+  const enqueueTranslation = translation.enqueue;
 
   const clearCaptionTimer = useCallback(() => {
     if (captionTimerRef.current !== null) {
@@ -90,6 +107,7 @@ export function useAsrCaptions(options: {
           setPartial(response.partial?.trim() || null);
 
           if (response.segments.length === 0) continue;
+          enqueueTranslation(response.segments);
           setCaption((current) =>
             response.segments.reduce(
               (committed, segment) =>
@@ -114,7 +132,7 @@ export function useAsrCaptions(options: {
       setProcessing(false);
       if (pendingJobRef.current) void processPendingJobs();
     }
-  }, [clearCaptionTimer]);
+  }, [clearCaptionTimer, enqueueTranslation]);
 
   useEffect(() => {
     if (!options.featureEnabled || !model.supported) {
@@ -211,17 +229,21 @@ export function useAsrCaptions(options: {
 
   useEffect(() => () => clearCaptionTimer(), [clearCaptionTimer]);
 
+  const modelSupported = model.supported;
+  const modelState = model.status?.state;
+  const modelQueryError = model.queryError;
+  const prepareModel = model.prepare;
   const toggle = useCallback(() => {
-    if (!localAsrClient || !model.supported || !options.featureEnabled) return;
-    if (model.status?.state === "error" || model.queryError) {
+    if (!localAsrClient || !modelSupported || !options.featureEnabled) return;
+    if (modelState === "error" || modelQueryError) {
       setNotice(null);
       setCaptureError(null);
-      void model.prepare().catch((error) => {
+      void prepareModel().catch((error) => {
         setNotice(`模型准备失败：${errorMessage(error)}`);
       });
       return;
     }
-    if (model.status?.state !== "ready" || !options.mediaAvailable) return;
+    if (modelState !== "ready" || !options.mediaAvailable) return;
 
     setCaptionsOn((current) => {
       const next = !current;
@@ -240,7 +262,16 @@ export function useAsrCaptions(options: {
       }
       return next;
     });
-  }, [clearCaptionTimer, localAsrClient, model, options.featureEnabled, options.mediaAvailable]);
+  }, [
+    clearCaptionTimer,
+    localAsrClient,
+    modelQueryError,
+    modelState,
+    modelSupported,
+    options.featureEnabled,
+    options.mediaAvailable,
+    prepareModel,
+  ]);
 
   const statusPresentation = describeAsrModelStatus(model.status, {
     enabled: options.featureEnabled,
@@ -254,7 +285,7 @@ export function useAsrCaptions(options: {
   // window makes the captions icon flash, so busy only describes preparation.
   let controlBusy = false;
   if (!isTauri() || !localAsrClient) {
-    controlLabel = "语音字幕仅在 Tauri 桌面或 Android 客户端可用";
+    controlLabel = "语音字幕仅在 Tauri 桌面客户端可用";
     controlDisabled = true;
   } else if (!options.featureEnabled) {
     controlLabel = "请先在设置中启用语音字幕";
@@ -278,8 +309,11 @@ export function useAsrCaptions(options: {
     desktopClient: localAsrClient,
     captionsOn,
     caption,
+    translatedCaption: translation.translatedCaption,
     partial,
     notice,
+    translationNotice: translation.translationNotice,
+    translationPending: translation.translationPending,
     noticeIsError: notice !== null,
     processing,
     modelStatus: model.status,

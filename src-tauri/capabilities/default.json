@@ -16,6 +16,10 @@
     "core:webview:default",
     "opener:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://translate.google.com/**" }]
+    }
   ]
 }

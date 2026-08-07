@@ -143,6 +143,31 @@ export type DanmakuFavoriteItem = {
   added_at: number;
 };
 
+export type CaptionTranslationLanguage =
+  | "ar"
+  | "de"
+  | "en"
+  | "es"
+  | "fr"
+  | "hi"
+  | "id"
+  | "it"
+  | "ja"
+  | "ko"
+  | "ms"
+  | "nl"
+  | "pl"
+  | "pt"
+  | "ru"
+  | "th"
+  | "tr"
+  | "uk"
+  | "vi"
+  | "zh-CN"
+  | "zh-TW";
+
+export type CaptionTranslationSourceLanguage = "auto" | CaptionTranslationLanguage;
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   default_site: string;
@@ -186,6 +211,12 @@ export type AppSettings = {
   asr_window_seconds?: number;
   /** Player subtitle font size in CSS pixels. */
   asr_font_size?: number;
+  /** Device-local consent for sending committed ASR captions to Google Translate. */
+  asr_translation_enabled?: boolean;
+  /** Google Translate source language, or auto detection. */
+  asr_translation_from?: CaptionTranslationSourceLanguage;
+  /** Google Translate target language. */
+  asr_translation_to?: CaptionTranslationLanguage;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;
   /** Legacy settings field kept only for backwards-compatible deserialization. */

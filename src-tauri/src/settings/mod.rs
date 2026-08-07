@@ -88,6 +88,44 @@ fn normalize_asr_preferences(settings: &mut AppSettings) {
         seen.insert(word.to_lowercase())
     });
     settings.asr_hotwords.truncate(100);
+
+    if settings.asr_translation_from != "auto"
+        && !is_supported_translation_language(&settings.asr_translation_from)
+    {
+        settings.asr_translation_from = "auto".to_owned();
+    }
+    if !is_supported_translation_language(&settings.asr_translation_to) {
+        settings.asr_translation_to = "zh-CN".to_owned();
+    }
+    if settings.asr_translation_from == settings.asr_translation_to {
+        settings.asr_translation_from = "auto".to_owned();
+    }
+}
+
+fn is_supported_translation_language(language: &str) -> bool {
+    matches!(
+        language,
+        "ar" | "de"
+            | "en"
+            | "es"
+            | "fr"
+            | "hi"
+            | "id"
+            | "it"
+            | "ja"
+            | "ko"
+            | "ms"
+            | "nl"
+            | "pl"
+            | "pt"
+            | "ru"
+            | "th"
+            | "tr"
+            | "uk"
+            | "vi"
+            | "zh-CN"
+            | "zh-TW"
+    )
 }
 
 fn normalize_danmaku_preferences(settings: &mut AppSettings) {
@@ -178,6 +216,9 @@ mod tests {
         assert!(s.asr_punctuation_enabled);
         assert_eq!(s.asr_provider, "auto");
         assert!(s.asr_hotwords.is_empty());
+        assert!(!s.asr_translation_enabled);
+        assert_eq!(s.asr_translation_from, "auto");
+        assert_eq!(s.asr_translation_to, "zh-CN");
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
     }
@@ -248,6 +289,28 @@ mod tests {
         settings.asr_provider = "cuda".into();
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().asr_provider, "cuda");
+    }
+
+    #[test]
+    fn set_normalizes_caption_translation_languages() {
+        let conn = open_in_memory().unwrap();
+        let mut settings = AppSettings {
+            asr_translation_from: "unsupported".into(),
+            asr_translation_to: "unsupported".into(),
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        let normalized = get(&conn).unwrap();
+        assert_eq!(normalized.asr_translation_from, "auto");
+        assert_eq!(normalized.asr_translation_to, "zh-CN");
+
+        settings.asr_translation_from = "en".into();
+        settings.asr_translation_to = "en".into();
+        set(&conn, &settings).unwrap();
+        let normalized = get(&conn).unwrap();
+        assert_eq!(normalized.asr_translation_from, "auto");
+        assert_eq!(normalized.asr_translation_to, "en");
     }
 
     #[test]

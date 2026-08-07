@@ -8,6 +8,7 @@ import {
 } from "../danmaku/content";
 import { subscribeDanmakuBatches } from "../danmaku/eventBus";
 import { createShieldMatcher, shouldShowValidatedOnCanvas } from "../danmaku/filter";
+import { isMobileClient } from "@/shared/clientPlatform";
 import {
   createEngine,
   DANMAKU_SELF_BORDER_PADDING_X,
@@ -15,6 +16,11 @@ import {
   type DanmakuEngine,
   type TrackItem,
 } from "./danmakuEngine";
+import {
+  canvasFrameIsDue,
+  MOBILE_DANMAKU_FRAME_INTERVAL_MS,
+  nextCanvasFrameDeadline,
+} from "./framePacing";
 import { cn } from "@/lib/utils";
 
 type CanvasDanmakuProps = {
@@ -391,6 +397,8 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     let raf: number | null = null;
     let last = performance.now();
     let lastFrameAt = last;
+    let nextFrameDeadline = 0;
+    const frameIntervalMs = isMobileClient() ? MOBILE_DANMAKU_FRAME_INTERVAL_MS : 0;
     let ro: ResizeObserver | null = null;
     let resizeRaf: number | null = null;
     let stopped = false;
@@ -628,6 +636,11 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       raf = null;
       if (stopped || document.hidden) return;
       if (width <= 0 || height <= 0) return;
+      if (!canvasFrameIsDue(now, nextFrameDeadline, frameIntervalMs)) {
+        scheduleFrame();
+        return;
+      }
+      nextFrameDeadline = nextCanvasFrameDeadline(now, nextFrameDeadline, frameIntervalMs);
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       lastFrameAt = now;
@@ -816,6 +829,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       raf = null;
       last = performance.now();
       lastFrameAt = last;
+      nextFrameDeadline = 0;
       requestFrame();
     }
 

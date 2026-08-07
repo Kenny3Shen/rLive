@@ -10,7 +10,7 @@
  *
  * Marking the data permanently fresh makes every later visit free. Freshness
  * stays entirely under explicit control:
- * - the floating refresh button and the Android pull-to-refresh gesture call
+ * - the desktop refresh button and the mobile pull-to-refresh gesture call
  *   `refetch()` directly, which ignores `staleTime`;
  * - `invalidateQueries` (Cookie changes, profile import) also ignores
  *   `staleTime`, so a mount after an invalidation still refetches.

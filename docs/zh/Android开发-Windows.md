@@ -38,15 +38,15 @@ Debug 开发运行：
 bun run tauri -- android dev --target aarch64
 ```
 
-构建使用 Tauri 原生命令。项目 vendor 的 `sherpa-onnx-sys 1.13.4` 仅补充 Android target 支持：首次构建会从官方 `v1.13.4` release 下载 `sherpa-onnx-v1.13.4-android.tar.bz2`，解压到 Cargo `target/sherpa-onnx-prebuilt` 缓存，并按当前 ABI 完成链接和打包。离线构建时，可让下列变量指向已下载压缩包所在的目录：
+构建使用 Tauri 原生命令。移动端当前不提供语音字幕，但 Rust 依赖仍需要链接 sherpa-onnx native runtime。项目 vendor 的 `sherpa-onnx-sys 1.13.4` 补充 Android target 支持：首次构建会从官方 `v1.13.4` release 下载 `sherpa-onnx-v1.13.4-android.tar.bz2`，解压到 Cargo `target/sherpa-onnx-prebuilt` 缓存，并按当前 ABI 完成链接和打包。离线构建时，可让下列变量指向已下载压缩包所在的目录：
 
 ```bash
 export SHERPA_ONNX_ARCHIVE_DIR="/path/to/downloaded-archives"
 ```
 
-该目录必须包含文件名完全相同的 `sherpa-onnx-v1.13.4-android.tar.bz2`。构建脚本把 Rust FFI 实际依赖的 `libsherpa-onnx-c-api.so` 与 `libonnxruntime.so` 复制到 `jniLibs/<abi>`，Gradle 随后将它们打入 APK；`libsherpa-onnx-jni.so` 是 Java/Kotlin JNI 接口，不用于当前 Rust 命令层。Zipformer、标点与可选 CAMPPlus 声纹模型不打包进 APK，首次启用对应功能时从 GitHub Release 下载到应用私有目录。
+该目录必须包含文件名完全相同的 `sherpa-onnx-v1.13.4-android.tar.bz2`。构建脚本把 Rust FFI 实际依赖的 `libsherpa-onnx-c-api.so` 与 `libonnxruntime.so` 复制到 `jniLibs/<abi>`，Gradle 随后将它们打入 APK；`libsherpa-onnx-jni.so` 是 Java/Kotlin JNI 接口，不用于当前 Rust 命令层。Zipformer、标点与 CAMPPlus 模型不打包进 APK；Android 不展示字幕设置或播放器入口，也不会下载这些模型。
 
-`--target aarch64` 只构建 `arm64-v8a`。Tauri/Gradle 的 flavor 名称可能仍显示为 `universal`，这不代表 APK 包含四种 ABI；以 APK 内的 `lib/arm64-v8a/` 目录为准。默认约 `550 MiB` 的 Zipformer 与标点模型仍在首次启用字幕时按需下载；关闭自动标点时约 `488 MiB`，开启默认关闭的说话人区分后会再下载约 `27 MiB`，这些模型都不会进入 APK。
+`--target aarch64` 只构建 `arm64-v8a`。Tauri/Gradle 的 flavor 名称可能仍显示为 `universal`，这不代表 APK 包含四种 ABI；以 APK 内的 `lib/arm64-v8a/` 目录为准。
 
 产物通常位于：
 
@@ -63,10 +63,6 @@ src-tauri/gen/android/app/build/outputs/apk/
 ### 缺少 native library
 
 检查 `src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/` 是否包含 `libsherpa-onnx-c-api.so` 与 `libonnxruntime.so`。如果缺失，确认网络可以访问 `https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/`；离线构建则确认 `SHERPA_ONNX_ARCHIVE_DIR` 指向包含官方 Android 压缩包的目录。
-
-### 模型下载失败
-
-基础模型下载合计约 `488–550 MiB`（取决于自动标点开关），说话人区分开启后最多约 `576 MiB`。Android 需要可访问 GitHub Release 的网络。代理设置会用于模型下载；网络不可用时可以先完成 APK 构建，进入设置后再重试模型准备。
 
 ## 真机验证
 
@@ -86,4 +82,4 @@ file src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/*.so
 
 `app-*-release.apk` 是可直接安装的 APK；`*.aab` 是应用商店格式，不能用 `adb install` 直接安装。`--ci` 未配置 release keystore 时可能生成 unsigned APK，必须先签名再安装或发布。
 
-安装后确认：播放直播、开启 CPU 语音字幕、分别切换默认开启的 VAD 和自动标点、配置本地热词、按 `0.1 秒`步长调整 `0.2–1.0 秒`更新间隔、观察中英标点与自动两行字幕，以及关闭字幕时控制栏图标不会闪烁。还应单独验证默认关闭的说话人区分：只在 final 显示匿名编号、短句保持稳定、切房后重新编号。该功能会增加 endpoint 后的 CPU、耗电和发热；热词会启用 modified beam search，低性能设备应按需启用。完整用户说明见[本地语音字幕](本地语音字幕.md)。
+安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。Android 不应下载 Zipformer、标点或 CAMPPlus 模型。

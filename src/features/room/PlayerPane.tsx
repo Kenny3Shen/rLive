@@ -4,10 +4,23 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { SunMedium, Volume2 } from "lucide-react";
+import {
+  Captions,
+  CaptionsOff,
+  Headphones,
+  MessageCircle,
+  MessageCircleOff,
+  PictureInPicture2,
+  SunMedium,
+  VideoOff,
+  Volume2,
+  VolumeX,
+  type LucideIcon,
+} from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
@@ -17,7 +30,11 @@ import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
 import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
-import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import {
+  audioOnlyControlPresentation,
+  danmakuControlPresentation,
+  PlayerControls,
+} from "@/shared/components/player/PlayerControls";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
@@ -41,6 +58,15 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { siteSupportsSuperChat } from "./superChat";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
+
+export type PlayerMobileRoomAction = {
+  id: "mute" | "audio-only" | "danmaku" | "asr" | "picture-in-picture";
+  label: string;
+  icon: LucideIcon;
+  pressed?: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+};
 
 /** Keep the visual tab order and touch-navigation order in one place. */
 export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
@@ -74,6 +100,7 @@ type PlayerEdgeGestureState = {
   kind: PlayerEdgeGesture;
   startX: number;
   startY: number;
+  stageHeight: number;
   startValue: number;
   lastValue: number;
   active: boolean;
@@ -276,6 +303,8 @@ type PlayerPaneProps = {
   /** The canonical room identity for platform-specific chat controls. */
   siteId?: SiteId;
   roomId?: string;
+  /** Publishes portrait-only secondary controls to RoomPage's room-actions menu. */
+  onMobileRoomActionsChange?: (actions: readonly PlayerMobileRoomAction[]) => void;
 };
 
 /**
@@ -309,6 +338,7 @@ export function PlayerPane({
   onSideTabChange,
   siteId,
   roomId,
+  onMobileRoomActionsChange,
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
   const compactLandscapeViewport = useCompactLandscapePlayerViewport();
@@ -333,6 +363,12 @@ export function PlayerPane({
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
   const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
+  const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
+  const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
+  const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
+  const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
+  const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
@@ -376,6 +412,9 @@ export function PlayerPane({
     aspectRatio: player.aspectRatio,
   });
   const changePlayerVolume = player.changeVolume;
+  const toggleAndroidMediaMute = androidPlayerControls.toggleMediaMute;
+  const togglePlayerMute = player.toggleMute;
+  const togglePlayerPictureInPicture = player.togglePictureInPicture;
   const togglePlayerFullscreen = player.toggleFullscreen;
   useScreenWakeLock(player.running && !player.paused && !audioOnly);
   // This stays above the conditional side panel, so hiding that panel never
@@ -407,7 +446,29 @@ export function PlayerPane({
     settingPending: asrPending,
     mediaAvailable: showHost,
     chunkSeconds: asrWindowSeconds,
+    translationEnabled: asrTranslationEnabled,
+    translationFrom: asrTranslationFrom,
+    translationTo: asrTranslationTo,
   });
+  const handleToggleMute = useCallback(() => {
+    if (androidClient) {
+      toggleAndroidMediaMute();
+      return;
+    }
+    togglePlayerMute();
+  }, [androidClient, toggleAndroidMediaMute, togglePlayerMute]);
+  const handleToggleAudioOnly = useCallback(() => {
+    const nextAudioOnly = !audioOnly;
+    if (nextAudioOnly && player.pictureInPictureActive) {
+      void togglePlayerPictureInPicture();
+    }
+    setAudioOnly(nextAudioOnly);
+  }, [audioOnly, player.pictureInPictureActive, togglePlayerPictureInPicture]);
+  const handleToggleOsd = useCallback(() => setOsdOn((visible) => !visible), []);
+  const handleTogglePictureInPicture = useCallback(
+    () => void togglePlayerPictureInPicture(),
+    [togglePlayerPictureInPicture],
+  );
   // Android routes loudness through STREAM_MUSIC. Use native state whenever the
   // bridge is supported, even before the first getState resolves, so UI and
   // gestures never fall back to the HTML <video> volume on a phone.
@@ -418,6 +479,85 @@ export function PlayerPane({
     nativePlayerControlState?.mediaVolume !== undefined
       ? nativePlayerControlState.mediaVolume <= 0
       : player.muted;
+  const mobileRoomActions = useMemo<readonly PlayerMobileRoomAction[]>(() => {
+    const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
+    const danmakuControl = danmakuControlPresentation(osdOn);
+    const actions: PlayerMobileRoomAction[] = [
+      {
+        id: "mute",
+        label: playerControlMuted ? "取消静音" : "静音",
+        icon: playerControlMuted ? VolumeX : Volume2,
+        pressed: playerControlMuted,
+        disabled: transportDisabled,
+        onSelect: handleToggleMute,
+      },
+      {
+        id: "audio-only",
+        label: audioOnlyControl.label,
+        icon: audioOnlyControl.icon === "headphones" ? Headphones : VideoOff,
+        pressed: audioOnlyControl.enabled,
+        disabled: transportDisabled && !audioOnly,
+        onSelect: handleToggleAudioOnly,
+      },
+      {
+        id: "danmaku",
+        label: danmakuControl.label,
+        icon: danmakuControl.icon === "message-circle" ? MessageCircle : MessageCircleOff,
+        pressed: danmakuControl.enabled,
+        disabled: transportDisabled,
+        onSelect: handleToggleOsd,
+      },
+    ];
+    if (asr.desktopClient) {
+      actions.push({
+        id: "asr",
+        label: asr.controlLabel,
+        icon: asr.captionsOn ? Captions : CaptionsOff,
+        pressed: asr.captionsOn,
+        disabled: asr.controlDisabled,
+        onSelect: asr.toggle,
+      });
+    }
+    if (player.pictureInPictureSupported) {
+      actions.push({
+        id: "picture-in-picture",
+        label: player.pictureInPictureActive ? "退出画中画" : "画中画",
+        icon: PictureInPicture2,
+        pressed: player.pictureInPictureActive,
+        disabled: transportDisabled || player.mode === "fullscreen" || audioOnly,
+        onSelect: handleTogglePictureInPicture,
+      });
+    }
+    return actions;
+  }, [
+    asr.captionsOn,
+    asr.controlDisabled,
+    asr.controlLabel,
+    asr.desktopClient,
+    asr.toggle,
+    audioOnly,
+    handleToggleAudioOnly,
+    handleToggleMute,
+    handleToggleOsd,
+    handleTogglePictureInPicture,
+    osdOn,
+    player.mode,
+    player.pictureInPictureActive,
+    player.pictureInPictureSupported,
+    playerControlMuted,
+    transportDisabled,
+  ]);
+
+  useEffect(() => {
+    onMobileRoomActionsChange?.(mobileRoomActions);
+  }, [mobileRoomActions, onMobileRoomActionsChange]);
+
+  useEffect(
+    () => () => {
+      onMobileRoomActionsChange?.([]);
+    },
+    [onMobileRoomActionsChange],
+  );
   const canAutoHideControls =
     showHost && player.running && !player.paused && !overlayInteractionOpen;
   const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
@@ -736,6 +876,7 @@ export function PlayerPane({
         kind,
         startX: event.clientX,
         startY: event.clientY,
+        stageHeight: stageBounds.height,
         startValue,
         lastValue: startValue,
         active: false,
@@ -789,11 +930,7 @@ export function PlayerPane({
 
       event.preventDefault();
       const nextValue = androidPlayerControlStep(
-        playerEdgeGestureValue(
-          gesture.startValue,
-          deltaY,
-          event.currentTarget.getBoundingClientRect().height,
-        ),
+        playerEdgeGestureValue(gesture.startValue, deltaY, gesture.stageHeight),
       );
       if (beganAdjustment || nextValue !== gesture.lastValue) {
         gesture.lastValue = nextValue;
@@ -1172,7 +1309,11 @@ export function PlayerPane({
             {showHost &&
               !audioOnly &&
               (asr.captionsOn || asr.notice) &&
-              (asr.notice || asr.caption || asr.partial) && (
+              (asr.notice ||
+                asr.caption ||
+                asr.translatedCaption ||
+                asr.translationNotice ||
+                asr.partial) && (
                 <div
                   role="status"
                   aria-live="polite"
@@ -1181,7 +1322,7 @@ export function PlayerPane({
                 >
                   <p
                     className={cn(
-                      "flex max-h-[3.25em] min-w-0 max-w-[min(48rem,92%)] flex-col justify-end overflow-hidden rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
+                      "flex max-h-[min(7em,45dvh)] min-w-0 max-w-[min(48rem,92%)] flex-col justify-end overflow-hidden rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
                       asr.noticeIsError &&
                         asr.notice &&
                         "border border-destructive/45 text-red-100",
@@ -1189,9 +1330,18 @@ export function PlayerPane({
                     style={{ fontSize: `${asrFontSize}px` }}
                   >
                     {asr.notice ?? (
-                      <span className="block shrink-0 whitespace-pre-line break-words">
-                        {asr.caption}
-                        {asr.caption && asr.partial ? "\n" : null}
+                      <span className="flex shrink-0 flex-col gap-0.5 whitespace-pre-line break-words">
+                        {asr.caption ? <span>{asr.caption}</span> : null}
+                        {asr.translatedCaption ? (
+                          <span lang={asrTranslationTo} className="text-white/82">
+                            {asr.translatedCaption}
+                          </span>
+                        ) : null}
+                        {asr.translationNotice ? (
+                          <span className="text-xs font-normal text-destructive">
+                            {asr.translationNotice}
+                          </span>
+                        ) : null}
                         {asr.partial ? <span className="text-white/60">{asr.partial}</span> : null}
                       </span>
                     )}
@@ -1283,6 +1433,10 @@ export function PlayerPane({
                 asrLabel={asr.controlLabel}
                 asrDisabled={asr.controlDisabled}
                 asrBusy={asr.controlBusy}
+                asrTranslationEnabled={asrTranslationEnabled}
+                asrTranslationFrom={asrTranslationFrom}
+                asrTranslationTo={asrTranslationTo}
+                asrTranslationBusy={asr.translationPending}
                 qualities={qualities}
                 qualityIndex={qualityIndex}
                 lines={lines}
@@ -1303,12 +1457,14 @@ export function PlayerPane({
                 compact={compactViewport}
                 portalContainer={player.stageRef}
                 centerSlot={
-                  <DanmakuComposer
-                    siteId={siteId}
-                    roomId={roomId}
-                    overlay
-                    onOverlayInteractionChange={handleComposerOverlayInteractionChange}
-                  />
+                  !inlineCompactSidePanel ? (
+                    <DanmakuComposer
+                      siteId={siteId}
+                      roomId={roomId}
+                      overlay
+                      onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                    />
+                  ) : null
                 }
                 onOverlayInteractionChange={handleControlsOverlayInteractionChange}
                 refreshDisabled={refreshDisabled}
@@ -1324,26 +1480,17 @@ export function PlayerPane({
                   }
                   player.changeVolume(value);
                 }}
-                onToggleMute={() => {
-                  if (androidClient) {
-                    androidPlayerControls.toggleMediaMute();
-                    return;
-                  }
-                  player.toggleMute();
-                }}
-                onToggleAudioOnly={() => {
-                  const nextAudioOnly = !audioOnly;
-                  if (nextAudioOnly && player.pictureInPictureActive) {
-                    void player.togglePictureInPicture();
-                  }
-                  setAudioOnly(nextAudioOnly);
-                }}
+                onToggleMute={handleToggleMute}
+                onToggleAudioOnly={handleToggleAudioOnly}
                 onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
-                onToggleOsd={() => setOsdOn((v) => !v)}
+                onToggleOsd={handleToggleOsd}
                 onToggleAsr={asr.toggle}
+                onAsrTranslationEnabledChange={setAsrTranslationEnabled}
+                onAsrTranslationFromChange={setAsrTranslationFrom}
+                onAsrTranslationToChange={setAsrTranslationTo}
                 onQualityChange={onQualityChange ?? (() => {})}
                 onLineChange={onLineChange ?? (() => {})}
-                onTogglePictureInPicture={() => void player.togglePictureInPicture()}
+                onTogglePictureInPicture={handleTogglePictureInPicture}
                 onToggleFullscreen={() => void player.toggleFullscreen()}
               />
             </div>
@@ -1422,15 +1569,18 @@ export function PlayerPane({
                 keepMounted
                 className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
               >
-                <DanmakuPanel
-                  key={`chat:${roomSessionKey ?? "room"}`}
-                  active={danmakuActive}
-                  siteId={siteId}
-                  roomId={roomId}
-                  visible={sidePanelOpen && activeSideTab === "chat"}
-                  statusText={danmakuStatusText}
-                  className="h-full"
-                />
+                <div className="flex h-full min-h-0 flex-col">
+                  <DanmakuPanel
+                    key={`chat:${roomSessionKey ?? "room"}`}
+                    active={danmakuActive}
+                    siteId={siteId}
+                    roomId={roomId}
+                    visible={sidePanelOpen && activeSideTab === "chat"}
+                    statusText={danmakuStatusText}
+                    className="min-h-0 flex-1"
+                  />
+                  {inlineCompactSidePanel && <DanmakuComposer siteId={siteId} roomId={roomId} />}
+                </div>
               </TabsContent>
               <TabsContent
                 value="follow"

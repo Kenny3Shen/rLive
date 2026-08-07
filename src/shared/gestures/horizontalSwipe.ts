@@ -92,6 +92,20 @@ export function horizontalSwipeDragOffset(
 }
 
 /**
+ * Rebase a committed drag around the newly selected page without changing the
+ * pixels currently under the finger. The new page becomes the track origin,
+ * so one page width is added in the navigation direction before settling to 0.
+ */
+export function horizontalSwipeCommitOffset(
+  dragOffset: number,
+  direction: 1 | -1,
+  surfaceWidth: number,
+): number {
+  const entry = Math.max(0, surfaceWidth) * HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO;
+  return dragOffset + direction * entry;
+}
+
+/**
  * Continuous horizontal gestures (sliders, text fields) own the pointer.
  * Ordinary buttons and list rows stay swipeable; a recognised swipe suppresses
  * the synthetic click that Android WebView may still emit.

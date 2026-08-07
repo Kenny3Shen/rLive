@@ -8,7 +8,17 @@ import {
   resolveStartupSiteId,
   updateDisabledSiteIds,
 } from "../siteId";
-import type { AppSettings, AsrProvider, SiteId } from "../types/live";
+import {
+  normalizeCaptionTranslationFrom,
+  normalizeCaptionTranslationTo,
+} from "../translation/languages";
+import type {
+  AppSettings,
+  AsrProvider,
+  CaptionTranslationLanguage,
+  CaptionTranslationSourceLanguage,
+  SiteId,
+} from "../types/live";
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -110,6 +120,9 @@ type SettingsState = {
   asrHotwords: string[];
   asrWindowSeconds: number;
   asrFontSize: number;
+  asrTranslationEnabled: boolean;
+  asrTranslationFrom: CaptionTranslationSourceLanguage;
+  asrTranslationTo: CaptionTranslationLanguage;
   /** True while the device-local ASR choice reaches the Rust backend. */
   asrPending: boolean;
   /**
@@ -139,6 +152,9 @@ type SettingsState = {
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => Promise<void>;
   setAsrHotwords: (hotwords: string[]) => Promise<void>;
   setAsrWindowSeconds: (seconds: number) => Promise<void>;
+  setAsrTranslationEnabled: (enabled: boolean) => void;
+  setAsrTranslationFrom: (from: CaptionTranslationSourceLanguage) => void;
+  setAsrTranslationTo: (to: CaptionTranslationLanguage) => void;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
   applyFromBackend: (settings: AppSettings) => void;
@@ -177,6 +193,9 @@ const defaultSettings: AppSettings = {
   asr_hotwords: [],
   asr_window_seconds: ASR_WINDOW_SECONDS_DEFAULT,
   asr_font_size: ASR_FONT_SIZE_DEFAULT,
+  asr_translation_enabled: false,
+  asr_translation_from: "auto",
+  asr_translation_to: "zh-CN",
   iptv_custom_m3u_url: null,
 };
 
@@ -210,6 +229,9 @@ function toAppSettings(state: SettingsState): AppSettings {
     asr_hotwords: state.asrHotwords,
     asr_window_seconds: state.asrWindowSeconds,
     asr_font_size: state.asrFontSize,
+    asr_translation_enabled: state.asrTranslationEnabled,
+    asr_translation_from: state.asrTranslationFrom,
+    asr_translation_to: state.asrTranslationTo,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
   };
 }
@@ -246,6 +268,9 @@ export const useSettingsStore = create<SettingsState>()(
       asrHotwords: [],
       asrWindowSeconds: ASR_WINDOW_SECONDS_DEFAULT,
       asrFontSize: ASR_FONT_SIZE_DEFAULT,
+      asrTranslationEnabled: false,
+      asrTranslationFrom: "auto",
+      asrTranslationTo: "zh-CN",
       asrPending: false,
       danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
@@ -443,6 +468,30 @@ export const useSettingsStore = create<SettingsState>()(
           throw error;
         }
       },
+      setAsrTranslationEnabled: (asrTranslationEnabled) => {
+        set({ asrTranslationEnabled });
+        void get().persistToBackend({
+          asr_translation_enabled: asrTranslationEnabled,
+        });
+      },
+      setAsrTranslationFrom: (from) => {
+        const normalized = normalizeCaptionTranslationFrom(from);
+        const asrTranslationFrom = normalized === get().asrTranslationTo ? "auto" : normalized;
+        set({ asrTranslationFrom });
+        void get().persistToBackend({
+          asr_translation_from: asrTranslationFrom,
+        });
+      },
+      setAsrTranslationTo: (to) => {
+        const asrTranslationTo = normalizeCaptionTranslationTo(to);
+        const asrTranslationFrom =
+          get().asrTranslationFrom === asrTranslationTo ? "auto" : get().asrTranslationFrom;
+        set({ asrTranslationFrom, asrTranslationTo });
+        void get().persistToBackend({
+          asr_translation_from: asrTranslationFrom,
+          asr_translation_to: asrTranslationTo,
+        });
+      },
       markDanmakuCookieChanged: () => {
         // This is intentionally not persisted. It has no meaning across an
         // app restart and must never contain the Cookie itself.
@@ -484,11 +533,13 @@ export const useSettingsStore = create<SettingsState>()(
           asrProvider: parseAsrProvider(settings.asr_provider),
           asrVadEnabled: settings.asr_vad_enabled ?? true,
           asrPunctuationEnabled: settings.asr_punctuation_enabled ?? true,
-          asrSpeakerDiarizationEnabled:
-            settings.asr_speaker_diarization_enabled ?? false,
+          asrSpeakerDiarizationEnabled: settings.asr_speaker_diarization_enabled ?? false,
           asrHotwords: settings.asr_hotwords ?? [],
           asrWindowSeconds: parseAsrWindowSeconds(settings.asr_window_seconds),
           asrFontSize: parseAsrFontSize(settings.asr_font_size),
+          asrTranslationEnabled: settings.asr_translation_enabled ?? false,
+          asrTranslationFrom: normalizeCaptionTranslationFrom(settings.asr_translation_from),
+          asrTranslationTo: normalizeCaptionTranslationTo(settings.asr_translation_to),
           asrPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
           hydratedFromBackend: true,

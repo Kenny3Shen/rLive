@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  horizontalSwipeCommitOffset,
   horizontalSwipeDragOffset,
   isHorizontalSwipe,
   isHorizontalSwipeIgnoredTarget,
@@ -48,6 +49,12 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeDragOffset(1, 3, 500, 1_000)).toBe(500);
     expect(horizontalSwipeDragOffset(1, 3, 1_500, 1_000)).toBe(1_000);
     expect(horizontalSwipeDragOffset(-1, 3, 80, 360)).toBe(0);
+  });
+
+  test("rebases a committed drag without restarting a full-width animation", () => {
+    expect(horizontalSwipeCommitOffset(-144, 1, 360)).toBe(216);
+    expect(horizontalSwipeCommitOffset(144, -1, 360)).toBe(-216);
+    expect(horizontalSwipeCommitOffset(0, 1, 360)).toBe(360);
   });
 });
 

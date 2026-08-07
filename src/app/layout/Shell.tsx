@@ -35,6 +35,7 @@ import {
 import { useHistoryShellStore } from "@/features/history/historyShellStore";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
+import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
 import { categoryHomePathAfterSiteChange } from "@/features/category/categoryRoute";
 import {
   FOLLOW_PLATFORM_PARAM,
@@ -114,6 +115,7 @@ export function Shell() {
   const isImmersivePlayer = isRoom || isIptvPlayer;
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
+  const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
 
   // React Router records each pushState entry with an incrementing `idx`.
@@ -239,9 +241,7 @@ export function Shell() {
       : sitePlatforms;
   // One ordered strip per surface, compared as strings so platforms and IPTV
   // source ids share the same direction rule.
-  const groupStrip: readonly string[] = isIptv
-    ? iptvSourceOptions
-    : platformStrip.map(String);
+  const groupStrip: readonly string[] = isIptv ? iptvSourceOptions : platformStrip.map(String);
   const previousGroupIndex = groupStrip.indexOf(previousGroup);
   const currentGroupIndex = groupStrip.indexOf(groupForMotion);
   const groupDirection: "forward" | "backward" =
@@ -317,18 +317,21 @@ export function Shell() {
     value: activeSiteId,
     onChange: handleSitePlatformChange,
     enabled: platformSwipeEnabled && !isFollow,
+    animate: platformSwipeEnabled,
   });
   const followPlatformSwipe = useHorizontalSwipe({
     items: followPlatforms,
     value: followPlatform,
     onChange: handleFollowPlatformChange,
     enabled: platformSwipeEnabled && isFollow,
+    animate: platformSwipeEnabled,
   });
   const historyPlatformSwipe = useHorizontalSwipe({
     items: historyPlatforms,
     value: historyPlatform,
     onChange: handleHistoryPlatformChange,
     enabled: platformSwipeEnabled && isHistory,
+    animate: platformSwipeEnabled,
   });
   const iptvSourceSwipe = useHorizontalSwipe({
     items: iptvSourceOptions,
@@ -418,13 +421,65 @@ export function Shell() {
       </PagePan>
     </div>
   );
-  const regularPage = showGroupSwitcher ? (
-    groupPage
-  ) : (
-    <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
-      {swipePage}
+  const activeLivePanelIndex = platformStrip.indexOf(platformForMotion);
+  const liveSwipePanels: PlatformScopeValue[] = [];
+  const addLiveSwipePanel = (index: number) => {
+    const platform = platformStrip[index];
+    if (platform !== undefined && !liveSwipePanels.includes(platform)) {
+      liveSwipePanels.push(platform);
+    }
+  };
+  addLiveSwipePanel(activeLivePanelIndex - 1);
+  addLiveSwipePanel(activeLivePanelIndex);
+  addLiveSwipePanel(activeLivePanelIndex + 1);
+  const previousLivePanelIndex = platformStrip.findIndex(
+    (platform) => String(platform) === previousGroup,
+  );
+  if (previousGroup !== groupForMotion) addLiveSwipePanel(previousLivePanelIndex);
+  liveSwipePanels.sort((left, right) => platformStrip.indexOf(left) - platformStrip.indexOf(right));
+
+  const liveSwipePage = (
+    <div
+      ref={bindContentSwipePageRef}
+      data-slot="app-swipe-track"
+      className="relative h-full min-h-0 min-w-0"
+    >
+      {liveSwipePanels.map((platform) => {
+        const panelIndex = platformStrip.indexOf(platform);
+        const panelOffset = Math.sign(panelIndex - activeLivePanelIndex) * 100;
+        const active = panelIndex === activeLivePanelIndex;
+        return (
+          <div
+            key={String(platform)}
+            ref={active ? bindPageScrollRef : undefined}
+            data-slot="app-swipe-panel"
+            aria-hidden={active ? undefined : true}
+            inert={active ? undefined : true}
+            className={cn(
+              pageScrollerClassName,
+              "absolute inset-0 w-full",
+              !active && "pointer-events-none",
+            )}
+            style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
+          >
+            <RefreshFabVisibilityProvider visible={active}>
+              <RouteOutlet defer={active && deferRouteOutlet} outlet={outlet} platform={platform} />
+            </RefreshFabVisibilityProvider>
+          </div>
+        );
+      })}
     </div>
   );
+  const regularPage =
+    mobileClient && showSiteSwitcher ? (
+      liveSwipePage
+    ) : showGroupSwitcher ? (
+      groupPage
+    ) : (
+      <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
+        {swipePage}
+      </div>
+    );
   const routePanDirection = isDirectSidebarNavigation
     ? sidebarDirectionRef.current
     : tabDirection === "backward"
@@ -447,7 +502,7 @@ export function Shell() {
           {!isImmersivePlayer && <Sidebar />}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <IptvControllerProvider source={iptvSource} active={isIptv}>
-              {!isImmersivePlayer && (
+              {!isImmersivePlayer && !isSettings && (
                 <header
                   data-slot="app-header"
                   data-mobile-empty={showTopNavigation ? undefined : "true"}

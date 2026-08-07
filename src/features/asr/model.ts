@@ -45,15 +45,11 @@ export function supportsLocalAsr(environment?: {
 }): boolean {
   const tauriRuntime = environment?.tauriRuntime ?? isTauri();
   const platform = environment?.platform ?? getClientPlatform();
-  return tauriRuntime && (platform === "desktop" || platform === "android");
+  return tauriRuntime && platform === "desktop";
 }
 
 export function asrDownloadProgress(status: AsrModelStatus | null): number | null {
-  if (
-    !status ||
-    status.state !== "downloading" &&
-    status.state !== "extracting"
-  ) {
+  if (!status || (status.state !== "downloading" && status.state !== "extracting")) {
     return null;
   }
   const total = status.total_bytes ?? status.model_size_bytes;
@@ -74,7 +70,7 @@ export function describeAsrModelStatus(
 ): AsrStatusPresentation {
   if (!options.supported) {
     return {
-      message: "语音字幕当前仅支持 Tauri 桌面或 Android 客户端",
+      message: "语音字幕当前仅支持 Tauri 桌面客户端",
       busy: false,
       error: false,
       progress: null,
@@ -109,9 +105,19 @@ export function describeAsrModelStatus(
   const progress = asrDownloadProgress(status);
   switch (status.state) {
     case "not_downloaded":
-      return { message: "等待下载模型…", busy: true, error: false, progress: 0 };
+      return {
+        message: "等待下载模型…",
+        busy: true,
+        error: false,
+        progress: 0,
+      };
     case "downloaded":
-      return { message: "模型已下载，正在等待加载…", busy: true, error: false, progress: 100 };
+      return {
+        message: "模型已下载，正在等待加载…",
+        busy: true,
+        error: false,
+        progress: 100,
+      };
     case "downloading": {
       const total = status.total_bytes ?? status.model_size_bytes;
       const detail = `${formatAsrBytes(status.downloaded_bytes)} / ${formatAsrBytes(total)}`;
@@ -130,7 +136,12 @@ export function describeAsrModelStatus(
         progress: progress ?? 0,
       };
     case "loading":
-      return { message: "模型已下载，正在加载…", busy: true, error: false, progress: 100 };
+      return {
+        message: "模型已下载，正在加载…",
+        busy: true,
+        error: false,
+        progress: 100,
+      };
     case "ready": {
       const features = [
         status.vad_enabled ? "VAD" : "关闭 VAD",
@@ -154,7 +165,7 @@ export function describeAsrModelStatus(
       };
     case "unsupported":
       return {
-        message: status.message ?? "语音字幕当前仅支持 Tauri 桌面或 Android 客户端",
+        message: status.message ?? "语音字幕当前仅支持 Tauri 桌面客户端",
         busy: false,
         error: false,
         progress: null,
@@ -184,12 +195,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
     refetchInterval: (currentQuery) => {
       if (!options.enabled) return false;
       const state = currentQuery.state.data?.state;
-      if (
-        !state ||
-        state === "downloading" ||
-        state === "extracting" ||
-        state === "loading"
-      ) {
+      if (!state || state === "downloading" || state === "extracting" || state === "loading") {
         return 500;
       }
       return state === "ready" ? 5_000 : false;
@@ -198,7 +204,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
 
   const prepare = useCallback(async () => {
     if (!supported) {
-      throw new Error("语音字幕当前仅支持 Tauri 桌面或 Android 客户端");
+      throw new Error("语音字幕当前仅支持 Tauri 桌面客户端");
     }
     attemptedStateRef.current = null;
     const status = await invokeCmd<AsrModelStatus>("asr_enable");

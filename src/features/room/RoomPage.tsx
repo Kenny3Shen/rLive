@@ -7,7 +7,7 @@ import { copyText } from "@/shared/clipboard";
 import { ErrorState } from "@/shared/components/ErrorState";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
-import type { RoomSideTab } from "./PlayerPane";
+import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
 import { RoomHostInfo } from "./RoomHostInfo";
 import {
   roomBackTargetFromNavigationState,
@@ -20,6 +20,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,6 +50,9 @@ export function RoomPage() {
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
   const backTarget = roomBackTargetFromNavigationState(location.state);
   const [sideTab, setSideTab] = useState<RoomSideTab>(requestedSideTab);
+  const [playerMobileActions, setPlayerMobileActions] = useState<readonly PlayerMobileRoomAction[]>(
+    [],
+  );
 
   // A regular room navigation starts at chat, while a navigation initiated by
   // FollowPanel keeps the follow picker open. This also covers a router setup
@@ -224,6 +228,7 @@ export function RoomPage() {
             <RoomMobileActions
               roomUrl={detail.url || window.location.href}
               playbackUrl={playback.playUrl?.url}
+              playerActions={playerMobileActions}
               onCopy={copyRoomValue}
             />
           </div>
@@ -256,6 +261,7 @@ export function RoomPage() {
           onSideTabChange={setSideTab}
           siteId={siteId}
           roomId={detail.room_id}
+          onMobileRoomActionsChange={setPlayerMobileActions}
         />
       </div>
 
@@ -388,10 +394,12 @@ function RoomTopBar({
 function RoomMobileActions({
   roomUrl,
   playbackUrl,
+  playerActions,
   onCopy,
 }: {
   roomUrl: string;
   playbackUrl?: string;
+  playerActions: readonly PlayerMobileRoomAction[];
   onCopy: (value: string, successMessage: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -399,6 +407,11 @@ function RoomMobileActions({
   function copy(value: string, successMessage: string) {
     setOpen(false);
     void onCopy(value, successMessage);
+  }
+
+  function runPlayerAction(action: PlayerMobileRoomAction) {
+    setOpen(false);
+    action.onSelect();
   }
 
   return (
@@ -415,10 +428,33 @@ function RoomMobileActions({
           </Button>
         }
       />
-      <PopoverContent side="bottom" align="end" className="w-52 gap-1 p-1.5">
+      <PopoverContent
+        side="bottom"
+        align="end"
+        className="max-h-[calc(100dvh-4rem)] w-52 gap-1 overflow-y-auto p-1.5"
+      >
         <PopoverTitle className="px-2 py-1 text-xs font-medium text-muted-foreground">
           房间操作
         </PopoverTitle>
+        {playerActions.map((action) => {
+          const Icon = action.icon;
+          return (
+            <Button
+              key={action.id}
+              type="button"
+              variant={action.pressed ? "secondary" : "ghost"}
+              size="sm"
+              className="h-11 w-full justify-start text-sm touch-manipulation"
+              disabled={action.disabled}
+              aria-pressed={action.pressed}
+              onClick={() => runPlayerAction(action)}
+            >
+              <Icon data-icon="inline-start" aria-hidden />
+              {action.label}
+            </Button>
+          );
+        })}
+        {playerActions.length > 0 && <Separator className="my-0.5" />}
         <Button
           type="button"
           variant="ghost"
