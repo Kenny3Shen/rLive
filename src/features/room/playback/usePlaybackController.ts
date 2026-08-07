@@ -8,14 +8,13 @@ import { clampIndex } from "@/lib/playUrl";
 import { pickDefaultQualityIndex } from "./quality";
 import { nextFailoverAction } from "./failover";
 import { isXgPlayerDecodeError } from "../player/xgPlayer";
+import { nextRankedLineIndex } from "./sourceSelection";
 import {
-  lineDiagnostics,
-  nextRankedLineIndex,
-  rankPlaybackSourceIndices,
-  shouldAdoptProbeWinner,
-  type PlaybackLineDiagnostic,
-  type PlaybackSourceProbe,
-} from "./sourceSelection";
+  playbackLinePreferenceRoomKey,
+  readPlaybackLinePreference,
+  rememberPlaybackLine,
+  resolvePlaybackLineIndex,
+} from "./linePreference";
 
 const EMPTY_QUALITIES: LivePlayQuality[] = [];
 const EMPTY_PLAY_URLS: PlayUrl[] = [];
@@ -115,8 +114,6 @@ export type PlaybackController = {
   lines: PlayUrl[];
   lineIndex: number;
   playUrl: PlayUrl | null;
-  lineDiagnostics: PlaybackLineDiagnostic[];
-  linesTesting: boolean;
   loading: boolean;
   error: unknown;
   loadError: string | null;
@@ -144,15 +141,12 @@ export function usePlaybackController(opts: {
   const { siteId, roomId, detail, refreshDetail, enabled = true } = opts;
   const queryClient = useQueryClient();
   const qualityLevel = useSettingsStore((s) => s.qualityLevel) as QualityLevel;
-  const smartLineSelection = useSettingsStore((s) => s.playbackSmartLineSelection);
   const stallAutoSwitchEnabled = useSettingsStore((s) => s.playbackStallAutoSwitchEnabled);
 
   const [qualityIndex, setQualityIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const [sourceProbes, setSourceProbes] = useState<PlaybackSourceProbe[]>([]);
-  const [linesTesting, setLinesTesting] = useState(false);
   const retryCountRef = useRef(0);
   const playUrlRenewalCountRef = useRef(0);
   const failoverTimerRef = useRef<number | null>(null);
@@ -166,6 +160,7 @@ export function usePlaybackController(opts: {
   const lastFailureRef = useRef<PlaybackFailureMarker | null>(null);
   const metadataRenewalInFlightRef = useRef(false);
   const metadataRenewalSequenceRef = useRef(0);
+  const appliedLineSetKeyRef = useRef("");
 
   useEffect(() => {
     lineIndexRef.current = lineIndex;
@@ -193,9 +188,9 @@ export function usePlaybackController(opts: {
     lastFailureRef.current = null;
     metadataRenewalInFlightRef.current = false;
     metadataRenewalSequenceRef.current += 1;
-    setSourceProbes([]);
-    setLinesTesting(false);
+    appliedLineSetKeyRef.current = "";
     setQualityIndex(0);
+    lineIndexRef.current = 0;
     setLineIndex(0);
     setLoadError(null);
   }, [siteId, roomId, detail?.room_id, clearFailoverTimer]);
@@ -228,6 +223,7 @@ export function usePlaybackController(opts: {
     appliedQualitiesKeyRef.current = qualitiesKey;
     const idx = pickDefaultQualityIndex(qualities.length, qualityLevel);
     setQualityIndex(idx);
+    lineIndexRef.current = 0;
     setLineIndex(0);
     retryCountRef.current = 0;
     playUrlRenewalCountRef.current = 0;
@@ -242,6 +238,7 @@ export function usePlaybackController(opts: {
   }, [qualities, qualityIndex]);
 
   useEffect(() => {
+    lineIndexRef.current = 0;
     setLineIndex(0);
     retryCountRef.current = 0;
     playUrlRenewalCountRef.current = 0;
@@ -274,70 +271,47 @@ export function usePlaybackController(opts: {
 
   const lines = playUrlQuery.data ?? EMPTY_PLAY_URLS;
   lineCountRef.current = lines.length;
-  const playUrl = lines[clampIndex(lineIndex, lines.length)] ?? null;
-  const sourceProbeKey = useMemo(
-    () => lines.map((line, index) => `${line.source_id ?? index}:${line.url}`).join("|"),
-    [lines],
+  const linePreferenceRoomKey = useMemo(
+    () => playbackLinePreferenceRoomKey(siteId, detail?.room_id ?? roomId),
+    [detail?.room_id, roomId, siteId],
   );
+  const lineSetKey = useMemo(
+    () =>
+      lines.length > 0 && linePreferenceRoomKey
+        ? JSON.stringify([
+            linePreferenceRoomKey,
+            selectedQuality?.quality ?? null,
+            lines.map((line, index) => [
+              line.source_id ?? null,
+              line.label ?? null,
+              line.protocol ?? null,
+              index,
+            ]),
+          ])
+        : "",
+    [linePreferenceRoomKey, lines, selectedQuality?.quality],
+  );
+  const rememberedLineIndex = useMemo(
+    () =>
+      lineSetKey
+        ? resolvePlaybackLineIndex(lines, readPlaybackLinePreference(linePreferenceRoomKey))
+        : 0,
+    [linePreferenceRoomKey, lineSetKey, lines],
+  );
+  const lineSetNeedsRestore = Boolean(lineSetKey && appliedLineSetKeyRef.current !== lineSetKey);
+  const resolvedLineIndex = lineSetNeedsRestore
+    ? rememberedLineIndex
+    : clampIndex(lineIndex, lines.length);
+  const playUrl = lines[resolvedLineIndex] ?? null;
 
   useEffect(() => {
+    if (!lineSetKey || appliedLineSetKeyRef.current === lineSetKey) return;
+    appliedLineSetKeyRef.current = lineSetKey;
     rankedLineIndicesRef.current = lines.map((_, index) => index);
     exhaustedLineIndicesRef.current.clear();
-    if (!smartLineSelection || lines.length <= 1) {
-      setSourceProbes([]);
-      setLinesTesting(false);
-      return;
-    }
-
-    let cancelled = false;
-    setSourceProbes([]);
-    setLinesTesting(true);
-    void invokeCmd<PlaybackSourceProbe[]>("stream_proxy_probe_sources", { sources: lines })
-      .then((probes) => {
-        if (cancelled) return;
-        setSourceProbes(probes);
-        const rankedIndices = rankPlaybackSourceIndices(lines, probes);
-        rankedLineIndicesRef.current = rankedIndices;
-        const winnerIndex = rankedIndices[0];
-        const currentIndex = clampIndex(lineIndexRef.current, lines.length);
-        if (
-          winnerIndex != null &&
-          shouldAdoptProbeWinner({
-            currentIndex,
-            winnerIndex,
-            hasPlayed: hasPlayedRef.current,
-            probes,
-            sources: lines,
-          })
-        ) {
-          retryCountRef.current = 0;
-          playUrlRenewalCountRef.current = 0;
-          exhaustedLineIndicesRef.current.clear();
-          playingStartedAtRef.current = null;
-          lastFailureRef.current = null;
-          setLoadError(null);
-          setLineIndex(winnerIndex);
-        }
-      })
-      .catch(() => {
-        // Playback remains on the platform order when diagnostics are not
-        // available (for example vite-only development or a transient proxy).
-      })
-      .finally(() => {
-        if (!cancelled) setLinesTesting(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [lines, smartLineSelection, sourceProbeKey]);
-
-  const resolvedLineDiagnostics = useMemo(
-    () =>
-      smartLineSelection && (sourceProbes.length > 0 || linesTesting)
-        ? lineDiagnostics(lines, sourceProbes, linesTesting)
-        : [],
-    [lines, linesTesting, smartLineSelection, sourceProbes],
-  );
+    lineIndexRef.current = rememberedLineIndex;
+    setLineIndex(rememberedLineIndex);
+  }, [lineSetKey, lines, rememberedLineIndex]);
 
   useEffect(() => () => clearFailoverTimer(), [clearFailoverTimer]);
 
@@ -354,6 +328,7 @@ export function usePlaybackController(opts: {
       lastFailureRef.current = null;
       setLoadError(null);
       setQualityIndex(index);
+      lineIndexRef.current = 0;
       setLineIndex(0);
     },
     [clearFailoverTimer],
@@ -371,9 +346,12 @@ export function usePlaybackController(opts: {
       playingStartedAtRef.current = null;
       lastFailureRef.current = null;
       setLoadError(null);
-      setLineIndex(index);
+      const nextIndex = clampIndex(index, lines.length);
+      lineIndexRef.current = nextIndex;
+      setLineIndex(nextIndex);
+      rememberPlaybackLine(linePreferenceRoomKey, lines[nextIndex], nextIndex);
     },
-    [clearFailoverTimer],
+    [clearFailoverTimer, linePreferenceRoomKey, lines],
   );
 
   const refreshPlaybackMetadata = useCallback(
@@ -426,6 +404,7 @@ export function usePlaybackController(opts: {
       queryClient.setQueryData(qualitiesQueryKey, refreshedQualities);
       queryClient.setQueryData(refreshedPlayUrlQueryKey, refreshedLines);
       setQualityIndex(refreshedQualityIndex);
+      lineIndexRef.current = refreshedLineIndex;
       setLineIndex(refreshedLineIndex);
       return true;
     },
@@ -511,6 +490,7 @@ export function usePlaybackController(opts: {
         playingStartedAtRef.current = null;
         lastFailureRef.current = null;
         setLoadError(null);
+        lineIndexRef.current = replacement;
         setLineIndex(replacement);
         return;
       }
@@ -545,6 +525,7 @@ export function usePlaybackController(opts: {
           lastFailureRef.current = null;
           setLoadError(null);
           setQualityIndex(fallbackQualityIndex);
+          lineIndexRef.current = 0;
           setLineIndex(0);
           return;
         }
@@ -598,7 +579,7 @@ export function usePlaybackController(opts: {
 
       const maxRetries = playerRebuildRetryLimit(siteId);
       let rankedReplacement: number | null | undefined;
-      if (smartLineSelection && retryCountRef.current >= maxRetries) {
+      if (retryCountRef.current >= maxRetries) {
         exhaustedLineIndicesRef.current.add(lineIndexRef.current);
         rankedReplacement = nextRankedLineIndex({
           currentIndex: lineIndexRef.current,
@@ -611,7 +592,7 @@ export function usePlaybackController(opts: {
         lineIndex: lineIndexRef.current,
         lineCount: lineCountRef.current,
         maxRetries,
-        ...(smartLineSelection ? { nextLineIndex: rankedReplacement } : {}),
+        nextLineIndex: rankedReplacement,
       });
 
       if (action.type === "fail") {
@@ -623,6 +604,7 @@ export function usePlaybackController(opts: {
         retryCountRef.current = action.retryCount;
         playingStartedAtRef.current = null;
         if (action.type === "next_line") {
+          lineIndexRef.current = action.lineIndex;
           setLineIndex(action.lineIndex);
         } else {
           // Same line: force player session to re-load via token bump.
@@ -642,7 +624,6 @@ export function usePlaybackController(opts: {
       qualityIndex,
       refreshPlaybackMetadata,
       siteId,
-      smartLineSelection,
       stallAutoSwitchEnabled,
     ],
   );
@@ -666,10 +647,8 @@ export function usePlaybackController(opts: {
     qualities,
     qualityIndex: clampIndex(qualityIndex, Math.max(qualities.length, 1)),
     lines,
-    lineIndex: clampIndex(lineIndex, Math.max(lines.length, 1)),
+    lineIndex: clampIndex(resolvedLineIndex, Math.max(lines.length, 1)),
     playUrl,
-    lineDiagnostics: resolvedLineDiagnostics,
-    linesTesting,
     loading,
     error,
     loadError,

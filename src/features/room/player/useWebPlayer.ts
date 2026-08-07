@@ -16,6 +16,7 @@ import {
   getXgMpegtsCore,
   isXgPlayerDecodeError,
   loadXgPlayerModules,
+  switchXgPlaybackSource,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
   type XgPlayerInstance,
@@ -241,7 +242,29 @@ export function hasStartedPlayback(
 }
 
 export const PLAYBACK_STALL_SWITCH_DELAY_MS = 8_000;
+export const BILIBILI_HLS_STALL_SWITCH_DELAY_MS = 20_000;
+export const BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS = 20_000;
 const PLAYBACK_STALL_PROGRESS_EPSILON_SECONDS = 0.25;
+
+export function playbackStallSwitchDelayMs(
+  siteId: SiteId | undefined,
+  playbackKind: XgPlaybackKind | null,
+): number {
+  return siteId === "bilibili" && playbackKind === "hls"
+    ? BILIBILI_HLS_STALL_SWITCH_DELAY_MS
+    : PLAYBACK_STALL_SWITCH_DELAY_MS;
+}
+
+export function shouldEscalateNonTwitchHlsFatal(input: {
+  siteId: SiteId | undefined;
+  failureCount: number;
+  firstFailureAt: number;
+  now: number;
+}): boolean {
+  if (input.failureCount <= 1) return false;
+  if (input.siteId !== "bilibili") return true;
+  return input.now - input.firstFailureAt >= BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS;
+}
 
 export function shouldReportPlaybackStall(
   video: Pick<HTMLMediaElement, "currentTime" | "ended" | "paused">,
@@ -389,12 +412,13 @@ export function liveFlvPlaybackOptions(mobileClient: boolean): Record<string, un
   };
 }
 
-/** FLV CDNs do not guarantee timestamp continuity across lines or reconnects. */
 export function shouldUsePlaybackSoftSwitch(
   configured: boolean,
   playbackKind: XgPlaybackKind | null,
 ): boolean {
-  return configured && playbackKind != null && playbackKind !== "flv";
+  return (
+    configured && (playbackKind === "flv" || playbackKind === "hls" || playbackKind === "mpegts")
+  );
 }
 
 export function canSoftSwitchPlaybackSource(input: {
@@ -504,6 +528,7 @@ export function useWebPlayer(opts: {
   const activePlaybackKindRef = useRef<XgPlaybackKind | null>(null);
   const telemetrySessionRef = useRef<PlaybackTelemetrySession | null>(null);
   const softSwitchSequenceRef = useRef(0);
+  const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
   const qualityRef = useRef<string | null>(quality);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
@@ -574,6 +599,7 @@ export function useWebPlayer(opts: {
     activeSourceKeyRef.current = "";
     setActiveSourceKey("");
     activePlaybackKindRef.current = null;
+    softSwitchInFlightRef.current = null;
     telemetrySessionRef.current = null;
     setRunning(false);
   }, []);
@@ -831,7 +857,9 @@ export function useWebPlayer(opts: {
 
           if (mpegtsCore) {
             mpegtsCore.on("loading_complete", () => {
-              if (!isCurrentPlayer()) return;
+              if (!isCurrentPlayer() || softSwitchInFlightRef.current?.player === player) {
+                return;
+              }
               setLoadError(null);
               setRunning(false);
               onMediaFailureRef.current?.({
@@ -867,8 +895,11 @@ export function useWebPlayer(opts: {
 
           if (hlsCore && siteId !== "twitch") {
             let hlsFatalFailureCount = 0;
+            let firstHlsFatalFailureAt: number | null = null;
             player.on("playing", () => {
-              if (isCurrentPlayer()) hlsFatalFailureCount = 0;
+              if (!isCurrentPlayer()) return;
+              hlsFatalFailureCount = 0;
+              firstHlsFatalFailureAt = null;
             });
             const reportHlsFailure = (cause: unknown, refreshPlayUrl = false) => {
               if (!isCurrentPlayer()) return;
@@ -905,7 +936,17 @@ export function useWebPlayer(opts: {
               // HlsJsPlugin immediately calls startLoad/recoverMediaError for
               // the first fatal event. Escalate only when that recovery also
               // fails, then obtain fresh site metadata and rebuild the player.
-              if (++hlsFatalFailureCount <= 1) {
+              hlsFatalFailureCount += 1;
+              const now = Date.now();
+              firstHlsFatalFailureAt ??= now;
+              if (
+                !shouldEscalateNonTwitchHlsFatal({
+                  siteId,
+                  failureCount: hlsFatalFailureCount,
+                  firstFailureAt: firstHlsFatalFailureAt,
+                  now,
+                })
+              ) {
                 setRunning(false);
                 return;
               }
@@ -1090,7 +1131,7 @@ export function useWebPlayer(opts: {
   // Live CDN timestamp continuity is not uniform, so any setup/switch failure
   // increments the hard key and rebuilds cleanly.
   useEffect(() => {
-    if (!effectivePlaybackSource) return;
+    if (!effectivePlaybackSource || !effectivePlaybackKind) return;
     if (
       !canSoftSwitchPlaybackSource({
         enabled: softSwitchEnabled,
@@ -1127,40 +1168,48 @@ export function useWebPlayer(opts: {
           return;
         }
 
-        const localUrl = await invokeCmd<string>("stream_proxy_start", {
-          url: targetSource.url,
-          headers: targetSource.headers,
-          sessionId: proxySessionId,
-          hls: targetKind === "hls",
-        });
-        if (
-          cancelled ||
-          sequence !== softSwitchSequenceRef.current ||
-          playerRef.current !== player
-        ) {
-          return;
+        const inFlight = { player, sequence };
+        softSwitchInFlightRef.current = inFlight;
+        try {
+          const localUrl = await invokeCmd<string>("stream_proxy_start", {
+            url: targetSource.url,
+            headers: targetSource.headers,
+            sessionId: proxySessionId,
+            hls: targetKind === "hls",
+          });
+          if (
+            cancelled ||
+            sequence !== softSwitchSequenceRef.current ||
+            playerRef.current !== player
+          ) {
+            return;
+          }
+          const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
+          telemetrySessionRef.current = createPlaybackTelemetrySession({
+            sessionId: `${proxySessionId}:soft:${sequence}`,
+            siteId: siteId ?? null,
+            sourceId: playbackSourceId(targetSource, 0),
+            protocol: playbackProtocol(targetSource),
+            quality: qualityRef.current,
+            switchMode: "soft",
+          });
+          await switchXgPlaybackSource(player, localSource, targetKind);
+          if (
+            cancelled ||
+            sequence !== softSwitchSequenceRef.current ||
+            playerRef.current !== player
+          ) {
+            return;
+          }
+          activeSourceKeyRef.current = targetKey;
+          setActiveSourceKey(targetKey);
+          activePlaybackKindRef.current = targetKind;
+          setLoadError(null);
+        } finally {
+          if (softSwitchInFlightRef.current === inFlight) {
+            softSwitchInFlightRef.current = null;
+          }
         }
-        const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
-        telemetrySessionRef.current = createPlaybackTelemetrySession({
-          sessionId: `${proxySessionId}:soft:${sequence}`,
-          siteId: siteId ?? null,
-          sourceId: playbackSourceId(targetSource, 0),
-          protocol: playbackProtocol(targetSource),
-          quality: qualityRef.current,
-          switchMode: "soft",
-        });
-        await Promise.resolve(player.switchURL?.(localSource, { seamless: true }));
-        if (
-          cancelled ||
-          sequence !== softSwitchSequenceRef.current ||
-          playerRef.current !== player
-        ) {
-          return;
-        }
-        activeSourceKeyRef.current = targetKey;
-        setActiveSourceKey(targetKey);
-        activePlaybackKindRef.current = targetKind;
-        setLoadError(null);
       })
       .catch(() => {
         if (cancelled || sequence !== softSwitchSequenceRef.current) return;
@@ -1209,22 +1258,25 @@ export function useWebPlayer(opts: {
     const armStallTimer = () => {
       if (stallTimer != null || video.paused || video.ended) return;
       stalledAtSeconds = video.currentTime;
-      stallTimer = window.setTimeout(() => {
-        stallTimer = null;
-        if (
-          videoRef.current !== video ||
-          genRef.current !== generation ||
-          !shouldReportPlaybackStall(video, stalledAtSeconds)
-        ) {
-          return;
-        }
-        onMediaFailureRef.current?.({
-          epoch: generation,
-          generation,
-          kind: "stall",
-          message: "播放持续卡顿",
-        });
-      }, PLAYBACK_STALL_SWITCH_DELAY_MS);
+      stallTimer = window.setTimeout(
+        () => {
+          stallTimer = null;
+          if (
+            videoRef.current !== video ||
+            genRef.current !== generation ||
+            !shouldReportPlaybackStall(video, stalledAtSeconds)
+          ) {
+            return;
+          }
+          onMediaFailureRef.current?.({
+            epoch: generation,
+            generation,
+            kind: "stall",
+            message: "播放持续卡顿",
+          });
+        },
+        playbackStallSwitchDelayMs(siteId, playbackKind),
+      );
     };
 
     const pictureInPictureDocument = getPictureInPictureDocument();
@@ -1324,7 +1376,7 @@ export function useWebPlayer(opts: {
       video.removeEventListener("enterpictureinpicture", onEnterPictureInPicture);
       video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
     };
-  }, [effectivePlaybackKind, mediaKey, streamKey]);
+  }, [effectivePlaybackKind, mediaKey, siteId, streamKey]);
 
   useEffect(() => {
     if (typeof PerformanceObserver === "undefined") return;
