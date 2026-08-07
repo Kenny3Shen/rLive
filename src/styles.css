@@ -513,18 +513,31 @@ html.overlay-window #root {
   }
 }
 
-/* Mobile WebViews share the GPU with video decode and Canvas danmaku. Keep the
-   material visibly frosted, but use roughly half the desktop blur radius so
-   the narrow control strip and transient drawer do not dominate composition. */
+/* Mobile WebViews share the GPU with video decode, Canvas danmaku and image-list
+   scrolling. Use a static translucent fill instead of sampling and blurring a
+   changing backdrop on every frame. Desktop keeps the full glass treatment. */
 @media (pointer: coarse), (update: slow) {
+  .glass-surface,
+  .glass-surface-overlay,
+  [data-mobile-static-backdrop],
+  [data-slot="dialog-overlay"],
+  [data-slot="drawer-overlay"],
+  [data-slot="alert-dialog-overlay"] {
+    backdrop-filter: none;
+  }
+
+  .glass-surface::before {
+    background-color: color-mix(in oklab, var(--popover) 90%, transparent);
+  }
+
   .glass-surface-overlay {
-    @supports (backdrop-filter: blur(1px)) {
-      backdrop-filter: blur(8px) saturate(125%);
-    }
+    box-shadow:
+      0 6px 20px oklch(0 0 0 / 0.34),
+      inset 0 1px 0 oklch(1 0 0 / 0.08);
   }
 
   .glass-surface-overlay::before {
-    background-color: oklch(0.16 0.012 265 / 0.64);
+    background-color: oklch(0.16 0.012 265 / 0.82);
   }
 }
 

@@ -3,9 +3,11 @@ package com.shenss.rlive
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.Display
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import kotlin.math.abs
 
 class MainActivity : TauriActivity() {
   private lateinit var fallbackChromeClient: RustWebChromeClient
@@ -21,6 +23,11 @@ class MainActivity : TauriActivity() {
     // Android 7.0/7.1 cannot expose WebView's currently installed Chrome
     // client. Keep an equivalent Tauri client ready for those devices.
     fallbackChromeClient = RustWebChromeClient(this)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    requestHighRefreshRate()
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -66,6 +73,45 @@ class MainActivity : TauriActivity() {
       }
     }.also { callback ->
       onBackPressedDispatcher.addCallback(this, callback)
+    }
+  }
+
+  /**
+   * Ask Android for the best animation mode the panel exposes, without changing
+   * its physical resolution. This remains a preference: power saving, thermal
+   * throttling and device-specific variable-refresh policies may override it.
+   */
+  private fun requestHighRefreshRate() {
+    val display = activityDisplay() ?: return
+    val currentMode = display.mode
+    val compatibleModes = display.supportedModes.filter { mode ->
+      mode.physicalWidth == currentMode.physicalWidth &&
+        mode.physicalHeight == currentMode.physicalHeight
+    }
+    val preferredRate = preferredAnimationRefreshRate(compatibleModes.map { it.refreshRate })
+      ?: return
+    val preferredMode = compatibleModes.minByOrNull { mode ->
+      abs(mode.refreshRate - preferredRate)
+    } ?: return
+    val attributes = window.attributes
+    if (
+      attributes.preferredDisplayModeId == preferredMode.modeId &&
+      abs(attributes.preferredRefreshRate - preferredMode.refreshRate) < 0.01f
+    ) {
+      return
+    }
+
+    attributes.preferredDisplayModeId = preferredMode.modeId
+    attributes.preferredRefreshRate = preferredMode.refreshRate
+    window.attributes = attributes
+  }
+
+  @Suppress("DEPRECATION")
+  private fun activityDisplay(): Display? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      display
+    } else {
+      windowManager.defaultDisplay
     }
   }
 

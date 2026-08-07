@@ -840,7 +840,10 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         )}
 
         {error && (
-          <div className="absolute right-3 bottom-16 left-3 z-20 flex items-start gap-2 rounded-lg bg-background/90 p-3 text-sm text-foreground shadow-lg backdrop-blur">
+          <div
+            data-mobile-static-backdrop
+            className="absolute right-3 bottom-16 left-3 z-20 flex items-start gap-2 rounded-lg bg-background/90 p-3 text-sm text-foreground shadow-lg backdrop-blur"
+          >
             <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
             <p>{error}</p>
           </div>
@@ -855,7 +858,10 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
               <Radio data-icon="inline-start" aria-hidden />
               直播
             </Badge>
-            <span className="max-w-[18rem] truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur">
+            <span
+              data-mobile-static-backdrop
+              className="max-w-[18rem] truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur"
+            >
               {channel.name}
             </span>
           </div>

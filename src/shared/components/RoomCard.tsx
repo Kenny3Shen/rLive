@@ -189,7 +189,10 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             </div>
           )}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
-          <span className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+          <span
+            data-mobile-static-backdrop
+            className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm"
+          >
             <Flame className="size-3 text-orange-400" aria-hidden />
             {formatOnline(room.online)}
           </span>

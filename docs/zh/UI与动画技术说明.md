@@ -320,11 +320,12 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 相同列表效果使用一个 tween 加 `stagger`，不要为每项创建独立 delay；动画目标数量必须有界。
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
+- Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定 GSAP ticker。
 - 移动端 Canvas 弹幕最高按 120 FPS 跟随高刷屏，并将 backing scale 限制为 1×：相比旧的 60 FPS / 1.5× 策略，整屏像素吞吐量更低，同时避免 90/120 Hz 设备上的隔帧跳动。运动时间按真实帧间隔推进，不执行补帧突发；桌面端仍跟随浏览器刷新率，backing scale 最高 1.5×。
 - 下拉刷新与横向滑动的连续输入通过 RAF 合并，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
-- 播放器控制栏、音量和播放设置 Drawer / 弹层共用 `glass-surface-overlay`；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不移动 blur 采样区域，也不触发播放器 React 重渲染。桌面使用 `14px` blur，coarse pointer 或 slow-update 设备保留轻量 `8px` blur 与略实的半透明底色，在维持 glassmorphism 一致性的同时控制移动 GPU 开销。
+- 播放器控制栏、音量和播放设置 Drawer / 弹层共用 `glass-surface-overlay`；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不触发播放器 React 重渲染。桌面使用 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层和房间卡片角标同样不采样动态背景，避免滚动、视频解码与 Canvas 弹幕争抢 GPU 帧预算。
 - 移动端紧凑播放器控制栏使用 `32px` 按钮和输入组，并把上下内边距压缩到 `1px + safe-area`；这是仅限视频边缘常用媒体操作的触控尺寸例外，应用导航和表单仍遵守 `44px` 目标。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，实际纵向滚动留给 `app-page`。
 - fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 和页面动画完成时必须恢复普通绘制。
