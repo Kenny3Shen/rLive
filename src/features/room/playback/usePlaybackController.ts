@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { LivePlayQuality, LiveRoomDetail, PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, QualityLevel } from "@/shared/types/player";
@@ -19,7 +19,68 @@ import {
 
 const EMPTY_QUALITIES: LivePlayQuality[] = [];
 const EMPTY_PLAY_URLS: PlayUrl[] = [];
-const MAX_TWITCH_PLAY_URL_RENEWALS = 3;
+const MAX_PLAYBACK_METADATA_RENEWALS = 3;
+const STABLE_PLAYBACK_RESET_MS = 30_000;
+const DUPLICATE_FAILURE_WINDOW_MS = 750;
+
+type PlaybackFailureMarker = {
+  epoch: number;
+  generation: number;
+  lineIndex: number;
+  at: number;
+};
+
+function playbackQualitiesKey(qualities: LivePlayQuality[]): string {
+  return qualities.length > 0
+    ? JSON.stringify(qualities.map((quality) => [quality.quality, quality.data]))
+    : "";
+}
+
+function playbackErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== "object" || !("message" in error)) return fallback;
+  const message = String(error.message ?? "").trim();
+  return message || fallback;
+}
+
+export function playbackWasStable(
+  startedAt: number | null,
+  failedAt: number,
+  thresholdMs = STABLE_PLAYBACK_RESET_MS,
+): boolean {
+  return startedAt != null && failedAt >= startedAt && failedAt - startedAt >= thresholdMs;
+}
+
+export function isDuplicatePlaybackFailure(
+  previous: PlaybackFailureMarker | null,
+  event: Pick<PlayerEvent, "epoch" | "generation">,
+  lineIndex: number,
+  now: number,
+  windowMs = DUPLICATE_FAILURE_WINDOW_MS,
+): boolean {
+  if (!previous) return false;
+  const elapsed = now - previous.at;
+  return (
+    previous.epoch === event.epoch &&
+    previous.generation === event.generation &&
+    previous.lineIndex === lineIndex &&
+    elapsed >= 0 &&
+    elapsed < windowMs
+  );
+}
+
+/** FLV plugins already retry their network request internally before reporting failure. */
+export function playerRebuildRetryLimit(siteId: SiteId | undefined): number {
+  return siteId === "douyu" || siteId === "huya" ? 1 : 2;
+}
+
+export function matchingQualityIndex(
+  qualities: Pick<LivePlayQuality, "quality">[],
+  preferredQuality: string | undefined,
+  fallbackIndex: number,
+): number {
+  const matchingIndex = qualities.findIndex((quality) => quality.quality === preferredQuality);
+  return matchingIndex >= 0 ? matchingIndex : clampIndex(fallbackIndex, qualities.length);
+}
 
 /** Return the next Twitch video rendition after a browser decode failure. */
 export function nextTwitchDecodeQualityIndex(
@@ -49,7 +110,7 @@ export type PlaybackController = {
   retryPlay: () => void;
   /** Call when native player reports eof/error for the active session. */
   onPlayerMediaFailure: (event: PlayerEvent) => void;
-  /** Notify that the current media is healthy (playing). */
+  /** Notify that the current media has produced a playable frame. */
   onPlayerPlaying: () => void;
   /** Bump when we want the player to reload the same playUrl (retry). */
   reloadToken: number;
@@ -59,10 +120,13 @@ export function usePlaybackController(opts: {
   siteId: SiteId | undefined;
   roomId: string | undefined;
   detail: LiveRoomDetail | undefined;
+  /** Re-fetch room-scoped signing data before renewing short-lived playback URLs. */
+  refreshDetail?: () => Promise<LiveRoomDetail | undefined>;
   /** When true, apply default quality preference once per qualities payload. */
   enabled?: boolean;
 }): PlaybackController {
-  const { siteId, roomId, detail, enabled = true } = opts;
+  const { siteId, roomId, detail, refreshDetail, enabled = true } = opts;
+  const queryClient = useQueryClient();
   const qualityLevel = useSettingsStore((s) => s.qualityLevel) as QualityLevel;
   const smartLineSelection = useSettingsStore((s) => s.playbackSmartLineSelection);
 
@@ -73,7 +137,7 @@ export function usePlaybackController(opts: {
   const [sourceProbes, setSourceProbes] = useState<PlaybackSourceProbe[]>([]);
   const [linesTesting, setLinesTesting] = useState(false);
   const retryCountRef = useRef(0);
-  const twitchPlayUrlRenewalCountRef = useRef(0);
+  const playUrlRenewalCountRef = useRef(0);
   const failoverTimerRef = useRef<number | null>(null);
   const appliedQualitiesKeyRef = useRef<string | null>(null);
   const lineIndexRef = useRef(0);
@@ -81,6 +145,10 @@ export function usePlaybackController(opts: {
   const rankedLineIndicesRef = useRef<number[]>([]);
   const exhaustedLineIndicesRef = useRef(new Set<number>());
   const hasPlayedRef = useRef(false);
+  const playingStartedAtRef = useRef<number | null>(null);
+  const lastFailureRef = useRef<PlaybackFailureMarker | null>(null);
+  const metadataRenewalInFlightRef = useRef(false);
+  const metadataRenewalSequenceRef = useRef(0);
 
   useEffect(() => {
     lineIndexRef.current = lineIndex;
@@ -100,10 +168,14 @@ export function usePlaybackController(opts: {
     clearFailoverTimer();
     appliedQualitiesKeyRef.current = null;
     retryCountRef.current = 0;
-    twitchPlayUrlRenewalCountRef.current = 0;
+    playUrlRenewalCountRef.current = 0;
     exhaustedLineIndicesRef.current.clear();
     rankedLineIndicesRef.current = [];
     hasPlayedRef.current = false;
+    playingStartedAtRef.current = null;
+    lastFailureRef.current = null;
+    metadataRenewalInFlightRef.current = false;
+    metadataRenewalSequenceRef.current += 1;
     setSourceProbes([]);
     setLinesTesting(false);
     setQualityIndex(0);
@@ -111,8 +183,12 @@ export function usePlaybackController(opts: {
     setLoadError(null);
   }, [siteId, roomId, detail?.room_id, clearFailoverTimer]);
 
+  const qualitiesQueryKey = useMemo(
+    () => ["play_qualities", siteId, roomId, detail?.room_id] as const,
+    [detail?.room_id, roomId, siteId],
+  );
   const qualitiesQuery = useQuery({
-    queryKey: ["play_qualities", siteId, roomId, detail?.room_id],
+    queryKey: qualitiesQueryKey,
     enabled: enabled && !!detail,
     // Live play metadata expires quickly; always refresh when re-entering a room.
     staleTime: 0,
@@ -126,10 +202,7 @@ export function usePlaybackController(opts: {
   });
 
   const qualities = qualitiesQuery.data ?? EMPTY_QUALITIES;
-  const qualitiesKey = useMemo(() => {
-    if (!qualities.length) return "";
-    return qualities.map((q) => `${q.quality}:${String(q.data)}`).join("|");
-  }, [qualities]);
+  const qualitiesKey = useMemo(() => playbackQualitiesKey(qualities), [qualities]);
 
   // Apply Simple Live default quality once per qualities payload.
   useEffect(() => {
@@ -140,7 +213,9 @@ export function usePlaybackController(opts: {
     setQualityIndex(idx);
     setLineIndex(0);
     retryCountRef.current = 0;
-    twitchPlayUrlRenewalCountRef.current = 0;
+    playUrlRenewalCountRef.current = 0;
+    playingStartedAtRef.current = null;
+    lastFailureRef.current = null;
     setLoadError(null);
   }, [qualitiesKey, qualities.length, qualityLevel]);
 
@@ -152,13 +227,19 @@ export function usePlaybackController(opts: {
   useEffect(() => {
     setLineIndex(0);
     retryCountRef.current = 0;
-    twitchPlayUrlRenewalCountRef.current = 0;
+    playUrlRenewalCountRef.current = 0;
     exhaustedLineIndicesRef.current.clear();
     hasPlayedRef.current = false;
-  }, [selectedQuality?.quality, selectedQuality?.data]);
+    playingStartedAtRef.current = null;
+    lastFailureRef.current = null;
+  }, [selectedQuality?.quality]);
 
+  const playUrlQueryKey = useMemo(
+    () => ["play_urls", siteId, roomId, selectedQuality?.quality, selectedQuality?.data] as const,
+    [roomId, selectedQuality?.data, selectedQuality?.quality, siteId],
+  );
   const playUrlQuery = useQuery({
-    queryKey: ["play_urls", siteId, roomId, selectedQuality?.quality, selectedQuality?.data],
+    queryKey: playUrlQueryKey,
     enabled: enabled && !!detail && !!selectedQuality,
     // CDN play URLs (esp. FLV/HLS tokens) go stale within minutes. Re-enter
     // must not reuse the previous visit's cached list — that caused black
@@ -213,8 +294,10 @@ export function usePlaybackController(opts: {
           })
         ) {
           retryCountRef.current = 0;
-          twitchPlayUrlRenewalCountRef.current = 0;
+          playUrlRenewalCountRef.current = 0;
           exhaustedLineIndicesRef.current.clear();
+          playingStartedAtRef.current = null;
+          lastFailureRef.current = null;
           setLoadError(null);
           setLineIndex(winnerIndex);
         }
@@ -244,10 +327,14 @@ export function usePlaybackController(opts: {
   const onQualityChange = useCallback(
     (index: number) => {
       clearFailoverTimer();
+      metadataRenewalInFlightRef.current = false;
+      metadataRenewalSequenceRef.current += 1;
       retryCountRef.current = 0;
-      twitchPlayUrlRenewalCountRef.current = 0;
+      playUrlRenewalCountRef.current = 0;
       exhaustedLineIndicesRef.current.clear();
       hasPlayedRef.current = false;
+      playingStartedAtRef.current = null;
+      lastFailureRef.current = null;
       setLoadError(null);
       setQualityIndex(index);
       setLineIndex(0);
@@ -258,34 +345,118 @@ export function usePlaybackController(opts: {
   const onLineChange = useCallback(
     (index: number) => {
       clearFailoverTimer();
+      metadataRenewalInFlightRef.current = false;
+      metadataRenewalSequenceRef.current += 1;
       retryCountRef.current = 0;
-      twitchPlayUrlRenewalCountRef.current = 0;
+      playUrlRenewalCountRef.current = 0;
       exhaustedLineIndicesRef.current.clear();
       hasPlayedRef.current = false;
+      playingStartedAtRef.current = null;
+      lastFailureRef.current = null;
       setLoadError(null);
       setLineIndex(index);
     },
     [clearFailoverTimer],
   );
 
+  const refreshPlaybackMetadata = useCallback(
+    async (renewalSequence: number) => {
+      if (!siteId || !detail) throw new Error("缺少播放元数据");
+      const preferredQuality = selectedQuality?.quality;
+      const preferredSourceId = playUrl?.source_id;
+      const fallbackLineIndex = lineIndexRef.current;
+      const refreshedDetail = (await refreshDetail?.()) ?? detail;
+      if (metadataRenewalSequenceRef.current !== renewalSequence) return false;
+      const refreshedQualities = await invokeCmd<LivePlayQuality[]>("site_get_play_qualities", {
+        siteId,
+        detail: refreshedDetail,
+      });
+      if (metadataRenewalSequenceRef.current !== renewalSequence) return false;
+      if (refreshedQualities.length === 0) throw new Error("平台未返回可用清晰度");
+
+      const refreshedQualityIndex = matchingQualityIndex(
+        refreshedQualities,
+        preferredQuality,
+        qualityIndex,
+      );
+      const refreshedQuality = refreshedQualities[refreshedQualityIndex];
+      const refreshedLines = await invokeCmd<PlayUrl[]>("site_get_play_urls", {
+        siteId,
+        detail: refreshedDetail,
+        quality: refreshedQuality,
+      });
+      if (metadataRenewalSequenceRef.current !== renewalSequence) return false;
+      if (refreshedLines.length === 0) throw new Error("平台未返回可用播放地址");
+
+      const matchingLineIndex = preferredSourceId
+        ? refreshedLines.findIndex((line) => line.source_id === preferredSourceId)
+        : -1;
+      const refreshedLineIndex =
+        matchingLineIndex >= 0
+          ? matchingLineIndex
+          : clampIndex(fallbackLineIndex, refreshedLines.length);
+      const refreshedPlayUrlQueryKey = [
+        "play_urls",
+        siteId,
+        roomId,
+        refreshedQuality.quality,
+        refreshedQuality.data,
+      ] as const;
+
+      // Mark this payload as already selected so a renewed sign does not reset
+      // the user's quality choice or the bounded recovery budget.
+      appliedQualitiesKeyRef.current = playbackQualitiesKey(refreshedQualities);
+      queryClient.setQueryData(qualitiesQueryKey, refreshedQualities);
+      queryClient.setQueryData(refreshedPlayUrlQueryKey, refreshedLines);
+      setQualityIndex(refreshedQualityIndex);
+      setLineIndex(refreshedLineIndex);
+      return true;
+    },
+    [
+      detail,
+      playUrl?.source_id,
+      qualityIndex,
+      qualitiesQueryKey,
+      queryClient,
+      refreshDetail,
+      roomId,
+      selectedQuality?.quality,
+      siteId,
+    ],
+  );
+
   const retryPlay = useCallback(() => {
     clearFailoverTimer();
+    metadataRenewalSequenceRef.current += 1;
+    const renewalSequence = metadataRenewalSequenceRef.current;
     retryCountRef.current = 0;
-    twitchPlayUrlRenewalCountRef.current = 0;
+    playUrlRenewalCountRef.current = 0;
     exhaustedLineIndicesRef.current.clear();
     hasPlayedRef.current = false;
+    playingStartedAtRef.current = null;
+    lastFailureRef.current = null;
     setLoadError(null);
-    // A metadata refetch alone does not recreate an already-attached MSE
-    // player when the CDN returns the same URL. Bump the session token first
-    // so the refresh control always rebuilds the active playback pipeline.
-    setReloadToken((token) => token + 1);
-    void qualitiesQuery.refetch().then(() => playUrlQuery.refetch());
-  }, [clearFailoverTimer, qualitiesQuery, playUrlQuery]);
+    metadataRenewalInFlightRef.current = true;
+    void refreshPlaybackMetadata(renewalSequence)
+      .then((refreshed) => {
+        if (!refreshed) return;
+        // A refreshed endpoint can occasionally equal the previous URL. The
+        // token still guarantees a clean MSE and proxy session.
+        setReloadToken((token) => token + 1);
+      })
+      .catch((error) => {
+        if (metadataRenewalSequenceRef.current !== renewalSequence) return;
+        setLoadError(playbackErrorMessage(error, "播放地址刷新失败，请重试"));
+      })
+      .finally(() => {
+        if (metadataRenewalSequenceRef.current === renewalSequence) {
+          metadataRenewalInFlightRef.current = false;
+        }
+      });
+  }, [clearFailoverTimer, refreshPlaybackMetadata]);
 
   const onPlayerPlaying = useCallback(() => {
-    retryCountRef.current = 0;
-    twitchPlayUrlRenewalCountRef.current = 0;
-    exhaustedLineIndicesRef.current.clear();
+    if (playingStartedAtRef.current == null) playingStartedAtRef.current = Date.now();
     hasPlayedRef.current = true;
     setLoadError(null);
   }, []);
@@ -293,7 +464,26 @@ export function usePlaybackController(opts: {
   const onPlayerMediaFailure = useCallback(
     (event: PlayerEvent) => {
       if (event.kind !== "error" && event.kind !== "eof") return;
+      if (metadataRenewalInFlightRef.current) return;
+      const failureAt = Date.now();
+      const activeLineIndex = lineIndexRef.current;
+      if (isDuplicatePlaybackFailure(lastFailureRef.current, event, activeLineIndex, failureAt)) {
+        return;
+      }
+      lastFailureRef.current = {
+        epoch: event.epoch,
+        generation: event.generation,
+        lineIndex: activeLineIndex,
+        at: failureAt,
+      };
       clearFailoverTimer();
+
+      if (playbackWasStable(playingStartedAtRef.current, failureAt)) {
+        retryCountRef.current = 0;
+        playUrlRenewalCountRef.current = 0;
+        exhaustedLineIndicesRef.current.clear();
+      }
+      playingStartedAtRef.current = null;
 
       const message = event.message?.trim() ?? "";
       const isDecodeError = event.decodeError === true || isXgPlayerDecodeError(message);
@@ -301,9 +491,10 @@ export function usePlaybackController(opts: {
         const fallbackQualityIndex = nextTwitchDecodeQualityIndex(qualities, qualityIndex);
         if (fallbackQualityIndex != null) {
           retryCountRef.current = 0;
-          twitchPlayUrlRenewalCountRef.current = 0;
+          playUrlRenewalCountRef.current = 0;
           exhaustedLineIndicesRef.current.clear();
           hasPlayedRef.current = false;
+          lastFailureRef.current = null;
           setLoadError(null);
           setQualityIndex(fallbackQualityIndex);
           setLineIndex(0);
@@ -313,48 +504,53 @@ export function usePlaybackController(opts: {
         return;
       }
 
-      if (event.refreshPlayUrl && siteId === "twitch") {
-        if (twitchPlayUrlRenewalCountRef.current >= MAX_TWITCH_PLAY_URL_RENEWALS) {
-          setLoadError("Twitch 播放地址多次更新失败，请点击刷新后重试");
+      if (event.refreshPlayUrl) {
+        if (metadataRenewalInFlightRef.current) return;
+        if (playUrlRenewalCountRef.current >= MAX_PLAYBACK_METADATA_RENEWALS) {
+          setLoadError("播放地址多次更新失败，请点击刷新后重试");
           return;
         }
 
-        const renewalAttempt = ++twitchPlayUrlRenewalCountRef.current;
+        const renewalAttempt = ++playUrlRenewalCountRef.current;
         const requestedDelay =
           typeof event.retryAfterMs === "number" && Number.isFinite(event.retryAfterMs)
             ? Math.max(0, Math.min(event.retryAfterMs, 60_000))
             : 0;
-        // Keep retries measured when Twitch is changing a playlist during a
-        // normal commercial break, while avoiding a tight token-refresh loop.
+        // Keep retries measured during a temporary platform interruption and
+        // avoid a tight loop when a newly issued URL also fails immediately.
         const delayMs = Math.max(requestedDelay, (renewalAttempt - 1) * 1_000);
-        const renewPlayUrl = () => {
+        metadataRenewalSequenceRef.current += 1;
+        const renewalSequence = metadataRenewalSequenceRef.current;
+        metadataRenewalInFlightRef.current = true;
+        const renewPlayback = () => {
           failoverTimerRef.current = null;
-          void playUrlQuery.refetch().then((result) => {
-            if (result.isError) {
-              const message =
-                result.error && typeof result.error === "object" && "message" in result.error
-                  ? String(result.error.message)
-                  : "Twitch 播放地址更新失败，请点击刷新后重试";
-              setLoadError(message);
-              return;
-            }
-            // The newly issued Twitch URL normally changes the stream key.
-            // Bump the token as well for the rare case where it is identical,
-            // so a stuck HLS instance is still replaced.
-            setReloadToken((token) => token + 1);
-          });
+          void refreshPlaybackMetadata(renewalSequence)
+            .then((refreshed) => {
+              if (!refreshed) return;
+              setReloadToken((token) => token + 1);
+            })
+            .catch((error) => {
+              if (metadataRenewalSequenceRef.current !== renewalSequence) return;
+              setLoadError(playbackErrorMessage(error, "播放地址更新失败，请点击刷新后重试"));
+            })
+            .finally(() => {
+              if (metadataRenewalSequenceRef.current === renewalSequence) {
+                metadataRenewalInFlightRef.current = false;
+              }
+            });
         };
 
         if (delayMs > 0) {
-          failoverTimerRef.current = window.setTimeout(renewPlayUrl, delayMs);
+          failoverTimerRef.current = window.setTimeout(renewPlayback, delayMs);
         } else {
-          renewPlayUrl();
+          renewPlayback();
         }
         return;
       }
 
+      const maxRetries = playerRebuildRetryLimit(siteId);
       let rankedReplacement: number | null | undefined;
-      if (smartLineSelection && retryCountRef.current >= 2) {
+      if (smartLineSelection && retryCountRef.current >= maxRetries) {
         exhaustedLineIndicesRef.current.add(lineIndexRef.current);
         rankedReplacement = nextRankedLineIndex({
           currentIndex: lineIndexRef.current,
@@ -366,6 +562,7 @@ export function usePlaybackController(opts: {
         retryCount: retryCountRef.current,
         lineIndex: lineIndexRef.current,
         lineCount: lineCountRef.current,
+        maxRetries,
         ...(smartLineSelection ? { nextLineIndex: rankedReplacement } : {}),
       });
 
@@ -376,6 +573,7 @@ export function usePlaybackController(opts: {
 
       const apply = () => {
         retryCountRef.current = action.retryCount;
+        playingStartedAtRef.current = null;
         if (action.type === "next_line") {
           setLineIndex(action.lineIndex);
         } else {
@@ -390,7 +588,14 @@ export function usePlaybackController(opts: {
         apply();
       }
     },
-    [clearFailoverTimer, playUrlQuery, qualities, qualityIndex, siteId, smartLineSelection],
+    [
+      clearFailoverTimer,
+      qualities,
+      qualityIndex,
+      refreshPlaybackMetadata,
+      siteId,
+      smartLineSelection,
+    ],
   );
 
   const loading = qualitiesQuery.isLoading || (qualitiesQuery.isSuccess && playUrlQuery.isLoading);

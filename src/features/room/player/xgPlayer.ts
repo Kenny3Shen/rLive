@@ -1,6 +1,6 @@
 import type { IPlayerOptions } from "xgplayer";
 
-export type XgPlaybackKind = "flv" | "hls" | "hlsjs" | "mpegts" | "native";
+export type XgPlaybackKind = "flv" | "hls" | "mpegts" | "native";
 
 export type XgPlayerInstance = {
   media: HTMLMediaElement;
@@ -26,15 +26,17 @@ export type XgPlayerModules = {
   plugin?: XgStreamingPlugin;
 };
 
-export type XgHlsJsCore = {
+export type XgHlsCore = {
   startLoad: (startPosition?: number) => void;
-  recoverMediaError: () => void;
+};
+
+export type XgMpegtsCore = {
+  on: (event: string, handler: (...args: unknown[]) => void) => void;
+  off?: (event: string, handler: (...args: unknown[]) => void) => void;
 };
 
 let coreModulePromise: Promise<typeof import("xgplayer")> | null = null;
-let flvModulePromise: Promise<typeof import("xgplayer-flv")> | null = null;
-let hlsModulePromise: Promise<typeof import("xgplayer-hls")> | null = null;
-let hlsJsModulePromise: Promise<typeof import("xgplayer-hls.js")> | null = null;
+let hlsModulePromise: Promise<typeof import("xgplayer-hls.js")> | null = null;
 let mpegtsModulePromise: Promise<typeof import("xgplayer-mpegts.js")> | null = null;
 
 function loadCoreModule(): Promise<typeof import("xgplayer")> {
@@ -45,31 +47,15 @@ function loadCoreModule(): Promise<typeof import("xgplayer")> {
 /** Lazy-load only the protocol plugin required by the selected live source. */
 export async function loadXgPlayerModules(kind: XgPlaybackKind): Promise<XgPlayerModules> {
   const corePromise = loadCoreModule();
-  if (kind === "flv") {
-    if (!flvModulePromise) flvModulePromise = import("xgplayer-flv");
-    const [core, { default: plugin }] = await Promise.all([corePromise, flvModulePromise]);
-    return {
-      Player: core.SimplePlayer as unknown as XgPlayerConstructor,
-      plugin: plugin as unknown as XgStreamingPlugin,
-    };
-  }
   if (kind === "hls") {
-    if (!hlsModulePromise) hlsModulePromise = import("xgplayer-hls");
+    if (!hlsModulePromise) hlsModulePromise = import("xgplayer-hls.js");
     const [core, { default: plugin }] = await Promise.all([corePromise, hlsModulePromise]);
     return {
       Player: core.SimplePlayer as unknown as XgPlayerConstructor,
       plugin: plugin as unknown as XgStreamingPlugin,
     };
   }
-  if (kind === "hlsjs") {
-    if (!hlsJsModulePromise) hlsJsModulePromise = import("xgplayer-hls.js");
-    const [core, { default: plugin }] = await Promise.all([corePromise, hlsJsModulePromise]);
-    return {
-      Player: core.SimplePlayer as unknown as XgPlayerConstructor,
-      plugin: plugin as unknown as XgStreamingPlugin,
-    };
-  }
-  if (kind === "mpegts") {
+  if (kind === "flv" || kind === "mpegts") {
     if (!mpegtsModulePromise) mpegtsModulePromise = import("xgplayer-mpegts.js");
     const [core, { default: plugin }] = await Promise.all([corePromise, mpegtsModulePromise]);
     return {
@@ -91,18 +77,16 @@ export function createXgPlayer(
     isLive?: boolean;
     flv?: Record<string, unknown>;
     hls?: Record<string, unknown>;
-    hlsJs?: Record<string, unknown>;
     mpegts?: Record<string, unknown>;
   },
 ): XgPlayerInstance {
-  const { root, video, url, kind, isLive = true, flv, hls, hlsJs, mpegts } = options;
+  const { root, video, url, kind, isLive = true, flv, hls, mpegts } = options;
   const pluginSupported = modules.plugin?.isSupported?.() ?? true;
-  const nativeHlsSupported = Boolean(video.canPlayType("application/vnd.apple.mpegurl"));
 
   if ((kind === "flv" || kind === "mpegts") && !pluginSupported) {
     throw new Error("当前环境不支持 MSE 直播播放");
   }
-  if ((kind === "hls" || kind === "hlsjs") && !pluginSupported && !nativeHlsSupported) {
+  if (kind === "hls" && !pluginSupported) {
     throw new Error("当前环境不支持 HLS 直播播放");
   }
 
@@ -128,17 +112,43 @@ export function createXgPlayer(
     videoFillMode: "contain",
   };
 
-  if (kind === "flv") playerOptions.flv = flv ?? {};
-  if (kind === "hls") playerOptions.hls = hls ?? {};
-  if (kind === "hlsjs") playerOptions.hlsJsPlugin = hlsJs ?? {};
+  if (kind === "flv") playerOptions.MpegtsPlugin = flv ?? {};
+  if (kind === "hls") playerOptions.hlsJsPlugin = hls ?? {};
   if (kind === "mpegts") playerOptions.MpegtsPlugin = mpegts ?? {};
 
   return new modules.Player(playerOptions);
 }
 
-export function getXgHlsJsCore(player: XgPlayerInstance): XgHlsJsCore | null {
+export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {
+  const plugin = player.getPlugin("MpegtsPlugin") as {
+    mpegts?: XgMpegtsCore | null;
+  } | null;
+  if (!plugin) return null;
+  if (plugin.mpegts) return plugin.mpegts;
+
+  // Player.start() invokes beforePlayerInit in a microtask, so the plugin can
+  // exist briefly before its mpegts.js instance. Defer subscriptions and also
+  // reattach them when switchURL replaces the underlying core.
+  return {
+    on: (event, handler) => {
+      let attachedCore: XgMpegtsCore | null = null;
+      const attach = () => {
+        const core = plugin.mpegts ?? null;
+        if (!core || core === attachedCore) return;
+        attachedCore?.off?.(event, handler);
+        core.on(event, handler);
+        attachedCore = core;
+      };
+      void Promise.resolve().then(attach);
+      player.on("ready", attach);
+      player.on("urlchange", attach);
+    },
+  };
+}
+
+export function getXgHlsCore(player: XgPlayerInstance): XgHlsCore | null {
   const plugin = player.getPlugin("HlsJsPlugin") as {
-    hls?: XgHlsJsCore | null;
+    hls?: XgHlsCore | null;
   } | null;
   if (!plugin) return null;
   if (plugin.hls) return plugin.hls;
@@ -148,9 +158,6 @@ export function getXgHlsJsCore(player: XgPlayerInstance): XgHlsJsCore | null {
   return {
     startLoad: (startPosition?: number) => {
       plugin.hls?.startLoad(startPosition);
-    },
-    recoverMediaError: () => {
-      plugin.hls?.recoverMediaError();
     },
   };
 }
@@ -170,7 +177,8 @@ export function xgPlayerErrorMessage(error: unknown, fallback = "播放失败"):
 
 /**
  * Chromium reports HLS/MSE decoder failures through several layers: the
- * native media error uses code 3, while xgplayer-hls may surface code 5103 or
+ * native media error uses code 3, while an xgplayer protocol plugin may
+ * surface code 5103 or
  * only preserve the browser's pipeline message. Keep the check structural so
  * Twitch can lower an incompatible rendition without treating a network
  * failure as a codec problem.

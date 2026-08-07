@@ -25,8 +25,6 @@
         "tailwind-merge": "^3.6.0",
         "tw-animate-css": "^1.4.0",
         "xgplayer": "^3.0.26",
-        "xgplayer-flv": "^3.0.26",
-        "xgplayer-hls": "^3.0.26",
         "xgplayer-hls.js": "3.0.26",
         "xgplayer-mpegts.js": "^1.0.1",
         "zustand": "^5.0.14",
@@ -447,8 +445,6 @@
 
     "commander": ["commander@14.0.3", "", {}, "sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw=="],
 
-    "concat-typed-array": ["concat-typed-array@1.0.2", "", {}, "sha512-aC878bxeWSlrY6h60cCDwBUXpKwovZrB7+C4+VHNO1CIXW2gBLxbQ757jWtOXUscLGgYI8R84N6uy9fTJPe+0g=="],
-
     "conf": ["conf@10.2.0", "", { "dependencies": { "ajv": "^8.6.3", "ajv-formats": "^2.1.1", "atomically": "^1.7.0", "debounce-fn": "^4.0.0", "dot-prop": "^6.0.1", "env-paths": "^2.2.1", "json-schema-typed": "^7.0.3", "onetime": "^5.1.2", "pkg-up": "^3.1.0", "semver": "^7.3.5" } }, "sha512-8fLl9F04EJqjSqH+QjITQfJF8BrOVaYr1jewVgSRAEWePfxT0sku4w2hrGQ60BC/TNLGQ2pgxNlTbWQmMPFvXg=="],
 
     "content-disposition": ["content-disposition@1.1.0", "", {}, "sha512-5jRCH9Z/+DRP7rkvY83B+yGIGX96OYdJmzngqnw2SBSxqCFPd0w2km3s5iawpGX8krnwSGmF0FW5Nhr0Hfai3g=="],
@@ -468,8 +464,6 @@
     "cosmiconfig": ["cosmiconfig@9.0.2", "", { "dependencies": { "env-paths": "^2.2.1", "import-fresh": "^3.3.0", "js-yaml": "^4.1.0", "parse-json": "^5.2.0" }, "peerDependencies": { "typescript": ">=4.9.5" }, "optionalPeers": ["typescript"] }, "sha512-gtTZxTDau1wL7Y7zifc2dd8jHSK/k6BTx/2Xp/BpdlAdnlYWFVt7qhJqgwi7637yRwRQ3qL4ZidbB4I8tA5VOg=="],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
-
-    "crypto-es": ["crypto-es@2.1.0", "", {}, "sha512-C5Dbuv4QTPGuloy5c5Vv/FZHtmK+lobLAypFfuRaBbwCsk3qbCWWESCH3MUcBsrgXloRNMrzwUAiPg4U6+IaKA=="],
 
     "cssesc": ["cssesc@3.0.0", "", { "bin": { "cssesc": "bin/cssesc" } }, "sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg=="],
 
@@ -991,19 +985,11 @@
 
     "xgplayer": ["xgplayer@3.0.26", "", { "dependencies": { "danmu.js": ">=1.2.1", "delegate": "^3.2.0", "eventemitter3": "^4.0.7", "xgplayer-subtitles": "3.0.26" }, "peerDependencies": { "core-js": ">=3.12.1" } }, "sha512-F/urLGIrxCa1DI+wtkPyT0TcRS6Wejbo+OZKOTlSVvg0+SGyN3TfSXddNcu6LL876ZTWzlEwhS4C5nKSUV5FZw=="],
 
-    "xgplayer-flv": ["xgplayer-flv@3.0.26", "", { "dependencies": { "eventemitter3": "^4.0.7", "xgplayer-streaming-shared": "3.0.26", "xgplayer-transmuxer": "3.0.26" }, "peerDependencies": { "core-js": ">=3.12.1", "xgplayer": ">=3.0.1" } }, "sha512-9kyiwNtFag/4r+N8bNxjL0dHETOrKAPGQoc38uD82NXZWANOoEA4NHdrVSqJX2p8y4GqTIQqfVZydGWDOuMq8g=="],
-
-    "xgplayer-hls": ["xgplayer-hls@3.0.26", "", { "dependencies": { "eventemitter3": "^4.0.7", "xgplayer-streaming-shared": "3.0.26", "xgplayer-transmuxer": "3.0.26" }, "peerDependencies": { "core-js": ">=3.12.1", "xgplayer": "3.0.26" } }, "sha512-F+su9sAGGzZt9MhlrCHxOVhunWT5qy1S8ooKW331lEwueHsCeBR/VFsGsG12cj33FA/+jt0sE2BFpWHxeoEb2g=="],
-
     "xgplayer-hls.js": ["xgplayer-hls.js@3.0.26", "", { "dependencies": { "deepmerge": "2.0.1", "event-emitter": "^0.3.5", "hls.js": "^1.6.15" }, "peerDependencies": { "core-js": ">=3.12.1", "xgplayer": ">=3.0.13" } }, "sha512-zuK4wOc7in/zkuRW13VwjYutrZwXnEyoSGeYXVhXJG3GQ8ijI8VgxTmu0JGQHw5NTUDuVXRWd4NZWBW4tJ8qmg=="],
 
     "xgplayer-mpegts.js": ["xgplayer-mpegts.js@1.0.1", "", { "dependencies": { "mpegts.js": "^1.8.0", "xgplayer": "^3.0.21" } }, "sha512-ZN+AezY7/hwC2MLBmTy8V27q83cMiXylwifOqqda0w50b8tpmtIdgJL1A0cW/9B2Q1HUUkv17Fb8TjeZAhSsDA=="],
 
-    "xgplayer-streaming-shared": ["xgplayer-streaming-shared@3.0.26", "", { "dependencies": { "eventemitter3": "^4.0.7" }, "peerDependencies": { "core-js": ">=3.12.1" } }, "sha512-URZWNZX90Z2BMhpDXFuGrFwphqoNf5jnqb6zUV756ACgrnlHE5nyxDBYutueCaoCaFXH4ueeN67K8Xit8+xijA=="],
-
     "xgplayer-subtitles": ["xgplayer-subtitles@3.0.26", "", { "dependencies": { "eventemitter3": "^4.0.7" }, "peerDependencies": { "core-js": ">=3.12.1" } }, "sha512-HiHlw3E8emEQCv0xFYHdmNUFgyzyWGBnSNmyI/fkuuvRBb+4IbsCfxg6PF3r1TNCfzOuNzA/OaMbtXBSH8n/Bw=="],
-
-    "xgplayer-transmuxer": ["xgplayer-transmuxer@3.0.26", "", { "dependencies": { "@babel/runtime": "^7.15.3", "concat-typed-array": "^1.0.2", "crypto-es": "^2.1.0" }, "peerDependencies": { "core-js": ">=3.12.1" } }, "sha512-McJZPMbrS6hGMHM1dQ7AjDhbaHeeIe2ZrUDOShiHhS3AJFibldtH3+w/veprBs9tAMvtPGDq9mztW/qvdyKUNw=="],
 
     "yallist": ["yallist@3.1.1", "", {}, "sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g=="],
 
