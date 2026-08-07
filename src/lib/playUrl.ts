@@ -39,12 +39,18 @@ export function playbackProtocolLabel(protocol: PlaybackProtocol): string {
   }
 }
 
-/** Use stable, human-readable labels rather than exposing CDN host names. */
-export function lineLabel(source: string | PlaybackSourceLike, index: number): string {
-  const protocol = playbackProtocol(source);
+/** Use stable, human-readable names rather than exposing CDN host names. */
+export function lineName(source: string | PlaybackSourceLike, index: number): string {
   const suppliedLabel = typeof source === "string" ? "" : source.label?.trim();
-  const label = suppliedLabel || `线路${index + 1}`;
-  return `${label}（${playbackProtocolLabel(protocol)}）`;
+  const displayLabel = suppliedLabel
+    ?.replace(/\s*(?:[（(]\s*)?(?:flv|hls)(?:\s*[）)])?\s*$/i, "")
+    .trim();
+  return displayLabel || `线路${index + 1}`;
+}
+
+/** Diagnostic label with transport information for logs and technical views. */
+export function lineLabel(source: string | PlaybackSourceLike, index: number): string {
+  return `${lineName(source, index)}（${playbackProtocolLabel(playbackProtocol(source))}）`;
 }
 
 export function clampIndex(i: number, len: number): number {

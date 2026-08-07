@@ -1,7 +1,7 @@
 export type PlayerUiMode = "windowed" | "fullscreen";
 
 /** MSE / web player media lifecycle (failover hooks). */
-export type PlayerEventKind = "playing" | "paused" | "idle" | "eof" | "error";
+export type PlayerEventKind = "playing" | "paused" | "idle" | "eof" | "error" | "stall";
 
 export type PlayerEvent = {
   epoch: number;

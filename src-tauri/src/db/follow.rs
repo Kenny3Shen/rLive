@@ -173,6 +173,28 @@ pub fn upsert_tag(conn: &Connection, tag: TagRecord) -> AppResult<()> {
     Ok(())
 }
 
+pub fn remove_tag(conn: &mut Connection, id: &str) -> AppResult<()> {
+    let transaction = conn.transaction().map_err(map_db_err)?;
+    let mut follows = list(&transaction)?;
+    for follow in &mut follows {
+        if !follow.tag_ids.iter().any(|tag_id| tag_id == id) {
+            continue;
+        }
+        follow.tag_ids.retain(|tag_id| tag_id != id);
+        set_tags(
+            &transaction,
+            &follow.site_id,
+            &follow.room_id,
+            &follow.tag_ids,
+        )?;
+    }
+    transaction
+        .execute("DELETE FROM tags WHERE id = ?1", params![id])
+        .map_err(map_db_err)?;
+    transaction.commit().map_err(map_db_err)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +319,37 @@ mod tests {
         let tags = list_tags(&conn).unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].name, "Favorites");
+    }
+
+    #[test]
+    fn remove_tag_clears_follow_references() {
+        let mut conn = open_in_memory().unwrap();
+        upsert_tag(
+            &conn,
+            TagRecord {
+                id: "t1".into(),
+                name: "Favorites".into(),
+            },
+        )
+        .unwrap();
+        upsert(
+            &conn,
+            FollowRecord {
+                site_id: "bilibili".into(),
+                room_id: "1".into(),
+                user_name: "u".into(),
+                face: "".into(),
+                tag_ids: vec!["t1".into()],
+                live_status: None,
+                live_started_at: None,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+
+        remove_tag(&mut conn, "t1").unwrap();
+
+        assert!(list_tags(&conn).unwrap().is_empty());
+        assert!(list(&conn).unwrap()[0].tag_ids.is_empty());
     }
 }

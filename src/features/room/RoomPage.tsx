@@ -33,6 +33,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
+import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
+import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -46,6 +48,7 @@ export function RoomPage() {
   const recordedHistoryRoomRef = useRef<string | null>(null);
 
   const [followBusy, setFollowBusy] = useState(false);
+  const [followGroupOpen, setFollowGroupOpen] = useState(false);
   const [confirmUnfollowOpen, setConfirmUnfollowOpen] = useState(false);
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
   const backTarget = roomBackTargetFromNavigationState(location.state);
@@ -127,9 +130,9 @@ export function RoomPage() {
     return followQuery.data.some((f) => f.site_id === siteId && f.room_id === roomId);
   }, [followQuery.data, siteId, roomId]);
 
-  async function toggleFollow() {
+  async function toggleFollow(groupId = UNGROUPED_FOLLOW_GROUP_ID): Promise<boolean> {
     const detail = detailQuery.data;
-    if (!detail || !siteId || !roomId) return;
+    if (!detail || !siteId || !roomId) return false;
     setFollowBusy(true);
     try {
       if (isFollowed) {
@@ -140,7 +143,7 @@ export function RoomPage() {
           room_id: detail.room_id,
           user_name: detail.user_name,
           face: detail.user_avatar,
-          tag_ids: [],
+          tag_ids: tagIdsForFollowGroup(groupId),
           live_status: detail.status,
           live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
           updated_at: Date.now(),
@@ -149,8 +152,10 @@ export function RoomPage() {
       }
       await qc.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
       notify.success(isFollowed ? "已取消关注" : "已关注主播");
+      return true;
     } catch {
       notify.error(isFollowed ? "取消关注失败" : "关注失败", "请检查网络后重试。");
+      return false;
     } finally {
       setFollowBusy(false);
     }
@@ -219,7 +224,7 @@ export function RoomPage() {
         if (isFollowed) {
           setConfirmUnfollowOpen(true);
         } else {
-          void toggleFollow();
+          setFollowGroupOpen(true);
         }
       }}
     />
@@ -341,6 +346,16 @@ export function RoomPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <FollowGroupPickerDialog
+        open={followGroupOpen}
+        subjectName={detail.user_name}
+        pending={followBusy}
+        onOpenChange={setFollowGroupOpen}
+        onConfirm={async (groupId) => {
+          if (await toggleFollow(groupId)) setFollowGroupOpen(false);
+        }}
+      />
     </div>
   );
 }

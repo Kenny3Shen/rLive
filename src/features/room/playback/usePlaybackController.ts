@@ -68,6 +68,22 @@ export function isDuplicatePlaybackFailure(
   );
 }
 
+export function nextStallReplacementLineIndex(input: {
+  enabled: boolean;
+  hasPlayed: boolean;
+  lineCount: number;
+  currentIndex: number;
+  rankedIndices: readonly number[];
+  exhaustedIndices: ReadonlySet<number>;
+}): number | null {
+  if (!input.enabled || !input.hasPlayed || input.lineCount <= 1) return null;
+  return nextRankedLineIndex({
+    currentIndex: input.currentIndex,
+    rankedIndices: input.rankedIndices,
+    exhaustedIndices: input.exhaustedIndices,
+  });
+}
+
 /** FLV plugins already retry their network request internally before reporting failure. */
 export function playerRebuildRetryLimit(siteId: SiteId | undefined): number {
   return siteId === "douyu" || siteId === "huya" ? 1 : 2;
@@ -129,6 +145,7 @@ export function usePlaybackController(opts: {
   const queryClient = useQueryClient();
   const qualityLevel = useSettingsStore((s) => s.qualityLevel) as QualityLevel;
   const smartLineSelection = useSettingsStore((s) => s.playbackSmartLineSelection);
+  const stallAutoSwitchEnabled = useSettingsStore((s) => s.playbackStallAutoSwitchEnabled);
 
   const [qualityIndex, setQualityIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
@@ -463,10 +480,41 @@ export function usePlaybackController(opts: {
 
   const onPlayerMediaFailure = useCallback(
     (event: PlayerEvent) => {
-      if (event.kind !== "error" && event.kind !== "eof") return;
+      if (event.kind !== "error" && event.kind !== "eof" && event.kind !== "stall") return;
       if (metadataRenewalInFlightRef.current) return;
       const failureAt = Date.now();
       const activeLineIndex = lineIndexRef.current;
+
+      if (event.kind === "stall") {
+        if (!stallAutoSwitchEnabled || !hasPlayedRef.current || lineCountRef.current <= 1) return;
+        clearFailoverTimer();
+        if (playbackWasStable(playingStartedAtRef.current, failureAt)) {
+          retryCountRef.current = 0;
+          playUrlRenewalCountRef.current = 0;
+          exhaustedLineIndicesRef.current.clear();
+        }
+        exhaustedLineIndicesRef.current.add(activeLineIndex);
+        const replacement = nextStallReplacementLineIndex({
+          enabled: stallAutoSwitchEnabled,
+          hasPlayed: hasPlayedRef.current,
+          lineCount: lineCountRef.current,
+          currentIndex: activeLineIndex,
+          rankedIndices: rankedLineIndicesRef.current,
+          exhaustedIndices: exhaustedLineIndicesRef.current,
+        });
+        if (replacement == null) return;
+
+        metadataRenewalSequenceRef.current += 1;
+        retryCountRef.current = 0;
+        playUrlRenewalCountRef.current = 0;
+        hasPlayedRef.current = false;
+        playingStartedAtRef.current = null;
+        lastFailureRef.current = null;
+        setLoadError(null);
+        setLineIndex(replacement);
+        return;
+      }
+
       if (isDuplicatePlaybackFailure(lastFailureRef.current, event, activeLineIndex, failureAt)) {
         return;
       }
@@ -595,6 +643,7 @@ export function usePlaybackController(opts: {
       refreshPlaybackMetadata,
       siteId,
       smartLineSelection,
+      stallAutoSwitchEnabled,
     ],
   );
 

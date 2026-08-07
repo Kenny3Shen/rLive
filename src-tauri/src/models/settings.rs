@@ -56,6 +56,9 @@ pub struct AppSettings {
     /// fallback for incompatible protocols and failed switches.
     #[serde(default = "default_playback_soft_switch_enabled")]
     pub playback_soft_switch_enabled: bool,
+    /// Switch to another ranked source after sustained playback stalling.
+    #[serde(default = "default_playback_stall_auto_switch_enabled")]
+    pub playback_stall_auto_switch_enabled: bool,
     /// Device-local permission for the user-operated single-message senders.
     /// It remains disabled until the user explicitly enables it in Settings and
     /// is not profile-imported. A Cookie and each platform's own validation
@@ -99,7 +102,7 @@ pub struct AppSettings {
     /// Google Translate source language, or `auto` for language detection.
     #[serde(default = "default_asr_translation_from")]
     pub asr_translation_from: String,
-    /// Google Translate target language.
+    /// Google Translate target language, or `auto` for automatic selection.
     #[serde(default = "default_asr_translation_to")]
     pub asr_translation_to: String,
     /// Optional custom IPTV M3U address for this device.
@@ -127,6 +130,10 @@ fn default_playback_smart_line_selection() -> bool {
 }
 
 fn default_playback_soft_switch_enabled() -> bool {
+    true
+}
+
+fn default_playback_stall_auto_switch_enabled() -> bool {
     true
 }
 
@@ -216,6 +223,7 @@ impl Default for AppSettings {
             quality_level: default_quality_level(),
             playback_smart_line_selection: default_playback_smart_line_selection(),
             playback_soft_switch_enabled: default_playback_soft_switch_enabled(),
+            playback_stall_auto_switch_enabled: default_playback_stall_auto_switch_enabled(),
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: default_asr_provider(),
@@ -274,6 +282,7 @@ mod tests {
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.playback_smart_line_selection);
         assert!(settings.playback_soft_switch_enabled);
+        assert!(settings.playback_stall_auto_switch_enabled);
         assert!(!settings.asr_enabled);
         assert_eq!(settings.asr_provider, "auto");
         assert!(settings.asr_vad_enabled);

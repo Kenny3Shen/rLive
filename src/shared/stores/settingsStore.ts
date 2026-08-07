@@ -109,6 +109,7 @@ type SettingsState = {
   qualityLevel: QualityLevel;
   playbackSmartLineSelection: boolean;
   playbackSoftSwitchEnabled: boolean;
+  playbackStallAutoSwitchEnabled: boolean;
   danmakuSendEnabled: boolean;
   /** True while the local multi-platform sending permission reaches the backend. */
   danmakuSendPending: boolean;
@@ -142,6 +143,7 @@ type SettingsState = {
   setQualityLevel: (level: QualityLevel) => void;
   setPlaybackSmartLineSelection: (enabled: boolean) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
+  setPlaybackStallAutoSwitchEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
@@ -184,6 +186,7 @@ const defaultSettings: AppSettings = {
   quality_level: "high",
   playback_smart_line_selection: true,
   playback_soft_switch_enabled: true,
+  playback_stall_auto_switch_enabled: true,
   danmaku_send_enabled: false,
   asr_enabled: false,
   asr_provider: "auto",
@@ -220,6 +223,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     quality_level: state.qualityLevel,
     playback_smart_line_selection: state.playbackSmartLineSelection,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
+    playback_stall_auto_switch_enabled: state.playbackStallAutoSwitchEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_provider: state.asrProvider,
@@ -258,6 +262,7 @@ export const useSettingsStore = create<SettingsState>()(
       qualityLevel: "high",
       playbackSmartLineSelection: true,
       playbackSoftSwitchEnabled: true,
+      playbackStallAutoSwitchEnabled: true,
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
@@ -311,6 +316,12 @@ export const useSettingsStore = create<SettingsState>()(
         set({ playbackSoftSwitchEnabled });
         void get().persistToBackend({
           playback_soft_switch_enabled: playbackSoftSwitchEnabled,
+        });
+      },
+      setPlaybackStallAutoSwitchEnabled: (playbackStallAutoSwitchEnabled) => {
+        set({ playbackStallAutoSwitchEnabled });
+        void get().persistToBackend({
+          playback_stall_auto_switch_enabled: playbackStallAutoSwitchEnabled,
         });
       },
       setSuperChatEnabled: (superChatEnabled) => {
@@ -476,7 +487,8 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setAsrTranslationFrom: (from) => {
         const normalized = normalizeCaptionTranslationFrom(from);
-        const asrTranslationFrom = normalized === get().asrTranslationTo ? "auto" : normalized;
+        const asrTranslationFrom =
+          normalized !== "auto" && normalized === get().asrTranslationTo ? "auto" : normalized;
         set({ asrTranslationFrom });
         void get().persistToBackend({
           asr_translation_from: asrTranslationFrom,
@@ -485,7 +497,9 @@ export const useSettingsStore = create<SettingsState>()(
       setAsrTranslationTo: (to) => {
         const asrTranslationTo = normalizeCaptionTranslationTo(to);
         const asrTranslationFrom =
-          get().asrTranslationFrom === asrTranslationTo ? "auto" : get().asrTranslationFrom;
+          asrTranslationTo !== "auto" && get().asrTranslationFrom === asrTranslationTo
+            ? "auto"
+            : get().asrTranslationFrom;
         set({ asrTranslationFrom, asrTranslationTo });
         void get().persistToBackend({
           asr_translation_from: asrTranslationFrom,
@@ -527,6 +541,8 @@ export const useSettingsStore = create<SettingsState>()(
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSmartLineSelection: settings.playback_smart_line_selection ?? true,
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled ?? true,
+          playbackStallAutoSwitchEnabled:
+            settings.playback_stall_auto_switch_enabled ?? true,
           danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled ?? false,

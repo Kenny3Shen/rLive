@@ -8,7 +8,7 @@ export type TranslationLanguageOption = {
   label: string;
 };
 
-export const TRANSLATION_LANGUAGE_OPTIONS: readonly TranslationLanguageOption[] = [
+const CONCRETE_TRANSLATION_LANGUAGE_OPTIONS: readonly TranslationLanguageOption[] = [
   { value: "zh-CN", label: "简体中文" },
   { value: "zh-TW", label: "繁体中文" },
   { value: "en", label: "English" },
@@ -32,9 +32,14 @@ export const TRANSLATION_LANGUAGE_OPTIONS: readonly TranslationLanguageOption[] 
   { value: "ms", label: "Bahasa Melayu" },
 ] as const;
 
+export const TRANSLATION_LANGUAGE_OPTIONS: readonly TranslationLanguageOption[] = [
+  { value: "auto", label: "自动选择" },
+  ...CONCRETE_TRANSLATION_LANGUAGE_OPTIONS,
+] as const;
+
 export const TRANSLATION_SOURCE_LANGUAGE_OPTIONS = [
-  { value: "auto" as const, label: "自动检测" },
-  ...TRANSLATION_LANGUAGE_OPTIONS,
+  { value: "auto", label: "自动检测" },
+  ...CONCRETE_TRANSLATION_LANGUAGE_OPTIONS,
 ] as const;
 
 const LANGUAGE_CODES = new Set<string>(
@@ -46,7 +51,7 @@ export function isCaptionTranslationLanguage(value: unknown): value is CaptionTr
 }
 
 export function normalizeCaptionTranslationFrom(value: unknown): CaptionTranslationSourceLanguage {
-  return value === "auto" || isCaptionTranslationLanguage(value) ? value : "auto";
+  return isCaptionTranslationLanguage(value) ? value : "auto";
 }
 
 export function normalizeCaptionTranslationTo(value: unknown): CaptionTranslationLanguage {

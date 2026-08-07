@@ -44,7 +44,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { lineLabel } from "@/lib/playUrl";
+import { lineName } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
 import {
   TRANSLATION_LANGUAGE_OPTIONS,
@@ -118,11 +118,14 @@ export type PlayerControlsProps = {
   asrTranslationFrom?: CaptionTranslationSourceLanguage;
   asrTranslationTo?: CaptionTranslationLanguage;
   asrTranslationBusy?: boolean;
+  asrSpeakerDiarizationEnabled?: boolean;
+  asrSettingsPending?: boolean;
   qualities?: { quality: string }[];
   qualityIndex?: number;
   lines?: PlayUrl[];
   lineDiagnostics?: LineDiagnostic[];
   lineIndex?: number;
+  stallAutoSwitchEnabled?: boolean;
   fullscreen?: boolean;
   pictureInPictureSupported?: boolean;
   pictureInPictureActive?: boolean;
@@ -162,8 +165,10 @@ export type PlayerControlsProps = {
   onAsrTranslationEnabledChange?: (enabled: boolean) => void;
   onAsrTranslationFromChange?: (from: CaptionTranslationSourceLanguage) => void;
   onAsrTranslationToChange?: (to: CaptionTranslationLanguage) => void;
+  onAsrSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
+  onStallAutoSwitchEnabledChange?: (enabled: boolean) => void;
   onTogglePictureInPicture?: () => void;
   onToggleFullscreen: () => void;
 };
@@ -237,11 +242,14 @@ export function PlayerControls({
   asrTranslationFrom = "auto",
   asrTranslationTo = "zh-CN",
   asrTranslationBusy = false,
+  asrSpeakerDiarizationEnabled = false,
+  asrSettingsPending = false,
   qualities = [],
   qualityIndex = 0,
   lines = [],
   lineDiagnostics = [],
   lineIndex = 0,
+  stallAutoSwitchEnabled = true,
   fullscreen = false,
   pictureInPictureSupported = false,
   pictureInPictureActive = false,
@@ -265,14 +273,17 @@ export function PlayerControls({
   onAsrTranslationEnabledChange,
   onAsrTranslationFromChange,
   onAsrTranslationToChange,
+  onAsrSpeakerDiarizationEnabledChange,
   onQualityChange,
   onLineChange,
+  onStallAutoSwitchEnabledChange,
   onTogglePictureInPicture,
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
   const [asrSettingsOpen, setAsrSettingsOpen] = useState(false);
+  const [asrSettingsError, setAsrSettingsError] = useState<string | null>(null);
   // Mobile settings open as a drawer: bottom sheet in portrait, right side in
   // landscape. Track orientation so the drawer matches the current posture.
   const [portrait, setPortrait] = useState<boolean>(
@@ -352,10 +363,12 @@ export function PlayerControls({
   };
 
   const hasStreamSettings = qualities.length > 0 || lines.length > 0;
-  const streamSettingsDisabled = disabled || (qualities.length <= 1 && lines.length <= 1);
+  const stallAutoSwitchAvailable = Boolean(onStallAutoSwitchEnabledChange);
+  const streamSettingsDisabled =
+    disabled || (!stallAutoSwitchAvailable && qualities.length <= 1 && lines.length <= 1);
   const streamSettingsLabel = [
     qualities.length > 0 ? `清晰度 ${qualityLabel(qualityIndex)}` : null,
-    lines.length > 0 && lines[lineIndex] ? `线路 ${lineLabel(lines[lineIndex], lineIndex)}` : null,
+    lines.length > 0 && lines[lineIndex] ? `线路 ${lineName(lines[lineIndex], lineIndex)}` : null,
   ]
     .filter(Boolean)
     .join("，");
@@ -452,7 +465,7 @@ export function PlayerControls({
                   closeStreamSettings();
                 }}
               >
-                <span className="truncate">{lineLabel(line, index)}</span>
+                <span className="truncate">{lineName(line, index)}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   {diagnostic?.state === "testing" && (
                     <Badge variant="outline">
@@ -476,10 +489,57 @@ export function PlayerControls({
           })}
         </div>
       )}
+
+      {stallAutoSwitchAvailable && (
+        <>
+          <Separator className={cn("my-1 max-md:my-0.5", overlay && "bg-white/10")} />
+          <Field orientation="horizontal" className="px-2 py-1.5">
+            <FieldLabel htmlFor="player-stall-auto-switch">卡顿自动换线</FieldLabel>
+            <Switch
+              id="player-stall-auto-switch"
+              size="sm"
+              checked={stallAutoSwitchEnabled}
+              onCheckedChange={onStallAutoSwitchEnabledChange}
+            />
+          </Field>
+        </>
+      )}
     </>
   );
-  const translationSettingsBody = (
+  const captionSettingsBody = (
     <FieldGroup className="gap-3">
+      <Field
+        orientation="horizontal"
+        data-disabled={asrSettingsPending || !onAsrSpeakerDiarizationEnabledChange || undefined}
+      >
+        <FieldContent>
+          <FieldLabel htmlFor="player-caption-speaker-diarization">说话人区分</FieldLabel>
+          <FieldDescription className={cn("text-xs", overlay && "text-white/60")}>
+            为稳定字幕添加匿名编号
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          id="player-caption-speaker-diarization"
+          size="sm"
+          checked={asrSpeakerDiarizationEnabled}
+          disabled={asrSettingsPending || !onAsrSpeakerDiarizationEnabledChange}
+          onCheckedChange={(checked) => {
+            setAsrSettingsError(null);
+            void Promise.resolve(onAsrSpeakerDiarizationEnabledChange?.(checked)).catch(() => {
+              setAsrSettingsError("说话人区分设置失败，请稍后重试。");
+            });
+          }}
+        />
+      </Field>
+
+      {asrSettingsError && (
+        <p role="status" className="text-xs text-destructive">
+          {asrSettingsError}
+        </p>
+      )}
+
+      <Separator className={cn(overlay && "bg-white/10")} />
+
       <Field orientation="horizontal">
         <FieldContent>
           <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
@@ -530,7 +590,7 @@ export function PlayerControls({
                 <SelectItem
                   key={language.value}
                   value={language.value}
-                  disabled={language.value === asrTranslationTo}
+                  disabled={language.value !== "auto" && language.value === asrTranslationTo}
                   className={overlayStreamSettingsOptionClass}
                 >
                   {language.label}
@@ -573,7 +633,7 @@ export function PlayerControls({
                 <SelectItem
                   key={language.value}
                   value={language.value}
-                  disabled={language.value === asrTranslationFrom}
+                  disabled={language.value !== "auto" && language.value === asrTranslationFrom}
                   className={overlayStreamSettingsOptionClass}
                 >
                   {language.label}
@@ -588,12 +648,19 @@ export function PlayerControls({
   return (
     <div
       data-slot="player-controls-bar"
+      data-compact={compact ? "true" : "false"}
       className={cn(
-        "flex min-w-0 shrink-0 items-center gap-1 max-md:gap-0.5 max-md:justify-between",
+        "flex min-w-0 shrink-0 items-center gap-1",
+        compact && "justify-between gap-0.5",
         overlay
           ? // The material reaches every player edge; safe-area spacing stays
             // inside the surface so it never creates a visible gutter.
-            "glass-surface-overlay border-t border-white/12 bg-transparent pt-1 pr-[max(0.375rem,env(safe-area-inset-right))] pb-[max(0.25rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white max-md:pt-0.5 max-md:pb-[max(0.125rem,env(safe-area-inset-bottom))]"
+            cn(
+              "glass-surface-overlay border-t border-white/12 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
+              compact
+                ? "pt-px pb-[max(1px,env(safe-area-inset-bottom))]"
+                : "pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]",
+            )
           : "border-t border-border bg-card px-1.5 py-1",
       )}
     >
@@ -853,10 +920,12 @@ export function PlayerControls({
               )}
             >
               <div className="flex items-center justify-between gap-2">
-                <PopoverTitle>字幕翻译</PopoverTitle>
-                {asrTranslationBusy && <Spinner aria-label="正在翻译字幕" />}
+                <PopoverTitle>字幕设置</PopoverTitle>
+                {(asrSettingsPending || asrTranslationBusy) && (
+                  <Spinner aria-label="正在更新字幕设置" />
+                )}
               </div>
-              {translationSettingsBody}
+              {captionSettingsBody}
             </PopoverContent>
           </Popover>
         )}

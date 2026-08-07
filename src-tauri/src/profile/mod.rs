@@ -214,6 +214,8 @@ pub fn merge_into_db(
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_smart_line_selection = package.settings.playback_smart_line_selection;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
+    settings.playback_stall_auto_switch_enabled =
+        package.settings.playback_stall_auto_switch_enabled;
     // Do not copy `danmaku_send_enabled`, `asr_enabled`, `asr_provider`,
     // `asr_vad_enabled`, `asr_punctuation_enabled`,
     // `asr_speaker_diarization_enabled`, `asr_hotwords`,

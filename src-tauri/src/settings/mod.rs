@@ -94,10 +94,14 @@ fn normalize_asr_preferences(settings: &mut AppSettings) {
     {
         settings.asr_translation_from = "auto".to_owned();
     }
-    if !is_supported_translation_language(&settings.asr_translation_to) {
+    if settings.asr_translation_to != "auto"
+        && !is_supported_translation_language(&settings.asr_translation_to)
+    {
         settings.asr_translation_to = "zh-CN".to_owned();
     }
-    if settings.asr_translation_from == settings.asr_translation_to {
+    if settings.asr_translation_from != "auto"
+        && settings.asr_translation_from == settings.asr_translation_to
+    {
         settings.asr_translation_from = "auto".to_owned();
     }
 }
@@ -311,6 +315,13 @@ mod tests {
         let normalized = get(&conn).unwrap();
         assert_eq!(normalized.asr_translation_from, "auto");
         assert_eq!(normalized.asr_translation_to, "en");
+
+        settings.asr_translation_from = "auto".into();
+        settings.asr_translation_to = "auto".into();
+        set(&conn, &settings).unwrap();
+        let normalized = get(&conn).unwrap();
+        assert_eq!(normalized.asr_translation_from, "auto");
+        assert_eq!(normalized.asr_translation_to, "auto");
     }
 
     #[test]

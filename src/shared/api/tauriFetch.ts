@@ -1,10 +1,28 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
+
+type TranslationFetchOptions = RequestInit & {
+  maxRedirections: number;
+  proxy?: { all: string };
+};
+
+export function buildTranslationFetchOptions(
+  init: RequestInit | undefined,
+  configuredProxy: string | null | undefined,
+): TranslationFetchOptions {
+  const proxy = configuredProxy?.trim();
+  return {
+    ...init,
+    maxRedirections: 3,
+    ...(proxy ? { proxy: { all: proxy } } : {}),
+  };
+}
 
 /**
- * Browser-compatible transport used only by @vitalets/google-translate-api.
- * The package imports node-fetch, while rLive needs Tauri's scoped Rust HTTP
- * client to reach Google Translate from a WebView without weakening CORS.
+ * Browser-compatible transport used only by google-translate-api-x. Tauri's
+ * scoped Rust HTTP client reaches Google Translate without weakening WebView
+ * CORS and explicitly inherits rLive's configured HTTP(S) proxy.
  */
 export default async function fetchThroughTauri(
   input: string | URL | Request,
@@ -15,5 +33,7 @@ export default async function fetchThroughTauri(
     error.name = "TauriUnavailableError";
     throw error;
   }
-  return tauriFetch(input, init);
+
+  const options = buildTranslationFetchOptions(init, useSettingsStore.getState().proxy);
+  return tauriFetch(input, options);
 }

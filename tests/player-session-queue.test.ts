@@ -8,9 +8,11 @@ import {
   isTwitchCommercialBreak,
   liveFlvPlaybackOptions,
   nextHlsFatalRecoveryAction,
+  PLAYBACK_STALL_SWITCH_DELAY_MS,
   playUrlKey,
   requestPlayerAutoplay,
   shouldUsePlaybackSoftSwitch,
+  shouldReportPlaybackStall,
   webPlaybackKind,
 } from "../src/features/room/player/useWebPlayer";
 
@@ -162,6 +164,22 @@ describe("player session queue", () => {
     expect(hasStartedPlayback({ paused: false, readyState: 1 })).toBe(false);
     expect(hasStartedPlayback({ paused: true, readyState: 4 })).toBe(false);
     expect(hasStartedPlayback({ paused: false, readyState: 2 })).toBe(true);
+  });
+
+  test("reports only sustained stalls without media progress", () => {
+    expect(PLAYBACK_STALL_SWITCH_DELAY_MS).toBe(8_000);
+    expect(
+      shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20 }, 20),
+    ).toBe(true);
+    expect(
+      shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20.3 }, 20),
+    ).toBe(false);
+    expect(
+      shouldReportPlaybackStall({ paused: true, ended: false, currentTime: 20 }, 20),
+    ).toBe(false);
+    expect(
+      shouldReportPlaybackStall({ paused: false, ended: true, currentTime: 20 }, 20),
+    ).toBe(false);
   });
 
   test("renews a Twitch HLS URL after one exhausted in-place recovery", () => {

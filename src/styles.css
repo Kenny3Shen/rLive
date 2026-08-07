@@ -393,6 +393,29 @@ html.overlay-window #root {
   display: none;
 }
 
+/* Compact player chrome is intentionally denser than the app-wide 44px touch
+   floor. It sits on a video edge and contains only familiar media actions;
+   limiting this override to the marked player bar keeps regular mobile forms
+   and navigation comfortably sized. */
+[data-slot="player-controls-bar"][data-compact="true"] [data-slot="button"] {
+  width: 2rem !important;
+  min-width: 2rem !important;
+  height: 2rem !important;
+  min-height: 2rem !important;
+}
+
+[data-slot="player-controls-bar"][data-compact="true"] [data-slot="input-group"] {
+  height: 2rem !important;
+  min-height: 2rem !important;
+}
+
+[data-slot="player-controls-bar"][data-compact="true"]
+  [data-slot="button"]
+  svg:not([class*="size-"]) {
+  width: 1rem;
+  height: 1rem;
+}
+
 @utility focus-ring {
   @apply outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
 }
@@ -474,15 +497,18 @@ html.overlay-window #root {
   }
 }
 
-/* Mobile WebViews share the GPU with video decode and Canvas danmaku. Prefer a
-   denser translucent fill there instead of continuously filtering video. */
+/* Mobile WebViews share the GPU with video decode and Canvas danmaku. Keep the
+   material visibly frosted, but use roughly half the desktop blur radius so
+   the narrow control strip and transient drawer do not dominate composition. */
 @media (pointer: coarse), (update: slow) {
   .glass-surface-overlay {
-    backdrop-filter: none;
+    @supports (backdrop-filter: blur(1px)) {
+      backdrop-filter: blur(8px) saturate(125%);
+    }
   }
 
   .glass-surface-overlay::before {
-    background-color: oklch(0.16 0.012 265 / 0.86);
+    background-color: oklch(0.16 0.012 265 / 0.64);
   }
 }
 
