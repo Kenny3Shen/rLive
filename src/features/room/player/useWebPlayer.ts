@@ -558,8 +558,8 @@ export function useWebPlayer(opts: {
     };
   }
   // During a quality query the controller can briefly have no URL. Keep the
-  // active source alive so the soft-switch experiment does not introduce a
-  // black frame while the replacement metadata is loading.
+  // active source alive so soft switching does not introduce a black frame
+  // while the replacement metadata is loading.
   const effectivePlaybackSource =
     playbackSource ?? retainedPlaybackSourceRef.current?.source ?? null;
   const effectivePlaybackSourceKey =
@@ -994,8 +994,8 @@ export function useWebPlayer(opts: {
   }, [hardStreamKey, reloadToken, destroyPlayer, siteId]);
 
   // Same-protocol source changes can retain the media element and MSE state.
-  // This remains opt-in because live CDN timestamp continuity is not uniform;
-  // any setup/switch failure increments the hard key and rebuilds cleanly.
+  // Live CDN timestamp continuity is not uniform, so any setup/switch failure
+  // increments the hard key and rebuilds cleanly.
   useEffect(() => {
     if (!effectivePlaybackSource) return;
     if (

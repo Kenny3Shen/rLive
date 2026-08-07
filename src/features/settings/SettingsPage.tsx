@@ -1536,7 +1536,7 @@ export function SettingsPage() {
                     </Field>
                     <Field orientation="responsive">
                       <FieldContent>
-                        <FieldTitle id="soft-switch-title">软切换实验</FieldTitle>
+                        <FieldTitle id="soft-switch-title">软切换</FieldTitle>
                         <FieldDescription>
                           同协议换源时保留缓冲，失败后自动重建播放器。
                         </FieldDescription>

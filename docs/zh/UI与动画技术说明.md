@@ -23,9 +23,9 @@
 | UI 组件 | shadcn-style `base-nova` + Base UI | Button、Tabs、Dialog、Drawer、Field、Select 等可访问基础组件 |
 | 图标 | `lucide-react` | 导航、工具按钮和状态图标 |
 | 运行时动画 | GSAP + `@gsap/react` | 页面入场、Zoom、手势回弹及可中断交互反馈 |
-| 浏览器动画 | Web Animations API | 路由整页平移和 View Transition 伪元素动画 |
-| 文档快照 | View Transition API | 亮暗主题 Radial Reveal |
-| 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、加载旋转和短状态过渡 |
+| 浏览器动画 | Web Animations API | 路由整页平移 |
+| 文档快照 | View Transition API + CSS keyframes | 亮暗主题 Radial Reveal |
+| 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、主题揭示、加载旋转和短状态过渡 |
 | Canvas 帧循环 | `requestAnimationFrame` | 弹幕绘制；不属于页面 UI 动画层 |
 
 当前项目不使用 Framer Motion，也没有启用 ScrollTrigger。不要为一个局部效果引入第二套并行动画体系；先判断现有 GSAP、CSS、`PagePan`、`PageZoom` 或 View Transition 是否已经覆盖需求。
@@ -108,7 +108,7 @@ flowchart TD
     B -->|进入或退出直播间| E[PageZoom]
     B -->|触摸横向切换| F[useHorizontalSwipe]
     B -->|页面内容入场| G[feature 内 useGSAP]
-    B -->|亮暗主题| H[View Transition + WAAPI]
+    B -->|亮暗主题| H[View Transition + CSS keyframes]
     B -->|Hover、Open、Loading| I[CSS transition / keyframes]
     D --> J[共享 motion tokens]
     E --> J
@@ -164,7 +164,7 @@ flowchart TD
 
 直接侧栏导航时，`RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，使 compositor 先启动平移，避免大列表首帧卡住。
 
-动画完成后必须先保留最终帧，再在下一帧取消 Animation 并卸载旧 subtree。清理发生过早会露出旧页边缘，清理发生过晚则会保留不可见页面和动画对象。
+动画完成后先用 `commitStyles()` 固定旧页的离屏最终位置，再同步卸载旧 subtree；不能先取消 Animation、再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 
 ### 4.4 `PageZoom`：直播间进入与退出
 
@@ -212,17 +212,17 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 
 ### 4.7 主题 Radial Reveal
 
-主题切换由 `src/app/theme.ts` 与 `src/app/layout/Sidebar.tsx` 协作：
+主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与设置页协作：
 
 1. 点击事件提供指针坐标；键盘激活使用按钮中心。
 2. `document.startViewTransition()` 分别捕获旧主题和新主题快照。
 3. `flushSync()` 在 update callback 中应用 Zustand 主题，确保新快照包含更新后的 React 图标与 `.dark` class。
-4. Web Animations API 对 `::view-transition-new(root)` 的 `clip-path` 从 `circle(0)` 扩展到覆盖最远视口角。
+4. CSS `theme-reveal` keyframe 对 `::view-transition-new(root)` 的 `clip-path` 从 `circle(0)` 扩展到覆盖最远视口角。
 5. desktop 动画为 `520ms`，coarse pointer 为 `420ms`；GSAP 同时提供按钮 scale/rotation 反馈。
-6. `src/styles.css` 关闭浏览器默认 snapshot crossfade，确保只显示径向揭示。
-7. 完成后取消伪元素 Animation、清理 `data-theme-reveal` 和 GSAP inline styles。
+6. `src/styles.css` 同时关闭浏览器默认的 root-group `250ms` 插值和 snapshot crossfade，整个切换只保留一条径向揭示时间线。
+7. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-reveal`、临时 CSS 变量和 GSAP inline styles。
 
-不支持 View Transition API 或启用 `prefers-reduced-motion` 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下半径样式或 finished Animation 对象。
+不支持 View Transition API 或启用 `prefers-reduced-motion` 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下临时 CSS 变量或未结束的快照状态。
 
 ### 4.8 CSS 动画
 
@@ -305,7 +305,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 1. 在 layout effect 中记录最后一次已提交的 subtree，并由 state 保存需要退出的快照；不要在 render 阶段推进快照 ref。
 2. 新旧 subtree 同时渲染，旧节点脱离布局流并禁用输入。
 3. 执行 exit；取消或路由再次变化时终止旧动画。
-4. 等最终帧完成后再以 `startTransition()` 卸载旧 subtree；完成回调必须校验快照身份，不能清除后续导航创建的新退出层。
+4. 等最终帧完成后固定退出样式并同步卸载旧 subtree；完成回调必须校验快照身份，不能清除后续导航创建的新退出层。
 5. 清理 animation、RAF、inline style 和 `will-change`。
 
 已有场景应复用 `PagePan` 或 `PageZoom`，不要在 feature 中复制这套持有逻辑。
