@@ -220,6 +220,7 @@ function DanmakuQuickPicker({
         <SmilePlus aria-hidden />
       </PopoverTrigger>
       <PopoverContent
+        data-mobile-static-backdrop
         side="top"
         align="start"
         aria-label={`${siteLabel}快捷弹幕面板`}

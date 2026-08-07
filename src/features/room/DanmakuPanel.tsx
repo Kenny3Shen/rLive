@@ -606,6 +606,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
 
         {visible && active && !atBottom && (
           <Button
+            data-mobile-static-backdrop
             type="button"
             aria-label="滚动到底部"
             title="滚动到底部"

@@ -10,6 +10,8 @@ Android 构建使用 Tauri 2、JDK 17、Android SDK、NDK 29.0.13846066 和 Rust
 - Rust target `aarch64-linux-android`
 - Bun 和 JDK 17
 
+`MainActivity` 在应用回到前台时会向 Android 请求同分辨率下不高于 120 Hz 的最高高刷模式。60/90 Hz 设备使用自身上限；只有 60/144 Hz 而没有 90/120 Hz 模式的面板使用 144 Hz，避免误退回 60 Hz。系统省电、温控、厂商策略与动态刷新率仍可降低实际刷新率，因此该请求不会强制所有设备固定运行在 120 FPS。Web 动画和 Canvas 仍以系统实际提供的 `requestAnimationFrame` 时间戳推进。
+
 设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT` 后安装工具链：
 
 ```bash
@@ -82,4 +84,4 @@ file src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/*.so
 
 `app-*-release.apk` 是可直接安装的 APK；`*.aab` 是应用商店格式，不能用 `adb install` 直接安装。`--ci` 未配置 release keystore 时可能生成 unsigned APK，必须先签名再安装或发布。
 
-安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。Android 不应下载 Zipformer、标点或 CAMPPlus 模型。
+安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。高刷设备可通过开发者选项的刷新率叠层确认前台目标模式；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型。
