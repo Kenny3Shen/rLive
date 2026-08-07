@@ -12,8 +12,8 @@ import {
   Captions,
   CaptionsOff,
   Headphones,
-  MessageCircle,
-  MessageCircleOff,
+  MessageSquareOff,
+  MessageSquareText,
   PictureInPicture2,
   SunMedium,
   VideoOff,
@@ -366,17 +366,11 @@ export function PlayerPane({
   const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
   const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
   const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
-  const playbackStallAutoSwitchEnabled = useSettingsStore(
-    (state) => state.playbackStallAutoSwitchEnabled,
-  );
   const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
   const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
   const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
   const setAsrSpeakerDiarizationEnabled = useSettingsStore(
     (state) => state.setAsrSpeakerDiarizationEnabled,
-  );
-  const setPlaybackStallAutoSwitchEnabled = useSettingsStore(
-    (state) => state.setPlaybackStallAutoSwitchEnabled,
   );
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -511,7 +505,7 @@ export function PlayerPane({
       {
         id: "danmaku",
         label: danmakuControl.label,
-        icon: danmakuControl.icon === "message-circle" ? MessageCircle : MessageCircleOff,
+        icon: danmakuControl.icon === "message-square-text" ? MessageSquareText : MessageSquareOff,
         pressed: danmakuControl.enabled,
         disabled: transportDisabled,
         onSelect: handleToggleOsd,
@@ -1455,7 +1449,6 @@ export function PlayerPane({
                 qualityIndex={qualityIndex}
                 lines={lines}
                 lineIndex={lineIndex}
-                stallAutoSwitchEnabled={playbackStallAutoSwitchEnabled}
                 fullscreen={player.mode === "fullscreen"}
                 // Capability is device-level and stable; keep the control
                 // mounted so reconnect loops (loading toggling) cannot make
@@ -1505,7 +1498,6 @@ export function PlayerPane({
                 onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
                 onQualityChange={onQualityChange ?? (() => {})}
                 onLineChange={onLineChange ?? (() => {})}
-                onStallAutoSwitchEnabledChange={setPlaybackStallAutoSwitchEnabled}
                 onTogglePictureInPicture={handleTogglePictureInPicture}
                 onToggleFullscreen={() => void player.toggleFullscreen()}
               />

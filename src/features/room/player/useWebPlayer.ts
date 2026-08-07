@@ -241,19 +241,7 @@ export function hasStartedPlayback(
   return !video.paused && video.readyState >= 2;
 }
 
-export const PLAYBACK_STALL_SWITCH_DELAY_MS = 8_000;
-export const BILIBILI_HLS_STALL_SWITCH_DELAY_MS = 20_000;
 export const BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS = 20_000;
-const PLAYBACK_STALL_PROGRESS_EPSILON_SECONDS = 0.25;
-
-export function playbackStallSwitchDelayMs(
-  siteId: SiteId | undefined,
-  playbackKind: XgPlaybackKind | null,
-): number {
-  return siteId === "bilibili" && playbackKind === "hls"
-    ? BILIBILI_HLS_STALL_SWITCH_DELAY_MS
-    : PLAYBACK_STALL_SWITCH_DELAY_MS;
-}
 
 export function shouldEscalateNonTwitchHlsFatal(input: {
   siteId: SiteId | undefined;
@@ -264,15 +252,6 @@ export function shouldEscalateNonTwitchHlsFatal(input: {
   if (input.failureCount <= 1) return false;
   if (input.siteId !== "bilibili") return true;
   return input.now - input.firstFailureAt >= BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS;
-}
-
-export function shouldReportPlaybackStall(
-  video: Pick<HTMLMediaElement, "currentTime" | "ended" | "paused">,
-  stalledAtSeconds: number,
-): boolean {
-  if (video.paused || video.ended) return false;
-  const progress = video.currentTime - stalledAtSeconds;
-  return !Number.isFinite(progress) || progress < PLAYBACK_STALL_PROGRESS_EPSILON_SECONDS;
 }
 
 const TWITCH_COMMERCIAL_RETRY_DELAY_MS = 8_000;
@@ -1247,37 +1226,6 @@ export function useWebPlayer(opts: {
     }
     const generation = genRef.current;
     const playbackKind = effectivePlaybackKind;
-    let stallTimer: number | null = null;
-    let stalledAtSeconds = video.currentTime;
-
-    const clearStallTimer = () => {
-      if (stallTimer == null) return;
-      window.clearTimeout(stallTimer);
-      stallTimer = null;
-    };
-    const armStallTimer = () => {
-      if (stallTimer != null || video.paused || video.ended) return;
-      stalledAtSeconds = video.currentTime;
-      stallTimer = window.setTimeout(
-        () => {
-          stallTimer = null;
-          if (
-            videoRef.current !== video ||
-            genRef.current !== generation ||
-            !shouldReportPlaybackStall(video, stalledAtSeconds)
-          ) {
-            return;
-          }
-          onMediaFailureRef.current?.({
-            epoch: generation,
-            generation,
-            kind: "stall",
-            message: "播放持续卡顿",
-          });
-        },
-        playbackStallSwitchDelayMs(siteId, playbackKind),
-      );
-    };
 
     const pictureInPictureDocument = getPictureInPictureDocument();
     const syncPictureInPicture = () => {
@@ -1296,7 +1244,6 @@ export function useWebPlayer(opts: {
       setPaused(false);
     };
     const onPlaying = () => {
-      clearStallTimer();
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
@@ -1305,23 +1252,15 @@ export function useWebPlayer(opts: {
       onPlayingRef.current?.();
     };
     const onPause = () => {
-      clearStallTimer();
       setPaused(true);
     };
     const onWaiting = () => {
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryWaiting(telemetry, performance.now());
-      armStallTimer();
     };
     const onStalled = () => {
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryStalled(telemetry, performance.now());
-      armStallTimer();
-    };
-    const onTimeUpdate = () => {
-      if (stallTimer != null && !shouldReportPlaybackStall(video, stalledAtSeconds)) {
-        clearStallTimer();
-      }
     };
     // Android fullscreen auto-rotation is decided from the decoded frame size,
     // so the ratio has to follow both the first metadata and later resolution
@@ -1333,7 +1272,6 @@ export function useWebPlayer(opts: {
     const onEnterPictureInPicture = () => syncPictureInPicture();
     const onLeavePictureInPicture = () => syncPictureInPicture();
     const onEnded = () => {
-      clearStallTimer();
       if (
         videoRef.current !== video ||
         genRef.current !== generation ||
@@ -1356,27 +1294,24 @@ export function useWebPlayer(opts: {
     video.addEventListener("pause", onPause);
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onStalled);
-    video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("ended", onEnded);
     video.addEventListener("loadedmetadata", syncAspectRatio);
     video.addEventListener("resize", syncAspectRatio);
     video.addEventListener("enterpictureinpicture", onEnterPictureInPicture);
     video.addEventListener("leavepictureinpicture", onLeavePictureInPicture);
     return () => {
-      clearStallTimer();
       video.removeEventListener("play", onPlay);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
-      video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("loadedmetadata", syncAspectRatio);
       video.removeEventListener("resize", syncAspectRatio);
       video.removeEventListener("enterpictureinpicture", onEnterPictureInPicture);
       video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
     };
-  }, [effectivePlaybackKind, mediaKey, siteId, streamKey]);
+  }, [effectivePlaybackKind, mediaKey, streamKey]);
 
   useEffect(() => {
     if (typeof PerformanceObserver === "undefined") return;

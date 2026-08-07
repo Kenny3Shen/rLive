@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
 import {
   BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS,
-  BILIBILI_HLS_STALL_SWITCH_DELAY_MS,
   canSoftSwitchPlaybackSource,
   hasStartedPlayback,
   hlsResponseStatus,
@@ -10,13 +9,10 @@ import {
   isTwitchCommercialBreak,
   liveFlvPlaybackOptions,
   nextHlsFatalRecoveryAction,
-  PLAYBACK_STALL_SWITCH_DELAY_MS,
-  playbackStallSwitchDelayMs,
   playUrlKey,
   requestPlayerAutoplay,
   shouldUsePlaybackSoftSwitch,
   shouldEscalateNonTwitchHlsFatal,
-  shouldReportPlaybackStall,
   webPlaybackKind,
 } from "../src/features/room/player/useWebPlayer";
 
@@ -169,24 +165,6 @@ describe("player session queue", () => {
     expect(hasStartedPlayback({ paused: false, readyState: 1 })).toBe(false);
     expect(hasStartedPlayback({ paused: true, readyState: 4 })).toBe(false);
     expect(hasStartedPlayback({ paused: false, readyState: 2 })).toBe(true);
-  });
-
-  test("reports only sustained stalls without media progress", () => {
-    expect(PLAYBACK_STALL_SWITCH_DELAY_MS).toBe(8_000);
-    expect(playbackStallSwitchDelayMs("bilibili", "hls")).toBe(BILIBILI_HLS_STALL_SWITCH_DELAY_MS);
-    expect(playbackStallSwitchDelayMs("bilibili", "flv")).toBe(PLAYBACK_STALL_SWITCH_DELAY_MS);
-    expect(shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20 }, 20)).toBe(
-      true,
-    );
-    expect(shouldReportPlaybackStall({ paused: false, ended: false, currentTime: 20.3 }, 20)).toBe(
-      false,
-    );
-    expect(shouldReportPlaybackStall({ paused: true, ended: false, currentTime: 20 }, 20)).toBe(
-      false,
-    );
-    expect(shouldReportPlaybackStall({ paused: false, ended: true, currentTime: 20 }, 20)).toBe(
-      false,
-    );
   });
 
   test("lets Bilibili hls.js recover in place before rebuilding playback", () => {
