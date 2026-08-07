@@ -296,7 +296,7 @@ export function PlayerControls({
       ? "退出全屏（F）"
       : "全屏（F）";
   const overlayButtonClass = overlay
-    ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-visible:ring-white/70 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
+    ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-visible:border-white/65 focus-visible:bg-white/16 focus-visible:ring-[2px]! focus-visible:ring-black/55 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
     : undefined;
   // The fill itself comes from `glass-surface-overlay`; this only carries the
   // border, text colour and shadow so it cannot override the glass material.
