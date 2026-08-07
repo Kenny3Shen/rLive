@@ -38,9 +38,7 @@ function getImageProxyBase(): Promise<string | null> {
 
 function shouldProxyHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, "");
-  return PROXIED_HOST_SUFFIXES.some(
-    (suffix) => host === suffix || host.endsWith(`.${suffix}`),
-  );
+  return PROXIED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
 /** Synchronous check for render-time decisions; falls back to direct URLs. */

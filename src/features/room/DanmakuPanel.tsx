@@ -367,7 +367,9 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const matchersRef = useRef({ shieldMatcher, filterGifts });
   const [prefersDark, setPrefersDark] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)").matches : false,
+    typeof window !== "undefined"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : false,
   );
   const listSurface = useMemo(
     () => danmakuListSurfaceFromTheme(theme, prefersDark),

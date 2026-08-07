@@ -107,11 +107,7 @@ export function formatAsrCaptionSegment(segment: {
   return `说话人 ${speakerId}：${text}`;
 }
 
-export function appendAsrCaptionLine(
-  previous: string | null,
-  next: string,
-  maxChars = 90,
-): string {
+export function appendAsrCaptionLine(previous: string | null, next: string, maxChars = 90): string {
   const normalized = joinAsrCaptionText([{ text: next }]);
   if (!normalized) return previous ?? "";
 
@@ -123,7 +119,10 @@ export function appendAsrCaptionLine(
 
   const clipped = characters.slice(-maxChars);
   const firstBoundary = clipped.findIndex((character) => /[，。！？；：,.!?;:\s]/u.test(character));
-  return clipped.slice(firstBoundary >= 0 ? firstBoundary + 1 : 0).join("").trimStart();
+  return clipped
+    .slice(firstBoundary >= 0 ? firstBoundary + 1 : 0)
+    .join("")
+    .trimStart();
 }
 
 export type AudioCaptureSubscription = {

@@ -212,7 +212,9 @@ function DanmakuQuickPicker({
             title="表情、收藏和发送历史"
             className={cn(
               COMPOSER_BUTTON_CLASS,
-              overlay ? COMPOSER_OVERLAY_GHOST_CLASS : "text-muted-foreground hover:text-foreground",
+              overlay
+                ? COMPOSER_OVERLAY_GHOST_CLASS
+                : "text-muted-foreground hover:text-foreground",
             )}
           />
         }

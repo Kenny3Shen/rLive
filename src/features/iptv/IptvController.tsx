@@ -23,11 +23,18 @@ import {
 import { useIptvAvailabilityStore } from "./availabilityStore";
 import { cancelIptvAvailabilityProbe, probeIptvAvailability } from "./availabilityProbe";
 import { filterIptvChannels, getIptvGroupOptions, type IptvGroupOption } from "./filterChannels";
+import {
+  mergeFavoriteChannels,
+  useIptvFavoriteMutation,
+  useIptvFavorites,
+  type IptvFavorite,
+} from "./favorites";
 import { iptvHomePath, iptvPlayerPath } from "./iptvRoute";
-import type { PlaylistSource } from "./playlistSource";
+import { iptvFavoriteSourceId, type PlaylistSource } from "./playlistSource";
 import type { IptvChannel } from "./types";
 
 const EMPTY_CHANNELS: IptvChannel[] = [];
+const EMPTY_FAVORITES: IptvFavorite[] = [];
 
 export type IptvController = {
   source: PlaylistSource;
@@ -37,6 +44,13 @@ export type IptvController = {
   groupOptions: IptvGroupOption[];
   matchingChannels: IptvChannel[];
   filteredChannels: IptvChannel[];
+  favoriteOnly: boolean;
+  setFavoriteOnly: (favoriteOnly: boolean) => void;
+  favoriteCount: number;
+  favoritesQuery: UseQueryResult<IptvFavorite[], Error>;
+  favoritePendingUrl: string | null;
+  isFavorite: (channel: IptvChannel) => boolean;
+  toggleFavorite: (channel: IptvChannel) => void;
   availabilityFilter: IptvAvailabilityFilter;
   setAvailabilityFilter: (filter: IptvAvailabilityFilter) => void;
   availabilityByUrl: ReadonlyMap<string, IptvAvailabilityState>;
@@ -77,6 +91,7 @@ export function IptvControllerProvider({
   const selectedGroup = searchParams.get("group") ?? "all";
   const keyword = searchParams.get("q") ?? "";
   const [availabilityFilter, setAvailabilityFilter] = useState<IptvAvailabilityFilter>("all");
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
   const availabilityByUrl = useIptvAvailabilityStore((state) => state.byUrl);
   const availabilityProgress = useIptvAvailabilityStore((state) => state.progress);
   const activeSourceRef = useRef<string | null>(null);
@@ -88,11 +103,23 @@ export function IptvControllerProvider({
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,
   });
+  const favoriteSourceId = iptvFavoriteSourceId(source);
   const channels = active ? (playlistQuery.data ?? EMPTY_CHANNELS) : EMPTY_CHANNELS;
+  const favoritesQuery = useIptvFavorites(favoriteSourceId, active);
+  const favorites = active ? (favoritesQuery.data ?? EMPTY_FAVORITES) : EMPTY_FAVORITES;
+  const favoriteMutation = useIptvFavoriteMutation(favoriteSourceId);
+  const favoriteUrls = useMemo(
+    () => new Set(favorites.map((favorite) => favorite.url)),
+    [favorites],
+  );
+  const channelsForFiltering = useMemo(
+    () => (favoriteOnly ? mergeFavoriteChannels(channels, favorites) : channels),
+    [channels, favoriteOnly, favorites],
+  );
   const groupOptions = useMemo(() => getIptvGroupOptions(channels), [channels]);
   const matchingChannels = useMemo(
-    () => filterIptvChannels(channels, { group: selectedGroup, query: keyword }),
-    [channels, keyword, selectedGroup],
+    () => filterIptvChannels(channelsForFiltering, { group: selectedGroup, query: keyword }),
+    [channelsForFiltering, keyword, selectedGroup],
   );
   const availabilitySummary = useMemo(
     () => summarizeIptvAvailability(matchingChannels, availabilityByUrl),
@@ -103,7 +130,10 @@ export function IptvControllerProvider({
     [availabilityByUrl, availabilityFilter, matchingChannels],
   );
   const hasFilters =
-    selectedGroup !== "all" || keyword.trim().length > 0 || availabilityFilter !== "all";
+    selectedGroup !== "all" ||
+    keyword.trim().length > 0 ||
+    availabilityFilter !== "all" ||
+    favoriteOnly;
   const isCheckingAvailability = availabilityProgress !== null;
   const uncheckedCount = availabilitySummary.unchecked + availabilitySummary.checking;
 
@@ -153,8 +183,21 @@ export function IptvControllerProvider({
 
   const clearFilters = useCallback(() => {
     setAvailabilityFilter("all");
+    setFavoriteOnly(false);
     navigateHome({ group: "all", query: "" }, true);
   }, [navigateHome]);
+
+  const isFavorite = useCallback(
+    (channel: IptvChannel) => favoriteUrls.has(channel.url),
+    [favoriteUrls],
+  );
+
+  const toggleFavorite = useCallback(
+    (channel: IptvChannel) => {
+      favoriteMutation.mutate({ channel, isFavorite: favoriteUrls.has(channel.url) });
+    },
+    [favoriteMutation, favoriteUrls],
+  );
 
   const openChannel = useCallback(
     (channel: IptvChannel) => {
@@ -203,6 +246,15 @@ export function IptvControllerProvider({
       groupOptions,
       matchingChannels,
       filteredChannels,
+      favoriteOnly,
+      setFavoriteOnly,
+      favoriteCount: favorites.length,
+      favoritesQuery,
+      favoritePendingUrl: favoriteMutation.isPending
+        ? (favoriteMutation.variables?.channel.url ?? null)
+        : null,
+      isFavorite,
+      toggleFavorite,
       availabilityFilter,
       setAvailabilityFilter,
       availabilityByUrl,
@@ -227,9 +279,15 @@ export function IptvControllerProvider({
       checkChannelAvailability,
       clearFilters,
       filteredChannels,
+      favoriteMutation.isPending,
+      favoriteMutation.variables,
+      favoriteOnly,
+      favorites.length,
+      favoritesQuery,
       groupOptions,
       hasFilters,
       isCheckingAvailability,
+      isFavorite,
       keyword,
       matchingChannels,
       navigateHome,
@@ -239,6 +297,7 @@ export function IptvControllerProvider({
       source,
       uncheckedCount,
       updateSource,
+      toggleFavorite,
     ],
   );
 

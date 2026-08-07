@@ -2,7 +2,7 @@ export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",
 } as const;
 
-const SIDEBAR_DESTINATIONS = ["/", "/follow", "/category", "/history", "/iptv", "/settings"];
+const SIDEBAR_DESTINATIONS = ["/", "/follow", "/category", "/iptv", "/history", "/settings"];
 
 type NavigationType = "POP" | "PUSH" | "REPLACE";
 

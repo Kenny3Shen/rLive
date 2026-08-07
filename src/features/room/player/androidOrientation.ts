@@ -6,10 +6,7 @@ import { supportsAndroidNativePlayerControls } from "./androidPlayerControls";
 /** Orientation lock requested from the Android Activity. */
 export type PlayerOrientation = "landscape" | "portrait" | "auto";
 
-type NativeOrientationInvoke = <T>(
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<T>;
+type NativeOrientationInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**
  * Orientation lock for a video, decided from the stream's real aspect ratio.

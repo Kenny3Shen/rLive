@@ -4,6 +4,7 @@ use std::io::Read;
 
 use crate::db::follow::{self, FollowRecord, TagRecord};
 use crate::db::history::{self, HistoryRecord};
+use crate::db::iptv_favorite::{self, IptvFavoriteGroupRecord, IptvFavoriteRecord};
 use crate::db::schema::map_db_err;
 use crate::error::{AppError, AppResult};
 use crate::models::settings::AppSettings;
@@ -22,6 +23,10 @@ pub struct ProfilePackage {
     pub exported_at: i64,
     pub settings: AppSettings,
     pub follows: Vec<FollowRecord>,
+    #[serde(default)]
+    pub iptv_favorites: Vec<IptvFavoriteRecord>,
+    #[serde(default)]
+    pub iptv_favorite_groups: Vec<IptvFavoriteGroupRecord>,
     pub tags: Vec<TagRecord>,
     pub history: Vec<HistoryRecord>,
     pub danmaku_shield_words: Vec<String>,
@@ -35,6 +40,8 @@ impl ProfilePackage {
             exported_at: 0,
             settings: AppSettings::default(),
             follows: vec![],
+            iptv_favorites: vec![],
+            iptv_favorite_groups: vec![],
             tags: vec![],
             history: vec![],
             danmaku_shield_words: vec![],
@@ -70,6 +77,9 @@ fn clear_local_only_settings(settings: &mut AppSettings) {
 fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Value> {
     let mut portable = package.clone();
     clear_local_only_settings(&mut portable.settings);
+    portable
+        .iptv_favorites
+        .retain(|favorite| is_portable_iptv_source(&favorite.source_id));
 
     let mut value = serde_json::to_value(portable)
         .map_err(|e| AppError::new("profile_encode_error", format!("serialize: {e}")))?;
@@ -95,6 +105,10 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
     Ok(value)
 }
 
+fn is_portable_iptv_source(source_id: &str) -> bool {
+    matches!(source_id, "chinese" | "mainland" | "east-asia" | "general")
+}
+
 pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
     let mut settings = settings::get(conn)?;
     clear_local_only_settings(&mut settings);
@@ -104,6 +118,11 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
         exported_at: chrono::Utc::now().timestamp_millis(),
         settings,
         follows: follow::list(conn)?,
+        iptv_favorites: iptv_favorite::list_all(conn)?
+            .into_iter()
+            .filter(|favorite| is_portable_iptv_source(&favorite.source_id))
+            .collect(),
+        iptv_favorite_groups: iptv_favorite::list_groups(conn)?,
         tags: follow::list_tags(conn)?,
         history: history::list(conn)?,
         danmaku_shield_words: shield,
@@ -132,6 +151,8 @@ pub fn encode_package(package: &ProfilePackage) -> AppResult<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileImportResult {
     pub follows: usize,
+    pub iptv_favorites: usize,
+    pub iptv_favorite_groups: usize,
     pub tags: usize,
     pub history: usize,
     pub settings: bool,
@@ -181,7 +202,7 @@ pub fn merge_into_db(
     conn: &mut Connection,
     package: &ProfilePackage,
 ) -> AppResult<ProfileImportResult> {
-    // A portable profile spans five logical data groups. Apply all of them in
+    // A portable profile spans seven logical data groups. Apply all of them in
     // one SQLite transaction so a duplicate tag or disk error cannot leave
     // follows/history partially imported while the settings remain old.
     let transaction = conn.transaction().map_err(map_db_err)?;
@@ -190,6 +211,16 @@ pub fn merge_into_db(
     }
     for f in &package.follows {
         follow::upsert(&transaction, f.clone())?;
+    }
+    for group in &package.iptv_favorite_groups {
+        iptv_favorite::upsert_group(&transaction, group.clone())?;
+    }
+    let mut imported_iptv_favorites = 0;
+    for favorite in &package.iptv_favorites {
+        if is_portable_iptv_source(&favorite.source_id) {
+            iptv_favorite::upsert(&transaction, favorite.clone())?;
+            imported_iptv_favorites += 1;
+        }
     }
     for h in &package.history {
         history::upsert(&transaction, h.clone())?;
@@ -243,6 +274,8 @@ pub fn merge_into_db(
 
     Ok(ProfileImportResult {
         follows: package.follows.len(),
+        iptv_favorites: imported_iptv_favorites,
+        iptv_favorite_groups: package.iptv_favorite_groups.len(),
         tags: package.tags.len(),
         history: package.history.len(),
         settings: true,
@@ -253,7 +286,23 @@ pub fn merge_into_db(
 mod tests {
     use super::*;
     use crate::db::schema::open_in_memory;
+    use crate::models::live::PlaybackProtocol;
     use std::io::repeat;
+
+    fn iptv_favorite(source_id: &str, url: &str) -> IptvFavoriteRecord {
+        IptvFavoriteRecord {
+            source_id: source_id.into(),
+            id: "news".into(),
+            name: "新闻频道".into(),
+            group: "新闻".into(),
+            favorite_group_id: None,
+            logo: None,
+            url: url.into(),
+            protocol: Some(PlaybackProtocol::Hls),
+            headers: Default::default(),
+            updated_at: 1,
+        }
+    }
 
     #[test]
     fn portable_export_omits_cookies_and_local_only_settings() {
@@ -294,6 +343,79 @@ mod tests {
         assert!(!text.contains("asr_translation_from"));
         assert!(!text.contains("asr_translation_to"));
         assert!(!text.contains("iptv_custom_m3u_url"));
+    }
+
+    #[test]
+    fn portable_profile_keeps_public_iptv_favorites_and_omits_custom_ones() {
+        let mut package = ProfilePackage::sample();
+        package.iptv_favorite_groups = vec![IptvFavoriteGroupRecord {
+            id: "news".into(),
+            name: "新闻".into(),
+        }];
+        let mut public = iptv_favorite("chinese", "https://public.example.test/live.m3u8");
+        public.favorite_group_id = Some("news".into());
+        package.iptv_favorites = vec![
+            public,
+            iptv_favorite(
+                "custom:deadbeef",
+                "https://private.example.test/live.m3u8?token=secret",
+            ),
+        ];
+
+        let encoded = encode_package(&package).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        let favorites = value["iptv_favorites"].as_array().unwrap();
+
+        assert_eq!(favorites.len(), 1);
+        assert_eq!(favorites[0]["source_id"], "chinese");
+        assert_eq!(favorites[0]["favorite_group_id"], "news");
+        assert_eq!(value["iptv_favorite_groups"][0]["name"], "新闻");
+        assert!(!encoded.contains("private.example.test"));
+        assert!(!encoded.contains("token=secret"));
+    }
+
+    #[test]
+    fn merge_imports_only_portable_iptv_favorites() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.iptv_favorites = vec![
+            iptv_favorite("mainland", "https://public.example.test/live.m3u8"),
+            iptv_favorite("custom:deadbeef", "https://private.example.test/live.m3u8"),
+        ];
+
+        let result = merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(result.iptv_favorites, 1);
+        assert_eq!(iptv_favorite::list(&conn, "mainland").unwrap().len(), 1);
+        assert!(
+            iptv_favorite::list(&conn, "custom:deadbeef")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn merge_imports_iptv_groups_before_channel_assignments() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.iptv_favorite_groups = vec![IptvFavoriteGroupRecord {
+            id: "sports".into(),
+            name: "体育".into(),
+        }];
+        let mut favorite = iptv_favorite("mainland", "https://public.example.test/sports.m3u8");
+        favorite.favorite_group_id = Some("sports".into());
+        package.iptv_favorites = vec![favorite];
+
+        let result = merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(result.iptv_favorite_groups, 1);
+        assert_eq!(iptv_favorite::list_groups(&conn).unwrap()[0].name, "体育");
+        assert_eq!(
+            iptv_favorite::list(&conn, "mainland").unwrap()[0]
+                .favorite_group_id
+                .as_deref(),
+            Some("sports")
+        );
     }
 
     #[test]

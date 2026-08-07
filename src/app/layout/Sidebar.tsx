@@ -25,7 +25,6 @@ const navItems: {
   { to: "/", label: "首页", icon: Home, end: true },
   { to: "/follow", label: "关注", icon: Heart },
   { to: "/category", label: "分类", icon: LayoutGrid },
-  { to: "/history", label: "历史", icon: History },
   { to: "/iptv", label: "IPTV", icon: Tv },
 ];
 
@@ -191,18 +190,23 @@ export function Sidebar() {
           />
         ))}
       </nav>
-      <div
-        data-slot="app-sidebar-preferences"
-        className="mb-1.5 flex flex-col items-center max-md:hidden"
-      >
-        <AppearanceToggle />
+      <div className="flex flex-col items-center gap-2 max-md:flex-row max-md:gap-0">
+        <div data-slot="app-sidebar-preferences" className="max-md:hidden">
+          <AppearanceToggle />
+        </div>
+        <SidebarLink
+          to="/history"
+          label="历史"
+          icon={History}
+          className="max-md:w-11 max-md:flex-none"
+        />
+        <SidebarLink
+          to="/settings"
+          label="设置"
+          icon={Settings}
+          className="max-md:w-11 max-md:flex-none"
+        />
       </div>
-      <SidebarLink
-        to="/settings"
-        label="设置"
-        icon={Settings}
-        className="max-md:w-11 max-md:flex-none"
-      />
     </aside>
   );
 }

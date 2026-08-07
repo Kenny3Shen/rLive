@@ -1,12 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   FOLLOW_PLATFORM_PARAM,
+  followViewFromSearch,
   followPlatformFromSearch,
   formatFollowLiveDuration,
+  withFollowView,
   withFollowPlatform,
 } from "../src/features/follow/followRoute";
 
 describe("follow platform route state", () => {
+  test("keeps live and IPTV follow views in the URL", () => {
+    const current = new URLSearchParams("platform=huya");
+    const iptv = withFollowView(current, "iptv");
+
+    expect(followViewFromSearch(iptv.get("view"))).toBe("iptv");
+    expect(iptv.get("platform")).toBe("huya");
+    expect(withFollowView(iptv, "live").toString()).toBe("platform=huya");
+    expect(followViewFromSearch("unknown")).toBe("live");
+  });
+
   test("accepts only supported platforms and falls back to all platforms", () => {
     expect(followPlatformFromSearch("bilibili")).toBe("bilibili");
     expect(followPlatformFromSearch("douyin")).toBe("douyin");

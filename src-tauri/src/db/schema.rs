@@ -57,6 +57,28 @@ CREATE TABLE IF NOT EXISTS danmaku_favorites (
 CREATE INDEX IF NOT EXISTS idx_danmaku_favorites_recent
   ON danmaku_favorites (site_id, added_at DESC);
 
+CREATE TABLE IF NOT EXISTS iptv_favorites (
+  source_id TEXT NOT NULL,
+  channel_url TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  group_name TEXT NOT NULL DEFAULT '',
+  favorite_group_id TEXT,
+  logo TEXT,
+  protocol TEXT,
+  headers TEXT NOT NULL DEFAULT '{}',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (source_id, channel_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_iptv_favorites_source_recent
+  ON iptv_favorites (source_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS iptv_favorite_groups (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS settings_kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -115,6 +137,23 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         conn.execute("ALTER TABLE follows ADD COLUMN live_started_at INTEGER", [])
             .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
     }
+
+    let has_iptv_favorite_group_id = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('iptv_favorites') WHERE name = ?1 LIMIT 1",
+            ["favorite_group_id"],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?
+        .is_some();
+    if !has_iptv_favorite_group_id {
+        conn.execute(
+            "ALTER TABLE iptv_favorites ADD COLUMN favorite_group_id TEXT",
+            [],
+        )
+        .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+    }
     Ok(())
 }
 
@@ -154,5 +193,37 @@ mod tests {
             .optional()
             .unwrap();
         assert_eq!(column.as_deref(), Some("live_started_at"));
+    }
+
+    #[test]
+    fn migrate_adds_group_id_to_existing_iptv_favorites_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE iptv_favorites (
+                source_id TEXT NOT NULL,
+                channel_url TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                group_name TEXT NOT NULL DEFAULT '',
+                logo TEXT,
+                protocol TEXT,
+                headers TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (source_id, channel_url)
+            );",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let column: Option<String> = conn
+            .query_row(
+                "SELECT name FROM pragma_table_info('iptv_favorites') WHERE name = ?1",
+                ["favorite_group_id"],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(column.as_deref(), Some("favorite_group_id"));
     }
 }

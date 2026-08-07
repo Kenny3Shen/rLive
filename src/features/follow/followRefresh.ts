@@ -52,10 +52,11 @@ export async function refreshFollows(queryClient: QueryClient): Promise<FollowUs
  * revisit — after returning from a room, or a platform filter change — from
  * repeating work the cache already holds.
  */
-export function useFollowStatusRefresh() {
+export function useFollowStatusRefresh(enabled = true) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
+    if (!enabled) return;
     let interval: number | undefined;
     const refresh = () => {
       // Automatic refresh errors should not replace a usable cached follow
@@ -75,5 +76,5 @@ export function useFollowStatusRefresh() {
       window.clearTimeout(timeout);
       if (interval != null) window.clearInterval(interval);
     };
-  }, [queryClient]);
+  }, [enabled, queryClient]);
 }

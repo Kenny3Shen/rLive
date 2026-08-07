@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -32,65 +32,81 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
+import {
+  IPTV_FAVORITES_QUERY_KEY,
+  IPTV_FAVORITE_GROUPS_QUERY_KEY,
+  sortIptvFavoriteGroups,
+  type IptvFavorite,
+  type IptvFavoriteGroup,
+} from "@/features/iptv/favorites";
 import { invokeCmd } from "@/shared/api/tauri";
-import { FOLLOW_LIST_QUERY_KEY } from "./followRefresh";
-import { FOLLOW_GROUPS_QUERY_KEY, sortFollowGroups, type FollowGroup } from "./followGroups";
 
-type FollowGroupManagerDialogProps = {
+type IptvFollowGroupManagerDialogProps = {
   open: boolean;
-  groups: readonly FollowGroup[];
+  groups: readonly IptvFavoriteGroup[];
   counts: ReadonlyMap<string, number>;
   onOpenChange: (open: boolean) => void;
 };
 
-export function FollowGroupManagerDialog({
+export function IptvFollowGroupManagerDialog({
   open,
   groups,
   counts,
   onOpenChange,
-}: FollowGroupManagerDialogProps) {
+}: IptvFollowGroupManagerDialogProps) {
   const queryClient = useQueryClient();
   const [newGroupName, setNewGroupName] = useState("");
-  const [editing, setEditing] = useState<FollowGroup | null>(null);
+  const [editing, setEditing] = useState<IptvFavoriteGroup | null>(null);
   const [editingName, setEditingName] = useState("");
-  const [pendingDelete, setPendingDelete] = useState<FollowGroup | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<IptvFavoriteGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  function updateGroupCache(group: FollowGroup) {
-    queryClient.setQueryData<FollowGroup[]>(FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
-      sortFollowGroups([...current.filter((item) => item.id !== group.id), group]),
+  function updateGroupCache(group: IptvFavoriteGroup) {
+    queryClient.setQueryData<IptvFavoriteGroup[]>(IPTV_FAVORITE_GROUPS_QUERY_KEY, (current = []) =>
+      sortIptvFavoriteGroups([...current.filter((item) => item.id !== group.id), group]),
     );
   }
 
   const saveMutation = useMutation({
     mutationFn: ({ name, id }: { name: string; id?: string }) =>
-      invokeCmd<FollowGroup>("tag_upsert", { name, id }),
+      invokeCmd<IptvFavoriteGroup>("iptv_favorite_group_upsert", { name, id }),
     onSuccess: (group, variables) => {
       updateGroupCache(group);
       setError(null);
       if (variables.id) {
         setEditing(null);
         setEditingName("");
-        notify.success("分组已重命名");
+        notify.success("IPTV 分组已重命名");
       } else {
         setNewGroupName("");
-        notify.success("分组已创建");
+        notify.success("IPTV 分组已创建");
       }
     },
     onError: () => setError("保存失败，请检查名称是否重复。"),
   });
 
   const removeMutation = useMutation({
-    mutationFn: (group: FollowGroup) => invokeCmd("tag_remove", { id: group.id }),
+    mutationFn: (group: IptvFavoriteGroup) =>
+      invokeCmd("iptv_favorite_group_remove", { id: group.id }),
     onSuccess: async (_, group) => {
-      queryClient.setQueryData<FollowGroup[]>(FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
-        current.filter((item) => item.id !== group.id),
+      queryClient.setQueryData<IptvFavoriteGroup[]>(
+        IPTV_FAVORITE_GROUPS_QUERY_KEY,
+        (current = []) => current.filter((item) => item.id !== group.id),
       );
-      await queryClient.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
+      queryClient.setQueriesData<IptvFavorite[]>(
+        { queryKey: IPTV_FAVORITES_QUERY_KEY },
+        (current) =>
+          current?.map((favorite) =>
+            favorite.favorite_group_id === group.id
+              ? { ...favorite, favorite_group_id: null }
+              : favorite,
+          ),
+      );
+      await queryClient.invalidateQueries({ queryKey: IPTV_FAVORITES_QUERY_KEY });
       setPendingDelete(null);
-      notify.success("分组已删除", "其中的主播已移至未分组。");
+      notify.success("IPTV 分组已删除", "其中的频道已移至未分组。");
     },
-    onError: () => notify.error("删除分组失败", "请稍后重试。"),
+    onError: () => notify.error("删除 IPTV 分组失败", "请稍后重试。"),
   });
 
   function createGroup() {
@@ -118,60 +134,64 @@ export function FollowGroupManagerDialog({
       <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>管理关注分组</DialogTitle>
-            <DialogDescription>分组保存在当前设备，并包含在配置导入导出中。</DialogDescription>
+            <DialogTitle>管理 IPTV 分组</DialogTitle>
+            <DialogDescription>
+              自定义频道分组保存在当前设备，并包含在配置导入导出中。
+            </DialogDescription>
           </DialogHeader>
 
-          <Field data-invalid={error ? true : undefined} data-disabled={busy || undefined}>
-            <FieldLabel htmlFor="follow-group-manager-new">新建分组</FieldLabel>
-            <InputGroup>
-              <InputGroupAddon>
-                <FolderPlus aria-hidden />
-              </InputGroupAddon>
-              <InputGroupInput
-                id="follow-group-manager-new"
-                value={newGroupName}
-                maxLength={32}
-                disabled={busy}
-                aria-invalid={error ? true : undefined}
-                placeholder="分组名称"
-                onChange={(event) => {
-                  setNewGroupName(event.target.value);
-                  setError(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  createGroup();
-                }}
-              />
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton
-                  size="icon-xs"
-                  disabled={busy || !newGroupName.trim()}
-                  aria-label="创建分组"
-                  onClick={createGroup}
-                >
-                  {saveMutation.isPending && !saveMutation.variables?.id ? (
-                    <Spinner aria-hidden />
-                  ) : (
-                    <FolderPlus aria-hidden />
-                  )}
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
-            {error && (
-              <p role="status" className="text-xs text-destructive">
-                {error}
-              </p>
-            )}
-          </Field>
+          <FieldGroup>
+            <Field data-invalid={error ? true : undefined} data-disabled={busy || undefined}>
+              <FieldLabel htmlFor="iptv-follow-group-manager-new">新建分组</FieldLabel>
+              <InputGroup>
+                <InputGroupAddon>
+                  <FolderPlus aria-hidden />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id="iptv-follow-group-manager-new"
+                  value={newGroupName}
+                  maxLength={32}
+                  disabled={busy}
+                  aria-invalid={error ? true : undefined}
+                  placeholder="分组名称"
+                  onChange={(event) => {
+                    setNewGroupName(event.target.value);
+                    setError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    createGroup();
+                  }}
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    disabled={busy || !newGroupName.trim()}
+                    aria-label="创建 IPTV 分组"
+                    onClick={createGroup}
+                  >
+                    {saveMutation.isPending && !saveMutation.variables?.id ? (
+                      <Spinner aria-hidden />
+                    ) : (
+                      <FolderPlus aria-hidden />
+                    )}
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+              {error && (
+                <p role="status" className="text-xs text-destructive">
+                  {error}
+                </p>
+              )}
+            </Field>
+          </FieldGroup>
 
           <Separator />
 
           <div className="flex max-h-72 flex-col overflow-y-auto">
             {groups.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">还没有分组</p>
+              <p className="py-8 text-center text-sm text-muted-foreground">还没有自定义分组</p>
             ) : (
               groups.map((group, index) => (
                 <div key={group.id}>
@@ -183,7 +203,7 @@ export function FollowGroupManagerDialog({
                           value={editingName}
                           maxLength={32}
                           autoFocus
-                          aria-label="分组名称"
+                          aria-label="IPTV 分组名称"
                           disabled={busy}
                           onChange={(event) => {
                             setEditingName(event.target.value);
@@ -200,7 +220,7 @@ export function FollowGroupManagerDialog({
                         <InputGroupAddon align="inline-end">
                           <InputGroupButton
                             size="icon-xs"
-                            aria-label="保存分组名称"
+                            aria-label="保存 IPTV 分组名称"
                             disabled={busy || !editingName.trim()}
                             onClick={renameGroup}
                           >
@@ -279,9 +299,9 @@ export function FollowGroupManagerDialog({
             <AlertDialogMedia className="bg-destructive/10 text-destructive">
               <Trash2 aria-hidden />
             </AlertDialogMedia>
-            <AlertDialogTitle>删除分组</AlertDialogTitle>
+            <AlertDialogTitle>删除 IPTV 分组</AlertDialogTitle>
             <AlertDialogDescription>
-              删除“{pendingDelete?.name}”后，其中的主播会移至未分组。
+              删除“{pendingDelete?.name}”后，其中的频道会移至未分组。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

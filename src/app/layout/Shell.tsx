@@ -17,11 +17,7 @@ import {
 } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  IptvHeaderStatusControls,
-  IptvSearchInput,
-  IptvSourceSwitcher,
-} from "@/features/iptv/IptvHeaderControls";
+import { IptvSearchInput, IptvSourceSwitcher } from "@/features/iptv/IptvHeaderControls";
 import { IptvControllerProvider } from "@/features/iptv/IptvController";
 import { iptvHomePath } from "@/features/iptv/iptvRoute";
 import { builtInSources, playlistSourceFromRoute } from "@/features/iptv/playlistSource";
@@ -39,10 +35,17 @@ import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
 import { categoryHomePathAfterSiteChange } from "@/features/category/categoryRoute";
 import {
   FOLLOW_PLATFORM_PARAM,
+  FOLLOW_VIEW_PARAM,
   type FollowPlatformFilter,
   followPlatformFromSearch,
+  followViewFromSearch,
   withFollowPlatform,
 } from "@/features/follow/followRoute";
+import {
+  FOLLOW_IPTV_GROUP_PARAM,
+  FOLLOW_IPTV_SOURCE_PARAM,
+  withIptvFollowSource,
+} from "@/features/follow/iptvFollowGroups";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { PagePan } from "@/shared/motion/PagePan";
 import { PageZoom } from "@/shared/motion/PageZoom";
@@ -171,6 +174,11 @@ export function Shell() {
         : sitePlatforms[0]!,
     [selectedSiteId, sitePlatforms],
   );
+  const followView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM));
+  const isLiveFollow = isFollow && followView === "live";
+  const isIptvFollow = isFollow && followView === "iptv";
+  const hasIptvSourceShell = isIptv || isIptvFollow;
+  const iptvFollowGroup = isIptvFollow ? searchParams.get(FOLLOW_IPTV_GROUP_PARAM) : null;
   // Routes carrying the live-platform strip. This gates the platform swipe and
   // the `SiteSwitcher` itself, so IPTV must stay out of it: IPTV has its own
   // source strip and its own swipe.
@@ -178,13 +186,14 @@ export function Shell() {
     pathname === "/" ||
     pathname.startsWith("/category") ||
     pathname.startsWith("/search") ||
-    isFollow ||
+    isLiveFollow ||
     isHistory;
-  // Routes whose content pans between groups. Same motion for live platforms
-  // and IPTV sources — one pan, two kinds of grouping.
-  const showGroupSwitcher = showSiteSwitcher || isIptv;
-  const showTopNavigation = showGroupSwitcher;
-  const iptvSourceId = isIptv ? searchParams.get("source") : null;
+  // Keep both follow views in the same content container so changing the
+  // live/IPTV tab does not remount FollowPage and discard its transition state.
+  // IPTV follow groups animate inside IptvFollowView rather than in this layer.
+  const useGroupedPageContainer = showSiteSwitcher || isIptv || isIptvFollow;
+  const showTopNavigation = useGroupedPageContainer;
+  const iptvSourceId = hasIptvSourceShell ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
     () => playlistSourceFromRoute(iptvSourceId, iptvSourceUrl ?? iptvCustomM3uUrl),
@@ -234,7 +243,7 @@ export function Shell() {
     () => ["all", ...sitePlatforms],
     [sitePlatforms],
   );
-  const platformStrip: readonly PlatformScopeValue[] = isFollow
+  const platformStrip: readonly PlatformScopeValue[] = isLiveFollow
     ? followPlatforms
     : isHistory
       ? historyPlatforms
@@ -287,10 +296,14 @@ export function Shell() {
     (id: string) => {
       const next = iptvSources.find((source) => source.id === id);
       if (next && next.url !== iptvSource.url) {
-        navigate(iptvHomePath({ source: next }));
+        if (isIptvFollow) {
+          setSearchParams((current) => withIptvFollowSource(current, next.id));
+        } else {
+          navigate(iptvHomePath({ source: next }));
+        }
       }
     },
-    [iptvSource.url, iptvSources, navigate],
+    [iptvSource.url, iptvSources, isIptvFollow, navigate, setSearchParams],
   );
 
   const handleIptvSearchChange = useCallback(
@@ -316,14 +329,14 @@ export function Shell() {
     items: sitePlatforms,
     value: activeSiteId,
     onChange: handleSitePlatformChange,
-    enabled: platformSwipeEnabled && !isFollow,
+    enabled: platformSwipeEnabled && !isLiveFollow,
     animate: platformSwipeEnabled,
   });
   const followPlatformSwipe = useHorizontalSwipe({
     items: followPlatforms,
     value: followPlatform,
     onChange: handleFollowPlatformChange,
-    enabled: platformSwipeEnabled && isFollow,
+    enabled: platformSwipeEnabled && isLiveFollow,
     animate: platformSwipeEnabled,
   });
   const historyPlatformSwipe = useHorizontalSwipe({
@@ -339,7 +352,7 @@ export function Shell() {
     onChange: handleIptvSourceChange,
     enabled: isIptv && mobileClient,
   });
-  const platformSwipe = isFollow
+  const platformSwipe = isLiveFollow
     ? followPlatformSwipe
     : isHistory
       ? historyPlatformSwipe
@@ -388,7 +401,7 @@ export function Shell() {
   }, []);
   useEffect(() => {
     pageScrollRef.current?.scrollTo({ top: 0 });
-  }, [pathname, platformForMotion]);
+  }, [iptvFollowGroup, iptvSource.id, pathname, platformForMotion]);
 
   const deferRouteOutlet = isDirectSidebarNavigation;
   const routeOutlet = (
@@ -473,7 +486,7 @@ export function Shell() {
   const regularPage =
     mobileClient && showSiteSwitcher ? (
       liveSwipePage
-    ) : showGroupSwitcher ? (
+    ) : useGroupedPageContainer ? (
       groupPage
     ) : (
       <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
@@ -508,32 +521,27 @@ export function Shell() {
                   data-mobile-empty={showTopNavigation ? undefined : "true"}
                   className={cn(
                     "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
-                    isIptv && "max-md:grid max-md:grid-cols-[auto_minmax(0,1fr)_auto]",
+                    isIptv && "max-md:grid max-md:grid-cols-[minmax(0,1fr)_auto]",
                     !showTopNavigation && "max-md:hidden",
                   )}
                 >
-                  {isIptv && (
-                    <div className="relative z-10 flex min-w-0 items-center">
-                      <IptvHeaderStatusControls />
-                    </div>
-                  )}
                   <div
                     className={cn(
                       "pointer-events-none absolute inset-0 flex items-center justify-center",
-                      !isIptv &&
+                      !hasIptvSourceShell &&
                         "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
-                      isIptv &&
-                        "max-md:static max-md:inset-auto max-md:min-w-0 max-md:overflow-hidden",
+                      hasIptvSourceShell &&
+                        "max-md:static max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:overflow-hidden",
                     )}
                   >
                     {showTopNavigation && (
                       <div
                         className={cn(
                           "pointer-events-auto",
-                          isIptv ? "max-md:min-w-0 max-md:w-full" : "max-md:min-w-max",
+                          hasIptvSourceShell ? "max-md:min-w-0 max-md:w-full" : "max-md:min-w-max",
                         )}
                       >
-                        {isIptv ? (
+                        {hasIptvSourceShell ? (
                           <div
                             data-horizontal-swipe-surface
                             className="h-full min-w-0"
@@ -547,7 +555,10 @@ export function Shell() {
                               sources={iptvSources}
                               value={iptvSource.id}
                               onValueChange={handleIptvSourceChange}
-                              className="h-full w-40 max-w-full lg:w-auto"
+                              className={cn(
+                                "h-full max-w-full lg:w-auto",
+                                isIptv ? "w-40 max-md:w-36" : "w-44 max-md:w-full",
+                              )}
                             />
                           </div>
                         ) : isFollow ? (
@@ -586,9 +597,9 @@ export function Shell() {
                       <IptvSearchInput
                         keyword={iptvKeyword}
                         onChange={handleIptvSearchChange}
-                        className="w-64 max-xl:w-48 max-md:w-[min(9rem,34vw)]"
+                        className="w-64 max-xl:w-48 max-md:w-[min(11rem,43vw)]"
                       />
-                    ) : isHistory ? (
+                    ) : isIptvFollow ? null : isHistory ? (
                       <HistoryHeaderControls />
                     ) : (
                       <HeaderSearch />
