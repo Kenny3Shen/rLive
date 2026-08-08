@@ -35,13 +35,19 @@ export const EASE_OUT = "power2.out";
 /** Accelerate, for exits that should clear the screen without lingering. */
 export const EASE_IN = "power2.in";
 /**
- * Settle for pointer-driven motion. The old spring (stiffness 520, damping 34,
- * mass 0.7) works out to a damping ratio of ~0.89 — just under critical, so it
- * lands without visible overshoot. `power3.out` over this duration reads the
- * same, and unlike a spring it has a known end time, which matters because the
- * gesture layer needs to know when the page is back at rest.
+ * Settle for pointer-driven motion.
+ *
+ * The release tween covers a full surface width when a swipe commits, so the
+ * curve matters more than the total time: `power3.out` front-loads most of its
+ * travel into the first few frames, which on a mobile WebView reads as a jerk
+ * before the tail crawls. `power2.out` spreads the same distance more evenly,
+ * and the slightly longer duration keeps enough frames in the fast part of the
+ * curve for the compositor to interpolate smoothly.
+ *
+ * Unlike a spring this has a known end time, which the gesture layer needs so
+ * it can tell when the page is back at rest.
  */
-export const SWIPE_SETTLE = { duration: 0.42, ease: "power3.out" } as const;
+export const SWIPE_SETTLE = { duration: 0.52, ease: "power2.out" } as const;
 
 /**
  * Extra travel applied to every full-page pan, as a share of its active axis.

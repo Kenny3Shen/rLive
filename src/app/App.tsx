@@ -12,6 +12,7 @@ import {
   loadHistoryPage,
   loadIptvPage,
   loadIptvPlayerPage,
+  loadMultiRoomPage,
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
@@ -30,6 +31,7 @@ const HistoryPage = lazy(loadHistoryPage);
 const SettingsPage = lazy(loadSettingsPage);
 const IptvPage = lazy(loadIptvPage);
 const IptvPlayerPage = lazy(loadIptvPlayerPage);
+const MultiRoomPage = lazy(loadMultiRoomPage);
 const RoomPage = lazy(loadRoomPage);
 
 /** Prevent stale links from opening a platform the user has opted out of. */
@@ -66,6 +68,7 @@ export function App() {
           <Route path="iptv/play" element={<IptvPlayerPage />} />
           <Route path="iptv" element={<IptvPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="multi-room" element={<MultiRoomPage />} />
           <Route path="room/:siteId/:roomId" element={<EnabledRoomRoute />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

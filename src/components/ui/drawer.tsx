@@ -56,7 +56,7 @@ function DrawerContent({
           side === "bottom" &&
             "inset-x-0 bottom-0 max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl border border-border p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] data-open:animate-drawer-in-bottom data-closed:animate-drawer-out-bottom motion-reduce:animate-none",
           side === "right" &&
-            "inset-y-0 right-0 h-full w-[min(22rem,85vw)] max-w-full overflow-y-auto rounded-l-2xl border border-border p-4 pr-[calc(1rem+env(safe-area-inset-right))] data-open:animate-drawer-in-right data-closed:animate-drawer-out-right motion-reduce:animate-none",
+            "inset-y-0 right-0 h-full w-[min(20rem,60vw)] max-w-full overflow-y-auto rounded-l-2xl border border-border p-4 pr-[calc(1rem+env(safe-area-inset-right))] data-open:animate-drawer-in-right data-closed:animate-drawer-out-right motion-reduce:animate-none",
           className,
         )}
         {...props}

@@ -13,6 +13,7 @@ import {
   HORIZONTAL_SWIPE_MAX_DRAG_PX,
   horizontalSwipeCommitOffset,
   horizontalSwipeDragOffset,
+  horizontalSwipeTrackOffset,
   isHorizontalSwipeIgnoredTarget,
   nextItemForHorizontalSwipe,
 } from "@/shared/gestures/horizontalSwipe";
@@ -31,6 +32,7 @@ type SwipeState = {
 };
 
 type SwipeOffsetSetter = (value: number) => void;
+type HorizontalSwipeLayout = "page" | "track";
 
 const HORIZONTAL_SWIPE_SURFACE_SELECTOR = "[data-horizontal-swipe-surface]";
 
@@ -42,6 +44,11 @@ export type UseHorizontalSwipeOptions<T> = {
   enabled?: boolean;
   /** Animates value changes regardless of gesture availability. Defaults to true. */
   animate?: boolean;
+  /**
+   * `page` moves one currently rendered page; `track` moves an equal-width row
+   * whose children stay mounted side by side during the gesture.
+   */
+  layout?: HorizontalSwipeLayout;
   isEqual?: (left: T, right: T) => boolean;
 };
 
@@ -64,8 +71,10 @@ export function useHorizontalSwipe<T>({
   onChange,
   enabled = true,
   animate: shouldAnimate = true,
+  layout = "page",
   isEqual = Object.is,
 }: UseHorizontalSwipeOptions<T>) {
+  const isTrackLayout = layout === "track";
   const pageRef = useRef<HTMLElement | null>(null);
   const swipeRef = useRef<SwipeState | null>(null);
   const clickSuppressionUntilRef = useRef(0);
@@ -117,6 +126,25 @@ export function useHorizontalSwipe<T>({
     flushOffset();
   }, [flushOffset]);
 
+  const surfaceWidth = useCallback(() => {
+    const track = pageRef.current;
+    const measured = track?.parentElement?.clientWidth ?? 0;
+    if (measured > 0) {
+      surfaceWidthRef.current = measured;
+      return measured;
+    }
+    return surfaceWidthRef.current;
+  }, []);
+
+  const settledOffsetForValue = useCallback(
+    (nextValue: T) => {
+      if (!isTrackLayout) return 0;
+      const index = itemsRef.current.findIndex((item) => isEqualRef.current(item, nextValue));
+      return index >= 0 ? horizontalSwipeTrackOffset(index, surfaceWidth()) : 0;
+    },
+    [isTrackLayout, surfaceWidth],
+  );
+
   /** Coalesce high-polling pointer events into one compositor write per frame. */
   const setOffset = useCallback(
     (next: number) => {
@@ -132,12 +160,18 @@ export function useHorizontalSwipe<T>({
   /** Return the settled page to normal layout painting instead of a permanent layer. */
   const clearOffset = useCallback(() => {
     cancelPendingOffset();
-    offsetRef.current = 0;
     offsetSetterRef.current = null;
     offsetSetterElementRef.current = null;
     const el = pageRef.current;
-    if (el) gsap.set(el, { clearProps: "transform,willChange" });
-  }, [cancelPendingOffset]);
+    const settledOffset = settledOffsetForValue(valueRef.current);
+    offsetRef.current = settledOffset;
+    if (!el) return;
+    if (isTrackLayout) {
+      gsap.set(el, { x: settledOffset, clearProps: "willChange" });
+    } else {
+      gsap.set(el, { clearProps: "transform,willChange" });
+    }
+  }, [cancelPendingOffset, isTrackLayout, settledOffsetForValue]);
 
   /** Tween whatever offset the finger left behind back to rest. */
   const settleAtRest = useCallback(() => {
@@ -145,18 +179,19 @@ export function useHorizontalSwipe<T>({
     if (!el) return;
     flushPendingOffset();
     gsap.killTweensOf(el);
+    const targetOffset = settledOffsetForValue(valueRef.current);
     if (prefersReducedMotion()) {
       clearOffset();
       return;
     }
-    offsetRef.current = 0;
+    offsetRef.current = targetOffset;
     gsap.to(el, {
-      x: 0,
+      x: targetOffset,
       ...SWIPE_SETTLE,
       // The compositor hint is only worth carrying while something moves.
       onComplete: clearOffset,
     });
-  }, [clearOffset, flushPendingOffset]);
+  }, [clearOffset, flushPendingOffset, settledOffsetForValue]);
 
   useLayoutEffect(() => {
     const previousValue = renderedValueRef.current;
@@ -188,19 +223,35 @@ export function useHorizontalSwipe<T>({
       return;
     }
 
+    const measuredSurfaceWidth = isTrackLayout ? surfaceWidth() : surfaceWidthRef.current;
+    if (measuredSurfaceWidth <= 0) {
+      clearOffset();
+      return;
+    }
+
+    if (isTrackLayout) {
+      // All pages stay mounted in the track, so the release only needs to settle
+      // the row at the newly selected page. The outgoing and incoming panels
+      // have already been visible together while the finger was moving.
+      const targetOffset = horizontalSwipeTrackOffset(nextIndex, measuredSurfaceWidth);
+      gsap.to(el, {
+        x: targetOffset,
+        force3D: true,
+        ...SWIPE_SETTLE,
+        onComplete: clearOffset,
+      });
+      offsetRef.current = targetOffset;
+      return;
+    }
+
     // The old page followed the finger out. Before the browser paints the new
     // value, place the incoming page a full surface width across the opposite
     // edge and settle it in, so the release plays as one continuous pan rather
     // than a short catch-up nudge.
-    const surfaceWidth = surfaceWidthRef.current;
-    if (surfaceWidth <= 0) {
-      clearOffset();
-      return;
-    }
     const startOffset = horizontalSwipeCommitOffset(
       pendingDirection === null ? 0 : offsetRef.current,
       direction,
-      surfaceWidth,
+      measuredSurfaceWidth,
     );
     gsap.fromTo(
       el,
@@ -213,7 +264,55 @@ export function useHorizontalSwipe<T>({
       },
     );
     offsetRef.current = 0;
-  }, [cancelPendingOffset, clearOffset, isEqual, items, shouldAnimate, value]);
+  }, [
+    cancelPendingOffset,
+    clearOffset,
+    isEqual,
+    isTrackLayout,
+    items,
+    shouldAnimate,
+    surfaceWidth,
+    value,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!enabled || !isTrackLayout) return;
+    const el = pageRef.current;
+    const width = surfaceWidth();
+    if (!el || width <= 0) return;
+    const index = itemsRef.current.findIndex((item) => isEqualRef.current(item, valueRef.current));
+    if (index < 0) return;
+    const targetOffset = horizontalSwipeTrackOffset(index, width);
+    offsetRef.current = targetOffset;
+    gsap.killTweensOf(el);
+    gsap.set(el, { x: targetOffset, force3D: true });
+  }, [enabled, isTrackLayout, surfaceWidth]);
+
+  useLayoutEffect(() => {
+    if (!enabled || !isTrackLayout) return;
+    const el = pageRef.current;
+    const viewport = el?.parentElement;
+    if (!el || !viewport) return;
+
+    const applyWidth = () => {
+      const width = viewport.clientWidth;
+      if (width <= 0 || swipeRef.current?.horizontal) return;
+      surfaceWidthRef.current = width;
+      const index = itemsRef.current.findIndex((item) =>
+        isEqualRef.current(item, valueRef.current),
+      );
+      if (index < 0) return;
+      const targetOffset = horizontalSwipeTrackOffset(index, width);
+      offsetRef.current = targetOffset;
+      gsap.set(el, { x: targetOffset, force3D: true });
+    };
+
+    applyWidth();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(applyWidth);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [enabled, isTrackLayout]);
 
   useLayoutEffect(() => {
     if (enabled) return;
@@ -259,22 +358,24 @@ export function useHorizontalSwipe<T>({
       ) {
         return;
       }
-      const surfaceWidth = event.currentTarget.clientWidth;
+      const measuredSurfaceWidth = isTrackLayout ? surfaceWidth() : event.currentTarget.clientWidth;
+      const nextSurfaceWidth =
+        measuredSurfaceWidth > 0 ? measuredSurfaceWidth : event.currentTarget.clientWidth;
       const currentItems = itemsRef.current;
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         startOffsetX: offsetRef.current,
-        surfaceWidth,
+        surfaceWidth: nextSurfaceWidth,
         itemIndex: currentItems.findIndex((item) => isEqualRef.current(item, valueRef.current)),
         itemCount: currentItems.length,
         reducedMotion: prefersReducedMotion(),
         horizontal: false,
       };
-      surfaceWidthRef.current = surfaceWidth;
+      surfaceWidthRef.current = nextSurfaceWidth;
     },
-    [enabled],
+    [enabled, isTrackLayout, surfaceWidth],
   );
 
   const onPointerMoveCapture = useCallback(
@@ -323,17 +424,26 @@ export function useHorizontalSwipe<T>({
           deltaX,
           surfaceWidth,
         );
-        // Bound by the live surface width (full-width pan), falling back to the
-        // absolute px ceiling only when the width is unknown.
-        const bound = surfaceWidth > 0 ? surfaceWidth : HORIZONTAL_SWIPE_MAX_DRAG_PX;
-        setOffset(Math.max(-bound, Math.min(bound, swipe.startOffsetX + dragOffset)));
+        const nextOffset = swipe.startOffsetX + dragOffset;
+        if (isTrackLayout) {
+          // Track offsets accumulate one full width per page. Clamping the
+          // absolute x to one width would freeze every transition after page 2.
+          // horizontalSwipeDragOffset already bounds this gesture's delta and
+          // applies resistance at the first and last page.
+          setOffset(nextOffset);
+        } else {
+          // Bound a standalone page by the live surface width, falling back to
+          // the absolute px ceiling only when the width is unknown.
+          const bound = surfaceWidth > 0 ? surfaceWidth : HORIZONTAL_SWIPE_MAX_DRAG_PX;
+          setOffset(Math.max(-bound, Math.min(bound, nextOffset)));
+        }
       }
 
       // Stop children (ScrollArea, buttons) from treating this as a drag/scroll.
       event.preventDefault();
       event.stopPropagation();
     },
-    [setOffset],
+    [isTrackLayout, setOffset],
   );
 
   const onPointerUpCapture = useCallback(

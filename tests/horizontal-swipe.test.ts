@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   horizontalSwipeCommitOffset,
   horizontalSwipeDragOffset,
+  horizontalSwipeTrackOffset,
   isHorizontalSwipe,
   isHorizontalSwipeIgnoredTarget,
   nextIndexForHorizontalSwipe,
@@ -55,6 +56,12 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeCommitOffset(-144, 1, 360)).toBe(216);
     expect(horizontalSwipeCommitOffset(144, -1, 360)).toBe(-216);
     expect(horizontalSwipeCommitOffset(0, 1, 360)).toBe(360);
+  });
+
+  test("positions a mounted track at each full-width page", () => {
+    expect(horizontalSwipeTrackOffset(0, 360)).toBe(0);
+    expect(horizontalSwipeTrackOffset(1, 360)).toBe(-360);
+    expect(horizontalSwipeTrackOffset(2, 360)).toBe(-720);
   });
 });
 

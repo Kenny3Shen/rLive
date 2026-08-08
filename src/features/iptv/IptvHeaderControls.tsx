@@ -303,7 +303,7 @@ export function IptvAvailabilityFab() {
             disabled={matchingChannels.length === 0 || pending}
             onClick={() => void checkChannelAvailability()}
             className={cn(
-              "fixed right-4 bottom-[4.5rem] z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:right-5 md:bottom-[4.75rem]",
+              "fixed right-4 bottom-[4.5rem] z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:right-5 md:bottom-[4.25rem]",
               "max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]",
             )}
           />

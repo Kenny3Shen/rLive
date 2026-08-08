@@ -1,5 +1,6 @@
 pub mod account;
 pub mod android_player_controls;
+#[cfg(not(target_os = "android"))]
 pub mod asr;
 pub mod danmaku;
 pub mod danmaku_favorite;

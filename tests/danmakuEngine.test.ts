@@ -32,7 +32,7 @@ function richChat(content: string, ts: number, user = "观众") {
 }
 
 describe("mobile canvas frame pacing", () => {
-  test("keeps every 120 Hz callback for high-refresh mobile displays", () => {
+  test("turns 120 Hz callbacks into an even 60 FPS paint cadence", () => {
     let deadline = 0;
     let paints = 0;
     for (let frame = 0; frame <= 12; frame += 1) {
@@ -41,10 +41,10 @@ describe("mobile canvas frame pacing", () => {
       paints += 1;
       deadline = nextCanvasFrameDeadline(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
     }
-    expect(paints).toBe(13);
+    expect(paints).toBe(7);
   });
 
-  test("turns 240 Hz callbacks into an even 120 FPS paint cadence", () => {
+  test("turns 240 Hz callbacks into an even 60 FPS paint cadence", () => {
     let deadline = 0;
     let paints = 0;
     for (let frame = 0; frame <= 24; frame += 1) {
@@ -53,12 +53,13 @@ describe("mobile canvas frame pacing", () => {
       paints += 1;
       deadline = nextCanvasFrameDeadline(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
     }
-    expect(paints).toBe(13);
+    expect(paints).toBe(7);
   });
 
-  test("uses a cheaper mobile backing scale while retaining desktop clarity", () => {
-    expect(danmakuCanvasPixelRatio(3, true)).toBe(1);
+  test("uses a crisp bounded mobile backing scale", () => {
+    expect(danmakuCanvasPixelRatio(3, true)).toBe(2);
     expect(danmakuCanvasPixelRatio(3, false)).toBe(1.5);
+    expect(danmakuCanvasPixelRatio(1.5, true)).toBe(1.5);
     expect(danmakuCanvasPixelRatio(Number.NaN, true)).toBe(1);
   });
 

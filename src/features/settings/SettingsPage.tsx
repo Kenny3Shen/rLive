@@ -1422,7 +1422,7 @@ export function SettingsPage() {
     <div
       ref={motionRootRef}
       data-horizontal-swipe-surface
-      className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 touch-pan-y"
+      className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col gap-6 touch-pan-y"
       onPointerDownCapture={settingsCategorySwipe.onPointerDownCapture}
       onPointerMoveCapture={settingsCategorySwipe.onPointerMoveCapture}
       onPointerUpCapture={settingsCategorySwipe.onPointerUpCapture}
@@ -1435,7 +1435,7 @@ export function SettingsPage() {
         <Tabs
           value={category}
           orientation={compactLayout ? "horizontal" : "vertical"}
-          className={cn("gap-6", compactLayout ? "min-h-0" : "min-h-[32rem] gap-8")}
+          className={cn("min-h-full gap-6", compactLayout ? "h-full" : "min-h-[32rem] gap-8")}
           onValueChange={(value) => setCategory(value as SettingsCategory)}
         >
           <div
@@ -1498,7 +1498,7 @@ export function SettingsPage() {
           <div
             ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
             data-slot="horizontal-swipe-page"
-            className="min-w-0 w-full max-w-4xl flex-1"
+            className="min-h-0 min-w-0 w-full max-w-4xl flex-1"
           >
             {category === "playback" && (
               <TabsContent value="playback" className="mt-0">
@@ -1742,7 +1742,7 @@ function SettingsContent({ title, children }: { title: string; children: React.R
   const hasCategoryMatch = matchesSearch(settingsCategorySearchText[titleToCategory(title)], query);
 
   return (
-    <div data-slot="settings-content" className="flex min-w-0 flex-col gap-4">
+    <div data-slot="settings-content" className="flex min-h-full min-w-0 flex-col gap-4">
       <div className="flex items-baseline gap-3 border-b border-border-subtle pb-3">
         <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
         {query && <span className="text-xs text-muted-foreground">筛选结果</span>}

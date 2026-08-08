@@ -226,10 +226,23 @@ export type WebPlayerApi = {
   stageRef: React.RefObject<HTMLDivElement | null>;
   togglePause: () => void;
   changeVolume: (v: number) => void;
+  setAudio: (volume: number, muted: boolean) => void;
   toggleMute: () => void;
   togglePictureInPicture: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
 };
+
+export function normalizeWebPlayerAudio(
+  initialVolume = 80,
+  initialMuted = false,
+): { volume: number; muted: boolean; previousVolume: number } {
+  const volume = Math.max(0, Math.min(100, Math.round(initialVolume)));
+  return {
+    volume,
+    muted: initialMuted || volume === 0,
+    previousVolume: volume > 0 ? volume : 80,
+  };
+}
 
 /** Whether a live URL requires xgplayer's HLS plugin rather than its FLV plugin. */
 export function isHlsStream(url: string): boolean {
@@ -454,9 +467,9 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
   }
 }
 
-// The native proxy has one process-global active listener. Queue the complete
-// teardown/start sequence so an async cleanup from room A cannot stop the
-// listener room B has just opened.
+// Serialize frontend lifecycle commands so a teardown and a same-session soft
+// switch cannot cross. The native proxy keeps independent listeners per
+// session, so this queue does not transfer ownership between player instances.
 const proxyLifecycleQueue = createSerialTaskQueue();
 
 let nextPlayerInstanceId = 0;
@@ -483,6 +496,9 @@ export function useWebPlayer(opts: {
   quality?: string | null;
   /** Rebuild even when two rooms happen to resolve to the same stream URL. */
   sessionKey?: string;
+  /** Per-instance audio defaults; multi-room secondary players start silent. */
+  initialVolume?: number;
+  initialMuted?: boolean;
   reloadToken?: number;
   onMediaFailure?: (event: PlayerEvent) => void;
   onPlaying?: () => void;
@@ -492,10 +508,13 @@ export function useWebPlayer(opts: {
     siteId,
     quality = null,
     sessionKey = "",
+    initialVolume = 80,
+    initialMuted = false,
     reloadToken = 0,
     onMediaFailure,
     onPlaying,
   } = opts;
+  const initialAudio = normalizeWebPlayerAudio(initialVolume, initialMuted);
   const softSwitchConfigured = useSettingsStore((state) => state.playbackSoftSwitchEnabled);
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
@@ -506,8 +525,8 @@ export function useWebPlayer(opts: {
   const playerInstanceIdRef = useRef<string | null>(null);
   const genRef = useRef(0);
   const mediaLifecycleVersionRef = useRef(0);
-  const volumeRef = useRef(80);
-  const mutedRef = useRef(false);
+  const volumeRef = useRef(initialAudio.volume);
+  const mutedRef = useRef(initialAudio.muted);
   const activeProxySessionIdRef = useRef<string | null>(null);
   const activeSourceKeyRef = useRef("");
   const activePlaybackKindRef = useRef<XgPlaybackKind | null>(null);
@@ -519,9 +538,9 @@ export function useWebPlayer(opts: {
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
-  const [volume, setVolume] = useState(80);
-  const [muted, setMuted] = useState(false);
-  const [prevVolume, setPrevVolume] = useState(80);
+  const [volume, setVolume] = useState(initialAudio.volume);
+  const [muted, setMuted] = useState(initialAudio.muted);
+  const [prevVolume, setPrevVolume] = useState(initialAudio.previousVolume);
   const [running, setRunning] = useState(false);
   const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
@@ -539,6 +558,17 @@ export function useWebPlayer(opts: {
   volumeRef.current = volume;
   mutedRef.current = muted;
   qualityRef.current = quality;
+
+  const previousSessionKeyRef = useRef(sessionKey);
+  useEffect(() => {
+    if (previousSessionKeyRef.current === sessionKey) return;
+    previousSessionKeyRef.current = sessionKey;
+    volumeRef.current = initialAudio.volume;
+    mutedRef.current = initialAudio.muted;
+    setVolume(initialAudio.volume);
+    setMuted(initialAudio.muted);
+    setPrevVolume(initialAudio.previousVolume);
+  }, [initialAudio.muted, initialAudio.previousVolume, initialAudio.volume, sessionKey]);
 
   const onMediaFailureRef = useRef(onMediaFailure);
   const onPlayingRef = useRef(onPlaying);
@@ -668,10 +698,6 @@ export function useWebPlayer(opts: {
     setLoadError(null);
     setFullscreenError(null);
     setPaused(false);
-    // Fresh volume defaults on each room open (avoid sticky mute from autoplay).
-    setMuted(false);
-    mutedRef.current = false;
-
     const playbackKind = webPlaybackKind(playbackSource);
     const hlsSource = playbackKind === "hls";
     // Start fetching xgplayer and only the selected protocol plugin while the
@@ -772,8 +798,10 @@ export function useWebPlayer(opts: {
           video.muted = mutedRef.current;
 
           const recoverMutedAutoplay = () => {
+            if (mutedRef.current) return false;
             mutedRef.current = false;
             setMuted(false);
+            return true;
           };
 
           const modules = await xgModulesPromise;
@@ -1446,6 +1474,12 @@ export function useWebPlayer(opts: {
     }
   }, []);
 
+  const setAudio = useCallback((nextVolume: number, nextMuted: boolean) => {
+    const normalizedVolume = Math.max(0, Math.min(100, Math.round(nextVolume)));
+    setVolume(normalizedVolume);
+    setMuted(nextMuted || normalizedVolume === 0);
+  }, []);
+
   const toggleMute = useCallback(() => {
     if (muted || volume === 0) {
       const restore = prevVolume || 80;
@@ -1571,6 +1605,7 @@ export function useWebPlayer(opts: {
     stageRef,
     togglePause,
     changeVolume,
+    setAudio,
     toggleMute,
     togglePictureInPicture,
     toggleFullscreen,

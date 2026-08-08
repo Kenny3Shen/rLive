@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   SIDEBAR_NAVIGATION_STATE,
   isSidebarNavigation,
+  routeScopedPreviousGroup,
   sidebarNavigationDirection,
 } from "../src/app/layout/sidebarNavigation";
 
@@ -29,5 +30,15 @@ describe("sidebar navigation transitions", () => {
 
   test("defaults unknown source routes to the forward direction", () => {
     expect(sidebarNavigationDirection("/search", "/follow")).toBe(1);
+  });
+});
+
+describe("route-scoped platform panels", () => {
+  test("retains the previous platform only inside the same destination", () => {
+    expect(routeScopedPreviousGroup("/", "huya", "/", "douyin")).toBe("huya");
+  });
+
+  test("starts a new destination from its own active platform", () => {
+    expect(routeScopedPreviousGroup("/", "huya", "/follow", "all")).toBe("all");
   });
 });

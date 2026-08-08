@@ -1,9 +1,9 @@
-export const MOBILE_DANMAKU_MAX_FPS = 120;
+export const MOBILE_DANMAKU_MAX_FPS = 60;
 export const MOBILE_DANMAKU_FRAME_INTERVAL_MS = 1_000 / MOBILE_DANMAKU_MAX_FPS;
-// A 1× mobile backing store keeps 120 FPS pixel throughput below the previous
-// 60 FPS / 1.5× profile. Desktop retains extra text sharpness at its lower
-// contention level.
-export const MOBILE_DANMAKU_MAX_PIXEL_RATIO = 1;
+// Mobile WebViews commonly report a 2×–3× device scale. A 1× backing store is
+// visibly upscaled by the compositor, so favor a crisp 2× text raster and cap
+// paint cadence at 60 FPS to keep total pixel throughput bounded.
+export const MOBILE_DANMAKU_MAX_PIXEL_RATIO = 2;
 export const DESKTOP_DANMAKU_MAX_PIXEL_RATIO = 1.5;
 
 // Browser animation timestamps can land a fraction before the nominal target.

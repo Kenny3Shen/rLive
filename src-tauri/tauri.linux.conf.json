@@ -2,22 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "linux": {
-      "appimage": {
-        "files": {
-          "/usr/lib": "target/crispasr-libs"
-        }
-      },
       "deb": {
-        "depends": ["libgomp1"],
-        "files": {
-          "/usr/lib": "target/crispasr-libs"
-        }
+        "depends": ["libgomp1"]
       },
       "rpm": {
-        "depends": ["libgomp"],
-        "files": {
-          "/usr/lib": "target/crispasr-libs"
-        }
+        "depends": ["libgomp"]
       }
     }
   }

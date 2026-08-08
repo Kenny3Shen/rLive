@@ -62,6 +62,12 @@ export const loadRoomPage = createCachedRouteLoader(() =>
   import("../features/room/RoomPage").then(({ RoomPage }) => ({ default: RoomPage })),
 );
 
+export const loadMultiRoomPage = createCachedRouteLoader(() =>
+  import("../features/multi-room/MultiRoomPage").then(({ MultiRoomPage }) => ({
+    default: MultiRoomPage,
+  })),
+);
+
 /** Keep expensive player code last so small, common destinations become ready first. */
 export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadCategoryPage,
@@ -72,6 +78,7 @@ export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadHistoryPage,
   loadIptvPlayerPage,
   loadSettingsPage,
+  loadMultiRoomPage,
   loadRoomPage,
 ];
 
@@ -95,6 +102,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/iptv/play") return loadIptvPlayerPage;
   if (pathname === "/iptv") return loadIptvPage;
   if (pathname === "/settings") return loadSettingsPage;
+  if (pathname === "/multi-room") return loadMultiRoomPage;
   if (pathname.startsWith("/room/")) return loadRoomPage;
 
   return null;
