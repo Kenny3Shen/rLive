@@ -610,13 +610,17 @@ export function PlayerControls({
         "flex min-w-0 shrink-0 items-center gap-1",
         compact && "justify-between gap-0.5",
         overlay
-          ? // The material reaches every player edge; safe-area spacing stays
-            // inside the surface so it never creates a visible gutter.
+          ? // A scrim that fades up into the picture, the way ordinary video
+            // players draw their bottom chrome — no top border, no blur, no
+            // panel edge. The gradient reaches every player edge; safe-area
+            // spacing stays inside the surface so it never creates a gutter.
+            // Extra top padding gives the fade room to resolve before the
+            // first control.
             cn(
-              "glass-surface-overlay border-t border-white/12 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
+              "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
               compact
-                ? "pt-px pb-[max(1px,env(safe-area-inset-bottom))]"
-                : "pt-1 pb-[max(0.25rem,env(safe-area-inset-bottom))]",
+                ? "pt-1.5 pb-[max(1px,env(safe-area-inset-bottom))]"
+                : "pt-3 pb-[max(0.25rem,env(safe-area-inset-bottom))]",
             )
           : "border-t border-border bg-card px-1.5 py-1",
       )}

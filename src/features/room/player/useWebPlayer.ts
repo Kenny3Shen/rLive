@@ -204,6 +204,17 @@ export function getFullscreenDocument(): FullscreenDocument | null {
   return typeof document === "undefined" ? null : (document as FullscreenDocument);
 }
 
+/**
+ * Native window fullscreen is a property of the window, not of one player, so
+ * several players mounted in the same window all observe the same state. Only
+ * the player that owns the fullscreen control may report or drive it; the rest
+ * stay windowed so multi-room secondaries keep their normal grid chrome while
+ * the main feed is the surface that fills the screen.
+ */
+export function playerOwnsFullscreen(fullscreenOwner: boolean | undefined): boolean {
+  return fullscreenOwner !== false;
+}
+
 export type WebPlayerApi = {
   mode: PlayerUiMode;
   paused: boolean;
@@ -230,6 +241,8 @@ export type WebPlayerApi = {
   toggleMute: () => void;
   togglePictureInPicture: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
+  /** Leave fullscreen without toggling back in; safe to call when windowed. */
+  exitFullscreen: () => Promise<void>;
 };
 
 export function normalizeWebPlayerAudio(
@@ -499,6 +512,12 @@ export function useWebPlayer(opts: {
   /** Per-instance audio defaults; multi-room secondary players start silent. */
   initialVolume?: number;
   initialMuted?: boolean;
+  /**
+   * Whether this player may drive and observe fullscreen. Multi-room mounts
+   * several players in one window, where fullscreen belongs to the main feed
+   * alone; pass false for the secondaries. Defaults to true.
+   */
+  fullscreenOwner?: boolean;
   reloadToken?: number;
   onMediaFailure?: (event: PlayerEvent) => void;
   onPlaying?: () => void;
@@ -510,6 +529,7 @@ export function useWebPlayer(opts: {
     sessionKey = "",
     initialVolume = 80,
     initialMuted = false,
+    fullscreenOwner = true,
     reloadToken = 0,
     onMediaFailure,
     onPlaying,
@@ -554,6 +574,8 @@ export function useWebPlayer(opts: {
   if (playerInstanceIdRef.current === null) {
     playerInstanceIdRef.current = createPlayerInstanceId();
   }
+
+  const ownsFullscreen = playerOwnsFullscreen(fullscreenOwner);
 
   volumeRef.current = volume;
   mutedRef.current = muted;
@@ -1402,6 +1424,10 @@ export function useWebPlayer(opts: {
   }, [hardStreamKey, mediaKey]);
 
   useEffect(() => {
+    if (!ownsFullscreen) {
+      setMode("windowed");
+      return;
+    }
     const onFs = () => {
       const el = stageRef.current;
       const fs = fullscreenElementFor(getFullscreenDocument());
@@ -1414,14 +1440,16 @@ export function useWebPlayer(opts: {
       document.removeEventListener("fullscreenchange", onFs);
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
-  }, []);
+  }, [ownsFullscreen]);
 
   // Desktop Tauri drives fullscreen through the native window, so the OS (F11,
   // a window manager shortcut, or exiting via the title bar) can change it
   // without an HTML fullscreenchange event. Reconcile `mode` from the window's
   // own resize stream so the stage overlay and the control icon stay correct.
   useEffect(() => {
-    if (!isTauriDesktop()) return;
+    // Secondary players share this window, so its fullscreen state says nothing
+    // about them. Reading it here would mark all of them fullscreen at once.
+    if (!ownsFullscreen || !isTauriDesktop()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void (async () => {
@@ -1451,7 +1479,7 @@ export function useWebPlayer(opts: {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [ownsFullscreen]);
 
   const togglePause = useCallback(() => {
     const video = videoRef.current;
@@ -1510,6 +1538,7 @@ export function useWebPlayer(opts: {
   }, []);
 
   const toggleFullscreen = useCallback(async () => {
+    if (!ownsFullscreen) return;
     // Desktop Tauri uses a real OS-window fullscreen. This covers the taskbar
     // (unlike WebView2's HTML fullscreen from a maximized window) and drives
     // `mode` through the resulting resize; the stage then overlays the room
@@ -1549,43 +1578,44 @@ export function useWebPlayer(opts: {
           : String(e);
       setFullscreenError(msg || "全屏切换失败");
     }
+  }, [ownsFullscreen]);
+
+  const exitFullscreen = useCallback(async () => {
+    // Desktop Tauri drives fullscreen through the native window, which has no
+    // HTML fullscreen element to exit. Leave the OS window fullscreen and let
+    // the resulting resize move `mode` back to windowed.
+    if (isTauriDesktop()) {
+      try {
+        const appWindow = getCurrentWindow();
+        if (await appWindow.isFullscreen()) {
+          await setNativePlayerFullscreen(appWindow, false, nativeFullscreenSessionRef.current);
+          setMode("windowed");
+        }
+      } catch {
+        /* A missing native window action must not trap the user. */
+      }
+      return;
+    }
+    if (!fullscreenElementFor(getFullscreenDocument())) return;
+    const documentRef = getFullscreenDocument();
+    const exit =
+      documentRef?.exitFullscreen ??
+      documentRef?.webkitExitFullscreen ??
+      documentRef?.webkitCancelFullScreen;
+    if (exit && documentRef) {
+      await Promise.resolve(exit.call(documentRef)).catch(() => {});
+    }
   }, []);
 
   useEffect(() => {
     if (mode !== "fullscreen") return;
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return;
-      // Desktop Tauri drives fullscreen through the native window, which has no
-      // HTML fullscreen element to exit. Leave the OS window fullscreen and let
-      // the resulting resize move `mode` back to windowed.
-      if (isTauriDesktop()) {
-        void (async () => {
-          try {
-            const appWindow = getCurrentWindow();
-            if (await appWindow.isFullscreen()) {
-              await setNativePlayerFullscreen(appWindow, false, nativeFullscreenSessionRef.current);
-              setMode("windowed");
-            }
-          } catch {
-            /* A missing native window action must not trap the user. */
-          }
-        })();
-        return;
-      }
-      if (fullscreenElementFor(getFullscreenDocument())) {
-        const documentRef = getFullscreenDocument();
-        const exit =
-          documentRef?.exitFullscreen ??
-          documentRef?.webkitExitFullscreen ??
-          documentRef?.webkitCancelFullScreen;
-        if (exit && documentRef) {
-          void Promise.resolve(exit.call(documentRef)).catch(() => {});
-        }
-      }
+      void exitFullscreen();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode]);
+  }, [exitFullscreen, mode]);
 
   return {
     mode,
@@ -1609,5 +1639,6 @@ export function useWebPlayer(opts: {
     toggleMute,
     togglePictureInPicture,
     toggleFullscreen,
+    exitFullscreen,
   };
 }
