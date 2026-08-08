@@ -1,0 +1,280 @@
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
+
+export const MULTI_ROOM_MAX_SLOTS = 6;
+export const MULTI_ROOM_MAIN_SLOT = 0;
+
+export type MultiRoomCandidate = Pick<LiveRoomItem, "site_id" | "room_id"> &
+  Partial<Pick<LiveRoomItem, "title" | "cover" | "user_name">>;
+
+export type MultiRoomEntry = {
+  key: string;
+  siteId: SiteId;
+  roomId: string;
+  title: string;
+  userName: string;
+  cover: string;
+  /** The secondary slot this room returns to after leaving the main slot. */
+  secondarySlot: number | null;
+  volume: number;
+  muted: boolean;
+};
+
+export type MultiRoomAddResult = "added" | "exists" | "full";
+
+export function multiRoomKey(siteId: SiteId, roomId: string): string {
+  return `${siteId}\u0000${roomId}`;
+}
+
+export function createMultiRoomEntry(
+  candidate: MultiRoomCandidate,
+  primary: boolean,
+  secondarySlot: number | null = null,
+): MultiRoomEntry {
+  return {
+    key: multiRoomKey(candidate.site_id, candidate.room_id),
+    siteId: candidate.site_id,
+    roomId: candidate.room_id,
+    title: candidate.title?.trim() || candidate.user_name?.trim() || "直播间",
+    userName: candidate.user_name?.trim() || "未知主播",
+    cover: candidate.cover?.trim() || "",
+    secondarySlot: primary ? null : secondarySlot,
+    volume: primary ? 80 : 0,
+    muted: !primary,
+  };
+}
+
+function withSecondarySlot(room: MultiRoomEntry, secondarySlot: number | null): MultiRoomEntry {
+  return { ...room, secondarySlot };
+}
+
+function validSecondarySlot(slot: number | null | undefined): slot is number {
+  return (
+    typeof slot === "number" &&
+    Number.isInteger(slot) &&
+    slot > MULTI_ROOM_MAIN_SLOT &&
+    slot < MULTI_ROOM_MAX_SLOTS
+  );
+}
+
+/** Keep exactly the current main feed audible while secondary feeds stay muted. */
+export function normalizeMultiRoomAudioRoles(
+  slots: readonly (MultiRoomEntry | null)[],
+): (MultiRoomEntry | null)[] {
+  return slots.map((room, index) => {
+    if (!room) return null;
+    if (index === MULTI_ROOM_MAIN_SLOT) {
+      return {
+        ...room,
+        volume: room.volume > 0 ? room.volume : 80,
+        muted: false,
+      };
+    }
+    return { ...room, muted: true };
+  });
+}
+
+export function normalizeMultiRoomSlots(
+  slots: readonly (MultiRoomEntry | null)[],
+): (MultiRoomEntry | null)[] {
+  const next = Array.from<MultiRoomEntry | null>({ length: MULTI_ROOM_MAX_SLOTS }).fill(null);
+  const seen = new Set<string>();
+  for (let index = 0; index < MULTI_ROOM_MAX_SLOTS; index += 1) {
+    const room = slots[index];
+    if (!room || seen.has(room.key)) continue;
+    seen.add(room.key);
+    next[index] =
+      index === MULTI_ROOM_MAIN_SLOT || validSecondarySlot(room.secondarySlot)
+        ? room
+        : withSecondarySlot(room, index);
+  }
+
+  if (!next[MULTI_ROOM_MAIN_SLOT]) {
+    const replacementIndex = next.findIndex((room) => room != null);
+    if (replacementIndex >= 0) {
+      next[MULTI_ROOM_MAIN_SLOT] = next[replacementIndex];
+      next[replacementIndex] = null;
+    }
+  }
+  return next;
+}
+
+/**
+ * Promote a secondary feed without losing its previous secondary position.
+ * The current main feed is placed into the promoted feed's remembered slot;
+ * an occupant there is carried into the old main feed's former slot.
+ */
+export function promoteMultiRoomSlot(
+  slots: readonly (MultiRoomEntry | null)[],
+  sourceIndex: number,
+): (MultiRoomEntry | null)[] {
+  const next = normalizeMultiRoomSlots(slots);
+  if (
+    sourceIndex <= MULTI_ROOM_MAIN_SLOT ||
+    sourceIndex >= MULTI_ROOM_MAX_SLOTS ||
+    !next[sourceIndex] ||
+    !next[MULTI_ROOM_MAIN_SLOT]
+  ) {
+    return next;
+  }
+
+  const selected = withSecondarySlot(next[sourceIndex], sourceIndex);
+  const previousMain = next[MULTI_ROOM_MAIN_SLOT];
+  const rememberedSlot = validSecondarySlot(previousMain.secondarySlot)
+    ? previousMain.secondarySlot
+    : sourceIndex;
+  const demotionSlot = rememberedSlot === sourceIndex ? sourceIndex : rememberedSlot;
+  const displaced = demotionSlot === sourceIndex ? null : next[demotionSlot];
+
+  next[MULTI_ROOM_MAIN_SLOT] = selected;
+  next[sourceIndex] = displaced ? withSecondarySlot(displaced, sourceIndex) : null;
+  next[demotionSlot] = withSecondarySlot(previousMain, demotionSlot);
+  return next;
+}
+
+function syncVisibleSecondarySlots(
+  slots: readonly (MultiRoomEntry | null)[],
+): (MultiRoomEntry | null)[] {
+  return slots.map((room, index) => {
+    if (!room || index === MULTI_ROOM_MAIN_SLOT) return room;
+    return withSecondarySlot(room, index);
+  });
+}
+
+export function moveMultiRoomSlot(
+  slots: readonly (MultiRoomEntry | null)[],
+  sourceIndex: number,
+  targetIndex: number,
+): (MultiRoomEntry | null)[] {
+  const next = normalizeMultiRoomSlots(slots);
+  if (
+    sourceIndex === targetIndex ||
+    sourceIndex < 0 ||
+    targetIndex < 0 ||
+    sourceIndex >= MULTI_ROOM_MAX_SLOTS ||
+    targetIndex >= MULTI_ROOM_MAX_SLOTS ||
+    !next[sourceIndex]
+  ) {
+    return next;
+  }
+
+  if (sourceIndex === MULTI_ROOM_MAIN_SLOT && !next[targetIndex]) {
+    const replacementIndex = next.findIndex(
+      (room, index) => index !== MULTI_ROOM_MAIN_SLOT && index !== targetIndex && room != null,
+    );
+    if (replacementIndex < 0) return next;
+    next[targetIndex] = next[sourceIndex];
+    next[sourceIndex] = next[replacementIndex];
+    next[replacementIndex] = null;
+    return next;
+  }
+
+  [next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]];
+  return normalizeMultiRoomSlots(next);
+}
+
+type MultiRoomState = {
+  slots: (MultiRoomEntry | null)[];
+  addRoom: (candidate: MultiRoomCandidate) => MultiRoomAddResult;
+  removeRoom: (key: string) => void;
+  moveRoom: (sourceIndex: number, targetIndex: number) => void;
+  setMainRoom: (key: string) => void;
+  updateAudio: (key: string, volume: number, muted: boolean) => void;
+  updateMetadata: (key: string, detail: LiveRoomDetail) => void;
+  clear: () => void;
+};
+
+const EMPTY_MULTI_ROOM_SLOTS = Array.from<MultiRoomEntry | null>({
+  length: MULTI_ROOM_MAX_SLOTS,
+}).fill(null);
+
+export const useMultiRoomStore = create<MultiRoomState>()(
+  persist(
+    (set, get) => ({
+      slots: [...EMPTY_MULTI_ROOM_SLOTS],
+      addRoom: (candidate) => {
+        const slots = normalizeMultiRoomSlots(get().slots);
+        const key = multiRoomKey(candidate.site_id, candidate.room_id);
+        if (slots.some((room) => room?.key === key)) return "exists";
+        const targetIndex = slots.findIndex((room) => room == null);
+        if (targetIndex < 0) return "full";
+        slots[targetIndex] = createMultiRoomEntry(
+          candidate,
+          targetIndex === MULTI_ROOM_MAIN_SLOT,
+          targetIndex === MULTI_ROOM_MAIN_SLOT ? null : targetIndex,
+        );
+        set({ slots });
+        return "added";
+      },
+      removeRoom: (key) => {
+        const slots = normalizeMultiRoomSlots(get().slots);
+        const index = slots.findIndex((room) => room?.key === key);
+        if (index < 0) return;
+        slots[index] = null;
+        const next = normalizeMultiRoomSlots(slots);
+        set({ slots: index === MULTI_ROOM_MAIN_SLOT ? normalizeMultiRoomAudioRoles(next) : next });
+      },
+      moveRoom: (sourceIndex, targetIndex) => {
+        const current = normalizeMultiRoomSlots(get().slots);
+        const mainSwitchIndex =
+          sourceIndex === MULTI_ROOM_MAIN_SLOT &&
+          targetIndex > MULTI_ROOM_MAIN_SLOT &&
+          current[targetIndex]
+            ? targetIndex
+            : targetIndex === MULTI_ROOM_MAIN_SLOT && sourceIndex > MULTI_ROOM_MAIN_SLOT
+              ? sourceIndex
+              : null;
+        const next =
+          mainSwitchIndex !== null
+            ? promoteMultiRoomSlot(current, mainSwitchIndex)
+            : syncVisibleSecondarySlots(moveMultiRoomSlot(current, sourceIndex, targetIndex));
+        const mainChanged = current[MULTI_ROOM_MAIN_SLOT]?.key !== next[MULTI_ROOM_MAIN_SLOT]?.key;
+        set({ slots: mainChanged ? normalizeMultiRoomAudioRoles(next) : next });
+      },
+      setMainRoom: (key) => {
+        const slots = normalizeMultiRoomSlots(get().slots);
+        const sourceIndex = slots.findIndex((room) => room?.key === key);
+        if (sourceIndex <= MULTI_ROOM_MAIN_SLOT) return;
+        set({
+          slots: normalizeMultiRoomAudioRoles(promoteMultiRoomSlot(slots, sourceIndex)),
+        });
+      },
+      updateAudio: (key, volume, muted) => {
+        const normalizedVolume = Math.max(0, Math.min(100, Math.round(volume)));
+        set({
+          slots: get().slots.map((room) =>
+            room?.key === key
+              ? { ...room, volume: normalizedVolume, muted: muted || normalizedVolume === 0 }
+              : room,
+          ),
+        });
+      },
+      updateMetadata: (key, detail) => {
+        set({
+          slots: get().slots.map((room) =>
+            room?.key === key
+              ? {
+                  ...room,
+                  title: detail.title || room.title,
+                  userName: detail.user_name || room.userName,
+                  cover: detail.cover || room.cover,
+                }
+              : room,
+          ),
+        });
+      },
+      clear: () => set({ slots: [...EMPTY_MULTI_ROOM_SLOTS] }),
+    }),
+    {
+      name: "rlive-multi-room",
+      version: 1,
+      partialize: (state) => ({ slots: state.slots }),
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<MultiRoomState>),
+        slots: normalizeMultiRoomSlots((persisted as Partial<MultiRoomState>)?.slots ?? []),
+      }),
+    },
+  ),
+);

@@ -91,6 +91,13 @@ export function horizontalSwipeDragOffset(
   return atBoundary ? boundedOffset * HORIZONTAL_SWIPE_EDGE_RESISTANCE : boundedOffset;
 }
 
+/** Position a full-width paging track at the requested item. */
+export function horizontalSwipeTrackOffset(index: number, surfaceWidth: number): number {
+  const normalizedIndex = Math.max(0, index);
+  const width = Math.max(0, surfaceWidth);
+  return normalizedIndex === 0 || width === 0 ? 0 : -normalizedIndex * width;
+}
+
 /**
  * Rebase a committed drag around the newly selected page without changing the
  * pixels currently under the finger. The new page becomes the track origin,

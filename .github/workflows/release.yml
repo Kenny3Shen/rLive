@@ -137,6 +137,16 @@ jobs:
 
           apk_path="${apk_files[0]}"
           aab_path="${aab_files[0]}"
+          mapfile -t apk_native_libs < <(unzip -Z1 "$apk_path" | awk '/^lib\// { print }')
+          mapfile -t aab_native_libs < <(unzip -Z1 "$aab_path" | awk '/^base\/lib\// { print }')
+          if [[ "${apk_native_libs[*]}" != "lib/arm64-v8a/librlive_lib.so" ]]; then
+            printf 'Unexpected APK native libraries:\n%s\n' "${apk_native_libs[*]}" >&2
+            exit 1
+          fi
+          if [[ "${aab_native_libs[*]}" != "base/lib/arm64-v8a/librlive_lib.so" ]]; then
+            printf 'Unexpected AAB native libraries:\n%s\n' "${aab_native_libs[*]}" >&2
+            exit 1
+          fi
           apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           "$apksigner" verify --verbose --print-certs "$apk_path"
 

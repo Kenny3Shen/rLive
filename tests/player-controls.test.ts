@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  COMPACT_LANDSCAPE_PLAYER_QUERY,
+  COMPACT_PLAYER_QUERY,
+  PORTRAIT_ORIENTATION_QUERY,
+  playerViewportFallbackMatches,
+} from "../src/shared/hooks/usePlayerViewport";
+import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   showPlayerControlsCenterSlot,
+  showPlayerSidePanelControl,
+  showPlayerVolumeControl,
   showSecondaryPlayerControls,
   volumeControlPresentation,
 } from "../src/shared/components/player/PlayerControls";
@@ -91,6 +99,19 @@ describe("volume player control", () => {
 });
 
 describe("mobile player layout", () => {
+  test("seeds mobile density without losing the settled orientation", () => {
+    expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, true, false)).toBe(true);
+    expect(playerViewportFallbackMatches(COMPACT_LANDSCAPE_PLAYER_QUERY, true, false)).toBe(false);
+    expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, true, false)).toBe(true);
+
+    expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, true, true)).toBe(true);
+    expect(playerViewportFallbackMatches(COMPACT_LANDSCAPE_PLAYER_QUERY, true, true)).toBe(true);
+    expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, true, true)).toBe(false);
+
+    expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, false, false)).toBe(false);
+    expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, false, true)).toBe(false);
+  });
+
   test("centers the composer in compact chrome only while fullscreen", () => {
     expect(showPlayerControlsCenterSlot(true, false)).toBe(false);
     expect(showPlayerControlsCenterSlot(true, true)).toBe(true);
@@ -107,6 +128,20 @@ describe("mobile player layout", () => {
     expect(showSecondaryPlayerControls(true, true)).toBe(false);
     expect(showSecondaryPlayerControls(true, false)).toBe(true);
     expect(showSecondaryPlayerControls(false, true)).toBe(true);
+  });
+
+  test("hides volume and side-panel buttons in mobile fullscreen", () => {
+    // Compact landscape still shows them outside fullscreen.
+    expect(showPlayerVolumeControl(true, false, false)).toBe(true);
+    expect(showPlayerSidePanelControl(true, false, false)).toBe(true);
+    // Compact + fullscreen drops both; edge-swipe volume remains.
+    expect(showPlayerVolumeControl(true, false, true)).toBe(false);
+    expect(showPlayerSidePanelControl(true, false, true)).toBe(false);
+    expect(showPlayerVolumeControl(true, true, true)).toBe(false);
+    expect(showPlayerSidePanelControl(true, true, true)).toBe(false);
+    // Desktop fullscreen keeps them.
+    expect(showPlayerVolumeControl(false, false, true)).toBe(true);
+    expect(showPlayerSidePanelControl(false, false, true)).toBe(true);
   });
 
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {

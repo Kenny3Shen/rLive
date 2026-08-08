@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.14.4"
+version = "0.15.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -29,7 +29,6 @@ serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dirs = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -51,13 +50,17 @@ brotli = "7"
 uuid = { version = "1", features = ["v4"] }
 boa_engine = "0.20"
 
-# Zipformer and CT-Transformer model releases use .tar.bz2 bundles.
-tar = "0.4"
-bzip2 = "0.4"
 tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["native-tls", "charset"] }
 
 [target.'cfg(all(not(target_os = "android"), not(windows)))'.dependencies]
 sherpa-onnx = "1.13.4"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Local ASR is a desktop-only feature. Keep its model archive and data-path
+# dependencies out of the Android Rust graph as well as out of the UI.
+dirs = "6"
+tar = "0.4"
+bzip2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # Windows builds use the shared CUDA-capable runtime. The native build script
@@ -67,10 +70,6 @@ sherpa-onnx = { version = "1.13.4", default-features = false, features = ["share
 libloading = "0.8"
 
 [target.'cfg(target_os = "android")'.dependencies]
-# The official Android package exposes shared C API libraries. The vendored
-# sherpa-onnx-sys patch below teaches its build script how to resolve and stage
-# those libraries for a Rust/Tauri Android target.
-sherpa-onnx = { version = "1.13.4", default-features = false, features = ["shared"] }
 # Douyu's danmaku ports need native-tls (see danmaku::tls), and Android has no
 # system OpenSSL for Cargo to link against, so build openssl-sys from source
 # there. Desktop targets use the platform stack and skip this.

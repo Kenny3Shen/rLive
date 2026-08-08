@@ -53,7 +53,8 @@ android {
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
-            packaging {                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+            packaging {
+                jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
                 jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86/*.so")
                 jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
@@ -70,6 +71,21 @@ android {
                     .toList().toTypedArray()
             )
         }
+    }
+    packaging {
+        // ASR is desktop-only. Generated jniLibs is intentionally ignored by
+        // Git, so stale runtimes can survive local rebuilds unless packaging
+        // rejects them explicitly.
+        jniLibs.excludes += setOf(
+            "**/libc++_shared.so",
+            "**/libcrispasr.so",
+            "**/libggml.so",
+            "**/libggml-base.so",
+            "**/libggml-cpu.so",
+            "**/libomp.so",
+            "**/libsherpa-onnx-c-api.so",
+            "**/libonnxruntime.so",
+        )
     }
     kotlinOptions {
         jvmTarget = "1.8"

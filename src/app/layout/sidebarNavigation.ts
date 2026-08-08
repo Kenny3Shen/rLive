@@ -2,7 +2,15 @@ export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",
 } as const;
 
-const SIDEBAR_DESTINATIONS = ["/", "/follow", "/category", "/iptv", "/history", "/settings"];
+const SIDEBAR_DESTINATIONS = [
+  "/",
+  "/follow",
+  "/category",
+  "/iptv",
+  "/multi-room",
+  "/history",
+  "/settings",
+];
 
 type NavigationType = "POP" | "PUSH" | "REPLACE";
 
@@ -26,4 +34,14 @@ export function sidebarNavigationDirection(fromPathname: string, toPathname: str
   const toIndex = sidebarDestinationIndex(toPathname);
 
   return fromIndex >= 0 && toIndex >= 0 && toIndex < fromIndex ? -1 : 1;
+}
+
+/** Never carry a platform panel from one bottom-navigation destination into another. */
+export function routeScopedPreviousGroup(
+  previousPathname: string,
+  previousGroup: string,
+  pathname: string,
+  currentGroup: string,
+): string {
+  return previousPathname === pathname ? previousGroup : currentGroup;
 }

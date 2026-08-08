@@ -40,13 +40,7 @@ Debug 开发运行：
 bun run tauri -- android dev --target aarch64
 ```
 
-构建使用 Tauri 原生命令。移动端当前不提供语音字幕，但 Rust 依赖仍需要链接 sherpa-onnx native runtime。项目 vendor 的 `sherpa-onnx-sys 1.13.4` 补充 Android target 支持：首次构建会从官方 `v1.13.4` release 下载 `sherpa-onnx-v1.13.4-android.tar.bz2`，解压到 Cargo `target/sherpa-onnx-prebuilt` 缓存，并按当前 ABI 完成链接和打包。离线构建时，可让下列变量指向已下载压缩包所在的目录：
-
-```bash
-export SHERPA_ONNX_ARCHIVE_DIR="/path/to/downloaded-archives"
-```
-
-该目录必须包含文件名完全相同的 `sherpa-onnx-v1.13.4-android.tar.bz2`。构建脚本把 Rust FFI 实际依赖的 `libsherpa-onnx-c-api.so` 与 `libonnxruntime.so` 复制到 `jniLibs/<abi>`，Gradle 随后将它们打入 APK；`libsherpa-onnx-jni.so` 是 Java/Kotlin JNI 接口，不用于当前 Rust 命令层。Zipformer、标点与 CAMPPlus 模型不打包进 APK；Android 不展示字幕设置或播放器入口，也不会下载这些模型。
+构建使用 Tauri 原生命令。移动端不提供语音字幕，Android target 会在 Rust 条件编译阶段排除 ASR module、commands 和 state，也不会编译或打包 `sherpa-onnx`、ONNX Runtime、CrispASR、ggml 与模型解压依赖。桌面端 ASR 实现不受影响。
 
 `--target aarch64` 只构建 `arm64-v8a`。Tauri/Gradle 的 flavor 名称可能仍显示为 `universal`，这不代表 APK 包含四种 ABI；以 APK 内的 `lib/arm64-v8a/` 目录为准。
 
@@ -62,9 +56,9 @@ src-tauri/gen/android/app/build/outputs/apk/
 
 确认 `ANDROID_NDK_HOME` 指向版本目录而不是 SDK 根目录，并使用 `--target aarch64` 构建 `arm64-v8a`。切换 ABI 后若 Cargo 仍复用失败状态，可清理对应 target 的 `sherpa-onnx-sys` 构建缓存后重试；不要把桌面 MSVC 环境变量带入 Android 构建。
 
-### 缺少 native library
+### APK 意外包含旧 native library
 
-检查 `src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/` 是否包含 `libsherpa-onnx-c-api.so` 与 `libonnxruntime.so`。如果缺失，确认网络可以访问 `https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/`；离线构建则确认 `SHERPA_ONNX_ARCHIVE_DIR` 指向包含官方 Android 压缩包的目录。
+`src-tauri/gen/android/app/src/main/jniLibs/` 是生成目录，旧的本地构建可能遗留被 Git 忽略的 `.so`。Release Gradle 配置会排除已知 ASR/C++ runtime，发布工作流还会校验最终 native 清单。当前 arm64 APK/AAB 只应包含 `librlive_lib.so`。
 
 ## 真机验证
 
@@ -74,14 +68,14 @@ APK=$(find src-tauri/gen/android/app/build/outputs/apk -name 'app-*-release*.apk
 adb install -r "$APK"
 ```
 
-安装前可检查 APK 格式和 JNI 架构：
+安装前可检查 APK 格式和最终 JNI 清单：
 
 ```bash
-file src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/*.so
+unzip -Z1 "$APK" | awk '/^lib\// { print }'
 "$ANDROID_HOME/build-tools/36.0.0/zipalign" -P 16 -c -v 4 "$APK"
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
 ```
 
 `app-*-release.apk` 是可直接安装的 APK；`*.aab` 是应用商店格式，不能用 `adb install` 直接安装。`--ci` 未配置 release keystore 时可能生成 unsigned APK，必须先签名再安装或发布。
 
-安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。高刷设备可通过开发者选项的刷新率叠层确认前台目标模式；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型。
+安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。高刷设备可通过开发者选项的刷新率叠层确认前台目标模式；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型，也不应包含 Sherpa/ONNX/CrispASR native runtime。

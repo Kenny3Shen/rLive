@@ -1,4 +1,5 @@
 mod account;
+#[cfg(not(target_os = "android"))]
 mod asr;
 mod commands;
 mod danmaku;
@@ -30,6 +31,7 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_media_volume,
     android_player_controls_set_orientation,
 };
+#[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
@@ -124,6 +126,7 @@ impl<'a> MakeWriter<'a> for AppLogWriter {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn app_log_directory() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -136,6 +139,9 @@ fn app_log_directory() -> PathBuf {
 /// values, tokens, outgoing chat text, and successful operation progress must
 /// never be written to disk.
 fn init_logging(directory: Option<PathBuf>) {
+    #[cfg(target_os = "android")]
+    let directory = directory.unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(not(target_os = "android"))]
     let directory = directory.unwrap_or_else(app_log_directory);
     if let Err(error) = fs::create_dir_all(&directory) {
         eprintln!("rLive log directory unavailable: {error}");
@@ -212,10 +218,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings_get,
             settings_set,
+            #[cfg(not(target_os = "android"))]
             asr_get_status,
+            #[cfg(not(target_os = "android"))]
             asr_enable,
+            #[cfg(not(target_os = "android"))]
             asr_disable,
+            #[cfg(not(target_os = "android"))]
             asr_reset_stream,
+            #[cfg(not(target_os = "android"))]
             asr_transcribe,
             account_get_cookie,
             account_get_profile,

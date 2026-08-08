@@ -42,7 +42,7 @@ import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { useWebPlayer } from "./player/useWebPlayer";
 import { androidPlayerControlStep, useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
@@ -579,6 +579,8 @@ export function PlayerPane({
   });
   const compactLandscapeSidePanelClassName =
     "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl";
+  const portraitStackedPlayer =
+    inlineCompactSidePanel && sidePanelOpen && player.mode !== "fullscreen";
 
   // Entering short landscape switches to an overlay drawer; rotating back to
   // portrait restores the immediately useful video + danmaku stack.
@@ -794,6 +796,7 @@ export function PlayerPane({
     value: activeSideTab,
     onChange: selectSideTab,
     enabled: sidePanelOpen,
+    layout: "track",
   });
 
   const clearPlayerEdgeGestureFeedbackTimer = useCallback(() => {
@@ -1204,40 +1207,49 @@ export function PlayerPane({
 
   return (
     <div
+      data-room-player-shell
       className={cn(
-        "relative flex h-full min-h-0 w-full bg-black",
+        "relative flex h-full min-h-0 min-w-0 w-full bg-black",
         inlineCompactSidePanel && "flex-col",
       )}
     >
       <div
+        data-room-player-frame
         className={cn(
           "relative flex min-w-0 flex-col bg-black",
-          inlineCompactSidePanel && sidePanelOpen ? "w-full flex-none aspect-video" : "flex-1",
+          portraitStackedPlayer ? "w-full flex-none" : "min-h-0 flex-1",
         )}
       >
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div
+          ref={player.stageRef}
+          data-player-stage
+          data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
+          data-audio-only={audioOnly ? "true" : undefined}
+          className={cn(
+            "relative flex min-w-0 flex-col overflow-hidden bg-black",
+            portraitStackedPlayer ? "w-full" : "min-h-0 flex-1",
+            androidClient && showHost && "touch-none",
+          )}
+          tabIndex={0}
+          aria-label={
+            androidClient
+              ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
+              : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
+          }
+          aria-keyshortcuts="Space K M F"
+          onPointerEnter={handleStagePointerActivity}
+          onPointerMove={handleStagePointerMove}
+          onPointerDown={handleStagePointerDown}
+          onPointerUp={handleStagePointerUp}
+          onPointerCancel={handlePlayerEdgeGestureCancel}
+          onKeyDown={handleStageKeyDown}
+        >
           <div
-            ref={player.stageRef}
-            data-player-stage
-            data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
-            data-audio-only={audioOnly ? "true" : undefined}
+            data-player-video-surface
             className={cn(
-              "relative min-h-0 flex-1 overflow-hidden bg-black",
-              androidClient && showHost && "touch-none",
+              "relative min-w-0 overflow-hidden bg-black",
+              portraitStackedPlayer ? "aspect-video w-full shrink-0" : "min-h-0 flex-1",
             )}
-            tabIndex={0}
-            aria-label={
-              androidClient
-                ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
-                : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
-            }
-            aria-keyshortcuts="Space K M F"
-            onPointerEnter={handleStagePointerActivity}
-            onPointerMove={handleStagePointerMove}
-            onPointerDown={handleStagePointerDown}
-            onPointerUp={handleStagePointerUp}
-            onPointerCancel={handlePlayerEdgeGestureCancel}
-            onKeyDown={handleStageKeyDown}
           >
             {loading && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -1312,7 +1324,7 @@ export function PlayerPane({
               <SuperChatOverlay
                 key={`sc:${roomSessionKey ?? "room"}`}
                 active={danmakuActive}
-                className="absolute bottom-[calc(4.75rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.5rem_-_env(safe-area-inset-bottom))] w-[min(240px,calc(100%-1.5rem))]"
+                className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_1.5rem_-_env(safe-area-inset-bottom))] w-[min(240px,calc(100%-1.5rem))]"
               />
             )}
 
@@ -1328,7 +1340,7 @@ export function PlayerPane({
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
-                  className="pointer-events-none absolute inset-x-4 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-20 flex justify-center"
+                  className="pointer-events-none absolute inset-x-4 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 flex justify-center"
                 >
                   <p
                     className={cn(
@@ -1394,124 +1406,118 @@ export function PlayerPane({
                 </strong>
               </div>
             </div>
+          </div>
 
-            <div
-              ref={controlsRef}
-              data-player-controls
-              data-visible="true"
-              className={cn(
-                // Keep the filtered surface stationary: moving backdrop blur
-                // would resample the video on every transition frame. The data
-                // attribute changes imperatively, so this compositor-only fade
-                // also avoids reconciling the video, canvas and side panels.
-                "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
-              )}
-              onPointerEnter={holdControlsVisible}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                holdControlsVisible();
-              }}
-              onPointerLeave={resumeControlsAutoHide}
-              onFocusCapture={() => {
+          <div
+            ref={controlsRef}
+            data-player-controls
+            data-visible="true"
+            aria-hidden="false"
+            className={cn(
+              // Keep the control height in normal flow. Visibility changes only
+              // fade this stable row, so the video surface never resizes.
+              "relative z-30 shrink-0 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+            )}
+            onPointerEnter={holdControlsVisible}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              holdControlsVisible();
+            }}
+            onPointerLeave={resumeControlsAutoHide}
+            onFocusCapture={() => {
+              controlsFocusWithinRef.current = true;
+              holdControlsVisible();
+            }}
+            onBlurCapture={(event) => {
+              const nextFocused = event.relatedTarget;
+              if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
                 controlsFocusWithinRef.current = true;
                 holdControlsVisible();
-              }}
-              onBlurCapture={(event) => {
-                const nextFocused = event.relatedTarget;
-                if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
-                  controlsFocusWithinRef.current = true;
-                  holdControlsVisible();
+                return;
+              }
+              controlsFocusWithinRef.current = false;
+              resumeControlsAutoHide();
+            }}
+          >
+            <PlayerControls
+              paused={player.paused}
+              volume={playerControlVolume}
+              muted={playerControlMuted}
+              audioOnly={audioOnly}
+              sidePanelOpen={sidePanelOpen}
+              sidePanelLabel={
+                compactViewport ? (sidePanelOpen ? "收起直播间面板" : "打开直播间面板") : undefined
+              }
+              osdOn={osdOn}
+              asrVisible={asr.desktopClient}
+              asrOn={asr.captionsOn}
+              asrLabel={asr.controlLabel}
+              asrDisabled={asr.controlDisabled}
+              asrBusy={asr.controlBusy}
+              asrTranslationEnabled={asrTranslationEnabled}
+              asrTranslationFrom={asrTranslationFrom}
+              asrTranslationTo={asrTranslationTo}
+              asrTranslationBusy={asr.translationPending}
+              asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+              asrSettingsPending={asrPending}
+              qualities={qualities}
+              qualityIndex={qualityIndex}
+              lines={lines}
+              lineIndex={lineIndex}
+              fullscreen={player.mode === "fullscreen"}
+              // Capability is device-level and stable; keep the control
+              // mounted so reconnect loops (loading toggling) cannot make
+              // the chrome flicker. transportDisabled covers unusable states.
+              pictureInPictureSupported={player.pictureInPictureSupported}
+              pictureInPictureActive={player.pictureInPictureActive}
+              pictureInPictureDisabled={
+                !player.running || player.mode === "fullscreen" || audioOnly
+              }
+              loadError={loadError}
+              disabled={transportDisabled}
+              compact={compactViewport}
+              portalContainer={player.stageRef}
+              centerSlot={
+                showDanmakuComposerInPlayerControls(
+                  inlineCompactSidePanel,
+                  player.mode === "fullscreen",
+                ) ? (
+                  <DanmakuComposer
+                    siteId={siteId}
+                    roomId={roomId}
+                    overlay
+                    onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                  />
+                ) : null
+              }
+              onOverlayInteractionChange={handleControlsOverlayInteractionChange}
+              refreshDisabled={refreshDisabled}
+              onRefresh={onRefresh}
+              onTogglePause={() => player.togglePause()}
+              onVolume={(value) => {
+                // Android always targets STREAM_MUSIC. Falling back to the
+                // HTML element would only dim the WebView relative to the
+                // system volume the user already expects from live apps.
+                if (androidClient) {
+                  androidPlayerControls.setMediaVolume(value);
                   return;
                 }
-                controlsFocusWithinRef.current = false;
-                resumeControlsAutoHide();
+                player.changeVolume(value);
               }}
-            >
-              <PlayerControls
-                paused={player.paused}
-                volume={playerControlVolume}
-                muted={playerControlMuted}
-                audioOnly={audioOnly}
-                sidePanelOpen={sidePanelOpen}
-                sidePanelLabel={
-                  compactViewport
-                    ? sidePanelOpen
-                      ? "收起直播间面板"
-                      : "打开直播间面板"
-                    : undefined
-                }
-                osdOn={osdOn}
-                asrVisible={asr.desktopClient}
-                asrOn={asr.captionsOn}
-                asrLabel={asr.controlLabel}
-                asrDisabled={asr.controlDisabled}
-                asrBusy={asr.controlBusy}
-                asrTranslationEnabled={asrTranslationEnabled}
-                asrTranslationFrom={asrTranslationFrom}
-                asrTranslationTo={asrTranslationTo}
-                asrTranslationBusy={asr.translationPending}
-                asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-                asrSettingsPending={asrPending}
-                qualities={qualities}
-                qualityIndex={qualityIndex}
-                lines={lines}
-                lineIndex={lineIndex}
-                fullscreen={player.mode === "fullscreen"}
-                // Capability is device-level and stable; keep the control
-                // mounted so reconnect loops (loading toggling) cannot make
-                // the chrome flicker. transportDisabled covers unusable states.
-                pictureInPictureSupported={player.pictureInPictureSupported}
-                pictureInPictureActive={player.pictureInPictureActive}
-                pictureInPictureDisabled={
-                  !player.running || player.mode === "fullscreen" || audioOnly
-                }
-                loadError={loadError}
-                disabled={transportDisabled}
-                overlay
-                compact={compactViewport}
-                portalContainer={player.stageRef}
-                centerSlot={
-                  showDanmakuComposerInPlayerControls(
-                    inlineCompactSidePanel,
-                    player.mode === "fullscreen",
-                  ) ? (
-                    <DanmakuComposer
-                      siteId={siteId}
-                      roomId={roomId}
-                      overlay
-                      onOverlayInteractionChange={handleComposerOverlayInteractionChange}
-                    />
-                  ) : null
-                }
-                onOverlayInteractionChange={handleControlsOverlayInteractionChange}
-                refreshDisabled={refreshDisabled}
-                onRefresh={onRefresh}
-                onTogglePause={() => player.togglePause()}
-                onVolume={(value) => {
-                  // Android always targets STREAM_MUSIC. Falling back to the
-                  // HTML element would only dim the WebView relative to the
-                  // system volume the user already expects from live apps.
-                  if (androidClient) {
-                    androidPlayerControls.setMediaVolume(value);
-                    return;
-                  }
-                  player.changeVolume(value);
-                }}
-                onToggleMute={handleToggleMute}
-                onToggleAudioOnly={handleToggleAudioOnly}
-                onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
-                onToggleOsd={handleToggleOsd}
-                onToggleAsr={asr.toggle}
-                onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-                onAsrTranslationFromChange={setAsrTranslationFrom}
-                onAsrTranslationToChange={setAsrTranslationTo}
-                onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
-                onQualityChange={onQualityChange ?? (() => {})}
-                onLineChange={onLineChange ?? (() => {})}
-                onTogglePictureInPicture={handleTogglePictureInPicture}
-                onToggleFullscreen={() => void player.toggleFullscreen()}
-              />
-            </div>
+              onToggleMute={handleToggleMute}
+              onToggleAudioOnly={handleToggleAudioOnly}
+              onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
+              onToggleOsd={handleToggleOsd}
+              onToggleAsr={asr.toggle}
+              onAsrTranslationEnabledChange={setAsrTranslationEnabled}
+              onAsrTranslationFromChange={setAsrTranslationFrom}
+              onAsrTranslationToChange={setAsrTranslationTo}
+              onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
+              onQualityChange={onQualityChange ?? (() => {})}
+              onLineChange={onLineChange ?? (() => {})}
+              onTogglePictureInPicture={handleTogglePictureInPicture}
+              onToggleFullscreen={() => void player.toggleFullscreen()}
+            />
           </div>
         </div>
       </div>
@@ -1536,12 +1542,12 @@ export function PlayerPane({
           data-room-side-tab-swipe-surface
           data-horizontal-swipe-surface
           className={cn(
-            "flex shrink-0 flex-col overflow-hidden bg-sidebar touch-pan-y overscroll-y-contain",
+            "flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar touch-pan-y overscroll-y-contain",
             inlineCompactSidePanel
               ? "min-h-0 w-full flex-1 border-t border-border/80"
               : compactLandscapeViewport
-                ? compactLandscapeSidePanelClassName
-                : "w-[300px] border-l border-border/80 lg:w-[320px]",
+                ? `${compactLandscapeSidePanelClassName} shrink-0`
+                : "w-[300px] shrink-0 border-l border-border/80 lg:w-[320px]",
             !sidePanelOpen && "hidden",
           )}
           onPointerDownCapture={sideTabSwipe.onPointerDownCapture}
@@ -1577,17 +1583,22 @@ export function PlayerPane({
                 </TabsTrigger>
               </TabsList>
             </div>
-            <div
-              ref={sideTabSwipe.pageRef as React.Ref<HTMLDivElement>}
-              data-slot="horizontal-swipe-page"
-              className="relative flex min-h-0 flex-1"
-            >
-              <TabsContent
-                value="chat"
-                keepMounted
-                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
+            <div data-room-side-tab-viewport className="relative min-h-0 flex-1 overflow-hidden">
+              <div
+                ref={sideTabSwipe.pageRef as React.Ref<HTMLDivElement>}
+                data-slot="horizontal-swipe-track"
+                className="flex h-full min-w-0"
+                style={{ width: `${ROOM_SIDE_TABS.length * 100}%` }}
               >
-                <div className="flex h-full min-h-0 flex-col">
+                <div
+                  role="tabpanel"
+                  aria-label="弹幕"
+                  aria-hidden={activeSideTab === "chat" ? undefined : true}
+                  inert={activeSideTab === "chat" ? undefined : true}
+                  data-room-side-tab-panel="chat"
+                  className="flex min-h-0 min-w-0 shrink-0 flex-col"
+                  style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
+                >
                   <DanmakuPanel
                     key={`chat:${roomSessionKey ?? "room"}`}
                     active={danmakuActive}
@@ -1599,25 +1610,33 @@ export function PlayerPane({
                   />
                   {inlineCompactSidePanel && <DanmakuComposer siteId={siteId} roomId={roomId} />}
                 </div>
-              </TabsContent>
-              <TabsContent
-                value="follow"
-                keepMounted
-                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-              >
-                <FollowPanel className="h-full" />
-              </TabsContent>
-              <TabsContent
-                value="settings"
-                keepMounted
-                className="mt-0 min-h-0 flex-1 data-[hidden]:hidden"
-              >
-                <DanmakuSettingsPanel
-                  className="h-full"
-                  autoSend={autoDanmakuSend}
-                  siteId={siteId}
-                />
-              </TabsContent>
+                <div
+                  role="tabpanel"
+                  aria-label="关注"
+                  aria-hidden={activeSideTab === "follow" ? undefined : true}
+                  inert={activeSideTab === "follow" ? undefined : true}
+                  data-room-side-tab-panel="follow"
+                  className="min-h-0 min-w-0 shrink-0"
+                  style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
+                >
+                  <FollowPanel className="h-full" />
+                </div>
+                <div
+                  role="tabpanel"
+                  aria-label="设置"
+                  aria-hidden={activeSideTab === "settings" ? undefined : true}
+                  inert={activeSideTab === "settings" ? undefined : true}
+                  data-room-side-tab-panel="settings"
+                  className="min-h-0 min-w-0 shrink-0"
+                  style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
+                >
+                  <DanmakuSettingsPanel
+                    className="h-full"
+                    autoSend={autoDanmakuSend}
+                    siteId={siteId}
+                  />
+                </div>
+              </div>
             </div>
           </Tabs>
         </aside>

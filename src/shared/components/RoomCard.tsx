@@ -2,7 +2,7 @@ import { memo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Copy, ExternalLink, Flame, Hash, Star, StarOff } from "lucide-react";
+import { Copy, ExternalLink, Flame, Hash, PanelsTopLeft, Star, StarOff } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import type { FollowUser, LiveRoomDetail, LiveRoomItem } from "@/shared/types/live";
@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/context-menu";
 import { notify } from "@/components/ui/toast";
 import { preloadRouteModule } from "@/app/routeModules";
+import { MULTI_ROOM_MAX_SLOTS, useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
 import { formatOnline, normalizeImageUrl, cn } from "@/lib/utils";
 
 type RoomCardProps = {
@@ -156,6 +157,13 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     }
   }
 
+  function addToMultiRoom() {
+    const result = useMultiRoomStore.getState().addRoom(room);
+    if (result === "added") notify.success("已加入多画面");
+    else if (result === "exists") notify.info("该直播间已在多画面中");
+    else notify.error("多画面已满", `最多同时添加 ${MULTI_ROOM_MAX_SLOTS} 个直播间。`);
+  }
+
   return (
     <ContextMenu>
       <ContextMenuTrigger
@@ -215,6 +223,10 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           <ContextMenuItem onClick={() => void copyRoomId()}>
             <Hash aria-hidden />
             复制房间号
+          </ContextMenuItem>
+          <ContextMenuItem onClick={addToMultiRoom}>
+            <PanelsTopLeft aria-hidden />
+            加入多画面
           </ContextMenuItem>
         </ContextMenuGroup>
         <ContextMenuSeparator />

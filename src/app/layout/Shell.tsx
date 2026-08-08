@@ -21,14 +21,12 @@ import { IptvSearchInput, IptvSourceSwitcher } from "@/features/iptv/IptvHeaderC
 import { IptvControllerProvider } from "@/features/iptv/IptvController";
 import { iptvHomePath } from "@/features/iptv/iptvRoute";
 import { builtInSources, playlistSourceFromRoute } from "@/features/iptv/playlistSource";
-import { HistoryHeaderControls } from "@/features/history/HistoryHeaderControls";
 import {
   HISTORY_PLATFORM_PARAM,
   type HistoryPlatformFilter,
   historyPlatformFromSearch,
   withHistoryPlatform,
 } from "@/features/history/historyRoute";
-import { useHistoryShellStore } from "@/features/history/historyShellStore";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
@@ -57,7 +55,11 @@ import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
-import { isSidebarNavigation, sidebarNavigationDirection } from "./sidebarNavigation";
+import {
+  isSidebarNavigation,
+  routeScopedPreviousGroup,
+  sidebarNavigationDirection,
+} from "./sidebarNavigation";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 
 function RouteLoadingFallback() {
@@ -113,9 +115,10 @@ export function Shell() {
   const outlet = useOutlet();
   const [searchParams, setSearchParams] = useSearchParams();
   const isRoom = pathname.startsWith("/room/");
+  const isMultiRoom = pathname === "/multi-room";
   const isIptv = pathname === "/iptv";
   const isIptvPlayer = pathname === "/iptv/play";
-  const isImmersivePlayer = isRoom || isIptvPlayer;
+  const isImmersivePlayer = isRoom || isIptvPlayer || isMultiRoom;
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
   const isSettings = pathname === "/settings";
@@ -226,9 +229,14 @@ export function Shell() {
   // IPTV travels between playlist sources. Both are the same gesture and the
   // same header slot, so they share one pan rather than each owning a scheme.
   const groupForMotion: string = isIptv ? iptvSource.id : String(platformForMotion);
-  const previousGroupRef = useRef<string>(groupForMotion);
-  const previousGroup = previousGroupRef.current;
-  previousGroupRef.current = groupForMotion;
+  const previousGroupRef = useRef({ pathname, group: groupForMotion });
+  const previousGroup = routeScopedPreviousGroup(
+    previousGroupRef.current.pathname,
+    previousGroupRef.current.group,
+    pathname,
+    groupForMotion,
+  );
+  previousGroupRef.current = { pathname, group: groupForMotion };
   // Keyed on the route alone, deliberately. Including the platform here would
   // unmount and rebuild the entire scroller subtree — the grid, the scroll
   // container, everything — during a site switch. Keeping the shell alive lets
@@ -324,7 +332,10 @@ export function Shell() {
 
   // Simple Live's home/category/search use TabBarView: a horizontal content
   // swipe changes the active platform. Keep that contract on touch clients.
-  const platformSwipeEnabled = showSiteSwitcher && mobileClient;
+  // History owns a nested two-page strip (watch / sent danmaku). Its platform
+  // filter remains tappable in the header, but the surrounding Shell must not
+  // compete for the same horizontal gesture.
+  const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
   const sitePlatformSwipe = useHorizontalSwipe({
     items: sitePlatforms,
     value: activeSiteId,
@@ -339,24 +350,13 @@ export function Shell() {
     enabled: platformSwipeEnabled && isLiveFollow,
     animate: platformSwipeEnabled,
   });
-  const historyPlatformSwipe = useHorizontalSwipe({
-    items: historyPlatforms,
-    value: historyPlatform,
-    onChange: handleHistoryPlatformChange,
-    enabled: platformSwipeEnabled && isHistory,
-    animate: platformSwipeEnabled,
-  });
   const iptvSourceSwipe = useHorizontalSwipe({
     items: iptvSourceOptions,
     value: iptvSource.id,
     onChange: handleIptvSourceChange,
     enabled: isIptv && mobileClient,
   });
-  const platformSwipe = isLiveFollow
-    ? followPlatformSwipe
-    : isHistory
-      ? historyPlatformSwipe
-      : sitePlatformSwipe;
+  const platformSwipe = isLiveFollow ? followPlatformSwipe : sitePlatformSwipe;
   const contentSwipe = isIptv ? iptvSourceSwipe : platformSwipe;
   const contentSwipePageRef = contentSwipe.pageRef;
   const bindContentSwipePageRef = useCallback(
@@ -383,10 +383,6 @@ export function Shell() {
     setSearchParams((current) => withHistoryPlatform(current, historyPlatform), { replace: true });
   }, [historyPlatform, isHistory, rawHistoryPlatform, setSearchParams]);
 
-  useEffect(() => {
-    if (!isHistory) useHistoryShellStore.getState().reset();
-  }, [isHistory]);
-
   // The scroller used to be keyed by platform, so a site switch reset scrollTop
   // as a side effect of being rebuilt. Now that it persists, do it explicitly:
   // the incoming platform's list is different content, so leaving the viewport
@@ -403,7 +399,10 @@ export function Shell() {
     pageScrollRef.current?.scrollTo({ top: 0 });
   }, [iptvFollowGroup, iptvSource.id, pathname, platformForMotion]);
 
-  const deferRouteOutlet = isDirectSidebarNavigation;
+  // Mobile bottom navigation swaps pages atomically. Retaining the outgoing
+  // ReactNode made its last selected platform visible for one compositor frame
+  // when the exit layer was removed. Desktop keeps the directional page pan.
+  const deferRouteOutlet = isDirectSidebarNavigation && !mobileClient;
   const routeOutlet = (
     <RouteOutlet
       key={deferRouteOutlet ? pathname : "immediate-route"}
@@ -416,10 +415,14 @@ export function Shell() {
     "relative h-full min-h-0",
     // The scroller stays inside the compositor-only page wrapper so translated
     // content cannot enlarge the main pane or flash a second scrollbar.
-    "overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom))] touch-pan-y md:p-5 md:pb-5",
+    "overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(4.25rem+env(safe-area-inset-bottom))] touch-pan-y md:p-5 md:pb-5",
   );
   const swipePage = (
-    <div ref={bindContentSwipePageRef} data-slot="app-swipe-page" className="relative min-h-full">
+    <div
+      ref={bindContentSwipePageRef}
+      data-slot="app-swipe-page"
+      className="relative h-full min-h-full"
+    >
       {routeOutlet}
     </div>
   );
@@ -468,11 +471,7 @@ export function Shell() {
             data-slot="app-swipe-panel"
             aria-hidden={active ? undefined : true}
             inert={active ? undefined : true}
-            className={cn(
-              pageScrollerClassName,
-              "absolute inset-0 w-full",
-              !active && "pointer-events-none",
-            )}
+            className={cn(pageScrollerClassName, "absolute inset-0 w-full", !active && "hidden")}
             style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
           >
             <RefreshFabVisibilityProvider visible={active}>
@@ -484,7 +483,7 @@ export function Shell() {
     </div>
   );
   const regularPage =
-    mobileClient && showSiteSwitcher ? (
+    mobileClient && showSiteSwitcher && !isHistory ? (
       liveSwipePage
     ) : useGroupedPageContainer ? (
       groupPage
@@ -499,6 +498,7 @@ export function Shell() {
       ? -1
       : 1;
   const routePanAxis = isDirectSidebarNavigation && !mobileClient ? "vertical" : "horizontal";
+  const routePanEnabled = !mobileClient && (isDirectSidebarNavigation || isTabNavigation);
 
   return (
     <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
@@ -599,9 +599,7 @@ export function Shell() {
                         onChange={handleIptvSearchChange}
                         className="w-64 max-xl:w-48 max-md:w-[min(11rem,43vw)]"
                       />
-                    ) : isIptvFollow ? null : isHistory ? (
-                      <HistoryHeaderControls />
-                    ) : (
+                    ) : isIptvFollow || isHistory ? null : (
                       <HeaderSearch />
                     )}
                   </div>
@@ -638,7 +636,7 @@ export function Shell() {
                     panKey={pageMotionKey}
                     direction={routePanDirection}
                     axis={routePanAxis}
-                    enabled={isDirectSidebarNavigation || isTabNavigation}
+                    enabled={routePanEnabled}
                     className="h-full min-h-0"
                     contentClassName="h-full min-h-0"
                   >

@@ -4,7 +4,17 @@ import gsap from "gsap";
 import { useCallback, useRef, type MouseEvent } from "react";
 import { flushSync } from "react-dom";
 import { NavLink } from "react-router-dom";
-import { Heart, History, Home, LayoutGrid, Moon, Settings, Sun, Tv } from "lucide-react";
+import {
+  Heart,
+  History,
+  Home,
+  LayoutGrid,
+  Moon,
+  PanelsTopLeft,
+  Settings,
+  Sun,
+  Tv,
+} from "lucide-react";
 import { revealThemeAt } from "@/app/theme";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -21,11 +31,13 @@ const navItems: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   end?: boolean;
+  className?: string;
 }[] = [
   { to: "/", label: "首页", icon: Home, end: true },
   { to: "/follow", label: "关注", icon: Heart },
   { to: "/category", label: "分类", icon: LayoutGrid },
   { to: "/iptv", label: "IPTV", icon: Tv },
+  { to: "/multi-room", label: "多画面", icon: PanelsTopLeft, className: "max-md:hidden" },
 ];
 
 function SidebarLink({

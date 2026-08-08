@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -23,10 +23,16 @@ import type { DanmakuSendHistoryItem, HistoryItem, SiteId } from "@/shared/types
 import { groupHistoryByDate, type HistoryDateGroup } from "./historyGrouping";
 import { historyPlatformFromSearch, HISTORY_PLATFORM_PARAM } from "./historyRoute";
 import {
-  createHistoryShellRegistrationId,
-  useHistoryShellStore,
-  type HistoryTab,
-} from "./historyShellStore";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -46,9 +52,13 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notify } from "@/components/ui/toast";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
+
+type HistoryTab = "watch" | "danmaku";
 
 const HISTORY_TABS: readonly HistoryTab[] = ["watch", "danmaku"];
 
@@ -202,12 +212,109 @@ function HistoryTimeline<T extends { site_id: SiteId }>({
   );
 }
 
+function HistoryClearButton({
+  activeTab,
+  canClear,
+  pending,
+  error,
+  open,
+  onOpenChange,
+  onReset,
+  onClear,
+}: {
+  activeTab: HistoryTab;
+  canClear: boolean;
+  pending: boolean;
+  error: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onReset: () => void;
+  onClear: () => void;
+}) {
+  const label = activeTab === "watch" ? "清空观看历史" : "清空发送弹幕记录";
+  const title = activeTab === "watch" ? "清空观看历史？" : "清空发送弹幕记录？";
+  const description =
+    activeTab === "watch"
+      ? "将删除全部观看记录，此操作无法恢复。"
+      : "将删除全部已发送弹幕记录，此操作无法恢复。";
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (pending) return;
+        if (nextOpen) onReset();
+        onOpenChange(nextOpen);
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              disabled={!canClear || pending}
+              aria-label={label}
+              aria-haspopup="dialog"
+              aria-expanded={open}
+              className="size-11 shrink-0"
+              onClick={() => {
+                onReset();
+                onOpenChange(true);
+              }}
+            />
+          }
+        >
+          {pending ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+      <AlertDialogContent size="sm">
+        <AlertDialogHeader>
+          <AlertDialogMedia className="bg-destructive/10 text-destructive">
+            <Trash2 aria-hidden />
+          </AlertDialogMedia>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            清空失败，请重试。
+          </p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>取消</AlertDialogCancel>
+          <AlertDialogAction
+            type="button"
+            variant="destructive"
+            disabled={pending}
+            onClick={onClear}
+          >
+            {pending ? (
+              <>
+                <Spinner data-icon="inline-start" aria-hidden />
+                清空中…
+              </>
+            ) : (
+              <>
+                <Trash2 data-icon="inline-start" aria-hidden />
+                清空
+              </>
+            )}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function HistoryPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<HistoryTab>("watch");
-  const [shellRegistrationId] = useState(createHistoryShellRegistrationId);
+  const [clearOpen, setClearOpen] = useState(false);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const scopedPlatform = usePlatformScope();
   const historyPlatform =
@@ -232,7 +339,7 @@ export function HistoryPage() {
     mutationFn: () => invokeCmd<void>("history_clear"),
     onSuccess: () => {
       qc.setQueriesData<HistoryItem[]>({ queryKey: ["history"] }, []);
-      useHistoryShellStore.getState().setClearOpen(false);
+      setClearOpen(false);
       void qc.invalidateQueries({ queryKey: ["history"] });
     },
   });
@@ -241,7 +348,7 @@ export function HistoryPage() {
     mutationFn: () => invokeCmd<void>("danmaku_send_history_clear_all"),
     onSuccess: () => {
       qc.setQueriesData<DanmakuSendHistoryItem[]>({ queryKey: ["danmaku-send-history"] }, []);
-      useHistoryShellStore.getState().setClearOpen(false);
+      setClearOpen(false);
       void qc.invalidateQueries({ queryKey: ["danmaku-send-history"] });
     },
   });
@@ -293,29 +400,22 @@ export function HistoryPage() {
     activeTab === "watch"
       ? clearWatchHistoryMutation.isError
       : clearDanmakuSendHistoryMutation.isError;
-  const clearTitle = activeTab === "watch" ? "清空观看历史？" : "清空发送弹幕记录？";
-  const clearDescription =
-    activeTab === "watch"
-      ? "将删除全部观看记录，此操作无法恢复。"
-      : "将删除全部已发送弹幕记录，此操作无法恢复。";
-
   function handleTabChange(value: string) {
     if (value !== "watch" && value !== "danmaku") return;
     const nextTab = value as HistoryTab;
     setActiveTab(nextTab);
-    useHistoryShellStore.getState().setActiveTab(nextTab);
-    useHistoryShellStore.getState().setClearOpen(false);
+    setClearOpen(false);
   }
 
-  const resetActiveClearMutation = useCallback(() => {
+  const resetActiveClearMutation = () => {
     if (activeTab === "watch") clearWatchHistoryMutation.reset();
     else clearDanmakuSendHistoryMutation.reset();
-  }, [activeTab, clearDanmakuSendHistoryMutation, clearWatchHistoryMutation]);
+  };
 
-  const clearActiveHistory = useCallback(() => {
+  const clearActiveHistory = () => {
     if (activeTab === "watch") clearWatchHistoryMutation.mutate();
     else clearDanmakuSendHistoryMutation.mutate();
-  }, [activeTab, clearDanmakuSendHistoryMutation, clearWatchHistoryMutation]);
+  };
 
   const historyTabSwipe = useHorizontalSwipe({
     items: HISTORY_TABS,
@@ -329,40 +429,12 @@ export function HistoryPage() {
   const historyRefreshing =
     activeTab === "watch" ? watchHistoryQuery.isRefetching : danmakuSendHistoryQuery.isRefetching;
 
-  useEffect(() => {
-    const shell = useHistoryShellStore.getState();
-    shell.register(shellRegistrationId, {
-      activeTab,
-      canClear,
-      clearPending,
-      clearError,
-      clearTitle,
-      clearDescription,
-      resetActiveMutation: resetActiveClearMutation,
-      clearActiveHistory,
-    });
-  }, [
-    activeTab,
-    canClear,
-    clearActiveHistory,
-    clearDescription,
-    clearError,
-    clearPending,
-    clearTitle,
-    resetActiveClearMutation,
-    shellRegistrationId,
-  ]);
-
-  useEffect(() => {
-    return () => useHistoryShellStore.getState().reset(shellRegistrationId);
-  }, [shellRegistrationId]);
-
   return (
     <PullToRefresh
       data-horizontal-swipe-surface
       onRefresh={refreshActiveHistory}
       refreshing={historyRefreshing}
-      className="mx-auto max-w-3xl"
+      className="mx-auto h-full min-h-full w-full max-w-3xl"
       onPointerDownCapture={historyTabSwipe.onPointerDownCapture}
       onPointerMoveCapture={historyTabSwipe.onPointerMoveCapture}
       onPointerUpCapture={historyTabSwipe.onPointerUpCapture}
@@ -378,20 +450,32 @@ export function HistoryPage() {
         label="刷新历史记录"
       />
       <div className="flex min-h-full flex-col touch-pan-y">
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-4">
-          <TabsList
-            aria-label="历史记录类型"
-            className="grid h-11! w-full grid-cols-2 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:h-12! max-md:min-h-12 max-md:p-0.5 sm:w-fit"
-          >
-            <TabsTrigger value="watch" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
-              <Clock3 aria-hidden />
-              观看历史
-            </TabsTrigger>
-            <TabsTrigger value="danmaku" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
-              <MessageSquareText aria-hidden />
-              发送弹幕
-            </TabsTrigger>
-          </TabsList>
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="min-h-full gap-4">
+          <div className="flex items-center gap-2">
+            <TabsList
+              aria-label="历史记录类型"
+              className="grid h-11! min-w-0 flex-1 grid-cols-2 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:h-12! max-md:min-h-12 max-md:p-0.5 sm:max-w-md"
+            >
+              <TabsTrigger value="watch" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
+                <Clock3 aria-hidden />
+                观看历史
+              </TabsTrigger>
+              <TabsTrigger value="danmaku" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
+                <MessageSquareText aria-hidden />
+                发送弹幕
+              </TabsTrigger>
+            </TabsList>
+            <HistoryClearButton
+              activeTab={activeTab}
+              canClear={canClear}
+              pending={clearPending}
+              error={clearError}
+              open={clearOpen}
+              onOpenChange={setClearOpen}
+              onReset={resetActiveClearMutation}
+              onClear={clearActiveHistory}
+            />
+          </div>
 
           <div
             ref={historyTabSwipe.pageRef as React.Ref<HTMLDivElement>}

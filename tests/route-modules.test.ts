@@ -8,6 +8,7 @@ import {
   loadHistoryPage,
   loadIptvPage,
   loadIptvPlayerPage,
+  loadMultiRoomPage,
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
@@ -58,6 +59,7 @@ describe("route module loading", () => {
       loadIptvPlayerPage,
     );
     expect(routeModuleLoaderForPath("/settings")).toBe(loadSettingsPage);
+    expect(routeModuleLoaderForPath("/multi-room")).toBe(loadMultiRoomPage);
     expect(routeModuleLoaderForPath("/room/bilibili/1")).toBe(loadRoomPage);
     expect(routeModuleLoaderForPath("/")).toBeNull();
     expect(routeModuleLoaderForPath("/unknown")).toBeNull();

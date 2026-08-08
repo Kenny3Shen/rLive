@@ -1,10 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Ellipsis, Link2, Share2, UserRoundX } from "lucide-react";
+import { ChevronLeft, Ellipsis, Link2, PanelsTopLeft, Share2, UserRoundX } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { glassSurfaceClass } from "@/shared/components/player/glassSurface";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
@@ -19,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
@@ -35,6 +36,7 @@ import {
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
+import { MULTI_ROOM_MAX_SLOTS, useMultiRoomStore } from "../multi-room/multiRoomStore";
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -44,6 +46,7 @@ export function RoomPage() {
   const siteId = siteParam as SiteId | undefined;
   const roomId = roomParam ? decodeURIComponent(roomParam) : undefined;
   const location = useLocation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const recordedHistoryRoomRef = useRef<string | null>(null);
 
@@ -169,6 +172,22 @@ export function RoomPage() {
     }
   }
 
+  function openInMultiRoom() {
+    if (!detailQuery.data) return;
+    const detail = detailQuery.data;
+    const result = useMultiRoomStore.getState().addRoom({
+      site_id: detail.site_id,
+      room_id: detail.room_id,
+      title: detail.title,
+      user_name: detail.user_name,
+      cover: detail.cover,
+    });
+    if (result === "added") notify.success("已加入多画面");
+    else if (result === "exists") notify.info("该直播间已在多画面中");
+    else notify.error("多画面已满", `最多同时添加 ${MULTI_ROOM_MAX_SLOTS} 个直播间。`);
+    navigate("/multi-room");
+  }
+
   if (!siteId || !roomId) {
     return (
       <div className="p-6">
@@ -236,13 +255,33 @@ export function RoomPage() {
         title={detail.title || "直播间"}
         backTarget={backTarget}
         rightSlot={
-          <div className="md:hidden">
-            <RoomMobileActions
-              roomUrl={detail.url || window.location.href}
-              playbackUrl={playback.playUrl?.url}
-              playerActions={playerMobileActions}
-              onCopy={copyRoomValue}
-            />
+          <div className="flex items-center gap-1">
+            <div className="hidden md:block">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="加入并打开多画面"
+                      onClick={openInMultiRoom}
+                    />
+                  }
+                >
+                  <PanelsTopLeft data-icon="inline-start" aria-hidden />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">加入并打开多画面</TooltipContent>
+              </Tooltip>
+            </div>
+            <div className="md:hidden">
+              <RoomMobileActions
+                roomUrl={detail.url || window.location.href}
+                playbackUrl={playback.playUrl?.url}
+                playerActions={playerMobileActions}
+                onCopy={copyRoomValue}
+              />
+            </div>
           </div>
         }
       />
@@ -436,8 +475,8 @@ function RoomMobileActions({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
+    <Drawer open={open} onOpenChange={setOpen}>
+      <DrawerTrigger
         render={
           <Button
             variant="ghost"
@@ -449,57 +488,58 @@ function RoomMobileActions({
           </Button>
         }
       />
-      <PopoverContent
-        side="bottom"
-        align="end"
-        className="max-h-[calc(100dvh-4rem)] w-52 gap-1 overflow-y-auto p-1.5"
-      >
-        <PopoverTitle className="px-2 py-1 text-xs font-medium text-muted-foreground">
-          房间操作
-        </PopoverTitle>
-        {playerActions.map((action) => {
-          const Icon = action.icon;
-          return (
-            <Button
-              key={action.id}
-              type="button"
-              variant={action.pressed ? "secondary" : "ghost"}
-              size="sm"
-              className="h-11 w-full justify-start text-sm touch-manipulation"
-              disabled={action.disabled}
-              aria-pressed={action.pressed}
-              onClick={() => runPlayerAction(action)}
-            >
-              <Icon data-icon="inline-start" aria-hidden />
-              {action.label}
-            </Button>
-          );
-        })}
-        {playerActions.length > 0 && <Separator className="my-0.5" />}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-11 w-full justify-start text-sm touch-manipulation"
-          onClick={() => copy(roomUrl, "已复制房间链接")}
-        >
-          <Link2 data-icon="inline-start" aria-hidden />
-          复制链接
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-11 w-full justify-start text-sm touch-manipulation"
-          disabled={!playbackUrl}
-          onClick={() => {
-            if (playbackUrl) copy(playbackUrl, "已复制播放直链");
-          }}
-        >
-          <Share2 data-icon="inline-start" aria-hidden />
-          复制直链
-        </Button>
-      </PopoverContent>
-    </Popover>
+      <DrawerContent side="bottom" glass className={`space-y-4 ${glassSurfaceClass()}`}>
+        <DrawerTitle>房间操作</DrawerTitle>
+        {/* Top row: link/copy actions. Bottom row: player feature toggles.
+           Both are icon-over-label tiles so touch targets stay large. */}
+        <div className="grid grid-cols-4 gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-auto flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
+            onClick={() => copy(roomUrl, "已复制房间链接")}
+          >
+            <Link2 className="size-5" aria-hidden />
+            复制链接
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-auto flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
+            disabled={!playbackUrl}
+            onClick={() => {
+              if (playbackUrl) copy(playbackUrl, "已复制播放直链");
+            }}
+          >
+            <Share2 className="size-5" aria-hidden />
+            复制直链
+          </Button>
+        </div>
+        {playerActions.length > 0 && (
+          <>
+            <Separator />
+            <div className="grid grid-cols-4 gap-2">
+              {playerActions.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <Button
+                    key={action.id}
+                    type="button"
+                    variant={action.pressed ? "secondary" : "ghost"}
+                    className="h-auto flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
+                    disabled={action.disabled}
+                    aria-pressed={action.pressed}
+                    onClick={() => runPlayerAction(action)}
+                  >
+                    <Icon className="size-5" aria-hidden />
+                    {action.label}
+                  </Button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </DrawerContent>
+    </Drawer>
   );
 }

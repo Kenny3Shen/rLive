@@ -1,5 +1,5 @@
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
 /**
@@ -11,7 +11,7 @@ export function requestPlayerAutoplay(
   player: { play: () => Promise<void> | null },
   video: Pick<HTMLVideoElement, "muted">,
   isCurrent: () => boolean,
-  onMutedAutoplayRecovered: () => void,
+  onMutedAutoplayRecovered: () => boolean | void,
   onAutoplayStarted?: () => void,
 ): void {
   void (async () => {
@@ -26,8 +26,8 @@ export function requestPlayerAutoplay(
         await player.play();
         await sleep(80);
         if (!isCurrent()) return;
-        video.muted = false;
-        onMutedAutoplayRecovered();
+        const shouldRestoreAudio = onMutedAutoplayRecovered() !== false;
+        if (shouldRestoreAudio) video.muted = false;
         onAutoplayStarted?.();
       } catch {
         // The player error event reports the actionable playback failure.
