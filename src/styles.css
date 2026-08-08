@@ -513,6 +513,49 @@ html.overlay-window #root {
   }
 }
 
+/* Bottom player chrome, the way ordinary video players draw it: a scrim that
+ * fades from a dark bottom edge up into the picture, with no top border and no
+ * blur. The controls read as part of the video rather than as a panel sitting
+ * on top of it, and the picture stays fully visible right up to the buttons.
+ *
+ * Why a scrim instead of the glass material: glass needs a hard edge to read as
+ * a surface, and that edge is exactly what makes the bar look like a separate
+ * strip bolted to the bottom of the frame. It also means `backdrop-filter`
+ * resampling a new decoded frame on every paint, for a bar that spans the whole
+ * width of the video.
+ *
+ * The gradient goes on a `::before` layer so callers keep using `bg-transparent`
+ * to strip a component default, matching the glass utilities. It extends above
+ * the bar's own box (`inset: auto 0 0`, taller than 100%) so the fade starts
+ * well before the first control and no banding edge lands on a glyph.
+ *
+ * Stops are plain sRGB with explicit alpha rather than `in oklab`: that syntax
+ * needs a recent Chromium, and an Android WebView too old to parse it would
+ * drop the whole declaration and leave white glyphs on raw video. A
+ * black-to-transparent-black ramp interpolates cleanly in sRGB anyway — the
+ * midpoint graying that motivates oklab affects light-to-transparent ramps. */
+@utility player-scrim-overlay {
+  position: relative;
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: auto 0 0;
+    /* Reach past the control row so the fade is gradual, not a visible band. */
+    height: 220%;
+    z-index: -1;
+    pointer-events: none;
+    background-image: linear-gradient(
+      to top,
+      rgb(0 0 0 / 0.82) 0%,
+      rgb(0 0 0 / 0.62) 34%,
+      rgb(0 0 0 / 0.3) 66%,
+      rgb(0 0 0 / 0) 100%
+    );
+  }
+}
+
 /* Mobile WebViews share the GPU with video decode, Canvas danmaku and image-list
    scrolling. Use a static translucent fill instead of sampling and blurring a
    changing backdrop on every frame. Desktop keeps the full glass treatment. */

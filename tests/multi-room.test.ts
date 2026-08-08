@@ -14,6 +14,7 @@ import {
 } from "../src/features/multi-room/multiRoomLayout";
 import {
   normalizeWebPlayerAudio,
+  playerOwnsFullscreen,
   requestPlayerAutoplay,
 } from "../src/features/room/player/useWebPlayer";
 
@@ -106,6 +107,19 @@ describe("multi-room audio defaults", () => {
 
     expect(attempts).toBe(2);
     expect(video.muted).toBe(true);
+  });
+});
+
+describe("multi-room fullscreen ownership", () => {
+  test("gives fullscreen to the main feed alone", () => {
+    // All six feeds share one window, so its fullscreen state would otherwise
+    // mark every secondary fullscreen and grow the grid instead of the picture.
+    expect(playerOwnsFullscreen(true)).toBe(true);
+    expect(playerOwnsFullscreen(false)).toBe(false);
+  });
+
+  test("keeps a single room player owning fullscreen by default", () => {
+    expect(playerOwnsFullscreen(undefined)).toBe(true);
   });
 });
 

@@ -1324,7 +1324,7 @@ export function PlayerPane({
               <SuperChatOverlay
                 key={`sc:${roomSessionKey ?? "room"}`}
                 active={danmakuActive}
-                className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_1.5rem_-_env(safe-area-inset-bottom))] w-[min(240px,calc(100%-1.5rem))]"
+                className="absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.75rem_-_env(safe-area-inset-bottom))] w-[min(240px,calc(100%-1.5rem))]"
               />
             )}
 
@@ -1340,7 +1340,7 @@ export function PlayerPane({
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
-                  className="pointer-events-none absolute inset-x-4 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 flex justify-center"
+                  className="pointer-events-none absolute inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-20 flex justify-center"
                 >
                   <p
                     className={cn(
@@ -1414,9 +1414,14 @@ export function PlayerPane({
             data-visible="true"
             aria-hidden="false"
             className={cn(
-              // Keep the control height in normal flow. Visibility changes only
-              // fade this stable row, so the video surface never resizes.
-              "relative z-30 shrink-0 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+              // The chrome floats over the bottom edge of the picture instead
+              // of consuming layout height, so hiding it gives the whole stage
+              // back to the video. Keep the filtered surface stationary: moving
+              // backdrop blur would resample the video on every transition
+              // frame. The data attribute changes imperatively, so this
+              // compositor-only fade also avoids reconciling the video, canvas
+              // and side panels.
+              "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
             )}
             onPointerEnter={holdControlsVisible}
             onPointerDown={(event) => {
@@ -1475,6 +1480,7 @@ export function PlayerPane({
               }
               loadError={loadError}
               disabled={transportDisabled}
+              overlay
               compact={compactViewport}
               portalContainer={player.stageRef}
               centerSlot={

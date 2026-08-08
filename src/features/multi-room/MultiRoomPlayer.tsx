@@ -154,7 +154,7 @@ function MainMultiRoomControls({
         <SuperChatOverlay
           key={`sc:${sessionKey}`}
           active={danmaku.active}
-          className="absolute bottom-[4.25rem] left-3 z-20 max-h-[calc(100%_-_5.5rem)] w-[min(240px,calc(100%-1.5rem))]"
+          className="absolute bottom-[4.5rem] left-3 z-20 max-h-[calc(100%_-_5.75rem)] w-[min(240px,calc(100%-1.5rem))]"
         />
       )}
       {showHost &&
@@ -169,7 +169,7 @@ function MainMultiRoomControls({
             role="status"
             aria-live="polite"
             aria-atomic="true"
-            className="pointer-events-none absolute inset-x-4 bottom-[4.25rem] z-20 flex justify-center"
+            className="pointer-events-none absolute inset-x-4 bottom-[4.5rem] z-20 flex justify-center"
           >
             <p
               className={`flex max-h-[min(7em,45dvh)] min-w-0 max-w-[min(48rem,92%)] flex-col justify-end overflow-hidden rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]${asr.noticeIsError ? " border border-destructive/45 text-red-100" : ""}`}
@@ -292,6 +292,9 @@ export function MultiRoomPlayer({
     sessionKey: `multi-room:${room.key}`,
     initialVolume: room.volume,
     initialMuted: room.muted,
+    // Every feed shares one window, so only the main one may read or drive
+    // fullscreen; otherwise all six would report themselves as fullscreen.
+    fullscreenOwner: main,
     reloadToken: playback.reloadToken,
     onMediaFailure: playback.onPlayerMediaFailure,
     onPlaying: playback.onPlayerPlaying,
@@ -299,10 +302,22 @@ export function MultiRoomPlayer({
   const playerVolume = player.volume;
   const playerMuted = player.muted;
   const setPlayerAudio = player.setAudio;
+  const exitPlayerFullscreen = player.exitFullscreen;
 
   useEffect(() => {
     if (!main) setAudioOnly(false);
   }, [main]);
+
+  // A feed can be demoted, dragged away or removed while it is the fullscreen
+  // stage. Fullscreen belongs to whichever feed is main, so give it up as soon
+  // as this one stops being main — including on unmount — instead of leaving
+  // the window fullscreen around the whole director grid.
+  useEffect(() => {
+    if (!main) return;
+    return () => {
+      void exitPlayerFullscreen();
+    };
+  }, [exitPlayerFullscreen, main]);
 
   useEffect(() => {
     if (detailQuery.data) updateMetadata(room.key, detailQuery.data);
@@ -347,11 +362,19 @@ export function MultiRoomPlayer({
     playback.retryPlay();
   }
 
+  const fullscreen = main && player.mode === "fullscreen";
+
   return (
     <article
       ref={player.stageRef}
       data-multi-room-player={room.key}
       data-main={main ? "true" : "false"}
+      // Only the main feed carries the stage markers. Fullscreen then lifts
+      // this one article out of the 3x3 grid as a fixed, full-window layer
+      // (see the [data-player-stage] rule in styles.css) instead of merely
+      // growing the window around the whole director matrix.
+      data-player-stage={main ? "" : undefined}
+      data-fullscreen={fullscreen ? "true" : undefined}
       className="group/player relative size-full min-h-0 overflow-hidden bg-black outline-none"
       tabIndex={0}
       aria-label={`${main ? "主画面" : "副画面"}：${title}`}

@@ -327,8 +327,9 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 下拉刷新与横向滑动的连续输入通过 RAF 合并，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
-- 播放器控制栏、音量和播放设置 Drawer / 弹层共用 `glass-surface-overlay`；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不触发播放器 React 重渲染。桌面使用 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层和房间卡片角标同样不采样动态背景，避免滚动、视频解码与 Canvas 弹幕争抢 GPU 帧预算。
-- 移动端紧凑播放器控制栏使用 `32px` 按钮和输入组，并把上下内边距压缩到 `1px + safe-area`；这是仅限视频边缘常用媒体操作的触控尺寸例外，应用导航和表单仍遵守 `44px` 目标。
+- 播放器控制栏使用 `player-scrim-overlay`：由底边向画面上方淡出的黑色渐变，参考常规播放器，不设上边框也不使用 `backdrop-filter`。渐变画在 `::before` 上并高于控制栏自身高度，让淡出在第一个控件之前完成，避免出现可见的条带边界；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不触发播放器 React 重渲染。
+- 音量和播放设置 Drawer / 弹层仍使用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层和房间卡片角标同样不采样动态背景，避免滚动、视频解码与 Canvas 弹幕争抢 GPU 帧预算。
+- 移动端紧凑播放器控制栏使用 `32px` 按钮和输入组，底部内边距压缩到 `1px + safe-area`，顶部保留渐变淡出所需的少量留白；这是仅限视频边缘常用媒体操作的触控尺寸例外，应用导航和表单仍遵守 `44px` 目标。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，实际纵向滚动留给 `app-page`。
 - fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 和页面动画完成时必须恢复普通绘制。
 
