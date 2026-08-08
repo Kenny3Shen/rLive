@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
+import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
@@ -39,6 +40,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { lineName } from "@/lib/playUrl";
 import { cn } from "@/lib/utils";
+import {
+  glassMutedTextClass,
+  glassOptionClass,
+  glassOptionSelectedClass,
+  glassPanelClass,
+  glassSeparatorClass,
+} from "./glassSurface";
 import {
   TRANSLATION_LANGUAGE_OPTIONS,
   TRANSLATION_SOURCE_LANGUAGE_OPTIONS,
@@ -85,6 +93,28 @@ export function asrControlPresentation(enabled: boolean, busy: boolean) {
 
 export function showSecondaryPlayerControls(compact: boolean, portrait: boolean): boolean {
   return !(compact && portrait);
+}
+
+/**
+ * Mobile fullscreen already exposes edge-swipe volume and hides the side panel
+ * chrome, so the bar drops those two buttons to keep the stage uncluttered.
+ */
+export function showPlayerVolumeControl(
+  compact: boolean,
+  portrait: boolean,
+  fullscreen: boolean,
+): boolean {
+  if (compact && fullscreen) return false;
+  return showSecondaryPlayerControls(compact, portrait);
+}
+
+export function showPlayerSidePanelControl(
+  compact: boolean,
+  portrait: boolean,
+  fullscreen: boolean,
+): boolean {
+  if (compact && fullscreen) return false;
+  return showSecondaryPlayerControls(compact, portrait);
 }
 
 export function showPlayerControlsCenterSlot(compact: boolean, fullscreen: boolean): boolean {
@@ -270,18 +300,13 @@ export function PlayerControls({
   const [asrSettingsOpen, setAsrSettingsOpen] = useState(false);
   const [asrSettingsError, setAsrSettingsError] = useState<string | null>(null);
   // Mobile settings open as a drawer: bottom sheet in portrait, right side in
-  // landscape. Track orientation so the drawer matches the current posture.
-  const [portrait, setPortrait] = useState<boolean>(
-    () => typeof window !== "undefined" && window.matchMedia("(orientation: portrait)").matches,
-  );
-  useEffect(() => {
-    const query = window.matchMedia("(orientation: portrait)");
-    const update = () => setPortrait(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
+  // landscape. The shared hook resolves orientation on the first paint and on
+  // change from one source, so control density never renders at desktop size
+  // for a frame before settling.
+  const portrait = usePortraitOrientation();
   const showSecondaryControls = showSecondaryPlayerControls(compact, portrait);
+  const showVolumeControl = showPlayerVolumeControl(compact, portrait, fullscreen);
+  const showSidePanelControl = showPlayerSidePanelControl(compact, portrait, fullscreen);
   const mobilePortrait = !showSecondaryControls;
   const volumeControl = volumeControlPresentation(volume, muted);
   const isMuted = volumeControl.isMuted;
@@ -298,14 +323,9 @@ export function PlayerControls({
   const overlayButtonClass = overlay
     ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-visible:border-white/65 focus-visible:bg-white/16 focus-visible:ring-[2px]! focus-visible:ring-black/55 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
     : undefined;
-  // The fill itself comes from `glass-surface-overlay`; this only carries the
-  // border, text colour and shadow so it cannot override the glass material.
-  const overlayStreamSettingsContentClass = overlay
-    ? "border border-white/10 text-white shadow-xl"
-    : undefined;
-  const overlayStreamSettingsOptionClass = overlay
-    ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
-    : undefined;
+  // Option rows come from the shared glass module so the player popups, the
+  // settings drawer and the room sheet cannot drift apart.
+  const overlayStreamSettingsOptionClass = glassOptionClass({ overlay }) || undefined;
   const overlayInteractionOpen = volumeOpen || streamSettingsOpen || asrSettingsOpen;
 
   useEffect(() => {
@@ -313,10 +333,11 @@ export function PlayerControls({
   }, [onOverlayInteractionChange, overlayInteractionOpen]);
 
   useEffect(() => {
-    if (!mobilePortrait) return;
+    if (!mobilePortrait && showVolumeControl) return;
     setVolumeOpen(false);
+    if (!mobilePortrait) return;
     setAsrSettingsOpen(false);
-  }, [mobilePortrait]);
+  }, [mobilePortrait, showVolumeControl]);
 
   useEffect(
     () => () => {
@@ -384,7 +405,7 @@ export function PlayerControls({
           <span
             className={cn(
               "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              overlay && "text-white/60",
+              glassMutedTextClass({ overlay }),
             )}
           >
             清晰度
@@ -399,7 +420,7 @@ export function PlayerControls({
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
-                  overlay && selected && "bg-white/18 text-white",
+                  selected && glassOptionSelectedClass({ overlay }),
                 )}
                 aria-pressed={selected}
                 onClick={() => {
@@ -416,7 +437,7 @@ export function PlayerControls({
       )}
 
       {qualities.length > 0 && lines.length > 0 && (
-        <Separator className={cn("my-1 max-md:my-0.5", overlay && "bg-white/10")} />
+        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay }))} />
       )}
 
       {lines.length > 0 && (
@@ -424,7 +445,7 @@ export function PlayerControls({
           <span
             className={cn(
               "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              overlay && "text-white/60",
+              glassMutedTextClass({ overlay }),
             )}
           >
             线路
@@ -439,7 +460,7 @@ export function PlayerControls({
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
-                  overlay && selected && "bg-white/18 text-white",
+                  selected && glassOptionSelectedClass({ overlay }),
                 )}
                 aria-pressed={selected}
                 onClick={() => {
@@ -485,7 +506,7 @@ export function PlayerControls({
         </p>
       )}
 
-      <Separator className={cn(overlay && "bg-white/10")} />
+      <Separator className={cn(glassSeparatorClass({ overlay }))} />
 
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
@@ -498,7 +519,7 @@ export function PlayerControls({
         />
       </Field>
 
-      <Separator className={cn(overlay && "bg-white/10")} />
+      <Separator className={cn(glassSeparatorClass({ overlay }))} />
 
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
@@ -522,10 +543,7 @@ export function PlayerControls({
             align="end"
             alignItemWithTrigger={false}
             glass={overlay}
-            className={cn(
-              "max-h-64",
-              overlay && "glass-surface-overlay border-white/10 text-white",
-            )}
+            className={cn("max-h-64", overlay && glassPanelClass({ overlay }))}
           >
             <SelectGroup>
               {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
@@ -565,10 +583,7 @@ export function PlayerControls({
             align="end"
             alignItemWithTrigger={false}
             glass={overlay}
-            className={cn(
-              "max-h-64",
-              overlay && "glass-surface-overlay border-white/10 text-white",
-            )}
+            className={cn("max-h-64", overlay && glassPanelClass({ overlay }))}
           >
             <SelectGroup>
               {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
@@ -628,7 +643,7 @@ export function PlayerControls({
           {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
         </ControlButton>
 
-        {showSecondaryControls && (
+        {showVolumeControl && (
           <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
             <PopoverTrigger
               render={
@@ -652,8 +667,7 @@ export function PlayerControls({
                 "w-auto items-center gap-2 p-2.5",
                 // Same material as the settings popup beside it, so the two
                 // control-bar popups read as one family.
-                overlay ? "glass-surface-overlay" : "glass-surface",
-                overlay && "border border-white/10 text-white shadow-xl",
+                glassPanelClass({ overlay }),
               )}
             >
               <PopoverTitle className="sr-only">音量</PopoverTitle>
@@ -670,7 +684,7 @@ export function PlayerControls({
                   onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
                 }}
               />
-              <Separator className={cn("w-8", overlay && "bg-white/10")} />
+              <Separator className={cn("w-8", glassSeparatorClass({ overlay }))} />
               <Button
                 type="button"
                 variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
@@ -679,7 +693,7 @@ export function PlayerControls({
                   "size-8",
                   CONTROL_ICON_CLASS,
                   overlay && "text-white/90 hover:bg-white/12 hover:text-white",
-                  isMuted && overlay && "bg-white/18 text-white",
+                  isMuted && glassOptionSelectedClass({ overlay }),
                 )}
                 aria-label={muteLabel}
                 aria-pressed={isMuted}
@@ -736,18 +750,18 @@ export function PlayerControls({
                 <DrawerContent
                   side={portrait ? "bottom" : "right"}
                   container={portalContainer}
-                  glass={!overlay}
+                  glass
                   className={cn(
-                    // Over video the drawer needs the darker tint, so it takes
-                    // the overlay material instead of the drawer's own `glass`.
-                    overlay && "glass-surface-overlay",
-                    overlayStreamSettingsContentClass,
+                    // Over video the drawer needs the darker tint; both
+                    // contexts now supply their material through the helper,
+                    // so `glass` is unconditional and only drops `bg-popover`.
+                    glassPanelClass({ overlay }),
                   )}
                 >
                   <DrawerTitle
                     className={cn(
                       "px-1 pb-1 text-xs font-medium text-muted-foreground",
-                      overlay && "text-white/60",
+                      glassMutedTextClass({ overlay }),
                     )}
                   >
                     播放设置
@@ -785,14 +799,13 @@ export function PlayerControls({
                 glass
                 className={cn(
                   "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))] gap-0 overflow-y-auto p-1.5",
-                  overlay ? "glass-surface-overlay" : "glass-surface",
-                  overlayStreamSettingsContentClass,
+                  glassPanelClass({ overlay }),
                 )}
               >
                 <PopoverTitle
                   className={cn(
                     "px-2 py-1 text-xs font-medium text-muted-foreground max-md:py-0.5",
-                    overlay && "text-white/60",
+                    glassMutedTextClass({ overlay }),
                   )}
                 >
                   播放设置
@@ -859,11 +872,7 @@ export function PlayerControls({
               collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
               sticky
               glass
-              className={cn(
-                "w-72",
-                overlay ? "glass-surface-overlay" : "glass-surface",
-                overlayStreamSettingsContentClass,
-              )}
+              className={cn("w-72", glassPanelClass({ overlay }))}
             >
               <div className="flex items-center justify-between gap-2">
                 <PopoverTitle>字幕设置</PopoverTitle>
@@ -875,7 +884,7 @@ export function PlayerControls({
             </PopoverContent>
           </Popover>
         )}
-        {showSecondaryControls && onToggleSidePanel && (
+        {showSidePanelControl && onToggleSidePanel && (
           <ControlButton
             label={resolvedSidePanelLabel}
             variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
