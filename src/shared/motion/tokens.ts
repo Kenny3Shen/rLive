@@ -35,19 +35,25 @@ export const EASE_OUT = "power2.out";
 /** Accelerate, for exits that should clear the screen without lingering. */
 export const EASE_IN = "power2.in";
 /**
- * Settle for pointer-driven motion.
+ * CSS equivalent of `power2.out`-family deceleration, for the surfaces that
+ * animate through Web Animations rather than GSAP.
  *
- * The release tween covers a full surface width when a swipe commits, so the
- * curve matters more than the total time: `power3.out` front-loads most of its
- * travel into the first few frames, which on a mobile WebView reads as a jerk
- * before the tail crawls. `power2.out` spreads the same distance more evenly,
- * and the slightly longer duration keeps enough frames in the fast part of the
- * curve for the compositor to interpolate smoothly.
- *
- * Unlike a spring this has a known end time, which the gesture layer needs so
- * it can tell when the page is back at rest.
+ * Web Animations can advance a transform on Chromium's compositor while the
+ * main thread is busy committing React work, which GSAP's rAF ticker cannot.
+ * Page pans and pointer-driven page settles both need that property, so they
+ * share one curve instead of each picking a bezier.
  */
-export const SWIPE_SETTLE = { duration: 0.52, ease: "power2.out" } as const;
+export const EASE_OUT_CSS = "cubic-bezier(0.215, 0.61, 0.355, 1)";
+/**
+ * Easing for the release phase of a pointer-driven page swipe.
+ *
+ * A settle continues motion the finger already started, so the curve has to
+ * leave the release point fast and decelerate into rest. Its duration is not a
+ * constant: `horizontalSwipeSettleDuration` derives it from the distance still
+ * to cover and the speed at which the finger let go, so a flick finishes
+ * quickly while a slow drag eases out over a longer ramp.
+ */
+export const SWIPE_SETTLE_EASING = EASE_OUT_CSS;
 
 /**
  * Extra travel applied to every full-page pan, as a share of its active axis.

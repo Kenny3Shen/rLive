@@ -140,8 +140,11 @@ flowchart TD
 | `EASE_IN` | `power2.in` | 离场加速 |
 | 桌面 enter/exit | `0.28s` | 桌面页面平移和 Zoom |
 | 触控 enter/exit | `0.24s` | 移动端更快完成页面读取 |
-| `SWIPE_SETTLE` | `0.42s`, `power3.out` | 手势释放回弹或新页归位 |
+| `EASE_OUT_CSS` | `cubic-bezier(0.215, 0.61, 0.355, 1)` | `power2.out` 的 CSS 等价曲线，供 Web Animations 使用 |
+| `SWIPE_SETTLE_EASING` | 同 `EASE_OUT_CSS` | 手势释放收尾；时长不是常量，由手势本身推导 |
 | `PAGE_PAN_PERCENT` | `110%` | 横向页面清除 padding 产生的边缘残影 |
+
+手势释放的时长由 `horizontalSwipeSettleDuration(剩余距离, 释放速度)` 得出，钳制在 `170ms ~ 400ms`：收尾是把手指已经开始的运动走完，快速滑动应该更快结束，慢速拖拽则铺开缓出，因此不能是固定值。
 
 不要在 feature 内复制这些数值。确有不同语义时可以局部覆盖，但应通过注释解释原因。
 
@@ -191,21 +194,27 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 
 - surface 使用 `touch-pan-y`；纵向手势仍交给浏览器滚动。
 - 移动距离达到 `10px` 后才锁定方向，横向距离需大于纵向的 `1.25` 倍。
-- 完成切换需要至少 `48px` 的有效横向移动。
-- 手势开始时一次性读取 surface 宽度、活动索引和减少动态效果偏好；拖动期间将高频 pointermove 合并到 `requestAnimationFrame`，每帧最多通过同一个 `gsap.quickSetter()` 写入 `x`，不重复创建 setter 或 tween。
+- 跟手阶段直接在 pointermove 中写 `transform`，不再合并到 `requestAnimationFrame`。合并会让每一帧都绘制上一帧的手指位置，这恰好就是「不跟手」的观感。
 - 到达首尾边界时只保留 `0.18` 倍位移，表达不可继续而不是循环。
-- 释放后使用 `SWIPE_SETTLE` 归位；未达阈值回到原位，达成切换则把手势的位移继续走完。
-- `layout` 选项区分三种承载方式，决定归位目标：
-  - `page`：移动层只承载当前一页。提交时先按 `horizontalSwipeCommitOffset` 把新页重基到一屏外，再滑入到 `0`，让释放表现为一次连续平移而非短促补位。
-  - `track`：所有页按等宽排成一行常驻挂载。提交只需把整行移动到新页对应的 `horizontalSwipeTrackOffset`，前后页在手势过程中本就同时可见。用于历史页双 Tab、设置分类和房间侧栏 Tab。
-  - `panels`：各页自行按 `(索引 - 活动索引) × 100%` 定位，以保留各自独立的滚动容器。提交会让所有面板整体重锚一屏，因此复用 `page` 的重基路径：重基量与重锚量相互抵消，手指下方的像素保持不动。用于 Shell 的移动端平台切换。
-- 交互式分页过渡（Interactive Paging Transition）由 `track` 和 `panels` 承担：相邻页在手势开始前就已挂载并绘制，跟手阶段实时按手势进度过渡，释放后只做收尾归位，不存在“松手才出现新页”的跳变。
-- 非 `page` 布局测量的是移动层所在的 viewport（父元素 `clientWidth`），而不是移动层自身；因此点击 Tab 触发的切换在首次交互即可动画，无需等待一次指针按下来校准宽度。
+- 是否翻页由手势进度与释放速度共同决定，不再使用固定的 `48px` 绝对距离：
+  - 与拖动同向的快速滑动（`≥0.32 px/ms`）在任意距离都翻页，短距离轻扫可用；
+  - 反向回拉在任意距离都取消，避免拖过半屏后又拉回却仍然翻页；
+  - 其余情况按位置判定，页面实际走过的屏占比需达到 `HORIZONTAL_SWIPE_COMMIT_PROGRESS`（`0.42`）。
+  - 释放速度取最近 `32ms` 窗口内样本的平均值。单纯对最后两个事件求差分噪声过大，会把稳定拖动误判为快扫；窗口自最新样本向前取，因此松手前停顿的手指速度读数为 `0`，回到位置判定。
+- 释放后由 Web Animations 接管剩余位移，时长按 `horizontalSwipeSettleDuration` 从剩余距离和释放速度推导。这里不能用 GSAP：翻页会触发 React 提交，rAF ticker 与该提交争抢主线程，重路由下会吞掉收尾动画的大部分帧——这正是「先切页再平移」的直接原因。Web Animations 的 transform 由 Chromium 合成器推进，不受主线程占用影响。
+- 手势中途抓住正在收尾的页面时，从其当前实际像素位置接管（`DOMMatrixReadOnly` 读取），不回跳。
+- `layout` 只保留两种承载方式：
+  - `track`：所有挂载页按**绝对索引**排布在 `index × width`，整层平移到 `-活动索引 × width`。提交时没有任何页需要位移，释放时启动的收尾动画可以一路走完。用于 Shell 移动端平台切换、历史页双 Tab、设置分类和房间侧栏 Tab。
+  - `page`：移动层只承载当前一页，供相邻页未挂载的条带使用。提交时先按 `horizontalSwipeCommitOffset` 把新页重基到一屏外，再滑入 `0`。
+  - 原 `panels` 布局已移除：它让各页按 `(索引 - 活动索引) × 100%` 定位，于是提交瞬间所有面板整体重锚一屏，收尾动画不得不围绕这次跳变重基。多出的这一步就是关注页卡顿最明显的来源。改为绝对索引后，各页仍保留独立滚动容器。
+- 收尾动画在通知 React 之前启动，顺序不能颠倒：`track` 的提交不移动任何页，先行启动可以避免整个 React 提交挤在松手与首个动画帧之间。
+- `track` 的宽度测量取移动层所在 viewport（父元素 `clientWidth`），因此点击 Tab 触发的切换在首次交互即可动画，无需等待一次指针按下来校准宽度。
+- 提交后的兜底回滚使用 `600ms` 超时而不是单帧检查。`BrowserRouter` 把每次 location 更新包在 `startTransition` 中，受控值可能延后若干帧才到达；单帧检查会在正常的延后提交上误判为「调用方拒绝」并把页面拉回原位。该超时需要长于收尾动画上限（`400ms`），否则会打断正常提交。
 - 移动端相邻平台页为无缝预览保持挂载，但使用 layout/paint/style containment 隔离；完全离屏页的 CSS animation 暂停，成为活动页后自动恢复。
 - Slider、Input、Textarea、Select、可编辑区域和 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管。
 - 已识别 swipe 后短暂抑制合成 click，避免 Android WebView 误触当前控件。
 
-开始新手势、禁用 hook 或组件卸载时，必须 `killTweensOf()` 并清除 transform/`will-change`。
+该 hook 已不再使用 GSAP。开始新手势、禁用 hook 或组件卸载时，必须取消在飞的 Animation、清掉兜底回滚定时器并清除 transform/`will-change`；取消收尾动画时要先把它当前到达的像素位置写回 inline style，否则会回跳到动画起点。
 
 ### 4.6 feature 页面入场
 
@@ -330,7 +339,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
 - Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定 GSAP ticker。
 - 移动端 Canvas 弹幕最高按 120 FPS 跟随高刷屏，并将 backing scale 限制为 1×：相比旧的 60 FPS / 1.5× 策略，整屏像素吞吐量更低，同时避免 90/120 Hz 设备上的隔帧跳动。运动时间按真实帧间隔推进，不执行补帧突发；桌面端仍跟随浏览器刷新率，backing scale 最高 1.5×。
-- 下拉刷新与横向滑动的连续输入通过 RAF 合并，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。
+- 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
 - 播放器控制栏使用 `player-scrim-overlay`：由底边向画面上方淡出的黑色渐变，参考常规播放器，不设上边框也不使用 `backdrop-filter`。渐变画在 `::before` 上并高于控制栏自身高度，让淡出在第一个控件之前完成，避免出现可见的条带边界；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不触发播放器 React 重渲染。

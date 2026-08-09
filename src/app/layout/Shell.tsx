@@ -336,11 +336,11 @@ export function Shell() {
   // filter remains tappable in the header, but the surrounding Shell must not
   // compete for the same horizontal gesture.
   const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
-  // `panels` is the layout `liveSwipePage` below renders: the active platform
-  // and its neighbours are all mounted and offset by index, so the gesture pans
-  // a layer whose pages are already on screen. Every other surface binds these
-  // hooks to the single-page `swipePage` instead.
-  const platformSwipeLayout = platformSwipeEnabled ? "panels" : "page";
+  // `track` is the layout `liveSwipePage` below renders: every mounted platform
+  // sits at its own absolute index, so the gesture pans a layer whose
+  // neighbouring pages are already painted and selecting one moves none of them.
+  // Every other surface binds these hooks to the single-page `swipePage` instead.
+  const platformSwipeLayout = platformSwipeEnabled ? "track" : "page";
   const sitePlatformSwipe = useHorizontalSwipe({
     items: sitePlatforms,
     value: activeSiteId,
@@ -467,6 +467,12 @@ export function Shell() {
     // already painted and enters continuously under the finger instead of
     // appearing only once the gesture is released. Each panel keeps its own
     // scroller, so they are positioned rather than laid out in a flex row.
+    //
+    // Each panel sits at its *absolute* strip index and the track is translated
+    // to -activeIndex * width. Positioning them relative to the active index
+    // instead would shift every panel by a full width the moment a swipe
+    // commits, forcing the release to be rebased around that jump — the extra
+    // step that made a committed swipe read as a switch followed by a slide.
     <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
       <div
         ref={bindContentSwipePageRef}
@@ -475,7 +481,7 @@ export function Shell() {
       >
         {liveSwipePanels.map((platform) => {
           const panelIndex = platformStrip.indexOf(platform);
-          const panelOffset = (panelIndex - activeLivePanelIndex) * 100;
+          const panelOffset = panelIndex * 100;
           const active = panelIndex === activeLivePanelIndex;
           return (
             <div

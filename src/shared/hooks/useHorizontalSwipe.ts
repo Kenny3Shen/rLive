@@ -5,36 +5,60 @@ import {
   useLayoutEffect,
   useRef,
 } from "react";
-import gsap from "gsap";
 import {
   HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS,
   HORIZONTAL_SWIPE_DIRECTION_RATIO,
   HORIZONTAL_SWIPE_LOCK_DISTANCE_PX,
   HORIZONTAL_SWIPE_MAX_DRAG_PX,
+  HORIZONTAL_SWIPE_VELOCITY_WINDOW_MS,
+  type HorizontalSwipeSample,
   horizontalSwipeCommitOffset,
   horizontalSwipeDragOffset,
+  horizontalSwipeSettleDuration,
+  horizontalSwipeTargetItem,
   horizontalSwipeTrackOffset,
+  horizontalSwipeVelocity,
   isHorizontalSwipeIgnoredTarget,
-  nextItemForHorizontalSwipe,
 } from "@/shared/gestures/horizontalSwipe";
-import { prefersReducedMotion, SWIPE_SETTLE } from "@/shared/motion/tokens";
+import { motionProfile, prefersReducedMotion, SWIPE_SETTLE_EASING } from "@/shared/motion/tokens";
 
 type SwipeState = {
   pointerId: number;
   startX: number;
   startY: number;
-  startOffsetX: number;
+  startOffset: number;
   surfaceWidth: number;
   itemIndex: number;
   itemCount: number;
   reducedMotion: boolean;
   horizontal: boolean;
+  /** Recent pointer positions, used to derive the release velocity. */
+  samples: HorizontalSwipeSample[];
 };
 
-type SwipeOffsetSetter = (value: number) => void;
-type HorizontalSwipeLayout = "page" | "track" | "panels";
+type HorizontalSwipeLayout = "page" | "track";
 
 const HORIZONTAL_SWIPE_SURFACE_SELECTOR = "[data-horizontal-swipe-surface]";
+/** Enough samples to cover the velocity window at any realistic pointer rate. */
+const HORIZONTAL_SWIPE_MAX_SAMPLES = 8;
+/**
+ * Grace period for a committed value to arrive, in ms.
+ *
+ * A caller may legitimately not apply the change on the next frame. React
+ * Router's `BrowserRouter` wraps every location update in `startTransition`, so
+ * a swipe that navigates — the platform and follow-filter strips both do, via
+ * search params — commits one or more frames later, and on a heavy route the
+ * concurrent render can take longer still. Only a caller that never applies the
+ * value at all should see the page returned to where it started, so the window
+ * is generous: an unnecessary rollback is a visible snap backwards, while
+ * waiting a little too long is invisible — the page is already sitting at its
+ * destination.
+ */
+const HORIZONTAL_SWIPE_COMMIT_GRACE_MS = 600;
+
+function transformFor(offset: number): string {
+  return `translate3d(${offset}px, 0, 0)`;
+}
 
 export type UseHorizontalSwipeOptions<T> = {
   items: readonly T[];
@@ -45,27 +69,41 @@ export type UseHorizontalSwipeOptions<T> = {
   /** Animates value changes regardless of gesture availability. Defaults to true. */
   animate?: boolean;
   /**
-   * `page` moves one currently rendered page; `track` moves an equal-width row
-   * whose children stay mounted side by side during the gesture; `panels`
-   * moves a layer whose children already position themselves relative to the
-   * active one, so a commit settles in place instead of panning in.
+   * `track` moves a layer whose pages are all laid out side by side at
+   * `index * width`, so the neighbours are already painted and the gesture pans
+   * between real pages. `page` moves the single rendered page and relies on the
+   * value change to bring the next one in, for strips whose neighbours are not
+   * mounted.
    */
   layout?: HorizontalSwipeLayout;
   isEqual?: (left: T, right: T) => boolean;
 };
 
 /**
- * Capture-phase pointer handlers that advance an ordered tab/platform strip.
+ * Interactive paging for an ordered tab/platform strip.
  *
- * Capture is required on Android WebView: scrollable children (ScrollArea,
- * overflow lists) otherwise claim the gesture and the parent never sees
- * pointermove. `touch-action: pan-y` on the surface keeps vertical scrolling
- * native while leaving horizontal motion to this hook.
+ * Capture-phase pointer handlers are required on Android WebView: scrollable
+ * children (ScrollArea, overflow lists) otherwise claim the gesture and the
+ * parent never sees pointermove. `touch-action: pan-y` on the surface keeps
+ * vertical scrolling native while leaving horizontal motion to this hook.
  *
- * Attach `pageRef` to the element that should travel. While a finger is down the
- * offset is written through one reused `gsap.quickSetter`, so pointermove never
- * allocates a tween. A tween is created only when the page settles back to rest
- * or the committed page pans into place.
+ * Attach `pageRef` to the element that should travel. Two properties make the
+ * transition read as one continuous movement rather than a page switch followed
+ * by an animation:
+ *
+ * 1. While a finger is down the transform is written straight from the
+ *    pointermove handler. Coalescing those writes into a rAF callback would
+ *    always paint the pointer position of the previous frame, which is exactly
+ *    what "not following the finger" looks like.
+ * 2. The release is a Web Animations transform, so Chromium advances it on the
+ *    compositor. GSAP (and any rAF ticker) has to share the main thread with the
+ *    React commit that the page change triggers — on a heavy route that commit
+ *    is long enough to swallow most of the settle's frames, which is what made a
+ *    committed swipe look like an instant switch followed by a slide.
+ *
+ * Its duration and the commit decision both come from the gesture itself: how
+ * much of the surface the page travelled, and how fast the finger was moving
+ * when it lifted.
  */
 export function useHorizontalSwipe<T>({
   items,
@@ -77,250 +115,263 @@ export function useHorizontalSwipe<T>({
   isEqual = Object.is,
 }: UseHorizontalSwipeOptions<T>) {
   const isTrackLayout = layout === "track";
-  // Both non-`page` layouts keep the adjacent pages mounted and on screen, so
-  // the drag spans real neighbours and the surface to measure is the viewport
-  // the moving layer travels inside rather than the layer itself.
-  const followsNeighbours = isTrackLayout || layout === "panels";
   const pageRef = useRef<HTMLElement | null>(null);
   const swipeRef = useRef<SwipeState | null>(null);
   const clickSuppressionUntilRef = useRef(0);
-  const pendingDirectionRef = useRef<1 | -1 | null>(null);
   const renderedValueRef = useRef(value);
   const itemsRef = useRef(items);
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const isEqualRef = useRef(isEqual);
-  // Last observed surface width, so a committed swipe knows how far a full-width
-  // pan actually is. Also the cap for the follow-the-finger drag.
+  // Last observed surface width, so a released swipe knows how far a full-width
+  // page travel actually is. Also the cap for the follow-the-finger drag.
   const surfaceWidthRef = useRef(0);
   const offsetRef = useRef(0);
-  const pendingOffsetRef = useRef<number | null>(null);
-  const offsetFrameRef = useRef<number | null>(null);
-  const offsetSetterRef = useRef<SwipeOffsetSetter | null>(null);
-  const offsetSetterElementRef = useRef<HTMLElement | null>(null);
+  const animationRef = useRef<Animation | null>(null);
+  /** Set between a gesture commit and the value change it asked for. */
+  const pendingCommitRef = useRef<{ value: T; direction: 1 | -1; velocity: number } | null>(null);
+  const commitRollbackTimerRef = useRef<number | null>(null);
   itemsRef.current = items;
   valueRef.current = value;
   onChangeRef.current = onChange;
   isEqualRef.current = isEqual;
 
-  const flushOffset = useCallback(() => {
-    offsetFrameRef.current = null;
-    const next = pendingOffsetRef.current;
-    pendingOffsetRef.current = null;
-    const el = pageRef.current;
-    if (!el || next === null) return;
-    if (!offsetSetterRef.current || offsetSetterElementRef.current !== el) {
-      offsetSetterElementRef.current = el;
-      offsetSetterRef.current = gsap.quickSetter(el, "x", "px") as SwipeOffsetSetter;
-    }
-    offsetSetterRef.current(next);
+  const clearCommitRollback = useCallback(() => {
+    if (commitRollbackTimerRef.current === null) return;
+    window.clearTimeout(commitRollbackTimerRef.current);
+    commitRollbackTimerRef.current = null;
   }, []);
-
-  const cancelPendingOffset = useCallback(() => {
-    if (offsetFrameRef.current !== null) {
-      window.cancelAnimationFrame(offsetFrameRef.current);
-      offsetFrameRef.current = null;
-    }
-    pendingOffsetRef.current = null;
-  }, []);
-
-  const flushPendingOffset = useCallback(() => {
-    if (offsetFrameRef.current !== null) {
-      window.cancelAnimationFrame(offsetFrameRef.current);
-      offsetFrameRef.current = null;
-    }
-    flushOffset();
-  }, [flushOffset]);
 
   const surfaceWidth = useCallback(() => {
-    const track = pageRef.current;
-    const measured = track?.parentElement?.clientWidth ?? 0;
+    const el = pageRef.current;
+    // A track is wider than the viewport it travels inside, so it measures the
+    // clipping parent. A standalone page sits inside a padded scroller and is
+    // therefore narrower than the surface it pans across — measure the gesture
+    // surface itself, or a page would enter from its own width and leave a band
+    // of the outgoing page along the edge.
+    const measured =
+      (isTrackLayout
+        ? el?.parentElement?.clientWidth
+        : (el?.closest(HORIZONTAL_SWIPE_SURFACE_SELECTOR) ?? el)?.clientWidth) ?? 0;
     if (measured > 0) {
       surfaceWidthRef.current = measured;
       return measured;
     }
     return surfaceWidthRef.current;
-  }, []);
+  }, [isTrackLayout]);
 
-  const settledOffsetForValue = useCallback(
-    (nextValue: T) => {
-      if (!isTrackLayout) return 0;
-      const index = itemsRef.current.findIndex((item) => isEqualRef.current(item, nextValue));
-      return index >= 0 ? horizontalSwipeTrackOffset(index, surfaceWidth()) : 0;
-    },
+  const restOffsetForIndex = useCallback(
+    (index: number) => (isTrackLayout ? horizontalSwipeTrackOffset(index, surfaceWidth()) : 0),
     [isTrackLayout, surfaceWidth],
   );
 
-  /** Coalesce high-polling pointer events into one compositor write per frame. */
-  const setOffset = useCallback(
-    (next: number) => {
-      offsetRef.current = next;
-      pendingOffsetRef.current = next;
-      if (offsetFrameRef.current === null) {
-        offsetFrameRef.current = window.requestAnimationFrame(flushOffset);
-      }
+  const restOffsetForValue = useCallback(
+    (nextValue: T) => {
+      if (!isTrackLayout) return 0;
+      const index = itemsRef.current.findIndex((item) => isEqualRef.current(item, nextValue));
+      return index >= 0 ? restOffsetForIndex(index) : 0;
     },
-    [flushOffset],
+    [isTrackLayout, restOffsetForIndex],
   );
 
-  /** Return the settled page to normal layout painting instead of a permanent layer. */
-  const clearOffset = useCallback(() => {
-    cancelPendingOffset();
-    offsetSetterRef.current = null;
-    offsetSetterElementRef.current = null;
+  /** Offset actually on screen, including a settle still in flight. */
+  const liveOffset = useCallback(() => {
     const el = pageRef.current;
-    const settledOffset = settledOffsetForValue(valueRef.current);
-    offsetRef.current = settledOffset;
-    if (!el) return;
-    if (isTrackLayout) {
-      gsap.set(el, { x: settledOffset, clearProps: "willChange" });
-    } else {
-      gsap.set(el, { clearProps: "transform,willChange" });
+    if (!el || !animationRef.current) return offsetRef.current;
+    const computed = window.getComputedStyle(el).transform;
+    if (!computed || computed === "none") return offsetRef.current;
+    try {
+      return new DOMMatrixReadOnly(computed).m41;
+    } catch {
+      return offsetRef.current;
     }
-  }, [cancelPendingOffset, isTrackLayout, settledOffsetForValue]);
+  }, []);
 
-  /** Tween whatever offset the finger left behind back to rest. */
-  const settleAtRest = useCallback(() => {
+  const writeOffset = useCallback((offset: number) => {
+    offsetRef.current = offset;
     const el = pageRef.current;
+    if (el) el.style.transform = transformFor(offset);
+  }, []);
+
+  /** Stop a settle where it currently is, leaving that offset as inline style. */
+  const cancelSettle = useCallback(() => {
+    const animation = animationRef.current;
+    if (!animation) return;
+    const stoppedAt = liveOffset();
+    animationRef.current = null;
+    animation.cancel();
+    writeOffset(stoppedAt);
+  }, [liveOffset, writeOffset]);
+
+  /**
+   * Hand the remaining travel to the compositor.
+   *
+   * `fill: both` makes the first keyframe apply as soon as the animation starts,
+   * so the layer never paints an untransformed frame between the inline write and
+   * the animation taking over.
+   */
+  const settle = useCallback(
+    (target: number, duration: number) => {
+      const el = pageRef.current;
+      if (!el) return;
+      cancelSettle();
+      const from = offsetRef.current;
+      // A standalone page rests at 0, which is also its natural layout position:
+      // landing there drops the transform entirely rather than leaving the page
+      // on a permanent compositor layer. A track's rest position is a transform.
+      const restsUntransformed = !isTrackLayout && target === 0;
+      if (duration <= 0 || from === target || prefersReducedMotion()) {
+        offsetRef.current = target;
+        el.style.transform = restsUntransformed ? "" : transformFor(target);
+        el.style.willChange = "";
+        return;
+      }
+      offsetRef.current = target;
+      el.style.willChange = "transform";
+      const animation = el.animate(
+        [{ transform: transformFor(from) }, { transform: transformFor(target) }],
+        { duration, easing: SWIPE_SETTLE_EASING, fill: "both" },
+      );
+      animationRef.current = animation;
+      void animation.finished
+        .then(() => {
+          if (animationRef.current !== animation) return;
+          animationRef.current = null;
+          // Inline style first, then drop the effect: reversing the order lets
+          // some Android compositors paint the untransformed layer for a frame.
+          el.style.transform = restsUntransformed ? "" : transformFor(target);
+          animation.cancel();
+          el.style.willChange = "";
+        })
+        .catch(() => {
+          // Cancellation is expected when a new gesture or value interrupts.
+        });
+    },
+    [cancelSettle, isTrackLayout],
+  );
+
+  /** Park the layer at the offset its current value implies, without motion. */
+  const restAtValue = useCallback(() => {
+    cancelSettle();
+    const el = pageRef.current;
+    const target = restOffsetForValue(valueRef.current);
+    offsetRef.current = target;
     if (!el) return;
-    flushPendingOffset();
-    gsap.killTweensOf(el);
-    const targetOffset = settledOffsetForValue(valueRef.current);
-    if (prefersReducedMotion()) {
-      clearOffset();
-      return;
-    }
-    offsetRef.current = targetOffset;
-    gsap.to(el, {
-      x: targetOffset,
-      ...SWIPE_SETTLE,
-      // The compositor hint is only worth carrying while something moves.
-      onComplete: clearOffset,
-    });
-  }, [clearOffset, flushPendingOffset, settledOffsetForValue]);
+    el.style.willChange = "";
+    // A settled standalone page returns to normal painting instead of keeping a
+    // permanent compositor layer; a track's rest position *is* a transform.
+    if (isTrackLayout) el.style.transform = transformFor(target);
+    else el.style.transform = "";
+  }, [cancelSettle, isTrackLayout, restOffsetForValue]);
+
+  /** Return whatever offset the finger left behind to the current page. */
+  const settleAtRest = useCallback(
+    (velocity = 0) => {
+      const target = restOffsetForValue(valueRef.current);
+      settle(target, horizontalSwipeSettleDuration(target - offsetRef.current, velocity));
+    },
+    [restOffsetForValue, settle],
+  );
 
   useLayoutEffect(() => {
     const previousValue = renderedValueRef.current;
     if (isEqual(previousValue, value)) return;
     renderedValueRef.current = value;
 
-    const previousIndex = items.findIndex((item) => isEqual(item, previousValue));
-    const nextIndex = items.findIndex((item) => isEqual(item, value));
-    const pendingDirection = pendingDirectionRef.current;
-    const direction =
-      pendingDirection ??
-      (previousIndex >= 0 && nextIndex >= 0 && previousIndex !== nextIndex
-        ? nextIndex > previousIndex
-          ? 1
-          : -1
-        : null);
-    pendingDirectionRef.current = null;
+    const pendingCommit = pendingCommitRef.current;
+    const committedByGesture = pendingCommit !== null && isEqual(pendingCommit.value, value);
+    pendingCommitRef.current = null;
+    clearCommitRollback();
     const el = pageRef.current;
     if (!el) return;
-    cancelPendingOffset();
-    gsap.killTweensOf(el);
 
-    // `shouldAnimate: false` means a parent PagePan owns the entry pan. Land at
-    // rest immediately: this element is shared by the outgoing and incoming
-    // pages, so any offset left here would ride on top of the parent's travel
-    // and leave a band of the old page on screen.
-    if (!shouldAnimate || prefersReducedMotion() || direction === null) {
-      clearOffset();
-      return;
-    }
+    // A track's pages are laid out by absolute index, so committing a swipe does
+    // not move any of them: the settle started at release is already travelling
+    // to this value's rest offset and must be left alone.
+    if (isTrackLayout && committedByGesture) return;
 
-    // Layouts that keep their neighbours mounted can measure the live viewport,
-    // so even a tap-driven change (no preceding gesture) animates on the very
-    // first interaction instead of snapping until a pointer has been down once.
-    const measuredSurfaceWidth = followsNeighbours ? surfaceWidth() : surfaceWidthRef.current;
-    if (measuredSurfaceWidth <= 0) {
-      clearOffset();
+    const previousIndex = items.findIndex((item) => isEqual(item, previousValue));
+    const nextIndex = items.findIndex((item) => isEqual(item, value));
+    const measuredSurfaceWidth = surfaceWidth();
+    const profile = motionProfile();
+
+    if (
+      !shouldAnimate ||
+      prefersReducedMotion() ||
+      previousIndex < 0 ||
+      nextIndex < 0 ||
+      measuredSurfaceWidth <= 0
+    ) {
+      restAtValue();
       return;
     }
 
     if (isTrackLayout) {
-      // All pages stay mounted in the track, so the release only needs to settle
-      // the row at the newly selected page. The outgoing and incoming panels
-      // have already been visible together while the finger was moving.
-      const targetOffset = horizontalSwipeTrackOffset(nextIndex, measuredSurfaceWidth);
-      gsap.to(el, {
-        x: targetOffset,
-        force3D: true,
-        ...SWIPE_SETTLE,
-        onComplete: clearOffset,
-      });
-      offsetRef.current = targetOffset;
+      cancelSettle();
+      // Only the immediate neighbours are mounted, so a multi-step jump would
+      // sweep across pages that are not there. Land on it instead.
+      if (Math.abs(nextIndex - previousIndex) !== 1) {
+        restAtValue();
+        return;
+      }
+      settle(restOffsetForIndex(nextIndex), profile.enter.duration * 1000);
       return;
     }
 
-    // The old page followed the finger out. Before the browser paints the new
-    // value, place the incoming page a full surface width across the opposite
-    // edge and settle it in, so the release plays as one continuous pan rather
-    // than a short catch-up nudge.
-    //
-    // `panels` shares this path on purpose: its children re-anchor themselves
-    // around the new active index, which shifts every one of them by a full
-    // width. Rebasing the layer by the same width in the travel direction keeps
-    // the pixels under the finger exactly where they were, and settling to 0
-    // finishes the pan the gesture started.
+    // `page`: the old page followed the finger out and the incoming one only
+    // exists now. Place it a full surface width across the opposite edge and
+    // settle it in, so the release plays as one continuous pan rather than a
+    // short catch-up nudge.
+    const direction: 1 | -1 = pendingCommit?.direction ?? (nextIndex > previousIndex ? 1 : -1);
+    cancelSettle();
     const startOffset = horizontalSwipeCommitOffset(
-      pendingDirection === null ? 0 : offsetRef.current,
+      pendingCommit === null ? 0 : offsetRef.current,
       direction,
       measuredSurfaceWidth,
     );
-    gsap.fromTo(
-      el,
-      { x: startOffset, force3D: true, willChange: "transform" },
-      {
-        x: 0,
-        force3D: true,
-        ...SWIPE_SETTLE,
-        onComplete: clearOffset,
-      },
+    writeOffset(startOffset);
+    settle(
+      0,
+      pendingCommit === null
+        ? profile.enter.duration * 1000
+        : horizontalSwipeSettleDuration(startOffset, pendingCommit.velocity),
     );
-    offsetRef.current = 0;
   }, [
-    cancelPendingOffset,
-    clearOffset,
-    followsNeighbours,
+    cancelSettle,
+    clearCommitRollback,
     isEqual,
     isTrackLayout,
     items,
+    restAtValue,
+    restOffsetForIndex,
+    settle,
     shouldAnimate,
     surfaceWidth,
     value,
+    writeOffset,
   ]);
 
+  // Positioning a track is layout rather than gesture, so it also runs on
+  // clients without touch: the strip must show the selected page even when no
+  // pointer will ever reach it.
   useLayoutEffect(() => {
-    if (!enabled || !isTrackLayout) return;
-    const el = pageRef.current;
-    const width = surfaceWidth();
-    if (!el || width <= 0) return;
-    const index = itemsRef.current.findIndex((item) => isEqualRef.current(item, valueRef.current));
-    if (index < 0) return;
-    const targetOffset = horizontalSwipeTrackOffset(index, width);
-    offsetRef.current = targetOffset;
-    gsap.killTweensOf(el);
-    gsap.set(el, { x: targetOffset, force3D: true });
-  }, [enabled, isTrackLayout, surfaceWidth]);
-
-  useLayoutEffect(() => {
-    if (!enabled || !isTrackLayout) return;
+    if (!isTrackLayout) return;
     const el = pageRef.current;
     const viewport = el?.parentElement;
     if (!el || !viewport) return;
 
     const applyWidth = () => {
       const width = viewport.clientWidth;
+      // Mid-gesture the finger owns the offset; a resize then is a keyboard or
+      // system bar appearing, and rebasing under the pointer would jump.
       if (width <= 0 || swipeRef.current?.horizontal) return;
       surfaceWidthRef.current = width;
       const index = itemsRef.current.findIndex((item) =>
         isEqualRef.current(item, valueRef.current),
       );
       if (index < 0) return;
-      const targetOffset = horizontalSwipeTrackOffset(index, width);
-      offsetRef.current = targetOffset;
-      gsap.set(el, { x: targetOffset, force3D: true });
+      cancelSettle();
+      writeOffset(horizontalSwipeTrackOffset(index, width));
     };
 
     applyWidth();
@@ -328,31 +379,31 @@ export function useHorizontalSwipe<T>({
     const observer = new ResizeObserver(applyWidth);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [enabled, isTrackLayout]);
+  }, [cancelSettle, isTrackLayout, writeOffset]);
 
   useLayoutEffect(() => {
     if (enabled) return;
     swipeRef.current = null;
-    pendingDirectionRef.current = null;
-    const el = pageRef.current;
-    if (!el) return;
-    cancelPendingOffset();
-    gsap.killTweensOf(el);
-    clearOffset();
-  }, [cancelPendingOffset, clearOffset, enabled]);
+    pendingCommitRef.current = null;
+    clearCommitRollback();
+    restAtValue();
+  }, [clearCommitRollback, enabled, restAtValue]);
 
-  // Kill anything still in flight when the surface goes away, so GSAP never
-  // ticks a detached node.
+  // Drop anything still in flight when the surface goes away, so no animation
+  // ticks against a detached node and no timer fires into an unmounted hook.
   useLayoutEffect(
     () => () => {
-      cancelPendingOffset();
+      clearCommitRollback();
+      const animation = animationRef.current;
+      animationRef.current = null;
+      animation?.cancel();
       const el = pageRef.current;
       if (el) {
-        gsap.killTweensOf(el);
-        gsap.set(el, { clearProps: "transform,willChange" });
+        el.style.transform = "";
+        el.style.willChange = "";
       }
     },
-    [cancelPendingOffset],
+    [clearCommitRollback],
   );
 
   const releasePointer = useCallback((element: HTMLElement, pointerId: number) => {
@@ -374,29 +425,26 @@ export function useHorizontalSwipe<T>({
       ) {
         return;
       }
-      // A track/panel layer is narrower or wider than the gesture surface that
-      // hosts it, so measure the viewport it travels inside rather than the
-      // element the pointer landed on.
-      const measuredSurfaceWidth = followsNeighbours
-        ? surfaceWidth()
-        : event.currentTarget.clientWidth;
-      const nextSurfaceWidth =
-        measuredSurfaceWidth > 0 ? measuredSurfaceWidth : event.currentTarget.clientWidth;
+      const measured = surfaceWidth();
+      const nextSurfaceWidth = measured > 0 ? measured : event.currentTarget.clientWidth;
       const currentItems = itemsRef.current;
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        startOffsetX: offsetRef.current,
+        // Provisional: a settle may still be running, and the offset it has
+        // reached is only read once the gesture locks horizontal.
+        startOffset: offsetRef.current,
         surfaceWidth: nextSurfaceWidth,
         itemIndex: currentItems.findIndex((item) => isEqualRef.current(item, valueRef.current)),
         itemCount: currentItems.length,
         reducedMotion: prefersReducedMotion(),
         horizontal: false,
+        samples: [{ x: event.clientX, time: performance.now() }],
       };
       surfaceWidthRef.current = nextSurfaceWidth;
     },
-    [enabled, followsNeighbours, surfaceWidth],
+    [enabled, surfaceWidth],
   );
 
   const onPointerMoveCapture = useCallback(
@@ -427,36 +475,41 @@ export function useHorizontalSwipe<T>({
         swipe.horizontal = true;
         const el = pageRef.current;
         if (el) {
-          const currentX = Number(gsap.getProperty(el, "x")) || 0;
-          gsap.killTweensOf(el);
-          offsetRef.current = currentX;
-          swipe.startOffsetX = currentX;
-          // A vertical gesture must never promote the whole scrolling page.
-          gsap.set(el, { force3D: true, willChange: "transform" });
+          // Take over from a settle at the exact pixel it reached, so grabbing a
+          // page mid-transition continues from there instead of snapping.
+          cancelSettle();
+          swipe.startOffset = offsetRef.current;
+          // Only promote the layer once the gesture is known to be horizontal; a
+          // vertical scroll must never promote the whole scrolling page.
+          el.style.willChange = "transform";
         }
         event.currentTarget.setPointerCapture(event.pointerId);
+        // Restart sampling from the lock point: the pre-lock samples describe a
+        // gesture that had not yet been recognised as paging.
+        swipe.samples = [];
       }
 
+      swipe.samples.push({ x: event.clientX, time: performance.now() });
+      if (swipe.samples.length > HORIZONTAL_SWIPE_MAX_SAMPLES) swipe.samples.shift();
+
       if (!swipe.reducedMotion) {
-        const surfaceWidth = swipe.surfaceWidth;
+        const width = swipe.surfaceWidth;
         const dragOffset = horizontalSwipeDragOffset(
           swipe.itemIndex,
           swipe.itemCount,
           deltaX,
-          surfaceWidth,
+          width,
         );
-        const nextOffset = swipe.startOffsetX + dragOffset;
+        const nextOffset = swipe.startOffset + dragOffset;
         if (isTrackLayout) {
           // Track offsets accumulate one full width per page. Clamping the
-          // absolute x to one width would freeze every transition after page 2.
-          // horizontalSwipeDragOffset already bounds this gesture's delta and
-          // applies resistance at the first and last page.
-          setOffset(nextOffset);
+          // absolute offset to one width would freeze every page past the
+          // second. `horizontalSwipeDragOffset` already bounds this gesture's
+          // own delta and damps it at the first and last page.
+          writeOffset(nextOffset);
         } else {
-          // Bound a standalone page by the live surface width, falling back to
-          // the absolute px ceiling only when the width is unknown.
-          const bound = surfaceWidth > 0 ? surfaceWidth : HORIZONTAL_SWIPE_MAX_DRAG_PX;
-          setOffset(Math.max(-bound, Math.min(bound, nextOffset)));
+          const bound = width > 0 ? width : HORIZONTAL_SWIPE_MAX_DRAG_PX;
+          writeOffset(Math.max(-bound, Math.min(bound, nextOffset)));
         }
       }
 
@@ -464,7 +517,7 @@ export function useHorizontalSwipe<T>({
       event.preventDefault();
       event.stopPropagation();
     },
-    [isTrackLayout, setOffset],
+    [cancelSettle, isTrackLayout, writeOffset],
   );
 
   const onPointerUpCapture = useCallback(
@@ -475,18 +528,22 @@ export function useHorizontalSwipe<T>({
       releasePointer(event.currentTarget, event.pointerId);
       if (!swipe.horizontal) return;
 
-      const next = nextItemForHorizontalSwipe(
+      swipe.samples.push({ x: event.clientX, time: performance.now() });
+      const velocity = horizontalSwipeVelocity(swipe.samples, HORIZONTAL_SWIPE_VELOCITY_WINDOW_MS);
+      const dragOffset = offsetRef.current - swipe.startOffset;
+      const next = horizontalSwipeTargetItem(
         itemsRef.current,
         valueRef.current,
-        event.clientX - swipe.startX,
-        event.clientY - swipe.startY,
+        dragOffset,
+        velocity,
+        swipe.surfaceWidth,
         isEqualRef.current,
       );
       clickSuppressionUntilRef.current = Date.now() + HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS;
       event.preventDefault();
       event.stopPropagation();
       if (next === null) {
-        settleAtRest();
+        settleAtRest(velocity);
         return;
       }
 
@@ -494,23 +551,42 @@ export function useHorizontalSwipe<T>({
         isEqualRef.current(item, valueRef.current),
       );
       const nextIndex = itemsRef.current.findIndex((item) => isEqualRef.current(item, next));
-      pendingDirectionRef.current = nextIndex > currentIndex ? 1 : -1;
       const previousValue = valueRef.current;
+      pendingCommitRef.current = {
+        value: next,
+        direction: nextIndex > currentIndex ? 1 : -1,
+        velocity,
+      };
+
+      // Start the settle before telling React, and in that order. A track's
+      // pages are positioned by absolute index, so the commit moves nothing the
+      // animation cares about — while waiting for the value change first would
+      // put the whole React commit between the finger lifting and the first
+      // animated frame.
+      if (isTrackLayout) {
+        const target = restOffsetForIndex(nextIndex);
+        settle(target, horizontalSwipeSettleDuration(target - offsetRef.current, velocity));
+      }
       onChangeRef.current(next);
 
-      // Controlled values normally update in the same frame. If a caller
-      // rejects or defers the change, do not leave the dragged page suspended.
-      window.requestAnimationFrame(() => {
+      // Last resort for a caller that rejects the change outright, so the page
+      // is not left parked between two pages. Deliberately a timer rather than
+      // the next frame: a value delivered through a transition legitimately
+      // takes several frames, and rolling back before it lands would undo the
+      // settle that is already running.
+      clearCommitRollback();
+      commitRollbackTimerRef.current = window.setTimeout(() => {
+        commitRollbackTimerRef.current = null;
         if (
-          pendingDirectionRef.current !== null &&
+          pendingCommitRef.current !== null &&
           isEqualRef.current(valueRef.current, previousValue)
         ) {
-          pendingDirectionRef.current = null;
+          pendingCommitRef.current = null;
           settleAtRest();
         }
-      });
+      }, HORIZONTAL_SWIPE_COMMIT_GRACE_MS);
     },
-    [releasePointer, settleAtRest],
+    [clearCommitRollback, isTrackLayout, releasePointer, restOffsetForIndex, settle, settleAtRest],
   );
 
   const onPointerCancelCapture = useCallback(
@@ -519,7 +595,7 @@ export function useHorizontalSwipe<T>({
       if (!swipe || swipe.pointerId !== event.pointerId) return;
       swipeRef.current = null;
       releasePointer(event.currentTarget, event.pointerId);
-      settleAtRest();
+      if (swipe.horizontal) settleAtRest();
     },
     [releasePointer, settleAtRest],
   );

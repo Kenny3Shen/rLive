@@ -6,7 +6,6 @@
  * page-view carousel.
  */
 
-export const HORIZONTAL_SWIPE_MIN_DISTANCE_PX = 48;
 export const HORIZONTAL_SWIPE_DIRECTION_RATIO = 1.25;
 export const HORIZONTAL_SWIPE_LOCK_DISTANCE_PX = 10;
 export const HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS = 420;
@@ -25,44 +24,174 @@ export const HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO = 1;
 const HORIZONTAL_SWIPE_MAX_DRAG_SURFACE_RATIO = 1;
 const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
 
-/** A deliberate horizontal drag wins over a diagonal or vertical gesture. */
-export function isHorizontalSwipe(deltaX: number, deltaY: number): boolean {
-  const horizontalDistance = Math.abs(deltaX);
+/**
+ * Share of the surface a slow drag must cover before the release changes page.
+ *
+ * This is the interactive half of the paging contract: what decides the commit
+ * is how far the page actually travelled, not how many pixels the finger moved.
+ * Slightly under half a screen, because a drag held past the midpoint already
+ * reads as committed to the eye.
+ */
+export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.42;
+/**
+ * Release speed, in px/ms, above which a flick pages regardless of progress.
+ *
+ * ~0.32 px/ms is a brisk but unremarkable flick (roughly 320 px/s). Below it the
+ * gesture is treated as a positional drag and judged by progress alone.
+ */
+export const HORIZONTAL_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
+/** Bounds for the release settle, in ms. */
+export const HORIZONTAL_SWIPE_SETTLE_MIN_MS = 170;
+export const HORIZONTAL_SWIPE_SETTLE_MAX_MS = 400;
+/**
+ * Speed window, px/ms, the settle duration is derived within.
+ *
+ * The settle continues motion the finger started, so its duration comes from
+ * the distance still to cover divided by the release speed. Clamping that speed
+ * keeps a near-stationary release from producing a multi-second crawl and a
+ * violent flick from snapping in a single frame.
+ */
+export const HORIZONTAL_SWIPE_SETTLE_MIN_SPEED = 0.7;
+export const HORIZONTAL_SWIPE_SETTLE_MAX_SPEED = 3;
+/**
+ * Sampling window for release velocity, in ms.
+ *
+ * Pointer samples arrive one per compositor frame, so a single pair of events is
+ * noisy. Smoothing over roughly two frames keeps a steady drag from reading as a
+ * flick while still reacting within the same gesture.
+ */
+export const HORIZONTAL_SWIPE_VELOCITY_WINDOW_MS = 32;
+
+export type HorizontalSwipeSample = {
+  /** Pointer position along the gesture axis, in px. */
+  x: number;
+  /** `performance.now()` at the time of the sample. */
+  time: number;
+};
+
+/**
+ * Release speed along the gesture axis, in px/ms, from a tail of samples.
+ *
+ * Pointer moves arrive roughly one per compositor frame, so differentiating the
+ * last two events alone is noisy enough to read a steady drag as a flick.
+ * Averaging over the samples inside `windowMs` smooths that out, and because the
+ * window is measured back from the newest sample, a finger that paused before
+ * lifting reports ~0 instead of inheriting the speed it had before the pause.
+ */
+export function horizontalSwipeVelocity(
+  samples: readonly HorizontalSwipeSample[],
+  windowMs: number = HORIZONTAL_SWIPE_VELOCITY_WINDOW_MS,
+): number {
+  const latest = samples[samples.length - 1];
+  if (!latest) return 0;
+  let oldest = latest;
+  for (let index = samples.length - 2; index >= 0; index -= 1) {
+    const sample = samples[index]!;
+    if (latest.time - sample.time > windowMs) break;
+    oldest = sample;
+  }
+  const elapsed = latest.time - oldest.time;
+  if (elapsed <= 0) return 0;
+  return (latest.x - oldest.x) / elapsed;
+}
+
+/**
+ * Signed share of a surface the live drag currently covers.
+ *
+ * This is the value a paging transition interpolates against: at ±1 the
+ * neighbouring page has fully replaced the current one.
+ */
+export function horizontalSwipeProgress(dragOffset: number, surfaceWidth: number): number {
+  if (!(surfaceWidth > 0)) return 0;
+  return Math.max(-1, Math.min(1, dragOffset / surfaceWidth));
+}
+
+/**
+ * Whether releasing here should land on the neighbour the drag was heading for.
+ *
+ * The drag's own sign picks the candidate page; this only decides commit versus
+ * return, the way a phone pager does:
+ *
+ * - a flick that agrees with the drag commits at any distance, so a quick flick
+ *   pages without having to cross the screen;
+ * - a flick back toward the start cancels at any distance, so a drag pulled back
+ *   past the midpoint does not page against the user's last intent;
+ * - otherwise the decision is positional — how much of the surface the page
+ *   actually travelled.
+ */
+export function horizontalSwipeShouldCommit(
+  dragOffset: number,
+  velocity: number,
+  surfaceWidth: number,
+): boolean {
+  if (dragOffset === 0) return false;
+  const advancing = dragOffset < 0;
+  const fling = HORIZONTAL_SWIPE_FLING_VELOCITY_PX_PER_MS;
+  if (advancing ? velocity <= -fling : velocity >= fling) return true;
+  if (advancing ? velocity >= fling : velocity <= -fling) return false;
   return (
-    horizontalDistance >= HORIZONTAL_SWIPE_MIN_DISTANCE_PX &&
-    horizontalDistance > Math.abs(deltaY) * HORIZONTAL_SWIPE_DIRECTION_RATIO
+    Math.abs(horizontalSwipeProgress(dragOffset, surfaceWidth)) >= HORIZONTAL_SWIPE_COMMIT_PROGRESS
   );
 }
 
 /**
- * Returns the adjacent item index for a left/right swipe, or null when the
- * gesture is too short/vertical or already at either end of the strip.
- * Left swipe advances; right swipe goes back.
+ * Index the strip lands on when the pointer is released, or null to stay put.
+ * A negative offset (finger moved left) advances; positive goes back.
  */
-export function nextIndexForHorizontalSwipe(
+export function horizontalSwipeTargetIndex(
   currentIndex: number,
   length: number,
-  deltaX: number,
-  deltaY: number,
+  dragOffset: number,
+  velocity: number,
+  surfaceWidth: number,
 ): number | null {
   if (length <= 1 || currentIndex < 0 || currentIndex >= length) return null;
-  if (!isHorizontalSwipe(deltaX, deltaY)) return null;
-  const direction = deltaX < 0 ? 1 : -1;
-  const nextIndex = currentIndex + direction;
-  if (nextIndex < 0 || nextIndex >= length) return null;
-  return nextIndex;
+  if (!horizontalSwipeShouldCommit(dragOffset, velocity, surfaceWidth)) return null;
+  const nextIndex = currentIndex + (dragOffset < 0 ? 1 : -1);
+  return nextIndex < 0 || nextIndex >= length ? null : nextIndex;
 }
 
-export function nextItemForHorizontalSwipe<T>(
+export function horizontalSwipeTargetItem<T>(
   items: readonly T[],
   current: T,
-  deltaX: number,
-  deltaY: number,
+  dragOffset: number,
+  velocity: number,
+  surfaceWidth: number,
   isEqual: (left: T, right: T) => boolean = Object.is,
 ): T | null {
   const currentIndex = items.findIndex((item) => isEqual(item, current));
-  const nextIndex = nextIndexForHorizontalSwipe(currentIndex, items.length, deltaX, deltaY);
+  const nextIndex = horizontalSwipeTargetIndex(
+    currentIndex,
+    items.length,
+    dragOffset,
+    velocity,
+    surfaceWidth,
+  );
   return nextIndex === null ? null : (items[nextIndex] ?? null);
+}
+
+/**
+ * How long the release should take to cover the remaining distance, in ms.
+ *
+ * A settle continues the gesture rather than playing a canned transition, so its
+ * duration follows from the distance left and the speed the finger let go at.
+ * The speed is clamped so a near-stationary release does not crawl and a hard
+ * flick does not snap within a single frame; the result is clamped again so the
+ * total time stays inside the range that reads as one continuous movement.
+ */
+export function horizontalSwipeSettleDuration(distance: number, velocity: number): number {
+  const remaining = Math.abs(distance);
+  if (remaining < 1) return 0;
+  const speed = Math.min(
+    HORIZONTAL_SWIPE_SETTLE_MAX_SPEED,
+    Math.max(HORIZONTAL_SWIPE_SETTLE_MIN_SPEED, Math.abs(velocity)),
+  );
+  return Math.round(
+    Math.min(
+      HORIZONTAL_SWIPE_SETTLE_MAX_MS,
+      Math.max(HORIZONTAL_SWIPE_SETTLE_MIN_MS, remaining / speed),
+    ),
+  );
 }
 
 /**
