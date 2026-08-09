@@ -100,14 +100,18 @@
   --sidebar-active: oklch(0.26 0.02 265);
 }
 
+/* Percentage geometry only: `circle()` resolves both the position and the
+   radius against the pseudo-element's own box, so the reveal stays aligned even
+   where the View Transition pseudo-tree does not share our CSS px scale (see
+   revealThemeAt). 150% covers the diagonal from any origin inside the box. */
 @keyframes theme-reveal {
   from {
-    clip-path: circle(0 at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh));
+    clip-path: circle(0 at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%));
   }
 
   to {
     clip-path: circle(
-      var(--theme-reveal-radius, 100vmax) at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh)
+      var(--theme-reveal-radius, 150%) at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%)
     );
   }
 }
