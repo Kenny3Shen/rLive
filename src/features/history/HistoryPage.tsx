@@ -422,6 +422,9 @@ export function HistoryPage() {
     value: activeTab,
     onChange: (tab) => handleTabChange(tab),
     enabled: isMobileClient(),
+    // Both panels ride one track, so the next page is already on screen and
+    // tracks the finger instead of appearing only after the release.
+    layout: "track",
   });
 
   const refreshActiveHistory = () =>
@@ -478,99 +481,126 @@ export function HistoryPage() {
           </div>
 
           <div
-            ref={historyTabSwipe.pageRef as React.Ref<HTMLDivElement>}
-            data-slot="horizontal-swipe-page"
-            className="min-w-0"
+            data-slot="horizontal-swipe-viewport"
+            // Clip only the horizontal axis: the list grows downward inside
+            // Shell's scroller, so clipping both would truncate long histories.
+            className="min-w-0 overflow-x-clip"
           >
-            <TabsContent value="watch" className="mt-0">
-              {watchHistoryQuery.isLoading && <HistorySkeleton />}
+            <div
+              ref={historyTabSwipe.pageRef as React.Ref<HTMLDivElement>}
+              data-slot="horizontal-swipe-track"
+              className="flex items-start"
+              style={{ width: `${HISTORY_TABS.length * 100}%` }}
+            >
+              <TabsContent
+                value="watch"
+                keepMounted
+                // The track keeps both panels side by side so the outgoing and
+                // incoming pages travel together under the finger. Base UI
+                // hides a kept-mounted panel, which would collapse the row —
+                // visibility is the track's job, so undo it here and mark the
+                // inactive page inert instead.
+                hidden={false}
+                inert={activeTab === "watch" ? undefined : true}
+                className="mt-0 min-w-0 shrink-0"
+                style={{ width: `${100 / HISTORY_TABS.length}%` }}
+              >
+                {watchHistoryQuery.isLoading && <HistorySkeleton />}
 
-              {watchHistoryQuery.isError && (
-                <ErrorState
-                  error={watchHistoryQuery.error}
-                  title="观看历史加载失败"
-                  onRetry={() => void watchHistoryQuery.refetch()}
-                />
-              )}
-
-              {!watchHistoryQuery.isLoading &&
-                !watchHistoryQuery.isError &&
-                watchGroups.length === 0 && (
-                  <Empty className="min-h-64 py-12">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <Clock3 aria-hidden />
-                      </EmptyMedia>
-                      <EmptyTitle>暂无观看记录</EmptyTitle>
-                      <EmptyDescription>打开直播间后会自动记录在这里。</EmptyDescription>
-                    </EmptyHeader>
-                    <EmptyContent>
-                      <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                        <Home data-icon="inline-start" aria-hidden />
-                        去首页看看
-                      </Button>
-                    </EmptyContent>
-                  </Empty>
+                {watchHistoryQuery.isError && (
+                  <ErrorState
+                    error={watchHistoryQuery.error}
+                    title="观看历史加载失败"
+                    onRetry={() => void watchHistoryQuery.refetch()}
+                  />
                 )}
 
-              {watchGroups.length > 0 && (
-                <HistoryTimeline
-                  groups={watchGroups}
-                  headingIdPrefix="watch-history-date"
-                  itemKey={(item) => `${item.site_id}:${item.room_id}:${item.watched_at}`}
-                  renderItem={(item) => (
-                    <HistoryCard
-                      item={item}
-                      onOpen={() =>
-                        navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
-                      }
-                      onRemove={() =>
-                        removeWatchHistoryMutation.mutate({
-                          siteId: item.site_id,
-                          roomId: item.room_id,
-                        })
-                      }
-                      isRemoving={removeWatchHistoryMutation.isPending}
-                    />
+                {!watchHistoryQuery.isLoading &&
+                  !watchHistoryQuery.isError &&
+                  watchGroups.length === 0 && (
+                    <Empty className="min-h-64 py-12">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <Clock3 aria-hidden />
+                        </EmptyMedia>
+                        <EmptyTitle>暂无观看记录</EmptyTitle>
+                        <EmptyDescription>打开直播间后会自动记录在这里。</EmptyDescription>
+                      </EmptyHeader>
+                      <EmptyContent>
+                        <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+                          <Home data-icon="inline-start" aria-hidden />
+                          去首页看看
+                        </Button>
+                      </EmptyContent>
+                    </Empty>
                   )}
-                />
-              )}
-            </TabsContent>
 
-            <TabsContent value="danmaku" className="mt-0">
-              {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
+                {watchGroups.length > 0 && (
+                  <HistoryTimeline
+                    groups={watchGroups}
+                    headingIdPrefix="watch-history-date"
+                    itemKey={(item) => `${item.site_id}:${item.room_id}:${item.watched_at}`}
+                    renderItem={(item) => (
+                      <HistoryCard
+                        item={item}
+                        onOpen={() =>
+                          navigate(`/room/${item.site_id}/${encodeURIComponent(item.room_id)}`)
+                        }
+                        onRemove={() =>
+                          removeWatchHistoryMutation.mutate({
+                            siteId: item.site_id,
+                            roomId: item.room_id,
+                          })
+                        }
+                        isRemoving={removeWatchHistoryMutation.isPending}
+                      />
+                    )}
+                  />
+                )}
+              </TabsContent>
 
-              {danmakuSendHistoryQuery.isError && (
-                <ErrorState
-                  error={danmakuSendHistoryQuery.error}
-                  title="发送弹幕记录加载失败"
-                  onRetry={() => void danmakuSendHistoryQuery.refetch()}
-                />
-              )}
+              <TabsContent
+                value="danmaku"
+                keepMounted
+                hidden={false}
+                inert={activeTab === "danmaku" ? undefined : true}
+                className="mt-0 min-w-0 shrink-0"
+                style={{ width: `${100 / HISTORY_TABS.length}%` }}
+              >
+                {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
 
-              {!danmakuSendHistoryQuery.isLoading &&
-                !danmakuSendHistoryQuery.isError &&
-                danmakuGroups.length === 0 && (
-                  <Empty className="min-h-64 py-12">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <MessageSquareText aria-hidden />
-                      </EmptyMedia>
-                      <EmptyTitle>暂无发送弹幕记录</EmptyTitle>
-                      <EmptyDescription>成功发送的弹幕会保存在此设备上。</EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
+                {danmakuSendHistoryQuery.isError && (
+                  <ErrorState
+                    error={danmakuSendHistoryQuery.error}
+                    title="发送弹幕记录加载失败"
+                    onRetry={() => void danmakuSendHistoryQuery.refetch()}
+                  />
                 )}
 
-              {danmakuGroups.length > 0 && (
-                <HistoryTimeline
-                  groups={danmakuGroups}
-                  headingIdPrefix="danmaku-history-date"
-                  itemKey={(item) => `${item.site_id}:${item.sent_at}:${item.content}`}
-                  renderItem={(item) => <DanmakuSendHistoryCard item={item} />}
-                />
-              )}
-            </TabsContent>
+                {!danmakuSendHistoryQuery.isLoading &&
+                  !danmakuSendHistoryQuery.isError &&
+                  danmakuGroups.length === 0 && (
+                    <Empty className="min-h-64 py-12">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <MessageSquareText aria-hidden />
+                        </EmptyMedia>
+                        <EmptyTitle>暂无发送弹幕记录</EmptyTitle>
+                        <EmptyDescription>成功发送的弹幕会保存在此设备上。</EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  )}
+
+                {danmakuGroups.length > 0 && (
+                  <HistoryTimeline
+                    groups={danmakuGroups}
+                    headingIdPrefix="danmaku-history-date"
+                    itemKey={(item) => `${item.site_id}:${item.sent_at}:${item.content}`}
+                    renderItem={(item) => <DanmakuSendHistoryCard item={item} />}
+                  />
+                )}
+              </TabsContent>
+            </div>
           </div>
         </Tabs>
       </div>

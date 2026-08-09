@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -1225,6 +1226,16 @@ export function PlayerPane({
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
           data-audio-only={audioOnly ? "true" : undefined}
+          // Overlays anchored above the controls (super chat, captions) must
+          // clear the same gesture-bar allowance the chrome uses, and only
+          // when the chrome actually reserves it.
+          style={
+            {
+              "--player-chrome-inset": portraitStackedPlayer
+                ? "0px"
+                : "env(safe-area-inset-bottom)",
+            } as CSSProperties
+          }
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
             portraitStackedPlayer ? "w-full" : "min-h-0 flex-1",
@@ -1324,7 +1335,7 @@ export function PlayerPane({
               <SuperChatOverlay
                 key={`sc:${roomSessionKey ?? "room"}`}
                 active={danmakuActive}
-                className="absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.75rem_-_env(safe-area-inset-bottom))] w-[min(240px,calc(100%-1.5rem))]"
+                className="absolute bottom-[calc(5rem+var(--player-chrome-inset))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.75rem_-_var(--player-chrome-inset))] w-[min(240px,calc(100%-1.5rem))]"
               />
             )}
 
@@ -1340,7 +1351,7 @@ export function PlayerPane({
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
-                  className="pointer-events-none absolute inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-20 flex justify-center"
+                  className="pointer-events-none absolute inset-x-4 bottom-[calc(4.5rem+var(--player-chrome-inset))] z-20 flex justify-center"
                 >
                   <p
                     className={cn(
@@ -1481,6 +1492,10 @@ export function PlayerPane({
               loadError={loadError}
               disabled={transportDisabled}
               overlay
+              // Portrait stacks the danmaku panel under the picture, so the
+              // controls float over the video's bottom edge rather than the
+              // window's — no gesture-bar inset there.
+              stackedBelowPlayer={portraitStackedPlayer}
               compact={compactViewport}
               portalContainer={player.stageRef}
               centerSlot={

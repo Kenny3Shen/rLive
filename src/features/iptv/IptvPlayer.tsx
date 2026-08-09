@@ -901,6 +901,10 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
             disabled={!channel || !mediaAvailable || status === "error"}
             overlay
+            // The stage is a boxed aspect-video card with the channel footer
+            // below it, so outside fullscreen the chrome never sits on the
+            // window's bottom edge.
+            stackedBelowPlayer
             compact={compactViewport}
             portalContainer={stageRef}
             onOverlayInteractionChange={handleControlsInteractionChange}

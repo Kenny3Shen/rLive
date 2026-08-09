@@ -8,6 +8,7 @@ import { flushSync } from "react-dom";
 import {
   createContext,
   type FormEvent,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
@@ -1241,7 +1242,235 @@ export function SettingsPage() {
     value: category,
     onChange: setCategory,
     enabled: mobileClient,
+    // The neighbouring category rides the same track, so it is already on
+    // screen and follows the finger rather than appearing on release.
+    layout: "track",
   });
+  // Settings pages are heavy (the playback one carries every danmaku control).
+  // A track only ever shows the current page and the one it is sliding toward,
+  // so mount that window instead of all six.
+  const categoryIndex = settingsCategoryValues.indexOf(category);
+  const isCategoryMounted = (value: SettingsCategory) =>
+    Math.abs(settingsCategoryValues.indexOf(value) - categoryIndex) <= 1;
+  const categoryTrackStyle = { width: `${settingsCategoryValues.length * 100}%` };
+  const categoryPanelStyle = { width: `${100 / settingsCategoryValues.length}%` };
+  // Panel bodies keyed by category so the swipe track can mount just the
+  // window it needs without duplicating this JSX.
+  const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
+    playback: (
+      <SettingsContent title="播放">
+        <AppearanceSettings />
+        <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
+          <Field orientation="responsive">
+            <FieldTitle id="quality-label">优先清晰度</FieldTitle>
+            <ToggleGroup
+              aria-labelledby="quality-label"
+              value={[qualityLevel]}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              onValueChange={(values) => {
+                const next = values[0];
+                if (next === "high" || next === "mid" || next === "low") {
+                  setQualityLevel(next);
+                }
+              }}
+            >
+              <ToggleGroupItem value="high">最高</ToggleGroupItem>
+              <ToggleGroupItem value="mid">中间</ToggleGroupItem>
+              <ToggleGroupItem value="low">最低</ToggleGroupItem>
+            </ToggleGroup>
+          </Field>
+          <Field orientation="responsive">
+            <FieldContent>
+              <FieldTitle id="soft-switch-title">软切换</FieldTitle>
+              <FieldDescription>
+                同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              aria-labelledby="soft-switch-title"
+              checked={playbackSoftSwitchEnabled}
+              onCheckedChange={setPlaybackSoftSwitchEnabled}
+            />
+          </Field>
+        </Section>
+        {!mobileClient && (
+          <Section
+            title="语音字幕"
+            keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端"
+          >
+            <AsrModelField />
+            <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
+          </Section>
+        )}
+        <Section title="弹幕轨道" keywords="弹幕 轨道 区域 行数">
+          <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
+        </Section>
+        <Section title="弹幕文字与节奏" keywords="弹幕 文字 透明度 字号 速度 字重">
+          <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
+          <Field orientation="responsive">
+            <FieldContent>
+              <FieldTitle>恢复弹幕默认设置</FieldTitle>
+              <FieldDescription>
+                重置轨道、文字、过滤和 SC 透明度，屏蔽词不会被清空。
+              </FieldDescription>
+            </FieldContent>
+            <DanmakuAppearanceResetButton />
+          </Field>
+        </Section>
+        <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并">
+          <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
+        </Section>
+        <Section title="醒目留言" keywords="醒目留言 sc 透明度">
+          <SuperChatSettingsFields idPrefix="settings" layout="page" />
+        </Section>
+      </SettingsContent>
+    ),
+    platform: (
+      <SettingsContent title="平台">
+        <PlatformEnablementField />
+      </SettingsContent>
+    ),
+    network: (
+      <SettingsContent title="网络">
+        <Section title="代理" keywords="代理 地址">
+          <Field data-invalid={proxyError ? true : undefined}>
+            <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
+            <FieldContent>
+              <form
+                className="w-full"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  saveProxy();
+                }}
+              >
+                <InputGroup>
+                  <InputGroupInput
+                    id="proxy"
+                    type="text"
+                    inputMode="url"
+                    autoCapitalize="none"
+                    value={proxyDraft}
+                    onChange={(event) => {
+                      setProxyDraft(event.target.value);
+                      setProxyError(null);
+                      setProxyStatus(null);
+                    }}
+                    placeholder="http://127.0.0.1:7890"
+                    aria-invalid={proxyError ? true : undefined}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton type="submit" variant="secondary" size="sm">
+                      保存
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              </form>
+              {proxyError ? (
+                <FieldError>{proxyError}</FieldError>
+              ) : (
+                proxyStatus && (
+                  <FieldDescription role="status" aria-live="polite">
+                    {proxyStatus}
+                  </FieldDescription>
+                )
+              )}
+            </FieldContent>
+          </Field>
+        </Section>
+        <Section title="IPTV 源" keywords="iptv IPTV M3U 源 地址">
+          <IptvCustomM3uUrlField />
+        </Section>
+      </SettingsContent>
+    ),
+    account: (
+      <SettingsContent title="账号">
+        <Section title="发送权限" keywords="发送 弹幕 权限">
+          <DanmakuSendField />
+        </Section>
+        <Section
+          title="平台账号"
+          keywords="账号 平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码"
+        >
+          <AccountCard
+            siteId="bilibili"
+            title="哔哩哔哩"
+            placeholder="SESSDATA=…; bili_jct=…"
+            qrLogin
+          />
+          <AccountCard
+            siteId="douyu"
+            title="斗鱼"
+            placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
+            qrLogin
+          />
+          <AccountCard
+            siteId="huya"
+            title="虎牙"
+            placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
+            qrLogin
+          />
+          <AccountCard
+            siteId="douyin"
+            title="抖音"
+            placeholder="sessionid=…; ttwid=…; msToken=…"
+            qrLogin
+          />
+        </Section>
+      </SettingsContent>
+    ),
+    data: (
+      <SettingsContent title="数据">
+        <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
+          <Field data-invalid={profileError ? true : undefined}>
+            <FieldContent>
+              <FieldTitle>配置档案</FieldTitle>
+              <div className="mt-1 flex flex-wrap gap-2">
+                <Button
+                  onClick={() => void chooseProfileForExport()}
+                  disabled={profileAction !== null}
+                >
+                  {profileAction === "export" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Download data-icon="inline-start" aria-hidden />
+                  )}
+                  {profileAction === "export" ? "正在导出…" : "导出配置"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void chooseProfileForImport()}
+                  disabled={profileAction !== null}
+                >
+                  {profileAction === "import" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Upload data-icon="inline-start" aria-hidden />
+                  )}
+                  {profileAction === "import" ? "正在导入…" : "导入配置"}
+                </Button>
+              </div>
+              {profileError ? (
+                <FieldError>{profileError}</FieldError>
+              ) : (
+                profileStatus && (
+                  <FieldDescription role="status" aria-live="polite">
+                    {profileStatus}
+                  </FieldDescription>
+                )
+              )}
+            </FieldContent>
+          </Field>
+        </Section>
+      </SettingsContent>
+    ),
+    about: (
+      <SettingsContent title="关于">
+        <AboutSettings />
+      </SettingsContent>
+    ),
+  };
   const normalizedSearchQuery = searchQuery.trim();
 
   useEffect(() => {
@@ -1281,30 +1510,10 @@ export function SettingsPage() {
     { scope: motionRootRef },
   );
 
-  useGSAP(
-    () => {
-      const panel = motionRootRef.current?.querySelector<HTMLElement>('[data-slot="tabs-content"]');
-      if (!panel || prefersReducedMotion()) return;
-
-      const profile = motionProfile();
-      gsap.fromTo(
-        panel,
-        { autoAlpha: 0, y: 8, willChange: "transform,opacity" },
-        {
-          autoAlpha: 1,
-          y: 0,
-          duration: profile.enter.duration,
-          ease: profile.enter.ease,
-          clearProps: "transform,opacity,visibility,willChange",
-        },
-      );
-    },
-    {
-      dependencies: [category],
-      scope: motionRootRef,
-      revertOnUpdate: true,
-    },
-  );
+  // Switching category no longer fades a panel in: every category is mounted
+  // side by side in the swipe track, so the change is carried by the track's
+  // own pan. A `querySelector` entrance here would always hit the first panel
+  // regardless of the selection, and stack a fade on top of that travel.
 
   useEffect(() => {
     setProxyDraft(proxy ?? "");
@@ -1496,240 +1705,34 @@ export function SettingsPage() {
           </div>
 
           <div
-            ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
-            data-slot="horizontal-swipe-page"
-            className="min-h-0 min-w-0 w-full max-w-4xl flex-1"
+            data-slot="horizontal-swipe-viewport"
+            // Only the horizontal overflow is clipped. The page scrolls in
+            // Shell's scroller, so hiding overflow on both axes here would cut
+            // long categories off at the viewport instead of letting them grow.
+            className="min-h-0 w-full max-w-4xl min-w-0 flex-1 overflow-x-clip"
           >
-            {category === "playback" && (
-              <TabsContent value="playback" className="mt-0">
-                <SettingsContent title="播放">
-                  <AppearanceSettings />
-                  <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
-                    <Field orientation="responsive">
-                      <FieldTitle id="quality-label">优先清晰度</FieldTitle>
-                      <ToggleGroup
-                        aria-labelledby="quality-label"
-                        value={[qualityLevel]}
-                        variant="outline"
-                        size="sm"
-                        spacing={1}
-                        onValueChange={(values) => {
-                          const next = values[0];
-                          if (next === "high" || next === "mid" || next === "low") {
-                            setQualityLevel(next);
-                          }
-                        }}
-                      >
-                        <ToggleGroupItem value="high">最高</ToggleGroupItem>
-                        <ToggleGroupItem value="mid">中间</ToggleGroupItem>
-                        <ToggleGroupItem value="low">最低</ToggleGroupItem>
-                      </ToggleGroup>
-                    </Field>
-                    <Field orientation="responsive">
-                      <FieldContent>
-                        <FieldTitle id="soft-switch-title">软切换</FieldTitle>
-                        <FieldDescription>
-                          同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。
-                        </FieldDescription>
-                      </FieldContent>
-                      <Switch
-                        aria-labelledby="soft-switch-title"
-                        checked={playbackSoftSwitchEnabled}
-                        onCheckedChange={setPlaybackSoftSwitchEnabled}
-                      />
-                    </Field>
-                  </Section>
-                  {!mobileClient && (
-                    <Section
-                      title="语音字幕"
-                      keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端"
-                    >
-                      <AsrModelField />
-                      <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
-                    </Section>
-                  )}
-                  <Section title="弹幕轨道" keywords="弹幕 轨道 区域 行数">
-                    <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
-                  </Section>
-                  <Section title="弹幕文字与节奏" keywords="弹幕 文字 透明度 字号 速度 字重">
-                    <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
-                    <Field orientation="responsive">
-                      <FieldContent>
-                        <FieldTitle>恢复弹幕默认设置</FieldTitle>
-                        <FieldDescription>
-                          重置轨道、文字、过滤和 SC 透明度，屏蔽词不会被清空。
-                        </FieldDescription>
-                      </FieldContent>
-                      <DanmakuAppearanceResetButton />
-                    </Field>
-                  </Section>
-                  <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并">
-                    <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
-                  </Section>
-                  <Section title="醒目留言" keywords="醒目留言 sc 透明度">
-                    <SuperChatSettingsFields idPrefix="settings" layout="page" />
-                  </Section>
-                </SettingsContent>
-              </TabsContent>
-            )}
-
-            {category === "platform" && (
-              <TabsContent value="platform" className="mt-0">
-                <SettingsContent title="平台">
-                  <PlatformEnablementField />
-                </SettingsContent>
-              </TabsContent>
-            )}
-
-            {category === "network" && (
-              <TabsContent value="network" className="mt-0">
-                <SettingsContent title="网络">
-                  <Section title="代理" keywords="代理 地址">
-                    <Field data-invalid={proxyError ? true : undefined}>
-                      <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
-                      <FieldContent>
-                        <form
-                          className="w-full"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            saveProxy();
-                          }}
-                        >
-                          <InputGroup>
-                            <InputGroupInput
-                              id="proxy"
-                              type="text"
-                              inputMode="url"
-                              autoCapitalize="none"
-                              value={proxyDraft}
-                              onChange={(event) => {
-                                setProxyDraft(event.target.value);
-                                setProxyError(null);
-                                setProxyStatus(null);
-                              }}
-                              placeholder="http://127.0.0.1:7890"
-                              aria-invalid={proxyError ? true : undefined}
-                            />
-                            <InputGroupAddon align="inline-end">
-                              <InputGroupButton type="submit" variant="secondary" size="sm">
-                                保存
-                              </InputGroupButton>
-                            </InputGroupAddon>
-                          </InputGroup>
-                        </form>
-                        {proxyError ? (
-                          <FieldError>{proxyError}</FieldError>
-                        ) : (
-                          proxyStatus && (
-                            <FieldDescription role="status" aria-live="polite">
-                              {proxyStatus}
-                            </FieldDescription>
-                          )
-                        )}
-                      </FieldContent>
-                    </Field>
-                  </Section>
-                  <Section title="IPTV 源" keywords="iptv IPTV M3U 源 地址">
-                    <IptvCustomM3uUrlField />
-                  </Section>
-                </SettingsContent>
-              </TabsContent>
-            )}
-
-            {category === "account" && (
-              <TabsContent value="account" className="mt-0">
-                <SettingsContent title="账号">
-                  <Section title="发送权限" keywords="发送 弹幕 权限">
-                    <DanmakuSendField />
-                  </Section>
-                  <Section
-                    title="平台账号"
-                    keywords="账号 平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码"
-                  >
-                    <AccountCard
-                      siteId="bilibili"
-                      title="哔哩哔哩"
-                      placeholder="SESSDATA=…; bili_jct=…"
-                      qrLogin
-                    />
-                    <AccountCard
-                      siteId="douyu"
-                      title="斗鱼"
-                      placeholder="acf_username=…; acf_stk=…; acf_ltkid=…"
-                      qrLogin
-                    />
-                    <AccountCard
-                      siteId="huya"
-                      title="虎牙"
-                      placeholder="yyuid=…; udb_uid=…; udb_n=…; udb_cred=…"
-                      qrLogin
-                    />
-                    <AccountCard
-                      siteId="douyin"
-                      title="抖音"
-                      placeholder="sessionid=…; ttwid=…; msToken=…"
-                      qrLogin
-                    />
-                  </Section>
-                </SettingsContent>
-              </TabsContent>
-            )}
-
-            {category === "data" && (
-              <TabsContent value="data" className="mt-0">
-                <SettingsContent title="数据">
-                  <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
-                    <Field data-invalid={profileError ? true : undefined}>
-                      <FieldContent>
-                        <FieldTitle>配置档案</FieldTitle>
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          <Button
-                            onClick={() => void chooseProfileForExport()}
-                            disabled={profileAction !== null}
-                          >
-                            {profileAction === "export" ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : (
-                              <Download data-icon="inline-start" aria-hidden />
-                            )}
-                            {profileAction === "export" ? "正在导出…" : "导出配置"}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => void chooseProfileForImport()}
-                            disabled={profileAction !== null}
-                          >
-                            {profileAction === "import" ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : (
-                              <Upload data-icon="inline-start" aria-hidden />
-                            )}
-                            {profileAction === "import" ? "正在导入…" : "导入配置"}
-                          </Button>
-                        </div>
-                        {profileError ? (
-                          <FieldError>{profileError}</FieldError>
-                        ) : (
-                          profileStatus && (
-                            <FieldDescription role="status" aria-live="polite">
-                              {profileStatus}
-                            </FieldDescription>
-                          )
-                        )}
-                      </FieldContent>
-                    </Field>
-                  </Section>
-                </SettingsContent>
-              </TabsContent>
-            )}
-
-            {category === "about" && (
-              <TabsContent value="about" className="mt-0">
-                <SettingsContent title="关于">
-                  <AboutSettings />
-                </SettingsContent>
-              </TabsContent>
-            )}
+            <div
+              ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
+              data-slot="horizontal-swipe-track"
+              className="flex min-h-0 items-start"
+              style={categoryTrackStyle}
+            >
+              {settingsCategoryValues.map((value) => (
+                // Every category holds its slot so the track keeps its
+                // geometry; only the visible window renders real content.
+                <TabsContent
+                  key={value}
+                  value={value}
+                  keepMounted
+                  hidden={false}
+                  inert={category === value ? undefined : true}
+                  className="mt-0 min-w-0 shrink-0"
+                  style={categoryPanelStyle}
+                >
+                  {isCategoryMounted(value) && settingsCategoryPanels[value]}
+                </TabsContent>
+              ))}
+            </div>
           </div>
         </Tabs>
       </SettingsSearchContext.Provider>

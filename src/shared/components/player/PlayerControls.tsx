@@ -121,6 +121,26 @@ export function showPlayerControlsCenterSlot(compact: boolean, fullscreen: boole
   return !compact || fullscreen;
 }
 
+/**
+ * Whether the overlay chrome should reserve room for the system gesture bar.
+ *
+ * `env(safe-area-inset-bottom)` describes the window, not this element. The
+ * inset is only real padding when the controls actually sit on the bottom
+ * window edge: fullscreen, or a player that fills the viewport down to it.
+ * Portrait rooms stack danmaku below the picture, so the controls float over
+ * the video's bottom edge with the panel — not the gesture bar — underneath.
+ * Padding there would push the buttons up off the picture by the inset height,
+ * which is exactly the gap that shows up on a cold start (Android reports the
+ * inset) and disappears after a fullscreen round trip (the WebView leaves it
+ * collapsed at 0) — same layout, two different renderings of the same bug.
+ */
+export function playerControlsAvoidSystemGestureBar(
+  fullscreen: boolean,
+  stackedBelowPlayer: boolean,
+): boolean {
+  return fullscreen || !stackedBelowPlayer;
+}
+
 export type PlayerControlsProps = {
   paused: boolean;
   volume: number;
@@ -152,6 +172,12 @@ export type PlayerControlsProps = {
   disabled?: boolean;
   /** Use when controls are rendered over the bottom edge of the video. */
   overlay?: boolean;
+  /**
+   * Set when content (portrait danmaku panel, page footer) is stacked below
+   * the player, so the controls do not sit on the window's bottom edge and
+   * must not reserve space for the system gesture bar.
+   */
+  stackedBelowPlayer?: boolean;
   /** Optional compact content centered between transport and room controls. */
   centerSlot?: ReactNode;
   /**
@@ -272,6 +298,7 @@ export function PlayerControls({
   pictureInPictureDisabled = false,
   disabled = false,
   overlay = false,
+  stackedBelowPlayer = false,
   compact = false,
   centerSlot,
   portalContainer,
@@ -307,6 +334,7 @@ export function PlayerControls({
   const showSecondaryControls = showSecondaryPlayerControls(compact, portrait);
   const showVolumeControl = showPlayerVolumeControl(compact, portrait, fullscreen);
   const showSidePanelControl = showPlayerSidePanelControl(compact, portrait, fullscreen);
+  const avoidSystemGestureBar = playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer);
   const mobilePortrait = !showSecondaryControls;
   const volumeControl = volumeControlPresentation(volume, muted);
   const isMuted = volumeControl.isMuted;
@@ -614,13 +642,20 @@ export function PlayerControls({
             // players draw their bottom chrome — no top border, no blur, no
             // panel edge. The gradient reaches every player edge; safe-area
             // spacing stays inside the surface so it never creates a gutter.
+            // The bottom inset applies only when the chrome really sits on the
+            // window edge (see playerControlsAvoidSystemGestureBar).
             // Extra top padding gives the fade room to resolve before the
             // first control.
             cn(
               "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
-              compact
-                ? "pt-1.5 pb-[max(1px,env(safe-area-inset-bottom))]"
-                : "pt-3 pb-[max(0.25rem,env(safe-area-inset-bottom))]",
+              compact ? "pt-1.5" : "pt-3",
+              avoidSystemGestureBar
+                ? compact
+                  ? "pb-[max(1px,env(safe-area-inset-bottom))]"
+                  : "pb-[max(0.25rem,env(safe-area-inset-bottom))]"
+                : compact
+                  ? "pb-px"
+                  : "pb-1",
             )
           : "border-t border-border bg-card px-1.5 py-1",
       )}
