@@ -22,6 +22,7 @@ import {
   MOBILE_DANMAKU_FRAME_INTERVAL_MS,
   nextCanvasFrameDeadline,
 } from "./framePacing";
+import { selfBorderTextBox } from "./selfBorder";
 import { cn } from "@/lib/utils";
 
 type CanvasDanmakuProps = {
@@ -66,18 +67,26 @@ function strokeSelfDanmakuBorder(
   x: number,
   y: number,
   width: number,
-  height: number,
+  lineHeight: number,
+  /**
+   * Image emotes are drawn at the full line height, so a rich comment's reserved
+   * box already is its content box. Only plain text needs the em-square fit.
+   */
+  fitToText = true,
 ): void {
   if (!item.isSelf) return;
+  const box = fitToText
+    ? selfBorderTextBox(y, item.fontSize, lineHeight)
+    : { top: y, height: lineHeight };
   ctx.save();
   ctx.strokeStyle = SELF_DANMAKU_BORDER_COLOR;
   ctx.lineWidth = SELF_DANMAKU_BORDER_WIDTH;
   ctx.lineJoin = "round";
   ctx.strokeRect(
     x - DANMAKU_SELF_BORDER_PADDING_X,
-    y - DANMAKU_SELF_BORDER_PADDING_Y,
+    box.top - DANMAKU_SELF_BORDER_PADDING_Y,
     width + DANMAKU_SELF_BORDER_PADDING_X * 2,
-    height + DANMAKU_SELF_BORDER_PADDING_Y * 2,
+    box.height + DANMAKU_SELF_BORDER_PADDING_Y * 2,
   );
   ctx.restore();
 }
@@ -285,6 +294,8 @@ function createRichRaster(
   scratchContext.strokeStyle = "rgba(0,0,0,0.82)";
   scratchContext.lineWidth = lineWidth;
   scratchContext.fillStyle = item.color || "#fff";
+  // Image emotes are drawn at the full line height, so this box is already the
+  // real content box.
   strokeSelfDanmakuBorder(
     scratchContext,
     item,
@@ -292,6 +303,7 @@ function createRichRaster(
     offsetY,
     metrics.contentWidth,
     metrics.lineHeight,
+    false,
   );
   if (!drawRichDanmaku(scratchContext, item, offsetX, offsetY, fontWeight, imageForUrl)) {
     return null;
@@ -756,6 +768,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
                 it.y,
                 richMetrics.contentWidth,
                 richMetrics.lineHeight,
+                false,
               );
             }
             const drewRich = drawRichDanmaku(ctx, it, x, it.y, currentFontWeight, imageForUrl);
