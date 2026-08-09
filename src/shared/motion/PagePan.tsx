@@ -1,11 +1,11 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
-import { motionProfile, prefersReducedMotion } from "./tokens";
+import { EASE_OUT_CSS, motionProfile, prefersReducedMotion } from "./tokens";
 
-// CSS equivalent of GSAP's power2.out. Web Animations can advance this
-// transform on Chromium's compositor while React is busy on the main thread.
-const PAGE_PAN_EASING = "cubic-bezier(0.215, 0.61, 0.355, 1)";
+// Web Animations can advance this transform on Chromium's compositor while
+// React is busy on the main thread.
+const PAGE_PAN_EASING = EASE_OUT_CSS;
 
 type PanSnapshot = {
   key: string;
