@@ -227,6 +227,9 @@ function MainMultiRoomControls({
           refreshDisabled={loading || !playback.playUrl}
           loadError={loadError}
           overlay
+          // One cell of the director grid: outside fullscreen there is always
+          // more grid below, so the chrome is not on the window's bottom edge.
+          stackedBelowPlayer
           portalContainer={player.stageRef}
           centerSlot={<DanmakuComposer siteId={room.siteId} roomId={room.roomId} overlay />}
           onRefresh={onRefresh}

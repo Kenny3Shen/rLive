@@ -8,6 +8,7 @@ import {
 import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
+  playerControlsAvoidSystemGestureBar,
   showPlayerControlsCenterSlot,
   showPlayerSidePanelControl,
   showPlayerVolumeControl,
@@ -298,5 +299,22 @@ describe("mobile room side tabs", () => {
     expect(nextRoomSideTabForSwipe("chat", -72, 72)).toBeNull();
     expect(nextRoomSideTabForSwipe("chat", 80, 4)).toBeNull();
     expect(nextRoomSideTabForSwipe("settings", -80, 4)).toBeNull();
+  });
+});
+
+describe("overlay chrome system gesture bar allowance", () => {
+  test("reserves the inset when the chrome sits on the window's bottom edge", () => {
+    expect(playerControlsAvoidSystemGestureBar(false, false)).toBe(true);
+  });
+
+  test("drops the inset when content is stacked below the player", () => {
+    // Portrait rooms put the danmaku panel under the picture: the gesture bar
+    // is below that panel, not below the controls. Reserving it there is the
+    // gap that appears on a cold start and hides after a fullscreen round trip.
+    expect(playerControlsAvoidSystemGestureBar(false, true)).toBe(false);
+  });
+
+  test("keeps the inset in fullscreen, where the player owns the whole window", () => {
+    expect(playerControlsAvoidSystemGestureBar(true, true)).toBe(true);
   });
 });

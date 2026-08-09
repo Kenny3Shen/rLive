@@ -336,12 +336,18 @@ export function Shell() {
   // filter remains tappable in the header, but the surrounding Shell must not
   // compete for the same horizontal gesture.
   const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
+  // `panels` is the layout `liveSwipePage` below renders: the active platform
+  // and its neighbours are all mounted and offset by index, so the gesture pans
+  // a layer whose pages are already on screen. Every other surface binds these
+  // hooks to the single-page `swipePage` instead.
+  const platformSwipeLayout = platformSwipeEnabled ? "panels" : "page";
   const sitePlatformSwipe = useHorizontalSwipe({
     items: sitePlatforms,
     value: activeSiteId,
     onChange: handleSitePlatformChange,
     enabled: platformSwipeEnabled && !isLiveFollow,
     animate: platformSwipeEnabled,
+    layout: platformSwipeLayout,
   });
   const followPlatformSwipe = useHorizontalSwipe({
     items: followPlatforms,
@@ -349,6 +355,7 @@ export function Shell() {
     onChange: handleFollowPlatformChange,
     enabled: platformSwipeEnabled && isLiveFollow,
     animate: platformSwipeEnabled,
+    layout: platformSwipeLayout,
   });
   const iptvSourceSwipe = useHorizontalSwipe({
     items: iptvSourceOptions,
@@ -455,31 +462,42 @@ export function Shell() {
   liveSwipePanels.sort((left, right) => platformStrip.indexOf(left) - platformStrip.indexOf(right));
 
   const liveSwipePage = (
-    <div
-      ref={bindContentSwipePageRef}
-      data-slot="app-swipe-track"
-      className="relative h-full min-h-0 min-w-0"
-    >
-      {liveSwipePanels.map((platform) => {
-        const panelIndex = platformStrip.indexOf(platform);
-        const panelOffset = Math.sign(panelIndex - activeLivePanelIndex) * 100;
-        const active = panelIndex === activeLivePanelIndex;
-        return (
-          <div
-            key={String(platform)}
-            ref={active ? bindPageScrollRef : undefined}
-            data-slot="app-swipe-panel"
-            aria-hidden={active ? undefined : true}
-            inert={active ? undefined : true}
-            className={cn(pageScrollerClassName, "absolute inset-0 w-full", !active && "hidden")}
-            style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
-          >
-            <RefreshFabVisibilityProvider visible={active}>
-              <RouteOutlet defer={active && deferRouteOutlet} outlet={outlet} platform={platform} />
-            </RefreshFabVisibilityProvider>
-          </div>
-        );
-      })}
+    // The rendered window is the active platform plus its neighbours. The track
+    // holds them side by side and travels as one layer, so the incoming page is
+    // already painted and enters continuously under the finger instead of
+    // appearing only once the gesture is released. Each panel keeps its own
+    // scroller, so they are positioned rather than laid out in a flex row.
+    <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
+      <div
+        ref={bindContentSwipePageRef}
+        data-slot="app-swipe-track"
+        className="relative h-full min-h-0 min-w-0"
+      >
+        {liveSwipePanels.map((platform) => {
+          const panelIndex = platformStrip.indexOf(platform);
+          const panelOffset = (panelIndex - activeLivePanelIndex) * 100;
+          const active = panelIndex === activeLivePanelIndex;
+          return (
+            <div
+              key={String(platform)}
+              ref={active ? bindPageScrollRef : undefined}
+              data-slot="app-swipe-panel"
+              aria-hidden={active ? undefined : true}
+              inert={active ? undefined : true}
+              className={cn(pageScrollerClassName, "absolute inset-0 w-full")}
+              style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
+            >
+              <RefreshFabVisibilityProvider visible={active}>
+                <RouteOutlet
+                  defer={active && deferRouteOutlet}
+                  outlet={outlet}
+                  platform={platform}
+                />
+              </RefreshFabVisibilityProvider>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
   const regularPage =

@@ -32,7 +32,7 @@ type SwipeState = {
 };
 
 type SwipeOffsetSetter = (value: number) => void;
-type HorizontalSwipeLayout = "page" | "track";
+type HorizontalSwipeLayout = "page" | "track" | "panels";
 
 const HORIZONTAL_SWIPE_SURFACE_SELECTOR = "[data-horizontal-swipe-surface]";
 
@@ -46,7 +46,9 @@ export type UseHorizontalSwipeOptions<T> = {
   animate?: boolean;
   /**
    * `page` moves one currently rendered page; `track` moves an equal-width row
-   * whose children stay mounted side by side during the gesture.
+   * whose children stay mounted side by side during the gesture; `panels`
+   * moves a layer whose children already position themselves relative to the
+   * active one, so a commit settles in place instead of panning in.
    */
   layout?: HorizontalSwipeLayout;
   isEqual?: (left: T, right: T) => boolean;
@@ -75,6 +77,10 @@ export function useHorizontalSwipe<T>({
   isEqual = Object.is,
 }: UseHorizontalSwipeOptions<T>) {
   const isTrackLayout = layout === "track";
+  // Both non-`page` layouts keep the adjacent pages mounted and on screen, so
+  // the drag spans real neighbours and the surface to measure is the viewport
+  // the moving layer travels inside rather than the layer itself.
+  const followsNeighbours = isTrackLayout || layout === "panels";
   const pageRef = useRef<HTMLElement | null>(null);
   const swipeRef = useRef<SwipeState | null>(null);
   const clickSuppressionUntilRef = useRef(0);
@@ -223,7 +229,10 @@ export function useHorizontalSwipe<T>({
       return;
     }
 
-    const measuredSurfaceWidth = isTrackLayout ? surfaceWidth() : surfaceWidthRef.current;
+    // Layouts that keep their neighbours mounted can measure the live viewport,
+    // so even a tap-driven change (no preceding gesture) animates on the very
+    // first interaction instead of snapping until a pointer has been down once.
+    const measuredSurfaceWidth = followsNeighbours ? surfaceWidth() : surfaceWidthRef.current;
     if (measuredSurfaceWidth <= 0) {
       clearOffset();
       return;
@@ -248,6 +257,12 @@ export function useHorizontalSwipe<T>({
     // value, place the incoming page a full surface width across the opposite
     // edge and settle it in, so the release plays as one continuous pan rather
     // than a short catch-up nudge.
+    //
+    // `panels` shares this path on purpose: its children re-anchor themselves
+    // around the new active index, which shifts every one of them by a full
+    // width. Rebasing the layer by the same width in the travel direction keeps
+    // the pixels under the finger exactly where they were, and settling to 0
+    // finishes the pan the gesture started.
     const startOffset = horizontalSwipeCommitOffset(
       pendingDirection === null ? 0 : offsetRef.current,
       direction,
@@ -267,6 +282,7 @@ export function useHorizontalSwipe<T>({
   }, [
     cancelPendingOffset,
     clearOffset,
+    followsNeighbours,
     isEqual,
     isTrackLayout,
     items,
@@ -358,7 +374,12 @@ export function useHorizontalSwipe<T>({
       ) {
         return;
       }
-      const measuredSurfaceWidth = isTrackLayout ? surfaceWidth() : event.currentTarget.clientWidth;
+      // A track/panel layer is narrower or wider than the gesture surface that
+      // hosts it, so measure the viewport it travels inside rather than the
+      // element the pointer landed on.
+      const measuredSurfaceWidth = followsNeighbours
+        ? surfaceWidth()
+        : event.currentTarget.clientWidth;
       const nextSurfaceWidth =
         measuredSurfaceWidth > 0 ? measuredSurfaceWidth : event.currentTarget.clientWidth;
       const currentItems = itemsRef.current;
@@ -375,7 +396,7 @@ export function useHorizontalSwipe<T>({
       };
       surfaceWidthRef.current = nextSurfaceWidth;
     },
-    [enabled, isTrackLayout, surfaceWidth],
+    [enabled, followsNeighbours, surfaceWidth],
   );
 
   const onPointerMoveCapture = useCallback(

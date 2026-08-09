@@ -63,6 +63,23 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeTrackOffset(1, 360)).toBe(-360);
     expect(horizontalSwipeTrackOffset(2, 360)).toBe(-720);
   });
+
+  test("keeps the pixels under the finger when index-offset panels re-anchor", () => {
+    // In the `panels` layout each child positions itself at
+    // (panelIndex - activeIndex) * width. Committing a new active index shifts
+    // every panel by one width, so the layer must be rebased by the same width
+    // in the travel direction for the release to continue the gesture instead
+    // of jumping. Rebase minus re-anchor must be exactly the live drag.
+    const width = 360;
+    for (const [drag, direction] of [
+      [-140, 1],
+      [140, -1],
+      [-320, 1],
+    ] as const) {
+      const rebased = horizontalSwipeCommitOffset(drag, direction, width);
+      expect(rebased - direction * width).toBe(drag);
+    }
+  });
 });
 
 describe("pull to refresh", () => {

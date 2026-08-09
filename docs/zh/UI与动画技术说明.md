@@ -194,7 +194,13 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - 完成切换需要至少 `48px` 的有效横向移动。
 - 手势开始时一次性读取 surface 宽度、活动索引和减少动态效果偏好；拖动期间将高频 pointermove 合并到 `requestAnimationFrame`，每帧最多通过同一个 `gsap.quickSetter()` 写入 `x`，不重复创建 setter 或 tween。
 - 到达首尾边界时只保留 `0.18` 倍位移，表达不可继续而不是循环。
-- 释放后使用 `SWIPE_SETTLE` 回到原位或让新页从完整一屏外进入。
+- 释放后使用 `SWIPE_SETTLE` 归位；未达阈值回到原位，达成切换则把手势的位移继续走完。
+- `layout` 选项区分三种承载方式，决定归位目标：
+  - `page`：移动层只承载当前一页。提交时先按 `horizontalSwipeCommitOffset` 把新页重基到一屏外，再滑入到 `0`，让释放表现为一次连续平移而非短促补位。
+  - `track`：所有页按等宽排成一行常驻挂载。提交只需把整行移动到新页对应的 `horizontalSwipeTrackOffset`，前后页在手势过程中本就同时可见。用于历史页双 Tab、设置分类和房间侧栏 Tab。
+  - `panels`：各页自行按 `(索引 - 活动索引) × 100%` 定位，以保留各自独立的滚动容器。提交会让所有面板整体重锚一屏，因此复用 `page` 的重基路径：重基量与重锚量相互抵消，手指下方的像素保持不动。用于 Shell 的移动端平台切换。
+- 交互式分页过渡（Interactive Paging Transition）由 `track` 和 `panels` 承担：相邻页在手势开始前就已挂载并绘制，跟手阶段实时按手势进度过渡，释放后只做收尾归位，不存在“松手才出现新页”的跳变。
+- 非 `page` 布局测量的是移动层所在的 viewport（父元素 `clientWidth`），而不是移动层自身；因此点击 Tab 触发的切换在首次交互即可动画，无需等待一次指针按下来校准宽度。
 - 移动端相邻平台页为无缝预览保持挂载，但使用 layout/paint/style containment 隔离；完全离屏页的 CSS animation 暂停，成为活动页后自动恢复。
 - Slider、Input、Textarea、Select、可编辑区域和 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管。
 - 已识别 swipe 后短暂抑制合成 click，避免 Android WebView 误触当前控件。
