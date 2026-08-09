@@ -69,19 +69,26 @@ src-tauri/gen/android/app/build/outputs/apk/
 
 **经验**：`env(safe-area-inset-*)` 是窗口级量，只有当元素自身贴着窗口对应边时才等于它需要的 padding。嵌套或堆叠布局中的元素直接引用它，就会引入一段与实际遮挡无关的偏移。
 
-### 退出视频全屏后系统栏未恢复（未修复）
+### 退出视频全屏后系统栏未恢复（已修复）
 
 **现象**：进入 HTML 视频全屏再退出后，状态栏和导航栏没有恢复显示，界面继续按无系统栏布局。副作用是所有 `env(safe-area-inset-*)` 塌陷为 0。
 
-**已定位的成因**：`RliveFullscreenWebChromeClient.enterImmersiveMode()`（`src-tauri/gen/android/app/src/main/java/com/shenss/rlive/RliveFullscreenWebChromeClient.kt:113`）在隐藏系统栏前，先用 `ViewCompat.getRootWindowInsets(decorView)?.isVisible(systemBars())` 记录原本的可见性到 `restoreVisibleSystemBars`，退出时（同文件 `dismissCustomView()`，第 138 行）仅在该标记为 `true` 时才 `controller.show(systemBars())`。这个「记录再恢复」的思路本身没问题，但取值时机不可靠：
+**成因**：`RliveFullscreenWebChromeClient` 原先在隐藏系统栏前，用 `ViewCompat.getRootWindowInsets(decorView)?.isVisible(systemBars())` 把「进入全屏前系统栏是否可见」记到 `restoreVisibleSystemBars`，退出时仅在该标记为 `true` 时才 `show(systemBars())`。这个「记录再恢复」的思路会自毁：
 
-1. 全屏前若已因 `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` 处于瞬时隐藏状态（例如上一次全屏刚退出、或系统正在播放栏动画），`isVisible` 会读到 `false`，于是退出时判定「原本就该隐藏」而不再恢复。
-2. `getRootWindowInsets` 在 insets 尚未派发时返回 `null`，此时 `?: true` 兜底是对的；但返回非 null 而内容是动画中间态时没有兜底。
-3. `previousSystemBarsBehavior` 会被连续两次 `enterImmersiveMode()` 覆盖成沉浸态自身的值，嵌套或快速重入时无法回到真正的原始 behavior。
+1. 首次退出全屏时标记为 `true`，系统栏确实恢复显示；
+2. 但 behavior 被一并还原成沉浸态自身的 `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`——该模式下重新出现的系统栏属于**瞬时**状态，会在短暂超时后自动隐藏；
+3. 下一次进入全屏时采样到的就是这个已经自动隐藏的状态，`isVisible` 返回 `false`，于是记录成「原本就该隐藏」；
+4. 此后每次退出全屏都跳过恢复，系统栏再也不回来。
 
-**修复方向**（尚未实施，需要真机验证）：这个 Activity 始终以 `enableEdgeToEdge()` 运行、除视频全屏外没有任何隐藏系统栏的路径，因此不存在「原本就该隐藏」的合法状态——直接无条件 `controller.show(systemBars())` 并把 behavior 复位为 `BEHAVIOR_DEFAULT`，比记录再恢复更可靠。同时应在 `onResume` 兜底一次恢复，以覆盖进程被系统回收后重建的情况。
+`previousSystemBarsBehavior` 同样会被连续两次 `enterImmersiveMode()` 覆盖成沉浸态自身的值，快速重入时无法回到真正的原始 behavior，进一步固化了这个状态。
 
-**当前影响**：控制栏 padding 已不再依赖系统栏可见性，所以这个问题不再表现为布局错位，但状态栏和导航栏仍会缺失，需要单独修复。
+**解决方案**：这个 Activity 始终以 `enableEdgeToEdge()` 运行、除视频全屏外没有任何隐藏系统栏的路径，因此不存在「原本就该隐藏」的合法状态，无条件恢复比记录再恢复更可靠。
+
+- 删除 `restoreVisibleSystemBars` 与 `previousSystemBarsBehavior` 两个快照字段，改为统一的 `restoreSystemBars()`：先把 behavior 复位为 `BEHAVIOR_DEFAULT`，再 `show(systemBars())`。顺序很重要——`BEHAVIOR_DEFAULT` 下系统栏一旦显示就持续可见直到被显式隐藏，而留在 `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` 时刚显示的系统栏会自行淡出，正是上面第 2 步的根源。
+- `MainActivity.onResume()` 增加 `restoreSystemBarsUnlessFullscreen()` 兜底：正在放全屏视频时不动，其余情况一律恢复，覆盖进程被系统回收后重建、以及全屏播放中途被系统中断的路径。
+- `restoreSystemBars` 同时提供 companion 版本。chrome client 是在 `webView.post {}` 里才赋值的，早于它的 `onResume` 需要一条不依赖实例的路径。
+
+**验证状态**：`./gradlew :app:compileUniversalDebugKotlin` 通过。行为验证需要真机覆盖三种情形：普通全屏往返、连续快速进出全屏、全屏中途切后台再回前台。
 
 ### Android target 选择错误 ABI
 

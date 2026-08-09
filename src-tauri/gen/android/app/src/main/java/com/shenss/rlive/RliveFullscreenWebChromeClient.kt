@@ -1,5 +1,6 @@
 package com.shenss.rlive
 
+import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Message
@@ -15,7 +16,6 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebStorage
 import android.webkit.WebView
-import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -37,8 +37,6 @@ class RliveFullscreenWebChromeClient(
   private var customView: View? = null
   private var customViewCallback: CustomViewCallback? = null
   private var fullscreenContainer: FrameLayout? = null
-  private var restoreVisibleSystemBars = true
-  private var previousSystemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
 
   val isShowingCustomView: Boolean
     get() = customView != null
@@ -111,11 +109,8 @@ class RliveFullscreenWebChromeClient(
   }
 
   private fun enterImmersiveMode() {
-    val decorView = activity.window.decorView
-    val controller = WindowCompat.getInsetsController(activity.window, decorView)
-    previousSystemBarsBehavior = controller.systemBarsBehavior
-    restoreVisibleSystemBars = ViewCompat.getRootWindowInsets(decorView)
-      ?.isVisible(WindowInsetsCompat.Type.systemBars()) ?: true
+    val controller =
+      WindowCompat.getInsetsController(activity.window, activity.window.decorView)
     controller.systemBarsBehavior =
       WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -132,13 +127,40 @@ class RliveFullscreenWebChromeClient(
     customView = null
     customViewCallback = null
 
-    val decorView = activity.window.decorView
-    val controller = WindowCompat.getInsetsController(activity.window, decorView)
-    controller.systemBarsBehavior = previousSystemBarsBehavior
-    if (restoreVisibleSystemBars) {
+    restoreSystemBars()
+    return true
+  }
+
+  /**
+   * Brings the system bars back unconditionally.
+   *
+   * An earlier version snapshotted `isVisible(systemBars())` before hiding and
+   * only restored when that snapshot was true. That self-destructs: the
+   * restored bars are still under BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE, so
+   * Android auto-hides them again shortly after. The next fullscreen entry then
+   * samples an already-hidden state, records "was hidden", and skips the
+   * restore forever after.
+   *
+   * The Activity runs edge-to-edge and has no path other than video fullscreen
+   * that hides the bars, so there is no legitimate hidden state to preserve.
+   * Resetting the behaviour first also matters: leaving it on TRANSIENT means
+   * the bars we just showed would fade out on their own.
+   */
+  fun restoreSystemBars() {
+    restoreSystemBars(activity)
+  }
+
+  companion object {
+    /**
+     * Same restore, reachable before [MainActivity] has installed its client.
+     * The chrome client is assigned from a `webView.post {}` block, so an early
+     * `onResume` can run while it is still null.
+     */
+    fun restoreSystemBars(activity: Activity) {
+      val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+      controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
       controller.show(WindowInsetsCompat.Type.systemBars())
     }
-    return true
   }
 
   override fun getDefaultVideoPoster(): Bitmap? = delegate.defaultVideoPoster

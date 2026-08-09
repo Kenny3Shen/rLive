@@ -28,6 +28,25 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     requestHighRefreshRate()
+    restoreSystemBarsUnlessFullscreen()
+  }
+
+  /**
+   * Video fullscreen is the only path that hides the system bars, and it always
+   * restores them on exit. Returning to the foreground in any other state means
+   * the bars should be visible — after a process death that dropped the custom
+   * view, or after the system interrupted playback mid-fullscreen.
+   *
+   * Without this the window can stay laid out as if the bars were present while
+   * they are not, which collapses every `env(safe-area-inset-*)` to 0 in the
+   * WebView.
+   */
+  private fun restoreSystemBarsUnlessFullscreen() {
+    val client = fullscreenChromeClient
+    if (client?.isShowingCustomView == true) {
+      return
+    }
+    client?.restoreSystemBars() ?: RliveFullscreenWebChromeClient.restoreSystemBars(this)
   }
 
   override fun onWebViewCreate(webView: WebView) {
