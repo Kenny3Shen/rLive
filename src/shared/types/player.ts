@@ -2,16 +2,20 @@ export type PlayerUiMode = "windowed" | "fullscreen";
 
 /** MSE / web player media lifecycle (failover hooks). */
 export type PlayerEventKind = "playing" | "paused" | "idle" | "eof" | "error";
+export type PlayerTransportProtocol = "flv" | "hls" | "mpegts" | "native";
 
 export type PlayerEvent = {
   epoch: number;
   generation: number;
   kind: PlayerEventKind;
   message?: string | null;
-  /** Ask the controller to obtain a fresh, short-lived playback URL. */
-  refreshPlayUrl?: boolean;
-  /** Optional delay before refreshing a source that is temporarily unavailable. */
-  retryAfterMs?: number;
+  protocol?: PlayerTransportProtocol;
+  /** HTTP status observed while loading media metadata or segments. */
+  httpStatus?: number | null;
+  /** The transport has exhausted its protocol-specific in-place recovery. */
+  recoveryExhausted?: boolean;
+  /** Twitch returned its temporary commercial-break response. */
+  commercialBreak?: boolean;
   /** The browser rejected the media because the selected rendition is not decodable. */
   decodeError?: boolean;
 };

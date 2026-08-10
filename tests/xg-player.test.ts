@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { IPlayerOptions } from "xgplayer";
-import { iptvPlaybackKind } from "../src/features/iptv/IptvPlayer";
+import {
+  iptvChannelPlayUrl,
+  iptvLifecycleReloadToken,
+  iptvPlaybackKind,
+  nextIptvReconnectAction,
+} from "../src/features/iptv/IptvPlayer";
 import {
   createXgPlayer,
   getXgHlsCore,
@@ -14,6 +19,18 @@ import {
 } from "../src/features/room/player/xgPlayer";
 
 describe("xgplayer transport selection", () => {
+  test("keeps IPTV reconnects bounded with the existing delays", () => {
+    expect(nextIptvReconnectAction(0)).toEqual({ type: "retry", attempt: 1, delayMs: 1_000 });
+    expect(nextIptvReconnectAction(1)).toEqual({ type: "retry", attempt: 2, delayMs: 2_500 });
+    expect(nextIptvReconnectAction(2)).toEqual({ type: "fail" });
+  });
+
+  test("keeps manual refresh and automatic reconnect rebuild keys distinct", () => {
+    expect(iptvLifecycleReloadToken(0, 1)).toBe("0:1");
+    expect(iptvLifecycleReloadToken(1, 0)).toBe("1:0");
+    expect(iptvLifecycleReloadToken(0, 1)).not.toBe(iptvLifecycleReloadToken(1, 0));
+  });
+
   test("selects the protocol plugin from common IPTV URL forms", () => {
     expect(iptvPlaybackKind("https://cdn.example/live.flv?token=one")).toBe("flv");
     expect(iptvPlaybackKind("https://cdn.example/live?id=1&type=flv")).toBe("flv");
@@ -28,6 +45,17 @@ describe("xgplayer transport selection", () => {
         protocol: "mpeg_ts",
       }),
     ).toBe("mpegts");
+  });
+
+  test("translates legacy IPTV channels into explicit shared lifecycle sources", () => {
+    const base = { id: "one", name: "频道", group: "", logo: null, headers: {} };
+    expect(iptvChannelPlayUrl({ ...base, url: "https://cdn.example/live.m2ts" })).toMatchObject({
+      source_id: "iptv:one",
+      protocol: "mpeg_ts",
+    });
+    expect(iptvChannelPlayUrl({ ...base, url: "https://cdn.example/archive.mov" })).toMatchObject({
+      protocol: "native",
+    });
   });
 
   test("normalizes xgplayer protocol and media errors", () => {
