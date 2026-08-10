@@ -14,6 +14,10 @@ type IptvPlayerPathOptions = {
   query?: string | null;
 };
 
+type DirectPlayerPathOptions = {
+  directUrl: string;
+};
+
 function withValue(params: URLSearchParams, key: string, value: string | null | undefined) {
   const trimmed = value?.trim();
   if (trimmed) params.set(key, trimmed);
@@ -52,11 +56,18 @@ export function iptvPlayerPath({
   return `/iptv/play?${params.toString()}`;
 }
 
-/** Only honour local pages that can open IPTV playback as return targets. */
+/** Open a user-provided media URL in the shared immersive player. */
+export function directPlayerPath({ directUrl }: DirectPlayerPathOptions): string {
+  const params = new URLSearchParams();
+  withValue(params, "direct", directUrl);
+  return `/iptv/play?${params.toString()}`;
+}
+
+/** Only honour supported local entry pages as player return targets. */
 export function iptvReturnPathFromState(state: unknown): string | null {
   if (!state || typeof state !== "object" || !("returnTo" in state)) return null;
   const value = state.returnTo;
   if (typeof value !== "string") return null;
   const pathname = value.split(/[?#]/, 1)[0];
-  return pathname === "/iptv" || pathname === "/follow" ? value : null;
+  return pathname === "/iptv" || pathname === "/follow" || pathname === "/settings" ? value : null;
 }

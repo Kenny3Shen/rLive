@@ -27,6 +27,7 @@ import {
   LogOut,
   MonitorPlay,
   Network,
+  Play,
   QrCode,
   Radio,
   RefreshCw,
@@ -60,6 +61,8 @@ import {
   SuperChatSettingsFields,
 } from "@/features/settings/PlaybackPreferenceFields";
 import { cn, SITE_LABELS } from "@/lib/utils";
+import { directPlayerPath } from "@/features/iptv/iptvRoute";
+import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -193,7 +196,7 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
     "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
-  network: "网络 代理 iptv IPTV M3U 源 地址",
+  network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
   data: "数据 导入 导出 配置 档案",
@@ -1069,6 +1072,69 @@ function IptvCustomM3uUrlField() {
   );
 }
 
+function DirectPlaybackField() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function play() {
+    const directUrl = draft.trim();
+    if (!isHttpUrl(directUrl)) {
+      setError("请输入以 http:// 或 https:// 开头的媒体直链");
+      return;
+    }
+    setError(null);
+    navigate(directPlayerPath({ directUrl }), {
+      state: { returnTo: `${location.pathname}${location.search}` },
+    });
+  }
+
+  return (
+    <Field data-invalid={error ? true : undefined}>
+      <FieldLabel htmlFor="direct-playback-url">媒体直链</FieldLabel>
+      <FieldContent>
+        <form
+          className="w-full"
+          onSubmit={(event) => {
+            event.preventDefault();
+            play();
+          }}
+        >
+          <InputGroup>
+            <InputGroupInput
+              id="direct-playback-url"
+              type="url"
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setError(null);
+              }}
+              placeholder="https://example.com/live.m3u8"
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={error ? true : undefined}
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton type="submit" variant="secondary" size="sm">
+                <Play data-icon="inline-start" aria-hidden />
+                播放
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+        </form>
+        {error ? (
+          <FieldError>{error}</FieldError>
+        ) : (
+          <FieldDescription>
+            支持 HLS、FLV、MPEG-TS 和 MP4 等媒体地址；播放请求会通过 rLive 本机代理转发。
+          </FieldDescription>
+        )}
+      </FieldContent>
+    </Field>
+  );
+}
+
 function isHttpM3uUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -1578,6 +1644,9 @@ export function SettingsPage() {
         </Section>
         <Section title="IPTV 源" keywords="iptv IPTV M3U 源 地址">
           <IptvCustomM3uUrlField />
+        </Section>
+        <Section title="直链播放" keywords="直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4">
+          <DirectPlaybackField />
         </Section>
       </SettingsContent>
     ),

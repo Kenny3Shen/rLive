@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  directPlayerPath,
   iptvHomePath,
   iptvPlayerPath,
   iptvReturnPathFromState,
@@ -42,6 +43,13 @@ describe("IPTV routes", () => {
     );
   });
 
+  test("builds a reload-safe direct playback route without losing URL tokens", () => {
+    const directUrl = "https://cdn.example/live.m3u8?token=a+b&part=1#segment";
+    const route = directPlayerPath({ directUrl });
+
+    expect(new URLSearchParams(route.split("?", 2)[1]).get("direct")).toBe(directUrl);
+  });
+
   test("resolves only supported built-in and legacy custom sources", () => {
     expect(playlistSourceFromRoute("mainland", null).label).toBe("中国大陆");
     expect(playlistSourceFromRoute("custom", "https://example.test/custom.m3u").url).toBe(
@@ -81,9 +89,12 @@ describe("IPTV routes", () => {
     expect(iptvFavoriteSourceIdFromRoute("x".repeat(65))).toBeNull();
   });
 
-  test("accepts only local IPTV entry pages as player return targets", () => {
+  test("accepts only supported local pages as player return targets", () => {
     expect(iptvReturnPathFromState({ returnTo: "/iptv?group=News" })).toBe("/iptv?group=News");
     expect(iptvReturnPathFromState({ returnTo: "/follow?view=iptv" })).toBe("/follow?view=iptv");
+    expect(iptvReturnPathFromState({ returnTo: "/settings?section=network" })).toBe(
+      "/settings?section=network",
+    );
     expect(iptvReturnPathFromState({ returnTo: "/room/bilibili/1" })).toBeNull();
     expect(iptvReturnPathFromState({ returnTo: "https://example.test/iptv" })).toBeNull();
   });
