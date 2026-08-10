@@ -236,6 +236,8 @@ export type WebPlayerApi = {
   playerRootRef: React.RefObject<HTMLDivElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   togglePause: () => void;
+  /** Apply a gesture frame directly without reconciling the player tree. */
+  previewVolume: (v: number) => void;
   changeVolume: (v: number) => void;
   setAudio: (volume: number, muted: boolean) => void;
   toggleMute: () => void;
@@ -245,11 +247,16 @@ export type WebPlayerApi = {
   exitFullscreen: () => Promise<void>;
 };
 
+function clampWebPlayerVolume(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
 export function normalizeWebPlayerAudio(
   initialVolume = 80,
   initialMuted = false,
 ): { volume: number; muted: boolean; previousVolume: number } {
-  const volume = Math.max(0, Math.min(100, Math.round(initialVolume)));
+  const volume = clampWebPlayerVolume(initialVolume);
   return {
     volume,
     muted: initialMuted || volume === 0,
@@ -263,7 +270,7 @@ export function applyWebPlayerAudio(
   volume: number,
   muted: boolean,
 ): { volume: number; muted: boolean } {
-  const normalizedVolume = Math.max(0, Math.min(100, Math.round(volume)));
+  const normalizedVolume = clampWebPlayerVolume(volume);
   const normalizedMuted = muted || normalizedVolume === 0;
   video.volume = normalizedVolume / 100;
   video.muted = normalizedMuted;
@@ -590,9 +597,12 @@ export function useWebPlayer(opts: {
 
   const ownsFullscreen = playerOwnsFullscreen(fullscreenOwner);
 
-  volumeRef.current = volume;
-  mutedRef.current = muted;
   qualityRef.current = quality;
+
+  useEffect(() => {
+    volumeRef.current = volume;
+    mutedRef.current = muted;
+  }, [muted, volume]);
 
   const previousSessionKeyRef = useRef(sessionKey);
   useEffect(() => {
@@ -1502,8 +1512,17 @@ export function useWebPlayer(opts: {
     }
   }, []);
 
+  const previewVolume = useCallback((v: number) => {
+    const vol = clampWebPlayerVolume(v);
+    const nextMuted = vol === 0;
+    volumeRef.current = vol;
+    mutedRef.current = nextMuted;
+    const video = videoRef.current;
+    if (video) applyWebPlayerAudio(video, vol, nextMuted);
+  }, []);
+
   const changeVolume = useCallback((v: number) => {
-    const vol = Math.max(0, Math.min(100, Math.round(v)));
+    const vol = clampWebPlayerVolume(v);
     const nextMuted = vol === 0;
     volumeRef.current = vol;
     mutedRef.current = nextMuted;
@@ -1518,7 +1537,7 @@ export function useWebPlayer(opts: {
   }, []);
 
   const setAudio = useCallback((nextVolume: number, nextMuted: boolean) => {
-    const normalizedVolume = Math.max(0, Math.min(100, Math.round(nextVolume)));
+    const normalizedVolume = clampWebPlayerVolume(nextVolume);
     const normalizedMuted = nextMuted || normalizedVolume === 0;
     volumeRef.current = normalizedVolume;
     mutedRef.current = normalizedMuted;
@@ -1659,6 +1678,7 @@ export function useWebPlayer(opts: {
     playerRootRef,
     stageRef,
     togglePause,
+    previewVolume,
     changeVolume,
     setAudio,
     toggleMute,

@@ -10,12 +10,10 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
-import kotlin.math.roundToInt
-
 /** Arguments for the brightness setter. */
 @InvokeArg
 class PlayerControlValueArgs {
-  var value: Int = 0
+  var value: Double = 0.0
 }
 
 /** Requested player orientation: "landscape" while fullscreen, "auto" on exit. */
@@ -34,8 +32,8 @@ class PlayerOrientationArgs {
  *
  * Volume is deliberately NOT here. Driving `STREAM_MUSIC` would change the
  * device-wide media volume and survive leaving the room, and its coarse
- * hardware steps (typically 15) silently swallowed part of the 5% gesture
- * scale. Loudness is handled in the web player via `<video>.volume`, which is
+ * hardware steps (typically 15) silently swallowed adjacent gesture values.
+ * Loudness is handled in the web player via `<video>.volume`, which is
  * app-local, continuous, and torn down with the player session.
  */
 @TauriPlugin
@@ -82,7 +80,7 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
         rememberBrightnessBeforeOverride()
         // This is an Activity override, not a write to Settings.System. It
         // affects rLive only and is restored when the player unmounts.
-        setWindowBrightness(percent / 100f)
+        setWindowBrightness((percent / 100.0).toFloat())
         invoke.resolve(controlValue(brightnessPercent()))
       } catch (error: Exception) {
         invoke.reject(error.message ?: "设置应用亮度失败")
@@ -146,14 +144,14 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
     put("brightness", brightnessPercent())
   }
 
-  private fun controlValue(value: Int): JSObject = JSObject().apply {
+  private fun controlValue(value: Double): JSObject = JSObject().apply {
     put("value", value)
   }
 
-  private fun brightnessPercent(): Int {
+  private fun brightnessPercent(): Double {
     val override = activity.window.attributes.screenBrightness
     if (override != WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE) {
-      return clampPercent((override * 100f).roundToInt())
+      return clampPercent(override.toDouble() * 100.0)
     }
 
     // Reading the user's current brightness is allowed; writing it is not
@@ -167,7 +165,7 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
     } catch (_: SecurityException) {
       128
     }
-    return clampPercent((systemBrightness * 100f / 255f).roundToInt())
+    return clampPercent(systemBrightness.toDouble() * 100.0 / 255.0)
   }
 
   private fun rememberBrightnessBeforeOverride() {
@@ -181,5 +179,5 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
     activity.window.attributes = attributes
   }
 
-  private fun clampPercent(value: Int): Int = value.coerceIn(0, 100)
+  private fun clampPercent(value: Double): Double = value.coerceIn(0.0, 100.0)
 }

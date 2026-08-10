@@ -1154,6 +1154,11 @@ function AppearanceSettings() {
   );
 }
 
+/** Mobile does not expose an explicit light/dark setting in the settings page. */
+export function showExplicitThemeSettings(mobileClient: boolean): boolean {
+  return !mobileClient;
+}
+
 function AboutSettings() {
   function openProjectHomepage() {
     void openUrl(PROJECT_HOMEPAGE_URL).catch(() => {
@@ -1259,7 +1264,7 @@ export function SettingsPage() {
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
     playback: (
       <SettingsContent title="播放">
-        <AppearanceSettings />
+        {showExplicitThemeSettings(mobileClient) && <AppearanceSettings />}
         <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
           <Field orientation="responsive">
             <FieldTitle id="quality-label">优先清晰度</FieldTitle>

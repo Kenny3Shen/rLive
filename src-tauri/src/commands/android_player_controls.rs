@@ -57,7 +57,7 @@ mod android {
     #[tauri::command]
     pub async fn android_player_controls_set_brightness(
         controls: State<'_, AndroidPlayerControls>,
-        value: i32,
+        value: f64,
     ) -> AppResult<Value> {
         run(controls, "setBrightness", json!({ "value": value })).await
     }
@@ -111,7 +111,7 @@ mod fallback {
     }
 
     #[tauri::command]
-    pub async fn android_player_controls_set_brightness(_value: i32) -> AppResult<Value> {
+    pub async fn android_player_controls_set_brightness(_value: f64) -> AppResult<Value> {
         Err(unsupported())
     }
 
