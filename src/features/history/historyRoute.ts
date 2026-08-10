@@ -1,29 +1,23 @@
-import { enabledSiteIds, isSiteEnabled, isSiteId } from "@/shared/siteId";
-import type { SiteId } from "@/shared/types/live";
+export const HISTORY_VIEW_PARAM = "view";
 
-export const HISTORY_PLATFORM_PARAM = "platform";
+/** The two timelines the page pages between. */
+export type HistoryView = "watch" | "danmaku";
 
-export type HistoryPlatformFilter = "all" | SiteId;
+export const HISTORY_VIEWS: readonly HistoryView[] = ["watch", "danmaku"];
 
-export function historyPlatformFromSearch(
-  value: string | null | undefined,
-  disabledSiteIds?: unknown,
-): HistoryPlatformFilter {
-  if (!value || value === "all") return "all";
-  if (!isSiteId(value)) return "all";
-  return disabledSiteIds === undefined || isSiteEnabled(value, disabledSiteIds) ? value : "all";
+/**
+ * The active timeline lives in the address bar rather than in page state: the
+ * application header owns the switcher while the page owns the lists, and a
+ * search param is the one place both can read without either importing the
+ * other's state.
+ */
+export function historyViewFromSearch(value: string | null | undefined): HistoryView {
+  return value === "danmaku" ? "danmaku" : "watch";
 }
 
-export function historyPlatformOptions(disabledSiteIds: unknown): HistoryPlatformFilter[] {
-  return ["all", ...enabledSiteIds(disabledSiteIds)];
-}
-
-export function withHistoryPlatform(
-  current: URLSearchParams,
-  platform: HistoryPlatformFilter,
-): URLSearchParams {
+export function withHistoryView(current: URLSearchParams, view: HistoryView): URLSearchParams {
   const next = new URLSearchParams(current);
-  if (platform === "all") next.delete(HISTORY_PLATFORM_PARAM);
-  else next.set(HISTORY_PLATFORM_PARAM, platform);
+  if (view === "watch") next.delete(HISTORY_VIEW_PARAM);
+  else next.set(HISTORY_VIEW_PARAM, view);
   return next;
 }

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS history (
   room_id TEXT NOT NULL,
   title TEXT NOT NULL,
   user_name TEXT NOT NULL,
+  cover TEXT NOT NULL DEFAULT '',
   watched_at INTEGER NOT NULL,
   PRIMARY KEY (site_id, room_id)
 );
@@ -40,6 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_history_site_recent
 CREATE TABLE IF NOT EXISTS danmaku_send_history (
   site_id TEXT NOT NULL,
   content TEXT NOT NULL,
+  room_id TEXT NOT NULL DEFAULT '',
+  room_title TEXT NOT NULL DEFAULT '',
   sent_at INTEGER NOT NULL,
   PRIMARY KEY (site_id, content)
 );
@@ -117,6 +120,35 @@ pub fn open_in_memory() -> AppResult<Connection> {
     Ok(conn)
 }
 
+/// Add one column to an existing table when an older installation predates it.
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so the column list is checked
+/// first to keep `migrate` safe to run on every launch.
+fn add_missing_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> AppResult<()> {
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1",
+            [table, column],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?
+        .is_some();
+    if exists {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )
+    .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
@@ -137,6 +169,24 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         conn.execute("ALTER TABLE follows ADD COLUMN live_started_at INTEGER", [])
             .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
     }
+
+    // The history screen shows the room cover captured at watch time, and the
+    // sent-danmaku list names the room a message went to. Older installations
+    // stored neither, so both arrive as added columns that default to empty
+    // and simply render a fallback for records written before this release.
+    add_missing_column(conn, "history", "cover", "TEXT NOT NULL DEFAULT ''")?;
+    add_missing_column(
+        conn,
+        "danmaku_send_history",
+        "room_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_missing_column(
+        conn,
+        "danmaku_send_history",
+        "room_title",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
 
     let has_iptv_favorite_group_id = conn
         .query_row(
@@ -193,6 +243,54 @@ mod tests {
             .optional()
             .unwrap();
         assert_eq!(column.as_deref(), Some("live_started_at"));
+    }
+
+    #[test]
+    fn migrate_adds_history_cover_and_danmaku_room_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE history (
+                site_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                user_name TEXT NOT NULL,
+                watched_at INTEGER NOT NULL,
+                PRIMARY KEY (site_id, room_id)
+            );
+            INSERT INTO history (site_id, room_id, title, user_name, watched_at)
+              VALUES ('bilibili', '1', 't', 'u', 10);
+            CREATE TABLE danmaku_send_history (
+                site_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sent_at INTEGER NOT NULL,
+                PRIMARY KEY (site_id, content)
+            );
+            INSERT INTO danmaku_send_history (site_id, content, sent_at)
+              VALUES ('bilibili', '你好', 10);",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Legacy rows survive and read back as the empty fallback the UI shows.
+        let cover: String = conn
+            .query_row("SELECT cover FROM history WHERE room_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(cover, "");
+        let (room_id, room_title): (String, String) = conn
+            .query_row(
+                "SELECT room_id, room_title FROM danmaku_send_history WHERE content = '你好'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(room_id, "");
+        assert_eq!(room_title, "");
+
+        // Running again on an already-migrated database must stay a no-op.
+        migrate(&conn).unwrap();
     }
 
     #[test]

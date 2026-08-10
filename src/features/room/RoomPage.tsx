@@ -97,6 +97,7 @@ export function RoomPage() {
       room_id: detail.room_id,
       title: detail.title,
       user_name: detail.user_name,
+      cover: detail.cover || undefined,
       watched_at: Date.now(),
     };
     void invokeCmd<void>("history_add", { item })

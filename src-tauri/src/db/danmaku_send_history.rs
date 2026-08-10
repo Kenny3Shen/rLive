@@ -12,13 +12,29 @@ pub const MAX_RECORDS_PER_SITE: i64 = 50;
 pub struct DanmakuSendHistoryRecord {
     pub site_id: String,
     pub content: String,
+    /// Room the message was sent to. Empty for records written by releases
+    /// that predate the column.
+    pub room_id: String,
+    /// Room title captured at send time, so the history screen can name the
+    /// room without a live lookup. Empty when unknown.
+    pub room_title: String,
     pub sent_at: i64,
+}
+
+fn map_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DanmakuSendHistoryRecord> {
+    Ok(DanmakuSendHistoryRecord {
+        site_id: row.get(0)?,
+        content: row.get(1)?,
+        room_id: row.get(2)?,
+        room_title: row.get(3)?,
+        sent_at: row.get(4)?,
+    })
 }
 
 pub fn list(conn: &Connection, site_id: &str) -> AppResult<Vec<DanmakuSendHistoryRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT site_id, content, sent_at
+            "SELECT site_id, content, room_id, room_title, sent_at
              FROM danmaku_send_history
              WHERE site_id = ?1
              ORDER BY sent_at DESC, rowid DESC
@@ -26,13 +42,7 @@ pub fn list(conn: &Connection, site_id: &str) -> AppResult<Vec<DanmakuSendHistor
         )
         .map_err(map_db_err)?;
     let rows = stmt
-        .query_map(params![site_id, MAX_RECORDS_PER_SITE], |row| {
-            Ok(DanmakuSendHistoryRecord {
-                site_id: row.get(0)?,
-                content: row.get(1)?,
-                sent_at: row.get(2)?,
-            })
-        })
+        .query_map(params![site_id, MAX_RECORDS_PER_SITE], map_record)
         .map_err(map_db_err)?;
 
     let mut out = Vec::new();
@@ -48,20 +58,12 @@ pub fn list(conn: &Connection, site_id: &str) -> AppResult<Vec<DanmakuSendHistor
 pub fn list_all(conn: &Connection) -> AppResult<Vec<DanmakuSendHistoryRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT site_id, content, sent_at
+            "SELECT site_id, content, room_id, room_title, sent_at
              FROM danmaku_send_history
              ORDER BY sent_at DESC, rowid DESC",
         )
         .map_err(map_db_err)?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(DanmakuSendHistoryRecord {
-                site_id: row.get(0)?,
-                content: row.get(1)?,
-                sent_at: row.get(2)?,
-            })
-        })
-        .map_err(map_db_err)?;
+    let rows = stmt.query_map([], map_record).map_err(map_db_err)?;
 
     let mut out = Vec::new();
     for row in rows {
@@ -72,13 +74,30 @@ pub fn list_all(conn: &Connection) -> AppResult<Vec<DanmakuSendHistoryRecord>> {
 
 /// Store one platform-confirmed outgoing message. Reusing a message moves it
 /// to the top of that platform's history instead of duplicating the entry.
-pub fn record(conn: &Connection, site_id: &str, content: &str, sent_at: i64) -> AppResult<()> {
+pub fn record(
+    conn: &Connection,
+    site_id: &str,
+    content: &str,
+    room_id: &str,
+    room_title: &str,
+    sent_at: i64,
+) -> AppResult<()> {
     conn.execute(
-        "INSERT INTO danmaku_send_history (site_id, content, sent_at)
-         VALUES (?1, ?2, ?3)
+        "INSERT INTO danmaku_send_history (site_id, content, room_id, room_title, sent_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(site_id, content) DO UPDATE SET
-           sent_at = MAX(danmaku_send_history.sent_at, excluded.sent_at)",
-        params![site_id, content, sent_at],
+           sent_at = MAX(danmaku_send_history.sent_at, excluded.sent_at),
+           -- The stored room is the one the surviving timestamp belongs to, so
+           -- an older duplicate send never relabels the newer entry.
+           room_id = CASE
+             WHEN excluded.sent_at >= danmaku_send_history.sent_at THEN excluded.room_id
+             ELSE danmaku_send_history.room_id
+           END,
+           room_title = CASE
+             WHEN excluded.sent_at >= danmaku_send_history.sent_at THEN excluded.room_title
+             ELSE danmaku_send_history.room_title
+           END",
+        params![site_id, content, room_id, room_title, sent_at],
     )
     .map_err(map_db_err)?;
 
@@ -123,10 +142,10 @@ mod tests {
     #[test]
     fn records_deduplicate_per_platform_and_keep_the_latest_timestamp() {
         let conn = open_in_memory().unwrap();
-        record(&conn, "bilibili", "你好", 10).unwrap();
-        record(&conn, "bilibili", "第二条", 20).unwrap();
-        record(&conn, "douyu", "你好", 30).unwrap();
-        record(&conn, "bilibili", "你好", 40).unwrap();
+        record(&conn, "bilibili", "你好", "room-1", "房间标题", 10).unwrap();
+        record(&conn, "bilibili", "第二条", "room-1", "房间标题", 20).unwrap();
+        record(&conn, "douyu", "你好", "room-1", "房间标题", 30).unwrap();
+        record(&conn, "bilibili", "你好", "room-1", "房间标题", 40).unwrap();
 
         assert_eq!(
             list(&conn, "bilibili").unwrap(),
@@ -134,11 +153,15 @@ mod tests {
                 DanmakuSendHistoryRecord {
                     site_id: "bilibili".into(),
                     content: "你好".into(),
+                    room_id: "room-1".into(),
+                    room_title: "房间标题".into(),
                     sent_at: 40,
                 },
                 DanmakuSendHistoryRecord {
                     site_id: "bilibili".into(),
                     content: "第二条".into(),
+                    room_id: "room-1".into(),
+                    room_title: "房间标题".into(),
                     sent_at: 20,
                 },
             ]
@@ -148,16 +171,46 @@ mod tests {
             vec![DanmakuSendHistoryRecord {
                 site_id: "douyu".into(),
                 content: "你好".into(),
+                room_id: "room-1".into(),
+                room_title: "房间标题".into(),
                 sent_at: 30,
             }]
         );
     }
 
     #[test]
+    fn resending_relabels_the_room_only_when_the_newer_send_wins() {
+        let conn = open_in_memory().unwrap();
+        record(&conn, "bilibili", "你好", "room-1", "第一个直播间", 10).unwrap();
+
+        // A later duplicate is the entry the surviving timestamp belongs to.
+        record(&conn, "bilibili", "你好", "room-2", "第二个直播间", 20).unwrap();
+        let records = list(&conn, "bilibili").unwrap();
+        assert_eq!(records[0].room_id, "room-2");
+        assert_eq!(records[0].room_title, "第二个直播间");
+        assert_eq!(records[0].sent_at, 20);
+
+        // An out-of-order older send must not relabel the newer entry.
+        record(&conn, "bilibili", "你好", "room-3", "第三个直播间", 5).unwrap();
+        let records = list(&conn, "bilibili").unwrap();
+        assert_eq!(records[0].room_id, "room-2");
+        assert_eq!(records[0].room_title, "第二个直播间");
+        assert_eq!(records[0].sent_at, 20);
+    }
+
+    #[test]
     fn keeps_a_bounded_history_for_each_platform() {
         let conn = open_in_memory().unwrap();
         for index in 0..=MAX_RECORDS_PER_SITE {
-            record(&conn, "bilibili", &format!("弹幕 {index}"), index).unwrap();
+            record(
+                &conn,
+                "bilibili",
+                &format!("弹幕 {index}"),
+                "room-1",
+                "房间标题",
+                index,
+            )
+            .unwrap();
         }
 
         let records = list(&conn, "bilibili").unwrap();
@@ -175,8 +228,8 @@ mod tests {
     #[test]
     fn clearing_one_platform_leaves_other_platforms_intact() {
         let conn = open_in_memory().unwrap();
-        record(&conn, "bilibili", "你好", 10).unwrap();
-        record(&conn, "huya", "晚上好", 20).unwrap();
+        record(&conn, "bilibili", "你好", "room-1", "房间标题", 10).unwrap();
+        record(&conn, "huya", "晚上好", "room-1", "房间标题", 20).unwrap();
 
         clear(&conn, "bilibili").unwrap();
 
@@ -187,9 +240,9 @@ mod tests {
     #[test]
     fn lists_all_platforms_in_reverse_chronological_order() {
         let conn = open_in_memory().unwrap();
-        record(&conn, "bilibili", "第一条", 10).unwrap();
-        record(&conn, "huya", "第二条", 20).unwrap();
-        record(&conn, "douyu", "第三条", 20).unwrap();
+        record(&conn, "bilibili", "第一条", "room-1", "房间标题", 10).unwrap();
+        record(&conn, "huya", "第二条", "room-1", "房间标题", 20).unwrap();
+        record(&conn, "douyu", "第三条", "room-1", "房间标题", 20).unwrap();
 
         assert_eq!(
             list_all(&conn).unwrap(),
@@ -197,16 +250,22 @@ mod tests {
                 DanmakuSendHistoryRecord {
                     site_id: "douyu".into(),
                     content: "第三条".into(),
+                    room_id: "room-1".into(),
+                    room_title: "房间标题".into(),
                     sent_at: 20,
                 },
                 DanmakuSendHistoryRecord {
                     site_id: "huya".into(),
                     content: "第二条".into(),
+                    room_id: "room-1".into(),
+                    room_title: "房间标题".into(),
                     sent_at: 20,
                 },
                 DanmakuSendHistoryRecord {
                     site_id: "bilibili".into(),
                     content: "第一条".into(),
+                    room_id: "room-1".into(),
+                    room_title: "房间标题".into(),
                     sent_at: 10,
                 },
             ]
@@ -216,8 +275,8 @@ mod tests {
     #[test]
     fn clearing_all_platforms_removes_every_record() {
         let conn = open_in_memory().unwrap();
-        record(&conn, "bilibili", "你好", 10).unwrap();
-        record(&conn, "huya", "晚上好", 20).unwrap();
+        record(&conn, "bilibili", "你好", "room-1", "房间标题", 10).unwrap();
+        record(&conn, "huya", "晚上好", "room-1", "房间标题", 20).unwrap();
 
         clear_all(&conn).unwrap();
 
