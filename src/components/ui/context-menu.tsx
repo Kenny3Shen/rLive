@@ -39,6 +39,15 @@ function ContextMenuContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        // A context menu anchors to a fixed virtual rect at the pointer, not to
+        // the trigger, so there is no anchor movement worth following. Leaving
+        // tracking on is actively harmful: Floating UI's `layoutShift` watcher
+        // rebuilds its IntersectionObserver whenever the anchor's rect differs
+        // from the one it captured, and on surfaces whose cards ride an
+        // animated `translate3d` track (home platform strip, history tab strip)
+        // that comparison keeps failing. The menu then churns observers for as
+        // long as it stays open until the main thread stops responding.
+        disableAnchorTracking
       >
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"

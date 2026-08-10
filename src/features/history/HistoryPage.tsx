@@ -54,14 +54,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuGroup,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
   Empty,
   EmptyContent,
   EmptyDescription,
@@ -108,102 +100,84 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   // supply artwork, fall back to the platform mark rather than an empty box.
   const cover = normalizeImageUrl(item.cover);
 
+  // No context menu here: a tap opens the room and the delete button covers the
+  // only other action, so a right-click/long-press menu would just duplicate
+  // both on every card.
   return (
-    <ContextMenu>
-      <ContextMenuTrigger
-        render={
-          <div
-            role="button"
-            tabIndex={0}
-            onClick={onOpen}
-            onKeyDown={(event) => {
-              if (event.currentTarget !== event.target) return;
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onOpen();
-              }
-            }}
-            onPointerEnter={() => preloadRouteModule(roomPath)}
-            onPointerDown={() => preloadRouteModule(roomPath)}
-            onFocus={() => preloadRouteModule(roomPath)}
-            className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
-          />
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.currentTarget !== event.target) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
         }
-      >
-        <span className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border-subtle max-sm:w-20">
-          {cover ? (
-            <img
-              src={cover}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <span className="flex h-full w-full items-center justify-center">
-              <SiteLogo siteId={item.site_id} className="size-7" />
-            </span>
-          )}
-          {/* The platform mark stays legible over artwork of any brightness. */}
-          <span className="absolute bottom-1 left-1 flex size-5 items-center justify-center rounded-md bg-black/60 backdrop-blur-sm">
-            <SiteLogo siteId={item.site_id} className="size-3.5" />
-          </span>
-          <CirclePlay
-            className="absolute right-1 bottom-1 size-4 rounded-full bg-card/85 text-foreground/80"
-            aria-hidden
+      }}
+      onPointerEnter={() => preloadRouteModule(roomPath)}
+      onPointerDown={() => preloadRouteModule(roomPath)}
+      onFocus={() => preloadRouteModule(roomPath)}
+      className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
+    >
+      <span className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border-subtle max-sm:w-20">
+        {cover ? (
+          <img
+            src={cover}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            className="h-full w-full object-cover"
           />
-        </span>
-
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-foreground">{title}</span>
-          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-            {item.user_name || "未知主播"}
+        ) : (
+          <span className="flex h-full w-full items-center justify-center">
+            <SiteLogo siteId={item.site_id} className="size-7" />
           </span>
-          <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <Clock3 className="size-3.5" aria-hidden />
-              {formatTime(item.watched_at)}
-            </span>
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <Hash className="size-3.5" aria-hidden />
-              {item.room_id}
-            </span>
+        )}
+        {/* The platform mark stays legible over artwork of any brightness. */}
+        <span className="absolute bottom-1 left-1 flex size-5 items-center justify-center rounded-md bg-black/60 backdrop-blur-sm">
+          <SiteLogo siteId={item.site_id} className="size-3.5" />
+        </span>
+        <CirclePlay
+          className="absolute right-1 bottom-1 size-4 rounded-full bg-card/85 text-foreground/80"
+          aria-hidden
+        />
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">{title}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+          {item.user_name || "未知主播"}
+        </span>
+        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock3 className="size-3.5" aria-hidden />
+            {formatTime(item.watched_at)}
+          </span>
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Hash className="size-3.5" aria-hidden />
+            {item.room_id}
           </span>
         </span>
+      </span>
 
-        <Button
-          type="button"
-          variant="destructive"
-          size="icon-sm"
-          data-action="delete-history"
-          aria-label={`删除 ${title} 的观看记录`}
-          title="删除此记录"
-          disabled={isRemoving}
-          onClick={(event) => {
-            event.stopPropagation();
-            onRemove();
-          }}
-        >
-          {isRemoving ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
-        </Button>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuGroup>
-          <ContextMenuItem onClick={onOpen}>
-            <CirclePlay aria-hidden />
-            打开直播间
-          </ContextMenuItem>
-        </ContextMenuGroup>
-        <ContextMenuSeparator />
-        <ContextMenuGroup>
-          <ContextMenuItem variant="destructive" disabled={isRemoving} onClick={onRemove}>
-            <Trash2 aria-hidden />
-            删除此记录
-          </ContextMenuItem>
-        </ContextMenuGroup>
-      </ContextMenuContent>
-    </ContextMenu>
+      <Button
+        type="button"
+        variant="destructive"
+        size="icon-sm"
+        data-action="delete-history"
+        aria-label={`删除 ${title} 的观看记录`}
+        title="删除此记录"
+        disabled={isRemoving}
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
+      >
+        {isRemoving ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+      </Button>
+    </div>
   );
 }
 

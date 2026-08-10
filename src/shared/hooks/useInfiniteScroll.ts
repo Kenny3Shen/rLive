@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 
 type UseInfiniteScrollOptions = {
   hasNextPage: boolean | undefined;
@@ -57,14 +58,18 @@ export function useInfiniteScroll({
       return;
     }
 
+    // Observe against the element that actually scrolls. `main` only clips —
+    // Shell puts `overflow-y-auto` on the page wrapper inside it — and a root
+    // that never scrolls computes visibility against a box the sentinel can sit
+    // permanently inside, so the observer keeps asking for the next page.
+    // `null` falls back to the viewport, which is still a scrolling box.
+    const root = findVerticalScrollParent(target);
+
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) loadMore();
       },
-      {
-        root: document.querySelector<HTMLElement>("main"),
-        rootMargin,
-      },
+      { root, rootMargin },
     );
     observer.observe(target);
     return () => observer.disconnect();
