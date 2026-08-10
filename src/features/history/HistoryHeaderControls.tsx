@@ -194,7 +194,7 @@ export function HistoryDateFilterControl({
                   size="sm"
                   aria-label={`按日期筛选：${label}`}
                   className={cn(
-                    "shrink-0 gap-1.5 max-md:h-9",
+                    "shrink-0 gap-1.5 max-md:h-11 max-sm:size-11 max-sm:gap-0 max-sm:px-0!",
                     active && "border-primary/45 text-primary",
                     className,
                   )}

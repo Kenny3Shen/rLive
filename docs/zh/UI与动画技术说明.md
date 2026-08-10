@@ -204,7 +204,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - 释放后由 Web Animations 接管剩余位移，时长按 `horizontalSwipeSettleDuration` 从剩余距离和释放速度推导。这里不能用 GSAP：翻页会触发 React 提交，rAF ticker 与该提交争抢主线程，重路由下会吞掉收尾动画的大部分帧——这正是「先切页再平移」的直接原因。Web Animations 的 transform 由 Chromium 合成器推进，不受主线程占用影响。
 - 手势中途抓住正在收尾的页面时，从其当前实际像素位置接管（`DOMMatrixReadOnly` 读取），不回跳。
 - `layout` 只保留两种承载方式：
-  - `track`：所有挂载页按**绝对索引**排布在 `index × width`，整层平移到 `-活动索引 × width`。提交时没有任何页需要位移，释放时启动的收尾动画可以一路走完。用于 Shell 移动端平台切换、历史页双 Tab、设置分类和房间侧栏 Tab。
+  - `track`：所有挂载页按**绝对索引**排布在 `index × width`，整层平移到 `-活动索引 × width`。提交时没有任何页需要位移，释放时启动的收尾动画可以一路走完。用于 Shell 移动端平台切换、历史页双 Tab 和房间侧栏 Tab。
   - `page`：移动层只承载当前一页，供相邻页未挂载的条带使用。提交时先按 `horizontalSwipeCommitOffset` 把新页重基到一屏外，再滑入 `0`。
   - 原 `panels` 布局已移除：它让各页按 `(索引 - 活动索引) × 100%` 定位，于是提交瞬间所有面板整体重锚一屏，收尾动画不得不围绕这次跳变重基。多出的这一步就是关注页卡顿最明显的来源。改为绝对索引后，各页仍保留独立滚动容器。
 - 收尾动画在通知 React 之前启动，顺序不能颠倒：`track` 的提交不移动任何页，先行启动可以避免整个 React 提交挤在松手与首个动画帧之间。
@@ -220,7 +220,8 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 
 IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由层：
 
-- 设置页不显示 Shell 或内容级顶部 header，搜索框并入分类导航；首次进入时对分类与搜索导航使用 `y: 10`，切换设置分类时只对 `TabsContent` 使用 `y: 8` 入场。
+- 设置页不显示 Shell 或内容级顶部 header。桌面端与移动端共用「设置首页 → 分类详情」二级结构：首页按观看体验、账号与数据、应用信息分组，详情分类写入 `section` 查询参数，使系统返回、浏览器返回和页内返回保持一致。
+- 搜索框仅在首页筛选分类；详情页头只保留返回按钮和当前分类标题。首次进入时仅对当前页头使用 `y: 10` 入场，不再挂载或横向平移相邻设置分类。
 - 设置页完成后通过 `clearProps` 归还 transform、opacity、visibility 和 `will-change`。
 - IPTV 之前对首批 18 张频道卡片的 GSAP stagger 入场已移除，频道网格与其他卡片页面（首页、分类、搜索、关注）保持一致，路由导航层面的位移由 `PagePan` 统一承担。
 - 频道卡片复用 `.room-card`，共享其 `content-visibility: auto` 长列表优化和移动端按压 `max-md:active:scale-[0.97]` 反馈。
@@ -439,4 +440,4 @@ bash scripts/sync-to-windows.sh
 | `src/shared/hooks/useHorizontalSwipe.ts` | 触摸跟随、回弹、切换和清理 |
 | `src/shared/gestures/horizontalSwipe.ts` | swipe 阈值、边界阻尼和纯逻辑 |
 | `src/features/iptv/IptvPage.tsx` | 有界频道卡片入场 |
-| `src/features/settings/SettingsPage.tsx` | 三栏设置中心、分类导航、设置搜索和分类内容入场 |
+| `src/features/settings/SettingsPage.tsx` | 双端二级设置中心、分组入口、分类详情、设置搜索和页面入场 |

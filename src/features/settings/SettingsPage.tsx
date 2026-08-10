@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import gsap from "gsap";
 import { flushSync } from "react-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   createContext,
   type FormEvent,
@@ -12,12 +13,13 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
+  ArrowLeft,
+  ChevronRight,
   Database,
   Download,
   ExternalLink,
@@ -43,7 +45,6 @@ import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { SiteLogo } from "@/shared/components/SiteLogo";
-import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
 import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
@@ -60,6 +61,7 @@ import {
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Field,
   FieldContent,
@@ -79,7 +81,6 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -112,6 +113,9 @@ import {
 
 type SettingsCategory = "playback" | "platform" | "network" | "account" | "data" | "about";
 
+export const SETTINGS_SECTION_PARAM = "section";
+const SETTINGS_OVERVIEW_NAVIGATION_STATE = "settingsOverviewNavigation";
+
 type AccountLoginMethod = "manual" | "qr";
 
 type AccountQrLoginStart = {
@@ -133,14 +137,52 @@ type AccountProfile = {
 const settingsCategories: {
   value: SettingsCategory;
   label: string;
+  description: string;
   icon: LucideIcon;
+  tone: string;
 }[] = [
-  { value: "playback", label: "播放", icon: MonitorPlay },
-  { value: "platform", label: "平台", icon: Radio },
-  { value: "network", label: "网络", icon: Network },
-  { value: "account", label: "账号", icon: UserRound },
-  { value: "data", label: "数据", icon: Database },
-  { value: "about", label: "关于", icon: Info },
+  {
+    value: "playback",
+    label: "播放与弹幕",
+    description: "画质、字幕和弹幕显示",
+    icon: MonitorPlay,
+    tone: "text-settings-playback bg-settings-playback/12",
+  },
+  {
+    value: "platform",
+    label: "直播平台",
+    description: "选择要显示的直播平台",
+    icon: Radio,
+    tone: "text-settings-platform bg-settings-platform/12",
+  },
+  {
+    value: "network",
+    label: "网络与 IPTV",
+    description: "代理和自定义频道源",
+    icon: Network,
+    tone: "text-settings-network bg-settings-network/12",
+  },
+  {
+    value: "account",
+    label: "账号与权限",
+    description: "平台登录和弹幕发送权限",
+    icon: UserRound,
+    tone: "text-settings-account bg-settings-account/12",
+  },
+  {
+    value: "data",
+    label: "数据管理",
+    description: "导入或导出本机配置",
+    icon: Database,
+    tone: "text-settings-data bg-settings-data/12",
+  },
+  {
+    value: "about",
+    label: "关于 rLive",
+    description: "项目主页和使用说明",
+    icon: Info,
+    tone: "text-settings-about bg-settings-about/12",
+  },
 ];
 
 const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
@@ -173,22 +215,6 @@ function errorMessage(cause: unknown): string {
   return typeof cause === "object" && cause && "message" in cause
     ? String((cause as { message: string }).message)
     : String(cause);
-}
-
-function useCompactSettingsLayout(): boolean {
-  const [compact, setCompact] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
-  );
-
-  useEffect(() => {
-    const query = window.matchMedia("(max-width: 767px)");
-    const update = () => setCompact(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return compact;
 }
 
 function isDanmakuSendCookieSite(siteId: SiteId): boolean {
@@ -1159,6 +1185,146 @@ export function showExplicitThemeSettings(mobileClient: boolean): boolean {
   return !mobileClient;
 }
 
+function settingsCategoryFromSearch(value: string | null): SettingsCategory | null {
+  return settingsCategories.some((category) => category.value === value)
+    ? (value as SettingsCategory)
+    : null;
+}
+
+const settingsCategoryGroups: {
+  label: string;
+  values: SettingsCategory[];
+}[] = [
+  { label: "观看体验", values: ["playback", "platform", "network"] },
+  { label: "账号与数据", values: ["account", "data"] },
+  { label: "应用信息", values: ["about"] },
+];
+
+function SettingsCategoryButton({
+  category,
+  onOpen,
+}: {
+  category: (typeof settingsCategories)[number];
+  onOpen: (value: SettingsCategory) => void;
+}) {
+  const Icon = category.icon;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(category.value)}
+      className="group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-ring"
+    >
+      <span
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-lg",
+          category.tone,
+        )}
+      >
+        <Icon className="size-5" aria-hidden />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">{category.label}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+          {category.description}
+        </span>
+      </span>
+      <ChevronRight
+        className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+        aria-hidden
+      />
+    </button>
+  );
+}
+
+function SettingsCategoryOverview({
+  query,
+  onQueryChange,
+  onOpen,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  onOpen: (value: SettingsCategory) => void;
+}) {
+  const visibleGroups = settingsCategoryGroups
+    .map((group) => ({
+      ...group,
+      categories: group.values
+        .map((value) => settingsCategories.find((category) => category.value === value))
+        .filter(
+          (category): category is (typeof settingsCategories)[number] =>
+            category !== undefined &&
+            matchesSearch(
+              `${category.label} ${category.description} ${settingsCategorySearchText[category.value]}`,
+              query,
+            ),
+        ),
+    }))
+    .filter((group) => group.categories.length > 0);
+
+  return (
+    <div className="flex min-h-full flex-col gap-6">
+      <div data-settings-intro className="flex flex-col gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">设置</h1>
+        </div>
+        <InputGroup className="h-11 max-w-2xl rounded-xl border-border-subtle bg-card/80 shadow-sm">
+          <InputGroupAddon align="inline-start" className="pl-3">
+            <Search aria-hidden />
+          </InputGroupAddon>
+          <InputGroupInput
+            aria-label="搜索设置项"
+            placeholder="搜索设置项"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+          />
+          {query && (
+            <InputGroupAddon align="inline-end" className="pr-2">
+              <InputGroupButton
+                size="icon-xs"
+                aria-label="清除设置搜索"
+                onClick={() => onQueryChange("")}
+              >
+                <X aria-hidden />
+              </InputGroupButton>
+            </InputGroupAddon>
+          )}
+        </InputGroup>
+      </div>
+
+      {visibleGroups.length > 0 ? (
+        <div className="flex max-w-4xl flex-col gap-4">
+          {visibleGroups.map((group) => (
+            <section key={group.label} aria-label={group.label}>
+              <Card className="overflow-hidden rounded-xl bg-card/85 p-0 ring-border-subtle shadow-sm shadow-black/10">
+                <CardContent className="divide-y divide-border-subtle p-0">
+                  {group.categories.map((category) => (
+                    <SettingsCategoryButton
+                      key={category.value}
+                      category={category}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <Empty className="min-h-64 max-w-4xl border border-dashed border-border-subtle bg-muted/10">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <SearchX aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle>没有匹配的设置</EmptyTitle>
+            <EmptyDescription>试试其他关键词，或清除搜索继续浏览。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </div>
+  );
+}
+
 function AboutSettings() {
   function openProjectHomepage() {
     void openUrl(PROJECT_HOMEPAGE_URL).catch(() => {
@@ -1223,6 +1389,9 @@ function AboutSettings() {
 export function SettingsPage() {
   const motionRootRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const proxy = useSettingsStore((s) => s.proxy);
   const setProxy = useSettingsStore((s) => s.setProxy);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
@@ -1236,31 +1405,36 @@ export function SettingsPage() {
   const [profileAction, setProfileAction] = useState<"import" | "export" | null>(null);
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
-  const [category, setCategory] = useState<SettingsCategory>("playback");
   const [searchQuery, setSearchQuery] = useState("");
-  const compactLayout = useCompactSettingsLayout();
   const mobileClient = isMobileClient();
-  const categoryTabRefs = useRef(new Map<SettingsCategory, HTMLButtonElement | null>());
-  const settingsCategoryValues = useMemo(() => settingsCategories.map((item) => item.value), []);
-  const settingsCategorySwipe = useHorizontalSwipe({
-    items: settingsCategoryValues,
-    value: category,
-    onChange: setCategory,
-    enabled: mobileClient,
-    // The neighbouring category rides the same track, so it is already on
-    // screen and follows the finger rather than appearing on release.
-    layout: "track",
-  });
-  // Settings pages are heavy (the playback one carries every danmaku control).
-  // A track only ever shows the current page and the one it is sliding toward,
-  // so mount that window instead of all six.
-  const categoryIndex = settingsCategoryValues.indexOf(category);
-  const isCategoryMounted = (value: SettingsCategory) =>
-    Math.abs(settingsCategoryValues.indexOf(value) - categoryIndex) <= 1;
-  const categoryTrackStyle = { width: `${settingsCategoryValues.length * 100}%` };
-  const categoryPanelStyle = { width: `${100 / settingsCategoryValues.length}%` };
-  // Panel bodies keyed by category so the swipe track can mount just the
-  // window it needs without duplicating this JSX.
+  const category = settingsCategoryFromSearch(searchParams.get(SETTINGS_SECTION_PARAM));
+
+  function setCategory(next: SettingsCategory | null, replace = false) {
+    const nextParams = new URLSearchParams(searchParams);
+    if (next) nextParams.set(SETTINGS_SECTION_PARAM, next);
+    else nextParams.delete(SETTINGS_SECTION_PARAM);
+    const previousState =
+      typeof location.state === "object" && location.state !== null ? location.state : {};
+    setSearchParams(nextParams, {
+      replace,
+      state: next
+        ? { ...previousState, [SETTINGS_OVERVIEW_NAVIGATION_STATE]: true }
+        : previousState,
+    });
+  }
+
+  function returnToOverview() {
+    const openedFromOverview =
+      typeof location.state === "object" &&
+      location.state !== null &&
+      SETTINGS_OVERVIEW_NAVIGATION_STATE in location.state &&
+      location.state[SETTINGS_OVERVIEW_NAVIGATION_STATE] === true;
+    if (openedFromOverview) navigate(-1);
+    else setCategory(null, true);
+  }
+
+  // Category bodies stay keyed here so the overview navigation changes only
+  // the page shell; every existing setting and persistence path remains intact.
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
     playback: (
       <SettingsContent title="播放">
@@ -1477,19 +1651,9 @@ export function SettingsPage() {
     ),
   };
   const normalizedSearchQuery = searchQuery.trim();
-
-  useEffect(() => {
-    if (
-      !normalizedSearchQuery ||
-      matchesSearch(settingsCategorySearchText[category], normalizedSearchQuery)
-    ) {
-      return;
-    }
-    const firstMatch = settingsCategories.find(({ value }) =>
-      matchesSearch(settingsCategorySearchText[value], normalizedSearchQuery),
-    );
-    if (firstMatch) setCategory(firstMatch.value);
-  }, [category, normalizedSearchQuery]);
+  const categoryMetadata = category
+    ? settingsCategories.find((item) => item.value === category)
+    : undefined;
 
   useGSAP(
     () => {
@@ -1515,30 +1679,9 @@ export function SettingsPage() {
     { scope: motionRootRef },
   );
 
-  // Switching category no longer fades a panel in: every category is mounted
-  // side by side in the swipe track, so the change is carried by the track's
-  // own pan. A `querySelector` entrance here would always hit the first panel
-  // regardless of the selection, and stack a fade on top of that travel.
-
   useEffect(() => {
     setProxyDraft(proxy ?? "");
   }, [proxy]);
-
-  useEffect(() => {
-    if (!compactLayout) return;
-    const activeTab = categoryTabRefs.current.get(category);
-    if (!activeTab) return;
-
-    // A compact tab strip intentionally scrolls horizontally. Keep keyboard
-    // and programmatic category changes discoverable instead of leaving the
-    // newly selected panel's trigger offscreen.
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    activeTab.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-      behavior: reducedMotion ? "auto" : "smooth",
-    });
-  }, [category, compactLayout]);
 
   function saveProxy() {
     setProxyStatus(null);
@@ -1633,113 +1776,42 @@ export function SettingsPage() {
   }
 
   return (
-    <div
-      ref={motionRootRef}
-      data-horizontal-swipe-surface
-      className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col gap-6 touch-pan-y"
-      onPointerDownCapture={settingsCategorySwipe.onPointerDownCapture}
-      onPointerMoveCapture={settingsCategorySwipe.onPointerMoveCapture}
-      onPointerUpCapture={settingsCategorySwipe.onPointerUpCapture}
-      onPointerCancelCapture={settingsCategorySwipe.onPointerCancelCapture}
-      onClickCapture={settingsCategorySwipe.onClickCapture}
-    >
-      <h1 className="sr-only">设置</h1>
-
+    <div ref={motionRootRef} className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col">
       <SettingsSearchContext.Provider value={normalizedSearchQuery}>
-        <Tabs
-          value={category}
-          orientation={compactLayout ? "horizontal" : "vertical"}
-          className={cn("min-h-full gap-6", compactLayout ? "h-full" : "min-h-[32rem] gap-8")}
-          onValueChange={(value) => setCategory(value as SettingsCategory)}
-        >
-          <div
-            data-settings-intro
-            className={cn(
-              "flex shrink-0 flex-col gap-3",
-              !compactLayout && "w-48 border-r border-border-subtle pr-5",
-            )}
-          >
-            <InputGroup className={cn("w-full", compactLayout ? "order-2" : "order-1")}>
-              <InputGroupAddon align="inline-start">
-                <Search aria-hidden />
-              </InputGroupAddon>
-              <InputGroupInput
-                aria-label="搜索设置"
-                placeholder="搜索设置"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-              />
-              {searchQuery && (
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    size="icon-xs"
-                    aria-label="清除设置搜索"
-                    onClick={() => setSearchQuery("")}
-                  >
-                    <X aria-hidden />
-                  </InputGroupButton>
-                </InputGroupAddon>
-              )}
-            </InputGroup>
-            <TabsList
-              aria-label="设置分类"
-              variant={compactLayout ? "line" : "default"}
-              className={cn(
-                compactLayout
-                  ? "scroll-fade-x order-1 sticky top-0 h-12! w-full flex-row! justify-start overflow-x-auto bg-background"
-                  : "order-2 w-full items-stretch",
-              )}
-            >
-              {settingsCategories.map(({ value, label, icon: Icon }) => (
-                <TabsTrigger
-                  key={value}
-                  value={value}
-                  ref={(node) => {
-                    categoryTabRefs.current.set(value, node);
-                  }}
-                  className={cn(
-                    "h-11 shrink-0 gap-2 px-3 py-2",
-                    compactLayout ? "w-auto! flex-none! justify-center text-center" : "text-left",
-                  )}
-                >
-                  <Icon aria-hidden />
-                  <span>{label}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
-
-          <div
-            data-slot="horizontal-swipe-viewport"
-            // Only the horizontal overflow is clipped. The page scrolls in
-            // Shell's scroller, so hiding overflow on both axes here would cut
-            // long categories off at the viewport instead of letting them grow.
-            className="min-h-0 w-full max-w-4xl min-w-0 flex-1 overflow-x-clip"
-          >
+        {category && categoryMetadata ? (
+          <div className="flex min-h-full flex-col gap-5">
             <div
-              ref={settingsCategorySwipe.pageRef as React.Ref<HTMLDivElement>}
-              data-slot="horizontal-swipe-track"
-              className="flex min-h-0 items-start"
-              style={categoryTrackStyle}
+              data-settings-intro
+              className="flex items-center gap-3 border-b border-border-subtle pb-4"
             >
-              {settingsCategoryValues.map((value) => (
-                // Every category holds its slot so the track keeps its
-                // geometry; only the visible window renders real content.
-                <TabsContent
-                  key={value}
-                  value={value}
-                  keepMounted
-                  hidden={false}
-                  inert={category === value ? undefined : true}
-                  className="mt-0 min-w-0 shrink-0"
-                  style={categoryPanelStyle}
-                >
-                  {isCategoryMounted(value) && settingsCategoryPanels[value]}
-                </TabsContent>
-              ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-lg"
+                className="-ml-2"
+                aria-label="返回设置首页"
+                onClick={returnToOverview}
+              >
+                <ArrowLeft aria-hidden />
+              </Button>
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-xl font-semibold text-foreground">
+                  {categoryMetadata.label}
+                </h1>
+              </div>
             </div>
+            <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
           </div>
-        </Tabs>
+        ) : (
+          <SettingsCategoryOverview
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            onOpen={(value) => {
+              setSearchQuery("");
+              setCategory(value);
+            }}
+          />
+        )}
       </SettingsSearchContext.Provider>
     </div>
   );
@@ -1751,10 +1823,8 @@ function SettingsContent({ title, children }: { title: string; children: React.R
 
   return (
     <div data-slot="settings-content" className="flex min-h-full min-w-0 flex-col gap-4">
-      <div className="flex items-baseline gap-3 border-b border-border-subtle pb-3">
-        <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
-        {query && <span className="text-xs text-muted-foreground">筛选结果</span>}
-      </div>
+      <h2 className="sr-only">{title}</h2>
+      {query && <p className="text-xs text-muted-foreground">当前分类的筛选结果</p>}
       {hasCategoryMatch ? (
         children
       ) : (

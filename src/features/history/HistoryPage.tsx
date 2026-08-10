@@ -537,11 +537,10 @@ export function HistoryPage() {
             // Clip only the horizontal axis: the list grows downward inside
             // Shell's scroller, so clipping both would truncate long histories.
             //
-            // The cards inside draw their edge with an outward ring, so the
-            // track is inset by that ring's width and the panels give it back
-            // as padding. Clipping flush against the panel would shave the
-            // left and right borders off every card.
-            className="-mx-1 min-w-0 overflow-x-clip px-1"
+            // Each panel gives its cards one pixel for their outward ring and
+            // clips that paint to its own page. This keeps the neighbouring
+            // panel's first card edge from peeking through after a tab switch.
+            className="min-w-0 overflow-x-clip"
           >
             <div
               ref={historyTabSwipe.pageRef as React.Ref<HTMLDivElement>}
@@ -559,7 +558,7 @@ export function HistoryPage() {
                 // inactive page inert instead.
                 hidden={false}
                 inert={activeView === "watch" ? undefined : true}
-                className="mt-0 min-w-0 shrink-0 px-1"
+                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
                 style={{ width: `${100 / HISTORY_VIEWS.length}%` }}
               >
                 {watchHistoryQuery.isLoading && <HistorySkeleton />}
@@ -624,7 +623,7 @@ export function HistoryPage() {
                 keepMounted
                 hidden={false}
                 inert={activeView === "danmaku" ? undefined : true}
-                className="mt-0 min-w-0 shrink-0 px-1"
+                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
                 style={{ width: `${100 / HISTORY_VIEWS.length}%` }}
               >
                 {danmakuSendHistoryQuery.isLoading && <DanmakuSendHistorySkeleton />}
