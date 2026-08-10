@@ -28,7 +28,8 @@ use commands::account::{
 use commands::android_player_controls::AndroidPlayerControls;
 use commands::android_player_controls::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
-    android_player_controls_set_brightness, android_player_controls_set_orientation,
+    android_player_controls_set_brightness, android_player_controls_set_media_volume,
+    android_player_controls_set_orientation,
 };
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
@@ -72,8 +73,8 @@ const MAX_LOG_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /**
  * Registers the narrow Android bridge used by the live-player edge gestures.
- * The Kotlin implementation changes only this Activity's brightness and the
- * Android media stream; desktop builds retain their existing web controls.
+ * The Kotlin implementation changes the Activity brightness and Android media
+ * stream; desktop builds retain their existing web controls.
  *
  * The `PluginHandle` returned here is the *only* way into the Kotlin
  * `@Command` methods, so it is stored in managed state for the
@@ -184,9 +185,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
-    // Android-only: window brightness override for the left-edge gesture, plus
-    // the fullscreen orientation lock. Volume stays in the web player on every
-    // platform so a room gesture never touches device-wide audio.
+    // Android-only: window brightness, STREAM_MUSIC volume, and fullscreen
+    // orientation for player edge gestures. Desktop keeps web-player volume.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(android_player_controls_plugin());
 
@@ -286,6 +286,7 @@ pub fn run() {
             profile_export,
             profile_import,
             android_player_controls_get_state,
+            android_player_controls_set_media_volume,
             android_player_controls_set_brightness,
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,

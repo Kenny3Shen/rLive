@@ -3,29 +3,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { notify } from "@/components/ui/toast";
 import { getClientPlatform } from "@/shared/clientPlatform";
 
-/** Batch rapid pointer-move writes while keeping native brightness responsive. */
+/** Batch rapid pointer-move writes while keeping native controls responsive. */
 const NATIVE_CONTROL_THROTTLE_MS = 50;
 
 /**
  * App-level commands, not `plugin:player-controls|…`.
  *
- * A `plugin:<name>|<command>` invoke is answered by the Rust plugin's own
- * invoke handler and never reaches the Kotlin `@Command` methods, so calling
- * the plugin namespace from the webview silently failed. The Rust side wraps
- * the plugin handle in these commands instead.
- *
- * Brightness only. Volume deliberately never crosses this bridge — see
- * [useAndroidPlayerControls].
+ * A plugin-namespaced invoke is answered by the Rust plugin's own invoke
+ * handler and never reaches the Kotlin `@Command` methods. The Rust side wraps
+ * the plugin handle in these app commands instead.
  */
 const NATIVE_COMMANDS = {
   getState: "android_player_controls_get_state",
+  setMediaVolume: "android_player_controls_set_media_volume",
   setBrightness: "android_player_controls_set_brightness",
   resetBrightness: "android_player_controls_reset_brightness",
 } as const;
 
 export type AndroidPlayerControlsState = {
+  mediaVolume: number;
   brightness: number;
 };
+
+type AndroidPlayerControlName = "mediaVolume" | "brightness";
 
 type NativePlayerControlsInvoke = <T>(
   command: string,
@@ -49,7 +49,7 @@ function nativeControlErrorText(error: unknown): string {
   return String(error ?? "未知错误");
 }
 
-/** Clamp arbitrary input without quantizing the continuous gesture value. */
+/** Clamp arbitrary input without quantizing it before Android chooses a stream level. */
 export function clampAndroidPlayerControl(value: number): number {
   return clampPercent(value);
 }
@@ -78,27 +78,43 @@ function runningOnAndroidTauri(): boolean {
   });
 }
 
-/** Read the app-window brightness override from the native bridge. */
+/** Read the system media volume and app-window brightness from the native bridge. */
 export async function getAndroidPlayerControls(
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<AndroidPlayerControlsState> {
   const response = await nativeInvoke<Record<string, unknown>>(NATIVE_COMMANDS.getState);
+  const mediaVolume = percentFrom(response.mediaVolume);
   const brightness = percentFrom(response.brightness);
-  if (brightness === null) {
+  if (mediaVolume === null || brightness === null) {
     throw new Error("Android 播放器控制返回了无效状态");
   }
-  return { brightness };
+  return { mediaVolume, brightness };
 }
 
-export async function setAndroidBrightness(
+async function setAndroidPlayerControl(
+  control: "setMediaVolume" | "setBrightness",
   value: number,
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<number> {
   const expected = clampAndroidPlayerControl(value);
-  const response = await nativeInvoke<NativeControlValue>(NATIVE_COMMANDS.setBrightness, {
+  const response = await nativeInvoke<NativeControlValue>(NATIVE_COMMANDS[control], {
     value: expected,
   });
   return percentFrom(response?.value) ?? expected;
+}
+
+export function setAndroidMediaVolume(
+  value: number,
+  nativeInvoke?: NativePlayerControlsInvoke,
+): Promise<number> {
+  return setAndroidPlayerControl("setMediaVolume", value, nativeInvoke);
+}
+
+export function setAndroidBrightness(
+  value: number,
+  nativeInvoke?: NativePlayerControlsInvoke,
+): Promise<number> {
+  return setAndroidPlayerControl("setBrightness", value, nativeInvoke);
 }
 
 /** Restore the Activity brightness captured before the first player gesture. */
@@ -109,27 +125,23 @@ export async function resetAndroidBrightness(
 }
 
 /**
- * Batches brightness pointer-move writes to Android and fences late replies.
- * A swipe updates its visual feedback immediately, while the native calls are
- * coalesced before crossing IPC rather than sending one call per input event.
- *
- * Volume is not here on purpose. It used to drive `STREAM_MUSIC`, which made a
- * room gesture change the device-wide media volume and persist after leaving
- * the room. Its coarse hardware steps (`getStreamMaxVolume` is typically 15,
- * so ~6.7% per notch) also made adjacent gesture values round to the same
- * notch, so the overlay animated while the audio never moved. Loudness now
- * stays on the web player's `<video>.volume`: app-local, continuous, and
- * released with the player session.
+ * Batches pointer-move writes to Android and fences late replies. A swipe
+ * updates its visual feedback immediately, while native calls are serialized
+ * through one queue so brightness and volume cannot reorder across JNI.
  */
 export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") {
   const [state, setState] = useState<AndroidPlayerControlsState | null>(null);
   const [available, setAvailable] = useState(false);
   const stateRef = useRef<AndroidPlayerControlsState | null>(null);
-  const pendingRef = useRef<number | null>(null);
+  const pendingRef = useRef<Partial<Record<AndroidPlayerControlName, number>>>({});
   const timerRef = useRef<number | null>(null);
   const nativeWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const releasePromiseRef = useRef<Promise<void>>(Promise.resolve());
-  const requestVersionRef = useRef(0);
+  const requestVersionRef = useRef<Record<AndroidPlayerControlName, number>>({
+    mediaVolume: 0,
+    brightness: 0,
+  });
+  const previousMediaVolumeRef = useRef(80);
   const mountedRef = useRef(true);
   /** One toast per mount: a drag emits many writes and would spam otherwise. */
   const reportedWriteErrorRef = useRef(false);
@@ -139,56 +151,83 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
     setState(next);
   }, []);
 
+  const patchState = useCallback(
+    (patch: Partial<AndroidPlayerControlsState>) => {
+      const current = stateRef.current;
+      if (!current) return;
+      replaceState({ ...current, ...patch });
+    },
+    [replaceState],
+  );
+
   const flush = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    const value = pendingRef.current;
-    pendingRef.current = null;
-    if (value === null) return;
+    const pending = pendingRef.current;
+    pendingRef.current = {};
 
-    const version = ++requestVersionRef.current;
-    const write = nativeWriteQueueRef.current
-      .catch(() => undefined)
-      .then(() => setAndroidBrightness(value));
-    nativeWriteQueueRef.current = write.then(
-      () => undefined,
-      () => undefined,
-    );
-    void write
-      .then((actualValue) => {
-        if (!mountedRef.current || requestVersionRef.current !== version) return;
-        // A successful write proves the native bridge is usable even when the
-        // initial getState race had not finished yet.
-        setAvailable(true);
-        reportedWriteErrorRef.current = false;
-        replaceState({ brightness: actualValue });
-      })
-      .catch((error: unknown) => {
-        if (!mountedRef.current || requestVersionRef.current !== version) return;
-        // Keep optimistic UI for this gesture, but allow a later getState /
-        // write to recover. A single failed frame must not permanently demote
-        // brightness control back to the CSS shade fallback. The failure still
-        // has to be visible: a silently swallowed error is exactly what made a
-        // dead native bridge look like a working slider.
-        if (reportedWriteErrorRef.current) return;
-        reportedWriteErrorRef.current = true;
-        notify.error("调节屏幕亮度失败", nativeControlErrorText(error));
-      });
-  }, [replaceState]);
-
-  const cancelPendingWrite = useCallback(() => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
+    for (const [name, value] of Object.entries(pending) as [AndroidPlayerControlName, number][]) {
+      const version = ++requestVersionRef.current[name];
+      const write = nativeWriteQueueRef.current
+        .catch(() => undefined)
+        .then(() =>
+          name === "mediaVolume" ? setAndroidMediaVolume(value) : setAndroidBrightness(value),
+        );
+      nativeWriteQueueRef.current = write.then(
+        () => undefined,
+        () => undefined,
+      );
+      void write
+        .then((actualValue) => {
+          if (!mountedRef.current || requestVersionRef.current[name] !== version) return;
+          setAvailable(true);
+          reportedWriteErrorRef.current = false;
+          if (name === "mediaVolume" && actualValue > 0) {
+            previousMediaVolumeRef.current = actualValue;
+          }
+          if (name === "mediaVolume") patchState({ mediaVolume: actualValue });
+          else patchState({ brightness: actualValue });
+        })
+        .catch((error: unknown) => {
+          if (!mountedRef.current || requestVersionRef.current[name] !== version) return;
+          if (reportedWriteErrorRef.current) return;
+          reportedWriteErrorRef.current = true;
+          notify.error(
+            name === "mediaVolume" ? "调节系统音量失败" : "调节屏幕亮度失败",
+            nativeControlErrorText(error),
+          );
+        });
     }
-    pendingRef.current = null;
-    requestVersionRef.current += 1;
-  }, []);
+  }, [patchState]);
+
+  const cancelPendingWrites = useCallback(
+    (name?: AndroidPlayerControlName) => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (name) {
+        delete pendingRef.current[name];
+        requestVersionRef.current[name] += 1;
+      } else {
+        pendingRef.current = {};
+        requestVersionRef.current.mediaVolume += 1;
+        requestVersionRef.current.brightness += 1;
+      }
+      if (Object.keys(pendingRef.current).length > 0) {
+        timerRef.current = window.setTimeout(flush, NATIVE_CONTROL_THROTTLE_MS);
+      }
+    },
+    [flush],
+  );
 
   const releaseBrightness = useCallback(() => {
-    cancelPendingWrite();
+    cancelPendingWrites("brightness");
+    // A volume gesture may still be queued when the room changes. Commit it
+    // before resetting brightness so the system volume cannot be lost.
+    flush();
     const release = nativeWriteQueueRef.current
       .catch(() => undefined)
       .then(() => resetAndroidBrightness())
@@ -196,38 +235,65 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
     nativeWriteQueueRef.current = release;
     releasePromiseRef.current = release;
     return release;
-  }, [cancelPendingWrite]);
+  }, [cancelPendingWrites, flush]);
 
-  const setBrightness = useCallback(
-    (value: number): boolean => {
+  const queueControl = useCallback(
+    (name: AndroidPlayerControlName, value: number): boolean => {
       if (!enabled || !runningOnAndroidTauri()) return false;
       const nextValue = clampAndroidPlayerControl(value);
-      // Keep the gesture snapshot current without reconciling PlayerPane for
-      // every pointer frame. Successful native replies still publish state.
-      stateRef.current = { brightness: nextValue };
-      pendingRef.current = nextValue;
+      if (!stateRef.current) {
+        replaceState({
+          mediaVolume: name === "mediaVolume" ? nextValue : previousMediaVolumeRef.current,
+          brightness: name === "brightness" ? nextValue : 100,
+        });
+      } else if (name === "mediaVolume") {
+        patchState({ mediaVolume: nextValue });
+      } else {
+        patchState({ brightness: nextValue });
+      }
+      pendingRef.current[name] = nextValue;
       if (timerRef.current === null) {
         timerRef.current = window.setTimeout(flush, NATIVE_CONTROL_THROTTLE_MS);
       }
       return true;
     },
-    [enabled, flush],
+    [enabled, flush, patchState, replaceState],
   );
+
+  const setMediaVolume = useCallback(
+    (value: number): boolean => queueControl("mediaVolume", value),
+    [queueControl],
+  );
+
+  const setBrightness = useCallback(
+    (value: number): boolean => queueControl("brightness", value),
+    [queueControl],
+  );
+
+  const toggleMediaMute = useCallback((): boolean => {
+    if (!enabled || !runningOnAndroidTauri()) return false;
+    const current = stateRef.current?.mediaVolume ?? previousMediaVolumeRef.current;
+    if (current <= 0) {
+      return setMediaVolume(previousMediaVolumeRef.current || 80);
+    }
+    previousMediaVolumeRef.current = current;
+    return setMediaVolume(0);
+  }, [enabled, setMediaVolume]);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      cancelPendingWrite();
+      cancelPendingWrites();
     };
-  }, [cancelPendingWrite]);
+  }, [cancelPendingWrites]);
 
   useEffect(() => {
     let cancelled = false;
     let shouldResetBrightness = false;
     let readVersion = 0;
     if (!enabled || !runningOnAndroidTauri()) {
-      cancelPendingWrite();
+      cancelPendingWrites();
       setAvailable(false);
       replaceState(null);
       return () => {
@@ -238,20 +304,17 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
     setAvailable(false);
     replaceState(null);
 
-    const readCurrentBrightness = () => {
+    const readCurrentState = () => {
       const version = ++readVersion;
       const pendingRelease = releasePromiseRef.current;
       void pendingRelease
         .then(() => getAndroidPlayerControls())
         .then((next) => {
-          if (
-            cancelled ||
-            readVersion !== version ||
-            document.visibilityState !== "visible"
-          ) {
+          if (cancelled || readVersion !== version || document.visibilityState !== "visible") {
             return;
           }
           replaceState(next);
+          if (next.mediaVolume > 0) previousMediaVolumeRef.current = next.mediaVolume;
           setAvailable(true);
           shouldResetBrightness = true;
         })
@@ -264,13 +327,10 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        readCurrentBrightness();
+        readCurrentState();
         return;
       }
 
-      // MainActivity.onPause also releases the override. Clear the optimistic
-      // browser snapshot here so returning to the room never starts the next
-      // gesture from a brightness value that no longer exists natively.
       readVersion += 1;
       setAvailable(false);
       replaceState(null);
@@ -278,30 +338,19 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
       void releaseBrightness();
     };
 
-    readCurrentBrightness();
+    readCurrentState();
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      // A direct room-to-room route change can reuse PlayerPane. Keying this
-      // effect by roomSessionKey makes that route transition release the old
-      // room's brightness just as a full unmount does. releaseBrightness waits
-      // for an in-flight native write before resetting, so a late reply cannot
-      // reapply the override after cleanup.
       if (shouldResetBrightness || stateRef.current !== null) {
         void releaseBrightness();
       } else {
-        cancelPendingWrite();
+        cancelPendingWrites();
       }
     };
-  }, [
-    cancelPendingWrite,
-    enabled,
-    releaseBrightness,
-    replaceState,
-    roomSessionKey,
-  ]);
+  }, [cancelPendingWrites, enabled, releaseBrightness, replaceState, roomSessionKey]);
 
   return {
     /** True after a successful native read/write. */
@@ -309,6 +358,8 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
     /** True on Android Tauri even before getState finishes. */
     supported: enabled && (available || runningOnAndroidTauri()),
     state,
+    setMediaVolume,
+    toggleMediaMute,
     setBrightness,
     flush,
   };

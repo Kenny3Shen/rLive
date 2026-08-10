@@ -18,6 +18,7 @@ import type { PlayUrl } from "@/shared/types/live";
 import type { PlayerEvent } from "@/shared/types/player";
 import { cn } from "@/lib/utils";
 import { useAndroidFullscreenOrientation } from "@/features/room/player/androidOrientation";
+import { useAndroidPlayerControls } from "@/features/room/player/androidPlayerControls";
 import {
   IPTV_MEDIA_LIFECYCLE_PROFILE,
   useMediaLifecycle,
@@ -180,7 +181,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const player = useMediaLifecycle({
     playUrl: transportEnabled ? playUrl : null,
     sessionKey: channelId ? `iptv:${channelId}` : "iptv:none",
-    initialVolume: 80,
+    initialVolume: androidClient ? 100 : 80,
     initialMuted: false,
     reloadToken: iptvLifecycleReloadToken(reloadToken, reconnectToken),
     onMediaFailure: handleMediaFailure,
@@ -192,6 +193,29 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   });
   const fullscreen = player.mode === "fullscreen";
   const { exitPictureInPicture, toggleFullscreen, toggleMute, togglePause } = player;
+  const androidPlayerControls = useAndroidPlayerControls(
+    androidClient,
+    channelId ? `iptv:${channelId}` : "iptv:none",
+  );
+  const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
+  const nativeMediaVolume = nativePlayerControlsActive
+    ? androidPlayerControls.state?.mediaVolume
+    : undefined;
+  const playerControlVolume = nativeMediaVolume ?? player.volume;
+  const playerControlMuted =
+    nativeMediaVolume !== undefined ? nativeMediaVolume <= 0 : player.muted;
+  const changePlayerVolume = player.changeVolume;
+  const handlePlayerVolumeChange = useCallback(
+    (value: number) => {
+      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(value)) return;
+      changePlayerVolume(value);
+    },
+    [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive],
+  );
+  const handleTogglePlayerMute = useCallback(() => {
+    if (nativePlayerControlsActive && androidPlayerControls.toggleMediaMute()) return;
+    toggleMute();
+  }, [androidPlayerControls, nativePlayerControlsActive, toggleMute]);
 
   useScreenWakeLock(status === "playing" && !audioOnly);
   useAndroidFullscreenOrientation({
@@ -301,10 +325,16 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
       event.preventDefault();
       scheduleControlsHide();
       if (key === " " || key === "k") togglePause();
-      else if (key === "m") toggleMute();
+      else if (key === "m") handleTogglePlayerMute();
       else void toggleFullscreen();
     },
-    [holdControlsVisible, scheduleControlsHide, toggleFullscreen, toggleMute, togglePause],
+    [
+      handleTogglePlayerMute,
+      holdControlsVisible,
+      scheduleControlsHide,
+      toggleFullscreen,
+      togglePause,
+    ],
   );
 
   const handleControlsInteractionChange = useCallback(
@@ -436,8 +466,8 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         >
           <PlayerControls
             paused={player.paused}
-            volume={player.volume}
-            muted={player.muted}
+            volume={playerControlVolume}
+            muted={playerControlMuted}
             audioOnly={audioOnly}
             fullscreen={fullscreen}
             pictureInPictureSupported={player.pictureInPictureSupported}
@@ -453,8 +483,8 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             loadError={player.fullscreenError}
             onRefresh={onReconnect}
             onTogglePause={togglePause}
-            onVolume={player.changeVolume}
-            onToggleMute={toggleMute}
+            onVolume={handlePlayerVolumeChange}
+            onToggleMute={handleTogglePlayerMute}
             onToggleAudioOnly={() => setAudioOnly((current) => !current)}
             onTogglePictureInPicture={() => void player.togglePictureInPicture()}
             onToggleFullscreen={() => void toggleFullscreen()}
