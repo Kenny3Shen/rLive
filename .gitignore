@@ -1,5 +1,23 @@
+# Dependencies
+/node_modules/
+
+# Frontend, Rust and test output
+/dist/
+/dist-ssr/
+/build/
+/coverage/
+/.vite/
+/src-tauri/target/
+*.tsbuildinfo
+
+# Local environment and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.local
+
 # Logs
-logs
+/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,15 +25,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Editor metadata
+/.vscode/*
+!/.vscode/extensions.json
+/.idea/
 .DS_Store
 *.suo
 *.ntvs*
@@ -23,30 +36,19 @@ dist-ssr
 *.sln
 *.sw?
 
-# worktrees / tooling
-.worktrees/
-.superpowers/
-node_modules/
-dist/
-src-tauri/target/
-*.log
-.DS_Store
-.playwright-cli/
-.grok
+# Local worktrees and development tools
+/.worktrees/
+/.superpowers/
+/.playwright-cli/
+/.grok/
+/.codex/
+/.claude/worktrees/
 
-# Local release-signing material. Keep private keys and their Gradle
-# configuration outside version control even if they are placed in the repo by
-# mistake.
+# Local release artifacts and signing material
+/release-assets/
 *.jks
 *.keystore
 *.p12
 *.pfx
 key.properties
 keystore.properties
-
-# Root Vite/Tauri intermediate output if created outside src-tauri/target.
-/build
-
-# Local plugin Android build intermediates (never commit).
-src-tauri/plugins/**/android/build/
-src-tauri/plugins/**/android/.tauri/
