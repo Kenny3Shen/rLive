@@ -15,20 +15,20 @@ const NATIVE_CONTROL_THROTTLE_MS = 200;
  * invoke handler and never reaches the Kotlin `@Command` methods, so calling
  * the plugin namespace from the webview silently failed. The Rust side wraps
  * the plugin handle in these commands instead.
+ *
+ * Brightness only. Volume deliberately never crosses this bridge — see
+ * [useAndroidPlayerControls].
  */
 const NATIVE_COMMANDS = {
   getState: "android_player_controls_get_state",
-  setMediaVolume: "android_player_controls_set_media_volume",
   setBrightness: "android_player_controls_set_brightness",
   resetBrightness: "android_player_controls_reset_brightness",
 } as const;
 
 export type AndroidPlayerControlsState = {
-  mediaVolume: number;
   brightness: number;
 };
 
-type AndroidPlayerControlName = keyof AndroidPlayerControlsState;
 type NativePlayerControlsInvoke = <T>(
   command: string,
   args?: Record<string, unknown>,
@@ -83,46 +83,27 @@ function runningOnAndroidTauri(): boolean {
   });
 }
 
-/** Read the Android media volume and app-window brightness from the native bridge. */
+/** Read the app-window brightness override from the native bridge. */
 export async function getAndroidPlayerControls(
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<AndroidPlayerControlsState> {
   const response = await nativeInvoke<Record<string, unknown>>(NATIVE_COMMANDS.getState);
-  const mediaVolume = percentFrom(response.mediaVolume);
   const brightness = percentFrom(response.brightness);
-  if (mediaVolume === null || brightness === null) {
+  if (brightness === null) {
     throw new Error("Android 播放器控制返回了无效状态");
   }
-  return { mediaVolume, brightness };
+  return { brightness };
 }
 
-async function setAndroidPlayerControl(
-  control: "setMediaVolume" | "setBrightness",
+export async function setAndroidBrightness(
   value: number,
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<number> {
   const expected = androidPlayerControlStep(value);
-  const response = await nativeInvoke<NativeControlValue>(NATIVE_COMMANDS[control], {
+  const response = await nativeInvoke<NativeControlValue>(NATIVE_COMMANDS.setBrightness, {
     value: expected,
   });
-  // Different Android devices expose different discrete media-volume steps.
-  // Keep the gesture UI on its stable 5% scale even when the framework rounds
-  // a stream level to e.g. 47% internally.
   return percentFrom(response?.value) ?? expected;
-}
-
-export function setAndroidMediaVolume(
-  value: number,
-  nativeInvoke?: NativePlayerControlsInvoke,
-): Promise<number> {
-  return setAndroidPlayerControl("setMediaVolume", value, nativeInvoke);
-}
-
-export function setAndroidBrightness(
-  value: number,
-  nativeInvoke?: NativePlayerControlsInvoke,
-): Promise<number> {
-  return setAndroidPlayerControl("setBrightness", value, nativeInvoke);
 }
 
 /** Restore the Activity brightness captured before the first player gesture. */
@@ -132,24 +113,26 @@ export async function resetAndroidBrightness(
   await nativeInvoke(NATIVE_COMMANDS.resetBrightness);
 }
 
-type PendingControls = Partial<Record<AndroidPlayerControlName, number>>;
-
 /**
- * Batches pointer-move writes to Android and fences late replies. A swipe
- * updates its visual feedback immediately, while the native calls are capped
- * at roughly one per display frame rather than one per input event.
+ * Batches brightness pointer-move writes to Android and fences late replies.
+ * A swipe updates its visual feedback immediately, while the native calls are
+ * capped at roughly one per display frame rather than one per input event.
+ *
+ * Volume is not here on purpose. It used to drive `STREAM_MUSIC`, which made a
+ * room gesture change the device-wide media volume and persist after leaving
+ * the room. Its coarse hardware steps (`getStreamMaxVolume` is typically 15,
+ * so ~6.7% per notch) also made consecutive 5% gesture steps round to the same
+ * notch, so the overlay animated while the audio never moved. Loudness now
+ * stays on the web player's `<video>.volume`: app-local, continuous, and
+ * released with the player session.
  */
 export function useAndroidPlayerControls(enabled: boolean) {
   const [state, setState] = useState<AndroidPlayerControlsState | null>(null);
   const [available, setAvailable] = useState(false);
   const stateRef = useRef<AndroidPlayerControlsState | null>(null);
-  const pendingRef = useRef<PendingControls>({});
+  const pendingRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
-  const requestVersionRef = useRef<Record<AndroidPlayerControlName, number>>({
-    mediaVolume: 0,
-    brightness: 0,
-  });
-  const previousMediaVolumeRef = useRef(80);
+  const requestVersionRef = useRef(0);
   const mountedRef = useRef(true);
   /** One toast per mount: a drag emits many writes and would spam otherwise. */
   const reportedWriteErrorRef = useRef(false);
@@ -159,89 +142,51 @@ export function useAndroidPlayerControls(enabled: boolean) {
     setState(next);
   }, []);
 
-  const patchState = useCallback(
-    (patch: Partial<AndroidPlayerControlsState>) => {
-      const current = stateRef.current;
-      if (!current) return;
-      replaceState({ ...current, ...patch });
-    },
-    [replaceState],
-  );
-
   const flush = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    const pending = pendingRef.current;
-    pendingRef.current = {};
+    const value = pendingRef.current;
+    pendingRef.current = null;
+    if (value === null) return;
 
-    (Object.entries(pending) as [AndroidPlayerControlName, number][]).forEach(([name, value]) => {
-      const version = ++requestVersionRef.current[name];
-      const write = name === "mediaVolume" ? setAndroidMediaVolume : setAndroidBrightness;
-      void write(value)
-        .then((actualValue) => {
-          if (!mountedRef.current || requestVersionRef.current[name] !== version) return;
-          // A successful write proves the native bridge is usable even when the
-          // initial getState race had not finished yet.
-          setAvailable(true);
-          reportedWriteErrorRef.current = false;
-          patchState({ [name]: actualValue });
-        })
-        .catch((error: unknown) => {
-          if (!mountedRef.current || requestVersionRef.current[name] !== version) return;
-          // Keep optimistic UI for this gesture, but allow a later getState /
-          // write to recover. A single failed frame must not permanently
-          // demote Android volume control back to the HTML <video> element.
-          // The failure still has to be visible: a silently swallowed error is
-          // exactly what made a dead native bridge look like a working slider.
-          if (reportedWriteErrorRef.current) return;
-          reportedWriteErrorRef.current = true;
-          notify.error(
-            name === "mediaVolume" ? "调节系统音量失败" : "调节屏幕亮度失败",
-            nativeControlErrorText(error),
-          );
-        });
-    });
-  }, [patchState]);
+    const version = ++requestVersionRef.current;
+    void setAndroidBrightness(value)
+      .then((actualValue) => {
+        if (!mountedRef.current || requestVersionRef.current !== version) return;
+        // A successful write proves the native bridge is usable even when the
+        // initial getState race had not finished yet.
+        setAvailable(true);
+        reportedWriteErrorRef.current = false;
+        replaceState({ brightness: actualValue });
+      })
+      .catch((error: unknown) => {
+        if (!mountedRef.current || requestVersionRef.current !== version) return;
+        // Keep optimistic UI for this gesture, but allow a later getState /
+        // write to recover. A single failed frame must not permanently demote
+        // brightness control back to the CSS shade fallback. The failure still
+        // has to be visible: a silently swallowed error is exactly what made a
+        // dead native bridge look like a working slider.
+        if (reportedWriteErrorRef.current) return;
+        reportedWriteErrorRef.current = true;
+        notify.error("调节屏幕亮度失败", nativeControlErrorText(error));
+      });
+  }, [replaceState]);
 
-  const queue = useCallback(
-    (name: AndroidPlayerControlName, value: number): boolean => {
-      // System media volume is the only correct Android control surface.
-      // Queue writes as soon as we are on a Tauri Android host, even before
-      // the first getState resolves, so a first swipe still changes STREAM_MUSIC.
+  const setBrightness = useCallback(
+    (value: number): boolean => {
       if (!enabled || !runningOnAndroidTauri()) return false;
       const nextValue = androidPlayerControlStep(value);
-      if (!stateRef.current) {
-        const seed: AndroidPlayerControlsState = {
-          mediaVolume: name === "mediaVolume" ? nextValue : 80,
-          brightness: name === "brightness" ? nextValue : 50,
-        };
-        replaceState(seed);
-      } else {
-        patchState({ [name]: nextValue });
-      }
-      pendingRef.current[name] = nextValue;
+      replaceState({ brightness: nextValue });
+      pendingRef.current = nextValue;
       if (timerRef.current === null) {
         timerRef.current = window.setTimeout(flush, NATIVE_CONTROL_THROTTLE_MS);
       }
       return true;
     },
-    [enabled, flush, patchState, replaceState],
+    [enabled, flush, replaceState],
   );
-
-  const setMediaVolume = useCallback((value: number) => queue("mediaVolume", value), [queue]);
-  const setBrightness = useCallback((value: number) => queue("brightness", value), [queue]);
-
-  const toggleMediaMute = useCallback((): boolean => {
-    if (!enabled || !runningOnAndroidTauri()) return false;
-    const mediaVolume = stateRef.current?.mediaVolume ?? previousMediaVolumeRef.current ?? 80;
-    if (mediaVolume <= 0) {
-      return setMediaVolume(previousMediaVolumeRef.current || 80);
-    }
-    previousMediaVolumeRef.current = mediaVolume;
-    return setMediaVolume(0);
-  }, [enabled, setMediaVolume]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -267,7 +212,6 @@ export function useAndroidPlayerControls(enabled: boolean) {
       .then((next) => {
         if (cancelled) return;
         replaceState(next);
-        previousMediaVolumeRef.current = next.mediaVolume || previousMediaVolumeRef.current;
         setAvailable(true);
         shouldResetBrightness = true;
       })
@@ -281,6 +225,7 @@ export function useAndroidPlayerControls(enabled: boolean) {
       cancelled = true;
       // Leaving the player must not leave the Activity stuck at a gesture
       // brightness; Simple Live restores the prior window value on exit.
+      // MainActivity.onPause covers backgrounding and process death too.
       if (shouldResetBrightness || stateRef.current !== null) {
         void resetAndroidBrightness().catch(() => {
           // Native bridge may already be torn down with the room route.
@@ -290,14 +235,12 @@ export function useAndroidPlayerControls(enabled: boolean) {
   }, [enabled, replaceState]);
 
   return {
-    /** True after a successful native read/write. Volume setters still work earlier. */
+    /** True after a successful native read/write. */
     available,
-    /** True on Android Tauri even before getState finishes — volume must hit STREAM_MUSIC. */
+    /** True on Android Tauri even before getState finishes. */
     supported: enabled && (available || runningOnAndroidTauri()),
     state,
-    setMediaVolume,
     setBrightness,
-    toggleMediaMute,
     flush,
   };
 }

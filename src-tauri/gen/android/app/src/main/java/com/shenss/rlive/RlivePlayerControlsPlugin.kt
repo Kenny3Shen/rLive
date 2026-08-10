@@ -1,10 +1,7 @@
 package com.shenss.rlive
 
 import android.app.Activity
-import android.content.Context
 import android.content.pm.ActivityInfo
-import android.media.AudioManager
-import android.os.Build
 import android.provider.Settings
 import android.view.WindowManager
 import app.tauri.annotation.Command
@@ -15,7 +12,7 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import kotlin.math.roundToInt
 
-/** Arguments shared by the brightness and media-volume setters. */
+/** Arguments for the brightness setter. */
 @InvokeArg
 class PlayerControlValueArgs {
   var value: Int = 0
@@ -28,28 +25,42 @@ class PlayerOrientationArgs {
 }
 
 /**
- * Android-only player controls.
+ * Android-only player brightness control.
  *
- * WebView can attenuate a <video>, but it cannot control Android's media
- * stream or the Activity brightness. Keeping those operations native gives
- * vertical player gestures the same behaviour users expect from Android live
- * clients while never requesting permission to write the device-wide setting.
+ * The WebView cannot dim the device screen, so brightness has to be native.
+ * It is applied as an Activity window override — rLive only, never a write to
+ * `Settings.System` — and is restored when the player leaves or the Activity
+ * is backgrounded, so a gesture inside a room never outlives that room.
+ *
+ * Volume is deliberately NOT here. Driving `STREAM_MUSIC` would change the
+ * device-wide media volume and survive leaving the room, and its coarse
+ * hardware steps (typically 15) silently swallowed part of the 5% gesture
+ * scale. Loudness is handled in the web player via `<video>.volume`, which is
+ * app-local, continuous, and torn down with the player session.
  */
 @TauriPlugin
 class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activity) {
-  private val audioManager: AudioManager
-    get() = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
   /** Prior window brightness before the first player gesture override. */
   private var brightnessBeforePlayer: Float? = null
 
-  /**
-   * Set once the first scripted media-volume write has primed STREAM_MUSIC as
-   * Android's active stream. Until the user presses the hardware volume key,
-   * a programmatic `setStreamVolume(STREAM_MUSIC, …)` may be no-opped by the
-   * AudioManager, so the very first gesture needs `FLAG_SHOW_UI` to take.
-   */
-  private var primedActiveMediaStream = false
+  init {
+    activeInstance = this
+  }
+
+  companion object {
+    /**
+     * The Activity cannot reach the plugin through Tauri, but leaving the
+     * player brightness applied while rLive is in the background would dim
+     * other apps' idea of this window on return and survive a process death.
+     * [MainActivity.onPause] calls this so the override is always released.
+     */
+    private var activeInstance: RlivePlayerControlsPlugin? = null
+
+    fun restoreBrightnessOverride() {
+      val instance = activeInstance ?: return
+      instance.activity.runOnUiThread { instance.restoreBrightness() }
+    }
+  }
 
   @Command
   fun getState(invoke: Invoke) {
@@ -58,45 +69,6 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
         invoke.resolve(state())
       } catch (error: Exception) {
         invoke.reject(error.message ?: "读取播放器系统控制状态失败")
-      }
-    }
-  }
-
-  @Command
-  fun setMediaVolume(invoke: Invoke) {
-    val args = invoke.parseArgs(PlayerControlValueArgs::class.java)
-    activity.runOnUiThread {
-      try {
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        if (maxVolume <= 0) {
-          invoke.reject("当前设备没有可调节的媒体音量")
-          return@runOnUiThread
-        }
-        val percent = clampPercent(args.value)
-        val streamVolume = (maxVolume * percent / 100f).roundToInt()
-        // A scripted setStreamVolume(STREAM_MUSIC) before any physical volume
-        // keypress has been pressed often lands in the system's "active stream"
-        // instead of STREAM_MUSIC — the very first swipe then looks inert until
-        // the user taps the hardware volume rocker once. Doing that first write
-        // with FLAG_SHOW_UI makes Android promote STREAM_MUSIC to active and the
-        // volume panel flicker is the same the hardware key shows. Later writes
-        // keep the silent flags so a drag is not noisy.
-        val flags = if (!primedActiveMediaStream) {
-          primedActiveMediaStream = true
-          AudioManager.FLAG_SHOW_UI or AudioManager.FLAG_VIBRATE
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-          AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
-        } else {
-          0
-        }
-        audioManager.setStreamVolume(
-          AudioManager.STREAM_MUSIC,
-          streamVolume,
-          flags
-        )
-        invoke.resolve(controlValue(mediaVolumePercent()))
-      } catch (error: Exception) {
-        invoke.reject(error.message ?: "设置媒体音量失败")
       }
     }
   }
@@ -126,13 +98,18 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
   fun resetBrightness(invoke: Invoke) {
     activity.runOnUiThread {
       try {
-        brightnessBeforePlayer?.let(::setWindowBrightness)
-        brightnessBeforePlayer = null
+        restoreBrightness()
         invoke.resolve(JSObject())
       } catch (error: Exception) {
         invoke.reject(error.message ?: "恢复应用亮度失败")
       }
     }
+  }
+
+  /** Drops the gesture override back to the pre-player window brightness. */
+  private fun restoreBrightness() {
+    brightnessBeforePlayer?.let(::setWindowBrightness)
+    brightnessBeforePlayer = null
   }
 
   /**
@@ -166,18 +143,11 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
   }
 
   private fun state(): JSObject = JSObject().apply {
-    put("mediaVolume", mediaVolumePercent())
     put("brightness", brightnessPercent())
   }
 
   private fun controlValue(value: Int): JSObject = JSObject().apply {
     put("value", value)
-  }
-
-  private fun mediaVolumePercent(): Int {
-    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-    if (maxVolume <= 0) return 0
-    return clampPercent((audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100f / maxVolume).roundToInt())
   }
 
   private fun brightnessPercent(): Int {

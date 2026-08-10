@@ -28,8 +28,7 @@ use commands::account::{
 use commands::android_player_controls::AndroidPlayerControls;
 use commands::android_player_controls::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
-    android_player_controls_set_brightness, android_player_controls_set_media_volume,
-    android_player_controls_set_orientation,
+    android_player_controls_set_brightness, android_player_controls_set_orientation,
 };
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
@@ -185,8 +184,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
-    // Android-only: brightness / STREAM_MUSIC volume for player edge gestures.
-    // Desktop and browser builds keep the existing web player controls.
+    // Android-only: window brightness override for the left-edge gesture, plus
+    // the fullscreen orientation lock. Volume stays in the web player on every
+    // platform so a room gesture never touches device-wide audio.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(android_player_controls_plugin());
 
@@ -286,7 +286,6 @@ pub fn run() {
             profile_export,
             profile_import,
             android_player_controls_get_state,
-            android_player_controls_set_media_volume,
             android_player_controls_set_brightness,
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
