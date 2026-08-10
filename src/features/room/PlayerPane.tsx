@@ -309,6 +309,8 @@ type PlayerPaneProps = {
   /** The canonical room identity for platform-specific chat controls. */
   siteId?: SiteId;
   roomId?: string;
+  roomTitle?: string;
+  roomUserName?: string;
   /** Publishes portrait-only secondary controls to RoomPage's room-actions menu. */
   onMobileRoomActionsChange?: (actions: readonly PlayerMobileRoomAction[]) => void;
 };
@@ -343,6 +345,8 @@ export function PlayerPane({
   onSideTabChange,
   siteId,
   roomId,
+  roomTitle,
+  roomUserName,
   onMobileRoomActionsChange,
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
@@ -414,7 +418,7 @@ export function PlayerPane({
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
   });
-  const androidPlayerControls = useAndroidPlayerControls(androidClient);
+  const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
   // Landscape streams auto-rotate on Android fullscreen; portrait ones stay
   // upright because the lock is derived from the decoded frame size.
   useAndroidFullscreenOrientation({
@@ -429,7 +433,13 @@ export function PlayerPane({
   useScreenWakeLock(player.running && !player.paused && !audioOnly);
   // This stays above the conditional side panel, so hiding that panel never
   // silently stops a session the user explicitly enabled.
-  const autoDanmakuSend = useAutoDanmakuSend({ siteId, roomId, roomSessionKey });
+  const autoDanmakuSend = useAutoDanmakuSend({
+    siteId,
+    roomId,
+    roomTitle,
+    roomUserName,
+    roomSessionKey,
+  });
 
   const displayError =
     error ??
@@ -1481,6 +1491,8 @@ export function PlayerPane({
                   <DanmakuComposer
                     siteId={siteId}
                     roomId={roomId}
+                    roomTitle={roomTitle}
+                    roomUserName={roomUserName}
                     overlay
                     onOverlayInteractionChange={handleComposerOverlayInteractionChange}
                   />
@@ -1593,11 +1605,20 @@ export function PlayerPane({
                     active={danmakuActive}
                     siteId={siteId}
                     roomId={roomId}
+                    roomTitle={roomTitle}
+                    roomUserName={roomUserName}
                     visible={sidePanelOpen && activeSideTab === "chat"}
                     statusText={danmakuStatusText}
                     className="min-h-0 flex-1"
                   />
-                  {inlineCompactSidePanel && <DanmakuComposer siteId={siteId} roomId={roomId} />}
+                  {inlineCompactSidePanel && (
+                    <DanmakuComposer
+                      siteId={siteId}
+                      roomId={roomId}
+                      roomTitle={roomTitle}
+                      roomUserName={roomUserName}
+                    />
+                  )}
                 </div>
                 <div
                   role="tabpanel"

@@ -121,15 +121,16 @@ fn validate_and_reserve_huya_send(
 /// failure must never turn an already accepted platform write into a false
 /// failure in the UI.
 ///
-/// `room_title` is best-effort: the send commands only resolve room metadata
-/// when the platform already required it, so an empty title simply renders the
-/// room id on the history screen rather than costing an extra request.
+/// Room metadata is best-effort. The active player supplies the detail it
+/// already rendered; watch history fills any missing field without adding a
+/// network request to the successful send path.
 fn record_successful_danmaku_send(
     state: &AppState,
     site_id: SiteId,
     content: &str,
     room_id: &str,
-    room_title: &str,
+    room_title: Option<&str>,
+    room_user_name: Option<&str>,
 ) {
     let sent_at = chrono::Utc::now().timestamp_millis();
     let result = state
@@ -137,17 +138,29 @@ fn record_successful_danmaku_send(
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
         .and_then(|conn| {
-            // Sending happens inside a room the user already opened, so watch
-            // history is a free local source for the title when the platform's
-            // send path never needed to fetch room detail.
-            let title = if room_title.is_empty() {
-                history::title_for_room(&conn, site_id.as_str(), room_id)
-                    .unwrap_or_default()
-                    .unwrap_or_default()
-            } else {
-                room_title.to_owned()
-            };
-            danmaku_send_history::record(&conn, site_id.as_str(), content, room_id, &title, sent_at)
+            let mut title = room_title.unwrap_or_default().trim().to_owned();
+            let mut user_name = room_user_name.unwrap_or_default().trim().to_owned();
+            if title.is_empty() || user_name.is_empty() {
+                if let Some((history_title, history_user_name)) =
+                    history::metadata_for_room(&conn, site_id.as_str(), room_id).unwrap_or_default()
+                {
+                    if title.is_empty() {
+                        title = history_title;
+                    }
+                    if user_name.is_empty() {
+                        user_name = history_user_name;
+                    }
+                }
+            }
+            danmaku_send_history::record(
+                &conn,
+                site_id.as_str(),
+                content,
+                room_id,
+                &title,
+                &user_name,
+                sent_at,
+            )
         });
     if let Err(error) = result {
         // Do not include the outgoing content in logs. It can be personal,
@@ -294,6 +307,8 @@ pub async fn bilibili_danmaku_send(
     state: State<'_, AppState>,
     room_id: String,
     message: String,
+    room_title: Option<String>,
+    room_user_name: Option<String>,
 ) -> AppResult<()> {
     let (settings, cookie) = {
         let conn = state
@@ -326,7 +341,14 @@ pub async fn bilibili_danmaku_send(
     // following for both proxied and direct requests.
     let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
     danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
-    record_successful_danmaku_send(state.inner(), SiteId::Bilibili, &message, &room_id, "");
+    record_successful_danmaku_send(
+        state.inner(),
+        SiteId::Bilibili,
+        &message,
+        &room_id,
+        room_title.as_deref(),
+        room_user_name.as_deref(),
+    );
     Ok(())
 }
 
@@ -360,6 +382,8 @@ pub async fn douyu_danmaku_send(
     state: State<'_, AppState>,
     room_id: String,
     message: String,
+    room_title: Option<String>,
+    room_user_name: Option<String>,
 ) -> AppResult<()> {
     let (send_enabled, cookie, proxy) = {
         let conn = state
@@ -405,7 +429,14 @@ pub async fn douyu_danmaku_send(
             },
         )?;
     danmaku::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
-    record_successful_danmaku_send(state.inner(), SiteId::Douyu, &message, &room_id, "");
+    record_successful_danmaku_send(
+        state.inner(),
+        SiteId::Douyu,
+        &message,
+        &room_id,
+        room_title.as_deref(),
+        room_user_name.as_deref(),
+    );
     Ok(())
 }
 
@@ -439,6 +470,8 @@ pub async fn huya_danmaku_send(
     state: State<'_, AppState>,
     room_id: String,
     message: String,
+    room_title: Option<String>,
+    room_user_name: Option<String>,
 ) -> AppResult<()> {
     let (send_enabled, cookie, proxy) = {
         let conn = state
@@ -486,7 +519,16 @@ pub async fn huya_danmaku_send(
         SiteId::Huya,
         &message,
         &room_id,
-        &detail.title,
+        if detail.title.trim().is_empty() {
+            room_title.as_deref()
+        } else {
+            Some(&detail.title)
+        },
+        if detail.user_name.trim().is_empty() {
+            room_user_name.as_deref()
+        } else {
+            Some(&detail.user_name)
+        },
     );
     Ok(())
 }

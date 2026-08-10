@@ -34,6 +34,8 @@ export type AutoDanmakuSendController = {
 type UseAutoDanmakuSendOptions = {
   siteId?: SiteId;
   roomId?: string;
+  roomTitle?: string;
+  roomUserName?: string;
   /** Changes for a direct room switch even when the component stays mounted. */
   roomSessionKey?: string;
 };
@@ -82,6 +84,8 @@ function createInFlightCompletion(): { done: Promise<void>; finish: () => void }
 export function useAutoDanmakuSend({
   siteId,
   roomId,
+  roomTitle,
+  roomUserName,
   roomSessionKey,
 }: UseAutoDanmakuSendOptions): AutoDanmakuSendController {
   const danmakuSendEnabled = useSettingsStore((state) => state.danmakuSendEnabled);
@@ -107,6 +111,8 @@ export function useAutoDanmakuSend({
   const roomKey = roomSessionKey ?? `${siteId ?? "unknown"}:${roomId ?? ""}`;
   const latestRoomKeyRef = useRef(roomKey);
   latestRoomKeyRef.current = roomKey;
+  const latestRoomMetadataRef = useRef({ roomTitle, roomUserName });
+  latestRoomMetadataRef.current = { roomTitle, roomUserName };
 
   const availabilityKey = [
     siteId ?? "",
@@ -315,7 +321,11 @@ export function useAutoDanmakuSend({
       setStatusMessage(`正在发送第 ${segmentIndex + 1}/${segments.length} 段。`);
 
       try {
-        await invokeCmd<void>(sendConfig.sendCommand, { roomId, message });
+        await invokeCmd<void>(sendConfig.sendCommand, {
+          roomId,
+          message,
+          ...latestRoomMetadataRef.current,
+        });
         if (
           cancelled ||
           latestRoomKeyRef.current !== scheduledRoomKey ||

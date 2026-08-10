@@ -138,6 +138,8 @@ export type DanmakuSendHistoryItem = {
   room_id?: string;
   /** Room title captured at send time; empty when it could not be resolved. */
   room_title?: string;
+  /** Streamer name captured at send time; empty for legacy records. */
+  room_user_name?: string;
   sent_at: number;
 };
 

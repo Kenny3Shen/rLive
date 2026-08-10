@@ -86,7 +86,7 @@
 
 `Shell` 是布局与滚动的唯一编排入口：
 
-- 桌面侧栏宽 `68px`，移动端转换为包含安全区域的底部导航。
+- 桌面侧栏宽 `68px`，移动端转换为包含安全区域的底部导航；全部可见导航入口在同一 flex 容器内等宽分配，不能为历史、设置等末尾入口保留更窄的固定宽度。
 - 移动端交互目标至少为 `44px`；按钮、Toggle、Tabs 等基础组件已为 coarse pointer 提供最小尺寸。
 - `env(safe-area-inset-*)` 用于 Android edge-to-edge、底部导航、Drawer 和悬浮按钮，不能用固定 padding 覆盖。
 - `main[data-slot="app-content"]` 负责裁剪页面动画产生的横向溢出。
@@ -234,7 +234,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 1. 点击事件提供指针坐标；键盘激活使用按钮中心。
 2. `document.startViewTransition()` 分别捕获旧主题和新主题快照。
 3. `flushSync()` 在 update callback 中应用 Zustand 主题，确保新快照包含更新后的 React 图标与 `.dark` class。
-4. CSS `theme-reveal` keyframe 对 `::view-transition-new(root)` 的 `clip-path` 从 `circle(0)` 扩展到覆盖最远视口角。
+4. CSS `theme-reveal` keyframe 对 `::view-transition-new(root)` 的 `clip-path` 从 `circle(0)` 扩展到覆盖最远视口角。圆心使用 `vw` / `vh`，终点半径使用 `vmax`，避开 Android WebView 在 View Transition 伪元素中对 CSS `px` 长度重复应用设备像素缩放造成的末帧跳变。
 5. desktop 动画为 `520ms`，coarse pointer 为 `420ms`；GSAP 同时提供按钮 scale/rotation 反馈。
 6. `src/styles.css` 同时关闭浏览器默认的 root-group `250ms` 插值和 snapshot crossfade，整个切换只保留一条径向揭示时间线。
 7. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-reveal`、临时 CSS 变量和 GSAP inline styles。
@@ -341,7 +341,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 移动端 Canvas 弹幕最高按 120 FPS 跟随高刷屏，并将 backing scale 限制为 1×：相比旧的 60 FPS / 1.5× 策略，整屏像素吞吐量更低，同时避免 90/120 Hz 设备上的隔帧跳动。运动时间按真实帧间隔推进，不执行补帧突发；桌面端仍跟随浏览器刷新率，backing scale 最高 1.5×。
 - 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
-- 浏览器播放器亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
+- 浏览器回退亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
 - 播放器控制栏使用 `player-scrim-overlay`：由底边向画面上方淡出的黑色渐变，参考常规播放器，不设上边框也不使用 `backdrop-filter`。渐变画在 `::before` 上并高于控制栏自身高度，让淡出在第一个控件之前完成，避免出现可见的条带边界；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不触发播放器 React 重渲染。
 - 音量和播放设置 Drawer / 弹层仍使用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层和房间卡片角标同样不采样动态背景，避免滚动、视频解码与 Canvas 弹幕争抢 GPU 帧预算。
 - 移动端紧凑播放器控制栏使用 `32px` 按钮和输入组，底部内边距压缩到 `1px + safe-area`，顶部保留渐变淡出所需的少量留白；这是仅限视频边缘常用媒体操作的触控尺寸例外，应用导航和表单仍遵守 `44px` 目标。

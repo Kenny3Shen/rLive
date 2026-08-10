@@ -10,6 +10,11 @@ type ThemeRevealOrigin = {
   y: number;
 };
 
+type ThemeRevealViewport = {
+  width: number;
+  height: number;
+};
+
 let activeThemeTransition: ViewTransition | null = null;
 
 const THEME_REVEAL_PROPERTIES = [
@@ -24,6 +29,30 @@ export function applyTheme(theme: ThemeMode) {
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const dark = theme === "dark" || (theme === "system" && prefersDark);
   root.classList.toggle("dark", dark);
+}
+
+/**
+ * Viewport-relative geometry avoids Android WebView's device-pixel scaling of
+ * CSS px lengths inside the View Transition pseudo-tree.
+ */
+export function themeRevealGeometry(
+  origin: ThemeRevealOrigin,
+  viewport: ThemeRevealViewport,
+): { x: string; y: string; radius: string } {
+  const width = Math.max(1, viewport.width);
+  const height = Math.max(1, viewport.height);
+  const x = Math.min(width, Math.max(0, origin.x));
+  const y = Math.min(height, Math.max(0, origin.y));
+  const radius = Math.hypot(Math.max(x, width - x), Math.max(y, height - y));
+  const maxDimension = Math.max(width, height);
+
+  return {
+    x: `${((x / width) * 100).toFixed(3)}vw`,
+    y: `${((y / height) * 100).toFixed(3)}vh`,
+    // One extra vmax covers rounding at the snapshot edge without spending a
+    // noticeable part of the easing curve outside the viewport.
+    radius: `${((radius / maxDimension) * 100 + 1).toFixed(3)}vmax`,
+  };
 }
 
 function clearThemeRevealStyles(root: HTMLElement) {
@@ -55,16 +84,14 @@ export function revealThemeAt(
   activeThemeTransition?.skipTransition();
 
   const root = document.documentElement;
-  const x = Math.min(window.innerWidth, Math.max(0, origin.x));
-  const y = Math.min(window.innerHeight, Math.max(0, origin.y));
-  const radius = Math.hypot(
-    Math.max(x, window.innerWidth - x),
-    Math.max(y, window.innerHeight - y),
-  );
+  const geometry = themeRevealGeometry(origin, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
 
-  root.style.setProperty("--theme-reveal-x", `${x}px`);
-  root.style.setProperty("--theme-reveal-y", `${y}px`);
-  root.style.setProperty("--theme-reveal-radius", `${Math.ceil(radius) + 2}px`);
+  root.style.setProperty("--theme-reveal-x", geometry.x);
+  root.style.setProperty("--theme-reveal-y", geometry.y);
+  root.style.setProperty("--theme-reveal-radius", geometry.radius);
   root.style.setProperty(
     "--theme-reveal-duration",
     window.matchMedia("(pointer: coarse)").matches ? "420ms" : "520ms",

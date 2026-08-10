@@ -257,6 +257,19 @@ export function normalizeWebPlayerAudio(
   };
 }
 
+/** Apply one normalized audio snapshot to the active room's media element. */
+export function applyWebPlayerAudio(
+  video: Pick<HTMLMediaElement, "volume" | "muted">,
+  volume: number,
+  muted: boolean,
+): { volume: number; muted: boolean } {
+  const normalizedVolume = Math.max(0, Math.min(100, Math.round(volume)));
+  const normalizedMuted = muted || normalizedVolume === 0;
+  video.volume = normalizedVolume / 100;
+  video.muted = normalizedMuted;
+  return { volume: normalizedVolume, muted: normalizedMuted };
+}
+
 /** Whether a live URL requires xgplayer's HLS plugin rather than its FLV plugin. */
 export function isHlsStream(url: string): boolean {
   return /\.m3u8(?:[?#]|$)/i.test(url) || /[/?&=_-]hls(?:[/?&=_-]|$)/i.test(url);
@@ -816,8 +829,7 @@ export function useWebPlayer(opts: {
           video.removeAttribute("src");
           video.srcObject = null;
           video.load();
-          video.volume = Math.max(0, Math.min(1, volumeRef.current / 100));
-          video.muted = mutedRef.current;
+          applyWebPlayerAudio(video, volumeRef.current, mutedRef.current);
 
           const recoverMutedAutoplay = () => {
             if (mutedRef.current) return false;
@@ -1269,8 +1281,7 @@ export function useWebPlayer(opts: {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    video.volume = Math.max(0, Math.min(1, volume / 100));
-    video.muted = muted;
+    applyWebPlayerAudio(video, volume, muted);
   }, [volume, muted, mediaKey]);
 
   useEffect(() => {
@@ -1493,10 +1504,14 @@ export function useWebPlayer(opts: {
 
   const changeVolume = useCallback((v: number) => {
     const vol = Math.max(0, Math.min(100, Math.round(v)));
-    setVolume(vol);
-    setMuted(vol === 0);
-    // Nudge playback if the protocol plugin is up but playback stayed paused.
+    const nextMuted = vol === 0;
+    volumeRef.current = vol;
+    mutedRef.current = nextMuted;
     const video = videoRef.current;
+    if (video) applyWebPlayerAudio(video, vol, nextMuted);
+    setVolume(vol);
+    setMuted(nextMuted);
+    // Nudge playback if the protocol plugin is up but playback stayed paused.
     if (video && video.paused && playerRef.current) {
       void video.play().catch(() => {});
     }
@@ -1504,16 +1519,26 @@ export function useWebPlayer(opts: {
 
   const setAudio = useCallback((nextVolume: number, nextMuted: boolean) => {
     const normalizedVolume = Math.max(0, Math.min(100, Math.round(nextVolume)));
+    const normalizedMuted = nextMuted || normalizedVolume === 0;
+    volumeRef.current = normalizedVolume;
+    mutedRef.current = normalizedMuted;
+    const video = videoRef.current;
+    if (video) applyWebPlayerAudio(video, normalizedVolume, normalizedMuted);
     setVolume(normalizedVolume);
-    setMuted(nextMuted || normalizedVolume === 0);
+    setMuted(normalizedMuted);
   }, []);
 
   const toggleMute = useCallback(() => {
     if (muted || volume === 0) {
       const restore = prevVolume || 80;
+      volumeRef.current = restore;
+      mutedRef.current = false;
+      if (videoRef.current) applyWebPlayerAudio(videoRef.current, restore, false);
       setMuted(false);
       setVolume(restore);
     } else {
+      mutedRef.current = true;
+      if (videoRef.current) applyWebPlayerAudio(videoRef.current, volume, true);
       setPrevVolume(volume);
       setMuted(true);
     }

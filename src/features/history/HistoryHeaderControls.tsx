@@ -49,7 +49,7 @@ export function HistoryViewSwitcher({
 }) {
   return (
     <div
-      className={cn("flex h-full items-stretch gap-1", className)}
+      className={cn("flex h-full items-stretch gap-1 max-md:w-full", className)}
       role="tablist"
       aria-label="历史记录类型"
     >
@@ -65,7 +65,7 @@ export function HistoryViewSwitcher({
             title={VIEW_LABELS[view]}
             onClick={() => onValueChange(view)}
             className={cn(
-              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-200 focus-ring",
+              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-200 focus-ring max-md:min-w-0 max-md:flex-1 max-md:justify-center",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",

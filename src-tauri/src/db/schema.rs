@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS danmaku_send_history (
   content TEXT NOT NULL,
   room_id TEXT NOT NULL DEFAULT '',
   room_title TEXT NOT NULL DEFAULT '',
+  room_user_name TEXT NOT NULL DEFAULT '',
   sent_at INTEGER NOT NULL,
   PRIMARY KEY (site_id, content)
 );
@@ -171,9 +172,9 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     }
 
     // The history screen shows the room cover captured at watch time, and the
-    // sent-danmaku list names the room a message went to. Older installations
-    // stored neither, so both arrive as added columns that default to empty
-    // and simply render a fallback for records written before this release.
+    // sent-danmaku list identifies the room and streamer a message went to.
+    // Older installations stored none of these fields, so added columns use
+    // empty defaults and let the UI retain its legacy fallbacks.
     add_missing_column(conn, "history", "cover", "TEXT NOT NULL DEFAULT ''")?;
     add_missing_column(
         conn,
@@ -185,6 +186,12 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         conn,
         "danmaku_send_history",
         "room_title",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_missing_column(
+        conn,
+        "danmaku_send_history",
+        "room_user_name",
         "TEXT NOT NULL DEFAULT ''",
     )?;
 
@@ -279,15 +286,17 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cover, "");
-        let (room_id, room_title): (String, String) = conn
+        let (room_id, room_title, room_user_name): (String, String, String) = conn
             .query_row(
-                "SELECT room_id, room_title FROM danmaku_send_history WHERE content = '你好'",
+                "SELECT room_id, room_title, room_user_name
+                 FROM danmaku_send_history WHERE content = '你好'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert_eq!(room_id, "");
         assert_eq!(room_title, "");
+        assert_eq!(room_user_name, "");
 
         // Running again on an already-migrated database must stay a no-op.
         migrate(&conn).unwrap();

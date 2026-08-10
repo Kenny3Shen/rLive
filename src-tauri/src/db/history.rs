@@ -71,17 +71,18 @@ pub fn list_for_site(conn: &Connection, site_id: &str) -> AppResult<Vec<HistoryR
     Ok(out)
 }
 
-/// Best-effort room title from local watch history. Returns `None` when the
-/// room was never recorded, so callers can fall back to showing the room id.
-pub fn title_for_room(
+/// Best-effort room identity from local watch history. Returns `None` when the
+/// room was never recorded, so callers can fall back to the metadata supplied
+/// by the active player or show the room id alone.
+pub fn metadata_for_room(
     conn: &Connection,
     site_id: &str,
     room_id: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<(String, String)>> {
     conn.query_row(
-        "SELECT title FROM history WHERE site_id = ?1 AND room_id = ?2",
+        "SELECT title, user_name FROM history WHERE site_id = ?1 AND room_id = ?2",
         params![site_id, room_id],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
     .map_err(map_db_err)
@@ -166,6 +167,10 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].room_id, "2");
         assert_eq!(rows[1].room_id, "1");
+        assert_eq!(
+            metadata_for_room(&conn, "bilibili", "2").unwrap(),
+            Some(("t2".into(), "u2".into()))
+        );
 
         // older watched_at must not clobber newer
         upsert(

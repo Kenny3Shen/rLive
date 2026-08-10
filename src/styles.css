@@ -107,7 +107,8 @@
 
   to {
     clip-path: circle(
-      var(--theme-reveal-radius, 100vmax) at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh)
+      var(--theme-reveal-radius, 150vmax) at var(--theme-reveal-x, 50vw)
+        var(--theme-reveal-y, 50vh)
     );
   }
 }
@@ -267,11 +268,6 @@ body {
     padding-left: 0.25rem;
     padding-top: 0.125rem;
     padding-bottom: 0.125rem;
-  }
-
-  .app-shell [data-slot="app-sidebar"] > [data-slot="app-sidebar-link"] {
-    width: 2.75rem;
-    flex: 0 0 2.75rem;
   }
 
   .app-shell [data-slot="app-sidebar-preferences"] {
