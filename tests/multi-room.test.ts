@@ -56,6 +56,12 @@ describe("multi-room audio defaults", () => {
     expect(applyWebPlayerAudio(video, 35, false)).toEqual({ volume: 35, muted: false });
     expect(video).toEqual({ volume: 0.35, muted: false });
 
+    expect(applyWebPlayerAudio(video, 35.375, false)).toEqual({
+      volume: 35.375,
+      muted: false,
+    });
+    expect(video).toEqual({ volume: 0.35375, muted: false });
+
     expect(applyWebPlayerAudio(video, 0, false)).toEqual({ volume: 0, muted: true });
     expect(video).toEqual({ volume: 0, muted: true });
   });

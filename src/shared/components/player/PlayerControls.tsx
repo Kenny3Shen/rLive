@@ -718,7 +718,7 @@ export function PlayerControls({
                 orientation="vertical"
                 className={cn("h-32", compact && "h-20 [&_[data-base-ui-slider-control]]:min-h-20")}
                 aria-label="音量"
-                aria-valuetext={`${volume}%`}
+                aria-valuetext={`${Math.round(volume)}%`}
                 onValueChange={(nextValue) => {
                   onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
                 }}

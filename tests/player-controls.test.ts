@@ -31,7 +31,7 @@ import {
   sidePanelStartsOpen,
 } from "../src/features/room/PlayerPane";
 import {
-  androidPlayerControlStep,
+  clampAndroidPlayerControl,
   getAndroidPlayerControls,
   resetAndroidBrightness,
   setAndroidBrightness,
@@ -177,7 +177,7 @@ describe("mobile player layout", () => {
   });
 });
 
-describe("Android player edge gestures", () => {
+describe("mobile player edge gestures", () => {
   test("assigns brightness to the left half and volume to the right half", () => {
     expect(playerEdgeGestureForStart(80, 20, 400)).toBe("brightness");
     expect(playerEdgeGestureForStart(260, 20, 400)).toBe("volume");
@@ -195,23 +195,23 @@ describe("Android player edge gestures", () => {
     expect(isVerticalPlayerEdgeGesture(5, -40)).toBe(true);
     expect(isVerticalPlayerEdgeGesture(48, -28)).toBe(false);
     expect(isVerticalPlayerEdgeGesture(0, 10)).toBe(false);
-    // Simple Live maps a full 0–100 sweep onto half the player height.
-    expect(playerEdgeGestureDragExtent(320)).toBe(160);
-    expect(playerEdgeGestureValue(50, -80, 320)).toBe(100);
-    expect(playerEdgeGestureValue(50, 40, 320)).toBe(25);
+    expect(playerEdgeGestureDragExtent(320)).toBe(320);
+    expect(playerEdgeGestureValue(50, -80, 320)).toBe(75);
+    expect(playerEdgeGestureValue(50, 40, 320)).toBe(37.5);
+    expect(playerEdgeGestureValue(50, -1, 320)).toBeCloseTo(50.3125);
+    expect(playerEdgeGestureValue(50, -1.5, 320)).toBeCloseTo(50.46875);
     expect(playerEdgeGestureValue(98, -400, 320)).toBe(100);
     expect(playerEdgeGestureValue(2, 400, 320)).toBe(0);
   });
 
-  test("starts only in the gesture-safe center band and reports stable 5% values", () => {
-    expect(canStartPlayerEdgeGesture(140, 100, 320)).toBe(false);
-    expect(canStartPlayerEdgeGesture(180, 100, 320)).toBe(true);
-    expect(canStartPlayerEdgeGesture(340, 100, 320)).toBe(true);
-    expect(canStartPlayerEdgeGesture(360, 100, 320)).toBe(false);
-    expect(androidPlayerControlStep(52)).toBe(50);
-    expect(androidPlayerControlStep(53)).toBe(55);
-    expect(androidPlayerControlStep(-5)).toBe(0);
-    expect(androidPlayerControlStep(101)).toBe(100);
+  test("uses most of the picture and preserves continuous native values", () => {
+    expect(canStartPlayerEdgeGesture(120, 100, 320)).toBe(false);
+    expect(canStartPlayerEdgeGesture(126, 100, 320)).toBe(true);
+    expect(canStartPlayerEdgeGesture(394, 100, 320)).toBe(true);
+    expect(canStartPlayerEdgeGesture(396, 100, 320)).toBe(false);
+    expect(clampAndroidPlayerControl(52.375)).toBe(52.375);
+    expect(clampAndroidPlayerControl(-5)).toBe(0);
+    expect(clampAndroidPlayerControl(101)).toBe(100);
   });
 
   test("classifies short stationary touches as stage taps and double taps", () => {
@@ -237,33 +237,33 @@ describe("Android native player controls", () => {
     );
   });
 
-  test("normalizes bridge values and sends stepped native commands", async () => {
+  test("normalizes bridge values and sends continuous native commands", async () => {
     const calls: { command: string; args?: Record<string, unknown> }[] = [];
     const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
       if (command.endsWith("get_state")) {
-        return { brightness: 48 } as T;
+        return { brightness: 48.25 } as T;
       }
       return { value: args?.value } as T;
     };
 
     await expect(getAndroidPlayerControls(nativeInvoke)).resolves.toEqual({
-      brightness: 50,
+      brightness: 48.25,
     });
-    await expect(setAndroidBrightness(3, nativeInvoke)).resolves.toBe(5);
+    await expect(setAndroidBrightness(3.125, nativeInvoke)).resolves.toBe(3.125);
     await expect(resetAndroidBrightness(nativeInvoke)).resolves.toBeUndefined();
     // App-level commands, not `plugin:player-controls|…`: a plugin-namespaced
     // invoke is answered by the Rust plugin and never reaches Kotlin.
     expect(calls).toEqual([
       { command: "android_player_controls_get_state", args: undefined },
-      { command: "android_player_controls_set_brightness", args: { value: 5 } },
+      { command: "android_player_controls_set_brightness", args: { value: 3.125 } },
       { command: "android_player_controls_reset_brightness", args: undefined },
     ]);
   });
 
   // Regression: driving STREAM_MUSIC made a room gesture change the device-wide
   // media volume and outlive the room, and its coarse hardware notches swallowed
-  // part of the 5% gesture scale. Volume must never reach the native bridge.
+  // part of the gesture scale. Volume must never reach the native bridge.
   test("exposes no native volume command", async () => {
     const controls = await import("../src/features/room/player/androidPlayerControls");
     expect("setAndroidMediaVolume" in controls).toBe(false);

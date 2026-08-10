@@ -1,3 +1,5 @@
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -41,7 +43,7 @@ import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { useWebPlayer } from "./player/useWebPlayer";
-import { androidPlayerControlStep, useAndroidPlayerControls } from "./player/androidPlayerControls";
+import { useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -55,6 +57,7 @@ import {
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { EASE_IN, EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
 import { siteSupportsSuperChat } from "./superChat";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
@@ -76,18 +79,17 @@ export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settin
 export const ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX = 48;
 const ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO = 1.25;
 
-// Android uses a native bridge for the media stream and Activity brightness.
-// Browser previews keep the same gesture with a video/CSS fallback.
+// Android uses a native bridge for Activity brightness. Other mobile clients
+// keep the same picture-local gesture through the compositor shade fallback.
 export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
 const PLAYER_EDGE_GESTURE_DIRECTION_RATIO = 1.25;
 const PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX = 160;
-// Simple Live maps a full 0–100 sweep to half the player height so a short
-// vertical drag remains responsive without needing a full-screen swipe.
-const PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO = 0.5;
-const PLAYER_EDGE_GESTURE_FEEDBACK_DURATION_MS = 900;
-const PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO = 0.25;
-const PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO = 0.75;
-// Match Simple Live's mobile stage interactions: a short tap toggles the
+// Bilibili-style adjustment tracks the finger across the whole picture height
+// instead of jumping through coarse fixed steps.
+const PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO = 1;
+const PLAYER_EDGE_GESTURE_HUD_LINGER_MS = 520;
+const PLAYER_EDGE_GESTURE_START_GUTTER_RATIO = 0.08;
+// Match familiar mobile stage interactions: a short tap toggles the
 // chrome, a second tap within this window enters/exits fullscreen.
 export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
 export const PLAYER_STAGE_TAP_MAX_DURATION_MS = 320;
@@ -140,8 +142,8 @@ export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boo
 }
 
 /**
- * Drag distance that maps to a full 0–100 adjustment. Simple Live uses half
- * the player height so volume/brightness remain reachable with a short swipe.
+ * Drag distance that maps to a full 0–100 adjustment. Using the whole stage
+ * makes small finger movements continuous and controllable rather than jumpy.
  */
 export function playerEdgeGestureDragExtent(stageHeight: number): number {
   return (
@@ -150,20 +152,19 @@ export function playerEdgeGestureDragExtent(stageHeight: number): number {
   );
 }
 
-/** Dragging half a player-height up/down maps to a full 0–100 adjustment. */
+/** Dragging one player-height up/down maps to a full 0–100 adjustment. */
 export function playerEdgeGestureValue(
   startValue: number,
   deltaY: number,
   stageHeight: number,
 ): number {
   const height = playerEdgeGestureDragExtent(stageHeight);
-  return Math.max(0, Math.min(100, Math.round(startValue - (deltaY / height) * 100)));
+  return Math.max(0, Math.min(100, startValue - (deltaY / height) * 100));
 }
 
 /**
- * Reserve the top/bottom quarters for Android system chrome and the playback
- * controls. This prevents accidental volume changes while reaching for an
- * overlay, matching the touch target used by Simple Live.
+ * Leave a narrow top/bottom gutter for system-edge gestures. Interactive
+ * playback chrome is excluded separately by `isPlayerEdgeGestureIgnoredTarget`.
  */
 export function canStartPlayerEdgeGesture(
   clientY: number,
@@ -173,7 +174,8 @@ export function canStartPlayerEdgeGesture(
   if (stageHeight <= 0) return false;
   const ratio = (clientY - stageTop) / stageHeight;
   return (
-    ratio >= PLAYER_EDGE_GESTURE_START_MIN_Y_RATIO && ratio <= PLAYER_EDGE_GESTURE_START_MAX_Y_RATIO
+    ratio >= PLAYER_EDGE_GESTURE_START_GUTTER_RATIO &&
+    ratio <= 1 - PLAYER_EDGE_GESTURE_START_GUTTER_RATIO
   );
 }
 
@@ -351,7 +353,9 @@ export function PlayerPane({
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
   const compactLandscapeViewport = useCompactLandscapePlayerViewport();
-  const androidClient = getClientPlatform() === "android";
+  const clientPlatform = getClientPlatform();
+  const mobileClient = clientPlatform !== "desktop";
+  const androidClient = clientPlatform === "android";
   // Portrait phones use a normal video + chat stack, so new rooms immediately
   // expose the danmaku list. Short landscape screens stay viewing-first and
   // retain a dismissible overlay drawer instead.
@@ -401,10 +405,12 @@ export function PlayerPane({
   const brightnessShadeRef = useRef<HTMLDivElement | null>(null);
   const playerEdgeGestureRef = useRef<PlayerEdgeGestureState | null>(null);
   const playerEdgeGestureFeedbackRef = useRef<HTMLDivElement | null>(null);
+  const playerEdgeGesturePanelRef = useRef<HTMLDivElement | null>(null);
   const playerEdgeGestureBrightnessIconRef = useRef<SVGSVGElement | null>(null);
   const playerEdgeGestureVolumeIconRef = useRef<SVGSVGElement | null>(null);
   const playerEdgeGestureLabelRef = useRef<HTMLSpanElement | null>(null);
   const playerEdgeGestureValueRef = useRef<HTMLElement | null>(null);
+  const playerEdgeGestureProgressRef = useRef<HTMLSpanElement | null>(null);
   const playerEdgeGestureFeedbackTimerRef = useRef<number | null>(null);
   const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
   const playerStageTapTimerRef = useRef<number | null>(null);
@@ -418,6 +424,9 @@ export function PlayerPane({
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
   });
+  const { contextSafe: playerEdgeGestureContextSafe } = useGSAP({
+    scope: playerEdgeGestureFeedbackRef,
+  });
   const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
   // Landscape streams auto-rotate on Android fullscreen; portrait ones stay
   // upright because the lock is derived from the decoded frame size.
@@ -426,7 +435,8 @@ export function PlayerPane({
     fullscreen: player.mode === "fullscreen",
     aspectRatio: player.aspectRatio,
   });
-  const changePlayerVolume = player.changeVolume;
+  const previewPlayerVolume = player.previewVolume;
+  const setPlayerAudio = player.setAudio;
   const togglePlayerMute = player.toggleMute;
   const togglePlayerPictureInPicture = player.togglePictureInPicture;
   const togglePlayerFullscreen = player.toggleFullscreen;
@@ -798,6 +808,70 @@ export function PlayerPane({
     }
   }, []);
 
+  const revealPlayerEdgeGestureFeedback = useMemo(
+    () =>
+      playerEdgeGestureContextSafe(() => {
+        const feedback = playerEdgeGestureFeedbackRef.current;
+        const panel = playerEdgeGesturePanelRef.current;
+        if (!feedback) return;
+        const wasVisible = feedback.dataset.visible === "true";
+        feedback.dataset.visible = "true";
+        if (wasVisible) return;
+
+        if (prefersReducedMotion()) {
+          gsap.set(feedback, { autoAlpha: 1 });
+          if (panel) gsap.set(panel, { scale: 1 });
+          return;
+        }
+        gsap.to(feedback, {
+          autoAlpha: 1,
+          duration: 0.16,
+          ease: EASE_OUT,
+          overwrite: "auto",
+        });
+        if (panel) {
+          gsap.to(panel, {
+            scale: 1,
+            duration: 0.16,
+            ease: EASE_OUT,
+            overwrite: "auto",
+          });
+        }
+      }),
+    [playerEdgeGestureContextSafe],
+  );
+
+  const hidePlayerEdgeGestureFeedback = useMemo(
+    () =>
+      playerEdgeGestureContextSafe(() => {
+        const feedback = playerEdgeGestureFeedbackRef.current;
+        const panel = playerEdgeGesturePanelRef.current;
+        if (!feedback || feedback.dataset.visible !== "true") return;
+        feedback.dataset.visible = "false";
+
+        if (prefersReducedMotion()) {
+          gsap.set(feedback, { autoAlpha: 0 });
+          if (panel) gsap.set(panel, { scale: 0.97 });
+          return;
+        }
+        gsap.to(feedback, {
+          autoAlpha: 0,
+          duration: 0.14,
+          ease: EASE_IN,
+          overwrite: "auto",
+        });
+        if (panel) {
+          gsap.to(panel, {
+            scale: 0.97,
+            duration: 0.14,
+            ease: EASE_IN,
+            overwrite: "auto",
+          });
+        }
+      }),
+    [playerEdgeGestureContextSafe],
+  );
+
   const showPlayerEdgeGestureFeedback = useCallback(
     (kind: PlayerEdgeGesture, value: number) => {
       const feedback = playerEdgeGestureFeedbackRef.current;
@@ -805,31 +879,35 @@ export function PlayerPane({
       const volumeIcon = playerEdgeGestureVolumeIconRef.current;
       const label = playerEdgeGestureLabelRef.current;
       const valueNode = playerEdgeGestureValueRef.current;
+      const progress = playerEdgeGestureProgressRef.current;
       if (feedback) {
         feedback.dataset.kind = kind;
         feedback.dataset.playerEdgeGestureFeedback = kind;
-        feedback.dataset.visible = "true";
       }
       if (brightnessIcon) brightnessIcon.style.display = kind === "brightness" ? "" : "none";
       if (volumeIcon) volumeIcon.style.display = kind === "volume" ? "" : "none";
       if (label) label.textContent = kind === "brightness" ? "亮度" : "音量";
-      if (valueNode) valueNode.textContent = `${value}%`;
+      if (valueNode) valueNode.textContent = `${Math.round(value)}%`;
+      if (progress) progress.style.transform = `scaleX(${Math.max(0, Math.min(1, value / 100))})`;
       clearPlayerEdgeGestureFeedbackTimer();
-      playerEdgeGestureFeedbackTimerRef.current = window.setTimeout(() => {
-        playerEdgeGestureFeedbackTimerRef.current = null;
-        if (playerEdgeGestureFeedbackRef.current) {
-          playerEdgeGestureFeedbackRef.current.dataset.visible = "false";
-        }
-      }, PLAYER_EDGE_GESTURE_FEEDBACK_DURATION_MS);
+      revealPlayerEdgeGestureFeedback();
     },
-    [clearPlayerEdgeGestureFeedbackTimer],
+    [clearPlayerEdgeGestureFeedbackTimer, revealPlayerEdgeGestureFeedback],
   );
 
-  const setClampedPlayerBrightness = useCallback((value: number) => {
-    const nextValue = Math.max(0, Math.min(100, Math.round(value)));
+  const schedulePlayerEdgeGestureFeedbackHide = useCallback(() => {
+    clearPlayerEdgeGestureFeedbackTimer();
+    playerEdgeGestureFeedbackTimerRef.current = window.setTimeout(() => {
+      playerEdgeGestureFeedbackTimerRef.current = null;
+      hidePlayerEdgeGestureFeedback();
+    }, PLAYER_EDGE_GESTURE_HUD_LINGER_MS);
+  }, [clearPlayerEdgeGestureFeedbackTimer, hidePlayerEdgeGestureFeedback]);
+
+  const setClampedPlayerBrightness = useCallback((value: number, applyShade: boolean) => {
+    const nextValue = Math.max(0, Math.min(100, value));
     if (playerBrightnessRef.current === nextValue) return;
     playerBrightnessRef.current = nextValue;
-    if (brightnessShadeRef.current) {
+    if (applyShade && brightnessShadeRef.current) {
       brightnessShadeRef.current.style.opacity = String(playerBrightnessShadeOpacity(nextValue));
     }
   }, []);
@@ -844,7 +922,7 @@ export function PlayerPane({
   const handlePlayerEdgeGestureStart = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (
-        !androidClient ||
+        !mobileClient ||
         !showHost ||
         !isTouchPointer(event.pointerType) ||
         !event.isPrimary ||
@@ -867,9 +945,7 @@ export function PlayerPane({
       const native = kind === "brightness" && nativePlayerControlsActive;
       let startValue: number;
       if (kind === "brightness") {
-        startValue = native
-          ? (nativePlayerControlState?.brightness ?? playerBrightnessRef.current)
-          : playerBrightnessRef.current;
+        startValue = playerBrightnessRef.current;
       } else {
         // Volume always reads back from the web player, on mobile too.
         startValue = player.muted || player.volume === 0 ? 0 : player.volume;
@@ -890,8 +966,7 @@ export function PlayerPane({
       event.currentTarget.setPointerCapture(event.pointerId);
     },
     [
-      androidClient,
-      nativePlayerControlState,
+      mobileClient,
       nativePlayerControlsActive,
       player.muted,
       player.volume,
@@ -932,19 +1007,16 @@ export function PlayerPane({
       }
 
       event.preventDefault();
-      const nextValue = androidPlayerControlStep(
-        playerEdgeGestureValue(gesture.startValue, deltaY, gesture.stageHeight),
-      );
+      const nextValue = playerEdgeGestureValue(gesture.startValue, deltaY, gesture.stageHeight);
       if (beganAdjustment || nextValue !== gesture.lastValue) {
         gesture.lastValue = nextValue;
         if (gesture.kind === "brightness") {
+          setClampedPlayerBrightness(nextValue, !gesture.native);
           if (gesture.native) {
             androidPlayerControls.setBrightness(nextValue);
-          } else {
-            setClampedPlayerBrightness(nextValue);
           }
         } else {
-          changePlayerVolume(nextValue);
+          previewPlayerVolume(nextValue);
         }
         showPlayerEdgeGestureFeedback(gesture.kind, nextValue);
       }
@@ -952,8 +1024,8 @@ export function PlayerPane({
     },
     [
       androidPlayerControls,
-      changePlayerVolume,
       clearPlayerStageTapTimer,
+      previewPlayerVolume,
       releasePlayerEdgeGesturePointer,
       setClampedPlayerBrightness,
       showPlayerEdgeGestureFeedback,
@@ -969,11 +1041,18 @@ export function PlayerPane({
       releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
       if (gesture.active) {
         if (gesture.native) androidPlayerControls.flush();
+        if (gesture.kind === "volume") setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
+        schedulePlayerEdgeGestureFeedbackHide();
         event.preventDefault();
       }
       return gesture.active;
     },
-    [androidPlayerControls, releasePlayerEdgeGesturePointer],
+    [
+      androidPlayerControls,
+      releasePlayerEdgeGesturePointer,
+      schedulePlayerEdgeGestureFeedbackHide,
+      setPlayerAudio,
+    ],
   );
 
   const handlePlayerEdgeGestureCancel = useCallback(
@@ -982,13 +1061,26 @@ export function PlayerPane({
       if (gesture && gesture.pointerId === event.pointerId) {
         playerEdgeGestureRef.current = null;
         releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
+        if (gesture.active) {
+          if (gesture.native) androidPlayerControls.flush();
+          if (gesture.kind === "volume") {
+            setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
+          }
+          schedulePlayerEdgeGestureFeedbackHide();
+        }
       }
       if (playerStageTapRef.current?.pointerId === event.pointerId) {
         playerStageTapRef.current = null;
       }
       clearPlayerStageTapTimer();
     },
-    [clearPlayerStageTapTimer, releasePlayerEdgeGesturePointer],
+    [
+      androidPlayerControls,
+      clearPlayerStageTapTimer,
+      releasePlayerEdgeGesturePointer,
+      schedulePlayerEdgeGestureFeedbackHide,
+      setPlayerAudio,
+    ],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -996,13 +1088,13 @@ export function PlayerPane({
       if (event.type === "pointerdown") {
         event.currentTarget.focus({ preventScroll: true });
       }
-      // Desktop/mouse keeps the always-reveal behaviour. Android touch uses an
+      // Desktop/mouse keeps the always-reveal behaviour. Mobile touch uses an
       // explicit single-tap toggle so a second tap can hide the chrome again,
-      // matching Simple Live rather than only resetting the auto-hide timer.
-      if (androidClient && isTouchPointer(event.pointerType)) return;
+      // matching familiar mobile players rather than only resetting the timer.
+      if (mobileClient && isTouchPointer(event.pointerType)) return;
       revealControls();
     },
-    [androidClient, revealControls],
+    [mobileClient, revealControls],
   );
 
   const handleStagePointerDown = useCallback(
@@ -1012,7 +1104,7 @@ export function PlayerPane({
       }
 
       if (
-        androidClient &&
+        mobileClient &&
         isTouchPointer(event.pointerType) &&
         event.isPrimary &&
         !isPlayerEdgeGestureIgnoredTarget(event.target)
@@ -1030,7 +1122,7 @@ export function PlayerPane({
       handleStagePointerActivity(event);
       handlePlayerEdgeGestureStart(event);
     },
-    [androidClient, handlePlayerEdgeGestureStart, handleStagePointerActivity],
+    [handlePlayerEdgeGestureStart, handleStagePointerActivity, mobileClient],
   );
 
   const handleStagePointerMove = useCallback(
@@ -1049,7 +1141,7 @@ export function PlayerPane({
       playerStageTapRef.current = null;
       if (gestureConsumed) return;
       if (
-        !androidClient ||
+        !mobileClient ||
         !isTouchPointer(event.pointerType) ||
         !showHost ||
         isPlayerEdgeGestureIgnoredTarget(event.target)
@@ -1067,7 +1159,7 @@ export function PlayerPane({
       if (isPlayerStageDoubleTap(lastPlayerStageTapAtRef.current, now)) {
         clearPlayerStageTapTimer();
         lastPlayerStageTapAtRef.current = 0;
-        // Double-tap toggles fullscreen the way Simple Live does on Android.
+        // Double-tap toggles fullscreen like other mobile video players.
         void togglePlayerFullscreen();
         return;
       }
@@ -1083,9 +1175,9 @@ export function PlayerPane({
       }, PLAYER_STAGE_DOUBLE_TAP_MS);
     },
     [
-      androidClient,
       clearPlayerStageTapTimer,
       handlePlayerEdgeGestureEnd,
+      mobileClient,
       showHost,
       toggleControls,
       togglePlayerFullscreen,
@@ -1096,10 +1188,31 @@ export function PlayerPane({
   useEffect(() => clearPlayerStageTapTimer, [clearPlayerStageTapTimer]);
 
   useEffect(() => {
+    const resetFallbackBrightness = () => {
+      playerBrightnessRef.current = 100;
+      if (brightnessShadeRef.current) brightnessShadeRef.current.style.opacity = "0";
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") resetFallbackBrightness();
+    };
+
+    resetFallbackBrightness();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [roomSessionKey]);
+
+  useEffect(() => {
     if (!androidClient || !androidPlayerControls.supported) return;
     playerBrightnessRef.current = 100;
     if (brightnessShadeRef.current) brightnessShadeRef.current.style.opacity = "0";
   }, [androidClient, androidPlayerControls.supported]);
+
+  useEffect(() => {
+    if (!nativePlayerControlState) return;
+    const gesture = playerEdgeGestureRef.current;
+    if (gesture?.active && gesture.kind === "brightness") return;
+    playerBrightnessRef.current = nativePlayerControlState.brightness;
+  }, [nativePlayerControlState]);
 
   const focusFirstControl = useCallback(() => {
     // A hidden transparent bar must not be in the tab sequence.  After Tab
@@ -1224,11 +1337,11 @@ export function PlayerPane({
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
             portraitStackedPlayer ? "w-full" : "min-h-0 flex-1",
-            androidClient && showHost && "touch-none",
+            mobileClient && showHost && "touch-none",
           )}
           tabIndex={0}
           aria-label={
-            androidClient
+            mobileClient
               ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
               : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
           }
@@ -1309,6 +1422,7 @@ export function PlayerPane({
                   every gesture step in browser/bridge-fallback playback. */}
               <div
                 ref={brightnessShadeRef}
+                data-player-brightness-shade
                 className="pointer-events-none absolute inset-0 z-[11] bg-black opacity-0"
                 aria-hidden="true"
               />
@@ -1382,24 +1496,39 @@ export function PlayerPane({
               data-kind="brightness"
               data-player-edge-gesture-feedback="brightness"
               data-visible="false"
-              className="pointer-events-none absolute top-1/2 z-20 -translate-y-1/2 opacity-0 transition-opacity duration-100 ease-out data-[kind=brightness]:left-[max(1.25rem,env(safe-area-inset-left))] data-[kind=volume]:right-[max(1.25rem,env(safe-area-inset-right))] data-[visible=true]:opacity-100 motion-reduce:transition-none"
+              className="pointer-events-none invisible absolute inset-0 z-20 flex items-center justify-center opacity-0 [will-change:opacity]"
             >
-              <div className="flex min-w-20 flex-col items-center gap-1 rounded-2xl border border-white/12 bg-black/72 px-3 py-2.5 text-white shadow-lg">
-                <SunMedium ref={playerEdgeGestureBrightnessIconRef} className="size-5" />
-                <Volume2
-                  ref={playerEdgeGestureVolumeIconRef}
-                  className="size-5"
-                  style={{ display: "none" }}
-                />
-                <span ref={playerEdgeGestureLabelRef} className="text-[11px] text-white/70">
-                  亮度
+              <div
+                ref={playerEdgeGesturePanelRef}
+                className="flex w-44 max-w-[calc(100%-2rem)] flex-col gap-3 rounded-lg border border-white/12 bg-black/78 p-3 text-white shadow-xl [transform:scale(0.97)] [will-change:transform]"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white/12">
+                    <SunMedium ref={playerEdgeGestureBrightnessIconRef} className="size-5" />
+                    <Volume2
+                      ref={playerEdgeGestureVolumeIconRef}
+                      className="size-5"
+                      style={{ display: "none" }}
+                    />
+                  </span>
+                  <span className="flex min-w-0 flex-1 items-baseline justify-between gap-2">
+                    <span ref={playerEdgeGestureLabelRef} className="text-sm text-white/76">
+                      亮度
+                    </span>
+                    <strong
+                      ref={playerEdgeGestureValueRef}
+                      className="text-base font-semibold tabular-nums"
+                    >
+                      100%
+                    </strong>
+                  </span>
+                </div>
+                <span className="h-1 overflow-hidden rounded-full bg-white/20">
+                  <span
+                    ref={playerEdgeGestureProgressRef}
+                    className="block h-full origin-left rounded-full bg-white [transform:scaleX(1)] [will-change:transform]"
+                  />
                 </span>
-                <strong
-                  ref={playerEdgeGestureValueRef}
-                  className="text-sm font-semibold tabular-nums"
-                >
-                  100%
-                </strong>
               </div>
             </div>
           </div>

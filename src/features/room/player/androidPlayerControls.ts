@@ -3,10 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { notify } from "@/components/ui/toast";
 import { getClientPlatform } from "@/shared/clientPlatform";
 
-/** Match Simple Live's deliberate, low-noise 5% gesture increments. */
-export const ANDROID_PLAYER_CONTROL_STEP = 5;
-/** Batch rapid pointer-move writes; version fencing drops stale replies. */
-const NATIVE_CONTROL_THROTTLE_MS = 200;
+/** Batch rapid pointer-move writes while keeping native brightness responsive. */
+const NATIVE_CONTROL_THROTTLE_MS = 50;
 
 /**
  * App-level commands, not `plugin:player-controls|…`.
@@ -39,7 +37,7 @@ type NativeControlValue = {
 };
 
 function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
+  return Math.max(0, Math.min(100, value));
 }
 
 /** Tauri rejects with an `AppError` object, Kotlin failures with a string. */
@@ -51,17 +49,14 @@ function nativeControlErrorText(error: unknown): string {
   return String(error ?? "未知错误");
 }
 
-/** Clamp arbitrary input to an Android player gesture step. */
-export function androidPlayerControlStep(value: number): number {
-  const clamped = clampPercent(value);
-  return clampPercent(
-    Math.round(clamped / ANDROID_PLAYER_CONTROL_STEP) * ANDROID_PLAYER_CONTROL_STEP,
-  );
+/** Clamp arbitrary input without quantizing the continuous gesture value. */
+export function clampAndroidPlayerControl(value: number): number {
+  return clampPercent(value);
 }
 
 function percentFrom(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
-    ? androidPlayerControlStep(value)
+    ? clampAndroidPlayerControl(value)
     : null;
 }
 
@@ -99,7 +94,7 @@ export async function setAndroidBrightness(
   value: number,
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<number> {
-  const expected = androidPlayerControlStep(value);
+  const expected = clampAndroidPlayerControl(value);
   const response = await nativeInvoke<NativeControlValue>(NATIVE_COMMANDS.setBrightness, {
     value: expected,
   });
@@ -116,12 +111,12 @@ export async function resetAndroidBrightness(
 /**
  * Batches brightness pointer-move writes to Android and fences late replies.
  * A swipe updates its visual feedback immediately, while the native calls are
- * capped at roughly one per display frame rather than one per input event.
+ * coalesced before crossing IPC rather than sending one call per input event.
  *
  * Volume is not here on purpose. It used to drive `STREAM_MUSIC`, which made a
  * room gesture change the device-wide media volume and persist after leaving
  * the room. Its coarse hardware steps (`getStreamMaxVolume` is typically 15,
- * so ~6.7% per notch) also made consecutive 5% gesture steps round to the same
+ * so ~6.7% per notch) also made adjacent gesture values round to the same
  * notch, so the overlay animated while the audio never moved. Loudness now
  * stays on the web player's `<video>.volume`: app-local, continuous, and
  * released with the player session.
@@ -206,15 +201,17 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
   const setBrightness = useCallback(
     (value: number): boolean => {
       if (!enabled || !runningOnAndroidTauri()) return false;
-      const nextValue = androidPlayerControlStep(value);
-      replaceState({ brightness: nextValue });
+      const nextValue = clampAndroidPlayerControl(value);
+      // Keep the gesture snapshot current without reconciling PlayerPane for
+      // every pointer frame. Successful native replies still publish state.
+      stateRef.current = { brightness: nextValue };
       pendingRef.current = nextValue;
       if (timerRef.current === null) {
         timerRef.current = window.setTimeout(flush, NATIVE_CONTROL_THROTTLE_MS);
       }
       return true;
     },
-    [enabled, flush, replaceState],
+    [enabled, flush],
   );
 
   useEffect(() => {

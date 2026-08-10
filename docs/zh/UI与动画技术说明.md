@@ -229,7 +229,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 
 ### 4.7 主题 Radial Reveal
 
-主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与设置页协作：
+主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与桌面设置页协作；移动端设置页不提供显式亮暗模式入口：
 
 1. 点击事件提供指针坐标；键盘激活使用按钮中心。
 2. `document.startViewTransition()` 分别捕获旧主题和新主题快照。
