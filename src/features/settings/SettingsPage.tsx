@@ -63,6 +63,7 @@ import {
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
+import { LanSyncField } from "@/features/settings/LanSyncField";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -176,7 +177,7 @@ const settingsCategories: {
   {
     value: "data",
     label: "数据管理",
-    description: "导入或导出本机配置",
+    description: "局域网同步与配置档案",
     icon: Database,
     tone: "text-settings-data bg-settings-data/12",
   },
@@ -199,7 +200,7 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
-  data: "数据 导入 导出 配置 档案",
+  data: "数据 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
   about: "关于 rLive 项目主页 github 免责声明",
 };
 
@@ -1688,6 +1689,9 @@ export function SettingsPage() {
     ),
     data: (
       <SettingsContent title="数据">
+        <Section title="局域网同步" keywords="局域网 同步 Wi-Fi 配对 发送 接收">
+          <LanSyncField />
+        </Section>
         <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
           <Field data-invalid={profileError ? true : undefined}>
             <FieldContent>

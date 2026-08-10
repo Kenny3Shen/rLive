@@ -9,6 +9,7 @@ pub mod follow;
 pub mod history;
 pub mod image_proxy;
 pub mod iptv;
+pub mod lan_sync;
 pub mod profile;
 pub mod settings;
 pub mod site;
