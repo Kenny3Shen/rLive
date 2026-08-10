@@ -32,6 +32,17 @@ class MainActivity : TauriActivity() {
   }
 
   /**
+   * A player brightness gesture is an Activity window override scoped to the
+   * room the user is in. Releasing it here means backgrounding rLive — or a
+   * process death that never runs the player's own teardown — always leaves
+   * the screen back on the user's system brightness.
+   */
+  override fun onPause() {
+    RlivePlayerControlsPlugin.restoreBrightnessOverride()
+    super.onPause()
+  }
+
+  /**
    * Video fullscreen is the only path that hides the system bars, and it always
    * restores them on exit. Returning to the foreground in any other state means
    * the bars should be visible — after a process death that dropped the custom
