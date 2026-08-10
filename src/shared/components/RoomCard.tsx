@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Copy, ExternalLink, Flame, Hash, PanelsTopLeft, Star, StarOff } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { copyText } from "@/shared/clipboard";
 import type { FollowUser, LiveRoomDetail, LiveRoomItem } from "@/shared/types/live";
 import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
@@ -224,10 +225,15 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             <Hash aria-hidden />
             复制房间号
           </ContextMenuItem>
-          <ContextMenuItem onClick={addToMultiRoom}>
-            <PanelsTopLeft aria-hidden />
-            加入多画面
-          </ContextMenuItem>
+          {/* Multi-view is desktop-only (see MultiRoomPage), and long-press is
+              the only way to reach this menu on touch. Offering the item there
+              would add a room to a surface the client cannot open. */}
+          {!isMobileClient() && (
+            <ContextMenuItem onClick={addToMultiRoom}>
+              <PanelsTopLeft aria-hidden />
+              加入多画面
+            </ContextMenuItem>
+          )}
         </ContextMenuGroup>
         <ContextMenuSeparator />
         <ContextMenuGroup>
