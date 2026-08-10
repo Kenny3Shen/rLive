@@ -1,64 +1,34 @@
 
 # rLive Agent 工作规范
 
-## 沟通语言
+## 通用规则
 
-- 与用户沟通、进度更新、交付说明和新增项目文档统一使用中文。
-- 代码标识符、命令、路径、第三方库名称和协议字段保留其原始英文写法。
+- 用户沟通、进度更新、交付说明和新增文档使用中文；代码标识符、命令、路径、库名和协议字段保留英文。
+- 唯一源码工作区是 `/home/shenss/python/rLive`。`/mnt/d/dev/rLive` 仅作为 Windows 同步镜像，不得直接编辑。
+- 每轮修改完成并通过必要检查后，交付前执行 `bash scripts/sync-to-windows.sh`；只读检查、分析或答疑无需同步。同步不等于构建，除非用户明确要求，不运行 Windows/Tauri 构建或 Windows 发布流程。
+- 按改动风险运行最聚焦的检查，如 `bun run check`、`bun test tests/`、`bun run build`、Rust 测试或本地运行验证。纯文档修改只需核对内容、命令和路径，并在交付时说明检查、同步结果和已知限制。
 
-## 工作区与 Windows 同步
+## 提交规范
 
-- 唯一源码工作区是 WSL/Linux 下的 `/home/shenss/python/rLive`；所有修改都必须先在此目录完成。
-- Windows 下的 `D:\dev\rLive`（WSL 路径 `/mnt/d/dev/rLive`）是同步镜像，不得直接作为源码目录编辑。
-- 每完成一轮文件修改并完成必要验证后，交付前自动执行 `bash scripts/sync-to-windows.sh`，无需等待用户再次确认。
-- 代码、UI、配置、依赖、脚本和文档修改都需要同步；仅进行只读检查、分析或答疑时不需要同步。
-- 同步失败时必须调查可处理的问题；若因 `/mnt/d` 未挂载、权限或 Windows 环境不可用而无法同步，应在交付中明确报告，不能静默跳过。
-- 自动同步不等于自动构建。除非用户明确要求，否则不要运行 Windows/Tauri 构建，也不要执行 Windows 端发布流程。
+- 提交标题使用 `type(scope): 中文摘要` 的 Conventional Commit 格式；`scope` 指向功能域，不使用文件名。一次提交只表达一个主题，标题直接描述结果，不写句号或模糊表述。
+- 非平凡提交在标题后空一行，用正文说明背景/根因、行为变化、关键实现和验证结果；多项改动使用项目符号。提交前检查暂存区内容与说明是否一致。
+- 遵循语义化版本规范（SemVer）。
 
-## 修改后验证
+## 项目结构与实现边界
 
-- 根据改动风险运行最聚焦、最有效的现有检查，例如 `bun run check`、`bun test tests/`、`bun run build`、Rust 测试或本地运行验证。
-- 检查发现由本次改动引入的问题时，应定位并修复，然后重新运行相关检查，直到通过或确认存在外部阻塞。
-- 纯文档或规划修改不要求运行时测试，但应检查内容、命令和路径是否与仓库现状一致。
-- 交付前说明已执行的检查、Windows 同步结果，以及任何已知限制或外部阻塞。
-
-## 提交说明规范
-
-- 提交标题使用 `type(scope): 中文摘要` 的 Conventional Commit 形式；常用 `type` 包括 `feat`、`fix`、`refactor`、`perf`、`test`、`docs`、`build`、`chore`。`scope` 应准确指向功能域，例如 `player`、`mobile`、`history`，不要用文件名充当范围。
-- 标题直接描述用户可感知的结果或明确的工程目的，不写句号，不使用“更新代码”“修复问题”“若干调整”等模糊表述；一次提交只表达一个可审查的主题。
-- 除纯拼写、格式或单行无行为变更外，非平凡提交必须在标题后空一行并提供正文。正文先说明背景、错误现象或根因，再说明本次行为变化和关键实现，不得只有一行标题。
-- 正文按改动实际情况覆盖：实现边界与没有改变的能力、状态/协议/数据库兼容与迁移方式、性能或安全取舍、测试与人工验证结果、文档更新。不能验证的部分必须明确写出原因。
-- 正文优先用短段落说明因果，再用项目符号列出多项具体改动；不要堆砌文件名、逐行复述 diff，或把 issue 标题原样重复成正文。
-- 提交前对照暂存区检查标题和正文是否准确涵盖全部改动。可参考提交 `8eadf9b17292c115c0b5516ae0e5247674d3a51f` 的结构：标题概括结果，正文解释根因，项目符号交代跨模块实现、回归测试和文档记录。
-- 提交必须根据本次完整改动的最高影响级别同步更新版本号，且一次提交只递增一次：仅包含用户可见 bug fix 时递增 patch（`X.Y.Z` → `X.Y.(Z+1)`）；包含向后兼容的新功能时递增 minor 并将 patch 归零（`X.Y.Z` → `X.(Y+1).0`）。同时包含 fix 与 feat 时按 minor 处理。
-- 纯文档、测试、格式、构建维护或不改变产品行为的重构默认不递增版本号。major 版本（`X.Y.Z` → `(X+1).0.0`）不得由 Agent 自行判断或更新，即使存在破坏性变更也必须先取得用户明确指示。
-- 需要递增版本时，在同一个功能提交中同步修改 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`，并刷新 `src-tauri/Cargo.lock` 中的根包版本；提交前确认各处版本完全一致。除非用户明确要求，不单独创建版本提交或版本标签。
-
-## 当前项目架构
-
-- 技术栈：Tauri 2、Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4、shadcn-style/Base UI。
-- 前端状态：TanStack Query 管理异步服务端/IPC 数据缓存；Zustand 管理设置和轻量客户端状态。
-- 前端动画：GSAP 动画封装位于 `src/shared/motion/`；应尊重减少动态效果设置，并优先使用 transform/opacity，避免布局抖动。
-- 标准目录结构为 `src/`（React/Vite）与 `src-tauri/`（Tauri/Rust）；禁止使用旧的 `frontend/`、`backend/` 路径。
-- `src/app/`：应用路由、Shell、路由懒加载与预加载。
-- `src/features/`：home、follow、category、history、search、iptv、room、settings、asr 等业务功能。
-- `src/components/ui/`：通用 UI 基础组件；`src/shared/`：API、hooks、stores、motion、types 和跨功能组件。
-- `src-tauri/src/commands/`：Tauri 命令边界；`sites/`：站点实现；`danmaku/`：弹幕协议；`db/`：SQLite；`iptv/`：M3U 与可用性；`asr.rs`：本地语音字幕。
-- 前后端通过 Tauri commands/events 交互。不要绕过既有命令层在前端直接复制 Rust 业务逻辑。
+- 技术栈为 Tauri 2、Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4 和 shadcn-style/Base UI。
+- 前端使用 TanStack Query 管理服务端/IPC 缓存，Zustand 管理设置和轻量状态；GSAP 封装在 `src/shared/motion/`，动画需尊重减少动态效果设置，并优先使用 `transform`/`opacity`。
+- `src/` 是 React/Vite 前端，`src-tauri/` 是 Tauri/Rust 后端；`src/app/` 管理路由与 Shell，`src/features/` 管理业务，`src/components/ui/` 提供通用 UI，`src/shared/` 提供跨功能代码。后端命令、站点、弹幕、数据库、IPTV 和 ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmaku/`、`db/`、`iptv/` 和 `asr.rs`。
+- 前后端通过既有 Tauri commands/events 交互。优先复用已有组件、hooks、stores 和功能边界，不在前端复制 Rust 业务逻辑或新增平行实现。
 
 ## 播放与功能边界
 
-- 桌面直播统一使用 Web 播放链：`xgplayer` + FLV/HLS/MPEG-TS 协议插件；所有直播和 IPTV 播放均通过 Rust `stream_proxy` 注入请求头和处理同源访问；不是 mpv，也不是旧的 `mpegts.js` 直连架构。
-- 已支持 Bilibili、Huya、Douyu、Douyin、Twitch 的浏览与播放；各站点搜索、翻页、Cookie 和弹幕能力以现有实现边界为准，不伪造平台不可靠的能力。
-- 抖音支持 SSR 首屏浏览、房间/播放、登录 Cookie 搜索和本地签名实时弹幕；当前不提供弹幕发送。
-- Twitch 使用 HLS 播放和匿名 IRC 弹幕，公开浏览接口仅可靠支持首屏。
-- 弹幕包括列表、Canvas、SC 叠加层及透明度、字号、速度、区域、行数、过滤和屏蔽设置。
-- 本地字幕使用 Web Audio 采集、16 kHz PCM IPC 与 Rust CrispASR CPU 会话；模型和音频数据保持设备本地。
-- IPTV 的 `/iptv` 是频道发现页，`/iptv/play` 是独立播放页；进入发现页不得自动创建播放器或播放频道。
+- 直播和 IPTV 使用 `xgplayer` 配合 FLV/HLS/MPEG-TS 插件，并统一通过 Rust `stream_proxy` 注入请求头和处理同源访问。
+- 已支持 Bilibili、Huya、Douyu、Douyin、Twitch 的浏览与播放；搜索、翻页、Cookie 和弹幕能力以现有实现为准，不伪造平台不可靠的能力。抖音支持推荐/分类分页、首屏 SSR 回退、房间/播放、登录 Cookie 搜索和本地签名实时弹幕，但不提供弹幕发送；Twitch 使用 HLS 和匿名 IRC 弹幕，公开浏览接口可靠支持首屏。
+- 弹幕支持列表、Canvas、SC 叠加层及透明度、字号、速度、区域、行数、过滤和屏蔽设置。本地字幕使用 Web Audio、16 kHz PCM IPC 与 Rust sherpa-onnx Zipformer 会话，模型和音频保持本地。
+- `/iptv` 是频道发现页，`/iptv/play` 是独立播放页；进入发现页不得自动创建播放器或播放频道。
 
 ## UI 与文档
 
-- 用户界面以中文为主，保持现有 Simple Live 风格和响应式桌面/移动布局。
-- 优先复用仓库已有组件、hooks、stores 和功能边界，不新增平行实现。
-- 用户文档入口为 `README.md` 和 `docs/README.md`，详细中文文档位于 `docs/zh/`。
-- 功能、配置、运行方式或架构发生变化时，应同步更新相关中文文档。
+- UI 以中文为主，保持 Simple Live 风格及桌面/移动响应式布局。
+- 用户文档入口为 `README.md`、`docs/README.md`，详细中文文档位于 `docs/zh/`。功能、配置、运行方式或架构变化时同步更新相关文档。

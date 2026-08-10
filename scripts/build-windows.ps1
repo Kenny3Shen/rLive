@@ -102,7 +102,7 @@ if ($rustc) {
 Set-Location $ProjectRoot
 
 # A previous `tauri dev` or manual launch may still have the target executable
-# (and its CrispASR DLLs) mapped. Windows cannot replace loaded binaries, so
+# (and its sherpa-onnx/ONNX Runtime DLLs) mapped. Windows cannot replace loaded binaries, so
 # stop only rLive instances built from this checkout before Cargo stages the
 # new runtime files. Installed copies outside this target directory are left
 # untouched.
