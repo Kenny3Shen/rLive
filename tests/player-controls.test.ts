@@ -35,6 +35,7 @@ import {
   getAndroidPlayerControls,
   resetAndroidBrightness,
   setAndroidBrightness,
+  setAndroidMediaVolume,
   supportsAndroidNativePlayerControls,
 } from "../src/features/room/player/androidPlayerControls";
 import { setAndroidPlayerOrientation } from "../src/features/room/player/androidOrientation";
@@ -242,32 +243,41 @@ describe("Android native player controls", () => {
     const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
       if (command.endsWith("get_state")) {
-        return { brightness: 48.25 } as T;
+        return { mediaVolume: 53.333, brightness: 48.25 } as T;
       }
       return { value: args?.value } as T;
     };
 
     await expect(getAndroidPlayerControls(nativeInvoke)).resolves.toEqual({
+      mediaVolume: 53.333,
       brightness: 48.25,
     });
+    await expect(setAndroidMediaVolume(52.375, nativeInvoke)).resolves.toBe(52.375);
     await expect(setAndroidBrightness(3.125, nativeInvoke)).resolves.toBe(3.125);
     await expect(resetAndroidBrightness(nativeInvoke)).resolves.toBeUndefined();
     // App-level commands, not `plugin:player-controls|…`: a plugin-namespaced
     // invoke is answered by the Rust plugin and never reaches Kotlin.
     expect(calls).toEqual([
       { command: "android_player_controls_get_state", args: undefined },
+      { command: "android_player_controls_set_media_volume", args: { value: 52.375 } },
       { command: "android_player_controls_set_brightness", args: { value: 3.125 } },
       { command: "android_player_controls_reset_brightness", args: undefined },
     ]);
   });
 
-  // Regression: driving STREAM_MUSIC made a room gesture change the device-wide
-  // media volume and outlive the room, and its coarse hardware notches swallowed
-  // part of the gesture scale. Volume must never reach the native bridge.
-  test("exposes no native volume command", async () => {
-    const controls = await import("../src/features/room/player/androidPlayerControls");
-    expect("setAndroidMediaVolume" in controls).toBe(false);
-    expect(Object.keys(controls).filter((name) => /volume/i.test(name))).toEqual([]);
+  test("clamps native media-volume writes before invoking Android", async () => {
+    const calls: { command: string; args?: Record<string, unknown> }[] = [];
+    const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      return { value: args?.value } as T;
+    };
+
+    await expect(setAndroidMediaVolume(120, nativeInvoke)).resolves.toBe(100);
+    await expect(setAndroidMediaVolume(-20, nativeInvoke)).resolves.toBe(0);
+    expect(calls).toEqual([
+      { command: "android_player_controls_set_media_volume", args: { value: 100 } },
+      { command: "android_player_controls_set_media_volume", args: { value: 0 } },
+    ]);
   });
 
   test("asks the Activity to lock and release the fullscreen orientation", async () => {

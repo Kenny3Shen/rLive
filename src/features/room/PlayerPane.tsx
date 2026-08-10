@@ -419,6 +419,9 @@ export function PlayerPane({
     playUrl,
     siteId,
     quality: qualities[qualityIndex]?.quality ?? null,
+    // Android volume is controlled by STREAM_MUSIC through the native bridge;
+    // keep the WebView media element at unity gain to avoid two volume layers.
+    initialVolume: androidClient ? 100 : 80,
     sessionKey: roomSessionKey,
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
@@ -437,6 +440,7 @@ export function PlayerPane({
   });
   const previewPlayerVolume = player.previewVolume;
   const setPlayerAudio = player.setAudio;
+  const changePlayerVolume = player.changeVolume;
   const togglePlayerMute = player.toggleMute;
   const togglePlayerPictureInPicture = player.togglePictureInPicture;
   const togglePlayerFullscreen = player.toggleFullscreen;
@@ -480,9 +484,28 @@ export function PlayerPane({
     translationFrom: asrTranslationFrom,
     translationTo: asrTranslationTo,
   });
+  // Android routes loudness through STREAM_MUSIC. Use native state whenever the
+  // bridge is supported, even before the first getState resolves, so UI and
+  // gestures never fall back to the HTML <video> volume on a phone.
+  const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
+  const nativePlayerControlState = nativePlayerControlsActive ? androidPlayerControls.state : null;
+  const playerControlVolume = nativePlayerControlState?.mediaVolume ?? player.volume;
+  const playerControlMuted =
+    nativePlayerControlState?.mediaVolume !== undefined
+      ? nativePlayerControlState.mediaVolume <= 0
+      : player.muted;
+
   const handleToggleMute = useCallback(() => {
+    if (nativePlayerControlsActive && androidPlayerControls.toggleMediaMute()) return;
     togglePlayerMute();
-  }, [togglePlayerMute]);
+  }, [androidPlayerControls, nativePlayerControlsActive, togglePlayerMute]);
+  const handlePlayerVolumeChange = useCallback(
+    (value: number) => {
+      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(value)) return;
+      changePlayerVolume(value);
+    },
+    [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive],
+  );
   const handleToggleAudioOnly = useCallback(() => {
     const nextAudioOnly = !audioOnly;
     if (nextAudioOnly && player.pictureInPictureActive) {
@@ -495,12 +518,6 @@ export function PlayerPane({
     () => void togglePlayerPictureInPicture(),
     [togglePlayerPictureInPicture],
   );
-  // Brightness is the only control the native bridge owns. Volume stays on the
-  // web player so a room gesture never touches the device-wide media stream.
-  const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
-  const nativePlayerControlState = nativePlayerControlsActive ? androidPlayerControls.state : null;
-  const playerControlVolume = player.volume;
-  const playerControlMuted = player.muted;
   const mobileRoomActions = useMemo<readonly PlayerMobileRoomAction[]>(() => {
     const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
     const danmakuControl = danmakuControlPresentation(osdOn);
@@ -941,14 +958,18 @@ export function PlayerPane({
       }
 
       const kind = playerEdgeGestureForStart(event.clientX, stageBounds.left, stageBounds.width);
-      // Only brightness has a native path; volume is web-player-only everywhere.
-      const native = kind === "brightness" && nativePlayerControlsActive;
+      // Android controls both brightness and volume through the native bridge.
+      const native = nativePlayerControlsActive;
       let startValue: number;
       if (kind === "brightness") {
         startValue = playerBrightnessRef.current;
       } else {
-        // Volume always reads back from the web player, on mobile too.
-        startValue = player.muted || player.volume === 0 ? 0 : player.volume;
+        startValue =
+          native && nativePlayerControlState
+            ? nativePlayerControlState.mediaVolume
+            : player.muted || player.volume === 0
+              ? 0
+              : player.volume;
       }
       playerEdgeGestureRef.current = {
         pointerId: event.pointerId,
@@ -968,6 +989,7 @@ export function PlayerPane({
     [
       mobileClient,
       nativePlayerControlsActive,
+      nativePlayerControlState,
       player.muted,
       player.volume,
       showHost,
@@ -1015,6 +1037,8 @@ export function PlayerPane({
           if (gesture.native) {
             androidPlayerControls.setBrightness(nextValue);
           }
+        } else if (gesture.native) {
+          androidPlayerControls.setMediaVolume(nextValue);
         } else {
           previewPlayerVolume(nextValue);
         }
@@ -1041,7 +1065,9 @@ export function PlayerPane({
       releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
       if (gesture.active) {
         if (gesture.native) androidPlayerControls.flush();
-        if (gesture.kind === "volume") setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
+        if (gesture.kind === "volume" && !gesture.native) {
+          setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
+        }
         schedulePlayerEdgeGestureFeedbackHide();
         event.preventDefault();
       }
@@ -1063,7 +1089,7 @@ export function PlayerPane({
         releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
         if (gesture.active) {
           if (gesture.native) androidPlayerControls.flush();
-          if (gesture.kind === "volume") {
+          if (gesture.kind === "volume" && !gesture.native) {
             setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
           }
           schedulePlayerEdgeGestureFeedbackHide();
@@ -1632,7 +1658,7 @@ export function PlayerPane({
               onRefresh={onRefresh}
               onTogglePause={() => player.togglePause()}
               onVolume={(value) => {
-                player.changeVolume(value);
+                handlePlayerVolumeChange(value);
               }}
               onToggleMute={handleToggleMute}
               onToggleAudioOnly={handleToggleAudioOnly}

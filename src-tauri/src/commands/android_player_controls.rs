@@ -1,7 +1,7 @@
-//! Forwards the player brightness gesture to the Android `RlivePlayerControlsPlugin`.
+//! Forwards the player edge gestures to the Android `RlivePlayerControlsPlugin`.
 //!
-//! Volume is intentionally absent: it is applied app-locally on `<video>` by
-//! the web player, never to the device-wide `STREAM_MUSIC`.
+//! Android media volume is intentionally handled by the native `AudioManager`
+//! bridge so the mobile player follows the device's media-volume semantics.
 //!
 //! A `plugin:<name>|<command>` invoke is answered by the *Rust* plugin's own
 //! invoke handler, never by the Kotlin `@Command` methods, so the webview
@@ -25,7 +25,7 @@ mod android {
     pub struct AndroidPlayerControls(pub PluginHandle<tauri::Wry>);
 
     /// The Kotlin commands resolve plain JSON objects (`{value}`,
-    /// `{brightness}`, `{orientation}`), so the payload and the
+    /// `{mediaVolume, brightness}`, `{orientation}`), so the payload and the
     /// reply are passed through untouched. `run_mobile_plugin_async` is used
     /// rather than the blocking variant because the JNI call is dispatched back
     /// through the Activity: blocking the invoke thread there can deadlock.
@@ -52,6 +52,14 @@ mod android {
         controls: State<'_, AndroidPlayerControls>,
     ) -> AppResult<Value> {
         run(controls, "getState", json!({})).await
+    }
+
+    #[tauri::command]
+    pub async fn android_player_controls_set_media_volume(
+        controls: State<'_, AndroidPlayerControls>,
+        value: f64,
+    ) -> AppResult<Value> {
+        run(controls, "setMediaVolume", json!({ "value": value })).await
     }
 
     #[tauri::command]
@@ -87,7 +95,7 @@ mod android {
 pub use android::{
     AndroidPlayerControls, android_player_controls_get_state,
     android_player_controls_reset_brightness, android_player_controls_set_brightness,
-    android_player_controls_set_orientation,
+    android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };
 
 #[cfg(not(target_os = "android"))]
@@ -111,6 +119,11 @@ mod fallback {
     }
 
     #[tauri::command]
+    pub async fn android_player_controls_set_media_volume(_value: f64) -> AppResult<Value> {
+        Err(unsupported())
+    }
+
+    #[tauri::command]
     pub async fn android_player_controls_set_brightness(_value: f64) -> AppResult<Value> {
         Err(unsupported())
     }
@@ -129,5 +142,6 @@ mod fallback {
 #[cfg(not(target_os = "android"))]
 pub use fallback::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
-    android_player_controls_set_brightness, android_player_controls_set_orientation,
+    android_player_controls_set_brightness, android_player_controls_set_media_volume,
+    android_player_controls_set_orientation,
 };
