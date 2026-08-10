@@ -11,6 +11,7 @@ import {
   Radio,
   SearchX,
   Trash2,
+  UserRound,
 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -206,6 +207,7 @@ function DanmakuSendHistoryCard({
 }) {
   const roomLabel = danmakuRoomLabel(item);
   const roomId = item.room_id?.trim();
+  const roomUserName = item.room_user_name?.trim();
 
   return (
     <Card size="sm">
@@ -242,6 +244,22 @@ function DanmakuSendHistoryCard({
       </CardHeader>
       <CardContent>
         <p className="break-words text-sm leading-relaxed text-foreground">{item.content}</p>
+        {(roomUserName || roomId) && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {roomUserName && (
+              <span className="inline-flex min-w-0 items-center gap-1">
+                <UserRound className="size-3.5 shrink-0" aria-hidden />
+                <span className="truncate">{roomUserName}</span>
+              </span>
+            )}
+            {roomId && (
+              <span className="inline-flex items-center gap-1">
+                <Hash className="size-3.5" aria-hidden />
+                {roomId}
+              </span>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -383,7 +401,12 @@ export function HistoryPage() {
           keyword,
           dateFilter,
           getTimestamp: (item) => item.sent_at,
-          getSearchFields: (item) => [item.content, item.room_title, item.room_id],
+          getSearchFields: (item) => [
+            item.content,
+            item.room_title,
+            item.room_user_name,
+            item.room_id,
+          ],
         }),
         (item) => item.sent_at,
         "all",

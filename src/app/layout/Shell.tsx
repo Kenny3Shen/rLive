@@ -524,7 +524,7 @@ export function Shell() {
                 >
                   <div
                     className={cn(
-                      "pointer-events-none absolute inset-0 flex items-center justify-center",
+                      "pointer-events-none absolute inset-0 flex h-full items-center justify-center",
                       !hasIptvSourceShell &&
                         "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
                       hasIptvSourceShell &&
@@ -532,12 +532,7 @@ export function Shell() {
                     )}
                   >
                     {showTopNavigation && (
-                      <div
-                        className={cn(
-                          "pointer-events-auto",
-                          hasIptvSourceShell ? "max-md:min-w-0 max-md:w-full" : "max-md:min-w-max",
-                        )}
-                      >
+                      <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
                         {isHistory ? (
                           <HistoryViewSwitcher
                             value={historyHeader.view}

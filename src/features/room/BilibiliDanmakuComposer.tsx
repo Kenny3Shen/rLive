@@ -55,6 +55,8 @@ function insertPlainDanmakuText(
 type DanmakuComposerProps = {
   siteId?: SiteId;
   roomId?: string;
+  roomTitle?: string;
+  roomUserName?: string;
   /** Compact transparent variant for the player-overlay control bar. */
   overlay?: boolean;
   /** Keeps the player chrome visible while the emoji picker is open. */
@@ -586,6 +588,8 @@ function DanmakuQuickPicker({
 export function DanmakuComposer({
   siteId,
   roomId,
+  roomTitle,
+  roomUserName,
   overlay = false,
   onOverlayInteractionChange,
 }: DanmakuComposerProps) {
@@ -709,6 +713,8 @@ export function DanmakuComposer({
       await invokeCmd<void>(config.sendCommand, {
         roomId: currentRoomId,
         message: outgoingMessage,
+        roomTitle,
+        roomUserName,
       });
       setDraft("");
       setResult("发送请求已提交。");

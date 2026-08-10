@@ -312,6 +312,8 @@ export function RoomPage() {
           onSideTabChange={setSideTab}
           siteId={siteId}
           roomId={detail.room_id}
+          roomTitle={detail.title}
+          roomUserName={detail.user_name}
           onMobileRoomActionsChange={setPlayerMobileActions}
         />
       </div>

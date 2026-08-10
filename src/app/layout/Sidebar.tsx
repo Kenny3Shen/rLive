@@ -191,7 +191,7 @@ export function Sidebar() {
     >
       <nav
         data-slot="app-sidebar-nav"
-        className="flex flex-1 flex-col items-center gap-2 max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden"
+        className="flex w-full flex-1 flex-col items-center gap-2 max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden"
         aria-label="主导航"
       >
         {navItems.map((item) => (
@@ -201,24 +201,12 @@ export function Sidebar() {
             onIntent={item.to === "/" ? preloadHome : undefined}
           />
         ))}
-      </nav>
-      <div className="flex flex-col items-center gap-2 max-md:flex-row max-md:gap-0">
-        <div data-slot="app-sidebar-preferences" className="max-md:hidden">
+        <div data-slot="app-sidebar-preferences" className="mt-auto max-md:hidden">
           <AppearanceToggle />
         </div>
-        <SidebarLink
-          to="/history"
-          label="历史"
-          icon={History}
-          className="max-md:w-11 max-md:flex-none"
-        />
-        <SidebarLink
-          to="/settings"
-          label="设置"
-          icon={Settings}
-          className="max-md:w-11 max-md:flex-none"
-        />
-      </div>
+        <SidebarLink to="/history" label="历史" icon={History} />
+        <SidebarLink to="/settings" label="设置" icon={Settings} />
+      </nav>
     </aside>
   );
 }

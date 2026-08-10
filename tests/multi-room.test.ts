@@ -13,6 +13,7 @@ import {
   multiRoomSlotLabel,
 } from "../src/features/multi-room/multiRoomLayout";
 import {
+  applyWebPlayerAudio,
   normalizeWebPlayerAudio,
   playerOwnsFullscreen,
   requestPlayerAutoplay,
@@ -47,6 +48,16 @@ describe("multi-room audio defaults", () => {
       muted: true,
       previousVolume: 100,
     });
+  });
+
+  test("writes a gesture audio snapshot to the media element immediately", () => {
+    const video = { volume: 0.8, muted: false };
+
+    expect(applyWebPlayerAudio(video, 35, false)).toEqual({ volume: 35, muted: false });
+    expect(video).toEqual({ volume: 0.35, muted: false });
+
+    expect(applyWebPlayerAudio(video, 0, false)).toEqual({ volume: 0, muted: true });
+    expect(video).toEqual({ volume: 0, muted: true });
   });
 
   test("opens the promoted main feed and mutes every secondary feed", () => {

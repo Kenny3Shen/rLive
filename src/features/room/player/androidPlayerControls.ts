@@ -126,12 +126,14 @@ export async function resetAndroidBrightness(
  * stays on the web player's `<video>.volume`: app-local, continuous, and
  * released with the player session.
  */
-export function useAndroidPlayerControls(enabled: boolean) {
+export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") {
   const [state, setState] = useState<AndroidPlayerControlsState | null>(null);
   const [available, setAvailable] = useState(false);
   const stateRef = useRef<AndroidPlayerControlsState | null>(null);
   const pendingRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
+  const nativeWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const releasePromiseRef = useRef<Promise<void>>(Promise.resolve());
   const requestVersionRef = useRef(0);
   const mountedRef = useRef(true);
   /** One toast per mount: a drag emits many writes and would spam otherwise. */
@@ -152,7 +154,14 @@ export function useAndroidPlayerControls(enabled: boolean) {
     if (value === null) return;
 
     const version = ++requestVersionRef.current;
-    void setAndroidBrightness(value)
+    const write = nativeWriteQueueRef.current
+      .catch(() => undefined)
+      .then(() => setAndroidBrightness(value));
+    nativeWriteQueueRef.current = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    void write
       .then((actualValue) => {
         if (!mountedRef.current || requestVersionRef.current !== version) return;
         // A successful write proves the native bridge is usable even when the
@@ -174,6 +183,26 @@ export function useAndroidPlayerControls(enabled: boolean) {
       });
   }, [replaceState]);
 
+  const cancelPendingWrite = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingRef.current = null;
+    requestVersionRef.current += 1;
+  }, []);
+
+  const releaseBrightness = useCallback(() => {
+    cancelPendingWrite();
+    const release = nativeWriteQueueRef.current
+      .catch(() => undefined)
+      .then(() => resetAndroidBrightness())
+      .catch(() => undefined);
+    nativeWriteQueueRef.current = release;
+    releasePromiseRef.current = release;
+    return release;
+  }, [cancelPendingWrite]);
+
   const setBrightness = useCallback(
     (value: number): boolean => {
       if (!enabled || !runningOnAndroidTauri()) return false;
@@ -192,15 +221,16 @@ export function useAndroidPlayerControls(enabled: boolean) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      timerRef.current = null;
+      cancelPendingWrite();
     };
-  }, []);
+  }, [cancelPendingWrite]);
 
   useEffect(() => {
     let cancelled = false;
     let shouldResetBrightness = false;
+    let readVersion = 0;
     if (!enabled || !runningOnAndroidTauri()) {
+      cancelPendingWrite();
       setAvailable(false);
       replaceState(null);
       return () => {
@@ -208,31 +238,73 @@ export function useAndroidPlayerControls(enabled: boolean) {
       };
     }
 
-    void getAndroidPlayerControls()
-      .then((next) => {
-        if (cancelled) return;
-        replaceState(next);
-        setAvailable(true);
-        shouldResetBrightness = true;
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setAvailable(false);
-        replaceState(null);
-      });
+    setAvailable(false);
+    replaceState(null);
+
+    const readCurrentBrightness = () => {
+      const version = ++readVersion;
+      const pendingRelease = releasePromiseRef.current;
+      void pendingRelease
+        .then(() => getAndroidPlayerControls())
+        .then((next) => {
+          if (
+            cancelled ||
+            readVersion !== version ||
+            document.visibilityState !== "visible"
+          ) {
+            return;
+          }
+          replaceState(next);
+          setAvailable(true);
+          shouldResetBrightness = true;
+        })
+        .catch(() => {
+          if (cancelled || readVersion !== version) return;
+          setAvailable(false);
+          replaceState(null);
+        });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        readCurrentBrightness();
+        return;
+      }
+
+      // MainActivity.onPause also releases the override. Clear the optimistic
+      // browser snapshot here so returning to the room never starts the next
+      // gesture from a brightness value that no longer exists natively.
+      readVersion += 1;
+      setAvailable(false);
+      replaceState(null);
+      shouldResetBrightness = false;
+      void releaseBrightness();
+    };
+
+    readCurrentBrightness();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      // Leaving the player must not leave the Activity stuck at a gesture
-      // brightness; Simple Live restores the prior window value on exit.
-      // MainActivity.onPause covers backgrounding and process death too.
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      // A direct room-to-room route change can reuse PlayerPane. Keying this
+      // effect by roomSessionKey makes that route transition release the old
+      // room's brightness just as a full unmount does. releaseBrightness waits
+      // for an in-flight native write before resetting, so a late reply cannot
+      // reapply the override after cleanup.
       if (shouldResetBrightness || stateRef.current !== null) {
-        void resetAndroidBrightness().catch(() => {
-          // Native bridge may already be torn down with the room route.
-        });
+        void releaseBrightness();
+      } else {
+        cancelPendingWrite();
       }
     };
-  }, [enabled, replaceState]);
+  }, [
+    cancelPendingWrite,
+    enabled,
+    releaseBrightness,
+    replaceState,
+    roomSessionKey,
+  ]);
 
   return {
     /** True after a successful native read/write. */

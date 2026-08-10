@@ -124,11 +124,15 @@ const DanmakuRow = memo(function DanmakuRow({
   line,
   siteId,
   roomId,
+  roomTitle,
+  roomUserName,
   surface,
 }: {
   line: DanmakuLine;
   siteId?: SiteId;
   roomId?: string;
+  roomTitle?: string;
+  roomUserName?: string;
   surface: DanmakuListSurface;
 }) {
   const { event } = line;
@@ -140,7 +144,16 @@ const DanmakuRow = memo(function DanmakuRow({
     );
   }
 
-  return <SelectableDanmakuRow event={event} siteId={siteId} roomId={roomId} surface={surface} />;
+  return (
+    <SelectableDanmakuRow
+      event={event}
+      siteId={siteId}
+      roomId={roomId}
+      roomTitle={roomTitle}
+      roomUserName={roomUserName}
+      surface={surface}
+    />
+  );
 });
 
 /**
@@ -152,11 +165,15 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   event,
   siteId,
   roomId,
+  roomTitle,
+  roomUserName,
   surface,
 }: {
   event: DanmakuEvent;
   siteId?: SiteId;
   roomId?: string;
+  roomTitle?: string;
+  roomUserName?: string;
   surface: DanmakuListSurface;
 }) {
   const queryClient = useQueryClient();
@@ -214,7 +231,12 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     setSending(true);
     setActionStatus(null);
     try {
-      await invokeCmd<void>(sendConfig.sendCommand, { roomId, message });
+      await invokeCmd<void>(sendConfig.sendCommand, {
+        roomId,
+        message,
+        roomTitle,
+        roomUserName,
+      });
       setActionStatus("sent");
     } catch {
       setActionStatus("send-failed");
@@ -331,6 +353,8 @@ type DanmakuPanelProps = {
   /** Current room identity used only by the explicit “+1” send action. */
   siteId?: SiteId;
   roomId?: string;
+  roomTitle?: string;
+  roomUserName?: string;
   /** Keep collecting while another room-side tab is open, without repainting it. */
   visible?: boolean;
   className?: string;
@@ -341,6 +365,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   active,
   siteId,
   roomId,
+  roomTitle,
+  roomUserName,
   visible = true,
   className,
   statusText,
@@ -600,6 +626,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
                 line={line}
                 siteId={siteId}
                 roomId={roomId}
+                roomTitle={roomTitle}
+                roomUserName={roomUserName}
                 surface={listSurface}
               />
             ))}
