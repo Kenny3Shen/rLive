@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notify } from "@/components/ui/toast";
 import { getClientPlatform } from "@/shared/clientPlatform";
 
@@ -352,15 +352,23 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
     };
   }, [cancelPendingWrites, enabled, releaseBrightness, replaceState, roomSessionKey]);
 
-  return {
-    /** True after a successful native read/write. */
-    available,
-    /** True on Android Tauri even before getState finishes. */
-    supported: enabled && (available || runningOnAndroidTauri()),
-    state,
-    setMediaVolume,
-    toggleMediaMute,
-    setBrightness,
-    flush,
-  };
+  const supported = enabled && (available || runningOnAndroidTauri());
+
+  // PlayerPane includes this object in callbacks that it publishes to
+  // RoomPage. Keep the container stable when none of its values changed, or
+  // that parent update immediately creates and publishes another action list.
+  return useMemo(
+    () => ({
+      /** True after a successful native read/write. */
+      available,
+      /** True on Android Tauri even before getState finishes. */
+      supported,
+      state,
+      setMediaVolume,
+      toggleMediaMute,
+      setBrightness,
+      flush,
+    }),
+    [available, flush, setBrightness, setMediaVolume, state, supported, toggleMediaMute],
+  );
 }
