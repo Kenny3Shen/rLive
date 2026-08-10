@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronRight,
   CirclePlay,
   Clock3,
   Hash,
@@ -113,9 +112,17 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
     <ContextMenu>
       <ContextMenuTrigger
         render={
-          <button
-            type="button"
+          <div
+            role="button"
+            tabIndex={0}
             onClick={onOpen}
+            onKeyDown={(event) => {
+              if (event.currentTarget !== event.target) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen();
+              }
+            }}
             onPointerEnter={() => preloadRouteModule(roomPath)}
             onPointerDown={() => preloadRouteModule(roomPath)}
             onFocus={() => preloadRouteModule(roomPath)}
@@ -165,10 +172,21 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
           </span>
         </span>
 
-        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors group-hover:text-foreground [@media(pointer:coarse)]:text-foreground">
-          <span className="hidden sm:inline">进入</span>
-          <ChevronRight className="size-4" aria-hidden />
-        </span>
+        <Button
+          type="button"
+          variant="destructive"
+          size="icon-sm"
+          data-action="delete-history"
+          aria-label={`删除 ${title} 的观看记录`}
+          title="删除此记录"
+          disabled={isRemoving}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
+        >
+          {isRemoving ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+        </Button>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuGroup>
