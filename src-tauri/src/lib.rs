@@ -8,6 +8,7 @@ mod error;
 mod http_client;
 mod image_proxy;
 mod iptv;
+mod lan_sync;
 mod models;
 mod profile;
 mod settings;
@@ -55,6 +56,7 @@ use commands::iptv::{
     iptv_favorite_group_upsert, iptv_favorite_list, iptv_favorite_remove, iptv_favorite_set_group,
     iptv_load_playlist,
 };
+use commands::lan_sync::{lan_sync_receive, lan_sync_start, lan_sync_status, lan_sync_stop};
 use commands::profile::{profile_export, profile_import};
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -285,6 +287,10 @@ pub fn run() {
             tag_remove,
             profile_export,
             profile_import,
+            lan_sync_start,
+            lan_sync_status,
+            lan_sync_stop,
+            lan_sync_receive,
             android_player_controls_get_state,
             android_player_controls_set_media_volume,
             android_player_controls_set_brightness,
@@ -304,6 +310,7 @@ pub fn run() {
                     let state = state.inner();
                     state.stream_proxy.stop();
                     state.image_proxy.stop();
+                    state.lan_sync.stop();
                     state.danmaku.disconnect();
                 }
                 std::process::exit(0);
@@ -316,6 +323,7 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     state.inner().stream_proxy.stop();
                     state.inner().image_proxy.stop();
+                    state.inner().lan_sync.stop();
                 }
             }
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
@@ -323,6 +331,7 @@ pub fn run() {
                     let state = state.inner();
                     state.stream_proxy.stop();
                     state.image_proxy.stop();
+                    state.lan_sync.stop();
                     state.danmaku.disconnect();
                 }
             }

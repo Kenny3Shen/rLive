@@ -15,7 +15,7 @@ use rusqlite::Connection;
 /// expected to carry media or model data. Bound the read before JSON parsing
 /// so a malformed Android content URI (or an accidental video selection)
 /// cannot make an import allocate without limit.
-const MAX_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfilePackage {
