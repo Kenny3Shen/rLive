@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Radio } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -96,12 +96,6 @@ export function CategoryRoomsPage() {
     isFetchNextPageError: roomsQuery.isFetchNextPageError,
     fetchNextPage: roomsQuery.fetchNextPage,
   });
-
-  // Shell owns the scrolling element. A dedicated route should always start at
-  // its top instead of inheriting the category browser's previous scroll spot.
-  useLayoutEffect(() => {
-    document.querySelector<HTMLElement>("main")?.scrollTo({ top: 0 });
-  }, [categoryId, parentId, siteId]);
 
   return (
     <PullToRefresh

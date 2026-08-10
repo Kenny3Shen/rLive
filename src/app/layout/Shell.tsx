@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -56,6 +57,14 @@ import {
   routeScopedPreviousGroup,
   sidebarNavigationDirection,
 } from "./sidebarNavigation";
+import {
+  PAGE_SCROLL_RESTORE_MAX_FRAMES,
+  pageScrollKey,
+  pageScrollRestoreSettled,
+  recallPageScroll,
+  rememberPageScroll,
+  shouldRestorePageScroll,
+} from "./pageScroll";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 
 function RouteLoadingFallback() {
@@ -364,20 +373,84 @@ export function Shell() {
   }, [followPlatform, isFollow, rawFollowPlatform, setSearchParams]);
 
   // The scroller used to be keyed by platform, so a site switch reset scrollTop
-  // as a side effect of being rebuilt. Now that it persists, do it explicitly:
-  // the incoming platform's list is different content, so leaving the viewport
-  // parked mid-page would land the user in the middle of rooms they never saw.
+  // as a side effect of being rebuilt. Now that it persists, the position is
+  // managed explicitly: a switch to different content still starts at the top,
+  // while returning to a page the user already scrolled replays where they were.
+  //
+  // `location.key` is stable per history entry, so a remembered position
+  // survives the room visit that unmounts this scroller entirely. The rest of
+  // the key covers what the old reset watched: two platforms, or two IPTV
+  // sources, are different content under one entry.
+  const surfaceKey = pageScrollKey(
+    location.key,
+    `${pathname}|${platformForMotion}|${iptvSource.id}`,
+    iptvFollowGroup,
+  );
+  // Read by the scroll listener below, which outlives any one render. Written
+  // idempotently during render so it can never lag the committed surface.
+  const surfaceKeyRef = useRef(surfaceKey);
+  surfaceKeyRef.current = surfaceKey;
   const pageScrollRef = useRef<HTMLDivElement | null>(null);
   const bindPageScrollRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     pageScrollRef.current = node;
+    // Recorded synchronously on every scroll rather than flushed on unmount.
+    // A cleanup-time read would run *after* the layout effect below has already
+    // reset the outgoing surface to 0, storing that reset instead of the
+    // position the user left. Writing a Map entry per scroll event is cheap,
+    // and `scrollTop` is already resolved inside a scroll handler.
+    const onScroll = () => rememberPageScroll(surfaceKeyRef.current, node.scrollTop);
+    node.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      node.removeEventListener("scroll", onScroll);
       if (pageScrollRef.current === node) pageScrollRef.current = null;
     };
   }, []);
-  useEffect(() => {
-    pageScrollRef.current?.scrollTo({ top: 0 });
-  }, [iptvFollowGroup, iptvSource.id, pathname, platformForMotion]);
+  const previousSurfaceKeyRef = useRef(surfaceKey);
+  const previousEntryKeyRef = useRef(location.key);
+  useLayoutEffect(() => {
+    const previousSurfaceKey = previousSurfaceKeyRef.current;
+    const previousEntryKey = previousEntryKeyRef.current;
+    previousSurfaceKeyRef.current = surfaceKey;
+    previousEntryKeyRef.current = location.key;
+    if (previousSurfaceKey === surfaceKey) return;
+
+    const scroller = pageScrollRef.current;
+    if (!scroller) return;
+
+    const target = shouldRestorePageScroll({
+      navigationType,
+      previousEntryKey,
+      entryKey: location.key,
+      previousSurfaceKey,
+      surfaceKey,
+    })
+      ? recallPageScroll(surfaceKey)
+      : 0;
+
+    if (target <= 0) {
+      scroller.scrollTo({ top: 0 });
+      return;
+    }
+
+    // An infinite list is restored before its rows have laid out, so the first
+    // assignment clamps to whatever height exists. Re-apply across frames until
+    // the content is tall enough to hold the offset. `target` is captured here,
+    // so the clamped positions these writes record cannot shorten the goal.
+    let frame: number | null = null;
+    let remaining = PAGE_SCROLL_RESTORE_MAX_FRAMES;
+    const apply = () => {
+      frame = null;
+      scroller.scrollTop = target;
+      if (pageScrollRestoreSettled(scroller.scrollTop, target) || remaining <= 0) return;
+      remaining -= 1;
+      frame = window.requestAnimationFrame(apply);
+    };
+    apply();
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [location.key, navigationType, surfaceKey]);
 
   // Mobile bottom navigation swaps pages atomically. Retaining the outgoing
   // ReactNode made its last selected platform visible for one compositor frame
