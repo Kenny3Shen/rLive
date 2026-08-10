@@ -55,28 +55,16 @@ export function revealThemeAt(
   activeThemeTransition?.skipTransition();
 
   const root = document.documentElement;
-  const width = Math.max(1, window.innerWidth);
-  const height = Math.max(1, window.innerHeight);
-  const x = Math.min(width, Math.max(0, origin.x));
-  const y = Math.min(height, Math.max(0, origin.y));
-  const radius = Math.hypot(Math.max(x, width - x), Math.max(y, height - y));
-
-  // The reveal geometry is expressed as percentages of the pseudo-element's own
-  // box rather than in px. Android WebView resolves lengths inside the View
-  // Transition pseudo-tree on a different scale than the CSS px we measure the
-  // origin in (it tracked the device pixel ratio), which placed the circle near
-  // the top-left corner and let it finish at ~1/DPR of the required radius —
-  // the animation completed, then the uncovered remainder snapped in. A
-  // percentage radius resolves against `hypot(w, h) / sqrt(2)` of the reference
-  // box, so both the origin and the radius stay correct under any box scale.
-  const radiusReference = Math.hypot(width, height) / Math.SQRT2;
-
-  root.style.setProperty("--theme-reveal-x", `${((x / width) * 100).toFixed(3)}%`);
-  root.style.setProperty("--theme-reveal-y", `${((y / height) * 100).toFixed(3)}%`);
-  root.style.setProperty(
-    "--theme-reveal-radius",
-    `${((radius / radiusReference) * 100 + 1).toFixed(3)}%`,
+  const x = Math.min(window.innerWidth, Math.max(0, origin.x));
+  const y = Math.min(window.innerHeight, Math.max(0, origin.y));
+  const radius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y),
   );
+
+  root.style.setProperty("--theme-reveal-x", `${x}px`);
+  root.style.setProperty("--theme-reveal-y", `${y}px`);
+  root.style.setProperty("--theme-reveal-radius", `${Math.ceil(radius) + 2}px`);
   root.style.setProperty(
     "--theme-reveal-duration",
     window.matchMedia("(pointer: coarse)").matches ? "420ms" : "520ms",
