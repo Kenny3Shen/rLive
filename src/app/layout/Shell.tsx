@@ -21,12 +21,8 @@ import { IptvSearchInput, IptvSourceSwitcher } from "@/features/iptv/IptvHeaderC
 import { IptvControllerProvider } from "@/features/iptv/IptvController";
 import { iptvHomePath } from "@/features/iptv/iptvRoute";
 import { builtInSources, playlistSourceFromRoute } from "@/features/iptv/playlistSource";
-import {
-  HISTORY_PLATFORM_PARAM,
-  type HistoryPlatformFilter,
-  historyPlatformFromSearch,
-  withHistoryPlatform,
-} from "@/features/history/historyRoute";
+import { HistoryClearButton, HistoryViewSwitcher } from "@/features/history/HistoryHeaderControls";
+import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
@@ -123,6 +119,7 @@ export function Shell() {
   const isHistory = pathname === "/history";
   const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
+  const historyHeader = useHistoryHeaderSnapshot();
 
   // React Router records each pushState entry with an incrementing `idx`.
   // Comparing it across renders tells the tab transition which way the user
@@ -189,13 +186,12 @@ export function Shell() {
     pathname === "/" ||
     pathname.startsWith("/category") ||
     pathname.startsWith("/search") ||
-    isLiveFollow ||
-    isHistory;
+    isLiveFollow;
   // Keep both follow views in the same content container so changing the
   // live/IPTV tab does not remount FollowPage and discard its transition state.
   // IPTV follow groups animate inside IptvFollowView rather than in this layer.
   const useGroupedPageContainer = showSiteSwitcher || isIptv || isIptvFollow;
-  const showTopNavigation = useGroupedPageContainer;
+  const showTopNavigation = useGroupedPageContainer || isHistory;
   const iptvSourceId = hasIptvSourceShell ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
@@ -219,12 +215,7 @@ export function Shell() {
     searchParams.get(FOLLOW_PLATFORM_PARAM),
     disabledSiteIds,
   );
-  const rawHistoryPlatform = historyPlatformFromSearch(searchParams.get(HISTORY_PLATFORM_PARAM));
-  const historyPlatform = historyPlatformFromSearch(
-    searchParams.get(HISTORY_PLATFORM_PARAM),
-    disabledSiteIds,
-  );
-  const platformForMotion = isFollow ? followPlatform : isHistory ? historyPlatform : activeSiteId;
+  const platformForMotion = isFollow ? followPlatform : activeSiteId;
   // The grouping a page pans between. Live routes travel between platforms;
   // IPTV travels between playlist sources. Both are the same gesture and the
   // same header slot, so they share one pan rather than each owning a scheme.
@@ -247,15 +238,9 @@ export function Shell() {
     () => ["all", ...sitePlatforms],
     [sitePlatforms],
   );
-  const historyPlatforms = useMemo<HistoryPlatformFilter[]>(
-    () => ["all", ...sitePlatforms],
-    [sitePlatforms],
-  );
   const platformStrip: readonly PlatformScopeValue[] = isLiveFollow
     ? followPlatforms
-    : isHistory
-      ? historyPlatforms
-      : sitePlatforms;
+    : sitePlatforms;
   // One ordered strip per surface, compared as strings so platforms and IPTV
   // source ids share the same direction rule.
   const groupStrip: readonly string[] = isIptv ? iptvSourceOptions : platformStrip.map(String);
@@ -289,13 +274,6 @@ export function Shell() {
   const handleFollowPlatformChange = useCallback(
     (platform: FollowPlatformFilter) => {
       setSearchParams((current) => withFollowPlatform(current, platform));
-    },
-    [setSearchParams],
-  );
-
-  const handleHistoryPlatformChange = useCallback(
-    (platform: HistoryPlatformFilter) => {
-      setSearchParams((current) => withHistoryPlatform(current, platform));
     },
     [setSearchParams],
   );
@@ -384,11 +362,6 @@ export function Shell() {
     if (!isFollow || rawFollowPlatform === followPlatform) return;
     setSearchParams((current) => withFollowPlatform(current, followPlatform), { replace: true });
   }, [followPlatform, isFollow, rawFollowPlatform, setSearchParams]);
-
-  useEffect(() => {
-    if (!isHistory || rawHistoryPlatform === historyPlatform) return;
-    setSearchParams((current) => withHistoryPlatform(current, historyPlatform), { replace: true });
-  }, [historyPlatform, isHistory, rawHistoryPlatform, setSearchParams]);
 
   // The scroller used to be keyed by platform, so a site switch reset scrollTop
   // as a side effect of being rebuilt. Now that it persists, do it explicitly:
@@ -565,7 +538,12 @@ export function Shell() {
                           hasIptvSourceShell ? "max-md:min-w-0 max-md:w-full" : "max-md:min-w-max",
                         )}
                       >
-                        {hasIptvSourceShell ? (
+                        {isHistory ? (
+                          <HistoryViewSwitcher
+                            value={historyHeader.view}
+                            onValueChange={historyHeader.onViewChange}
+                          />
+                        ) : hasIptvSourceShell ? (
                           <div
                             data-horizontal-swipe-surface
                             className="h-full min-w-0"
@@ -592,13 +570,6 @@ export function Shell() {
                             filterMode
                             onValueChange={handleFollowPlatformChange}
                           />
-                        ) : isHistory ? (
-                          <SiteSwitcher
-                            value={historyPlatform}
-                            includeAll
-                            filterMode
-                            onValueChange={handleHistoryPlatformChange}
-                          />
                         ) : (
                           <SiteSwitcher
                             onValueIntent={preloadHomePlatform}
@@ -623,7 +594,14 @@ export function Shell() {
                         onChange={handleIptvSearchChange}
                         className="w-64 max-xl:w-48 max-md:w-[min(11rem,43vw)]"
                       />
-                    ) : isIptvFollow || isHistory ? null : (
+                    ) : isHistory ? (
+                      <HistoryClearButton
+                        view={historyHeader.view}
+                        canClear={historyHeader.canClear}
+                        pending={historyHeader.clearPending}
+                        onRequestClear={historyHeader.onRequestClear}
+                      />
+                    ) : isIptvFollow ? null : (
                       <HeaderSearch />
                     )}
                   </div>

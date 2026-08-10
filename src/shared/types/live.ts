@@ -125,6 +125,7 @@ export type HistoryItem = {
   room_id: string;
   title: string;
   user_name: string;
+  /** Room cover captured when the room was opened; empty for older records. */
   cover?: string;
   watched_at: number;
 };
@@ -133,6 +134,10 @@ export type HistoryItem = {
 export type DanmakuSendHistoryItem = {
   site_id: SiteId;
   content: string;
+  /** Room the message was sent to; empty for records written before 0.15.2. */
+  room_id?: string;
+  /** Room title captured at send time; empty when it could not be resolved. */
+  room_title?: string;
   sent_at: number;
 };
 

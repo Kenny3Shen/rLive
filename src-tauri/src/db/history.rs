@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::db::schema::map_db_err;
@@ -10,6 +10,10 @@ pub struct HistoryRecord {
     pub room_id: String,
     pub title: String,
     pub user_name: String,
+    /// Room cover captured when the room was opened. Empty for records written
+    /// by releases that predate the column, and for platforms without a cover.
+    #[serde(default)]
+    pub cover: String,
     pub watched_at: i64,
 }
 
@@ -21,14 +25,15 @@ fn map_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord
         room_id: row.get(1)?,
         title: row.get(2)?,
         user_name: row.get(3)?,
-        watched_at: row.get(4)?,
+        cover: row.get(4)?,
+        watched_at: row.get(5)?,
     })
 }
 
 pub fn list(conn: &Connection) -> AppResult<Vec<HistoryRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT site_id, room_id, title, user_name, watched_at
+            "SELECT site_id, room_id, title, user_name, cover, watched_at
              FROM history
              ORDER BY watched_at DESC
              LIMIT ?1",
@@ -48,7 +53,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<HistoryRecord>> {
 pub fn list_for_site(conn: &Connection, site_id: &str) -> AppResult<Vec<HistoryRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT site_id, room_id, title, user_name, watched_at
+            "SELECT site_id, room_id, title, user_name, cover, watched_at
              FROM history
              WHERE site_id = ?1
              ORDER BY watched_at DESC
@@ -66,20 +71,40 @@ pub fn list_for_site(conn: &Connection, site_id: &str) -> AppResult<Vec<HistoryR
     Ok(out)
 }
 
+/// Best-effort room title from local watch history. Returns `None` when the
+/// room was never recorded, so callers can fall back to showing the room id.
+pub fn title_for_room(
+    conn: &Connection,
+    site_id: &str,
+    room_id: &str,
+) -> AppResult<Option<String>> {
+    conn.query_row(
+        "SELECT title FROM history WHERE site_id = ?1 AND room_id = ?2",
+        params![site_id, room_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(map_db_err)
+}
+
 /// Replace row for (site_id, room_id) and keep the latest `watched_at`.
 pub fn upsert(conn: &Connection, record: HistoryRecord) -> AppResult<()> {
     conn.execute(
-        "INSERT INTO history (site_id, room_id, title, user_name, watched_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO history (site_id, room_id, title, user_name, cover, watched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(site_id, room_id) DO UPDATE SET
            title = excluded.title,
            user_name = excluded.user_name,
+           -- A revisit whose detail payload carried no cover must not erase the
+           -- artwork an earlier visit already recorded.
+           cover = CASE WHEN excluded.cover = '' THEN history.cover ELSE excluded.cover END,
            watched_at = MAX(history.watched_at, excluded.watched_at)",
         params![
             record.site_id,
             record.room_id,
             record.title,
             record.user_name,
+            record.cover,
             record.watched_at,
         ],
     )
@@ -119,6 +144,7 @@ mod tests {
                 room_id: "1".into(),
                 title: "t1".into(),
                 user_name: "u1".into(),
+                cover: String::new(),
                 watched_at: 10,
             },
         )
@@ -130,6 +156,7 @@ mod tests {
                 room_id: "2".into(),
                 title: "t2".into(),
                 user_name: "u2".into(),
+                cover: String::new(),
                 watched_at: 20,
             },
         )
@@ -148,6 +175,7 @@ mod tests {
                 room_id: "2".into(),
                 title: "t2-old".into(),
                 user_name: "u2".into(),
+                cover: String::new(),
                 watched_at: 5,
             },
         )
@@ -175,6 +203,7 @@ mod tests {
                 room_id: "huya-room".into(),
                 title: "huya".into(),
                 user_name: "huya-user".into(),
+                cover: String::new(),
                 watched_at: 1,
             },
         )
@@ -188,6 +217,7 @@ mod tests {
                     room_id: format!("bilibili-{index}"),
                     title: format!("title-{index}"),
                     user_name: "bilibili-user".into(),
+                    cover: String::new(),
                     watched_at: index + 10,
                 },
             )
@@ -201,6 +231,30 @@ mod tests {
         let huya_rows = list_for_site(&conn, "huya").unwrap();
         assert_eq!(huya_rows.len(), 1);
         assert_eq!(huya_rows[0].room_id, "huya-room");
+    }
+
+    #[test]
+    fn revisit_without_a_cover_keeps_the_recorded_artwork() {
+        let conn = open_in_memory().unwrap();
+        let mut record = HistoryRecord {
+            site_id: "bilibili".into(),
+            room_id: "1".into(),
+            title: "t1".into(),
+            user_name: "u1".into(),
+            cover: "https://example.com/a.jpg".into(),
+            watched_at: 10,
+        };
+        upsert(&conn, record.clone()).unwrap();
+
+        record.cover = String::new();
+        record.watched_at = 20;
+        upsert(&conn, record.clone()).unwrap();
+        assert_eq!(list(&conn).unwrap()[0].cover, "https://example.com/a.jpg");
+
+        record.cover = "https://example.com/b.jpg".into();
+        record.watched_at = 30;
+        upsert(&conn, record).unwrap();
+        assert_eq!(list(&conn).unwrap()[0].cover, "https://example.com/b.jpg");
     }
 
     #[test]
@@ -218,6 +272,7 @@ mod tests {
                     room_id: room_id.into(),
                     title: room_id.into(),
                     user_name: site_id.into(),
+                    cover: String::new(),
                     watched_at,
                 },
             )

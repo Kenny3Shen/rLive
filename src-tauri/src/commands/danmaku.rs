@@ -3,7 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::account;
 use crate::danmaku;
-use crate::db::danmaku_send_history;
+use crate::db::{danmaku_send_history, history};
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::sites;
@@ -120,13 +120,35 @@ fn validate_and_reserve_huya_send(
 /// becomes reusable history. History is convenience data, so a local database
 /// failure must never turn an already accepted platform write into a false
 /// failure in the UI.
-fn record_successful_danmaku_send(state: &AppState, site_id: SiteId, content: &str) {
+///
+/// `room_title` is best-effort: the send commands only resolve room metadata
+/// when the platform already required it, so an empty title simply renders the
+/// room id on the history screen rather than costing an extra request.
+fn record_successful_danmaku_send(
+    state: &AppState,
+    site_id: SiteId,
+    content: &str,
+    room_id: &str,
+    room_title: &str,
+) {
     let sent_at = chrono::Utc::now().timestamp_millis();
     let result = state
         .db
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
-        .and_then(|conn| danmaku_send_history::record(&conn, site_id.as_str(), content, sent_at));
+        .and_then(|conn| {
+            // Sending happens inside a room the user already opened, so watch
+            // history is a free local source for the title when the platform's
+            // send path never needed to fetch room detail.
+            let title = if room_title.is_empty() {
+                history::title_for_room(&conn, site_id.as_str(), room_id)
+                    .unwrap_or_default()
+                    .unwrap_or_default()
+            } else {
+                room_title.to_owned()
+            };
+            danmaku_send_history::record(&conn, site_id.as_str(), content, room_id, &title, sent_at)
+        });
     if let Err(error) = result {
         // Do not include the outgoing content in logs. It can be personal,
         // while the app's release log is intentionally failure-only.
@@ -304,7 +326,7 @@ pub async fn bilibili_danmaku_send(
     // following for both proxied and direct requests.
     let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
     danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
-    record_successful_danmaku_send(state.inner(), SiteId::Bilibili, &message);
+    record_successful_danmaku_send(state.inner(), SiteId::Bilibili, &message, &room_id, "");
     Ok(())
 }
 
@@ -383,7 +405,7 @@ pub async fn douyu_danmaku_send(
             },
         )?;
     danmaku::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
-    record_successful_danmaku_send(state.inner(), SiteId::Douyu, &message);
+    record_successful_danmaku_send(state.inner(), SiteId::Douyu, &message, &room_id, "");
     Ok(())
 }
 
@@ -459,7 +481,13 @@ pub async fn huya_danmaku_send(
     let (_room_id, message) =
         validate_and_reserve_huya_send(&state.huya_send_limiter, &room_id, &message)?;
     danmaku::huya::send_chat(&cookie, args, &message).await?;
-    record_successful_danmaku_send(state.inner(), SiteId::Huya, &message);
+    record_successful_danmaku_send(
+        state.inner(),
+        SiteId::Huya,
+        &message,
+        &room_id,
+        &detail.title,
+    );
     Ok(())
 }
 
