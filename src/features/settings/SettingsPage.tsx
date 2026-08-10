@@ -46,6 +46,7 @@ import type { AsrProvider, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
+import { PagePan } from "@/shared/motion/PagePan";
 import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
@@ -1191,6 +1192,19 @@ function settingsCategoryFromSearch(value: string | null): SettingsCategory | nu
     : null;
 }
 
+export function settingsPageMotion(section: string | null): {
+  category: SettingsCategory | null;
+  key: string;
+  direction: 1 | -1;
+} {
+  const category = settingsCategoryFromSearch(section);
+  return {
+    category,
+    key: category ? `settings:${category}` : "settings:overview",
+    direction: category ? 1 : -1,
+  };
+}
+
 const settingsCategoryGroups: {
   label: string;
   values: SettingsCategory[];
@@ -1407,7 +1421,11 @@ export function SettingsPage() {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const mobileClient = isMobileClient();
-  const category = settingsCategoryFromSearch(searchParams.get(SETTINGS_SECTION_PARAM));
+  const {
+    category,
+    key: settingsMotionKey,
+    direction: settingsMotionDirection,
+  } = settingsPageMotion(searchParams.get(SETTINGS_SECTION_PARAM));
 
   function setCategory(next: SettingsCategory | null, replace = false) {
     const nextParams = new URLSearchParams(searchParams);
@@ -1778,40 +1796,47 @@ export function SettingsPage() {
   return (
     <div ref={motionRootRef} className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col">
       <SettingsSearchContext.Provider value={normalizedSearchQuery}>
-        {category && categoryMetadata ? (
-          <div className="flex min-h-full flex-col gap-5">
-            <div
-              data-settings-intro
-              className="flex items-center gap-3 border-b border-border-subtle pb-4"
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-lg"
-                className="-ml-2"
-                aria-label="返回设置首页"
-                onClick={returnToOverview}
+        <PagePan
+          panKey={settingsMotionKey}
+          direction={settingsMotionDirection}
+          className="min-h-full"
+          contentClassName="min-h-full overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y"
+        >
+          {category && categoryMetadata ? (
+            <div className="flex min-h-full flex-col gap-5">
+              <div
+                data-settings-intro
+                className="flex items-center gap-3 border-b border-border-subtle pb-4"
               >
-                <ArrowLeft aria-hidden />
-              </Button>
-              <div className="min-w-0 flex-1">
-                <h1 className="truncate text-xl font-semibold text-foreground">
-                  {categoryMetadata.label}
-                </h1>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-lg"
+                  className="-ml-2"
+                  aria-label="返回设置首页"
+                  onClick={returnToOverview}
+                >
+                  <ArrowLeft aria-hidden />
+                </Button>
+                <div className="min-w-0 flex-1">
+                  <h1 className="truncate text-xl font-semibold text-foreground">
+                    {categoryMetadata.label}
+                  </h1>
+                </div>
               </div>
+              <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
             </div>
-            <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
-          </div>
-        ) : (
-          <SettingsCategoryOverview
-            query={searchQuery}
-            onQueryChange={setSearchQuery}
-            onOpen={(value) => {
-              setSearchQuery("");
-              setCategory(value);
-            }}
-          />
-        )}
+          ) : (
+            <SettingsCategoryOverview
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              onOpen={(value) => {
+                setSearchQuery("");
+                setCategory(value);
+              }}
+            />
+          )}
+        </PagePan>
       </SettingsSearchContext.Provider>
     </div>
   );
