@@ -423,7 +423,6 @@ export function PlayerPane({
     aspectRatio: player.aspectRatio,
   });
   const changePlayerVolume = player.changeVolume;
-  const toggleAndroidMediaMute = androidPlayerControls.toggleMediaMute;
   const togglePlayerMute = player.toggleMute;
   const togglePlayerPictureInPicture = player.togglePictureInPicture;
   const togglePlayerFullscreen = player.toggleFullscreen;
@@ -462,12 +461,8 @@ export function PlayerPane({
     translationTo: asrTranslationTo,
   });
   const handleToggleMute = useCallback(() => {
-    if (androidClient) {
-      toggleAndroidMediaMute();
-      return;
-    }
     togglePlayerMute();
-  }, [androidClient, toggleAndroidMediaMute, togglePlayerMute]);
+  }, [togglePlayerMute]);
   const handleToggleAudioOnly = useCallback(() => {
     const nextAudioOnly = !audioOnly;
     if (nextAudioOnly && player.pictureInPictureActive) {
@@ -480,16 +475,12 @@ export function PlayerPane({
     () => void togglePlayerPictureInPicture(),
     [togglePlayerPictureInPicture],
   );
-  // Android routes loudness through STREAM_MUSIC. Use native state whenever the
-  // bridge is supported, even before the first getState resolves, so UI and
-  // gestures never fall back to the HTML <video> volume on a phone.
+  // Brightness is the only control the native bridge owns. Volume stays on the
+  // web player so a room gesture never touches the device-wide media stream.
   const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
   const nativePlayerControlState = nativePlayerControlsActive ? androidPlayerControls.state : null;
-  const playerControlVolume = nativePlayerControlState?.mediaVolume ?? player.volume;
-  const playerControlMuted =
-    nativePlayerControlState?.mediaVolume !== undefined
-      ? nativePlayerControlState.mediaVolume <= 0
-      : player.muted;
+  const playerControlVolume = player.volume;
+  const playerControlMuted = player.muted;
   const mobileRoomActions = useMemo<readonly PlayerMobileRoomAction[]>(() => {
     const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
     const danmakuControl = danmakuControlPresentation(osdOn);
@@ -588,16 +579,6 @@ export function PlayerPane({
   useEffect(() => {
     setSidePanelOpen(sidePanelStartsOpen(compactLandscapeViewport));
   }, [compactLandscapeViewport]);
-
-  // Simple Live keeps the player element at full level on mobile and only
-  // adjusts the system media stream. Without this, Android would stack a
-  // reduced <video>.volume on top of STREAM_MUSIC and make system volume
-  // gestures feel broken.
-  useEffect(() => {
-    if (!androidClient) return;
-    if (player.volume === 100 && !player.muted) return;
-    changePlayerVolume(100);
-  }, [androidClient, changePlayerVolume, player.muted, player.volume]);
 
   useEffect(() => {
     if (!mobileDrawerOpen) return;
@@ -872,17 +853,15 @@ export function PlayerPane({
       }
 
       const kind = playerEdgeGestureForStart(event.clientX, stageBounds.left, stageBounds.width);
-      const native = nativePlayerControlsActive;
+      // Only brightness has a native path; volume is web-player-only everywhere.
+      const native = kind === "brightness" && nativePlayerControlsActive;
       let startValue: number;
       if (kind === "brightness") {
         startValue = native
           ? (nativePlayerControlState?.brightness ?? playerBrightnessRef.current)
           : playerBrightnessRef.current;
-      } else if (native) {
-        // Prefer the last known system volume; never seed from <video>.volume
-        // (forced to 100% on Android) or a first swipe jumps to full loudness.
-        startValue = nativePlayerControlState?.mediaVolume ?? 50;
       } else {
+        // Volume always reads back from the web player, on mobile too.
         startValue = player.muted || player.volume === 0 ? 0 : player.volume;
       }
       playerEdgeGestureRef.current = {
@@ -955,11 +934,7 @@ export function PlayerPane({
             setClampedPlayerBrightness(nextValue);
           }
         } else {
-          if (gesture.native) {
-            androidPlayerControls.setMediaVolume(nextValue);
-          } else {
-            changePlayerVolume(nextValue);
-          }
+          changePlayerVolume(nextValue);
         }
         showPlayerEdgeGestureFeedback(gesture.kind, nextValue);
       }
@@ -1516,13 +1491,6 @@ export function PlayerPane({
               onRefresh={onRefresh}
               onTogglePause={() => player.togglePause()}
               onVolume={(value) => {
-                // Android always targets STREAM_MUSIC. Falling back to the
-                // HTML element would only dim the WebView relative to the
-                // system volume the user already expects from live apps.
-                if (androidClient) {
-                  androidPlayerControls.setMediaVolume(value);
-                  return;
-                }
                 player.changeVolume(value);
               }}
               onToggleMute={handleToggleMute}
