@@ -220,6 +220,7 @@ export type WebPlayerApi = {
   paused: boolean;
   volume: number;
   muted: boolean;
+  mediaAvailable: boolean;
   running: boolean;
   pictureInPictureSupported: boolean;
   pictureInPictureActive: boolean;
@@ -242,10 +243,19 @@ export type WebPlayerApi = {
   setAudio: (volume: number, muted: boolean) => void;
   toggleMute: () => void;
   togglePictureInPicture: () => Promise<void>;
+  exitPictureInPicture: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
   /** Leave fullscreen without toggling back in; safe to call when windowed. */
   exitFullscreen: () => Promise<void>;
 };
+
+export type MediaLifecycleProfile = Readonly<{
+  retainSourceDuringGap: boolean;
+  resetAudioOnSessionChange: boolean;
+  softSwitch: "settings" | "disabled";
+  telemetry: boolean;
+  flvOptions(mobileClient: boolean): Record<string, unknown>;
+}>;
 
 function clampWebPlayerVolume(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -306,16 +316,12 @@ export function shouldEscalateNonTwitchHlsFatal(input: {
   return input.now - input.firstFailureAt >= BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS;
 }
 
-const TWITCH_COMMERCIAL_RETRY_DELAY_MS = 8_000;
-
-export type HlsFatalRecoveryAction =
-  | { type: "restart" }
-  | { type: "refresh_play_url"; retryAfterMs: number };
+export type HlsFatalRecoveryAction = { type: "restart" } | { type: "recovery_exhausted" };
 
 /**
  * hls.js has already attempted its built-in recovery before the player error
- * reaches this boundary. Retry once, then ask Twitch for a fresh signed URL
- * instead of repeatedly loading an expired URL forever.
+ * reaches this boundary. Retry once, then report that transport recovery is
+ * exhausted so the playback session can choose the next domain action.
  */
 export function nextHlsFatalRecoveryAction(
   failureCount: number,
@@ -325,13 +331,10 @@ export function nextHlsFatalRecoveryAction(
   // A 401/403 on a Twitch media playlist is normally a short-lived signed
   // URL expiring. Replaying against the same URL only repeats the failure.
   if (authorizationFailed && !commercialBreak) {
-    return { type: "refresh_play_url", retryAfterMs: 0 };
+    return { type: "recovery_exhausted" };
   }
   if (failureCount <= 1) return { type: "restart" };
-  return {
-    type: "refresh_play_url",
-    retryAfterMs: commercialBreak ? TWITCH_COMMERCIAL_RETRY_DELAY_MS : 0,
-  };
+  return { type: "recovery_exhausted" };
 }
 
 /**
@@ -443,6 +446,42 @@ export function liveFlvPlaybackOptions(mobileClient: boolean): Record<string, un
   };
 }
 
+export function iptvFlvPlaybackOptions(): Record<string, unknown> {
+  return {
+    mediaDataSource: {
+      type: "flv",
+      isLive: true,
+      hasAudio: true,
+      hasVideo: true,
+    },
+    mpegtsConfig: {
+      enableWorker: false,
+      enableStashBuffer: true,
+      stashInitialSize: 384,
+      liveBufferLatencyChasing: true,
+      liveBufferLatencyMaxLatency: 3,
+      liveBufferLatencyMinRemain: 0.5,
+      autoCleanupSourceBuffer: true,
+    },
+  };
+}
+
+export const LIVE_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
+  retainSourceDuringGap: true,
+  resetAudioOnSessionChange: true,
+  softSwitch: "settings",
+  telemetry: true,
+  flvOptions: liveFlvPlaybackOptions,
+};
+
+export const IPTV_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
+  retainSourceDuringGap: false,
+  resetAudioOnSessionChange: false,
+  softSwitch: "disabled",
+  telemetry: false,
+  flvOptions: () => iptvFlvPlaybackOptions(),
+};
+
 export function shouldUsePlaybackSoftSwitch(
   configured: boolean,
   playbackKind: XgPlaybackKind | null,
@@ -523,7 +562,7 @@ function createPlayerInstanceId(): string {
  * tick, then starts a fresh proxy URL with cache-bust. Avoids black screen from
  * reused MediaSource / expired CDN URL / half-destroyed xgplayer instance.
  */
-export function useWebPlayer(opts: {
+export type MediaLifecycleOptions = {
   playUrl: PlayUrl | null;
   siteId?: SiteId;
   quality?: string | null;
@@ -538,10 +577,19 @@ export function useWebPlayer(opts: {
    * alone; pass false for the secondaries. Defaults to true.
    */
   fullscreenOwner?: boolean;
-  reloadToken?: number;
+  /** Semantic rebuild key; changing it recreates the transport for the same source. */
+  reloadToken?: number | string;
   onMediaFailure?: (event: PlayerEvent) => void;
+  onReady?: () => void;
+  onWaiting?: () => void;
+  onPause?: () => void;
   onPlaying?: () => void;
-}): WebPlayerApi {
+  profile: MediaLifecycleProfile;
+};
+
+export type WebPlayerOptions = Omit<MediaLifecycleOptions, "profile">;
+
+export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const {
     playUrl,
     siteId,
@@ -552,7 +600,11 @@ export function useWebPlayer(opts: {
     fullscreenOwner = true,
     reloadToken = 0,
     onMediaFailure,
+    onReady,
+    onWaiting,
+    onPause,
     onPlaying,
+    profile,
   } = opts;
   const initialAudio = normalizeWebPlayerAudio(initialVolume, initialMuted);
   const softSwitchConfigured = useSettingsStore((state) => state.playbackSoftSwitchEnabled);
@@ -581,6 +633,7 @@ export function useWebPlayer(opts: {
   const [volume, setVolume] = useState(initialAudio.volume);
   const [muted, setMuted] = useState(initialAudio.muted);
   const [prevVolume, setPrevVolume] = useState(initialAudio.previousVolume);
+  const [mediaAvailable, setMediaAvailable] = useState(false);
   const [running, setRunning] = useState(false);
   const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
   const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
@@ -608,16 +661,29 @@ export function useWebPlayer(opts: {
   useEffect(() => {
     if (previousSessionKeyRef.current === sessionKey) return;
     previousSessionKeyRef.current = sessionKey;
+    if (!profile.resetAudioOnSessionChange) return;
     volumeRef.current = initialAudio.volume;
     mutedRef.current = initialAudio.muted;
     setVolume(initialAudio.volume);
     setMuted(initialAudio.muted);
     setPrevVolume(initialAudio.previousVolume);
-  }, [initialAudio.muted, initialAudio.previousVolume, initialAudio.volume, sessionKey]);
+  }, [
+    initialAudio.muted,
+    initialAudio.previousVolume,
+    initialAudio.volume,
+    profile.resetAudioOnSessionChange,
+    sessionKey,
+  ]);
 
   const onMediaFailureRef = useRef(onMediaFailure);
+  const onReadyRef = useRef(onReady);
+  const onWaitingRef = useRef(onWaiting);
+  const onPauseRef = useRef(onPause);
   const onPlayingRef = useRef(onPlaying);
   onMediaFailureRef.current = onMediaFailure;
+  onReadyRef.current = onReady;
+  onWaitingRef.current = onWaiting;
+  onPauseRef.current = onPause;
   onPlayingRef.current = onPlaying;
 
   const destroyPlayer = useCallback(() => {
@@ -662,6 +728,7 @@ export function useWebPlayer(opts: {
     activePlaybackKindRef.current = null;
     softSwitchInFlightRef.current = null;
     telemetrySessionRef.current = null;
+    setMediaAvailable(false);
     setRunning(false);
   }, []);
 
@@ -689,19 +756,25 @@ export function useWebPlayer(opts: {
       sourceKey: playbackSourceKey,
       source: playbackSource,
     };
+  } else if (!profile.retainSourceDuringGap) {
+    retainedPlaybackSourceRef.current = null;
   }
   // During a quality query the controller can briefly have no URL. Keep the
   // active source alive so soft switching does not introduce a black frame
   // while the replacement metadata is loading.
   const effectivePlaybackSource =
-    playbackSource ?? retainedPlaybackSourceRef.current?.source ?? null;
+    playbackSource ??
+    (profile.retainSourceDuringGap ? retainedPlaybackSourceRef.current?.source : null) ??
+    null;
   const effectivePlaybackSourceKey =
-    playbackSourceKey || retainedPlaybackSourceRef.current?.sourceKey || "";
+    playbackSourceKey ||
+    (profile.retainSourceDuringGap ? retainedPlaybackSourceRef.current?.sourceKey : "") ||
+    "";
   const effectivePlaybackKind = effectivePlaybackSource
     ? webPlaybackKind(effectivePlaybackSource)
     : null;
   const softSwitchEnabled = shouldUsePlaybackSoftSwitch(
-    softSwitchConfigured,
+    profile.softSwitch === "settings" && softSwitchConfigured,
     effectivePlaybackKind,
   );
   const effectivePlaybackSourceRef = useRef<PlayUrl | null>(effectivePlaybackSource);
@@ -807,14 +880,16 @@ export function useWebPlayer(opts: {
           if (!selectedSource) {
             throw new Error("播放源已失效");
           }
-          telemetrySessionRef.current = createPlaybackTelemetrySession({
-            sessionId: proxySessionId,
-            siteId: siteId ?? null,
-            sourceId: playbackSourceId(selectedSource, 0),
-            protocol: playbackProtocol(selectedSource),
-            quality: qualityRef.current,
-            switchMode: "hard",
-          });
+          telemetrySessionRef.current = profile.telemetry
+            ? createPlaybackTelemetrySession({
+                sessionId: proxySessionId,
+                siteId: siteId ?? null,
+                sourceId: playbackSourceId(selectedSource, 0),
+                protocol: playbackProtocol(selectedSource),
+                quality: qualityRef.current,
+                switchMode: "hard",
+              })
+            : null;
 
           // 3) Fresh proxy (new port) + cache-bust query so the browser never
           // reuses a closed keep-alive to the previous listener.
@@ -881,7 +956,7 @@ export function useWebPlayer(opts: {
                 fragLoadingMaxRetry: 3,
               },
             },
-            flv: liveFlvPlaybackOptions(mobileClient),
+            flv: profile.flvOptions(mobileClient),
             mpegts: {
               mediaDataSource: {
                 type: "mpegts",
@@ -904,6 +979,7 @@ export function useWebPlayer(opts: {
           // Register ownership before autoplay: play() can remain pending until
           // the first live segment, while route cleanup must stay immediate.
           playerRef.current = player;
+          setMediaAvailable(true);
           activeSourceKeyRef.current = sourceKey;
           setActiveSourceKey(sourceKey);
           activePlaybackKindRef.current = playbackKind;
@@ -925,7 +1001,7 @@ export function useWebPlayer(opts: {
                 generation: gen,
                 kind: "eof",
                 message: "直播流已结束",
-                refreshPlayUrl: playbackKind === "flv",
+                protocol: playbackKind,
               });
             });
           }
@@ -943,6 +1019,7 @@ export function useWebPlayer(opts: {
                 generation: gen,
                 kind: "error",
                 message,
+                protocol: playbackKind,
               });
             };
             player.on("error", reportPlayerError);
@@ -959,11 +1036,11 @@ export function useWebPlayer(opts: {
               hlsFatalFailureCount = 0;
               firstHlsFatalFailureAt = null;
             });
-            const reportHlsFailure = (cause: unknown, refreshPlayUrl = false) => {
+            const reportHlsFailure = (cause: unknown, recoveryExhausted = false) => {
               if (!isCurrentPlayer()) return;
               const message = xgPlayerErrorMessage(cause, "HLS 连接中断");
               setRunning(false);
-              if (refreshPlayUrl) {
+              if (recoveryExhausted) {
                 playerRef.current = null;
                 try {
                   player.destroy();
@@ -979,7 +1056,8 @@ export function useWebPlayer(opts: {
                 generation: gen,
                 kind: "error",
                 message,
-                refreshPlayUrl,
+                protocol: "hls",
+                recoveryExhausted,
               });
             };
             player.on("HLS_ERROR", (cause) => {
@@ -1043,6 +1121,7 @@ export function useWebPlayer(opts: {
                 generation: gen,
                 kind: "error",
                 message: "当前 Twitch 清晰度无法解码",
+                protocol: "hls",
                 decodeError: true,
               });
             }
@@ -1088,8 +1167,8 @@ export function useWebPlayer(opts: {
               }
 
               const message = commercialBreak
-                ? "Twitch 正在播放广告，广告结束后将自动恢复"
-                : `${errorMessage}，正在更新播放地址…`;
+                ? "Twitch 正在播放广告"
+                : `${errorMessage}，HLS 内部恢复已耗尽`;
               activeVideo.removeEventListener("error", onNativeMediaError);
               playerRef.current = null;
               try {
@@ -1104,8 +1183,10 @@ export function useWebPlayer(opts: {
                 generation: gen,
                 kind: "error",
                 message,
-                refreshPlayUrl: true,
-                retryAfterMs: action.retryAfterMs,
+                protocol: "hls",
+                httpStatus: responseStatus,
+                recoveryExhausted: true,
+                commercialBreak,
               });
             }
             player.on("HLS_ERROR", (cause) => {
@@ -1169,6 +1250,7 @@ export function useWebPlayer(opts: {
             generation: gen,
             kind: "error",
             message: msg,
+            protocol: playbackKind,
           });
         }
       })
@@ -1183,7 +1265,7 @@ export function useWebPlayer(opts: {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [hardStreamKey, reloadToken, destroyPlayer, mobileClient, siteId]);
+  }, [hardStreamKey, reloadToken, destroyPlayer, mobileClient, profile, siteId]);
 
   // Same-protocol source changes can retain the media element and MSE state.
   // Live CDN timestamp continuity is not uniform, so any setup/switch failure
@@ -1243,14 +1325,16 @@ export function useWebPlayer(opts: {
             return;
           }
           const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
-          telemetrySessionRef.current = createPlaybackTelemetrySession({
-            sessionId: `${proxySessionId}:soft:${sequence}`,
-            siteId: siteId ?? null,
-            sourceId: playbackSourceId(targetSource, 0),
-            protocol: playbackProtocol(targetSource),
-            quality: qualityRef.current,
-            switchMode: "soft",
-          });
+          telemetrySessionRef.current = profile.telemetry
+            ? createPlaybackTelemetrySession({
+                sessionId: `${proxySessionId}:soft:${sequence}`,
+                siteId: siteId ?? null,
+                sourceId: playbackSourceId(targetSource, 0),
+                protocol: playbackProtocol(targetSource),
+                quality: qualityRef.current,
+                switchMode: "soft",
+              })
+            : null;
           await switchXgPlaybackSource(player, localSource, targetKind);
           if (
             cancelled ||
@@ -1283,6 +1367,7 @@ export function useWebPlayer(opts: {
     effectivePlaybackKind,
     effectivePlaybackSource,
     effectivePlaybackSourceKey,
+    profile,
     siteId,
     softSwitchEnabled,
   ]);
@@ -1306,6 +1391,10 @@ export function useWebPlayer(opts: {
     const playbackKind = effectivePlaybackKind;
 
     const pictureInPictureDocument = getPictureInPictureDocument();
+    const isCurrentMedia = () =>
+      videoRef.current === video &&
+      genRef.current === generation &&
+      playerRef.current?.media === video;
     const syncPictureInPicture = () => {
       // A leave event from the <video> that was just replaced must never
       // overwrite the state of the new MediaSource node.
@@ -1319,9 +1408,11 @@ export function useWebPlayer(opts: {
     };
 
     const onPlay = () => {
+      if (!isCurrentMedia()) return;
       setPaused(false);
     };
     const onPlaying = () => {
+      if (!isCurrentMedia()) return;
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
@@ -1330,13 +1421,18 @@ export function useWebPlayer(opts: {
       onPlayingRef.current?.();
     };
     const onPause = () => {
+      if (!isCurrentMedia()) return;
       setPaused(true);
+      onPauseRef.current?.();
     };
     const onWaiting = () => {
+      if (!isCurrentMedia()) return;
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryWaiting(telemetry, performance.now());
+      onWaitingRef.current?.();
     };
     const onStalled = () => {
+      if (!isCurrentMedia()) return;
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryStalled(telemetry, performance.now());
     };
@@ -1347,22 +1443,21 @@ export function useWebPlayer(opts: {
       if (videoRef.current !== video) return;
       setAspectRatio(videoAspectRatio(video));
     };
+    const onCanPlay = () => {
+      if (!isCurrentMedia()) return;
+      setPaused(video.paused);
+      onReadyRef.current?.();
+    };
     const onEnterPictureInPicture = () => syncPictureInPicture();
     const onLeavePictureInPicture = () => syncPictureInPicture();
     const onEnded = () => {
-      if (
-        videoRef.current !== video ||
-        genRef.current !== generation ||
-        playerRef.current?.media !== video
-      ) {
-        return;
-      }
+      if (!isCurrentMedia()) return;
       onMediaFailureRef.current?.({
         epoch: generation,
         generation,
         kind: "eof",
         message: "直播流已结束",
-        refreshPlayUrl: playbackKind === "flv",
+        protocol: playbackKind ?? undefined,
       });
     };
     syncPictureInPicture();
@@ -1371,6 +1466,7 @@ export function useWebPlayer(opts: {
     video.addEventListener("playing", onPlaying);
     video.addEventListener("pause", onPause);
     video.addEventListener("waiting", onWaiting);
+    video.addEventListener("canplay", onCanPlay);
     video.addEventListener("stalled", onStalled);
     video.addEventListener("ended", onEnded);
     video.addEventListener("loadedmetadata", syncAspectRatio);
@@ -1382,6 +1478,7 @@ export function useWebPlayer(opts: {
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("canplay", onCanPlay);
       video.removeEventListener("stalled", onStalled);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("loadedmetadata", syncAspectRatio);
@@ -1392,6 +1489,7 @@ export function useWebPlayer(opts: {
   }, [effectivePlaybackKind, mediaKey, streamKey]);
 
   useEffect(() => {
+    if (!profile.telemetry) return;
     if (typeof PerformanceObserver === "undefined") return;
     if (!PerformanceObserver.supportedEntryTypes?.includes("longtask")) return;
     let observer: PerformanceObserver | null = null;
@@ -1409,9 +1507,10 @@ export function useWebPlayer(opts: {
       return;
     }
     return () => observer?.disconnect();
-  }, []);
+  }, [profile.telemetry]);
 
   useEffect(() => {
+    if (!profile.telemetry) return;
     let cancelled = false;
     let sampling = false;
     const sample = async () => {
@@ -1442,7 +1541,7 @@ export function useWebPlayer(opts: {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [hardStreamKey, mediaKey]);
+  }, [hardStreamKey, mediaKey, profile.telemetry]);
 
   useEffect(() => {
     if (!ownsFullscreen) {
@@ -1581,6 +1680,10 @@ export function useWebPlayer(opts: {
     }
   }, []);
 
+  const exitPictureInPicture = useCallback(async () => {
+    await exitPictureInPictureForVideo(getPictureInPictureDocument(), videoRef.current);
+  }, []);
+
   const toggleFullscreen = useCallback(async () => {
     if (!ownsFullscreen) return;
     // Desktop Tauri uses a real OS-window fullscreen. This covers the taskbar
@@ -1666,6 +1769,7 @@ export function useWebPlayer(opts: {
     paused,
     volume,
     muted,
+    mediaAvailable,
     running,
     pictureInPictureSupported,
     pictureInPictureActive,
@@ -1683,7 +1787,12 @@ export function useWebPlayer(opts: {
     setAudio,
     toggleMute,
     togglePictureInPicture,
+    exitPictureInPicture,
     toggleFullscreen,
     exitFullscreen,
   };
+}
+
+export function useWebPlayer(opts: WebPlayerOptions): WebPlayerApi {
+  return useMediaLifecycle({ ...opts, profile: LIVE_MEDIA_LIFECYCLE_PROFILE });
 }

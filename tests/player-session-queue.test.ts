@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
 import {
   BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS,
+  IPTV_MEDIA_LIFECYCLE_PROFILE,
+  LIVE_MEDIA_LIFECYCLE_PROFILE,
   canSoftSwitchPlaybackSource,
   hasStartedPlayback,
   hlsResponseStatus,
   isHlsStream,
   isTwitchCommercialBreak,
+  iptvFlvPlaybackOptions,
   liveFlvPlaybackOptions,
   nextHlsFatalRecoveryAction,
   playUrlKey,
@@ -149,6 +152,28 @@ describe("player session queue", () => {
         autoCleanupMaxBackwardDuration: 20,
       },
     });
+    expect(iptvFlvPlaybackOptions()).toMatchObject({
+      mediaDataSource: { type: "flv", isLive: true },
+      mpegtsConfig: {
+        liveBufferLatencyMinRemain: 0.5,
+        liveBufferLatencyMaxLatency: 3,
+      },
+    });
+  });
+
+  test("keeps live and IPTV lifecycle differences in explicit profiles", () => {
+    expect(LIVE_MEDIA_LIFECYCLE_PROFILE).toMatchObject({
+      retainSourceDuringGap: true,
+      resetAudioOnSessionChange: true,
+      softSwitch: "settings",
+      telemetry: true,
+    });
+    expect(IPTV_MEDIA_LIFECYCLE_PROFILE).toMatchObject({
+      retainSourceDuringGap: false,
+      resetAudioOnSessionChange: false,
+      softSwitch: "disabled",
+      telemetry: false,
+    });
   });
 
   test("routes every HLS site through the same hls.js playback kind", () => {
@@ -198,13 +223,11 @@ describe("player session queue", () => {
   test("renews a Twitch HLS URL after one exhausted in-place recovery", () => {
     expect(nextHlsFatalRecoveryAction(1)).toEqual({ type: "restart" });
     expect(nextHlsFatalRecoveryAction(2)).toEqual({
-      type: "refresh_play_url",
-      retryAfterMs: 0,
+      type: "recovery_exhausted",
     });
     expect(hlsResponseStatus({ response: { code: 403 } })).toBe(403);
     expect(nextHlsFatalRecoveryAction(1, false, true)).toEqual({
-      type: "refresh_play_url",
-      retryAfterMs: 0,
+      type: "recovery_exhausted",
     });
   });
 
@@ -215,8 +238,7 @@ describe("player session queue", () => {
       }),
     ).toBe(true);
     expect(nextHlsFatalRecoveryAction(2, true)).toEqual({
-      type: "refresh_play_url",
-      retryAfterMs: 8_000,
+      type: "recovery_exhausted",
     });
     expect(isTwitchCommercialBreak("normal HLS manifest error")).toBe(false);
   });
