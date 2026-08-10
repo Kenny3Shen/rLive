@@ -184,13 +184,27 @@ class MainActivity : TauriActivity() {
    * screen; drilled-down routes (category children, search, rooms, IPTV
    * player) keep the normal history rewind.
    */
-  private val homeTabPaths = setOf("/", "/follow", "/category", "/history", "/iptv", "/settings")
-
   private fun isHomeTabPath(url: String?): Boolean {
     if (url.isNullOrEmpty()) {
       return true
     }
-    val path = Uri.parse(url).path
-    return path == null || path in homeTabPaths
+    val uri = Uri.parse(url)
+    return isHomeTabRoute(
+      path = uri.path,
+      settingsSection = uri.getQueryParameter("section"),
+    )
   }
+}
+
+private val homeTabPaths = setOf("/", "/follow", "/category", "/history", "/iptv", "/settings")
+
+/** Settings sections share one path, but remain drilled-down navigation states. */
+internal fun isHomeTabRoute(path: String?, settingsSection: String?): Boolean {
+  if (path == null) {
+    return true
+  }
+  if (path == "/settings" && !settingsSection.isNullOrBlank()) {
+    return false
+  }
+  return path in homeTabPaths
 }
