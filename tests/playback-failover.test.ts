@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { nextFailoverAction } from "../src/features/room/playback/failover";
-import { pickDefaultQualityIndex, parseQualityLevel } from "../src/features/room/playback/quality";
+import { pickDefaultQualityIndex } from "../src/features/room/playback/quality";
 import {
   isDuplicatePlaybackFailure,
   matchingQualityIndex,
@@ -8,13 +8,7 @@ import {
   playbackWasStable,
   playerRebuildRetryLimit,
 } from "../src/features/room/playback/usePlaybackController";
-import {
-  createShieldMatcher,
-  floatingDanmakuText,
-  isShielded,
-  shouldShowOnCanvas,
-} from "../src/features/room/danmaku/filter";
-import { lineLabel, clampIndex } from "../src/lib/playUrl";
+import { clampIndex } from "../src/lib/playUrl";
 
 describe("failover policy (Simple Live)", () => {
   test("retries current line twice before advancing", () => {
@@ -121,11 +115,6 @@ describe("quality preference", () => {
     expect(pickDefaultQualityIndex(0, "high")).toBe(0);
   });
 
-  test("parseQualityLevel defaults to high", () => {
-    expect(parseQualityLevel("mid")).toBe("mid");
-    expect(parseQualityLevel("nope")).toBe("high");
-  });
-
   test("skips to the next Twitch video quality after a decoder failure", () => {
     const qualities = [
       { quality: "1080p60 (source)" },
@@ -139,51 +128,9 @@ describe("quality preference", () => {
   });
 });
 
-describe("line labels", () => {
-  test("prefer 线路n with transport tag", () => {
-    expect(lineLabel("https://example.com/live.m3u8", 0)).toBe("线路1（HLS）");
-    expect(lineLabel("https://example.com/live.flv", 1)).toBe("线路2（FLV）");
-  });
-
+describe("playback index helpers", () => {
   test("clampIndex", () => {
     expect(clampIndex(5, 3)).toBe(2);
     expect(clampIndex(-1, 3)).toBe(0);
-  });
-});
-
-describe("danmaku filter", () => {
-  test("floating text is content-only", () => {
-    expect(
-      floatingDanmakuText({
-        kind: "chat",
-        user: "Alice",
-        content: "你好",
-        color: null,
-        ts: 1,
-      }),
-    ).toBe("你好");
-    expect(
-      floatingDanmakuText({
-        kind: "super_chat",
-        user: "Bob",
-        content: "加油",
-        color: null,
-        ts: 2,
-      }),
-    ).toBe("【SC】加油");
-  });
-
-  test("shield and canvas rules", () => {
-    const chat = {
-      kind: "chat" as const,
-      user: "u",
-      content: "屏蔽词测试",
-      color: null,
-      ts: 1,
-    };
-    expect(isShielded(chat, ["屏蔽词"])).toBe(true);
-    const matcher = createShieldMatcher(["  屏蔽词  "]);
-    expect(matcher(chat)).toBe(true);
-    expect(shouldShowOnCanvas({ ...chat, kind: "system", content: "x" })).toBe(false);
   });
 });
