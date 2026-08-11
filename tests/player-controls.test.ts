@@ -31,6 +31,10 @@ import {
   sidePanelStartsOpen,
 } from "../src/features/room/PlayerPane";
 import {
+  playerHudOnlineLabel,
+  showPlayerFullscreenHud,
+} from "../src/features/room/PlayerFullscreenHud";
+import {
   clampAndroidPlayerControl,
   getAndroidPlayerControls,
   resetAndroidBrightness,
@@ -314,6 +318,40 @@ describe("mobile room side tabs", () => {
     expect(nextRoomSideTabForSwipe("chat", -72, 72)).toBeNull();
     expect(nextRoomSideTabForSwipe("chat", 80, 4)).toBeNull();
     expect(nextRoomSideTabForSwipe("settings", -80, 4)).toBeNull();
+  });
+});
+
+describe("fullscreen top HUD", () => {
+  test("draws only in fullscreen", () => {
+    expect(
+      showPlayerFullscreenHud({ fullscreen: false, hasRoomIdentity: true, hasActions: true }),
+    ).toBe(false);
+    expect(
+      showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: true, hasActions: false }),
+    ).toBe(true);
+  });
+
+  test("keeps an action-only HUD, so the overflow menu survives an unnamed room", () => {
+    expect(
+      showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: false, hasActions: true }),
+    ).toBe(true);
+  });
+
+  test("skips the scrim band when there is neither identity nor actions", () => {
+    // Otherwise a detail payload without a title paints an empty gradient strip
+    // across the top of the picture.
+    expect(
+      showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: false, hasActions: false }),
+    ).toBe(false);
+  });
+
+  test("formats a reported viewer count and hides an unreported one", () => {
+    expect(playerHudOnlineLabel(0)).toBe("0");
+    expect(playerHudOnlineLabel(1_200)).toBe("1.2k");
+    expect(playerHudOnlineLabel(12_345)).toBe("1.2万");
+    expect(playerHudOnlineLabel(undefined)).toBeNull();
+    expect(playerHudOnlineLabel(Number.NaN)).toBeNull();
+    expect(playerHudOnlineLabel(-1)).toBeNull();
   });
 });
 

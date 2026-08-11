@@ -570,6 +570,33 @@ html.overlay-window #root {
   }
 }
 
+/* Fullscreen top chrome (room title, host, overflow menu). Same material and
+ * reasoning as the bottom scrim above, mirrored to fade down from the top edge:
+ * `inset: 0 0 auto` anchors the layer to the top of the bar's box and the extra
+ * height lets the ramp resolve below the last line of text. Slightly lighter
+ * stops than the bottom bar because this layer only carries text, so it needs
+ * less cover than a row of glyph-sized controls. */
+@utility player-scrim-overlay-top {
+  position: relative;
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 200%;
+    z-index: -1;
+    pointer-events: none;
+    background-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0 / 0.72) 0%,
+      rgb(0 0 0 / 0.52) 34%,
+      rgb(0 0 0 / 0.24) 66%,
+      rgb(0 0 0 / 0) 100%
+    );
+  }
+}
+
 /* Mobile WebViews share the GPU with video decode, Canvas danmaku and image-list
    scrolling. Use a static translucent fill instead of sampling and blurring a
    changing backdrop on every frame. Desktop keeps the full glass treatment. */
