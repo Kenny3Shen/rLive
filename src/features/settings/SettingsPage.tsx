@@ -1376,7 +1376,7 @@ function SettingsCategoryOverview({
       </div>
 
       {visibleGroups.length > 0 ? (
-        <div className="flex max-w-4xl flex-col gap-4">
+        <div className="flex max-w-4xl flex-col gap-4 px-px">
           {visibleGroups.map((group) => (
             <section key={group.label} aria-label={group.label}>
               <Card className="overflow-hidden rounded-xl bg-card/85 p-0 ring-border-subtle shadow-sm shadow-black/10">
