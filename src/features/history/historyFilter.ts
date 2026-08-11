@@ -1,5 +1,9 @@
+import { isSiteId } from "@/shared/siteId";
+import type { HistoryPlatformFilter } from "./historyGrouping";
+
 export const HISTORY_QUERY_PARAM = "q";
 export const HISTORY_DATE_PARAM = "date";
+export const HISTORY_PLATFORM_PARAM = "platform";
 
 /** Relative presets plus `YYYY-MM-DD` for one specific local day. */
 export type HistoryDateFilter = "all" | "today" | "yesterday" | "7d" | "30d" | (string & {});
@@ -44,6 +48,13 @@ export function historyDateFilterLabel(filter: HistoryDateFilter): string {
     default:
       return isSpecificDayFilter(filter) ? filter.replaceAll("-", "/") : "全部时间";
   }
+}
+
+/** A platform filter the address bar can carry; stale values show all sites. */
+export function historyPlatformFilterFromSearch(
+  value: string | null | undefined,
+): HistoryPlatformFilter {
+  return value && isSiteId(value) ? value : "all";
 }
 
 function startOfLocalDay(timestamp: number): number {
@@ -135,5 +146,15 @@ export function withHistoryDateFilter(
   const next = new URLSearchParams(current);
   if (filter === "all") next.delete(HISTORY_DATE_PARAM);
   else next.set(HISTORY_DATE_PARAM, filter);
+  return next;
+}
+
+export function withHistoryPlatformFilter(
+  current: URLSearchParams,
+  filter: HistoryPlatformFilter,
+): URLSearchParams {
+  const next = new URLSearchParams(current);
+  if (filter === "all") next.delete(HISTORY_PLATFORM_PARAM);
+  else next.set(HISTORY_PLATFORM_PARAM, filter);
   return next;
 }

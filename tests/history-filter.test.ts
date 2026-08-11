@@ -3,8 +3,10 @@ import {
   filterHistoryItems,
   historyDateFilterFromSearch,
   historyDateWindow,
+  historyPlatformFilterFromSearch,
   matchesHistoryKeyword,
   withHistoryDateFilter,
+  withHistoryPlatformFilter,
   withHistorySearch,
 } from "../src/features/history/historyFilter";
 import { historyViewFromSearch, withHistoryView } from "../src/features/history/historyRoute";
@@ -65,19 +67,30 @@ describe("history search", () => {
 });
 
 describe("history route parameters", () => {
-  test("writes compact search, date, and view parameters without dropping unrelated state", () => {
+  test("writes compact search, date, platform, and view parameters without dropping unrelated state", () => {
     const initial = new URLSearchParams("source=sidebar");
     const next = withHistoryView(
-      withHistoryDateFilter(withHistorySearch(initial, "  主播名  "), "30d"),
+      withHistoryPlatformFilter(
+        withHistoryDateFilter(withHistorySearch(initial, "  主播名  "), "30d"),
+        "douyu",
+      ),
       "danmaku",
     );
     expect(next.toString()).toBe(
-      "source=sidebar&q=%E4%B8%BB%E6%92%AD%E5%90%8D&date=30d&view=danmaku",
+      "source=sidebar&q=%E4%B8%BB%E6%92%AD%E5%90%8D&date=30d&platform=douyu&view=danmaku",
     );
     expect(historyViewFromSearch(next.get("view"))).toBe("danmaku");
+    expect(historyPlatformFilterFromSearch(next.get("platform"))).toBe("douyu");
 
     expect(withHistoryView(next, "watch").has("view")).toBe(false);
     expect(withHistoryDateFilter(next, "all").has("date")).toBe(false);
+    expect(withHistoryPlatformFilter(next, "all").has("platform")).toBe(false);
     expect(withHistorySearch(next, "").has("q")).toBe(false);
+  });
+
+  test("falls back to all platforms for absent or stale route values", () => {
+    expect(historyPlatformFilterFromSearch(null)).toBe("all");
+    expect(historyPlatformFilterFromSearch("all")).toBe("all");
+    expect(historyPlatformFilterFromSearch("unknown-site")).toBe("all");
   });
 });

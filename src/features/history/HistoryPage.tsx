@@ -19,17 +19,25 @@ import { RefreshFab } from "@/shared/components/RefreshFab";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
+import { enabledSiteIds } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import type { DanmakuSendHistoryItem, HistoryItem, SiteId } from "@/shared/types/live";
-import { groupHistoryByDate, type HistoryDateGroup } from "./historyGrouping";
+import {
+  groupHistoryByDate,
+  type HistoryDateGroup,
+  type HistoryPlatformFilter,
+} from "./historyGrouping";
 import {
   HISTORY_DATE_PARAM,
+  HISTORY_PLATFORM_PARAM,
   HISTORY_QUERY_PARAM,
   type HistoryDateFilter,
   filterHistoryItems,
   historyDateFilterFromSearch,
+  historyPlatformFilterFromSearch,
   withHistoryDateFilter,
+  withHistoryPlatformFilter,
   withHistorySearch,
 } from "./historyFilter";
 import {
@@ -39,7 +47,11 @@ import {
   historyViewFromSearch,
   withHistoryView,
 } from "./historyRoute";
-import { HistoryDateFilterControl, HistorySearchInput } from "./HistoryHeaderControls";
+import {
+  HistoryDateFilterControl,
+  HistoryPlatformFilterControl,
+  HistorySearchInput,
+} from "./HistoryHeaderControls";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -300,7 +312,7 @@ function HistoryFilteredEmpty({ onReset }: { onReset: () => void }) {
           <SearchX aria-hidden />
         </EmptyMedia>
         <EmptyTitle>没有匹配的记录</EmptyTitle>
-        <EmptyDescription>换个关键词，或放宽日期范围试试。</EmptyDescription>
+        <EmptyDescription>调整平台、关键词或日期范围后重试。</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <Button variant="outline" size="sm" onClick={onReset}>
@@ -317,18 +329,36 @@ export function HistoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [clearOpen, setClearOpen] = useState(false);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+  const visibleSiteIds = useMemo(() => enabledSiteIds(disabledSiteIds), [disabledSiteIds]);
   const activeView = historyViewFromSearch(searchParams.get(HISTORY_VIEW_PARAM));
   const keyword = searchParams.get(HISTORY_QUERY_PARAM) ?? "";
   const dateFilter = historyDateFilterFromSearch(searchParams.get(HISTORY_DATE_PARAM));
-  const hasFilters = keyword.trim().length > 0 || dateFilter !== "all";
+  const requestedPlatform = historyPlatformFilterFromSearch(
+    searchParams.get(HISTORY_PLATFORM_PARAM),
+  );
+  const platformFilter =
+    requestedPlatform === "all" || visibleSiteIds.includes(requestedPlatform)
+      ? requestedPlatform
+      : "all";
+  const hasFilters = keyword.trim().length > 0 || dateFilter !== "all" || platformFilter !== "all";
 
-  const watchHistoryQuery = useQuery({
+  const allWatchHistoryQuery = useQuery({
     queryKey: ["history", "all"],
     queryFn: () =>
       invokeCmd<HistoryItem[]>("history_list", {
         siteId: null,
       }),
   });
+  const platformWatchHistoryQuery = useQuery({
+    queryKey: ["history", "platform", platformFilter],
+    queryFn: () =>
+      invokeCmd<HistoryItem[]>("history_list", {
+        siteId: platformFilter === "all" ? null : platformFilter,
+      }),
+    enabled: platformFilter !== "all",
+  });
+  const watchHistoryQuery =
+    platformFilter === "all" ? allWatchHistoryQuery : platformWatchHistoryQuery;
 
   const danmakuSendHistoryQuery = useQuery({
     queryKey: ["danmaku-send-history", "all"],
@@ -381,10 +411,10 @@ export function HistoryPage() {
           getSearchFields: (item) => [item.title, item.user_name, item.room_id],
         }),
         (item) => item.watched_at,
-        "all",
+        platformFilter,
         disabledSiteIds,
       ),
-    [dateFilter, disabledSiteIds, keyword, watchHistoryQuery.data],
+    [dateFilter, disabledSiteIds, keyword, platformFilter, watchHistoryQuery.data],
   );
   const danmakuGroups = useMemo(
     () =>
@@ -401,15 +431,15 @@ export function HistoryPage() {
           ],
         }),
         (item) => item.sent_at,
-        "all",
+        platformFilter,
         disabledSiteIds,
       ),
-    [danmakuSendHistoryQuery.data, dateFilter, disabledSiteIds, keyword],
+    [danmakuSendHistoryQuery.data, dateFilter, disabledSiteIds, keyword, platformFilter],
   );
 
   const canClear =
     activeView === "watch"
-      ? (watchHistoryQuery.data?.length ?? 0) > 0
+      ? (allWatchHistoryQuery.data?.length ?? 0) > 0
       : (danmakuSendHistoryQuery.data?.length ?? 0) > 0;
   const clearPending =
     activeView === "watch"
@@ -443,10 +473,22 @@ export function HistoryPage() {
     [setSearchParams],
   );
 
+  const handlePlatformFilterChange = useCallback(
+    (next: HistoryPlatformFilter) => {
+      setSearchParams((current) => withHistoryPlatformFilter(current, next), { replace: true });
+    },
+    [setSearchParams],
+  );
+
   const resetFilters = useCallback(() => {
-    setSearchParams((current) => withHistoryDateFilter(withHistorySearch(current, ""), "all"), {
-      replace: true,
-    });
+    setSearchParams(
+      (current) =>
+        withHistoryPlatformFilter(
+          withHistoryDateFilter(withHistorySearch(current, ""), "all"),
+          "all",
+        ),
+      { replace: true },
+    );
   }, [setSearchParams]);
 
   const resetActiveClearMutation = useCallback(() => {
@@ -520,6 +562,11 @@ export function HistoryPage() {
               keyword={keyword}
               onChange={handleSearchChange}
               className="min-w-0 flex-1"
+            />
+            <HistoryPlatformFilterControl
+              value={platformFilter}
+              sites={visibleSiteIds}
+              onValueChange={handlePlatformFilterChange}
             />
             <HistoryDateFilterControl value={dateFilter} onValueChange={handleDateFilterChange} />
           </div>
