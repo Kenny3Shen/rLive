@@ -6,13 +6,8 @@ import { useGSAP } from "@gsap/react";
 import {
   DndContext,
   DragOverlay,
-  KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
   useDraggable,
   useDroppable,
-  useSensor,
-  useSensors,
   type DragEndEvent,
   type DragStartEvent,
   type Announcements,
@@ -100,6 +95,7 @@ import { iptvFavoriteSourceId, playlistSourceFromRoute } from "@/features/iptv/p
 import { FollowGroupManagerDialog } from "./FollowGroupManagerDialog";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
 import { IptvFollowView } from "./IptvFollowView";
+import { useFollowDndSensors } from "./useFollowDndSensors";
 import {
   FOLLOW_IPTV_GROUP_PARAM,
   FOLLOW_IPTV_SOURCE_PARAM,
@@ -254,7 +250,7 @@ function FollowCard({
             ref={setActivatorNodeRef}
             type="button"
             className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-            aria-label={`打开${user.user_name}的直播间，拖动卡片可移动分组`}
+            aria-label={`打开${user.user_name}的直播间，可拖动卡片或通过菜单移动分组`}
             onPointerEnter={() => preloadRouteModule(roomPath)}
             onFocus={() => preloadRouteModule(roomPath)}
             onClick={() => onNavigate(roomPath)}
@@ -415,11 +411,7 @@ export function FollowPage() {
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const iptvCustomM3uUrl = useSettingsStore((state) => state.iptvCustomM3uUrl);
   const scopedPlatform = usePlatformScope();
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
-    useSensor(KeyboardSensor),
-  );
+  const sensors = useFollowDndSensors();
 
   useFollowStatusRefresh(activeView === "live");
   const platformFilter =

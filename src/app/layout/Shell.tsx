@@ -357,17 +357,12 @@ export function Shell() {
   });
   const platformSwipe = isLiveFollow ? followPlatformSwipe : sitePlatformSwipe;
   const contentSwipe = isIptv ? iptvSourceSwipe : platformSwipe;
-  const contentSwipePageRef = contentSwipe.pageRef;
-  const bindContentSwipePageRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (!node) return;
-      contentSwipePageRef.current = node;
-      return () => {
-        if (contentSwipePageRef.current === node) contentSwipePageRef.current = null;
-      };
-    },
-    [contentSwipePageRef],
-  );
+  // `PagePan` is keyed on the pathname, so returning to a swipeable route hands
+  // the hook a brand new track. Binding through `bindPage` is what re-parks it
+  // at the active platform's offset — assigning `pageRef` directly would leave
+  // the fresh track untransformed and push every panel past the first off
+  // screen, taking the page's scroller with it.
+  const bindContentSwipePageRef = contentSwipe.bindPage;
 
   // A manually opened URL may name a platform that has since been disabled.
   // Keep the page usable on its first render, then remove that stale filter
