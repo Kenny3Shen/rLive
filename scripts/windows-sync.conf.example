@@ -1,0 +1,3 @@
+# Windows path that receives the WSL source mirror.
+# Copy this file to scripts/windows-sync.conf and adjust the value locally.
+WINDOWS_SYNC_PATH='D:\dev\rLive'

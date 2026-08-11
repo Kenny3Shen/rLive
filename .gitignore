@@ -46,6 +46,7 @@ lerna-debug.log*
 
 # Local release artifacts and signing material
 /release-assets/
+/scripts/windows-sync.conf
 *.jks
 *.keystore
 *.p12

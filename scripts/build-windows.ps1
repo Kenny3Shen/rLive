@@ -1,4 +1,5 @@
-# Build rLive on Windows. Default project: D:\dev\rLive
+# Build rLive on Windows. Run this script from the project directory, or pass
+# -ProjectRoot explicitly.
 #
 # Prerequisites:
 #   - VS Build Tools: D:\VS\BuildTools (vcvars64.bat)
@@ -7,11 +8,11 @@
 #   - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x runtime and a compatible NVIDIA driver
 #
 # Usage:
-#   cd D:\dev\rLive
+#   cd <rLive project directory>
 #   .\scripts\build-windows.ps1
 
 param(
-    [string]$ProjectRoot = "D:\dev\rLive"
+    [string]$ProjectRoot = (Get-Location).Path
 )
 
 $ErrorActionPreference = "Stop"
