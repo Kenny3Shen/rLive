@@ -38,6 +38,8 @@ export function pageScrollKey(entryKey: string, group: string, subgroup?: string
 
 export function rememberPageScroll(key: string, top: number): void {
   if (!Number.isFinite(top)) return;
+  // A restore's own clamped writes must not be mistaken for the user scrolling.
+  if (restore?.key === key) return;
   // Re-inserting moves the key to the end of the iteration order, so eviction
   // drops the surface the user has been away from longest rather than one they
   // are still moving between.
@@ -54,8 +56,36 @@ export function recallPageScroll(key: string): number {
   return positions.get(key) ?? 0;
 }
 
+/**
+ * Surface whose stored position is currently being replayed, if any.
+ *
+ * A restore assigns `scrollTop` repeatedly while the list grows into its full
+ * height, and every assignment the browser clamps still fires a `scroll` event.
+ * Left unguarded, the scroll listener records those clamped values and erases
+ * the position the restore is in the middle of replaying — the goal is captured
+ * before the first write, so the scroller recovers, but the memory does not, and
+ * a second visit to the same entry starts from the truncated offset.
+ */
+let restore: { readonly key: string } | null = null;
+
+/**
+ * Ignore `rememberPageScroll` for `key` until the returned handle is released.
+ *
+ * Identity is the token, not the key: a restore that has already been superseded
+ * must not release the one that replaced it, even though both name the same
+ * surface. Releasing a stale handle is therefore a no-op.
+ */
+export function beginPageScrollRestore(key: string): () => void {
+  const token = { key };
+  restore = token;
+  return () => {
+    if (restore === token) restore = null;
+  };
+}
+
 export function clearPageScrollMemory(): void {
   positions.clear();
+  restore = null;
 }
 
 export type PageScrollTransition = {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  HORIZONTAL_SWIPE_COMMIT_PROGRESS,
   HORIZONTAL_SWIPE_SETTLE_MAX_MS,
   HORIZONTAL_SWIPE_SETTLE_MIN_MS,
   horizontalSwipeCommitOffset,
@@ -55,12 +56,19 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeVelocity([], 32)).toBe(0);
   });
 
-  test("commits on progress past the midpoint or on a flick in the same direction", () => {
+  test("commits on progress past the threshold or on a flick in the same direction", () => {
     const width = 360;
+    const threshold = width * HORIZONTAL_SWIPE_COMMIT_PROGRESS;
     // Positional: only a drag that carried the page far enough pages on release.
-    expect(horizontalSwipeShouldCommit(-160, 0, width)).toBe(true);
-    expect(horizontalSwipeShouldCommit(-100, 0, width)).toBe(false);
-    expect(horizontalSwipeShouldCommit(160, 0, width)).toBe(true);
+    // Stated against the constant so the boundary cases stay meaningful if the
+    // threshold is retuned, rather than silently becoming both-sides-of-it.
+    expect(horizontalSwipeShouldCommit(-(threshold + 20), 0, width)).toBe(true);
+    expect(horizontalSwipeShouldCommit(-threshold, 0, width)).toBe(true);
+    expect(horizontalSwipeShouldCommit(-(threshold - 20), 0, width)).toBe(false);
+    expect(horizontalSwipeShouldCommit(threshold + 20, 0, width)).toBe(true);
+    // A third of the surface is a deliberate drag and must page: near the
+    // midpoint it sprang back, which read as the gesture being ignored.
+    expect(horizontalSwipeShouldCommit(-width / 3, 0, width)).toBe(true);
     // A flick pages from a short drag — the old 48px absolute rule could not.
     expect(horizontalSwipeShouldCommit(-24, -0.9, width)).toBe(true);
     expect(horizontalSwipeShouldCommit(24, 0.9, width)).toBe(true);

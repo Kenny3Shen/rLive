@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   PAGE_SCROLL_MEMORY_LIMIT,
+  beginPageScrollRestore,
   clearPageScrollMemory,
   pageScrollKey,
   pageScrollRestoreSettled,
@@ -90,6 +91,54 @@ describe("scroll restore eligibility", () => {
         surfaceKey: pageScrollKey("entry-1", "/|huya|iptv-default", null),
       }),
     ).toBe(false);
+  });
+});
+
+describe("restore suppression", () => {
+  test("ignores the clamped positions a restore's own writes report", () => {
+    rememberPageScroll(HOME, 1240);
+
+    const endRestore = beginPageScrollRestore(HOME);
+    // Each `scrollTop = target` write fires a scroll event; while the list is
+    // still short the browser clamps it, and storing that would erase the goal.
+    rememberPageScroll(HOME, 0);
+    rememberPageScroll(HOME, 380);
+    expect(recallPageScroll(HOME)).toBe(1240);
+
+    endRestore();
+    rememberPageScroll(HOME, 1240);
+    expect(recallPageScroll(HOME)).toBe(1240);
+  });
+
+  test("resumes recording once the restore releases", () => {
+    rememberPageScroll(HOME, 900);
+    beginPageScrollRestore(HOME)();
+    rememberPageScroll(HOME, 120);
+    expect(recallPageScroll(HOME)).toBe(120);
+  });
+
+  test("suppresses only the surface being restored", () => {
+    const other = pageScrollKey("entry-2", "/|huya|iptv-default", null);
+    rememberPageScroll(HOME, 1240);
+
+    const endRestore = beginPageScrollRestore(HOME);
+    rememberPageScroll(other, 640);
+    expect(recallPageScroll(other)).toBe(640);
+    endRestore();
+  });
+
+  test("a superseded restore cannot unlock the one that replaced it", () => {
+    rememberPageScroll(HOME, 1240);
+    const stale = beginPageScrollRestore(HOME);
+    const current = beginPageScrollRestore(HOME);
+
+    stale();
+    rememberPageScroll(HOME, 0);
+    expect(recallPageScroll(HOME)).toBe(1240);
+
+    current();
+    rememberPageScroll(HOME, 200);
+    expect(recallPageScroll(HOME)).toBe(200);
   });
 });
 
