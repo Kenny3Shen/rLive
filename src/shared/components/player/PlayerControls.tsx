@@ -230,11 +230,20 @@ type ControlButtonProps = Omit<
 /**
  * Video chrome reads from further away than in-page buttons, so the glyphs run
  * one small step above the shared button default (size-4).
+ *
+ * These three are exported because the fullscreen top HUD draws its own button
+ * outside this bar; sharing the classes keeps the two chrome layers from
+ * drifting apart in glyph size, hit area or focus treatment.
  */
-const CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-4.5";
+export const PLAYER_CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-4.5";
 /** Player chrome stays compact even when the shared coarse-pointer floor is 44px. */
-const CONTROL_BUTTON_CLASS =
+export const PLAYER_CONTROL_BUTTON_CLASS =
   "size-9 [@media(pointer:coarse)]:size-9! [@media(pointer:coarse)]:min-h-9! [@media(pointer:coarse)]:min-w-9! [@media(pointer:coarse)]:touch-manipulation";
+/** Trim for a chrome button drawn over video: white glyph on a scrim. */
+export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
+  "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-visible:border-white/65 focus-visible:bg-white/16 focus-visible:ring-[2px]! focus-visible:ring-black/55 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]";
+const CONTROL_ICON_CLASS = PLAYER_CONTROL_ICON_CLASS;
+const CONTROL_BUTTON_CLASS = PLAYER_CONTROL_BUTTON_CLASS;
 
 function ControlButton({
   label,
@@ -348,9 +357,7 @@ export function PlayerControls({
     : fullscreen
       ? "退出全屏（F）"
       : "全屏（F）";
-  const overlayButtonClass = overlay
-    ? "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-visible:border-white/65 focus-visible:bg-white/16 focus-visible:ring-[2px]! focus-visible:ring-black/55 drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]"
-    : undefined;
+  const overlayButtonClass = overlay ? PLAYER_OVERLAY_CONTROL_BUTTON_CLASS : undefined;
   // Option rows come from the shared glass module so the player popups, the
   // settings drawer and the room sheet cannot drift apart.
   const overlayStreamSettingsOptionClass = glassOptionClass({ overlay }) || undefined;

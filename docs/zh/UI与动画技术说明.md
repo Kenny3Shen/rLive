@@ -57,6 +57,7 @@
 - `Dialog`、`Drawer` 和其他任务型 Overlay 必须有可访问标题，必要时可使用 `sr-only` 隐藏视觉标题。
 - Card 只用于独立、重复或需要明确边界的内容，不在 Card 中继续嵌套 Card，也不把整段页面当作悬浮 Card。
 - Base UI 通过 `render` 组合自定义 trigger，不使用 Radix 的 `asChild` API。
+- 全屏图层内的 Overlay 必须传 `container`，否则默认 portal 到 `<body>` 会被 top layer 压住。播放器把 `player.stageRef` 传给 popover/drawer/tooltip；`notify` 的视口由 `setToastPortalContainer()` 在全屏期间整体移入 stage，退出后还原。
 
 项目配置位于 `components.json`：当前样式为 `base-nova`，primitive 为 Base UI，Tailwind 为 v4，路径别名为 `@/`。
 

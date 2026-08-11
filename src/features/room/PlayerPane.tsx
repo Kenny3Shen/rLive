@@ -2,6 +2,7 @@ import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import {
   type CSSProperties,
+  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -34,6 +35,11 @@ import { FollowPanel } from "./FollowPanel";
 import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import {
+  PlayerFullscreenHud,
+  showPlayerFullscreenHud,
+  type PlayerHudRoomAction,
+} from "./PlayerFullscreenHud";
+import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   PlayerControls,
@@ -48,6 +54,7 @@ import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { setToastPortalContainer } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import {
@@ -226,7 +233,7 @@ export function nextRoomSideTabForSwipe(
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
-type OverlayInteractionSource = "controls" | "composer";
+type OverlayInteractionSource = "controls" | "composer" | "hud";
 
 function isTouchPointer(pointerType: string): boolean {
   // A few Android WebViews expose an empty pointerType for finger input.
@@ -277,7 +284,7 @@ function isPlayerEdgeGestureIgnoredTarget(target: EventTarget | null): boolean {
     target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   return Boolean(
     element?.closest(
-      '[data-player-controls], button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
+      '[data-player-controls], [data-player-hud], button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
     ),
   );
 }
@@ -313,6 +320,14 @@ type PlayerPaneProps = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
+  roomUserAvatar?: string;
+  roomOnline?: number;
+  /**
+   * Room-level entries for the fullscreen HUD overflow menu (copy link, follow,
+   * multi-room). The app chrome that normally hosts them is covered by the
+   * fullscreen stage, so the page hands them down instead.
+   */
+  fullscreenRoomActions?: readonly PlayerHudRoomAction[];
   /** Publishes portrait-only secondary controls to RoomPage's room-actions menu. */
   onMobileRoomActionsChange?: (actions: readonly PlayerMobileRoomAction[]) => void;
 };
@@ -349,6 +364,9 @@ export function PlayerPane({
   roomId,
   roomTitle,
   roomUserName,
+  roomUserAvatar,
+  roomOnline,
+  fullscreenRoomActions = [],
   onMobileRoomActionsChange,
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
@@ -390,6 +408,8 @@ export function PlayerPane({
   );
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
+  // The fullscreen top HUD is a second chrome layer on the same idle timer.
+  const hudRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
   // Track focus inside the bottom chrome. A clicked button also takes DOM
   // focus, so the idle guard below additionally checks :focus-visible before
@@ -400,6 +420,7 @@ export function PlayerPane({
   const overlayInteractionSourcesRef = useRef<Record<OverlayInteractionSource, boolean>>({
     controls: false,
     composer: false,
+    hud: false,
   });
   const playerBrightnessRef = useRef(100);
   const brightnessShadeRef = useRef<HTMLDivElement | null>(null);
@@ -610,6 +631,11 @@ export function PlayerPane({
     "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl";
   const portraitStackedPlayer =
     inlineCompactSidePanel && sidePanelOpen && player.mode !== "fullscreen";
+  const fullscreenHudVisible = showPlayerFullscreenHud({
+    fullscreen: player.mode === "fullscreen",
+    hasRoomIdentity: Boolean(roomTitle?.trim() || roomUserName?.trim()),
+    hasActions: fullscreenRoomActions.length > 0 || mobileRoomActions.length > 0,
+  });
 
   // Entering short landscape switches to an overlay drawer; rotating back to
   // portrait restores the immediately useful video + danmaku stack.
@@ -635,6 +661,18 @@ export function PlayerPane({
       window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
     };
   }, [mobileDrawerOpen]);
+
+  // Toasts default to a `<body>` portal, which the fullscreen stage covers on
+  // both paths (browser top layer, and the fixed in-page layer used by the
+  // desktop native window). Re-home the viewport for as long as this player
+  // owns the screen so copy/follow feedback stays visible.
+  useEffect(() => {
+    if (player.mode !== "fullscreen") return;
+    const stage = player.stageRef.current;
+    if (!stage) return;
+    setToastPortalContainer(stage);
+    return () => setToastPortalContainer(null);
+  }, [player.mode, player.stageRef]);
 
   // Prefer exiting HTML/WebView fullscreen before room navigation. Native
   // custom-view fullscreen is already handled in MainActivity; this covers
@@ -673,11 +711,15 @@ export function PlayerPane({
     // This small DOM-only state is deliberately isolated to the overlay: CSS
     // still performs the composited fade, while the video, canvas and lists
     // continue their existing work without a React reconciliation.
-    const controls = controlsRef.current;
-    if (!controls) return;
-    controls.dataset.visible = visible ? "true" : "false";
-    controls.setAttribute("aria-hidden", String(!visible));
-    controls.toggleAttribute("inert", !visible);
+    //
+    // Both chrome layers are driven from here so the fullscreen top HUD and the
+    // bottom bar always appear and fade as one surface.
+    for (const layer of [controlsRef.current, hudRef.current]) {
+      if (!layer) continue;
+      layer.dataset.visible = visible ? "true" : "false";
+      layer.setAttribute("aria-hidden", String(!visible));
+      layer.toggleAttribute("inert", !visible);
+    }
   }, []);
 
   const markControlsActivity = useCallback(() => {
@@ -687,10 +729,12 @@ export function PlayerPane({
   const hasKeyboardFocusWithinControls = useCallback(() => {
     if (!controlsFocusWithinRef.current) return false;
     const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement) || !activeElement.matches(":focus-visible")) {
+      return false;
+    }
     return (
-      activeElement instanceof HTMLElement &&
-      controlsRef.current?.contains(activeElement) === true &&
-      activeElement.matches(":focus-visible")
+      controlsRef.current?.contains(activeElement) === true ||
+      hudRef.current?.contains(activeElement) === true
     );
   }, []);
 
@@ -777,7 +821,8 @@ export function PlayerPane({
       overlayInteractionSourcesRef.current[source] = open;
       const hasOpenOverlay =
         overlayInteractionSourcesRef.current.controls ||
-        overlayInteractionSourcesRef.current.composer;
+        overlayInteractionSourcesRef.current.composer ||
+        overlayInteractionSourcesRef.current.hud;
       overlayInteractionOpenRef.current = hasOpenOverlay;
       setOverlayInteractionOpen(hasOpenOverlay);
       if (hasOpenOverlay) holdControlsVisible();
@@ -793,6 +838,44 @@ export function PlayerPane({
   const handleComposerOverlayInteractionChange = useCallback(
     (open: boolean) => handleOverlayInteractionChange("composer", open),
     [handleOverlayInteractionChange],
+  );
+
+  const handleHudOverlayInteractionChange = useCallback(
+    (open: boolean) => handleOverlayInteractionChange("hud", open),
+    [handleOverlayInteractionChange],
+  );
+
+  // Both chrome layers hold themselves visible while pointer or keyboard focus
+  // is inside them, and Tab between them must not restart the idle countdown.
+  const handleChromePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.stopPropagation();
+      holdControlsVisible();
+    },
+    [holdControlsVisible],
+  );
+
+  const handleChromeFocusCapture = useCallback(() => {
+    controlsFocusWithinRef.current = true;
+    holdControlsVisible();
+  }, [holdControlsVisible]);
+
+  const handleChromeBlurCapture = useCallback(
+    (event: ReactFocusEvent<HTMLDivElement>) => {
+      const nextFocused = event.relatedTarget;
+      if (
+        nextFocused instanceof Node &&
+        (controlsRef.current?.contains(nextFocused) === true ||
+          hudRef.current?.contains(nextFocused) === true)
+      ) {
+        controlsFocusWithinRef.current = true;
+        holdControlsVisible();
+        return;
+      }
+      controlsFocusWithinRef.current = false;
+      resumeControlsAutoHide();
+    },
+    [holdControlsVisible, resumeControlsAutoHide],
   );
 
   const selectSideTab = useCallback(
@@ -1241,15 +1324,22 @@ export function PlayerPane({
   }, [nativePlayerControlState]);
 
   const focusFirstControl = useCallback(() => {
-    // A hidden transparent bar must not be in the tab sequence.  After Tab
+    // Hidden transparent chrome must not be in the tab sequence.  After Tab
     // reveals it, explicitly put focus on its first usable control instead of
     // relying on an asynchronous React state update to affect this key's
     // native tab traversal.
+    //
+    // Layers are visited in DOM order, so a fullscreen session enters at the
+    // top HUD and Tab continues naturally down into the bottom bar.
     window.requestAnimationFrame(() => {
-      const target = controlsRef.current?.querySelector<HTMLElement>(
-        'button:not(:disabled), [role="combobox"]:not([aria-disabled="true"])',
-      );
-      target?.focus({ preventScroll: true });
+      for (const layer of [hudRef.current, controlsRef.current]) {
+        const target = layer?.querySelector<HTMLElement>(
+          'button:not(:disabled), [role="combobox"]:not([aria-disabled="true"])',
+        );
+        if (!target) continue;
+        target.focus({ preventScroll: true });
+        return;
+      }
     });
   }, []);
 
@@ -1310,6 +1400,7 @@ export function PlayerPane({
     // fallback so a closing portal can never pin controls for the next room.
     overlayInteractionSourcesRef.current.controls = false;
     overlayInteractionSourcesRef.current.composer = false;
+    overlayInteractionSourcesRef.current.hud = false;
     overlayInteractionOpenRef.current = false;
     controlsFocusWithinRef.current = false;
     setOverlayInteractionOpen(false);
@@ -1559,6 +1650,42 @@ export function PlayerPane({
             </div>
           </div>
 
+          {fullscreenHudVisible && (
+            <div
+              ref={hudRef}
+              data-player-hud
+              data-visible={controlsVisibleRef.current ? "true" : "false"}
+              aria-hidden={!controlsVisibleRef.current}
+              className={cn(
+                // Mirror of the bottom chrome: a fixed-position sibling of the
+                // video surface that floats over the top edge instead of taking
+                // layout height, faded by the same imperative data attribute so
+                // no React reconciliation happens on the idle timer.
+                "absolute inset-x-0 top-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+              )}
+              onPointerEnter={holdControlsVisible}
+              onPointerDown={handleChromePointerDown}
+              onPointerLeave={resumeControlsAutoHide}
+              onFocusCapture={handleChromeFocusCapture}
+              onBlurCapture={handleChromeBlurCapture}
+            >
+              <PlayerFullscreenHud
+                siteId={siteId}
+                roomId={roomId}
+                roomTitle={roomTitle}
+                roomUserName={roomUserName}
+                roomUserAvatar={roomUserAvatar}
+                roomOnline={roomOnline}
+                roomActions={fullscreenRoomActions}
+                playerActions={mobileRoomActions}
+                compact={compactViewport}
+                portalContainer={player.stageRef}
+                onOverlayInteractionChange={handleHudOverlayInteractionChange}
+                onExitFullscreen={player.exitFullscreen}
+              />
+            </div>
+          )}
+
           <div
             ref={controlsRef}
             data-player-controls
@@ -1575,25 +1702,10 @@ export function PlayerPane({
               "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
             )}
             onPointerEnter={holdControlsVisible}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              holdControlsVisible();
-            }}
+            onPointerDown={handleChromePointerDown}
             onPointerLeave={resumeControlsAutoHide}
-            onFocusCapture={() => {
-              controlsFocusWithinRef.current = true;
-              holdControlsVisible();
-            }}
-            onBlurCapture={(event) => {
-              const nextFocused = event.relatedTarget;
-              if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
-                controlsFocusWithinRef.current = true;
-                holdControlsVisible();
-                return;
-              }
-              controlsFocusWithinRef.current = false;
-              resumeControlsAutoHide();
-            }}
+            onFocusCapture={handleChromeFocusCapture}
+            onBlurCapture={handleChromeBlurCapture}
           >
             <PlayerControls
               paused={player.paused}

@@ -1,7 +1,15 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Ellipsis, Link2, PanelsTopLeft, Share2, UserRoundX } from "lucide-react";
+import {
+  ChevronLeft,
+  Ellipsis,
+  Heart,
+  Link2,
+  PanelsTopLeft,
+  Share2,
+  UserRoundX,
+} from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -9,6 +17,7 @@ import { glassSurfaceClass } from "@/shared/components/player/glassSurface";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
+import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
 import { RoomHostInfo } from "./RoomHostInfo";
 import {
   roomBackTargetFromNavigationState,
@@ -173,6 +182,14 @@ export function RoomPage() {
     }
   }
 
+  function requestFollowToggle() {
+    if (isFollowed) {
+      setConfirmUnfollowOpen(true);
+    } else {
+      setFollowGroupOpen(true);
+    }
+  }
+
   function openInMultiRoom() {
     if (!detailQuery.data) return;
     const detail = detailQuery.data;
@@ -235,18 +252,50 @@ export function RoomPage() {
 
   if (!detail) return null;
 
+  // The fullscreen stage covers the app chrome, so the room-level actions that
+  // normally live in the top bar and the bottom action row are republished into
+  // the player's own overflow menu. Follow and multi-room answer through a
+  // dialog or a route change, which only exist outside fullscreen.
+  const fullscreenRoomActions: readonly PlayerHudRoomAction[] = [
+    {
+      id: "copy-room-url",
+      label: "复制链接",
+      icon: Link2,
+      onSelect: () => void copyRoomValue(detail.url || window.location.href, "已复制房间链接"),
+    },
+    {
+      id: "copy-play-url",
+      label: "复制直链",
+      icon: Share2,
+      disabled: !playback.playUrl?.url,
+      onSelect: () => {
+        if (playback.playUrl?.url) void copyRoomValue(playback.playUrl.url, "已复制播放直链");
+      },
+    },
+    {
+      id: "follow",
+      label: isFollowed ? "取消关注" : "关注",
+      icon: Heart,
+      pressed: isFollowed,
+      disabled: followBusy,
+      exitsFullscreen: true,
+      onSelect: requestFollowToggle,
+    },
+    {
+      id: "multi-room",
+      label: "多画面",
+      icon: PanelsTopLeft,
+      exitsFullscreen: true,
+      onSelect: openInMultiRoom,
+    },
+  ];
+
   const sideHeader = (
     <RoomHostInfo
       detail={detail}
       isFollowed={isFollowed}
       followBusy={followBusy}
-      onToggleFollow={() => {
-        if (isFollowed) {
-          setConfirmUnfollowOpen(true);
-        } else {
-          setFollowGroupOpen(true);
-        }
-      }}
+      onToggleFollow={requestFollowToggle}
     />
   );
 
@@ -314,6 +363,9 @@ export function RoomPage() {
           roomId={detail.room_id}
           roomTitle={detail.title}
           roomUserName={detail.user_name}
+          roomUserAvatar={detail.user_avatar}
+          roomOnline={detail.online}
+          fullscreenRoomActions={fullscreenRoomActions}
           onMobileRoomActionsChange={setPlayerMobileActions}
         />
       </div>

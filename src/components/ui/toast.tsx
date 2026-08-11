@@ -1,5 +1,6 @@
 import { Toast as ToastPrimitive } from "@base-ui/react/toast";
 import { CheckCircle2, CircleAlert, Info, X } from "lucide-react";
+import { create } from "zustand";
 
 import { cn } from "@/lib/utils";
 
@@ -10,6 +11,27 @@ export type ToastType = "success" | "error" | "info";
  * initiated from any route, including context menus and portalled controls.
  */
 export const toast = ToastPrimitive.createToastManager();
+
+type ToastPortalStore = {
+  container: HTMLElement | null;
+  setContainer: (container: HTMLElement | null) => void;
+};
+
+/**
+ * A fullscreen surface owns the browser top layer (and outranks the app chrome
+ * even on the desktop native-window path), so the default `<body>` portal is
+ * painted underneath it and command feedback disappears silently. Whichever
+ * surface is currently fullscreen publishes itself here; the viewport follows.
+ */
+const useToastPortalStore = create<ToastPortalStore>((set) => ({
+  container: null,
+  setContainer: (container) => set({ container }),
+}));
+
+/** Route toasts into a fullscreen surface; pass `null` to restore `<body>`. */
+export function setToastPortalContainer(container: HTMLElement | null): void {
+  useToastPortalStore.getState().setContainer(container);
+}
 
 function ToastIcon({ type }: { type?: string }) {
   if (type === "success") return <CheckCircle2 className="size-4 text-success" aria-hidden />;
@@ -46,11 +68,18 @@ function ToastList() {
 }
 
 export function Toaster({ children }: { children: React.ReactNode }) {
+  const container = useToastPortalStore((state) => state.container);
+
   return (
     <ToastPrimitive.Provider toastManager={toast} limit={3} timeout={4_000}>
       {children}
-      <ToastPrimitive.Portal>
-        <ToastPrimitive.Viewport className="pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto flex w-auto max-w-sm flex-col gap-2 outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full">
+      <ToastPrimitive.Portal container={container}>
+        {/* Inside a fullscreen player the bottom edge belongs to the control
+           bar, so lift the stack clear of it instead of stacking on top. */}
+        <ToastPrimitive.Viewport
+          data-fullscreen={container ? "true" : undefined}
+          className="pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto flex w-auto max-w-sm flex-col gap-2 outline-none data-[fullscreen=true]:bottom-24 sm:right-4 sm:left-auto sm:mx-0 sm:w-full"
+        >
           <ToastList />
         </ToastPrimitive.Viewport>
       </ToastPrimitive.Portal>
