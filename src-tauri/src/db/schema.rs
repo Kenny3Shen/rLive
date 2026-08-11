@@ -1,8 +1,15 @@
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::{AppError, AppResult};
+
+pub const HISTORY_RETENTION_LIMIT: i64 = 2_000;
+
+const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
+const DB_JOURNAL_SIZE_LIMIT_BYTES: i64 = 8 * 1_024 * 1_024;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS follows (
@@ -32,12 +39,6 @@ CREATE TABLE IF NOT EXISTS history (
   PRIMARY KEY (site_id, room_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_history_recent
-  ON history (watched_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_history_site_recent
-  ON history (site_id, watched_at DESC);
-
 CREATE TABLE IF NOT EXISTS danmaku_send_history (
   site_id TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -47,9 +48,6 @@ CREATE TABLE IF NOT EXISTS danmaku_send_history (
   sent_at INTEGER NOT NULL,
   PRIMARY KEY (site_id, content)
 );
-
-CREATE INDEX IF NOT EXISTS idx_danmaku_send_history_recent
-  ON danmaku_send_history (site_id, sent_at DESC);
 
 CREATE TABLE IF NOT EXISTS danmaku_favorites (
   site_id TEXT NOT NULL,
@@ -108,9 +106,25 @@ impl Db {
         }
         let conn =
             Connection::open(path).map_err(|e| AppError::new("db_open_error", e.to_string()))?;
+        configure_file_connection(&conn)?;
         migrate(&conn)?;
+        conn.execute_batch("PRAGMA optimize;")
+            .map_err(|e| AppError::new("db_optimize_error", e.to_string()))?;
         Ok(conn)
     }
+}
+
+fn configure_file_connection(conn: &Connection) -> AppResult<()> {
+    conn.busy_timeout(DB_BUSY_TIMEOUT).map_err(map_db_err)?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(map_db_err)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(map_db_err)?;
+    conn.pragma_update(None, "cache_size", -DB_CACHE_SIZE_KIB)
+        .map_err(map_db_err)?;
+    conn.pragma_update(None, "journal_size_limit", DB_JOURNAL_SIZE_LIMIT_BYTES)
+        .map_err(map_db_err)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -195,6 +209,55 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         "TEXT NOT NULL DEFAULT ''",
     )?;
 
+    // The UI exposes only the recent timeline. Keep a larger local reserve for
+    // profile merging while preventing years of unique rooms from growing the
+    // database without bound. The trigger prunes inside the inserting
+    // transaction, and this one-time-compatible delete also bounds upgrades.
+    conn.execute(
+        "DELETE FROM history
+         WHERE rowid IN (
+           SELECT rowid
+           FROM history
+           ORDER BY watched_at DESC
+           LIMIT -1 OFFSET ?1
+         )",
+        [HISTORY_RETENTION_LIMIT],
+    )
+    .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+
+    // Replace the older prefix-only indexes. Including deterministic tie
+    // breakers lets SQLite satisfy the complete ORDER BY without a temp sort.
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_history_recent;
+         DROP INDEX IF EXISTS idx_history_site_recent;
+         DROP INDEX IF EXISTS idx_danmaku_send_history_recent;
+
+         CREATE INDEX IF NOT EXISTS idx_history_recent_order
+           ON history (watched_at DESC, site_id ASC, room_id ASC);
+         CREATE INDEX IF NOT EXISTS idx_history_site_recent_order
+           ON history (site_id ASC, watched_at DESC, room_id ASC);
+         CREATE INDEX IF NOT EXISTS idx_danmaku_send_history_site_recent_order
+           ON danmaku_send_history (site_id ASC, sent_at DESC, content ASC);
+         CREATE INDEX IF NOT EXISTS idx_danmaku_send_history_global_recent_order
+           ON danmaku_send_history (sent_at DESC, site_id ASC, content ASC);",
+    )
+    .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+
+    conn.execute_batch(&format!(
+        "CREATE TRIGGER IF NOT EXISTS history_prune_after_insert
+         AFTER INSERT ON history
+         BEGIN
+           DELETE FROM history
+           WHERE rowid = (
+             SELECT rowid
+             FROM history INDEXED BY idx_history_recent_order
+             ORDER BY watched_at DESC, site_id ASC, room_id ASC
+             LIMIT 1 OFFSET {HISTORY_RETENTION_LIMIT}
+           );
+         END;"
+    ))
+    .map_err(|e| AppError::new("db_migrate_error", e.to_string()))?;
+
     let has_iptv_favorite_group_id = conn
         .query_row(
             "SELECT 1 FROM pragma_table_info('iptv_favorites') WHERE name = ?1 LIMIT 1",
@@ -221,6 +284,7 @@ pub fn map_db_err(err: rusqlite::Error) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn migrate_adds_live_started_at_to_existing_follows_table() {
@@ -332,5 +396,111 @@ mod tests {
             .optional()
             .unwrap();
         assert_eq!(column.as_deref(), Some("favorite_group_id"));
+    }
+
+    #[test]
+    fn file_database_uses_bounded_wal_settings() {
+        let dir = std::env::temp_dir().join(format!("rlive-db-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        {
+            let conn = Db::open(dir.join("rlive.db")).unwrap();
+            let journal_mode: String = conn
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))
+                .unwrap();
+            let synchronous: i64 = conn
+                .pragma_query_value(None, "synchronous", |row| row.get(0))
+                .unwrap();
+            let busy_timeout: i64 = conn
+                .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+                .unwrap();
+            let cache_size: i64 = conn
+                .pragma_query_value(None, "cache_size", |row| row.get(0))
+                .unwrap();
+            let journal_size_limit: i64 = conn
+                .pragma_query_value(None, "journal_size_limit", |row| row.get(0))
+                .unwrap();
+
+            assert_eq!(journal_mode, "wal");
+            assert_eq!(synchronous, 1);
+            assert_eq!(busy_timeout, DB_BUSY_TIMEOUT.as_millis() as i64);
+            assert_eq!(cache_size, -DB_CACHE_SIZE_KIB);
+            assert_eq!(journal_size_limit, DB_JOURNAL_SIZE_LIMIT_BYTES);
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn migration_prunes_legacy_history_and_installs_ordered_indexes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE history (
+               site_id TEXT NOT NULL,
+               room_id TEXT NOT NULL,
+               title TEXT NOT NULL,
+               user_name TEXT NOT NULL,
+               watched_at INTEGER NOT NULL,
+               PRIMARY KEY (site_id, room_id)
+             );
+             WITH RECURSIVE rows(value) AS (
+               VALUES(1)
+               UNION ALL
+               SELECT value + 1 FROM rows WHERE value <= {HISTORY_RETENTION_LIMIT}
+             )
+             INSERT INTO history (site_id, room_id, title, user_name, watched_at)
+             SELECT 'bilibili', printf('room-%05d', value), 'title', 'user', value
+             FROM rows;"
+        ))
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM history", [], |row| row.get(0))
+            .unwrap();
+        let oldest: i64 = conn
+            .query_row("SELECT min(watched_at) FROM history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, HISTORY_RETENTION_LIMIT);
+        assert_eq!(oldest, 2);
+
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index' AND name LIKE 'idx_history_%_order'
+                 ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            indexes,
+            vec!["idx_history_recent_order", "idx_history_site_recent_order"]
+        );
+
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT site_id, room_id, title, user_name, cover, watched_at
+                 FROM history
+                 ORDER BY watched_at DESC, site_id ASC, room_id ASC
+                 LIMIT 200",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_history_recent_order"))
+        );
+        assert!(
+            plan.iter()
+                .all(|detail| !detail.contains("USE TEMP B-TREE"))
+        );
     }
 }

@@ -41,7 +41,7 @@ pub fn list(conn: &Connection, site_id: &str) -> AppResult<Vec<DanmakuSendHistor
             "SELECT site_id, content, room_id, room_title, room_user_name, sent_at
              FROM danmaku_send_history
              WHERE site_id = ?1
-             ORDER BY sent_at DESC, rowid DESC
+             ORDER BY sent_at DESC, content ASC
              LIMIT ?2",
         )
         .map_err(map_db_err)?;
@@ -64,7 +64,7 @@ pub fn list_all(conn: &Connection) -> AppResult<Vec<DanmakuSendHistoryRecord>> {
         .prepare(
             "SELECT site_id, content, room_id, room_title, room_user_name, sent_at
              FROM danmaku_send_history
-             ORDER BY sent_at DESC, rowid DESC",
+             ORDER BY sent_at DESC, site_id ASC, content ASC",
         )
         .map_err(map_db_err)?;
     let rows = stmt.query_map([], map_record).map_err(map_db_err)?;
@@ -127,7 +127,7 @@ pub fn record(
            SELECT rowid
            FROM danmaku_send_history
            WHERE site_id = ?1
-           ORDER BY sent_at DESC, rowid DESC
+           ORDER BY sent_at DESC, content ASC
            LIMIT -1 OFFSET ?2
          )",
         params![site_id, MAX_RECORDS_PER_SITE],

@@ -35,7 +35,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<HistoryRecord>> {
         .prepare(
             "SELECT site_id, room_id, title, user_name, cover, watched_at
              FROM history
-             ORDER BY watched_at DESC
+             ORDER BY watched_at DESC, site_id ASC, room_id ASC
              LIMIT ?1",
         )
         .map_err(map_db_err)?;
@@ -56,7 +56,7 @@ pub fn list_for_site(conn: &Connection, site_id: &str) -> AppResult<Vec<HistoryR
             "SELECT site_id, room_id, title, user_name, cover, watched_at
              FROM history
              WHERE site_id = ?1
-             ORDER BY watched_at DESC
+             ORDER BY watched_at DESC, room_id ASC
              LIMIT ?2",
         )
         .map_err(map_db_err)?;
@@ -133,7 +133,7 @@ pub fn remove(conn: &Connection, site_id: &str, room_id: &str) -> AppResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::open_in_memory;
+    use crate::db::schema::{HISTORY_RETENTION_LIMIT, open_in_memory};
 
     #[test]
     fn upsert_list_and_clear_history() {
@@ -290,6 +290,44 @@ mod tests {
                 .map(|record| record.room_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["newest", "middle", "oldest"]
+        );
+    }
+
+    #[test]
+    fn new_rooms_keep_history_within_the_storage_limit() {
+        let conn = open_in_memory().unwrap();
+        for index in 0..=HISTORY_RETENTION_LIMIT {
+            upsert(
+                &conn,
+                HistoryRecord {
+                    site_id: "bilibili".into(),
+                    room_id: format!("room-{index:05}"),
+                    title: format!("title-{index}"),
+                    user_name: "user".into(),
+                    cover: String::new(),
+                    watched_at: index,
+                },
+            )
+            .unwrap();
+        }
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, HISTORY_RETENTION_LIMIT);
+        assert!(
+            metadata_for_room(&conn, "bilibili", "room-00000")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            metadata_for_room(
+                &conn,
+                "bilibili",
+                &format!("room-{HISTORY_RETENTION_LIMIT:05}")
+            )
+            .unwrap()
+            .is_some()
         );
     }
 }
