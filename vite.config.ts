@@ -17,7 +17,7 @@ export default defineConfig(({ command }) => ({
   logLevel: command === "build" ? "warn" : "info",
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src"),
+      "@": path.resolve(import.meta.dirname, "src"),
     },
   },
   // Vite 8 + Rolldown: keep dependency prebundle tight for Tauri desktop.

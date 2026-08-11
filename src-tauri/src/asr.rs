@@ -15,9 +15,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use libloading::Library;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::sync::OnceLock;
 
 use serde::Serialize;
@@ -46,9 +46,9 @@ const HOTWORDS_SCORE: f32 = 2.0;
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
 const ASR_PROVIDER_CUDA: &str = "cuda";
-// The v1.13.4 Windows CUDA archive used by this project contains SASS for
-// Pascal (sm_61) and newer NVIDIA architectures.
-#[cfg(any(windows, test))]
+// The v1.13.4 CUDA archives used by this project support Pascal (sm_61) and
+// newer NVIDIA architectures.
+#[cfg(any(windows, target_os = "linux", test))]
 const CUDA_MIN_COMPUTE_CAPABILITY: (i32, i32) = (6, 1);
 
 const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
@@ -137,7 +137,7 @@ impl AsrModelStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRuntimeOptions {
-    /// `auto` selects CUDA on Windows when the staged runtime and NVIDIA
+    /// `auto` selects CUDA on Windows/Linux when the staged runtime and NVIDIA
     /// driver are loadable; otherwise it uses CPU.
     pub provider: String,
     pub vad_enabled: bool,
@@ -1413,7 +1413,7 @@ fn asr_provider_fallback_message(preference: &str) -> Option<String> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn cuda_provider_fallback_message() -> String {
     if let Some((major, minor)) = cuda_compute_capability() {
         if !cuda_compute_capability_supported(major, minor) {
@@ -1425,17 +1425,17 @@ fn cuda_provider_fallback_message() -> String {
     "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn cuda_provider_fallback_message() -> String {
     "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn cuda_compute_capability_supported(major: i32, minor: i32) -> bool {
     (major, minor) >= CUDA_MIN_COMPUTE_CAPABILITY
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn cuda_compute_capability() -> Option<(i32, i32)> {
     static CAPABILITY: OnceLock<Option<(i32, i32)>> = OnceLock::new();
 
@@ -1444,7 +1444,12 @@ fn cuda_compute_capability() -> Option<(i32, i32)> {
         type CuDeviceGet = unsafe extern "system" fn(*mut i32, i32) -> i32;
         type CuDeviceComputeCapability = unsafe extern "system" fn(*mut i32, *mut i32, i32) -> i32;
 
-        let driver = unsafe { Library::new("nvcuda.dll").ok()? };
+        let driver_name = if cfg!(windows) {
+            "nvcuda.dll"
+        } else {
+            "libcuda.so.1"
+        };
+        let driver = unsafe { Library::new(driver_name).ok()? };
         let cu_init = unsafe { driver.get::<CuInit>(b"cuInit\0").ok()? };
         let cu_device_get = unsafe { driver.get::<CuDeviceGet>(b"cuDeviceGet\0").ok()? };
         let cu_device_compute_capability = unsafe {
@@ -1525,7 +1530,59 @@ fn cuda_runtime_available() -> bool {
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn cuda_runtime_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+    *AVAILABLE.get_or_init(|| {
+        if !cuda_compute_capability()
+            .is_some_and(|(major, minor)| cuda_compute_capability_supported(major, minor))
+        {
+            return false;
+        }
+
+        let executable_dir = std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(Path::to_path_buf));
+        let provider_is_staged = executable_dir.as_ref().is_some_and(|directory| {
+            directory.join("libonnxruntime_providers_cuda.so").is_file()
+                && directory
+                    .join("libonnxruntime_providers_shared.so")
+                    .is_file()
+        });
+        if !provider_is_staged {
+            return false;
+        }
+
+        fn can_load(name: &str, executable_dir: Option<&Path>) -> bool {
+            let mut candidates = Vec::new();
+            if let Some(directory) = executable_dir {
+                candidates.push(directory.join(name));
+            }
+            candidates.push(PathBuf::from(name));
+            candidates
+                .into_iter()
+                .any(|candidate| unsafe { Library::new(candidate).is_ok() })
+        }
+
+        // The official v1.13.4 Linux GPU archive is built for CUDA 11.x and
+        // cuDNN 8.x. Provider files are staged by the shared-runtime build; the
+        // NVIDIA driver/toolkit dependencies remain supplied by the host.
+        [
+            "libcuda.so.1",
+            "libcublasLt.so.11",
+            "libcublas.so.11",
+            "libcudnn.so.8",
+            "libcurand.so.10",
+            "libcufft.so.10",
+            "libcudart.so.11.0",
+        ]
+        .into_iter()
+        .all(|name| can_load(name, executable_dir.as_deref()))
+    })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn cuda_runtime_available() -> bool {
     false
 }

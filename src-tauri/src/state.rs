@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 #[cfg(not(target_os = "android"))]
 use crate::asr::AsrManager;
-use crate::danmaku::DanmakuManager;
+use crate::danmu_rs::DanmakuManager;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::image_proxy::ImageProxy;

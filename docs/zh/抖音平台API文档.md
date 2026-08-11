@@ -62,6 +62,6 @@ Cookie、短时签名 URL 和上游原始响应均不写入日志或前端缓存
 
 - 站点与播放：`src-tauri/src/sites/douyin/mod.rs`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
-- 弹幕连接与帧解析：`src-tauri/src/danmaku/douyin.rs`
-- 本地签名：`src-tauri/src/danmaku/douyin_sign.rs`
+- 弹幕连接与帧解析：`src-tauri/src/danmu_rs/douyin.rs`
+- 本地签名：`src-tauri/src/danmu_rs/douyin_sign.rs`
 - MSSDK 脚本：`src-tauri/assets/douyin_webmssdk.js`

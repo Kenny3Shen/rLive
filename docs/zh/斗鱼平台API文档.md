@@ -58,5 +58,5 @@ loginreq → loginres → getEncryption → livreq → livres → lsigreq → ch
 斗鱼 Cookie 只保存在本机 SQLite，不能记录、导出或上传。
 
 - 站点与播放：`src-tauri/src/sites/douyu/`
-- 弹幕接收与发送状态机：`src-tauri/src/danmaku/douyu.rs`
+- 弹幕接收与发送状态机：`src-tauri/src/danmu_rs/douyu.rs`
 - command、授权与本机冷却：`src-tauri/src/commands/danmaku.rs`

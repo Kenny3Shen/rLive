@@ -58,12 +58,16 @@ import {
   sidebarNavigationDirection,
 } from "./sidebarNavigation";
 import {
+  PAGE_SCROLL_ANCHOR_STABLE_FRAMES,
   PAGE_SCROLL_RESTORE_MAX_FRAMES,
   beginPageScrollRestore,
+  nextPageScrollAnchorStableFrames,
   pageScrollKey,
   pageScrollRestoreSettled,
-  recallPageScroll,
+  pageScrollTargetForAnchor,
+  recallPageScrollSnapshot,
   rememberPageScroll,
+  rememberPageScrollAnchor,
   shouldRestorePageScroll,
 } from "./pageScroll";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
@@ -401,9 +405,20 @@ export function Shell() {
     // position the user left. Writing a Map entry per scroll event is cheap,
     // and `scrollTop` is already resolved inside a scroll handler.
     const onScroll = () => rememberPageScroll(surfaceKeyRef.current, node.scrollTop);
+    const onClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const anchor = target?.closest<HTMLElement>("[data-page-scroll-anchor]");
+      const anchorKey = anchor?.dataset.pageScrollAnchor;
+      if (!anchor || !anchorKey || !node.contains(anchor)) return;
+
+      const viewportOffset = anchor.getBoundingClientRect().top - node.getBoundingClientRect().top;
+      rememberPageScrollAnchor(surfaceKeyRef.current, node.scrollTop, anchorKey, viewportOffset);
+    };
     node.addEventListener("scroll", onScroll, { passive: true });
+    node.addEventListener("click", onClick, { capture: true });
     return () => {
       node.removeEventListener("scroll", onScroll);
+      node.removeEventListener("click", onClick, { capture: true });
       if (pageScrollRef.current === node) pageScrollRef.current = null;
     };
   }, []);
@@ -419,17 +434,16 @@ export function Shell() {
     const scroller = pageScrollRef.current;
     if (!scroller) return;
 
-    const target = shouldRestorePageScroll({
+    const restore = shouldRestorePageScroll({
       navigationType,
       previousEntryKey,
       entryKey: location.key,
       previousSurfaceKey,
       surfaceKey,
-    })
-      ? recallPageScroll(surfaceKey)
-      : 0;
+    });
+    const snapshot = restore ? recallPageScrollSnapshot(surfaceKey) : { top: 0, anchor: null };
 
-    if (target <= 0) {
+    if (snapshot.top <= 0 && snapshot.anchor === null) {
       scroller.scrollTo({ top: 0 });
       return;
     }
@@ -448,6 +462,9 @@ export function Shell() {
     const endRestore = beginPageScrollRestore(surfaceKey);
     let frame: number | null = null;
     let remaining = PAGE_SCROLL_RESTORE_MAX_FRAMES;
+    let anchorElement: HTMLElement | null = null;
+    let anchorStableFrames = 0;
+    let previousAnchorScrollHeight: number | null = null;
     // `scroll` is dispatched after the assignment that caused it, so the guard
     // outlives the final write by a frame. Releasing it synchronously would let
     // the last clamped event through — exactly the case the guard exists for.
@@ -459,8 +476,45 @@ export function Shell() {
     };
     const apply = () => {
       frame = null;
+      let target = snapshot.top;
+      let anchorResolved = snapshot.anchor === null;
+      let anchorSettled = false;
+      if (snapshot.anchor !== null) {
+        if (!anchorElement?.isConnected) {
+          anchorElement =
+            Array.from(scroller.querySelectorAll<HTMLElement>("[data-page-scroll-anchor]")).find(
+              (element) => element.dataset.pageScrollAnchor === snapshot.anchor?.key,
+            ) ?? null;
+        }
+        if (anchorElement) {
+          const currentViewportOffset =
+            anchorElement.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+          anchorStableFrames = nextPageScrollAnchorStableFrames(
+            currentViewportOffset,
+            snapshot.anchor.viewportOffset,
+            scroller.scrollHeight,
+            previousAnchorScrollHeight,
+            anchorStableFrames,
+          );
+          previousAnchorScrollHeight = scroller.scrollHeight;
+          target = pageScrollTargetForAnchor(
+            scroller.scrollTop,
+            currentViewportOffset,
+            snapshot.anchor.viewportOffset,
+          );
+          anchorResolved = true;
+          anchorSettled = anchorStableFrames >= PAGE_SCROLL_ANCHOR_STABLE_FRAMES;
+        } else {
+          anchorStableFrames = 0;
+          previousAnchorScrollHeight = scroller.scrollHeight;
+        }
+      }
       scroller.scrollTop = target;
-      if (pageScrollRestoreSettled(scroller.scrollTop, target) || remaining <= 0) {
+      if (
+        (snapshot.anchor === null && pageScrollRestoreSettled(scroller.scrollTop, target)) ||
+        (anchorResolved && anchorSettled) ||
+        remaining <= 0
+      ) {
         finish();
         return;
       }

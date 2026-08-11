@@ -85,8 +85,16 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeTargetIndex(3, 4, -200, 0, 360)).toBeNull();
     expect(horizontalSwipeTargetItem(["a", "b", "c"], "b", -200, 0, 360)).toBe("c");
     expect(horizontalSwipeTargetItem(["a", "b", "c"], "a", 200, 0, 360)).toBeNull();
-    // Below the commit threshold the strip stays where it is.
-    expect(horizontalSwipeTargetItem(["a", "b", "c"], "b", -40, 0, 360)).toBeNull();
+    // Below the configured commit threshold the strip stays where it is.
+    expect(
+      horizontalSwipeTargetItem(
+        ["a", "b", "c"],
+        "b",
+        -(360 * HORIZONTAL_SWIPE_COMMIT_PROGRESS - 1),
+        0,
+        360,
+      ),
+    ).toBeNull();
   });
 
   test("derives the settle duration from remaining distance and release speed", () => {

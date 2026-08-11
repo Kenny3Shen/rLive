@@ -2,7 +2,7 @@ mod account;
 #[cfg(not(target_os = "android"))]
 mod asr;
 mod commands;
-mod danmaku;
+mod danmu_rs;
 mod db;
 mod error;
 mod http_client;

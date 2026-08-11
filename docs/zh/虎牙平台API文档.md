@@ -44,5 +44,5 @@
 
 - 站点与播放：`src-tauri/src/sites/huya/`
 - 扫码登录：`src-tauri/src/account/huya_qr.rs`
-- 弹幕与 TARS 编解码：`src-tauri/src/danmaku/huya.rs`、`src-tauri/src/danmaku/tars.rs`
+- 弹幕与 TARS 编解码：`src-tauri/src/danmu_rs/huya.rs`、`src-tauri/src/danmu_rs/tars.rs`
 - command、授权与本机冷却：`src-tauri/src/commands/danmaku.rs`
