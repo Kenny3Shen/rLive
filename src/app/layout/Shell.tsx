@@ -59,6 +59,7 @@ import {
 } from "./sidebarNavigation";
 import {
   PAGE_SCROLL_RESTORE_MAX_FRAMES,
+  beginPageScrollRestore,
   pageScrollKey,
   pageScrollRestoreSettled,
   recallPageScroll,
@@ -437,18 +438,39 @@ export function Shell() {
     // assignment clamps to whatever height exists. Re-apply across frames until
     // the content is tall enough to hold the offset. `target` is captured here,
     // so the clamped positions these writes record cannot shorten the goal.
+    //
+    // Those writes still fire `scroll`, and the listener above would store the
+    // clamped offset over the position being replayed. Suppressing this surface
+    // for the length of the restore keeps the memory intact when the list takes
+    // longer than the frame budget to reach full height, so a later visit to the
+    // same entry replays where the user actually was rather than how far the
+    // previous attempt got.
+    const endRestore = beginPageScrollRestore(surfaceKey);
     let frame: number | null = null;
     let remaining = PAGE_SCROLL_RESTORE_MAX_FRAMES;
+    // `scroll` is dispatched after the assignment that caused it, so the guard
+    // outlives the final write by a frame. Releasing it synchronously would let
+    // the last clamped event through — exactly the case the guard exists for.
+    const finish = () => {
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        endRestore();
+      });
+    };
     const apply = () => {
       frame = null;
       scroller.scrollTop = target;
-      if (pageScrollRestoreSettled(scroller.scrollTop, target) || remaining <= 0) return;
+      if (pageScrollRestoreSettled(scroller.scrollTop, target) || remaining <= 0) {
+        finish();
+        return;
+      }
       remaining -= 1;
       frame = window.requestAnimationFrame(apply);
     };
     apply();
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
+      endRestore();
     };
   }, [location.key, navigationType, surfaceKey]);
 

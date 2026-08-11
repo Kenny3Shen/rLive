@@ -29,10 +29,11 @@ const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
  *
  * This is the interactive half of the paging contract: what decides the commit
  * is how far the page actually travelled, not how many pixels the finger moved.
- * Slightly under half a screen, because a drag held past the midpoint already
- * reads as committed to the eye.
+ * A quarter of the surface: the neighbouring page is painted and tracking the
+ * finger by then, so a drag carried that far already reads as committed. Near
+ * the midpoint it did not — a deliberate third-of-a-screen drag sprang back.
  */
-export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.42;
+export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.10;
 /**
  * Release speed, in px/ms, above which a flick pages regardless of progress.
  *
