@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
   createMultiRoomEntry,
+  findMultiRoomEmptySlot,
+  fitMultiRoomSlotsToLayout,
   moveMultiRoomSlot,
   normalizeMultiRoomAudioRoles,
+  normalizeMultiRoomFourLayout,
+  normalizeMultiRoomLayout,
   normalizeMultiRoomSlots,
   promoteMultiRoomSlot,
+  restoreMultiRoomSlotsForLayout,
   type MultiRoomEntry,
 } from "../src/features/multi-room/multiRoomStore";
 import {
   isMultiRoomMainSlot,
+  multiRoomGridClassName,
   multiRoomSlotClassName,
   multiRoomSlotLabel,
 } from "../src/features/multi-room/multiRoomLayout";
@@ -147,6 +153,87 @@ describe("multi-room director layout", () => {
     expect(multiRoomSlotClassName(0)).toContain("row-start-2");
     expect(multiRoomSlotClassName(0)).toContain("row-span-2");
     expect(multiRoomSlotLabel(0)).toBe("主画面");
+  });
+
+  test("places the main feed across the left 3x2 area in four-screen mode", () => {
+    expect(multiRoomGridClassName(4, "main-left")).toBe("grid-cols-3 grid-rows-3");
+    expect(multiRoomSlotClassName(0, 4, "main-left")).toContain("col-span-2");
+    expect(multiRoomSlotClassName(0, 4, "main-left")).toContain("row-start-1");
+    expect(multiRoomSlotClassName(0, 4, "main-left")).toContain("row-span-3");
+    expect(multiRoomSlotClassName(1, 4, "main-left")).toContain("col-start-3");
+    expect(multiRoomSlotClassName(3, 4, "main-left")).toContain("row-start-3");
+    expect(multiRoomSlotClassName(4, 4)).toBe("");
+    expect(multiRoomSlotLabel(1, 4, "main-left")).toBe("右侧上方");
+  });
+
+  test("gives every feed the same size in the equal four-screen layout", () => {
+    expect(multiRoomGridClassName(4, "equal")).toBe("grid-cols-2 grid-rows-2");
+    expect(multiRoomSlotClassName(0, 4, "equal")).toBe("col-start-1 row-start-1");
+    expect(multiRoomSlotClassName(1, 4, "equal")).toBe("col-start-2 row-start-1");
+    expect(multiRoomSlotClassName(2, 4, "equal")).toBe("col-start-1 row-start-2");
+    expect(multiRoomSlotClassName(3, 4, "equal")).toBe("col-start-2 row-start-2");
+    expect(multiRoomSlotLabel(3, 4, "equal")).toBe("右下画面");
+  });
+
+  test("compacts four feeds into visible slots and rejects overflowing layouts", () => {
+    const main = { ...room("main"), secondarySlot: 5 };
+    const topLeft = { ...room("top-left"), secondarySlot: 1 };
+    const rightMiddle = { ...room("right-middle"), secondarySlot: 4 };
+    const rightBottom = { ...room("right-bottom"), secondarySlot: 5 };
+    const fitted = fitMultiRoomSlotsToLayout(
+      [main, topLeft, null, null, rightMiddle, rightBottom],
+      4,
+    );
+
+    expect(fitted?.slice(0, 4).map((entry) => entry?.key)).toEqual([
+      main.key,
+      topLeft.key,
+      rightMiddle.key,
+      rightBottom.key,
+    ]);
+    expect(fitted?.[0]?.secondarySlot).toBeNull();
+    expect(fitted?.slice(1, 4).map((entry) => entry?.secondarySlot)).toEqual([1, 2, 3]);
+    expect(fitted?.slice(4)).toEqual([null, null]);
+
+    expect(
+      fitMultiRoomSlotsToLayout([main, topLeft, room("2"), room("3"), room("4")], 4),
+    ).toBeNull();
+  });
+
+  test("preserves intentional empty slots when restoring four-screen mode", () => {
+    const main = room("main");
+    const topMiddle = { ...room("top-middle"), secondarySlot: 5 };
+    const restored = restoreMultiRoomSlotsForLayout(
+      [main, null, topMiddle, null, null, null],
+      4,
+    );
+
+    expect(restored?.map((entry) => entry?.key ?? null)).toEqual([
+      main.key,
+      null,
+      topMiddle.key,
+      null,
+      null,
+      null,
+    ]);
+    expect(restored?.[2]?.secondarySlot).toBe(2);
+  });
+
+  test("falls back to the six-screen layout for unknown persisted values", () => {
+    expect(normalizeMultiRoomLayout(4)).toBe(4);
+    expect(normalizeMultiRoomLayout(6)).toBe(6);
+    expect(normalizeMultiRoomLayout(5)).toBe(6);
+    expect(normalizeMultiRoomFourLayout("main-left")).toBe("main-left");
+    expect(normalizeMultiRoomFourLayout("equal")).toBe("equal");
+    expect(normalizeMultiRoomFourLayout("unknown")).toBe("main-left");
+  });
+
+  test("enforces the selected layout capacity when adding rooms", () => {
+    const slots = [room("main"), room("1"), room("2"), room("3"), null, null];
+
+    expect(findMultiRoomEmptySlot(slots, 4)).toBe(-1);
+    expect(findMultiRoomEmptySlot(slots, 6)).toBe(4);
+    expect(findMultiRoomEmptySlot([slots[0], null, ...slots.slice(2)], 4)).toBe(1);
   });
 
   test("places secondary feeds across the top and right edge", () => {

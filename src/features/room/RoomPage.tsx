@@ -46,7 +46,7 @@ import {
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
-import { MULTI_ROOM_MAX_SLOTS, useMultiRoomStore } from "../multi-room/multiRoomStore";
+import { useMultiRoomStore } from "../multi-room/multiRoomStore";
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -203,7 +203,10 @@ export function RoomPage() {
     });
     if (result === "added") notify.success("已加入多画面");
     else if (result === "exists") notify.info("该直播间已在多画面中");
-    else notify.error("多画面已满", `最多同时添加 ${MULTI_ROOM_MAX_SLOTS} 个直播间。`);
+    else {
+      const { layout } = useMultiRoomStore.getState();
+      notify.error("多画面已满", `当前布局最多同时添加 ${layout} 个直播间。`);
+    }
     navigate("/multi-room");
   }
 

@@ -4,6 +4,14 @@ import type { LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
 
 export const MULTI_ROOM_MAX_SLOTS = 6;
 export const MULTI_ROOM_MAIN_SLOT = 0;
+export const MULTI_ROOM_LAYOUT_OPTIONS = [4, 6] as const;
+export const MULTI_ROOM_FOUR_LAYOUT_OPTIONS = ["main-left", "equal"] as const;
+
+export type MultiRoomLayout = (typeof MULTI_ROOM_LAYOUT_OPTIONS)[number];
+export type MultiRoomFourLayout = (typeof MULTI_ROOM_FOUR_LAYOUT_OPTIONS)[number];
+
+const DEFAULT_MULTI_ROOM_LAYOUT: MultiRoomLayout = 6;
+const DEFAULT_MULTI_ROOM_FOUR_LAYOUT: MultiRoomFourLayout = "main-left";
 
 export type MultiRoomCandidate = Pick<LiveRoomItem, "site_id" | "room_id"> &
   Partial<Pick<LiveRoomItem, "title" | "cover" | "user_name">>;
@@ -22,6 +30,25 @@ export type MultiRoomEntry = {
 };
 
 export type MultiRoomAddResult = "added" | "exists" | "full";
+
+export function normalizeMultiRoomLayout(layout: unknown): MultiRoomLayout {
+  return MULTI_ROOM_LAYOUT_OPTIONS.includes(layout as MultiRoomLayout)
+    ? (layout as MultiRoomLayout)
+    : DEFAULT_MULTI_ROOM_LAYOUT;
+}
+
+export function normalizeMultiRoomFourLayout(layout: unknown): MultiRoomFourLayout {
+  return MULTI_ROOM_FOUR_LAYOUT_OPTIONS.includes(layout as MultiRoomFourLayout)
+    ? (layout as MultiRoomFourLayout)
+    : DEFAULT_MULTI_ROOM_FOUR_LAYOUT;
+}
+
+export function findMultiRoomEmptySlot(
+  slots: readonly (MultiRoomEntry | null)[],
+  layout: MultiRoomLayout,
+): number {
+  return slots.slice(0, layout).findIndex((room) => room == null);
+}
 
 export function multiRoomKey(siteId: SiteId, roomId: string): string {
   return `${siteId}\u0000${roomId}`;
@@ -100,6 +127,50 @@ export function normalizeMultiRoomSlots(
   return next;
 }
 
+export function fitMultiRoomSlotsToLayout(
+  slots: readonly (MultiRoomEntry | null)[],
+  layout: MultiRoomLayout,
+): (MultiRoomEntry | null)[] | null {
+  const normalized = normalizeMultiRoomSlots(slots);
+  const occupied = normalized.filter((room): room is MultiRoomEntry => room != null);
+  if (occupied.length > layout) return null;
+
+  const next = Array.from<MultiRoomEntry | null>({ length: MULTI_ROOM_MAX_SLOTS }).fill(null);
+  const main = normalized[MULTI_ROOM_MAIN_SLOT];
+  if (main) {
+    next[MULTI_ROOM_MAIN_SLOT] =
+      validSecondarySlot(main.secondarySlot) && main.secondarySlot < layout
+        ? main
+        : withSecondarySlot(main, null);
+  }
+
+  let targetIndex = MULTI_ROOM_MAIN_SLOT + 1;
+  for (let index = MULTI_ROOM_MAIN_SLOT + 1; index < MULTI_ROOM_MAX_SLOTS; index += 1) {
+    const room = normalized[index];
+    if (!room) continue;
+    next[targetIndex] = withSecondarySlot(room, targetIndex);
+    targetIndex += 1;
+  }
+  return next;
+}
+
+export function restoreMultiRoomSlotsForLayout(
+  slots: readonly (MultiRoomEntry | null)[],
+  layout: MultiRoomLayout,
+): (MultiRoomEntry | null)[] | null {
+  const normalized = normalizeMultiRoomSlots(slots);
+  if (normalized.filter(Boolean).length > layout) return null;
+  if (normalized.slice(layout).some(Boolean)) return fitMultiRoomSlotsToLayout(normalized, layout);
+
+  return normalized.map((room, index) => {
+    if (!room || index >= layout) return null;
+    if (index > MULTI_ROOM_MAIN_SLOT) return withSecondarySlot(room, index);
+    return validSecondarySlot(room.secondarySlot) && room.secondarySlot < layout
+      ? room
+      : withSecondarySlot(room, null);
+  });
+}
+
 /**
  * Promote a secondary feed without losing its previous secondary position.
  * The current main feed is placed into the promoted feed's remembered slot;
@@ -176,12 +247,16 @@ export function moveMultiRoomSlot(
 
 type MultiRoomState = {
   slots: (MultiRoomEntry | null)[];
+  layout: MultiRoomLayout;
+  fourLayout: MultiRoomFourLayout;
   addRoom: (candidate: MultiRoomCandidate) => MultiRoomAddResult;
   removeRoom: (key: string) => void;
   moveRoom: (sourceIndex: number, targetIndex: number) => void;
   setMainRoom: (key: string) => void;
   updateAudio: (key: string, volume: number, muted: boolean) => void;
   updateMetadata: (key: string, detail: LiveRoomDetail) => void;
+  setLayout: (layout: MultiRoomLayout) => boolean;
+  setFourLayout: (layout: MultiRoomFourLayout) => void;
   clear: () => void;
 };
 
@@ -193,11 +268,14 @@ export const useMultiRoomStore = create<MultiRoomState>()(
   persist(
     (set, get) => ({
       slots: [...EMPTY_MULTI_ROOM_SLOTS],
+      layout: DEFAULT_MULTI_ROOM_LAYOUT,
+      fourLayout: DEFAULT_MULTI_ROOM_FOUR_LAYOUT,
       addRoom: (candidate) => {
         const slots = normalizeMultiRoomSlots(get().slots);
+        const layout = normalizeMultiRoomLayout(get().layout);
         const key = multiRoomKey(candidate.site_id, candidate.room_id);
         if (slots.some((room) => room?.key === key)) return "exists";
-        const targetIndex = slots.findIndex((room) => room == null);
+        const targetIndex = findMultiRoomEmptySlot(slots, layout);
         if (targetIndex < 0) return "full";
         slots[targetIndex] = createMultiRoomEntry(
           candidate,
@@ -264,17 +342,48 @@ export const useMultiRoomStore = create<MultiRoomState>()(
           ),
         });
       },
+      setLayout: (layout) => {
+        const normalizedLayout = normalizeMultiRoomLayout(layout);
+        if (normalizedLayout === get().layout) return true;
+        const slots = fitMultiRoomSlotsToLayout(get().slots, normalizedLayout);
+        if (!slots) return false;
+        set({ layout: normalizedLayout, slots });
+        return true;
+      },
+      setFourLayout: (layout) => set({ fourLayout: normalizeMultiRoomFourLayout(layout) }),
       clear: () => set({ slots: [...EMPTY_MULTI_ROOM_SLOTS] }),
     }),
     {
       name: "rlive-multi-room",
-      version: 1,
-      partialize: (state) => ({ slots: state.slots }),
-      merge: (persisted, current) => ({
-        ...current,
-        ...(persisted as Partial<MultiRoomState>),
-        slots: normalizeMultiRoomSlots((persisted as Partial<MultiRoomState>)?.slots ?? []),
+      version: 3,
+      migrate: (persistedState) => {
+        const state = persistedState as Partial<
+          Pick<MultiRoomState, "slots" | "layout" | "fourLayout">
+        >;
+        return {
+          slots: state.slots ?? [],
+          layout: normalizeMultiRoomLayout(state.layout),
+          fourLayout: normalizeMultiRoomFourLayout(state.fourLayout),
+        };
+      },
+      partialize: (state) => ({
+        slots: state.slots,
+        layout: state.layout,
+        fourLayout: state.fourLayout,
       }),
+      merge: (persisted, current) => {
+        const persistedState = persisted as Partial<MultiRoomState>;
+        const requestedLayout = normalizeMultiRoomLayout(persistedState?.layout);
+        const fourLayout = normalizeMultiRoomFourLayout(persistedState?.fourLayout);
+        const slots = normalizeMultiRoomSlots(persistedState?.slots ?? []);
+        const restoredSlots = restoreMultiRoomSlotsForLayout(slots, requestedLayout);
+        return {
+          ...current,
+          layout: restoredSlots ? requestedLayout : DEFAULT_MULTI_ROOM_LAYOUT,
+          fourLayout,
+          slots: restoredSlots ?? slots,
+        };
+      },
     },
   ),
 );
