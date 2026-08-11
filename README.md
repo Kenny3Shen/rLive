@@ -87,7 +87,7 @@ rLive 是面向桌面端与 Android 的跨平台直播客户端。它把不同�
 | 客户端 | 直播与 IPTV | 多画面 | 本地语音字幕 | 说明 |
 | --- | --- | --- | --- | --- |
 | Windows 桌面 | 支持 | 支持 | CPU / NVIDIA CUDA | 当前从源码构建；CUDA 需要兼容驱动及运行库 |
-| Linux 桌面 | 支持 | 支持 | CPU | 当前从源码构建 |
+| Linux 桌面 | 支持 | 支持 | CPU / NVIDIA CUDA | 仅 x86_64 支持 CUDA；Linux CUDA 尚未完成完整硬件和发行版测试 |
 | Android arm64 | 支持 | 不支持 | 不支持 | 最低 Android API 24；当前从源码构建 |
 
 电视端、iOS、录制与下载、礼物与支付、批量发送及自动回复不在当前支持范围内。
@@ -122,6 +122,8 @@ bun run tauri build
 
 Windows 推荐在 WSL 中维护源码。首次使用前复制 `scripts/windows-sync.conf.example` 为 `scripts/windows-sync.conf`，在 `WINDOWS_SYNC_PATH` 中填写 Windows 项目目录，然后运行 `./scripts/build-windows-from-wsl.sh` 同步并构建。Android SDK、NDK、真机运行和签名配置见 [Android 开发文档](docs/zh/Android开发-Windows.md)。
 
+Linux x86_64 构建默认包含 CUDA-capable 的 sherpa-onnx shared runtime。使用 CUDA 字幕需要兼容的 NVIDIA 驱动、CUDA 11.x 和 x86-64 cuDNN 8.x；运行时检测不到 GPU 或依赖时会自动回退 CPU。Linux CUDA 路径尚未完成完整硬件和发行版测试，发布前请在目标发行版和 NVIDIA / 非 NVIDIA 设备上自行验证。构建 CPU-only 版本可设置 `SHERPA_ONNX_GPU=0`。
+
 ## 第一次使用
 
 1. 从顶部切换直播平台，在推荐、分类或搜索中找到直播间。
@@ -149,7 +151,7 @@ React 19 + TypeScript + Vite 8 + Tailwind CSS 4
                          │
                       Tauri 2
                          │
-       Rust sites / danmaku / stream proxy / SQLite
+       Rust sites / danmu_rs / stream proxy / SQLite
                          │
        xgplayer + HLS / MPEG-TS / FLV + sherpa-onnx
 ```
