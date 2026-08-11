@@ -171,6 +171,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         render={
           <button
             type="button"
+            data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
             onClick={openRoom}
             onPointerEnter={() => preloadRouteModule(roomPath)}
             onPointerDown={() => preloadRouteModule(roomPath)}

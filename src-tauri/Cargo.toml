@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.23.1"
+version = "0.23.2"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -53,8 +53,13 @@ boa_engine = "0.20"
 
 tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["native-tls", "charset"] }
 
-[target.'cfg(all(not(target_os = "android"), not(windows)))'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 sherpa-onnx = "1.13.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux uses the shared runtime so the CUDA-capable provider can be selected at
+# runtime while machines without NVIDIA dependencies continue on CPU.
+sherpa-onnx = { version = "1.13.4", default-features = false, features = ["shared"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Local ASR is a desktop-only feature. Keep its model archive and data-path
@@ -68,10 +73,12 @@ bzip2 = "0.4"
 # still permits SHERPA_ONNX_GPU=0 for a CPU-only build without changing Rust
 # code or the model/provider settings.
 sherpa-onnx = { version = "1.13.4", default-features = false, features = ["shared"] }
+
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 libloading = "0.8"
 
 [target.'cfg(target_os = "android")'.dependencies]
-# Douyu's danmaku ports need native-tls (see danmaku::tls), and Android has no
+# Douyu's danmaku ports need native-tls, and Android has no
 # system OpenSSL for Cargo to link against, so build openssl-sys from source
 # there. Desktop targets use the platform stack and skip this.
 openssl = { version = "0.10", features = ["vendored"] }

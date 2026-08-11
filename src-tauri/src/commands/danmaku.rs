@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::account;
-use crate::danmaku;
+use crate::danmu_rs;
 use crate::db::{danmaku_send_history, history};
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
@@ -64,7 +64,7 @@ fn validate_and_reserve_bilibili_send(
             AppError::new("bilibili_send_invalid_room", "B站直播间号无效").with_site("bilibili"),
         );
     }
-    let message = danmaku::bilibili::normalize_outgoing_message(message)?;
+    let message = danmu_rs::bilibili::normalize_outgoing_message(message)?;
     limiter.reserve(room_id)?;
     Ok((room_id.to_string(), message))
 }
@@ -84,7 +84,7 @@ fn validate_and_reserve_douyu_send(
     {
         return Err(AppError::new("douyu_send_invalid_room", "斗鱼直播间号无效").with_site("douyu"));
     }
-    let message = danmaku::douyu::normalize_outgoing_message(message)?;
+    let message = danmu_rs::douyu::normalize_outgoing_message(message)?;
     limiter.reserve(room_id)?;
     Ok((room_id.to_string(), message))
 }
@@ -111,7 +111,7 @@ fn validate_and_reserve_huya_send(
     message: &str,
 ) -> AppResult<(String, String)> {
     let room_id = validate_huya_send_room(room_id)?;
-    let message = danmaku::huya::normalize_outgoing_message(message)?;
+    let message = danmu_rs::huya::normalize_outgoing_message(message)?;
     limiter.reserve(&room_id)?;
     Ok((room_id, message))
 }
@@ -229,7 +229,7 @@ pub async fn danmaku_connect(
     let danmaku_cookie = site
         .danmaku_session_cookie()?
         .unwrap_or_else(|| cookie.clone().unwrap_or_default());
-    danmaku::connect(
+    danmu_rs::connect(
         app,
         &state.danmaku,
         connection_epoch,
@@ -285,7 +285,7 @@ pub fn bilibili_danmaku_send_status(
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
-    let cookie_ready = danmaku::bilibili::has_send_credentials(&cookie);
+    let cookie_ready = danmu_rs::bilibili::has_send_credentials(&cookie);
     let send_enabled = settings.danmaku_send_enabled;
     let message = if !send_enabled {
         "在设置中启用“弹幕发送功能”后可使用".into()
@@ -327,7 +327,7 @@ pub async fn bilibili_danmaku_send(
         )
         .with_site("bilibili"));
     }
-    if !danmaku::bilibili::has_send_credentials(&cookie) {
+    if !danmu_rs::bilibili::has_send_credentials(&cookie) {
         return Err(AppError::new(
             "bilibili_send_cookie_missing",
             "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
@@ -340,7 +340,7 @@ pub async fn bilibili_danmaku_send(
     // never receive it, so the write path deliberately opts out of redirect
     // following for both proxied and direct requests.
     let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
-    danmaku::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
+    danmu_rs::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
     record_successful_danmaku_send(
         state.inner(),
         SiteId::Bilibili,
@@ -360,7 +360,7 @@ pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DouyuD
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default();
-    let cookie_ready = danmaku::douyu::has_send_credentials(&cookie);
+    let cookie_ready = danmu_rs::douyu::has_send_credentials(&cookie);
     let send_enabled = settings.danmaku_send_enabled;
     let message = if !send_enabled {
         "在设置中启用“弹幕发送功能”后可使用".into()
@@ -404,7 +404,7 @@ pub async fn douyu_danmaku_send(
         )
         .with_site("douyu"));
     }
-    if !danmaku::douyu::has_send_credentials(&cookie) {
+    if !danmu_rs::douyu::has_send_credentials(&cookie) {
         tracing::warn!(
             room_id = %room_id.trim(),
             stage = "preflight",
@@ -428,7 +428,7 @@ pub async fn douyu_danmaku_send(
                 error
             },
         )?;
-    danmaku::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
+    danmu_rs::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
     record_successful_danmaku_send(
         state.inner(),
         SiteId::Douyu,
@@ -448,7 +448,7 @@ pub fn huya_danmaku_send_status(state: State<'_, AppState>) -> AppResult<HuyaDan
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default();
-    let cookie_ready = danmaku::huya::has_send_credentials(&cookie);
+    let cookie_ready = danmu_rs::huya::has_send_credentials(&cookie);
     let send_enabled = settings.danmaku_send_enabled;
     let message = if !send_enabled {
         "在设置中启用“弹幕发送功能”后可使用".into()
@@ -492,7 +492,7 @@ pub async fn huya_danmaku_send(
         )
         .with_site("huya"));
     }
-    if !danmaku::huya::has_send_credentials(&cookie) {
+    if !danmu_rs::huya::has_send_credentials(&cookie) {
         tracing::warn!(
             room_id = %room_id.trim(),
             stage = "preflight",
@@ -510,10 +510,10 @@ pub async fn huya_danmaku_send(
     let room_id = validate_huya_send_room(&room_id)?;
     let site = sites::site_with_proxy(&SiteId::Huya, Some(cookie.clone()), proxy.as_deref())?;
     let detail = site.get_room_detail(&room_id).await?;
-    let args = danmaku::huya::args_from_raw(&room_id, &detail.raw)?;
+    let args = danmu_rs::huya::args_from_raw(&room_id, &detail.raw)?;
     let (_room_id, message) =
         validate_and_reserve_huya_send(&state.huya_send_limiter, &room_id, &message)?;
-    danmaku::huya::send_chat(&cookie, args, &message).await?;
+    danmu_rs::huya::send_chat(&cookie, args, &message).await?;
     record_successful_danmaku_send(
         state.inner(),
         SiteId::Huya,

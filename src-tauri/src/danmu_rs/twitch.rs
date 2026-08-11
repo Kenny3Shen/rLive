@@ -18,12 +18,11 @@ use tokio::{
 };
 use tokio_native_tls::TlsConnector;
 use tokio_tungstenite::{
-    WebSocketStream, client_async_tls_with_config, connect_async_tls_with_config,
-    tungstenite::Message,
+    WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
 };
 
-use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmaku::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
+use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 
@@ -540,7 +539,7 @@ async fn connect_and_run(
     emit_event(events, system_event("正在连接 Twitch 弹幕服务器…"));
     match proxy {
         None => {
-            let (socket, _) = connect_async_tls_with_config(IRC_WS_URL, None, false, None)
+            let (socket, _) = connect_async(IRC_WS_URL)
                 .await
                 .map_err(websocket_connection_error)?;
             run_irc_session(events, args, socket).await

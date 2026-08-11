@@ -128,6 +128,7 @@ export function useHorizontalSwipe<T>({
   const surfaceWidthRef = useRef(0);
   const offsetRef = useRef(0);
   const animationRef = useRef<Animation | null>(null);
+  const commitDeliveryFrameRef = useRef<number | null>(null);
   /** Set between a gesture commit and the value change it asked for. */
   const pendingCommitRef = useRef<{ value: T; direction: 1 | -1; velocity: number } | null>(null);
   const commitRollbackTimerRef = useRef<number | null>(null);
@@ -141,6 +142,35 @@ export function useHorizontalSwipe<T>({
     window.clearTimeout(commitRollbackTimerRef.current);
     commitRollbackTimerRef.current = null;
   }, []);
+
+  const clearCommitDelivery = useCallback(() => {
+    if (commitDeliveryFrameRef.current === null) return;
+    window.cancelAnimationFrame(commitDeliveryFrameRef.current);
+    commitDeliveryFrameRef.current = null;
+  }, []);
+
+  const deliverCommittedChange = useCallback(
+    (nextValue: T) => {
+      clearCommitDelivery();
+      if (!isTrackLayout) {
+        onChangeRef.current(nextValue);
+        return;
+      }
+
+      // The first rAF returns without React work, guaranteeing the compositor
+      // can paint the release motion once. The value change runs in the next
+      // frame; even if mounting the new platform is expensive, the already
+      // running Web Animation keeps advancing instead of pausing under the
+      // finger's release point.
+      commitDeliveryFrameRef.current = window.requestAnimationFrame(() => {
+        commitDeliveryFrameRef.current = window.requestAnimationFrame(() => {
+          commitDeliveryFrameRef.current = null;
+          onChangeRef.current(nextValue);
+        });
+      });
+    },
+    [clearCommitDelivery, isTrackLayout],
+  );
 
   const surfaceWidth = useCallback(() => {
     const el = pageRef.current;
@@ -385,14 +415,16 @@ export function useHorizontalSwipe<T>({
     if (enabled) return;
     swipeRef.current = null;
     pendingCommitRef.current = null;
+    clearCommitDelivery();
     clearCommitRollback();
     restAtValue();
-  }, [clearCommitRollback, enabled, restAtValue]);
+  }, [clearCommitDelivery, clearCommitRollback, enabled, restAtValue]);
 
   // Drop anything still in flight when the surface goes away, so no animation
   // ticks against a detached node and no timer fires into an unmounted hook.
   useLayoutEffect(
     () => () => {
+      clearCommitDelivery();
       clearCommitRollback();
       const animation = animationRef.current;
       animationRef.current = null;
@@ -403,7 +435,7 @@ export function useHorizontalSwipe<T>({
         el.style.willChange = "";
       }
     },
-    [clearCommitRollback],
+    [clearCommitDelivery, clearCommitRollback],
   );
 
   const releasePointer = useCallback((element: HTMLElement, pointerId: number) => {
@@ -567,7 +599,7 @@ export function useHorizontalSwipe<T>({
         const target = restOffsetForIndex(nextIndex);
         settle(target, horizontalSwipeSettleDuration(target - offsetRef.current, velocity));
       }
-      onChangeRef.current(next);
+      deliverCommittedChange(next);
 
       // Last resort for a caller that rejects the change outright, so the page
       // is not left parked between two pages. Deliberately a timer rather than
@@ -586,7 +618,15 @@ export function useHorizontalSwipe<T>({
         }
       }, HORIZONTAL_SWIPE_COMMIT_GRACE_MS);
     },
-    [clearCommitRollback, isTrackLayout, releasePointer, restOffsetForIndex, settle, settleAtRest],
+    [
+      clearCommitRollback,
+      deliverCommittedChange,
+      isTrackLayout,
+      releasePointer,
+      restOffsetForIndex,
+      settle,
+      settleAtRest,
+    ],
   );
 
   const onPointerCancelCapture = useCallback(

@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
+  PAGE_SCROLL_ANCHOR_STABLE_FRAMES,
   PAGE_SCROLL_MEMORY_LIMIT,
   beginPageScrollRestore,
   clearPageScrollMemory,
+  nextPageScrollAnchorStableFrames,
   pageScrollKey,
   pageScrollRestoreSettled,
+  pageScrollTargetForAnchor,
   recallPageScroll,
+  recallPageScrollSnapshot,
   rememberPageScroll,
+  rememberPageScrollAnchor,
   shouldRestorePageScroll,
 } from "../src/app/layout/pageScroll";
 
@@ -58,6 +63,22 @@ describe("page scroll memory", () => {
     expect(recallPageScroll(pageScrollKey("entry-0", "/", null))).toBe(10);
     expect(recallPageScroll(pageScrollKey("entry-1", "/", null))).toBe(0);
     expect(recallPageScroll(pageScrollKey("entry-overflow", "/", null))).toBe(99);
+  });
+
+  test("captures the clicked card as a viewport-relative restore anchor", () => {
+    rememberPageScrollAnchor(HOME, 860, "bilibili:123", 24.5);
+
+    expect(recallPageScrollSnapshot(HOME)).toEqual({
+      top: 860,
+      anchor: { key: "bilibili:123", viewportOffset: 24.5 },
+    });
+  });
+
+  test("clears a stale card anchor when the user scrolls again", () => {
+    rememberPageScrollAnchor(HOME, 860, "bilibili:123", 24.5);
+    rememberPageScroll(HOME, 920);
+
+    expect(recallPageScrollSnapshot(HOME)).toEqual({ top: 920, anchor: null });
   });
 });
 
@@ -150,5 +171,26 @@ describe("restore settling", () => {
 
   test("keeps retrying while the list is still too short", () => {
     expect(pageScrollRestoreSettled(400, 1200)).toBe(false);
+  });
+
+  test("realigns a card after rows are inserted ahead of it", () => {
+    expect(pageScrollTargetForAnchor(860, 412, 24)).toBe(1248);
+    expect(pageScrollTargetForAnchor(1248, 24, 24)).toBe(1248);
+  });
+
+  test("waits for consecutive aligned frames after the layout stops changing", () => {
+    let stableFrames = 0;
+    stableFrames = nextPageScrollAnchorStableFrames(24, 24, 1600, null, stableFrames);
+    expect(stableFrames).toBe(0);
+
+    stableFrames = nextPageScrollAnchorStableFrames(24, 24, 1700, 1600, stableFrames);
+    expect(stableFrames).toBe(0);
+
+    for (let frame = 0; frame < PAGE_SCROLL_ANCHOR_STABLE_FRAMES; frame += 1) {
+      stableFrames = nextPageScrollAnchorStableFrames(24.4, 24, 1700, 1700, stableFrames);
+    }
+    expect(stableFrames).toBe(PAGE_SCROLL_ANCHOR_STABLE_FRAMES);
+
+    expect(nextPageScrollAnchorStableFrames(30, 24, 1700, 1700, stableFrames)).toBe(0);
   });
 });

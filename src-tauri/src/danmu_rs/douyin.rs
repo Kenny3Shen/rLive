@@ -15,7 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
 use tokio::time;
 use tokio_tungstenite::{
-    connect_async_tls_with_config,
+    connect_async,
     tungstenite::{
         Error as WsError, Message,
         client::IntoClientRequest,
@@ -23,9 +23,9 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::danmaku::douyin_sign;
-use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmaku::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::douyin_sign;
+use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
+use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 use crate::sites::douyin::DEFAULT_USER_AGENT;
@@ -318,7 +318,7 @@ async fn run_connection_once(
 
         let outcome = tokio::time::timeout(
             Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            connect_async_tls_with_config(request, None, false, None),
+            connect_async(request),
         )
         .await;
         match outcome {

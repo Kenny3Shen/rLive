@@ -25,13 +25,12 @@ use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{
-    Connector, WebSocketStream, client_async_tls_with_config, connect_async_tls_with_config,
-    tungstenite::Message,
+    Connector, WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
 };
 use uuid::Uuid;
 
-use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmaku::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
+use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 
@@ -1379,7 +1378,7 @@ async fn connect_douyu_ws() -> AppResult<
         // proxy never echoes one back, and tungstenite (RFC 6455) then rejects
         // the handshake with `SecWebSocketSubProtocolError::NoSubProtocol`.
         let _ = ASSERT_NATIVE_TLS_ENABLED;
-        match connect_async_tls_with_config(req, None, false, None).await {
+        match connect_async(req).await {
             Ok((ws, _)) => return Ok(ws),
             Err(e) => {
                 last_err = format!("{url}: {e}");

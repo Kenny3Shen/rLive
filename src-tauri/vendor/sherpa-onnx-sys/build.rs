@@ -235,7 +235,11 @@ fn archive_name(
             format!("sherpa-onnx-v{version}-win-x64-static-MT-Release-lib.tar.bz2")
         }
         (LinkMode::Shared, "linux", "x86_64") => {
-            format!("sherpa-onnx-v{version}-linux-x64-shared-lib.tar.bz2")
+            if gpu_enabled(target_os, target_arch) {
+                format!("sherpa-onnx-v{version}-linux-x64-gpu.tar.bz2")
+            } else {
+                format!("sherpa-onnx-v{version}-linux-x64-shared-lib.tar.bz2")
+            }
         }
         (LinkMode::Shared, "linux", "aarch64") => {
             format!("sherpa-onnx-v{version}-linux-aarch64-shared-cpu-lib.tar.bz2")
@@ -247,7 +251,7 @@ fn archive_name(
             format!("sherpa-onnx-v{version}-osx-arm64-shared-lib.tar.bz2")
         }
         (LinkMode::Shared, "windows", "x86_64") => {
-            if windows_gpu_enabled(target_os) {
+            if gpu_enabled(target_os, target_arch) {
                 format!(
                     "sherpa-onnx-v{version}-win-x64-cuda.tar.bz2"
                 )
@@ -269,8 +273,10 @@ fn archive_name(
     Ok(name)
 }
 
-fn windows_gpu_enabled(target_os: &str) -> bool {
-    if target_os != "windows" {
+fn gpu_enabled(target_os: &str, target_arch: &str) -> bool {
+    if !((target_os == "windows" && target_arch == "x86_64")
+        || (target_os == "linux" && target_arch == "x86_64"))
+    {
         return false;
     }
 

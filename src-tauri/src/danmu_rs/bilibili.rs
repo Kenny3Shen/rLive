@@ -7,12 +7,12 @@ use reqwest::{Client, Url};
 use serde_json::Value;
 use tokio::time;
 use tokio_tungstenite::{
-    connect_async_tls_with_config,
+    connect_async,
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 
-use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmaku::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
+use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuContentSpan, DanmakuEvent, DanmakuKind, SuperChatInfo};
 
@@ -1144,7 +1144,7 @@ async fn run_connection(
             }
         }
     }
-    let (ws, _) = match connect_async_tls_with_config(request, None, false, None).await {
+    let (ws, _) = match connect_async(request).await {
         Ok(connection) => connection,
         Err(error) => {
             return ConnectionEnd {

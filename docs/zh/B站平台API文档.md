@@ -54,5 +54,5 @@ Cookie、CSRF、消息正文、短时 token 和上游原始错误不写入日志
 ## 代码位置
 
 - 站点与播放：`src-tauri/src/sites/bilibili/`
-- 弹幕接收与发送：`src-tauri/src/danmaku/bilibili.rs`
+- 弹幕接收与发送：`src-tauri/src/danmu_rs/bilibili.rs`
 - Tauri command 与本机冷却：`src-tauri/src/commands/danmaku.rs`

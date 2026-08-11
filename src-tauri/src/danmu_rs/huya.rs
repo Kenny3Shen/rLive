@@ -2,7 +2,7 @@
 //!
 //! WS: `wss://cdnws.api.huya.com`
 //! Join packet encodes ayyuid + channel ids; chat push uri=1400.
-//! Reconnects follow the shared [`crate::danmaku::reconnect`] policy, which
+//! Reconnects follow the shared [`crate::danmu_rs::reconnect`] policy, which
 //! stops once the endpoint stops looking recoverable.
 
 use std::time::{Duration, Instant};
@@ -13,14 +13,14 @@ use md5::{Digest, Md5};
 use serde_json::Value;
 use tokio::time;
 use tokio_tungstenite::{
-    connect_async_tls_with_config,
+    connect_async,
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 use uuid::Uuid;
 
-use crate::danmaku::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmaku::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
-use crate::danmaku::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
+use crate::danmu_rs::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
+use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 /// simple_live heartbeat payload: base64 `ABQdAAwsNgBM`
@@ -365,7 +365,7 @@ fn encode_websocket_command(command: i64, payload: &[u8], request_id: i64) -> Ve
 
 fn decode_websocket_command(
     packet: &[u8],
-) -> Result<(i64, Vec<u8>, i64), crate::danmaku::tars::TarsError> {
+) -> Result<(i64, Vec<u8>, i64), crate::danmu_rs::tars::TarsError> {
     let mut reader = TarsReader::new(packet);
     let command = reader.read_i64(0, true)?;
     let payload = reader.read_bytes(1, true)?;
@@ -502,7 +502,7 @@ async fn connect_send_ws(credentials: &HuyaSendCredentials) -> AppResult<HuyaWeb
         headers.insert("User-Agent", user_agent);
         headers.insert("Cookie", cookie);
 
-        match connect_async_tls_with_config(request, None, false, None).await {
+        match connect_async(request).await {
             Ok((socket, _)) => return Ok(socket),
             Err(error) => {
                 // Do not include the URL here: its query holds a user-bound
@@ -867,7 +867,7 @@ async fn run_connection_once(
         },
     );
 
-    let (ws, _) = match connect_async_tls_with_config(SERVER_URL, None, false, None).await {
+    let (ws, _) = match connect_async(SERVER_URL).await {
         Ok(ws) => ws,
         Err(e) => {
             return DisconnectReason::transient(format!("连接虎牙弹幕服务器失败：{e}"));
@@ -1126,14 +1126,14 @@ mod tests {
     #[test]
     fn streaming_decoder_preserves_a_chat_push() {
         let mut notice = TarsWriter::new();
-        notice.write_head(crate::danmaku::tars::ty::STRUCT_BEGIN, 0);
+        notice.write_head(crate::danmu_rs::tars::ty::STRUCT_BEGIN, 0);
         notice.write_i64(42, 0);
         notice.write_string("虎牙观众", 2);
-        notice.write_head(crate::danmaku::tars::ty::STRUCT_END, 0);
+        notice.write_head(crate::danmu_rs::tars::ty::STRUCT_END, 0);
         notice.write_string("测试弹幕", 3);
-        notice.write_head(crate::danmaku::tars::ty::STRUCT_BEGIN, 6);
+        notice.write_head(crate::danmu_rs::tars::ty::STRUCT_BEGIN, 6);
         notice.write_i64(0x11_22_33, 0);
-        notice.write_head(crate::danmaku::tars::ty::STRUCT_END, 0);
+        notice.write_head(crate::danmu_rs::tars::ty::STRUCT_END, 0);
         let notice = notice.into_bytes();
 
         let mut push = TarsWriter::new();
