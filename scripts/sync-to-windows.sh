@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Sync WSL workspace → D:\dev\rLive (/mnt/d/dev/rLive)
+# Sync the WSL workspace to the configured Windows mirror.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
-DEST_MNT="${DEST_MNT:-/mnt/d/dev/rLive}"
-DEST_WIN="${DEST_WIN:-D:\\dev\\rLive}"
+source "$SRC/scripts/windows-sync-config.sh"
+load_windows_sync_config "$SRC"
 
-if [[ ! -d /mnt/d ]]; then
-  echo "error: /mnt/d not found (is D: mounted in WSL?)" >&2
-  exit 1
-fi
+DEST_MNT="$WINDOWS_SYNC_PATH_MNT"
+DEST_WIN="$WINDOWS_SYNC_PATH_WIN"
 
 mkdir -p "$DEST_MNT"
 
@@ -32,6 +30,7 @@ rsync -a --delete \
   --exclude 'src-tauri/gen/android/app/key.properties' \
   --exclude 'src-tauri/gen/android/app/keystore.properties' \
   --exclude '.playwright-cli/' \
+  --exclude 'scripts/windows-sync.conf' \
   --exclude '.superpowers/' \
   --exclude '.worktrees/' \
   --exclude '*.log' \

@@ -420,10 +420,12 @@ bun run build
 所有源码修改与验证都在 WSL 的 `/home/shenss/python/rLive` 完成。交付前同步镜像：
 
 ```bash
+cp scripts/windows-sync.conf.example scripts/windows-sync.conf
+# 编辑 scripts/windows-sync.conf，设置 WINDOWS_SYNC_PATH
 bash scripts/sync-to-windows.sh
 ```
 
-同步不会触发 Windows/Tauri build；只有明确需要 Windows 运行验证或发布时才执行对应构建流程。
+同步目标由 `scripts/windows-sync.conf` 的 `WINDOWS_SYNC_PATH` 配置，不再固定为某个盘符。同步不会触发 Windows/Tauri build；只有明确需要 Windows 运行验证或发布时才执行对应构建流程。
 
 ## 10. 关键源码索引
 

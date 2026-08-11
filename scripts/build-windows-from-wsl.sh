@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# From WSL: sync to D:\dev\rLive then invoke Windows PowerShell build.
+# From WSL: sync to the configured Windows mirror then invoke the Windows build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST_MNT="${DEST_MNT:-/mnt/d/dev/rLive}"
-DEST_WIN="${DEST_WIN:-D:\\dev\\rLive}"
-LOG_WIN="${LOG_WIN:-D:\\dev\\logs\\build-windows.txt}"
+source "$ROOT/scripts/windows-sync-config.sh"
+load_windows_sync_config "$ROOT"
 
-if [[ ! -d /mnt/d ]]; then
-  echo "error: /mnt/d not found (is D: mounted in WSL?)" >&2
-  exit 1
-fi
+DEST_MNT="$WINDOWS_SYNC_PATH_MNT"
+DEST_WIN="$WINDOWS_SYNC_PATH_WIN"
+DEST_PARENT_MNT="$(dirname "$DEST_MNT")"
+LOG_MNT="${LOG_MNT:-$DEST_PARENT_MNT/logs}"
+TEMP_MNT="${TEMP_MNT:-$DEST_PARENT_MNT/Temp/build}"
+LOG_WIN="${LOG_WIN:-$(wslpath -w -- "$LOG_MNT/build-windows.txt")}"
+TEMP_WIN="${TEMP_WIN:-$(wslpath -w -- "$TEMP_MNT")}"
 
 "$ROOT/scripts/sync-to-windows.sh"
 
@@ -18,7 +20,7 @@ echo "== windows build =="
 echo "  root: $DEST_WIN"
 echo "  log:  $LOG_WIN"
 
-mkdir -p /mnt/d/dev/logs /mnt/d/Temp/build
+mkdir -p "$LOG_MNT" "$TEMP_MNT"
 
 # Prefer /init + full PowerShell path (more reliable under some WSL setups).
 INIT="${INIT:-/init}"
@@ -34,20 +36,26 @@ if [[ ! -x "$PS_EXE" && ! -f "$PS_EXE" ]]; then
 fi
 
 # Wrapper avoids Stop + native stderr aborting build-windows.ps1 early.
-WRAPPER="/mnt/d/dev/run-rlive-build.ps1"
+WRAPPER="$DEST_PARENT_MNT/run-rlive-build.ps1"
+WRAPPER_WIN="$(wslpath -w -- "$WRAPPER")"
 cat > "$WRAPPER" << 'EOF'
 param(
-    [string]$LogPath = "D:\dev\logs\build-windows.txt"
+    [Parameter(Mandatory=$true)]
+    [string]$LogPath,
+    [Parameter(Mandatory=$true)]
+    [string]$ProjectRoot,
+    [Parameter(Mandatory=$true)]
+    [string]$TempPath
 )
 
 $ErrorActionPreference = "Continue"
 $env:CARGO_HOME = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "D:\dev\rust\cargo" }
 $env:RUSTUP_HOME = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { "D:\dev\rust\rustup" }
-$env:TEMP = "D:\Temp\build"
-$env:TMP = "D:\Temp\build"
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath),"D:\Temp\build" | Out-Null
-Set-Location "D:\dev\rLive"
-& ".\scripts\build-windows.ps1" *>&1 | Tee-Object -FilePath $LogPath
+$env:TEMP = $TempPath
+$env:TMP = $TempPath
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath),$TempPath | Out-Null
+Set-Location $ProjectRoot
+& (Join-Path $ProjectRoot "scripts\build-windows.ps1") *>&1 | Tee-Object -FilePath $LogPath
 $code = $LASTEXITCODE
 if ($null -eq $code) { $code = 0 }
 Write-Host "BUILD_EXIT=$code"
@@ -57,17 +65,17 @@ EOF
 ps_build_args=(-LogPath "$LOG_WIN")
 
 if [[ -x "$INIT" || -f "$INIT" ]]; then
-  "$INIT" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1" "${ps_build_args[@]}"
+  "$INIT" "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "$WRAPPER_WIN" "${ps_build_args[@]}" -ProjectRoot "$DEST_WIN" -TempPath "$TEMP_WIN"
 else
-  "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "D:\dev\run-rlive-build.ps1" "${ps_build_args[@]}"
+  "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "$WRAPPER_WIN" "${ps_build_args[@]}" -ProjectRoot "$DEST_WIN" -TempPath "$TEMP_WIN"
 fi
 
 code=$?
 if [[ $code -ne 0 ]]; then
   echo "error: windows build failed (exit $code). See $LOG_WIN" >&2
   # Best-effort tail for WSL logs
-  if [[ -f /mnt/d/dev/logs/build-windows.txt ]]; then
-    tail -c 6000 /mnt/d/dev/logs/build-windows.txt | tr -d '\000' | tail -40 || true
+  if [[ -f "$LOG_MNT/build-windows.txt" ]]; then
+    tail -c 6000 "$LOG_MNT/build-windows.txt" | tr -d '\000' | tail -40 || true
   fi
   exit "$code"
 fi
@@ -78,4 +86,5 @@ if [[ ! -f "$EXE" ]]; then
   exit 1
 fi
 
-echo "OK: $DEST_WIN\\src-tauri\\target\\release\\rlive.exe ($(stat -c%s "$EXE" 2>/dev/null || echo '?') bytes)"
+printf 'OK: %s\\src-tauri\\target\\release\\rlive.exe (%s bytes)\n' \
+  "$DEST_WIN" "$(stat -c%s "$EXE" 2>/dev/null || echo '?')"
