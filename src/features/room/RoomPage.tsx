@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
+import { supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { glassSurfaceClass } from "@/shared/components/player/glassSurface";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
@@ -281,13 +282,17 @@ export function RoomPage() {
       exitsFullscreen: true,
       onSelect: requestFollowToggle,
     },
-    {
-      id: "multi-room",
-      label: "多画面",
-      icon: PanelsTopLeft,
-      exitsFullscreen: true,
-      onSelect: openInMultiRoom,
-    },
+    ...(supportsMultiRoom()
+      ? [
+          {
+            id: "multi-room",
+            label: "多画面",
+            icon: PanelsTopLeft,
+            exitsFullscreen: true,
+            onSelect: openInMultiRoom,
+          },
+        ]
+      : []),
   ];
 
   const sideHeader = (
