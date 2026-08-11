@@ -33,7 +33,6 @@ import { invokeCmd } from "@/shared/api/tauri";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
 import {
-  MULTI_ROOM_MAX_SLOTS,
   multiRoomKey,
   useMultiRoomStore,
   type MultiRoomAddResult,
@@ -46,10 +45,10 @@ type PickerCandidate = MultiRoomCandidate & {
   source: "follow" | "history";
 };
 
-function addResultMessage(result: MultiRoomAddResult): void {
+function addResultMessage(result: MultiRoomAddResult, capacity: number): void {
   if (result === "added") notify.success("已加入多画面");
   else if (result === "exists") notify.info("该直播间已在多画面中");
-  else notify.error("多画面已满", `最多同时添加 ${MULTI_ROOM_MAX_SLOTS} 个直播间。`);
+  else notify.error("多画面已满", `当前布局最多同时添加 ${capacity} 个直播间。`);
 }
 
 export function MultiRoomPickerDialog({
@@ -60,6 +59,7 @@ export function MultiRoomPickerDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const slots = useMultiRoomStore((state) => state.slots);
+  const layout = useMultiRoomStore((state) => state.layout);
   const addRoom = useMultiRoomStore((state) => state.addRoom);
   const [siteId, setSiteId] = useState<SiteId>("bilibili");
   const [roomId, setRoomId] = useState("");
@@ -81,7 +81,7 @@ export function MultiRoomPickerDialog({
     () => new Set(slots.flatMap((room) => (room ? [room.key] : []))),
     [slots],
   );
-  const full = activeKeys.size >= MULTI_ROOM_MAX_SLOTS;
+  const full = activeKeys.size >= layout;
 
   const candidates = useMemo(() => {
     const result: PickerCandidate[] = [];
@@ -116,7 +116,7 @@ export function MultiRoomPickerDialog({
   }, [followsQuery.data, historyQuery.data]);
 
   function addCandidate(candidate: MultiRoomCandidate) {
-    addResultMessage(addRoom(candidate));
+    addResultMessage(addRoom(candidate), layout);
   }
 
   async function addManualRoom(event: FormEvent<HTMLFormElement>) {
@@ -140,7 +140,7 @@ export function MultiRoomPickerDialog({
         user_name: detail.user_name,
         cover: detail.cover,
       });
-      addResultMessage(result);
+      addResultMessage(result, layout);
       if (result === "added") setRoomId("");
     } catch (error) {
       const message =
@@ -159,8 +159,7 @@ export function MultiRoomPickerDialog({
         <DialogHeader>
           <DialogTitle>添加直播间</DialogTitle>
           <DialogDescription>
-            可输入平台房间号，或从关注与观看历史中选择。当前 {activeKeys.size}/
-            {MULTI_ROOM_MAX_SLOTS} 路。
+            可输入平台房间号，或从关注与观看历史中选择。当前 {activeKeys.size}/{layout} 路。
           </DialogDescription>
         </DialogHeader>
 

@@ -12,7 +12,16 @@ import {
   useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import { ChevronLeft, Grip, Monitor, Plus, RadioTower, Trash2 } from "lucide-react";
+import {
+  ChevronLeft,
+  Grip,
+  LayoutGrid,
+  LayoutPanelLeft,
+  Monitor,
+  Plus,
+  RadioTower,
+  Trash2,
+} from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,18 +44,41 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { MultiRoomPickerDialog } from "./MultiRoomPickerDialog";
 import { MultiRoomPlayer } from "./MultiRoomPlayer";
-import { isMultiRoomMainSlot, multiRoomSlotClassName, multiRoomSlotLabel } from "./multiRoomLayout";
-import { MULTI_ROOM_MAX_SLOTS, useMultiRoomStore, type MultiRoomEntry } from "./multiRoomStore";
+import {
+  isMultiRoomMainSlot,
+  multiRoomGridClassName,
+  multiRoomSlotClassName,
+  multiRoomSlotLabel,
+} from "./multiRoomLayout";
+import {
+  MULTI_ROOM_FOUR_LAYOUT_OPTIONS,
+  MULTI_ROOM_LAYOUT_OPTIONS,
+  useMultiRoomStore,
+  type MultiRoomEntry,
+  type MultiRoomFourLayout,
+  type MultiRoomLayout,
+} from "./multiRoomStore";
 
 const MULTI_ROOM_DND_INSTRUCTIONS = {
   draggable: "按空格键选中画面，使用方向键移动，按空格键放置，按 Escape 取消。",
 };
 
-function EmptySlot({ index, onAdd }: { index: number; onAdd: () => void }) {
+function EmptySlot({
+  index,
+  fourLayout,
+  layout,
+  onAdd,
+}: {
+  index: number;
+  fourLayout: MultiRoomFourLayout;
+  layout: MultiRoomLayout;
+  onAdd: () => void;
+}) {
   const { isOver, setNodeRef } = useDroppable({
     id: `multi-room-slot:${index}`,
     data: { slotIndex: index },
@@ -59,7 +91,7 @@ function EmptySlot({ index, onAdd }: { index: number; onAdd: () => void }) {
       data-empty="true"
       className={cn(
         "flex min-h-0 items-center justify-center overflow-hidden bg-muted/20",
-        multiRoomSlotClassName(index),
+        multiRoomSlotClassName(index, layout, fourLayout),
         isOver && "bg-primary/15 ring-2 ring-inset ring-primary",
       )}
     >
@@ -70,7 +102,7 @@ function EmptySlot({ index, onAdd }: { index: number; onAdd: () => void }) {
               type="button"
               variant="ghost"
               size="icon-lg"
-              aria-label={`添加到${multiRoomSlotLabel(index)}`}
+              aria-label={`添加到${multiRoomSlotLabel(index, layout, fourLayout)}`}
               onClick={onAdd}
             />
           }
@@ -83,7 +115,17 @@ function EmptySlot({ index, onAdd }: { index: number; onAdd: () => void }) {
   );
 }
 
-function OccupiedSlot({ index, room }: { index: number; room: MultiRoomEntry }) {
+function OccupiedSlot({
+  index,
+  fourLayout,
+  layout,
+  room,
+}: {
+  index: number;
+  fourLayout: MultiRoomFourLayout;
+  layout: MultiRoomLayout;
+  room: MultiRoomEntry;
+}) {
   const { isOver, setNodeRef: setDroppableNodeRef } = useDroppable({
     id: `multi-room-slot:${index}`,
     data: { slotIndex: index },
@@ -139,7 +181,7 @@ function OccupiedSlot({ index, room }: { index: number; room: MultiRoomEntry }) 
       data-room-key={room.key}
       className={cn(
         "relative min-h-0 min-w-0 overflow-hidden bg-black",
-        multiRoomSlotClassName(index),
+        multiRoomSlotClassName(index, layout, fourLayout),
         isOver && !isDragging && "ring-2 ring-inset ring-primary",
         isDragging && "opacity-45",
       )}
@@ -153,7 +195,11 @@ function OccupiedSlot({ index, room }: { index: number; room: MultiRoomEntry }) 
 export function MultiRoomPage() {
   const navigate = useNavigate();
   const slots = useMultiRoomStore((state) => state.slots);
+  const layout = useMultiRoomStore((state) => state.layout);
+  const fourLayout = useMultiRoomStore((state) => state.fourLayout);
   const moveRoom = useMultiRoomStore((state) => state.moveRoom);
+  const setLayout = useMultiRoomStore((state) => state.setLayout);
+  const setFourLayout = useMultiRoomStore((state) => state.setFourLayout);
   const clear = useMultiRoomStore((state) => state.clear);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
@@ -163,6 +209,7 @@ export function MultiRoomPage() {
     useSensor(KeyboardSensor),
   );
   const roomCount = useMemo(() => slots.filter(Boolean).length, [slots]);
+  const visibleSlots = useMemo(() => slots.slice(0, layout), [layout, slots]);
 
   function goBack() {
     const historyState = window.history.state as { idx?: number } | null;
@@ -226,8 +273,65 @@ export function MultiRoomPage() {
         <RadioTower className="size-4 text-primary" aria-hidden />
         <strong className="text-sm font-medium">多画面</strong>
         <Badge variant="secondary" className="tabular-nums">
-          {roomCount}/{MULTI_ROOM_MAX_SLOTS}
+          {roomCount}/{layout}
         </Badge>
+        <ToggleGroup
+          value={[String(layout)]}
+          spacing={0}
+          variant="outline"
+          size="sm"
+          aria-label="多画面布局"
+          onValueChange={(value) => {
+            const next = Number(value[0]);
+            if (MULTI_ROOM_LAYOUT_OPTIONS.includes(next as MultiRoomLayout)) {
+              setLayout(next as MultiRoomLayout);
+            }
+          }}
+        >
+          {MULTI_ROOM_LAYOUT_OPTIONS.map((option) => (
+            <ToggleGroupItem
+              key={option}
+              value={String(option)}
+              aria-label={`${option} 画面布局`}
+              disabled={option === 4 && roomCount > 4}
+              title={option === 4 && roomCount > 4 ? "请先将直播间减少到 4 路" : undefined}
+            >
+              {option}画面
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        {layout === 4 && (
+          <ToggleGroup
+            value={[fourLayout]}
+            spacing={0}
+            variant="outline"
+            size="sm"
+            aria-label="四画面排列"
+            onValueChange={(value) => {
+              const next = value[0];
+              if (MULTI_ROOM_FOUR_LAYOUT_OPTIONS.includes(next as MultiRoomFourLayout)) {
+                setFourLayout(next as MultiRoomFourLayout);
+              }
+            }}
+          >
+            <Tooltip>
+              <TooltipTrigger
+                render={<ToggleGroupItem value="main-left" aria-label="主画面靠左排列" />}
+              >
+                <LayoutPanelLeft aria-hidden />
+              </TooltipTrigger>
+              <TooltipContent>主画面靠左</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={<ToggleGroupItem value="equal" aria-label="四画面均分排列" />}
+              >
+                <LayoutGrid aria-hidden />
+              </TooltipTrigger>
+              <TooltipContent>四画面均分</TooltipContent>
+            </Tooltip>
+          </ToggleGroup>
+        )}
         <div className="ml-auto flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger
@@ -237,7 +341,7 @@ export function MultiRoomPage() {
                   variant="ghost"
                   size="icon-sm"
                   aria-label="添加直播间"
-                  disabled={roomCount >= MULTI_ROOM_MAX_SLOTS}
+                  disabled={roomCount >= layout}
                   onClick={() => setPickerOpen(true)}
                 />
               }
@@ -274,13 +378,29 @@ export function MultiRoomPage() {
       >
         <div
           data-multi-room-grid
-          className="grid min-h-0 flex-1 grid-cols-3 grid-rows-3 gap-px overflow-hidden bg-border/60"
+          data-multi-room-layout={layout === 4 ? fourLayout : "six"}
+          className={cn(
+            "grid min-h-0 flex-1 gap-px overflow-hidden bg-border/60",
+            multiRoomGridClassName(layout, fourLayout),
+          )}
         >
-          {slots.map((room, index) =>
+          {visibleSlots.map((room, index) =>
             room ? (
-              <OccupiedSlot key={room.key} index={index} room={room} />
+              <OccupiedSlot
+                key={room.key}
+                index={index}
+                fourLayout={fourLayout}
+                layout={layout}
+                room={room}
+              />
             ) : (
-              <EmptySlot key={`empty:${index}`} index={index} onAdd={() => setPickerOpen(true)} />
+              <EmptySlot
+                key={`empty:${index}`}
+                index={index}
+                fourLayout={fourLayout}
+                layout={layout}
+                onAdd={() => setPickerOpen(true)}
+              />
             ),
           )}
         </div>

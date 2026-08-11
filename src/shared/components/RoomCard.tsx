@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/context-menu";
 import { notify } from "@/components/ui/toast";
 import { preloadRouteModule } from "@/app/routeModules";
-import { MULTI_ROOM_MAX_SLOTS, useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
+import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
 import { formatOnline, normalizeImageUrl, cn } from "@/lib/utils";
 
 type RoomCardProps = {
@@ -162,7 +162,10 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     const result = useMultiRoomStore.getState().addRoom(room);
     if (result === "added") notify.success("已加入多画面");
     else if (result === "exists") notify.info("该直播间已在多画面中");
-    else notify.error("多画面已满", `最多同时添加 ${MULTI_ROOM_MAX_SLOTS} 个直播间。`);
+    else {
+      const { layout } = useMultiRoomStore.getState();
+      notify.error("多画面已满", `当前布局最多同时添加 ${layout} 个直播间。`);
+    }
   }
 
   return (
