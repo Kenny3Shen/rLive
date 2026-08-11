@@ -1,11 +1,13 @@
 import { useGSAP } from "@gsap/react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import gsap from "gsap";
 import { flushSync } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import packageMetadata from "../../../package.json";
 import {
   createContext,
   type FormEvent,
@@ -184,7 +186,7 @@ const settingsCategories: {
   {
     value: "about",
     label: "关于 rLive",
-    description: "项目主页和使用说明",
+    description: "版本、项目主页和使用说明",
     icon: Info,
     tone: "text-settings-about bg-settings-about/12",
   },
@@ -201,7 +203,7 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
   data: "数据 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
-  about: "关于 rLive 项目主页 github 免责声明",
+  about: "关于 rLive 当前版本 version 项目主页 github 免责声明",
 };
 
 const SettingsSearchContext = createContext("");
@@ -1407,6 +1409,15 @@ function SettingsCategoryOverview({
 }
 
 function AboutSettings() {
+  const versionQuery = useQuery({
+    queryKey: ["app-version"],
+    queryFn: getVersion,
+    enabled: isTauri(),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const appVersion = versionQuery.data ?? packageMetadata.version;
+
   function openProjectHomepage() {
     void openUrl(PROJECT_HOMEPAGE_URL).catch(() => {
       // Keep the link useful in a browser-based development preview, where
@@ -1418,7 +1429,13 @@ function AboutSettings() {
   return (
     <div className="flex flex-col gap-4">
       <AlertDialog>
-        <Section title="关于 rLive" keywords="项目主页 github 免责声明">
+        <Section title="关于 rLive" keywords="当前版本 version 项目主页 github 免责声明">
+          <Field orientation="horizontal">
+            <FieldTitle id="app-version">当前版本</FieldTitle>
+            <Badge variant="secondary" className="tabular-nums">
+              v{appVersion}
+            </Badge>
+          </Field>
           <Field orientation="horizontal">
             <FieldTitle id="project-homepage">项目主页</FieldTitle>
             <Button onClick={openProjectHomepage} variant="outline">

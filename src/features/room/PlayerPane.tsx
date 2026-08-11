@@ -1741,7 +1741,7 @@ export function PlayerPane({
             </div>
             <div data-room-side-tab-viewport className="relative min-h-0 flex-1 overflow-hidden">
               <div
-                ref={sideTabSwipe.pageRef as React.Ref<HTMLDivElement>}
+                ref={sideTabSwipe.bindPage}
                 data-slot="horizontal-swipe-track"
                 className="flex h-full min-w-0"
                 style={{ width: `${ROOM_SIDE_TABS.length * 100}%` }}

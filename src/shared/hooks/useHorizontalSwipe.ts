@@ -132,6 +132,8 @@ export function useHorizontalSwipe<T>({
   /** Set between a gesture commit and the value change it asked for. */
   const pendingCommitRef = useRef<{ value: T; direction: 1 | -1; velocity: number } | null>(null);
   const commitRollbackTimerRef = useRef<number | null>(null);
+  /** Watches the track's viewport. One per attached node, replaced on rebind. */
+  const trackResizeObserverRef = useRef<ResizeObserver | null>(null);
   itemsRef.current = items;
   valueRef.current = value;
   onChangeRef.current = onChange;
@@ -381,10 +383,36 @@ export function useHorizontalSwipe<T>({
     writeOffset,
   ]);
 
-  // Positioning a track is layout rather than gesture, so it also runs on
-  // clients without touch: the strip must show the selected page even when no
-  // pointer will ever reach it.
-  useLayoutEffect(() => {
+  const disconnectTrackResize = useCallback(() => {
+    const observer = trackResizeObserverRef.current;
+    if (!observer) return;
+    trackResizeObserverRef.current = null;
+    observer.disconnect();
+  }, []);
+
+  /**
+   * Park the track at the offset its current value implies, and keep measuring
+   * the viewport it travels inside.
+   *
+   * Positioning a track is layout rather than gesture, so this also runs on
+   * clients without touch: the strip must show the selected page even when no
+   * pointer will ever reach it.
+   *
+   * Runs on mount *and* on every rebind, because a caller may replace the track
+   * while this hook stays mounted. The Shell's `PagePan` is keyed on the
+   * pathname, so leaving a swipeable route and coming back rebuilds the whole
+   * viewport/track/panel subtree — and assigning a ref does not re-run layout
+   * effects, so parking only on mount left the fresh track untransformed while
+   * `offsetRef` still held `-index * width`. Panels sit at their *absolute*
+   * strip index, so for any page past the first that pushes the active panel
+   * entirely off screen: nothing scrollable under the finger, and a horizontal
+   * gesture whose commit only remounts pages.
+   *
+   * A standalone `page` needs none of this: it rests untransformed at offset 0,
+   * which is where a freshly mounted node already sits.
+   */
+  const parkTrack = useCallback(() => {
+    disconnectTrackResize();
     if (!isTrackLayout) return;
     const el = pageRef.current;
     const viewport = el?.parentElement;
@@ -404,12 +432,42 @@ export function useHorizontalSwipe<T>({
       writeOffset(horizontalSwipeTrackOffset(index, width));
     };
 
+    // Observing happens even mid-gesture — `applyWidth` decides for itself
+    // whether it may move the layer — so a track bound while a finger is down
+    // is not left permanently unmeasured.
     applyWidth();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(applyWidth);
+    trackResizeObserverRef.current = observer;
     observer.observe(viewport);
-    return () => observer.disconnect();
-  }, [cancelSettle, isTrackLayout, writeOffset]);
+  }, [cancelSettle, disconnectTrackResize, isTrackLayout, writeOffset]);
+
+  /**
+   * Attach the element that should travel. The only way in: this is a callback
+   * ref rather than a ref object precisely so that replacing the surface cannot
+   * go unnoticed.
+   *
+   * Its identity changes with `layout`, so React re-invokes it — and `parkTrack`
+   * runs again — whenever either the node or the layout changes, and at no other
+   * time. A gesture commit leaves the node alone, so the settle it started is
+   * never interrupted.
+   */
+  const bindPage = useCallback(
+    (node: HTMLElement | null) => {
+      if (!node) return;
+      pageRef.current = node;
+      parkTrack();
+      return () => {
+        // A retained exit animation (PagePan keeps the outgoing page alive) means
+        // this cleanup can run while a newer surface is already bound and
+        // observed. Only the node still in charge may tear anything down.
+        if (pageRef.current !== node) return;
+        disconnectTrackResize();
+        pageRef.current = null;
+      };
+    },
+    [disconnectTrackResize, parkTrack],
+  );
 
   useLayoutEffect(() => {
     if (enabled) return;
@@ -648,7 +706,7 @@ export function useHorizontalSwipe<T>({
 
   if (!enabled) {
     return {
-      pageRef,
+      bindPage,
       onPointerDownCapture: undefined,
       onPointerMoveCapture: undefined,
       onPointerUpCapture: undefined,
@@ -658,7 +716,7 @@ export function useHorizontalSwipe<T>({
   }
 
   return {
-    pageRef,
+    bindPage,
     onPointerDownCapture,
     onPointerMoveCapture,
     onPointerUpCapture,

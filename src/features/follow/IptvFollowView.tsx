@@ -3,13 +3,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   DndContext,
   DragOverlay,
-  KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
   useDraggable,
   useDroppable,
-  useSensor,
-  useSensors,
   type Announcements,
   type DragEndEvent,
   type DragStartEvent,
@@ -88,6 +83,7 @@ import { PagePan } from "@/shared/motion/PagePan";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { IptvFollowGroupManagerDialog } from "./IptvFollowGroupManagerDialog";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
+import { useFollowDndSensors } from "./useFollowDndSensors";
 import {
   IPTV_FOLLOW_UNGROUPED_ID,
   IPTV_FOLLOW_UNGROUPED_NAME,
@@ -205,7 +201,7 @@ function IptvFavoriteCard({
             ref={setActivatorNodeRef}
             type="button"
             className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-            aria-label={`播放 ${favorite.name}，拖动卡片可移动分组`}
+            aria-label={`播放 ${favorite.name}，可拖动卡片或通过菜单移动分组`}
             onPointerEnter={() => preloadRouteModule("/iptv/play")}
             onFocus={() => preloadRouteModule("/iptv/play")}
             onClick={() => onOpen(favorite)}
@@ -415,11 +411,7 @@ export function IptvFollowView({
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
   const removeMutation = useRemoveIptvFavoriteMutation();
   const moveMutation = useSetIptvFavoriteGroupMutation(groups);
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
-    useSensor(KeyboardSensor),
-  );
+  const sensors = useFollowDndSensors();
 
   const groupOptions = useMemo(() => iptvFollowGroups(favorites, groups), [favorites, groups]);
   const groupCounts = useMemo(

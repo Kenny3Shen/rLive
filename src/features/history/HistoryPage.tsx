@@ -535,7 +535,7 @@ export function HistoryPage() {
             className="min-w-0 overflow-x-clip"
           >
             <div
-              ref={historyTabSwipe.pageRef as React.Ref<HTMLDivElement>}
+              ref={historyTabSwipe.bindPage}
               data-slot="horizontal-swipe-track"
               className="flex items-start"
               style={{ width: `${HISTORY_VIEWS.length * 100}%` }}
