@@ -8,7 +8,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
-import { SITE_LABELS, normalizeImageUrl } from "@/lib/utils";
+import { RoomIdentityLine } from "@/shared/components/player/RoomIdentityLine";
+import { normalizeImageUrl } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { LiveRoomDetail } from "@/shared/types/live";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -334,6 +335,8 @@ export function MultiRoomPlayer({
   const detail = detailQuery.data;
   const title = detail?.title || room.title;
   const userName = detail?.user_name || room.userName;
+  const userAvatar = detail?.user_avatar;
+  const online = detail?.online;
   const cover = normalizeImageUrl(detail?.cover || room.cover);
   const loading = detailQuery.isLoading || playback.loading;
   const error = detailQuery.error ?? playback.error ?? playback.loadError ?? player.loadError;
@@ -429,18 +432,20 @@ export function MultiRoomPlayer({
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex min-w-0 items-start justify-between gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity group-data-[main=true]/player:opacity-100 group-focus-within/player:opacity-100 group-hover/player:opacity-100">
-        <div className="pointer-events-auto flex min-w-0 items-center gap-1.5">
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity group-data-[main=true]/player:opacity-100 group-focus-within/player:opacity-100 group-hover/player:opacity-100">
+        <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
           {dragHandle}
           {main && <Badge variant="secondary">主画面</Badge>}
-          <div className="flex min-w-0 flex-col">
-            <strong className="truncate text-xs font-medium" title={title}>
-              {title}
-            </strong>
-            <span className="truncate text-[10px] text-white/65">
-              {SITE_LABELS[room.siteId] ?? room.siteId} · {userName}
-            </span>
-          </div>
+          <RoomIdentityLine
+            siteId={room.siteId}
+            roomId={detail?.room_id || room.roomId}
+            title={title}
+            userName={userName}
+            userAvatar={userAvatar}
+            online={online}
+            density="tile"
+            className="flex-1"
+          />
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-1">
           {!main && (

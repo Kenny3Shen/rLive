@@ -46,6 +46,13 @@ export function isMobileClient(
   return getClientPlatform(navigatorRef) !== "desktop";
 }
 
+/** Multi-room playback is intentionally limited to desktop-class clients. */
+export function supportsMultiRoom(
+  navigatorRef: ClientNavigator | null | undefined = browserNavigator(),
+): boolean {
+  return getClientPlatform(navigatorRef) === "desktop";
+}
+
 export function isWindowsDesktop(
   navigatorRef: ClientNavigator | null | undefined = browserNavigator(),
 ): boolean {

@@ -32,6 +32,7 @@ import {
 } from "../src/features/room/PlayerPane";
 import {
   playerHudOnlineLabel,
+  roomIdentityOverflowDistance,
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
 import {
@@ -322,6 +323,12 @@ describe("mobile room side tabs", () => {
 });
 
 describe("fullscreen top HUD", () => {
+  test("pans only by the room identity width that exceeds the fixed controls", () => {
+    expect(roomIdentityOverflowDistance(640, 420)).toBe(220);
+    expect(roomIdentityOverflowDistance(420, 420)).toBe(0);
+    expect(roomIdentityOverflowDistance(420.5, 420)).toBe(0);
+  });
+
   test("draws only in fullscreen", () => {
     expect(
       showPlayerFullscreenHud({ fullscreen: false, hasRoomIdentity: true, hasActions: true }),

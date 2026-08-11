@@ -1,12 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Ellipsis, Flame, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Ellipsis, type LucideIcon } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import { SiteLogo } from "@/shared/components/SiteLogo";
 import {
   glassMutedTextClass,
   glassOptionClass,
@@ -19,9 +17,15 @@ import {
   PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
+import {
+  RoomIdentityLine,
+  roomIdentityOverflowDistance,
+} from "@/shared/components/player/RoomIdentityLine";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import type { SiteId } from "@/shared/types/live";
-import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { cn, formatOnline } from "@/lib/utils";
+
+export { roomIdentityOverflowDistance };
 
 /** A room-level entry in the HUD overflow menu (copy link, follow, …). */
 export type PlayerHudRoomAction = {
@@ -131,13 +135,6 @@ export function PlayerFullscreenHud({
     return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
   }, [menuOpen]);
 
-  const title = roomTitle?.trim() || "直播间";
-  const userName = roomUserName?.trim() || "";
-  const platformName = siteId ? (SITE_LABELS[siteId] ?? siteId) : "";
-  const trimmedRoomId = roomId?.trim() || "";
-  const onlineLabel = playerHudOnlineLabel(roomOnline);
-  const avatarUrl = normalizeImageUrl(roomUserAvatar);
-  const avatarLabel = userName ? `${userName} 的头像` : "主播头像";
   const hasMenu = roomActions.length > 0 || playerActions.length > 0;
 
   function runAction(action: PlayerHudRoomAction) {
@@ -190,68 +187,20 @@ export function PlayerFullscreenHud({
       data-slot="player-fullscreen-hud"
       data-compact={compact ? "true" : "false"}
       className={cn(
-        "player-scrim-overlay-top flex min-w-0 items-start gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] text-white",
+        "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] text-white",
         compact ? "pt-[max(0.375rem,env(safe-area-inset-top))] pb-3" : "pt-2.5 pb-6",
       )}
     >
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p
-          className={cn(
-            "min-w-0 truncate font-semibold tracking-tight [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]",
-            compact ? "text-sm" : "text-base",
-          )}
-          title={title}
-        >
-          {title}
-        </p>
-        <div className="flex min-w-0 items-center gap-2 text-white/80">
-          {(avatarUrl || userName) && (
-            <Avatar
-              size="sm"
-              className={cn("shrink-0 ring-1 ring-white/25", compact ? "size-5" : "size-6")}
-              aria-label={avatarLabel}
-            >
-              <AvatarImage src={avatarUrl} alt={avatarLabel} referrerPolicy="no-referrer" />
-              <AvatarFallback
-                aria-label={`${avatarLabel}（加载失败）`}
-                className="bg-white/18 text-[0.625rem] font-medium text-white"
-              >
-                {Array.from(userName)[0] ?? "?"}
-              </AvatarFallback>
-            </Avatar>
-          )}
-          <span
-            className={cn(
-              "min-w-0 truncate font-medium [text-shadow:0_1px_2px_rgb(0_0_0_/_0.7)]",
-              compact ? "text-xs" : "text-sm",
-            )}
-            title={userName || undefined}
-          >
-            {userName || "未知主播"}
-          </span>
-          {siteId && trimmedRoomId && (
-            <HudMetaItem
-              compact={compact}
-              title={`${platformName}房间号：${trimmedRoomId}`}
-              icon={<SiteLogo siteId={siteId} className={compact ? "size-3" : "size-3.5"} />}
-            >
-              {trimmedRoomId}
-            </HudMetaItem>
-          )}
-          {onlineLabel && (
-            <HudMetaItem
-              compact={compact}
-              title={`当前热度：${onlineLabel}`}
-              icon={
-                <Flame aria-hidden className={cn("text-accent", compact ? "size-3" : "size-3.5")} />
-              }
-            >
-              <span className="sr-only">当前热度 </span>
-              {onlineLabel}
-            </HudMetaItem>
-          )}
-        </div>
-      </div>
+      <RoomIdentityLine
+        siteId={siteId}
+        roomId={roomId}
+        title={roomTitle}
+        userName={roomUserName}
+        userAvatar={roomUserAvatar}
+        online={roomOnline}
+        compact={compact}
+        className="flex-1"
+      />
 
       {hasMenu &&
         (compact ? (
@@ -337,31 +286,5 @@ function HudActionTile({
       <Icon className="size-5" aria-hidden />
       {action.label}
     </Button>
-  );
-}
-
-/** Separated meta pair (platform room id, heat) in the host line. */
-function HudMetaItem({
-  compact,
-  title,
-  icon,
-  children,
-}: {
-  compact: boolean;
-  title: string;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center gap-1 border-l border-white/20 pl-2 tabular-nums [text-shadow:0_1px_2px_rgb(0_0_0_/_0.7)]",
-        compact ? "text-[0.6875rem]" : "text-xs",
-      )}
-      title={title}
-    >
-      {icon}
-      {children}
-    </span>
   );
 }

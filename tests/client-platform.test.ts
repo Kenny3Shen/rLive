@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { getClientPlatform, isMobileClient, isWindowsDesktop } from "../src/shared/clientPlatform";
+import {
+  getClientPlatform,
+  isMobileClient,
+  isWindowsDesktop,
+  supportsMultiRoom,
+} from "../src/shared/clientPlatform";
 
 describe("client platform detection", () => {
   test("identifies Android from Client Hints or the current Android WebView user agent", () => {
@@ -27,6 +32,7 @@ describe("client platform detection", () => {
 
     expect(getClientPlatform(ipadDesktopUserAgent)).toBe("ios");
     expect(isMobileClient(ipadDesktopUserAgent)).toBe(true);
+    expect(supportsMultiRoom(ipadDesktopUserAgent)).toBe(false);
   });
 
   test("keeps ordinary desktop browsers on the desktop shell", () => {
@@ -37,6 +43,7 @@ describe("client platform detection", () => {
 
     expect(getClientPlatform(desktop)).toBe("desktop");
     expect(isMobileClient(desktop)).toBe(false);
+    expect(supportsMultiRoom(desktop)).toBe(true);
     expect(isWindowsDesktop(desktop)).toBe(true);
     expect(
       isWindowsDesktop({
