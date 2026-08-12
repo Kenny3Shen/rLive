@@ -1,6 +1,7 @@
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { isMobileClient } from "@/shared/clientPlatform";
+export { prefersReducedMotion } from "./preference";
 
 /**
  * Shared motion vocabulary, on GSAP.
@@ -90,17 +91,4 @@ const TOUCH_PROFILE: MotionProfile = {
 
 export function motionProfile(mobile: boolean = isMobileClient()): MotionProfile {
   return mobile ? TOUCH_PROFILE : DESKTOP_PROFILE;
-}
-
-/**
- * Live `prefers-reduced-motion` read.
- *
- * GSAP's `matchMedia` reverts animations created under a query when it stops
- * matching, which suits declarative setup blocks. The gesture layer instead
- * needs a plain boolean at the moment a pointer is released, so it reads the
- * query directly rather than restructuring around a media context.
- */
-export function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || !window.matchMedia) return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }

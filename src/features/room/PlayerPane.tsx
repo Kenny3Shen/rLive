@@ -1661,7 +1661,7 @@ export function PlayerPane({
                 // video surface that floats over the top edge instead of taking
                 // layout height, faded by the same imperative data attribute so
                 // no React reconciliation happens on the idle timer.
-                "absolute inset-x-0 top-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                "absolute inset-x-0 top-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={handleChromePointerDown}
@@ -1699,7 +1699,7 @@ export function PlayerPane({
               // frame. The data attribute changes imperatively, so this
               // compositor-only fade also avoids reconciling the video, canvas
               // and side panels.
-              "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+              "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
             )}
             onPointerEnter={holdControlsVisible}
             onPointerDown={handleChromePointerDown}

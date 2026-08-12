@@ -118,6 +118,7 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   return (
     <div
       role="button"
+      data-motion-press
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(event) => {

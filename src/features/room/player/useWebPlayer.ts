@@ -900,6 +900,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             // Twitch and other HLS sites need the proxy to rewrite child
             // playlists, keys and segments to the same local session.
             hls: hlsSource,
+            twitchAdRecovery: selectedSource.twitch_ad_recovery,
           });
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
@@ -1316,6 +1317,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             headers: targetSource.headers,
             sessionId: proxySessionId,
             hls: targetKind === "hls",
+            twitchAdRecovery: targetSource.twitch_ad_recovery,
           });
           if (
             cancelled ||

@@ -19,6 +19,7 @@
 
 /* Class-based dark mode so applyTheme() can toggle html.dark */
 @custom-variant dark (&:where(.dark, .dark *));
+@custom-variant motion-reduced (&:where([data-motion="reduced"], [data-motion="reduced"] *));
 
 /*
   Simple Live–inspired dark stage for rLive.
@@ -216,6 +217,32 @@ body,
 
 body {
   font-family: var(--font-sans);
+}
+
+/* Direct-manipulation feedback starts on pointer down. The scale is restrained
+   enough for dense controls, and only explicit surfaces opt in so player video,
+   gesture tracks and drag transforms never compete with it. */
+[data-motion-press],
+.motion-card {
+  transform-origin: center;
+  transition-property: transform, background-color, border-color, color, box-shadow, opacity;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (pointer: coarse) {
+  :root[data-motion="full"] [data-motion-press]:active {
+    transform: scale(0.97);
+  }
+
+  :root[data-motion="full"] .motion-card:has(> button:active) {
+    transform: scale(0.985);
+  }
+}
+
+:root[data-motion="reduced"] [data-motion-press],
+:root[data-motion="reduced"] .motion-card {
+  transition-property: background-color, border-color, color, box-shadow, opacity;
 }
 
 /* On touch-first devices, browser tap flashes and accidental text selection
@@ -693,14 +720,12 @@ html.overlay-window #root {
   animation: drawer-out-right 200ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .animate-spin-soft,
-  .animate-drawer-in-bottom,
-  .animate-drawer-out-bottom,
-  .animate-drawer-in-right,
-  .animate-drawer-out-right {
-    animation: none;
-  }
+:root[data-motion="reduced"] .animate-spin-soft,
+:root[data-motion="reduced"] .animate-drawer-in-bottom,
+:root[data-motion="reduced"] .animate-drawer-out-bottom,
+:root[data-motion="reduced"] .animate-drawer-in-right,
+:root[data-motion="reduced"] .animate-drawer-out-right {
+  animation: none;
 }
 
 @layer base {

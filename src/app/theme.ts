@@ -1,4 +1,5 @@
 import type { ThemeMode } from "../shared/stores/settingsStore";
+import { prefersReducedMotion } from "../shared/motion/preference";
 
 export type ThemeRevealTransition = {
   ready: Promise<void>;
@@ -76,8 +77,7 @@ export function revealThemeAt(
   origin: ThemeRevealOrigin,
   updateTheme: () => void,
 ): ThemeRevealTransition {
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (reducedMotion || typeof document.startViewTransition !== "function") {
+  if (prefersReducedMotion() || typeof document.startViewTransition !== "function") {
     return updateThemeImmediately(updateTheme);
   }
 
