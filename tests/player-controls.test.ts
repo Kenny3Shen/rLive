@@ -27,7 +27,9 @@ import {
   playerEdgeGestureValue,
   PLAYER_STAGE_DOUBLE_TAP_MS,
   showDanmakuComposerInPlayerControls,
+  shouldRetainRoomSidePanel,
   shouldRunDanmakuCanvas,
+  shouldShowRoomDanmakuPanel,
   sidePanelStartsOpen,
 } from "../src/features/room/PlayerPane";
 import {
@@ -153,6 +155,23 @@ describe("mobile player layout", () => {
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {
     expect(sidePanelStartsOpen(false)).toBe(true);
     expect(sidePanelStartsOpen(true)).toBe(false);
+  });
+
+  test("retains the mounted danmaku panel while mobile fullscreen hides it", () => {
+    let retained = shouldRetainRoomSidePanel(false, true, true);
+    expect(retained).toBe(true);
+
+    // Entering fullscreen rotates the viewport and closes the visible panel.
+    retained = shouldRetainRoomSidePanel(retained, false, true);
+    expect(retained).toBe(true);
+    expect(shouldShowRoomDanmakuPanel(false, true, "chat")).toBe(false);
+
+    // Exiting fullscreen reveals the same retained chat panel and its backlog.
+    expect(shouldShowRoomDanmakuPanel(true, false, "chat")).toBe(true);
+
+    // A fresh landscape room still avoids mounting a panel that was never opened.
+    expect(shouldRetainRoomSidePanel(false, false, true)).toBe(false);
+    expect(shouldRetainRoomSidePanel(false, false, false)).toBe(true);
   });
 
   test("pauses the danmaku canvas only when an overlay actually obscures the picture", () => {
