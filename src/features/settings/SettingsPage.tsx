@@ -262,10 +262,11 @@ function Section({
   return (
     <section
       data-slot="settings-section"
-      className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm shadow-black/10"
+      data-settings-motion-item
+      className="settings-section overflow-hidden rounded-xl border border-border/80 bg-card/80 shadow-sm shadow-black/10"
     >
       <FieldSet className="gap-0 py-0">
-        <div className="border-b border-border-subtle bg-muted/20 px-4 py-2.5">
+        <div className="settings-section-heading border-b border-border-subtle bg-muted/20 px-4 py-2.5">
           <FieldLegend variant="label" className="m-0 text-sm font-semibold text-foreground">
             {title}
           </FieldLegend>
@@ -1302,7 +1303,8 @@ function SettingsCategoryButton({
       type="button"
       data-motion-press
       onClick={() => onOpen(category.value)}
-      className="group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-ring"
+      data-settings-motion-item
+      className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40 focus-visible:bg-muted/40 focus-ring"
     >
       <span
         className={cn(
@@ -1352,12 +1354,12 @@ function SettingsCategoryOverview({
     .filter((group) => group.categories.length > 0);
 
   return (
-    <div className="flex min-h-full flex-col gap-6">
+    <div className="settings-overview flex min-h-full flex-col gap-6">
       <div data-settings-intro className="flex flex-col gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">设置</h1>
         </div>
-        <InputGroup className="h-11 max-w-2xl rounded-xl border-border-subtle bg-card/80 shadow-sm">
+        <InputGroup className="settings-search h-11 max-w-2xl rounded-xl border-border-subtle bg-card/80 shadow-sm">
           <InputGroupAddon align="inline-start" className="pl-3">
             <Search aria-hidden />
           </InputGroupAddon>
@@ -1382,10 +1384,18 @@ function SettingsCategoryOverview({
       </div>
 
       {visibleGroups.length > 0 ? (
-        <div className="flex max-w-4xl flex-col gap-4 px-px">
+        <div className="flex max-w-4xl flex-col gap-5 px-px">
           {visibleGroups.map((group) => (
-            <section key={group.label} aria-label={group.label}>
-              <Card className="overflow-hidden rounded-xl bg-card/85 p-0 ring-border-subtle shadow-sm shadow-black/10">
+            <section
+              key={group.label}
+              aria-label={group.label}
+              data-settings-motion-item
+              className="settings-category-group"
+            >
+              <p className="settings-category-group-label mb-2 px-1 text-xs font-semibold text-muted-foreground">
+                {group.label}
+              </p>
+              <Card className="settings-category-list overflow-hidden rounded-xl bg-card/85 p-0 ring-border-subtle shadow-sm shadow-black/10">
                 <CardContent className="divide-y divide-border-subtle p-0">
                   {group.categories.map((category) => (
                     <SettingsCategoryButton
@@ -1788,24 +1798,27 @@ export function SettingsPage() {
     () => {
       const root = motionRootRef.current;
       if (!root || prefersReducedMotion()) return;
-      const targets = gsap.utils.toArray<HTMLElement>("[data-settings-intro]", root);
+      const targets = gsap.utils.toArray<HTMLElement>(
+        "[data-settings-intro], [data-settings-motion-item]",
+        root,
+      );
       if (targets.length === 0) return;
 
       const profile = motionProfile();
       gsap.fromTo(
         targets,
-        { autoAlpha: 0, y: 10, willChange: "transform,opacity" },
+        { autoAlpha: 0, y: 8, willChange: "transform,opacity" },
         {
           autoAlpha: 1,
           y: 0,
-          duration: profile.enter.duration,
+          duration: Math.min(profile.enter.duration, 0.2),
           ease: profile.enter.ease,
-          stagger: 0.04,
+          stagger: { each: 0.025, from: "start" },
           clearProps: "transform,opacity,visibility,willChange",
         },
       );
     },
-    { scope: motionRootRef },
+    { scope: motionRootRef, dependencies: [settingsMotionKey] },
   );
 
   useEffect(() => {
@@ -1914,31 +1927,35 @@ export function SettingsPage() {
           contentClassName="min-h-full overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y"
         >
           {category && categoryMetadata ? (
-            <div className="flex min-h-full flex-col gap-5">
+            <div className="settings-detail flex min-h-full flex-col gap-5">
               <div
                 data-settings-intro
-                className="flex items-center gap-3 border-b border-border-subtle pb-4"
+                className="settings-detail-header flex items-center gap-3 border-b border-border-subtle pb-4"
               >
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-lg"
-                  className="motion-back-button relative z-10"
-                  aria-label="返回设置首页"
-                  onClick={returnToOverview}
-                >
-                  <ArrowLeft
-                    className="transition-transform duration-150 ease-[var(--motion-ease-out)]"
-                    aria-hidden
-                  />
-                </Button>
+                <div className="settings-back-slot shrink-0">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-lg"
+                    className="motion-back-button"
+                    aria-label="返回设置首页"
+                    onClick={returnToOverview}
+                  >
+                    <ArrowLeft
+                      className="transition-transform duration-150 ease-[var(--motion-ease-out)]"
+                      aria-hidden
+                    />
+                  </Button>
+                </div>
                 <div className="min-w-0 flex-1">
                   <h1 className="truncate text-xl font-semibold text-foreground">
                     {categoryMetadata.label}
                   </h1>
                 </div>
               </div>
-              <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
+              <div data-settings-motion-item className="min-w-0 max-w-4xl">
+                {settingsCategoryPanels[category]}
+              </div>
             </div>
           ) : (
             <SettingsCategoryOverview

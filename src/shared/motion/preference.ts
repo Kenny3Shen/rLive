@@ -13,7 +13,15 @@ export function applyFullMotion() {
   document.documentElement.dataset.motion = FULL_MOTION_MODE;
 }
 
-/** Compatibility helper shared by GSAP, WAAPI, gestures and View Transitions. */
+/**
+ * The app no longer exposes a motion selector, but the operating system's
+ * accessibility preference still needs to be honored without changing the
+ * persisted full-motion default.
+ */
 export function prefersReducedMotion(): boolean {
-  return false;
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
