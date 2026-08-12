@@ -47,7 +47,7 @@ function ToastList() {
       key={item.id}
       toast={item}
       className={cn(
-        "pointer-events-auto relative flex w-full items-start gap-3 rounded-xl border border-border bg-popover p-3.5 text-popover-foreground shadow-lg shadow-black/15 outline-none transition-[opacity,transform] duration-200 data-starting-style:translate-y-2 data-starting-style:opacity-0 data-ending-style:translate-y-2 data-ending-style:opacity-0",
+        "motion-toast pointer-events-auto relative flex w-full items-start gap-3 rounded-xl border border-border bg-popover p-3.5 text-popover-foreground shadow-lg shadow-black/15 outline-none data-starting-style:translate-y-2 data-starting-style:opacity-0 data-ending-style:translate-y-2 data-ending-style:opacity-0",
         item.type === "error" && "border-destructive/35",
       )}
     >

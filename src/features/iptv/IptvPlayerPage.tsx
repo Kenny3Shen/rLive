@@ -62,7 +62,7 @@ function IptvPlayerTopBar({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="absolute left-3 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70"
+              className="motion-back-button absolute left-3 rounded-lg hover:bg-muted/70"
               aria-label={backLabel}
               onClick={onBack}
             />

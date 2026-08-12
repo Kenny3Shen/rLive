@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct AppSettings {
     /// `system` | `light` | `dark`
     pub theme: String,
-    /// `system` | `full` | `reduced`
+    /// Legacy compatibility field; normalized to `full` at the settings boundary.
     #[serde(default = "default_motion_mode")]
     pub motion_mode: String,
     pub default_site: String,
@@ -129,7 +129,7 @@ fn default_quality_level() -> String {
 }
 
 fn default_motion_mode() -> String {
-    "system".into()
+    "full".into()
 }
 
 fn default_playback_smart_line_selection() -> bool {
@@ -261,7 +261,7 @@ mod tests {
         let v = serde_json::to_string(&s).unwrap();
         let back: AppSettings = serde_json::from_str(&v).unwrap();
         assert_eq!(back.default_site, "bilibili");
-        assert_eq!(back.motion_mode, "system");
+        assert_eq!(back.motion_mode, "full");
     }
 
     #[test]
@@ -282,7 +282,7 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(legacy).unwrap();
 
         assert_eq!(settings.danmaku_area, 0.9);
-        assert_eq!(settings.motion_mode, "system");
+        assert_eq!(settings.motion_mode, "full");
         assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);

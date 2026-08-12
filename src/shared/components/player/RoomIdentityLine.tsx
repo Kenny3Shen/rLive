@@ -4,7 +4,6 @@ import { useRef, type ReactNode } from "react";
 import { Flame } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
-import { MOTION_CHANGE_EVENT } from "@/shared/motion/preference";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import type { SiteId } from "@/shared/types/live";
 import { SiteLogo } from "../SiteLogo";
@@ -99,13 +98,11 @@ export function RoomIdentityLine({
       observer?.observe(viewport);
       observer?.observe(track);
       if (!observer) window.addEventListener("resize", scheduleMeasure);
-      window.addEventListener(MOTION_CHANGE_EVENT, scheduleMeasure);
 
       return () => {
         if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
         observer?.disconnect();
         if (!observer) window.removeEventListener("resize", scheduleMeasure);
-        window.removeEventListener(MOTION_CHANGE_EVENT, scheduleMeasure);
         tween?.kill();
       };
     },

@@ -25,7 +25,7 @@ gsap.registerPlugin(useGSAP);
 
 // Project-wide tween defaults. Individual tweens still override where they mean
 // something different, but this keeps one-off `gsap.to` calls on-brand.
-gsap.defaults({ duration: 0.26, ease: "power2.out" });
+gsap.defaults({ duration: 0.22, ease: "power2.out" });
 
 /**
  * Decelerate curve for entrances — the closest built-in to the previous
@@ -33,8 +33,6 @@ gsap.defaults({ duration: 0.26, ease: "power2.out" });
  * CustomEase so no extra plugin has to be registered or shipped.
  */
 export const EASE_OUT = "power2.out";
-/** Accelerate, for exits that should clear the screen without lingering. */
-export const EASE_IN = "power2.in";
 /**
  * CSS equivalent of `power2.out`-family deceleration, for the surfaces that
  * animate through Web Animations rather than GSAP.
@@ -77,16 +75,16 @@ export type MotionProfile = {
 const DESKTOP_PROFILE: MotionProfile = {
   // Full-surface pan: both pages move together as one continuous viewport.
   tabTravel: PAGE_PAN_PERCENT,
-  enter: { duration: 0.28, ease: EASE_OUT },
-  exit: { duration: 0.28, ease: EASE_OUT },
+  enter: { duration: 0.22, ease: EASE_OUT },
+  exit: { duration: 0.22, ease: EASE_OUT },
 };
 
 const TOUCH_PROFILE: MotionProfile = {
   // Touch navigation reads as an extension of the finger: the whole page tracks
   // across the viewport, settling a touch faster than desktop.
   tabTravel: PAGE_PAN_PERCENT,
-  enter: { duration: 0.24, ease: EASE_OUT },
-  exit: { duration: 0.24, ease: EASE_OUT },
+  enter: { duration: 0.2, ease: EASE_OUT },
+  exit: { duration: 0.2, ease: EASE_OUT },
 };
 
 export function motionProfile(mobile: boolean = isMobileClient()): MotionProfile {

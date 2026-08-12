@@ -94,7 +94,7 @@ export function revealThemeAt(
   root.style.setProperty("--theme-reveal-radius", geometry.radius);
   root.style.setProperty(
     "--theme-reveal-duration",
-    window.matchMedia("(pointer: coarse)").matches ? "420ms" : "520ms",
+    window.matchMedia("(pointer: coarse)").matches ? "240ms" : "280ms",
   );
   root.dataset.themeReveal = "true";
 

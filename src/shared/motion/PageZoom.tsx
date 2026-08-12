@@ -2,9 +2,9 @@ import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { startTransition, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { EASE_IN, motionProfile, prefersReducedMotion } from "./tokens";
+import { EASE_OUT, motionProfile, prefersReducedMotion } from "./tokens";
 
-const ROOM_ZOOM_START_SCALE = 0.92;
+const ROOM_ZOOM_START_SCALE = 0.96;
 
 type ZoomSnapshot = {
   key: string;
@@ -84,8 +84,8 @@ export function PageZoom({
         gsap.to(leaving, {
           autoAlpha: 0,
           scale: ROOM_ZOOM_START_SCALE,
-          duration: profile.exit.duration,
-          ease: EASE_IN,
+          duration: Math.min(profile.exit.duration, 0.18),
+          ease: EASE_OUT,
           // This node is about to unmount. Clearing opacity/visibility here
           // would restore the live room for one frame before React removes it.
           onComplete: () => {

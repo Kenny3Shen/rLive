@@ -77,11 +77,12 @@ export function IptvSourceSwitcher({
               key={source.id}
               type="button"
               role="tab"
+              data-motion-control
               aria-selected={active}
               title={source.label}
               onClick={() => onValueChange(source.id)}
               className={cn(
-                "relative flex h-full shrink-0 items-center px-3 text-sm font-medium transition-colors duration-200 focus-ring",
+                "relative flex h-full shrink-0 items-center px-3 text-sm font-medium transition-colors duration-150 focus-ring",
                 active
                   ? "text-foreground"
                   : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",

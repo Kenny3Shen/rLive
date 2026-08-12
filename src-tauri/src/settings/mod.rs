@@ -10,9 +10,7 @@ const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 5;
 const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 
 fn normalize_motion_preference(settings: &mut AppSettings) {
-    if !matches!(settings.motion_mode.as_str(), "system" | "full" | "reduced") {
-        settings.motion_mode = "system".to_owned();
-    }
+    settings.motion_mode = "full".to_owned();
 }
 
 /// Repairs platform visibility preferences from hand-edited or future settings
@@ -213,7 +211,7 @@ mod tests {
         assert!(!has_saved_settings);
         assert_eq!(s.default_site, "bilibili");
         assert_eq!(s.theme, "system");
-        assert_eq!(s.motion_mode, "system");
+        assert_eq!(s.motion_mode, "full");
         assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_size, 18);
         assert_eq!(s.danmaku_speed, 8);
@@ -267,15 +265,15 @@ mod tests {
     }
 
     #[test]
-    fn set_normalizes_motion_mode() {
+    fn set_normalizes_legacy_motion_mode_to_full() {
         let conn = open_in_memory().unwrap();
         let settings = AppSettings {
-            motion_mode: "surprise".into(),
+            motion_mode: "reduced".into(),
             ..AppSettings::default()
         };
 
         set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().motion_mode, "system");
+        assert_eq!(get(&conn).unwrap().motion_mode, "full");
     }
 
     #[test]
