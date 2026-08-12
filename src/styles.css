@@ -28,6 +28,8 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
+  --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* light (rarely used — app defaults to dark) */
   --background: oklch(0.985 0.002 260);
   --foreground: oklch(0.18 0.02 260);
@@ -120,8 +122,7 @@
 
   to {
     clip-path: circle(
-      var(--theme-reveal-radius, 150vmax) at var(--theme-reveal-x, 50vw)
-        var(--theme-reveal-y, 50vh)
+      var(--theme-reveal-radius, 150vmax) at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh)
     );
   }
 }
@@ -144,7 +145,7 @@
 }
 
 :root[data-theme-reveal="true"]::view-transition-new(root) {
-  animation: theme-reveal var(--theme-reveal-duration, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: theme-reveal var(--theme-reveal-duration, 280ms) var(--motion-ease-out) both;
   z-index: 2;
 }
 
@@ -226,12 +227,13 @@ body {
 .motion-card {
   transform-origin: center;
   transition-property: transform, background-color, border-color, color, box-shadow, opacity;
-  transition-duration: 180ms;
-  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  transition-duration: 150ms;
+  transition-timing-function: var(--motion-ease-out);
 }
 
 @media (pointer: coarse) {
-  :root[data-motion="full"] [data-motion-press]:active {
+  :root[data-motion="full"]
+    :is([data-motion-press], [data-motion-control]):active:not(:focus-visible) {
     transform: scale(0.97);
   }
 
@@ -240,9 +242,203 @@ body {
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  :root[data-motion="full"] [data-motion-control]:active:not(:focus-visible) {
+    transform: scale(0.98);
+  }
+
+  :root[data-motion="full"] .group:hover .motion-nav-icon {
+    transform: scale(1.05);
+  }
+
+  :root[data-motion="full"] .group:hover .motion-room-cover {
+    transform: scale(1.035);
+  }
+
+  :root[data-motion="full"] .group:hover .motion-disclosure-icon {
+    transform: translate3d(2px, 0, 0);
+  }
+
+  :root[data-motion="full"] .motion-back-button:hover svg {
+    transform: translate3d(-2px, 0, 0);
+  }
+}
+
+:root[data-motion="full"] :is([data-motion-press], [data-motion-control]):focus-visible {
+  transition-duration: 0s;
+}
+
 :root[data-motion="reduced"] [data-motion-press],
 :root[data-motion="reduced"] .motion-card {
   transition-property: background-color, border-color, color, box-shadow, opacity;
+}
+
+/* Base UI keeps popup nodes mounted through their exit state. Transitions can
+   therefore reverse from the current frame when a control is toggled rapidly,
+   unlike keyframes which restart the whole entrance or exit sequence. */
+.motion-popup,
+.motion-tooltip {
+  transform: translate3d(0, 0, 0) scale(1);
+  opacity: 1;
+  transition-property: transform, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: var(--motion-ease-out);
+  will-change: transform, opacity;
+}
+
+.motion-tooltip {
+  transition-duration: 140ms;
+}
+
+:is(.motion-popup, .motion-tooltip)[data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-ending-style] {
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(0.97);
+}
+
+:is(.motion-popup, .motion-tooltip)[data-side="bottom"][data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-side="bottom"][data-ending-style] {
+  transform: translate3d(0, -4px, 0) scale(0.97);
+}
+
+:is(.motion-popup, .motion-tooltip)[data-side="top"][data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-side="top"][data-ending-style] {
+  transform: translate3d(0, 4px, 0) scale(0.97);
+}
+
+:is(.motion-popup, .motion-tooltip)[data-side="right"][data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-side="right"][data-ending-style],
+:is(.motion-popup, .motion-tooltip)[data-side="inline-end"][data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-side="inline-end"][data-ending-style] {
+  transform: translate3d(-4px, 0, 0) scale(0.97);
+}
+
+:is(.motion-popup, .motion-tooltip)[data-side="left"][data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-side="left"][data-ending-style],
+:is(.motion-popup, .motion-tooltip)[data-side="inline-start"][data-starting-style],
+:is(.motion-popup, .motion-tooltip)[data-side="inline-start"][data-ending-style] {
+  transform: translate3d(4px, 0, 0) scale(0.97);
+}
+
+:is(.motion-popup, .motion-tooltip)[data-ending-style] {
+  transition-duration: 110ms;
+}
+
+.motion-tooltip[data-instant] {
+  transition-duration: 0ms;
+}
+
+/* Item-aligned selects reposition the popup so the current option sits over
+   the trigger. Scaling that geometry makes the option drift under the cursor. */
+.motion-popup[data-align-trigger="true"] {
+  transition-duration: 0ms;
+}
+
+.motion-popup[data-align-trigger="true"]:is([data-starting-style], [data-ending-style]) {
+  transform: none;
+  opacity: 1;
+}
+
+.motion-dialog-overlay {
+  opacity: 1;
+  transition: opacity 180ms var(--motion-ease-out);
+}
+
+.motion-dialog-overlay:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+}
+
+.motion-dialog-overlay[data-ending-style] {
+  transition-duration: 120ms;
+}
+
+.motion-dialog {
+  scale: 1;
+  opacity: 1;
+  transform-origin: center;
+  transition:
+    scale 200ms var(--motion-ease-out),
+    opacity 180ms var(--motion-ease-out);
+  will-change: scale, opacity;
+}
+
+.motion-dialog:is([data-starting-style], [data-ending-style]) {
+  scale: 0.96;
+  opacity: 0;
+}
+
+.motion-dialog[data-ending-style] {
+  transition-duration: 140ms;
+}
+
+.motion-drawer {
+  transform: translate3d(0, 0, 0);
+  transition: transform 240ms var(--motion-ease-drawer);
+  will-change: transform;
+}
+
+.motion-drawer[data-side="bottom"]:is([data-starting-style], [data-ending-style]) {
+  transform: translate3d(0, 100%, 0);
+}
+
+.motion-drawer[data-side="right"]:is([data-starting-style], [data-ending-style]) {
+  transform: translate3d(100%, 0, 0);
+}
+
+.motion-drawer[data-ending-style] {
+  transition-duration: 160ms;
+  transition-timing-function: var(--motion-ease-out);
+}
+
+.motion-toast {
+  transition-property: translate, opacity;
+  transition-duration: 180ms;
+  transition-timing-function: var(--motion-ease-out);
+}
+
+.motion-toast[data-ending-style] {
+  transition-duration: 120ms;
+}
+
+:root[data-motion="reduced"] :is(.motion-popup, .motion-tooltip) {
+  transform: none;
+  transition-property: opacity;
+  transition-duration: 120ms;
+}
+
+:root[data-motion="reduced"] .motion-dialog {
+  scale: 1;
+  transition-property: opacity;
+  transition-duration: 120ms;
+}
+
+:root[data-motion="reduced"] .motion-drawer {
+  transform: none;
+  opacity: 1;
+  transition-property: opacity;
+  transition-duration: 140ms;
+}
+
+:root[data-motion="reduced"]
+  :is(.motion-popup, .motion-tooltip, .motion-dialog, .motion-drawer):is(
+    [data-starting-style],
+    [data-ending-style]
+  ) {
+  scale: 1;
+  opacity: 0;
+}
+
+:root[data-motion="reduced"]
+  :is(.motion-popup, .motion-tooltip, .motion-drawer):is(
+    [data-starting-style],
+    [data-ending-style]
+  ) {
+  transform: none;
+}
+
+:root[data-motion="reduced"] .motion-toast {
+  translate: none;
+  transition-property: opacity;
 }
 
 /* On touch-first devices, browser tap flashes and accidental text selection
@@ -665,66 +861,7 @@ html.overlay-window #root {
 /* Discovery lists render directly. The only route-level motion left is the
    directional history transition in Shell. */
 
-/* Drawer sheets travel in quickly on the Material out-going curve and leave
-   on the accelerated one, so they feel immediate on touch while remaining
-   fully composited (no opacity work on the sheet itself). */
-@keyframes drawer-in-bottom {
-  from {
-    transform: translate3d(0, 100%, 0);
-  }
-  to {
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes drawer-out-bottom {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(0, 100%, 0);
-  }
-}
-
-@keyframes drawer-in-right {
-  from {
-    transform: translate3d(100%, 0, 0);
-  }
-  to {
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes drawer-out-right {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(100%, 0, 0);
-  }
-}
-
-@utility animate-drawer-in-bottom {
-  animation: drawer-in-bottom 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
-}
-
-@utility animate-drawer-out-bottom {
-  animation: drawer-out-bottom 200ms cubic-bezier(0.4, 0, 1, 1) both;
-}
-
-@utility animate-drawer-in-right {
-  animation: drawer-in-right 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
-}
-
-@utility animate-drawer-out-right {
-  animation: drawer-out-right 200ms cubic-bezier(0.4, 0, 1, 1) both;
-}
-
-:root[data-motion="reduced"] .animate-spin-soft,
-:root[data-motion="reduced"] .animate-drawer-in-bottom,
-:root[data-motion="reduced"] .animate-drawer-out-bottom,
-:root[data-motion="reduced"] .animate-drawer-in-right,
-:root[data-motion="reduced"] .animate-drawer-out-right {
+:root[data-motion="reduced"] .animate-spin-soft {
   animation: none;
 }
 

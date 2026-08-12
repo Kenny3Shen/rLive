@@ -81,11 +81,12 @@ export function HistoryViewSwitcher({
             key={view}
             type="button"
             role="tab"
+            data-motion-control
             aria-selected={active}
             title={VIEW_LABELS[view]}
             onClick={() => onValueChange(view)}
             className={cn(
-              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-200 focus-ring max-md:min-w-0 max-md:flex-1 max-md:justify-center",
+              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-150 focus-ring max-md:min-w-0 max-md:flex-1 max-md:justify-center",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",

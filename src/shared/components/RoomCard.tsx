@@ -182,7 +182,6 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             onFocus={() => preloadRouteModule(roomPath)}
             className={cn(
               "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring",
-              "hover:-translate-y-0.5 motion-reduced:hover:translate-y-0",
             )}
           />
         }
@@ -194,7 +193,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
               alt=""
               loading="lazy"
               decoding="async"
-              className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04] motion-reduced:group-hover:scale-100 motion-reduced:transition-none"
+              className="motion-room-cover h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none"
               referrerPolicy="no-referrer"
             />
           ) : (

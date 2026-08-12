@@ -64,7 +64,7 @@ import {
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { EASE_IN, EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
+import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
 import { siteSupportsSuperChat } from "./superChat";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
@@ -957,14 +957,14 @@ export function PlayerPane({
         gsap.to(feedback, {
           autoAlpha: 0,
           duration: 0.14,
-          ease: EASE_IN,
+          ease: EASE_OUT,
           overwrite: "auto",
         });
         if (panel) {
           gsap.to(panel, {
             scale: 0.97,
             duration: 0.14,
-            ease: EASE_IN,
+            ease: EASE_OUT,
             overwrite: "auto",
           });
         }

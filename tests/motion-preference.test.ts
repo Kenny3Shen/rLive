@@ -1,21 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { isMotionMode, resolveMotionMode } from "../src/shared/motion/preference";
+import { prefersReducedMotion, resolveMotionMode } from "../src/shared/motion/preference";
 
 describe("motion preference", () => {
-  test("system mode follows the operating system", () => {
+  test("legacy modes always resolve to the complete profile", () => {
     expect(resolveMotionMode("system", false)).toBe("full");
-    expect(resolveMotionMode("system", true)).toBe("reduced");
-  });
-
-  test("explicit modes override the operating system", () => {
+    expect(resolveMotionMode("system", true)).toBe("full");
     expect(resolveMotionMode("full", true)).toBe("full");
-    expect(resolveMotionMode("reduced", false)).toBe("reduced");
+    expect(resolveMotionMode("reduced", true)).toBe("full");
+    expect(resolveMotionMode("unexpected", true)).toBe("full");
   });
 
-  test("accepts only persisted motion modes", () => {
-    expect(isMotionMode("system")).toBe(true);
-    expect(isMotionMode("full")).toBe(true);
-    expect(isMotionMode("reduced")).toBe(true);
-    expect(isMotionMode("none")).toBe(false);
+  test("runtime never reports reduced motion", () => {
+    expect(prefersReducedMotion()).toBe(false);
   });
 });

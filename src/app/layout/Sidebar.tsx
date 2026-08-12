@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import gsap from "gsap";
 import { useCallback, useRef, type MouseEvent } from "react";
 import { flushSync } from "react-dom";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import {
   Heart,
   History,
@@ -55,6 +55,8 @@ function SidebarLink({
   className?: string;
   onIntent?: () => void;
 }) {
+  const navigate = useNavigate();
+
   function preloadDestination() {
     preloadRouteModule(to);
     onIntent?.();
@@ -68,6 +70,11 @@ function SidebarLink({
       onPointerEnter={preloadDestination}
       onPointerDown={preloadDestination}
       onFocus={preloadDestination}
+      onClick={(event) => {
+        if (event.detail !== 0) return;
+        event.preventDefault();
+        navigate(to);
+      }}
       data-slot="app-sidebar-link"
       data-motion-press
       className={({ isActive }) =>
@@ -84,7 +91,7 @@ function SidebarLink({
         <>
           <Icon
             className={cn(
-              "size-5 transition-transform duration-150 group-hover:scale-105 motion-reduced:group-hover:scale-100 motion-reduced:transition-none",
+              "motion-nav-icon size-5 transition-transform duration-150 ease-[var(--motion-ease-out)] motion-reduced:transition-none",
               isActive && "text-primary",
             )}
           />
@@ -127,12 +134,12 @@ function AppearanceToggle() {
     gsap.killTweensOf(button);
     gsap.fromTo(
       button,
-      { rotation, scale: 0.88, willChange: "transform" },
+      { rotation, scale: 0.94, willChange: "transform" },
       {
         rotation: 0,
         scale: 1,
-        duration: 0.34,
-        ease: "back.out(2)",
+        duration: 0.18,
+        ease: "power2.out",
         clearProps: "transform,willChange",
       },
     );
@@ -142,17 +149,17 @@ function AppearanceToggle() {
     if (switchingRef.current) return;
     switchingRef.current = true;
 
-    const button = event.currentTarget;
-    const rect = button.getBoundingClientRect();
     const keyboardActivation = event.detail === 0;
-    const transition = revealThemeAt(
-      keyboardActivation
-        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-        : { x: event.clientX, y: event.clientY },
-      () => flushSync(() => setTheme(nextTheme)),
+    if (keyboardActivation) {
+      flushSync(() => setTheme(nextTheme));
+      switchingRef.current = false;
+      return;
+    }
+    const transition = revealThemeAt({ x: event.clientX, y: event.clientY }, () =>
+      flushSync(() => setTheme(nextTheme)),
     );
 
-    void transition.ready.then(() => animateToggle(isDark ? -18 : 18));
+    void transition.ready.then(() => animateToggle(isDark ? -12 : 12));
     void transition.finished.then(() => {
       switchingRef.current = false;
     });

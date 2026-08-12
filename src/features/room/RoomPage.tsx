@@ -493,7 +493,7 @@ function RoomTopBar({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="absolute left-3 z-10 rounded-lg transition-transform hover:-translate-x-0.5 hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
+              className="motion-back-button absolute left-3 z-10 rounded-lg hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
               aria-label="返回上一页"
               onClick={goBack}
             >

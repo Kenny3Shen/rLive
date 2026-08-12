@@ -202,7 +202,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
-    "播放 外观 主题 深色 暗色 浅色 亮色 动态 动画 效果 完整 减少 系统 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
+    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   account:
@@ -1210,13 +1210,11 @@ function PlatformEnablementField() {
   );
 }
 
-function AppearanceSettings({ showTheme }: { showTheme: boolean }) {
+function AppearanceSettings() {
   const switchRef = useRef<HTMLButtonElement>(null);
   const switchingRef = useRef(false);
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
-  const motionMode = useSettingsStore((s) => s.motionMode);
-  const setMotionMode = useSettingsStore((s) => s.setMotionMode);
   const isDark =
     theme === "dark" ||
     (theme === "system" &&
@@ -1241,55 +1239,17 @@ function AppearanceSettings({ showTheme }: { showTheme: boolean }) {
   }
 
   return (
-    <Section title="外观" keywords="主题 深色 暗色 浅色 亮色 动态 动画 效果 完整 减少 跟随系统">
-      {showTheme && (
-        <Field orientation="horizontal">
-          <FieldContent>
-            <FieldTitle id="dark-mode-label">深色模式</FieldTitle>
-          </FieldContent>
-          <Switch
-            ref={switchRef}
-            aria-labelledby="dark-mode-label"
-            checked={isDark}
-            onCheckedChange={handleThemeChange}
-          />
-        </Field>
-      )}
-      <Field orientation="responsive">
+    <Section title="外观" keywords="主题 深色 暗色 浅色 亮色">
+      <Field orientation="horizontal">
         <FieldContent>
-          <FieldTitle id="motion-mode-label">动态效果</FieldTitle>
-          <FieldDescription>
-            {motionMode === "system"
-              ? "跟随设备的减少动态效果设置。"
-              : motionMode === "full"
-                ? "启用完整的页面转场与交互反馈。"
-                : "保留必要反馈，减少位移和缩放。"}
-          </FieldDescription>
+          <FieldTitle id="dark-mode-label">深色模式</FieldTitle>
         </FieldContent>
-        <ToggleGroup
-          aria-labelledby="motion-mode-label"
-          value={[motionMode]}
-          variant="outline"
-          size="sm"
-          spacing={1}
-          className="max-md:w-full"
-          onValueChange={(values) => {
-            const next = values[0];
-            if (next === "system" || next === "full" || next === "reduced") {
-              setMotionMode(next);
-            }
-          }}
-        >
-          <ToggleGroupItem value="system" className="max-md:flex-1">
-            系统
-          </ToggleGroupItem>
-          <ToggleGroupItem value="full" className="max-md:flex-1">
-            完整
-          </ToggleGroupItem>
-          <ToggleGroupItem value="reduced" className="max-md:flex-1">
-            减少
-          </ToggleGroupItem>
-        </ToggleGroup>
+        <Switch
+          ref={switchRef}
+          aria-labelledby="dark-mode-label"
+          checked={isDark}
+          onCheckedChange={handleThemeChange}
+        />
       </Field>
     </Section>
   );
@@ -1359,7 +1319,7 @@ function SettingsCategoryButton({
         </span>
       </span>
       <ChevronRight
-        className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground motion-reduced:group-hover:translate-x-0 motion-reduced:transition-none"
+        className="motion-disclosure-icon size-4 shrink-0 text-muted-foreground transition-[transform,color] duration-150 ease-[var(--motion-ease-out)] group-hover:text-foreground motion-reduced:transition-colors"
         aria-hidden
       />
     </button>
@@ -1587,7 +1547,7 @@ export function SettingsPage() {
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
     playback: (
       <SettingsContent title="播放">
-        <AppearanceSettings showTheme={showExplicitThemeSettings(mobileClient)} />
+        {showExplicitThemeSettings(mobileClient) && <AppearanceSettings />}
         <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
           <Field orientation="responsive">
             <FieldTitle id="quality-label">优先清晰度</FieldTitle>
@@ -1963,11 +1923,14 @@ export function SettingsPage() {
                   type="button"
                   variant="ghost"
                   size="icon-lg"
-                  className="-ml-2"
+                  className="motion-back-button relative z-10"
                   aria-label="返回设置首页"
                   onClick={returnToOverview}
                 >
-                  <ArrowLeft aria-hidden />
+                  <ArrowLeft
+                    className="transition-transform duration-150 ease-[var(--motion-ease-out)]"
+                    aria-hidden
+                  />
                 </Button>
                 <div className="min-w-0 flex-1">
                   <h1 className="truncate text-xl font-semibold text-foreground">

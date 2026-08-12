@@ -8,7 +8,7 @@ import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Toaster } from "./components/ui/toast";
 import { preloadImageProxy } from "./shared/api/imageProxy";
-import { applyMotionMode } from "./shared/motion/preference";
+import { applyFullMotion } from "./shared/motion/preference";
 import "./styles.css";
 
 if (getClientPlatform() === "android") {
@@ -28,11 +28,10 @@ const queryClient = new QueryClient({
   },
 });
 const initialSettings = useSettingsStore.getState();
+applyFullMotion();
 applyTheme(initialSettings.theme);
-applyMotionMode(initialSettings.motionMode);
 useSettingsStore.subscribe((settings, previous) => {
   if (settings.theme !== previous.theme) applyTheme(settings.theme);
-  if (settings.motionMode !== previous.motionMode) applyMotionMode(settings.motionMode);
 });
 void useSettingsStore.getState().loadFromBackend();
 // Start the loopback image proxy as early as possible so first-paint covers

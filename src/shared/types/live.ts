@@ -186,12 +186,10 @@ export type CaptionTranslationLanguage =
 
 export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
-export type MotionMode = "system" | "full" | "reduced";
-
 export type AppSettings = {
   theme: "system" | "light" | "dark";
-  /** App motion preference; omitted by legacy backends and profiles. */
-  motion_mode?: MotionMode;
+  /** Legacy compatibility field. Runtime and persistence normalize it to `full`. */
+  motion_mode?: string;
   default_site: string;
   proxy: string | null;
   danmaku_opacity: number;
