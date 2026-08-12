@@ -262,6 +262,10 @@ body {
   :root[data-motion="full"] .motion-back-button:hover svg {
     transform: translate3d(-2px, 0, 0);
   }
+
+  :root[data-motion="full"] .settings-category-button:hover {
+    transform: translate3d(2px, 0, 0);
+  }
 }
 
 :root[data-motion="full"] :is([data-motion-press], [data-motion-control]):focus-visible {
@@ -271,6 +275,69 @@ body {
 :root[data-motion="reduced"] [data-motion-press],
 :root[data-motion="reduced"] .motion-card {
   transition-property: background-color, border-color, color, box-shadow, opacity;
+}
+
+/* Settings uses a padded back-button slot instead of a negative-margin icon.
+   The slot keeps the hover/focus surface inside the page-pan clip while still
+   aligning the title with the content column. */
+.settings-detail-header {
+  min-height: 3.25rem;
+}
+
+.settings-back-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+.settings-back-slot .motion-back-button {
+  border-radius: 0.75rem;
+}
+
+.settings-section-heading {
+  letter-spacing: 0.01em;
+}
+
+.settings-category-group-label {
+  letter-spacing: 0.02em;
+}
+
+.settings-search {
+  transition-property: border-color, box-shadow, background-color;
+  transition-duration: 160ms;
+  transition-timing-function: var(--motion-ease-out);
+}
+
+.settings-search:focus-within {
+  border-color: color-mix(in oklab, var(--ring) 60%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--ring) 16%, transparent),
+    0 8px 20px oklch(0 0 0 / 0.12);
+}
+
+:root[data-motion="reduced"] .settings-category-button,
+:root[data-motion="reduced"] .settings-search {
+  transition-property: background-color, border-color, color, box-shadow;
+}
+
+/* Full motion is the product default. OS-level reduced motion is an implicit
+   accessibility override, so it does not reintroduce a user-facing setting. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="full"] [data-motion-press],
+  :root[data-motion="full"] .motion-card,
+  :root[data-motion="full"] .settings-category-button {
+    transition-property: background-color, border-color, color, box-shadow, opacity;
+  }
+
+  :root[data-motion="full"] .settings-category-button:hover,
+  :root[data-motion="full"] .motion-back-button:hover svg,
+  :root[data-motion="full"] .group:hover .motion-disclosure-icon,
+  :root[data-motion="full"] .group:hover .motion-nav-icon,
+  :root[data-motion="full"] .group:hover .motion-room-cover {
+    transform: none;
+  }
 }
 
 /* Base UI keeps popup nodes mounted through their exit state. Transitions can
