@@ -258,6 +258,23 @@ export function sidePanelStartsOpen(compactLandscapeViewport: boolean): boolean 
   return !compactLandscapeViewport;
 }
 
+/** Once opened, keep the panel alive so hidden/fullscreen chat can retain its queue. */
+export function shouldRetainRoomSidePanel(
+  retained: boolean,
+  sidePanelOpen: boolean,
+  compactViewport: boolean,
+): boolean {
+  return retained || sidePanelOpen || !compactViewport;
+}
+
+export function shouldShowRoomDanmakuPanel(
+  sidePanelOpen: boolean,
+  fullscreen: boolean,
+  activeSideTab: RoomSideTab,
+): boolean {
+  return sidePanelOpen && !fullscreen && activeSideTab === "chat";
+}
+
 export function showDanmakuComposerInPlayerControls(
   inlineCompactSidePanel: boolean,
   fullscreen: boolean,
@@ -385,7 +402,14 @@ export function PlayerPane({
   // lets a touch gesture select a tab without depending on Base UI internals.
   const [uncontrolledSideTab, setUncontrolledSideTab] = useState<RoomSideTab>("chat");
   const activeSideTab = sideTab ?? uncontrolledSideTab;
-  const shouldMountSidePanel = sidePanelOpen || !compactViewport;
+  const [sidePanelRetained, setSidePanelRetained] = useState(
+    () => sidePanelOpen || !compactViewport,
+  );
+  const shouldMountSidePanel = shouldRetainRoomSidePanel(
+    sidePanelRetained,
+    sidePanelOpen,
+    compactViewport,
+  );
   const [osdOn, setOsdOn] = useState(true);
   const [audioOnly, setAudioOnly] = useState(false);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
@@ -642,6 +666,18 @@ export function PlayerPane({
   useEffect(() => {
     setSidePanelOpen(sidePanelStartsOpen(compactLandscapeViewport));
   }, [compactLandscapeViewport]);
+
+  // A new room starts over: drop the retention flag and let the effect below
+  // raise it again on the following render if this viewport mounts the panel anyway.
+  // Clearing rather than recomputing keeps the dependency list honest — the
+  // recomputed value is exactly what that effect derives.
+  useEffect(() => {
+    setSidePanelRetained(false);
+  }, [roomSessionKey]);
+
+  useEffect(() => {
+    if (shouldMountSidePanel && !sidePanelRetained) setSidePanelRetained(true);
+  }, [shouldMountSidePanel, sidePanelRetained]);
 
   useEffect(() => {
     if (!mobileDrawerOpen) return;
@@ -1874,7 +1910,11 @@ export function PlayerPane({
                     roomId={roomId}
                     roomTitle={roomTitle}
                     roomUserName={roomUserName}
-                    visible={sidePanelOpen && activeSideTab === "chat"}
+                    visible={shouldShowRoomDanmakuPanel(
+                      sidePanelOpen,
+                      player.mode === "fullscreen",
+                      activeSideTab,
+                    )}
                     statusText={danmakuStatusText}
                     className="min-h-0 flex-1"
                   />
