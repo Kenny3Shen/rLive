@@ -69,9 +69,10 @@ function SidebarLink({
       onPointerDown={preloadDestination}
       onFocus={preloadDestination}
       data-slot="app-sidebar-link"
+      data-motion-press
       className={({ isActive }) =>
         cn(
-          "group relative flex h-10 w-10 items-center justify-center rounded-xl focus-ring max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1 max-md:active:scale-90",
+          "group relative flex h-10 w-10 items-center justify-center rounded-xl focus-ring max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1",
           className,
           isActive
             ? "bg-primary/12 text-primary ring-1 ring-primary/15 shadow-sm shadow-primary/10"
@@ -83,11 +84,14 @@ function SidebarLink({
         <>
           <Icon
             className={cn(
-              "size-5 transition-transform duration-150 group-hover:scale-105",
+              "size-5 transition-transform duration-150 group-hover:scale-105 motion-reduced:group-hover:scale-100 motion-reduced:transition-none",
               isActive && "text-primary",
             )}
           />
-          <span data-slot="app-sidebar-label" className="sr-only">
+          <span
+            data-slot="app-sidebar-label"
+            className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[10px] max-md:leading-3 max-md:font-medium"
+          >
             {label}
           </span>
         </>

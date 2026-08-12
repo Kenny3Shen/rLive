@@ -9,6 +9,12 @@ const SETTINGS_KEY: &str = "app_settings";
 const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 5;
 const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 
+fn normalize_motion_preference(settings: &mut AppSettings) {
+    if !matches!(settings.motion_mode.as_str(), "system" | "full" | "reduced") {
+        settings.motion_mode = "system".to_owned();
+    }
+}
+
 /// Repairs platform visibility preferences from hand-edited or future settings
 /// records. The UI prevents this state already, but settings are imported and
 /// written through more than one path, so the persisted representation also
@@ -161,6 +167,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
         None => Ok((AppSettings::default(), false)),
         Some(json) => match serde_json::from_str(&json) {
             Ok(mut settings) => {
+                normalize_motion_preference(&mut settings);
                 normalize_site_preferences(&mut settings);
                 normalize_danmaku_preferences(&mut settings);
                 normalize_asr_preferences(&mut settings);
@@ -175,6 +182,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
 /// Persist full app settings under key `app_settings`.
 pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
+    normalize_motion_preference(&mut normalized);
     normalize_site_preferences(&mut normalized);
     normalize_danmaku_preferences(&mut normalized);
     normalize_asr_preferences(&mut normalized);
@@ -205,6 +213,7 @@ mod tests {
         assert!(!has_saved_settings);
         assert_eq!(s.default_site, "bilibili");
         assert_eq!(s.theme, "system");
+        assert_eq!(s.motion_mode, "system");
         assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_size, 18);
         assert_eq!(s.danmaku_speed, 8);
@@ -255,6 +264,18 @@ mod tests {
         settings.danmaku_merge_window_seconds = 60;
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 30);
+    }
+
+    #[test]
+    fn set_normalizes_motion_mode() {
+        let conn = open_in_memory().unwrap();
+        let settings = AppSettings {
+            motion_mode: "surprise".into(),
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().motion_mode, "system");
     }
 
     #[test]

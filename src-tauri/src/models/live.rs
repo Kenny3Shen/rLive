@@ -214,6 +214,18 @@ impl PlaybackProtocol {
 /// `source_id` is stable within a quality payload and deliberately excludes
 /// signed URLs. `priority` preserves the upstream platform's preferred order;
 /// runtime proxy probes may refine that order without mutating this contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TwitchAdRecovery {
+    pub login: String,
+    pub selector: String,
+    #[serde(default)]
+    pub target_width: u32,
+    #[serde(default)]
+    pub target_height: u32,
+    #[serde(default)]
+    pub target_frame_rate_milli: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayUrl {
     #[serde(default)]
@@ -226,6 +238,8 @@ pub struct PlayUrl {
     pub priority: u32,
     pub url: String,
     pub headers: std::collections::HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twitch_ad_recovery: Option<TwitchAdRecovery>,
 }
 
 impl PlayUrl {
@@ -243,11 +257,30 @@ impl PlayUrl {
             priority,
             url,
             headers,
+            twitch_ad_recovery: None,
         }
     }
 
     pub fn with_protocol(mut self, protocol: PlaybackProtocol) -> Self {
         self.protocol = protocol;
+        self
+    }
+
+    pub fn with_twitch_ad_recovery(
+        mut self,
+        login: String,
+        selector: String,
+        target_width: u32,
+        target_height: u32,
+        target_frame_rate_milli: u32,
+    ) -> Self {
+        self.twitch_ad_recovery = Some(TwitchAdRecovery {
+            login,
+            selector,
+            target_width,
+            target_height,
+            target_frame_rate_milli,
+        });
         self
     }
 }

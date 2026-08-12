@@ -14,3 +14,4 @@ pub mod profile;
 pub mod settings;
 pub mod site;
 pub mod stream_proxy;
+pub mod web_bridge;

@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct AppSettings {
     /// `system` | `light` | `dark`
     pub theme: String,
+    /// `system` | `full` | `reduced`
+    #[serde(default = "default_motion_mode")]
+    pub motion_mode: String,
     pub default_site: String,
     /// Platform ids hidden from discovery and room navigation.
     ///
@@ -125,6 +128,10 @@ fn default_quality_level() -> String {
     "high".into()
 }
 
+fn default_motion_mode() -> String {
+    "system".into()
+}
+
 fn default_playback_smart_line_selection() -> bool {
     true
 }
@@ -205,6 +212,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "system".into(),
+            motion_mode: default_motion_mode(),
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
             proxy: None,
@@ -253,6 +261,7 @@ mod tests {
         let v = serde_json::to_string(&s).unwrap();
         let back: AppSettings = serde_json::from_str(&v).unwrap();
         assert_eq!(back.default_site, "bilibili");
+        assert_eq!(back.motion_mode, "system");
     }
 
     #[test]
@@ -273,6 +282,7 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(legacy).unwrap();
 
         assert_eq!(settings.danmaku_area, 0.9);
+        assert_eq!(settings.motion_mode, "system");
         assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_repeats);
