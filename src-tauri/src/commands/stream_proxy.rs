@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::models::live::PlayUrl;
+use crate::models::live::{PlayUrl, TwitchAdRecovery};
 use crate::state::AppState;
 use crate::stream_proxy::{StreamProxyProbe, StreamProxyTelemetry};
 
@@ -24,6 +24,7 @@ pub async fn stream_proxy_start(
     headers: HashMap<String, String>,
     session_id: String,
     hls: Option<bool>,
+    twitch_ad_recovery: Option<TwitchAdRecovery>,
 ) -> AppResult<String> {
     if url.trim().is_empty() {
         return Err(crate::error::AppError::new(
@@ -49,6 +50,7 @@ pub async fn stream_proxy_start(
             session_id,
             hls.unwrap_or(false),
             proxy.as_deref(),
+            twitch_ad_recovery,
         )
         .await
 }

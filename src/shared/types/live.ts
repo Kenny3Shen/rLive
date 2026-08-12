@@ -49,6 +49,14 @@ export type LiveRoomDetail = {
 
 export type PlaybackProtocol = "flv" | "hls" | "mpeg_ts" | "native" | "unknown";
 
+export type TwitchAdRecovery = {
+  login: string;
+  selector: string;
+  target_width: number;
+  target_height: number;
+  target_frame_rate_milli: number;
+};
+
 /** Structured playback candidate returned by the native site adapter. */
 export type PlayUrl = {
   /** Stable within a quality payload; never contains a signed URL or request headers. */
@@ -61,6 +69,8 @@ export type PlayUrl = {
   priority?: number;
   url: string;
   headers: Record<string, string>;
+  /** Native-only context used to replace Twitch ad playlists behind the local proxy. */
+  twitch_ad_recovery?: TwitchAdRecovery;
 };
 
 export type LivePlayQuality = {
@@ -176,8 +186,12 @@ export type CaptionTranslationLanguage =
 
 export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
+export type MotionMode = "system" | "full" | "reduced";
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
+  /** App motion preference; omitted by legacy backends and profiles. */
+  motion_mode?: MotionMode;
   default_site: string;
   proxy: string | null;
   danmaku_opacity: number;
