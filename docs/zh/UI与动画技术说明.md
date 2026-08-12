@@ -350,7 +350,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
 - Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定 GSAP ticker。
-- 移动端 Canvas 弹幕最高按 120 FPS 跟随高刷屏，并将 backing scale 限制为 1×：相比旧的 60 FPS / 1.5× 策略，整屏像素吞吐量更低，同时避免 90/120 Hz 设备上的隔帧跳动。运动时间按真实帧间隔推进，不执行补帧突发；桌面端仍跟随浏览器刷新率，backing scale 最高 1.5×。
+- 移动端 Canvas 弹幕跟随 WebView 的 `requestAnimationFrame` 刷新节奏，不使用固定 60 FPS 的墙钟节流；需要降档时只能按整数回调帧跳过，避免 90/144 Hz 等非整数倍刷新率产生规律性 judder。移动端 backing scale 在 60 Hz 默认最高 2×，实测高于 75 Hz 时最高 1.5×；刷新率探测完成后同步重建并重绘 Canvas，运动时间按真实帧间隔推进，长暂停由引擎上限兜底；桌面端仍跟随浏览器刷新率，backing scale 最高 1.5×。
 - 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器回退亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
