@@ -17,10 +17,10 @@ import {
   type TrackItem,
 } from "./danmakuEngine";
 import {
-  canvasFrameIsDue,
+  DEFAULT_DANMAKU_REFRESH_RATE_HZ,
   danmakuCanvasPixelRatio,
-  MOBILE_DANMAKU_FRAME_INTERVAL_MS,
-  nextCanvasFrameDeadline,
+  measureDisplayRefreshRate,
+  shouldPaintFrame,
 } from "./framePacing";
 import { selfBorderTextBox } from "./selfBorder";
 import { cn } from "@/lib/utils";
@@ -401,23 +401,25 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const mobileClient = isMobileClient();
-    const ctx = canvas.getContext("2d", {
-      alpha: true,
-      desynchronized: mobileClient,
-    });
+    const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
     let raf: number | null = null;
     let last = performance.now();
     let lastFrameAt = last;
-    let nextFrameDeadline = 0;
-    const frameIntervalMs = mobileClient ? MOBILE_DANMAKU_FRAME_INTERVAL_MS : 0;
+    let frameCounter = 0;
+    // Follow every rAF callback by default. A future low-end fallback may use
+    // an integer skip value without creating a fractional refresh cadence.
+    const frameSkip = 1;
+    let refreshRateHz = DEFAULT_DANMAKU_REFRESH_RATE_HZ;
     let ro: ResizeObserver | null = null;
     let resizeRaf: number | null = null;
     let stopped = false;
     let needsDraw = true;
     let width = 0;
     let height = 0;
+    let bitmapCssWidth = 0;
+    let bitmapCssHeight = 0;
     let pixelRatio = 0;
     const rasterCache = new Map<string, TextRaster>();
     let rasterCachePixels = 0;
@@ -600,60 +602,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       }
     };
 
-    const resize = () => {
-      if (stopped) return;
-      const parent = canvas.parentElement;
-      if (!parent) return;
-      const nextPixelRatio = danmakuCanvasPixelRatio(window.devicePixelRatio, mobileClient);
-      const nextWidth = parent.clientWidth;
-      const nextHeight = parent.clientHeight;
-      const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
-      const nextCanvasHeight = Math.max(1, Math.floor(nextHeight * nextPixelRatio));
-
-      // ResizeObserver can fire for layout work that leaves the canvas size
-      // unchanged. Resetting a canvas erases it and costs a full redraw, so
-      // avoid touching its bitmap until a CSS size or device scale changed.
-      if (
-        width === nextWidth &&
-        height === nextHeight &&
-        pixelRatio === nextPixelRatio &&
-        canvas.width === nextCanvasWidth &&
-        canvas.height === nextCanvasHeight
-      ) {
-        return;
-      }
-
-      width = nextWidth;
-      height = nextHeight;
-      pixelRatio = nextPixelRatio;
-      canvas.width = nextCanvasWidth;
-      canvas.height = nextCanvasHeight;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-
-      // A native window resize can temporarily throttle animation frames while
-      // the browser is repeatedly rebuilding the canvas bitmap. Do not charge
-      // that layout pause to the next danmaku tick; the engine remaps the
-      // existing comments to the new width and they resume at that same visual
-      // progress rather than jumping off-screen.
-      last = performance.now();
-      lastFrameAt = last;
-      requestFrame();
-    };
-
-    const loop = (now: number) => {
-      raf = null;
-      if (stopped || document.hidden) return;
-      if (width <= 0 || height <= 0) return;
-      if (!canvasFrameIsDue(now, nextFrameDeadline, frameIntervalMs)) {
-        scheduleFrame();
-        return;
-      }
-      nextFrameDeadline = nextCanvasFrameDeadline(now, nextFrameDeadline, frameIntervalMs);
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      lastFrameAt = now;
+    const paint = (dt: number): boolean => {
       const engine = engineRef.current;
       const hadWork = active && Boolean(engine?.hasWork());
       if (engine && active) {
@@ -819,6 +768,83 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         sweepUnusedImages();
       }
 
+      return hasWork;
+    };
+
+    const resize = () => {
+      if (stopped) return;
+      const parent = canvas.parentElement;
+      if (!parent) return;
+      const nextPixelRatio = danmakuCanvasPixelRatio(
+        window.devicePixelRatio,
+        mobileClient,
+        refreshRateHz,
+      );
+      const nextWidth = parent.clientWidth;
+      const nextHeight = parent.clientHeight;
+      const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
+      const nextCanvasHeight = Math.max(1, Math.floor(nextHeight * nextPixelRatio));
+      const cssSizeChanged =
+        Math.abs(nextWidth - bitmapCssWidth) >= 1.5 ||
+        Math.abs(nextHeight - bitmapCssHeight) >= 1.5;
+
+      // ResizeObserver can fire for layout work that leaves the canvas size
+      // unchanged. Resetting a canvas erases it and costs a full redraw, so
+      // avoid touching its bitmap until a meaningful CSS size or device scale
+      // change. The canvas element remains the exact layout size and absorbs
+      // sub-pixel viewport jitter through its CSS dimensions.
+      if (
+        !cssSizeChanged &&
+        pixelRatio === nextPixelRatio &&
+        bitmapCssWidth > 0 &&
+        bitmapCssHeight > 0
+      ) {
+        width = nextWidth;
+        height = nextHeight;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        return;
+      }
+
+      width = nextWidth;
+      height = nextHeight;
+      bitmapCssWidth = nextWidth;
+      bitmapCssHeight = nextHeight;
+      pixelRatio = nextPixelRatio;
+      canvas.width = nextCanvasWidth;
+      canvas.height = nextCanvasHeight;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+
+      // A native window resize can temporarily throttle animation frames while
+      // the browser is repeatedly rebuilding the canvas bitmap. Do not charge
+      // that layout pause to the next danmaku tick; the engine remaps the
+      // existing comments to the new width and they resume at that same visual
+      // progress rather than jumping off-screen.
+      last = performance.now();
+      lastFrameAt = last;
+      needsDraw = true;
+      if (paint(0)) scheduleFrame();
+    };
+
+    const loop = (now: number) => {
+      raf = null;
+      if (stopped || document.hidden) return;
+      if (width <= 0 || height <= 0) return;
+      if (!shouldPaintFrame(frameCounter, frameSkip)) {
+        frameCounter += 1;
+        scheduleFrame();
+        return;
+      }
+      frameCounter += 1;
+      // Keep medium stalls proportional to real time. The engine has its own
+      // 200ms upper bound for a long suspension, so this cap only prevents an
+      // unusually large browser pause from causing a visible teleport.
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      lastFrameAt = now;
+      const hasWork = paint(dt);
       if (hasWork) scheduleFrame();
     };
 
@@ -840,7 +866,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       raf = null;
       last = performance.now();
       lastFrameAt = last;
-      nextFrameDeadline = 0;
+      frameCounter = 0;
       requestFrame();
     }
 
@@ -851,6 +877,13 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
 
     requestFrameRef.current = requestFrame;
     resize();
+    if (mobileClient) {
+      void measureDisplayRefreshRate().then((measuredRefreshRateHz) => {
+        if (stopped) return;
+        refreshRateHz = measuredRefreshRateHz;
+        resize();
+      });
+    }
     // Window resizing can deliver several ResizeObserver entries in one
     // paint cycle. Coalesce them so the canvas bitmap is rebuilt at most once
     // per animation frame rather than repeatedly clearing and reallocating it.

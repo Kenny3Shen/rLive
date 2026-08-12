@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { createEngine } from "../src/features/room/canvas/danmakuEngine";
 import {
-  canvasFrameIsDue,
+  danmakuFrameSkip,
   danmakuCanvasPixelRatio,
-  MOBILE_DANMAKU_FRAME_INTERVAL_MS,
-  nextCanvasFrameDeadline,
+  estimateRefreshRateHz,
+  MOBILE_DANMAKU_TARGET_FPS,
+  shouldPaintFrame,
 } from "../src/features/room/canvas/framePacing";
 
 function chat(content: string, ts: number, user = "观众") {
@@ -32,41 +33,42 @@ function richChat(content: string, ts: number, user = "观众") {
 }
 
 describe("mobile canvas frame pacing", () => {
-  test("turns 120 Hz callbacks into an even 60 FPS paint cadence", () => {
-    let deadline = 0;
-    let paints = 0;
-    for (let frame = 0; frame <= 12; frame += 1) {
-      const now = frame * (1_000 / 120);
-      if (!canvasFrameIsDue(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS)) continue;
-      paints += 1;
-      deadline = nextCanvasFrameDeadline(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
+  test.each([60, 90, 120, 144])("keeps %d Hz callback paints evenly paced", (refreshRateHz) => {
+    const callbackIntervalMs = 1_000 / refreshRateHz;
+    const skipEvery = Math.max(1, danmakuFrameSkip(refreshRateHz, MOBILE_DANMAKU_TARGET_FPS));
+    const paintedTimes: number[] = [];
+    for (let frame = 0; frame < refreshRateHz; frame += 1) {
+      if (shouldPaintFrame(frame, skipEvery)) paintedTimes.push(frame * callbackIntervalMs);
     }
-    expect(paints).toBe(7);
+    const intervals = paintedTimes.slice(1).map((time, index) => time - paintedTimes[index]);
+    expect(new Set(intervals.map((interval) => interval.toFixed(6))).size).toBe(1);
   });
 
-  test("turns 240 Hz callbacks into an even 60 FPS paint cadence", () => {
-    let deadline = 0;
-    let paints = 0;
-    for (let frame = 0; frame <= 24; frame += 1) {
-      const now = frame * (1_000 / 240);
-      if (!canvasFrameIsDue(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS)) continue;
-      paints += 1;
-      deadline = nextCanvasFrameDeadline(now, deadline, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
-    }
-    expect(paints).toBe(7);
+  test("only derives an integer skip for an evenly representable target rate", () => {
+    expect(danmakuFrameSkip(60, 60)).toBe(1);
+    expect(danmakuFrameSkip(120, 60)).toBe(2);
+    expect(danmakuFrameSkip(90, 60)).toBe(0);
+    expect(danmakuFrameSkip(144, 60)).toBe(0);
   });
 
-  test("uses a crisp bounded mobile backing scale", () => {
+  test("uses a refresh-rate-aware backing scale", () => {
     expect(danmakuCanvasPixelRatio(3, true)).toBe(2);
+    expect(danmakuCanvasPixelRatio(3, true, 60)).toBe(2);
+    expect(danmakuCanvasPixelRatio(3, true, 90)).toBe(1.5);
     expect(danmakuCanvasPixelRatio(3, false)).toBe(1.5);
-    expect(danmakuCanvasPixelRatio(1.5, true)).toBe(1.5);
     expect(danmakuCanvasPixelRatio(Number.NaN, true)).toBe(1);
   });
 
-  test("resets its deadline after a long stall instead of catching up in a burst", () => {
-    const next = nextCanvasFrameDeadline(1_000, 100, MOBILE_DANMAKU_FRAME_INTERVAL_MS);
-    expect(next).toBeCloseTo(1_000 + MOBILE_DANMAKU_FRAME_INTERVAL_MS);
-    expect(canvasFrameIsDue(1_000, next, MOBILE_DANMAKU_FRAME_INTERVAL_MS)).toBe(false);
+  test("uses the median interval and ignores an outlier long frame", () => {
+    const nominalIntervalMs = 1_000 / 90;
+    const intervals = [
+      nominalIntervalMs,
+      nominalIntervalMs,
+      180,
+      nominalIntervalMs,
+      nominalIntervalMs,
+    ];
+    expect(estimateRefreshRateHz(intervals)).toBeCloseTo(90, 5);
   });
 });
 
