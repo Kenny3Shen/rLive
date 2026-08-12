@@ -33,6 +33,43 @@ const TWITCH_USHER_URL: &str = "https://usher.ttvnw.net/api/channel/hls";
 const PAGE_SIZE: u32 = 30;
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
+/// Twitch decides server-side ad stitching per playback token, and the
+/// `playerType` the token was minted for is part of that decision.  `site` stays
+/// the primary because it is both clean and full quality: measured on
+/// `kaicenat` it carries the channel's whole ladder (`1080p60` source down to
+/// `audio_only`, 7 renditions) and returned no stitched ad in any sample.
+pub(crate) const TWITCH_PRIMARY_PLAYER_TYPE: (&str, &str) = ("site", "web");
+
+/// Recovery order for a stitched playlist, ordered by what was measured rather
+/// than by guesswork.  Across six consecutive samples of `kaicenat` the verdict
+/// per `playerType` was completely stable, which is why this is an ordered list
+/// and not a set to try at random:
+///
+/// | profile             | stitched ad | ladder                     |
+/// |---------------------|-------------|----------------------------|
+/// | `popout`            | no          | 7, up to `1080p60` source  |
+/// | `autoplay`          | no          | 3, capped at `360p`        |
+/// | `embed`             | yes (preroll) | 7                        |
+/// | `picture-by-picture`| yes (preroll) | 3, capped at `360p`      |
+///
+/// So `popout` is tried first: it was clean *and* keeps the full ladder.
+/// `autoplay` is next -- also clean, but Twitch caps it, so it trades quality
+/// for an ad-free picture.  `embed` and `picture-by-picture` stay last precisely
+/// because they were the profiles observed carrying ads; they are retained only
+/// as a final attempt for the case where the profiles above are the stitched
+/// ones, since Twitch's per-profile decision is not guaranteed to stay fixed.
+///
+/// Note the ads seen on `embed` / `picture-by-picture` were `ROLL-TYPE=PREROLL`,
+/// i.e. attached to a freshly minted playback session rather than to a mid-stream
+/// commercial.  A profile being clean here therefore does not prove it survives a
+/// real commercial break; it proves Twitch does not treat all player types alike.
+pub(crate) const TWITCH_AD_FALLBACK_PROFILES: [(&str, &str); 4] = [
+    ("popout", "web"),
+    ("autoplay", "android"),
+    ("embed", "web"),
+    ("picture-by-picture", "web"),
+];
+
 /// Keep a stable browser-like UA for the web bootstrap and HLS CDN.  It does
 /// not identify an account and is not coupled to a fragile browser version.
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -46,6 +83,32 @@ struct PublicWebContext {
 }
 
 static PUBLIC_WEB_CONTEXT: OnceLock<Mutex<Option<PublicWebContext>>> = OnceLock::new();
+
+/// Twitch's web client sends a device identifier with every GraphQL request.
+/// Omitting it marks the caller as an unrecognised client, which is one of the
+/// signals that decides whether a playback token gets server-stitched ads.
+/// This is a random per-process value: it is never persisted, never derived
+/// from the machine, and identifies no account.
+static GQL_DEVICE_ID: OnceLock<String> = OnceLock::new();
+
+fn gql_device_id() -> &'static str {
+    GQL_DEVICE_ID.get_or_init(|| {
+        // Twitch's own identifier is 32 lowercase alphanumerics.
+        const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        let raw = uuid::Uuid::new_v4().as_u128();
+        let mut id = String::with_capacity(32);
+        let mut remaining = raw;
+        for _ in 0..32 {
+            let index = (remaining % ALPHABET.len() as u128) as usize;
+            id.push(ALPHABET[index] as char);
+            remaining /= ALPHABET.len() as u128;
+            if remaining == 0 {
+                remaining = uuid::Uuid::new_v4().as_u128();
+            }
+        }
+        id
+    })
+}
 
 /// Twitch's registered live-site backend.
 pub struct TwitchSite {
@@ -161,6 +224,7 @@ impl TwitchSite {
             .header("user-agent", DEFAULT_USER_AGENT)
             .header("referer", TWITCH_WEB_ROOT)
             .header("client-id", context.client_id)
+            .header("x-device-id", gql_device_id())
             // Twitch's own bootstrap uses text/plain for this request.  This
             // keeps the request equivalent to a normal anonymous web visit.
             .header("content-type", "text/plain; charset=UTF-8")
@@ -288,6 +352,17 @@ impl TwitchSite {
     }
 
     async fn playback_variants(&self, login: &str) -> AppResult<Vec<TwitchVariant>> {
+        let (player_type, platform) = TWITCH_PRIMARY_PLAYER_TYPE;
+        self.playback_variants_for_profile(login, player_type, platform)
+            .await
+    }
+
+    async fn playback_variants_for_profile(
+        &self,
+        login: &str,
+        player_type: &str,
+        platform: &str,
+    ) -> AppResult<Vec<TwitchVariant>> {
         let login = normalize_login(login)?;
         let data = self
             .graphql(
@@ -337,8 +412,8 @@ impl TwitchSite {
                     "login": login,
                     "isVod": false,
                     "vodID": "",
-                    "playerType": "site",
-                    "platform": "web",
+                    "playerType": player_type,
+                    "platform": platform,
                 }),
             )
             .await?;
@@ -371,7 +446,7 @@ impl TwitchSite {
             .with_site("twitch"));
         }
 
-        let master = usher_master_url(&login, signature, token)?;
+        let master = usher_master_url(&login, signature, token, player_type)?;
         let response = self
             .client
             .get(master.clone())
@@ -397,6 +472,22 @@ impl TwitchSite {
         }
         Ok(variants)
     }
+}
+
+pub(crate) async fn twitch_ad_fallback_url(
+    client: Client,
+    recovery: &crate::models::live::TwitchAdRecovery,
+    player_type: &str,
+    platform: &str,
+) -> AppResult<String> {
+    let site = TwitchSite::new(client);
+    let variants = site
+        .playback_variants_for_profile(&recovery.login, player_type, platform)
+        .await?;
+    find_hls_variant(&variants, &recovery.selector)
+        .or_else(|| find_closest_hls_variant(&variants, recovery))
+        .map(|variant| variant.url.clone())
+        .ok_or_else(|| TwitchSite::parse_err("Twitch 备用播放列表缺少所选清晰度"))
 }
 
 #[async_trait::async_trait]
@@ -605,7 +696,14 @@ impl LiveSite for TwitchSite {
                 variant.url.clone(),
                 headers,
             )
-            .with_protocol(crate::models::live::PlaybackProtocol::Hls),
+            .with_protocol(crate::models::live::PlaybackProtocol::Hls)
+            .with_twitch_ad_recovery(
+                login,
+                selector.to_string(),
+                variant.width,
+                variant.height,
+                variant.frame_rate_milli,
+            ),
         ])
     }
 }
@@ -794,7 +892,12 @@ fn parse_room_live_status(data: &Value) -> AppResult<LiveRoomStatus> {
     })
 }
 
-fn usher_master_url(login: &str, signature: &str, token: &str) -> AppResult<Url> {
+fn usher_master_url(
+    login: &str,
+    signature: &str,
+    token: &str,
+    player_type: &str,
+) -> AppResult<Url> {
     let mut url = Url::parse(&format!("{TWITCH_USHER_URL}/{login}.m3u8"))
         .map_err(|error| TwitchSite::parse_err(format!("Twitch HLS URL 无效: {error}")))?;
     url.query_pairs_mut()
@@ -808,7 +911,7 @@ fn usher_master_url(login: &str, signature: &str, token: &str) -> AppResult<Url>
         .append_pair("sig", signature)
         .append_pair("supported_codecs", "av1,h264")
         .append_pair("token", token)
-        .append_pair("player_type", "site");
+        .append_pair("player_type", player_type);
     Ok(url)
 }
 
@@ -988,6 +1091,25 @@ fn find_hls_variant<'a>(
     variants.iter().find(|variant| variant.selector == selector)
 }
 
+fn find_closest_hls_variant<'a>(
+    variants: &'a [TwitchVariant],
+    recovery: &crate::models::live::TwitchAdRecovery,
+) -> Option<&'a TwitchVariant> {
+    if recovery.target_width == 0 || recovery.target_height == 0 {
+        return variants.first();
+    }
+    let target_pixels = u64::from(recovery.target_width) * u64::from(recovery.target_height);
+    variants.iter().min_by_key(|variant| {
+        let pixels = u64::from(variant.width) * u64::from(variant.height);
+        (
+            pixels.abs_diff(target_pixels),
+            variant
+                .frame_rate_milli
+                .abs_diff(recovery.target_frame_rate_milli),
+        )
+    })
+}
+
 fn hls_attribute(attributes: &str, key: &str) -> Option<String> {
     let mut quoted = false;
     let mut start = 0;
@@ -1091,6 +1213,38 @@ fn preview(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads one quoted `#EXT-X-DATERANGE` attribute out of a playlist. Used by
+    /// the live diagnostics to name what made a playlist unclean without dumping
+    /// the whole tag, which carries a multi-kilobyte ad token.
+    fn twitch_daterange_attribute(manifest: &str, attribute: &str) -> Option<String> {
+        manifest
+            .lines()
+            .filter(|line| line.trim_start().starts_with("#EXT-X-DATERANGE:"))
+            .find_map(|line| {
+                let value = line.split(&format!("{attribute}=")).nth(1)?;
+                Some(value.trim_start_matches('"').split('"').next()?.to_string())
+            })
+    }
+
+    #[test]
+    fn a_daterange_attribute_is_read_without_the_surrounding_tag() {
+        let manifest = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"stitched-ad-1\",CLASS=\"twitch-stitched-ad\",",
+            "X-TV-TWITCH-AD-ROLL-TYPE=\"PREROLL\",X-TV-TWITCH-AD-RADS-TOKEN=\"eyJhbGci\"\n",
+            "#EXT-X-DATERANGE:ID=\"source-1\",X-TV-TWITCH-STREAM-SOURCE=\"Amazon|24888\"\n",
+        );
+        assert_eq!(
+            twitch_daterange_attribute(manifest, "X-TV-TWITCH-AD-ROLL-TYPE").as_deref(),
+            Some("PREROLL")
+        );
+        assert_eq!(
+            twitch_daterange_attribute(manifest, "X-TV-TWITCH-STREAM-SOURCE").as_deref(),
+            Some("Amazon|24888")
+        );
+        assert!(twitch_daterange_attribute(manifest, "X-TV-TWITCH-ABSENT").is_none());
+    }
 
     #[test]
     fn extracts_only_valid_public_client_id_from_bootstrap() {
@@ -1214,7 +1368,7 @@ mod tests {
 
     #[test]
     fn requests_av1_and_h264_twitch_variants_for_webview_playback() {
-        let url = usher_master_url("demo", "signature", "token").expect("master URL");
+        let url = usher_master_url("demo", "signature", "token", "site").expect("master URL");
         let supported_codecs = url
             .query_pairs()
             .find_map(|(key, value)| (key == "supported_codecs").then(|| value.into_owned()));
@@ -1276,6 +1430,31 @@ mod tests {
     }
 
     #[test]
+    fn chooses_closest_quality_when_a_twitch_fallback_has_fewer_variants() {
+        let master = Url::parse("https://usher.ttvnw.net/api/channel/hls/demo.m3u8").unwrap();
+        let variants = parse_hls_variants(
+            concat!(
+                "#EXTM3U\n",
+                "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,FRAME-RATE=30.000,VIDEO=\"360p30\"\n",
+                "360.m3u8\n",
+                "#EXT-X-STREAM-INF:BANDWIDTH=300000,RESOLUTION=284x160,FRAME-RATE=30.000,VIDEO=\"160p30\"\n",
+                "160.m3u8\n"
+            ),
+            &master,
+        );
+        let recovery = crate::models::live::TwitchAdRecovery {
+            login: "demo".into(),
+            selector: "video-group:chunked".into(),
+            target_width: 1920,
+            target_height: 1080,
+            target_frame_rate_milli: 60_000,
+        };
+
+        let closest = find_closest_hls_variant(&variants, &recovery).unwrap();
+        assert_eq!(closest.selector, "video-group:360p30");
+    }
+
+    #[test]
     fn recognizes_integrity_challenge_without_bypass() {
         let value = json!({
             "errors": [{
@@ -1314,6 +1493,119 @@ mod tests {
             urls.first()
                 .is_some_and(|url| url.url.starts_with("https://")),
             "expected a HTTPS HLS URL"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "live Kai Cenat Twitch ad-fallback smoke; requires channel and external network"]
+    async fn live_kaicenat_ad_fallback_smoke() {
+        let client = reqwest::Client::new();
+        let site = TwitchSite::new(client.clone());
+        let detail = site
+            .get_room_detail("kaicenat")
+            .await
+            .expect("Kai Cenat room detail");
+        if !detail.status {
+            eprintln!("Kai Cenat is offline; skipping live ad-fallback probe");
+            return;
+        }
+
+        let qualities = site
+            .get_play_qualities(&detail)
+            .await
+            .expect("Kai Cenat qualities");
+        let sources = site
+            .get_play_urls(&detail, &qualities[0])
+            .await
+            .expect("Kai Cenat play URL");
+        let recovery = sources[0]
+            .twitch_ad_recovery
+            .as_ref()
+            .expect("Twitch recovery context");
+        let primary_response = client
+            .get(&sources[0].url)
+            .header("user-agent", DEFAULT_USER_AGENT)
+            .header("referer", "https://www.twitch.tv/kaicenat")
+            .send()
+            .await
+            .expect("Kai Cenat primary playlist request");
+        let primary_status = primary_response.status();
+        let primary_body = primary_response
+            .text()
+            .await
+            .expect("Kai Cenat primary playlist body");
+        // Judged with the proxy's own detector: every break measured on this
+        // channel carried no textual marker at all, so a text-only check here
+        // would report a stitched playlist as clean.
+        let primary_clean = primary_status.is_success()
+            && primary_body.trim_start().starts_with("#EXTM3U")
+            && !crate::stream_proxy::is_twitch_ad_manifest(&primary_body);
+        eprintln!(
+            "Kai Cenat primary profile={}/{} status={} clean={primary_clean}",
+            TWITCH_PRIMARY_PLAYER_TYPE.0,
+            TWITCH_PRIMARY_PLAYER_TYPE.1,
+            primary_status.as_u16(),
+        );
+        let mut clean_profiles = Vec::new();
+        for (player_type, platform) in TWITCH_AD_FALLBACK_PROFILES {
+            let url = twitch_ad_fallback_url(client.clone(), recovery, player_type, platform)
+                .await
+                .unwrap_or_else(|error| panic!("{player_type} fallback URL: {}", error.message));
+            let response = client
+                .get(url)
+                .header("user-agent", DEFAULT_USER_AGENT)
+                .header("referer", "https://www.twitch.tv/kaicenat")
+                .send()
+                .await
+                .unwrap_or_else(|error| panic!("{player_type} playlist request: {error}"));
+            let status = response.status();
+            let body = response.text().await.expect("fallback playlist body");
+            let clean = status.is_success()
+                && body.trim_start().starts_with("#EXTM3U")
+                && !crate::stream_proxy::is_twitch_ad_manifest(&body);
+            if !clean {
+                // Attribute the verdict instead of just reporting it: `clean=false`
+                // has to be traceable to a real stitched ad rather than to a
+                // detector quirk. Only the identifying attributes are printed --
+                // the full DATERANGE carries a multi-kilobyte ad token.
+                let roll_type = twitch_daterange_attribute(&body, "X-TV-TWITCH-AD-ROLL-TYPE");
+                let source = twitch_daterange_attribute(&body, "X-TV-TWITCH-STREAM-SOURCE");
+                eprintln!(
+                    "  {player_type} stitched-ad evidence: roll_type={} stream_source={}",
+                    roll_type.as_deref().unwrap_or("-"),
+                    source.as_deref().unwrap_or("-"),
+                );
+            }
+            // The quality a profile can offer is the other half of the picture:
+            // `autoplay` is a profile observed to stay clean through a break, but
+            // Twitch caps it, so a "clean" verdict alone would hide what it costs.
+            // Read from the *variant list*, because the URL above is already
+            // resolved to a single media playlist and so never carries
+            // `#EXT-X-STREAM-INF` itself.
+            let ladder = TwitchSite::new(client.clone())
+                .playback_variants_for_profile(&recovery.login, player_type, platform)
+                .await
+                .map(|variants| {
+                    variants
+                        .iter()
+                        .map(|variant| variant.label.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            eprintln!(
+                "Kai Cenat fallback profile={player_type}/{platform} status={} clean={clean} renditions={} ladder={ladder:?}",
+                status.as_u16(),
+                ladder.len(),
+            );
+            if clean {
+                clean_profiles.push(player_type);
+            }
+        }
+        // Not asserted: when the channel is not in a commercial every profile is
+        // clean, and during one the honest outcome may be that only the capped
+        // `autoplay` survives. Both are findings to read, not failures.
+        eprintln!(
+            "Kai Cenat primary clean={primary_clean} clean fallback profiles: {clean_profiles:?}"
         );
     }
 }

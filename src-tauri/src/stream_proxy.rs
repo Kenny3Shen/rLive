@@ -16,10 +16,10 @@ use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
 use crate::error::{AppError, AppResult};
-use crate::models::live::{PlayUrl, PlaybackProtocol};
+use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_SOURCES: usize = 12;
@@ -275,6 +275,133 @@ struct HlsResourceEntries {
     access_order: VecDeque<u64>,
 }
 
+struct TwitchAdRecoverySession {
+    config: TwitchAdRecovery,
+    client: Client,
+    state: AsyncMutex<TwitchAdRecoveryState>,
+}
+
+struct TwitchAdRecoveryState {
+    /// One cached fallback playlist URL per entry in
+    /// `TWITCH_AD_FALLBACK_PROFILES`, indexed by that array's position.
+    fallback_urls: [Option<String>; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
+    active_profile: Option<usize>,
+    last_clean_manifest: Option<(String, Url)>,
+}
+
+struct TwitchManifestReplacement {
+    body: String,
+    upstream_url: Url,
+}
+
+impl TwitchAdRecoverySession {
+    fn new(config: TwitchAdRecovery, client: Client) -> Self {
+        Self {
+            config,
+            client,
+            state: AsyncMutex::new(TwitchAdRecoveryState {
+                fallback_urls: [const { None }; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES
+                    .len()],
+                active_profile: None,
+                last_clean_manifest: None,
+            }),
+        }
+    }
+
+    async fn replace_ad_manifest(
+        &self,
+        manifest: &str,
+        upstream_url: &Url,
+        headers: &HashMap<String, String>,
+    ) -> Option<TwitchManifestReplacement> {
+        let mut state = self.state.lock().await;
+        if !is_twitch_ad_manifest(manifest) {
+            state.active_profile = None;
+            if looks_like_hls_manifest(manifest.as_bytes()) {
+                state.last_clean_manifest = Some((manifest.to_string(), upstream_url.clone()));
+            }
+            return None;
+        }
+
+        let mut profile_order =
+            (0..crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()).collect::<Vec<_>>();
+        if let Some(active) = state.active_profile {
+            profile_order.retain(|index| *index != active);
+            profile_order.insert(0, active);
+        }
+
+        for profile_index in profile_order {
+            let (player_type, platform) =
+                crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES[profile_index];
+            for attempt in 0..2 {
+                let candidate_url = match state.fallback_urls[profile_index].clone() {
+                    Some(url) => url,
+                    None => match crate::sites::twitch::twitch_ad_fallback_url(
+                        self.client.clone(),
+                        &self.config,
+                        player_type,
+                        platform,
+                    )
+                    .await
+                    {
+                        Ok(url) => {
+                            state.fallback_urls[profile_index] = Some(url.clone());
+                            url
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                player_type,
+                                code = %error.code,
+                                "Twitch ad fallback token request failed"
+                            );
+                            break;
+                        }
+                    },
+                };
+
+                match fetch_twitch_playlist(&self.client, &candidate_url, headers).await {
+                    Ok((body, effective_url)) => {
+                        if looks_like_hls_manifest(body.as_bytes()) && !is_twitch_ad_manifest(&body)
+                        {
+                            state.active_profile = Some(profile_index);
+                            state.last_clean_manifest = Some((body.clone(), effective_url.clone()));
+                            tracing::debug!(player_type, "Twitch ad playlist replaced");
+                            return Some(TwitchManifestReplacement {
+                                body,
+                                upstream_url: effective_url,
+                            });
+                        }
+                        break;
+                    }
+                    Err(error) => {
+                        state.fallback_urls[profile_index] = None;
+                        if attempt == 0 {
+                            continue;
+                        }
+                        tracing::debug!(player_type, %error, "Twitch ad fallback playlist failed");
+                    }
+                }
+            }
+        }
+
+        state.active_profile = None;
+        let (body, effective_url) = if looks_like_hls_manifest(manifest.as_bytes()) {
+            (
+                mark_twitch_ad_segments_as_gaps(manifest),
+                upstream_url.clone(),
+            )
+        } else if let Some((last_clean, last_url)) = state.last_clean_manifest.as_ref() {
+            (mark_all_hls_segments_as_gaps(last_clean), last_url.clone())
+        } else {
+            (twitch_wait_manifest(), upstream_url.clone())
+        };
+        Some(TwitchManifestReplacement {
+            body,
+            upstream_url: effective_url,
+        })
+    }
+}
+
 impl HlsResources {
     const MAX_ENTRIES: usize = 2_048;
 
@@ -398,6 +525,7 @@ impl StreamProxy {
         session_id: String,
         force_hls: bool,
         proxy: Option<&str>,
+        twitch_ad_recovery: Option<TwitchAdRecovery>,
     ) -> AppResult<String> {
         // Reserve ownership before the first await.  A later start or a stop
         // can supersede this reservation, in which case this request drops
@@ -435,6 +563,22 @@ impl StreamProxy {
                 return Err(error);
             }
         };
+        let twitch_ad_recovery = match twitch_ad_recovery {
+            Some(config) => {
+                let recovery_client = match crate::http_client::build_client(proxy) {
+                    Ok(client) => client,
+                    Err(error) => {
+                        self.clear_pending(&session_id, generation);
+                        return Err(error);
+                    }
+                };
+                Some(Arc::new(TwitchAdRecoverySession::new(
+                    config,
+                    recovery_client,
+                )))
+            }
+            None => None,
+        };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -462,6 +606,7 @@ impl StreamProxy {
                 hls_resources,
                 local_origin,
                 force_hls,
+                twitch_ad_recovery,
                 task_telemetry,
                 shutdown_rx,
             )
@@ -527,10 +672,12 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{
-        HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, looks_like_hls_manifest,
-        probe_sources, rewrite_hls_manifest, validate_probe_sample,
+        HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, TwitchAdRecoverySession,
+        is_twitch_ad_manifest, looks_like_hls_manifest, mark_all_hls_segments_as_gaps,
+        mark_twitch_ad_segments_as_gaps, probe_sources, rewrite_hls_manifest, twitch_wait_manifest,
+        validate_probe_sample,
     };
-    use crate::models::live::{PlayUrl, PlaybackProtocol};
+    use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
     use tokio::sync::watch;
 
     #[test]
@@ -648,6 +795,7 @@ mod tests {
                 "room-a:1".into(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -657,6 +805,7 @@ mod tests {
                 HashMap::new(),
                 "room-b:1".into(),
                 false,
+                None,
                 None,
             )
             .await
@@ -733,6 +882,137 @@ mod tests {
     }
 
     #[test]
+    fn twitch_ad_detection_covers_stitched_playlists_and_commercial_responses() {
+        assert!(is_twitch_ad_manifest(
+            "#EXTM3U\n#EXT-X-DATERANGE:ID=\"stitched-ad-123\"\n"
+        ));
+        assert!(is_twitch_ad_manifest("Commercial break in progress"));
+        assert!(is_twitch_ad_manifest("COMMERCIAL BREAK IN PROGRESS"));
+        assert!(!is_twitch_ad_manifest(
+            "#EXTM3U\n#EXTINF:2.000,live\nlive.ts\n"
+        ));
+    }
+
+    #[test]
+    fn twitch_ad_detection_reads_the_stream_source_daterange() {
+        // A live rendition names `live` as its source and must stay untouched,
+        // even though the playlist also carries unrelated DATERANGE rows.
+        assert!(!is_twitch_ad_manifest(concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"playlist-creation-1\",CLASS=\"timestamp\"\n",
+            "#EXT-X-DATERANGE:ID=\"source-1\",CLASS=\"twitch-stream-source\",",
+            "X-TV-TWITCH-STREAM-SOURCE=\"live\"\n",
+            "#EXTINF:2.000,live\nlive.ts\n"
+        )));
+        // A commercial names its own source, which is the signal that survives
+        // when Twitch omits the `stitched` marker.
+        assert!(is_twitch_ad_manifest(concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"source-2\",CLASS=\"twitch-stream-source\",",
+            "X-TV-TWITCH-STREAM-SOURCE=\"midroll\"\n",
+            "#EXTINF:2.000,\nad.ts\n"
+        )));
+    }
+
+    #[test]
+    fn twitch_ad_detection_matches_a_captured_live_commercial_break() {
+        // Trimmed from a real `site/web` playlist captured during a commercial on
+        // four channels simultaneously (2026-08-11). Twitch named the ad source
+        // `Amazon|<creative id>` and tagged the segments with it, while carrying
+        // no "Commercial break in progress" text at all - so the DATERANGE source
+        // is what a text-only check would have missed.
+        let captured = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"playlist-session-1786466727\",CLASS=\"twitch-session\",",
+            "END-ON-NEXT=YES,X-TV-TWITCH-SESSIONID=\"1723543675029225621\"\n",
+            "#EXT-X-DATERANGE:ID=\"source-1786466722\",CLASS=\"twitch-stream-source\",",
+            "END-ON-NEXT=YES,X-TV-TWITCH-STREAM-SOURCE=\"Amazon|2474283100494\"\n",
+            "#EXT-X-DISCONTINUITY\n",
+            "#EXTINF:2.000,Amazon|2474283100494\n",
+            "ad-0.ts\n",
+            "#EXTINF:2.000,Amazon|2474283100494\n",
+            "ad-1.ts\n",
+        );
+        assert!(is_twitch_ad_manifest(captured));
+        assert!(looks_like_hls_manifest(captured.as_bytes()));
+
+        // The same channel once the break ends: identical structure, `live`
+        // source, and it must not be treated as an ad.
+        let resumed = captured.replace("Amazon|2474283100494", "live");
+        assert!(!is_twitch_ad_manifest(&resumed));
+    }
+
+    #[test]
+    fn twitch_ad_segments_become_hls_gaps_without_hiding_live_segments() {
+        let manifest = concat!(
+            "#EXTM3U\n",
+            "#EXTINF:2.000,\n",
+            "ad.ts\n",
+            "#EXTINF:2.000,live\n",
+            "live.ts\n",
+            "#EXT-X-TWITCH-PREFETCH:next-ad.ts\n"
+        );
+
+        let filtered = mark_twitch_ad_segments_as_gaps(manifest);
+        assert_eq!(filtered.matches("#EXT-X-GAP").count(), 1);
+        assert!(filtered.contains("#EXTINF:2.000,\n#EXT-X-GAP\nad.ts"));
+        assert!(filtered.contains("#EXTINF:2.000,live\nlive.ts"));
+        assert!(!filtered.contains("PREFETCH"));
+
+        let all_gaps = mark_all_hls_segments_as_gaps(manifest);
+        assert_eq!(all_gaps.matches("#EXT-X-GAP").count(), 2);
+    }
+
+    #[test]
+    fn twitch_wait_response_is_a_valid_gap_playlist() {
+        let manifest = twitch_wait_manifest();
+        assert!(looks_like_hls_manifest(manifest.as_bytes()));
+        assert!(manifest.contains("#EXT-X-TARGETDURATION:2"));
+        assert!(manifest.contains("#EXT-X-GAP"));
+    }
+
+    #[tokio::test]
+    #[ignore = "live Kai Cenat commercial-break replacement; requires channel and external network"]
+    async fn live_kaicenat_commercial_break_replacement_smoke() {
+        let recovery = TwitchAdRecoverySession::new(
+            TwitchAdRecovery {
+                login: "kaicenat".into(),
+                selector: "video-group:chunked".into(),
+                target_width: 1920,
+                target_height: 1080,
+                target_frame_rate_milli: 60_000,
+            },
+            crate::http_client::build_client(None).expect("Twitch recovery client"),
+        );
+        let mut headers = HashMap::new();
+        headers.insert(
+            "user-agent".into(),
+            crate::sites::twitch::DEFAULT_USER_AGENT.into(),
+        );
+        headers.insert("referer".into(), "https://www.twitch.tv/kaicenat".into());
+
+        let replacement = recovery
+            .replace_ad_manifest(
+                "Commercial break in progress",
+                &Url::parse("https://video-weaver.example/kaicenat/chunked/index.m3u8").unwrap(),
+                &headers,
+            )
+            .await
+            .expect("commercial response must be replaced");
+
+        assert!(looks_like_hls_manifest(replacement.body.as_bytes()));
+        assert!(!is_twitch_ad_manifest(&replacement.body));
+        assert!(
+            !replacement.body.contains("#EXT-X-GAP"),
+            "expected a real Kai Cenat fallback playlist, not the wait manifest"
+        );
+        eprintln!(
+            "Kai Cenat commercial-break response replaced from host {}",
+            replacement.upstream_url.host_str().unwrap_or("unknown")
+        );
+    }
+
+    #[test]
     fn probe_validation_rejects_login_pages_and_wrong_containers() {
         assert_eq!(
             validate_probe_sample(
@@ -786,6 +1066,7 @@ mod tests {
                 session_id.into(),
                 false,
                 Some(&format!("http://{address}")),
+                None,
             )
             .await
             .unwrap();
@@ -845,6 +1126,7 @@ mod tests {
                 priority: 0,
                 url: "http://media.invalid/live.flv?token=probe-secret".into(),
                 headers,
+                twitch_ad_recovery: None,
             }],
             Some(&format!("http://{address}")),
         )
@@ -901,6 +1183,7 @@ async fn run_proxy_loop(
     hls_resources: Arc<HlsResources>,
     local_origin: Arc<str>,
     force_hls: bool,
+    twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
     telemetry: Arc<ProxyTelemetryCounters>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -920,6 +1203,7 @@ async fn run_proxy_loop(
                         let hls_resources = hls_resources.clone();
                         let local_origin = local_origin.clone();
                         let telemetry = telemetry.clone();
+                        let twitch_ad_recovery = twitch_ad_recovery.clone();
                         let force_hls = force_hls;
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) = handle_client(
@@ -930,6 +1214,7 @@ async fn run_proxy_loop(
                                 hls_resources.as_ref(),
                                 local_origin.as_ref(),
                                 force_hls,
+                                twitch_ad_recovery.as_deref(),
                                 telemetry.as_ref(),
                             )
                             .await
@@ -957,6 +1242,7 @@ async fn handle_client(
     hls_resources: &HlsResources,
     local_origin: &str,
     force_hls: bool,
+    twitch_ad_recovery: Option<&TwitchAdRecoverySession>,
     telemetry: &ProxyTelemetryCounters,
 ) -> Result<(), String> {
     // Read request head (we only need method/path; body unused for GET).
@@ -973,6 +1259,10 @@ async fn handle_client(
     let mut request_parts = first.split_whitespace();
     let method = request_parts.next().unwrap_or("");
     let request_target = request_parts.next().unwrap_or("");
+    let is_primary_request = request_target
+        .split_once('?')
+        .map_or(request_target, |(path, _)| path)
+        == "/live";
 
     if method == "OPTIONS" {
         let resp = concat!(
@@ -1053,6 +1343,25 @@ async fn handle_client(
     if !upstream.status().is_success() {
         let body = upstream.text().await.unwrap_or_default();
         telemetry.record_bytes(body.len());
+        if is_primary_request
+            && is_twitch_ad_manifest(&body)
+            && let Some(recovery) = twitch_ad_recovery
+            && let Some(replacement) = recovery
+                .replace_ad_manifest(&body, &upstream_url, headers)
+                .await
+        {
+            write_hls_manifest(
+                socket,
+                200,
+                "OK",
+                &replacement.body,
+                &replacement.upstream_url,
+                local_origin,
+                hls_resources,
+            )
+            .await?;
+            return Ok(());
+        }
         let resp = format!(
             "HTTP/1.1 {status} Error\r\n\
              Content-Type: text/plain; charset=utf-8\r\n\
@@ -1066,17 +1375,27 @@ async fn handle_client(
     }
 
     if is_hls_manifest(&upstream_url, &content_type) {
-        let manifest = upstream
+        let mut manifest = upstream
             .text()
             .await
             .map_err(|e| format!("read hls manifest: {e}"))?;
         telemetry.record_bytes(manifest.len());
+        let mut manifest_url = upstream_url;
+        if is_primary_request
+            && let Some(recovery) = twitch_ad_recovery
+            && let Some(replacement) = recovery
+                .replace_ad_manifest(&manifest, &manifest_url, headers)
+                .await
+        {
+            manifest = replacement.body;
+            manifest_url = replacement.upstream_url;
+        }
         write_hls_manifest(
             socket,
             status,
             status_reason,
             &manifest,
-            &upstream_url,
+            &manifest_url,
             local_origin,
             hls_resources,
         )
@@ -1210,6 +1529,94 @@ fn request_header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
             .then_some(value.trim())
             .filter(|value| !value.is_empty())
     })
+}
+
+async fn fetch_twitch_playlist(
+    client: &Client,
+    url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<(String, Url), String> {
+    let mut request = client.get(url);
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let response = request
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await
+        .map_err(|_| "request failed".to_string())?;
+    let status = response.status();
+    let effective_url = response.url().clone();
+    if !status.is_success() {
+        return Err(format!("HTTP {}", status.as_u16()));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "read failed".to_string())?;
+    Ok((body, effective_url))
+}
+
+/// `pub(crate)` so the live Twitch smoke tests judge a playlist with the same
+/// detector the proxy ships, rather than a text-only copy that would miss the
+/// textless breaks this function exists to catch.
+pub(crate) fn is_twitch_ad_manifest(manifest: &str) -> bool {
+    let lower = manifest.to_ascii_lowercase();
+    if lower.contains("stitched") || lower.contains("commercial break in progress") {
+        return true;
+    }
+    // Twitch labels the current rendition through a `twitch-stream-source`
+    // DATERANGE. A clean live playlist reports `live`; during a server-side
+    // commercial it names the ad source instead. This catches an ad break that
+    // carries neither of the textual markers above.
+    manifest
+        .lines()
+        .filter(|line| line.trim_start().starts_with("#EXT-X-DATERANGE:"))
+        .filter_map(|line| {
+            let value = line.split("X-TV-TWITCH-STREAM-SOURCE=").nth(1)?;
+            Some(value.trim_start_matches('"').split('"').next()?.to_string())
+        })
+        .any(|source| !source.eq_ignore_ascii_case("live"))
+}
+
+fn mark_twitch_ad_segments_as_gaps(manifest: &str) -> String {
+    mark_hls_segments_as_gaps(manifest, false)
+}
+
+fn mark_all_hls_segments_as_gaps(manifest: &str) -> String {
+    mark_hls_segments_as_gaps(manifest, true)
+}
+
+fn mark_hls_segments_as_gaps(manifest: &str, mark_all: bool) -> String {
+    let mut output = Vec::new();
+    for line in manifest.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#EXT-X-TWITCH-PREFETCH:") {
+            continue;
+        }
+        output.push(line.to_string());
+        if trimmed.starts_with("#EXTINF")
+            && (mark_all || !trimmed.to_ascii_lowercase().contains(",live"))
+        {
+            output.push("#EXT-X-GAP".into());
+        }
+    }
+    let mut body = output.join("\n");
+    if manifest.ends_with('\n') {
+        body.push('\n');
+    }
+    body
+}
+
+fn twitch_wait_manifest() -> String {
+    let sequence = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 2;
+    format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n#EXTINF:2.000,\n#EXT-X-GAP\ngap.ts\n"
+    )
 }
 
 fn is_hls_manifest(url: &Url, content_type: &str) -> bool {
