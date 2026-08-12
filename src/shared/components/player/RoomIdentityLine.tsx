@@ -4,6 +4,7 @@ import { useRef, type ReactNode } from "react";
 import { Flame } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { MOTION_CHANGE_EVENT } from "@/shared/motion/preference";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import type { SiteId } from "@/shared/types/live";
 import { SiteLogo } from "../SiteLogo";
@@ -61,64 +62,52 @@ export function RoomIdentityLine({
 
       let resizeFrame: number | null = null;
       let tween: gsap.core.Tween | null = null;
-      const media = gsap.matchMedia();
+      const measure = () => {
+        resizeFrame = null;
+        tween?.kill();
+        tween = null;
+        gsap.set(track, { x: 0 });
 
-      media.add(
-        {
-          reducedMotion: "(prefers-reduced-motion: reduce)",
-          motionAllowed: "(prefers-reduced-motion: no-preference)",
-        },
-        (context) => {
-          const reducedMotion = context.conditions?.reducedMotion ?? prefersReducedMotion();
+        const distance = roomIdentityOverflowDistance(track.scrollWidth, viewport.clientWidth);
+        viewport.dataset.overflowing = distance > 0 ? "true" : "false";
+        if (distance === 0 || prefersReducedMotion()) {
+          gsap.set(track, { clearProps: "transform,willChange" });
+          return;
+        }
 
-          const measure = () => {
-            resizeFrame = null;
-            tween?.kill();
-            tween = null;
-            gsap.set(track, { x: 0 });
+        tween = gsap.to(track, {
+          x: -distance,
+          delay: OVERFLOW_EDGE_PAUSE_SECONDS,
+          duration: Math.min(16, Math.max(2.4, distance / OVERFLOW_PIXELS_PER_SECOND)),
+          ease: "none",
+          repeat: -1,
+          repeatDelay: OVERFLOW_EDGE_PAUSE_SECONDS,
+          yoyo: true,
+          overwrite: "auto",
+          willChange: "transform",
+        });
+      };
 
-            const distance = roomIdentityOverflowDistance(track.scrollWidth, viewport.clientWidth);
-            viewport.dataset.overflowing = distance > 0 ? "true" : "false";
-            if (distance === 0 || reducedMotion) {
-              gsap.set(track, { clearProps: "transform,willChange" });
-              return;
-            }
+      const scheduleMeasure = () => {
+        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = window.requestAnimationFrame(measure);
+      };
 
-            tween = gsap.to(track, {
-              x: -distance,
-              delay: OVERFLOW_EDGE_PAUSE_SECONDS,
-              duration: Math.min(16, Math.max(2.4, distance / OVERFLOW_PIXELS_PER_SECOND)),
-              ease: "none",
-              repeat: -1,
-              repeatDelay: OVERFLOW_EDGE_PAUSE_SECONDS,
-              yoyo: true,
-              overwrite: "auto",
-              willChange: "transform",
-            });
-          };
+      scheduleMeasure();
+      const observer =
+        typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
+      observer?.observe(viewport);
+      observer?.observe(track);
+      if (!observer) window.addEventListener("resize", scheduleMeasure);
+      window.addEventListener(MOTION_CHANGE_EVENT, scheduleMeasure);
 
-          const scheduleMeasure = () => {
-            if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
-            resizeFrame = window.requestAnimationFrame(measure);
-          };
-
-          scheduleMeasure();
-          const observer =
-            typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
-          observer?.observe(viewport);
-          observer?.observe(track);
-          if (!observer) window.addEventListener("resize", scheduleMeasure);
-
-          return () => {
-            if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
-            observer?.disconnect();
-            if (!observer) window.removeEventListener("resize", scheduleMeasure);
-            tween?.kill();
-          };
-        },
-      );
-
-      return () => media.revert();
+      return () => {
+        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+        observer?.disconnect();
+        if (!observer) window.removeEventListener("resize", scheduleMeasure);
+        window.removeEventListener(MOTION_CHANGE_EVENT, scheduleMeasure);
+        tween?.kill();
+      };
     },
     {
       dependencies: [

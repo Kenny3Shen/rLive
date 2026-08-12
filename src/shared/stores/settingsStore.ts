@@ -17,9 +17,11 @@ import type {
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
+  MotionMode,
   SiteId,
 } from "../types/live";
 import type { QualityLevel } from "../types/player";
+import { isMotionMode } from "../motion/preference";
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -90,6 +92,7 @@ function parseAsrWindowSeconds(value: unknown): number {
 
 type SettingsState = {
   theme: ThemeMode;
+  motionMode: MotionMode;
   siteId: string;
   /** Platform opt-outs. An absent legacy setting means every platform is enabled. */
   disabledSiteIds: SiteId[];
@@ -136,6 +139,7 @@ type SettingsState = {
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
+  setMotionMode: (motionMode: MotionMode) => void;
   setSiteId: (siteId: string) => void;
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setProxy: (proxy: string | null) => void;
@@ -166,6 +170,7 @@ type SettingsState = {
 
 const defaultSettings: AppSettings = {
   theme: "system",
+  motion_mode: "system",
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
   proxy: null,
@@ -202,6 +207,7 @@ const defaultSettings: AppSettings = {
 function toAppSettings(state: SettingsState): AppSettings {
   return {
     theme: state.theme,
+    motion_mode: state.motionMode,
     default_site: state.siteId,
     disabled_site_ids: state.disabledSiteIds,
     proxy: state.proxy,
@@ -240,6 +246,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
       theme: "system",
+      motionMode: "system",
       siteId: DEFAULT_SITE_ID,
       disabledSiteIds: [],
       proxy: null,
@@ -278,6 +285,10 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => {
         set({ theme });
         void get().persistToBackend({ theme });
+      },
+      setMotionMode: (motionMode) => {
+        set({ motionMode });
+        void get().persistToBackend({ motion_mode: motionMode });
       },
       setSiteId: (siteId) => {
         const nextSiteId = resolveEnabledSiteId(siteId, get().disabledSiteIds);
@@ -507,9 +518,11 @@ export const useSettingsStore = create<SettingsState>()(
       },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
+        const motionMode = isMotionMode(settings.motion_mode) ? settings.motion_mode : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
         set({
           theme,
+          motionMode,
           siteId: resolveEnabledSiteId(settings.default_site, disabledSiteIds),
           disabledSiteIds,
           proxy: settings.proxy,
@@ -561,6 +574,7 @@ export const useSettingsStore = create<SettingsState>()(
             : { settings: result, hasSavedSettings: true };
           const localSiteId = get().siteId;
           const localDisabledSiteIds = get().disabledSiteIds;
+          const localMotionMode = get().motionMode;
           const disabledSiteIds = normalizeDisabledSiteIds(
             hasSavedSettings ? settings.disabled_site_ids : localDisabledSiteIds,
           );
@@ -573,14 +587,21 @@ export const useSettingsStore = create<SettingsState>()(
 
           get().applyFromBackend({
             ...settings,
+            motion_mode: hasSavedSettings ? settings.motion_mode : localMotionMode,
             default_site: siteId,
             disabled_site_ids: disabledSiteIds,
           });
 
           // Migrate a pre-backend local platform choice once. This makes the
           // choice durable without changing the first-run Bilibili default.
-          if (!hasSavedSettings && (siteId !== DEFAULT_SITE_ID || disabledSiteIds.length > 0)) {
+          if (
+            !hasSavedSettings &&
+            (siteId !== DEFAULT_SITE_ID ||
+              disabledSiteIds.length > 0 ||
+              localMotionMode !== "system")
+          ) {
             await get().persistToBackend({
+              motion_mode: localMotionMode,
               default_site: siteId,
               disabled_site_ids: disabledSiteIds,
             });
@@ -615,6 +636,7 @@ export const useSettingsStore = create<SettingsState>()(
       // Dual-write localStorage for theme flash; backend overwrites after load.
       partialize: (s) => ({
         theme: s.theme,
+        motionMode: s.motionMode,
         siteId: s.siteId,
         disabledSiteIds: s.disabledSiteIds,
       }),

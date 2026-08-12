@@ -37,6 +37,7 @@ function CategoryTile({ category, onClick, onIntent }: CategoryTileProps) {
   return (
     <button
       type="button"
+      data-motion-press
       title={`查看${category.name}`}
       onClick={onClick}
       onPointerEnter={onIntent}
@@ -74,6 +75,7 @@ function ExpandTile({ expanded, onClick }: ExpandTileProps) {
   return (
     <button
       type="button"
+      data-motion-press
       onClick={onClick}
       className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/65 hover:text-foreground focus-ring"
     >

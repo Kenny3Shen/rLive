@@ -10,7 +10,7 @@
 - 动画用于表达导航层级、操作来源和状态变化，不作为持续装饰。
 - 桌面与移动端共享业务组件，但允许按输入方式、视口和安全区域调整布局及动画时长。
 - 播放、Canvas 弹幕、滚动和手势同时工作时，动画仍应保持可中断、可清理且不阻塞交互。
-- 所有新增动态效果都必须提供 `prefers-reduced-motion` 回退。
+- 所有新增动态效果都必须经过共享动效偏好解析；系统 `prefers-reduced-motion`、应用“完整”和“减少”三态最终统一为根元素 `data-motion="full|reduced"`。
 
 代码是最终事实来源。本文列出的数值与行为发生变化时，应同步更新本文。
 
@@ -40,9 +40,9 @@
 | `src/shared/components/` | 跨功能业务组件，例如刷新按钮、站点切换器和房间卡片 |
 | `src/app/layout/` | 标题栏、侧栏、顶部导航、页面滚动容器和路由动效编排 |
 | `src/features/*/` | 功能页、功能内组件和局部状态 |
-| `src/shared/motion/` | 跨页面动画令牌、`PagePan` 和 `PageZoom` |
+| `src/shared/motion/` | 跨页面动画令牌、动效偏好、`PagePan` 和 `PageZoom` |
 | `src/styles.css` | 主题变量、Tailwind 映射、全局响应式规则和 CSS 关键帧 |
-| `src/app/theme.ts` | 主题解析、应用和 Radial Reveal |
+| `src/app/theme.ts` | 主题解析、应用和 Radial Reveal（受共享动效偏好控制） |
 
 基础组件是仓库内可维护源码，不是不可修改的黑盒。修改 `src/components/ui/` 会影响多个功能页，必须先检查所有调用方；页面特有布局应留在对应 feature 中。
 
@@ -133,6 +133,14 @@ flowchart TD
 ### 4.2 共享 motion tokens
 
 `src/shared/motion/tokens.ts` 负责注册 `useGSAP`、设置 GSAP 默认值并输出共享参数。
+
+动效偏好由 `src/shared/motion/preference.ts` 统一解析：
+
+- `system`（默认）跟随设备 `prefers-reduced-motion`；
+- `full` 显式启用完整页面转场、Overlay、按压和移动端反馈；
+- `reduced` 保留颜色、焦点与状态反馈，移除位移、缩放、持续滚动和弹性效果。
+
+`src/main.tsx` 在 React 首帧前应用偏好，并监听 Zustand 与系统媒体查询变化。CSS 使用 `motion-reduced:*` 自定义 variant；GSAP、Web Animations、View Transition 和手势代码统一调用 `prefersReducedMotion()`。
 
 | Token/配置 | 当前值 | 用途 |
 | --- | --- | --- |
@@ -243,7 +251,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 6. `src/styles.css` 同时关闭浏览器默认的 root-group `250ms` 插值和 snapshot crossfade，整个切换只保留一条径向揭示时间线。
 7. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-reveal`、临时 CSS 变量和 GSAP inline styles。
 
-不支持 View Transition API 或启用 `prefers-reduced-motion` 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下临时 CSS 变量或未结束的快照状态。
+不支持 View Transition API 或共享动效偏好解析为 `reduced` 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下临时 CSS 变量或未结束的快照状态。
 
 ### 4.8 CSS 动画
 
@@ -253,9 +261,9 @@ CSS 只承担无需 JavaScript 编排的短状态：
 - `animate-spin-soft`：加载图标的连续旋转。
 - `animate-drawer-in/out-bottom/right`：Base UI Drawer 的开关状态，进入 `240ms`，退出 `200ms`。
 - `tw-animate-css`：Dialog、Popover、Tooltip 等基础 Overlay 状态。
-- Drawer、Dialog、AlertDialog、Popover、Tooltip 和自定义 keyframes 均提供 `motion-reduce:animate-none` 或全局 reduced-motion 回退。
+- Drawer、Dialog、AlertDialog、Popover、Tooltip 和自定义 keyframes 均提供 `motion-reduced:animate-none` 或全局 reduced-motion 回退。
 
-CSS 动画不会自动经过 `prefersReducedMotion()`。新增或修改关键帧时，必须单独使用 `motion-reduce:*` 或 `@media (prefers-reduced-motion: reduce)` 提供回退；不能假设 GSAP 的检查会覆盖 CSS。
+CSS 动画不会自动经过 `prefersReducedMotion()`。新增或修改关键帧时，必须单独使用 `motion-reduced:*` 或根元素 `data-motion="reduced"` 提供回退；不能假设 GSAP 的检查会覆盖 CSS。
 
 ## 5. React + GSAP 实现规范
 
@@ -439,6 +447,7 @@ bash scripts/sync-to-windows.sh
 | `src/app/layout/Shell.tsx` | 页面滚动、路由来源识别和动画编排 |
 | `src/app/layout/Sidebar.tsx` | 桌面/移动导航和主题按钮反馈 |
 | `src/app/theme.ts` | 主题应用与 Radial Reveal |
+| `src/shared/motion/preference.ts` | 系统 / 完整 / 减少动效偏好、根元素状态和媒体查询同步 |
 | `src/shared/motion/tokens.ts` | GSAP 注册、共享 easing、duration 和 reduced-motion helper |
 | `src/shared/motion/PagePan.tsx` | 整页平移与 outgoing subtree 生命周期 |
 | `src/shared/motion/PageZoom.tsx` | 直播间 Zoom 进入和退出 |

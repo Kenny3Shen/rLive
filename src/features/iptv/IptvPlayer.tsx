@@ -446,7 +446,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
           data-player-controls
           data-visible="true"
           aria-hidden="false"
-          className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduce:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+          className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
           onPointerEnter={holdControlsVisible}
           onPointerMove={(event) => {
             event.stopPropagation();

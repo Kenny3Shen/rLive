@@ -250,7 +250,7 @@ export function PullToRefresh({
       <div
         ref={indicatorRef}
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center opacity-0 transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none"
+        className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center opacity-0 transition-[opacity,transform] duration-150 ease-out motion-reduced:transition-none"
       >
         <div
           ref={indicatorBodyRef}
@@ -258,11 +258,11 @@ export function PullToRefresh({
           className="flex size-9 items-center justify-center rounded-full border border-border-subtle bg-card/95 text-muted-foreground shadow-sm data-[armed=true]:border-primary/30 data-[armed=true]:text-primary"
         >
           {refreshing ? (
-            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+            <Loader2 className="size-4 animate-spin motion-reduced:animate-none" aria-hidden />
           ) : (
             <RefreshCw
               ref={refreshIconRef}
-              className="size-4 transition-transform duration-150 ease-out motion-reduce:transition-none"
+              className="size-4 transition-transform duration-150 ease-out motion-reduced:transition-none"
               aria-hidden
             />
           )}
@@ -270,7 +270,7 @@ export function PullToRefresh({
       </div>
       <div
         ref={contentRef}
-        className="flex min-h-full flex-col transition-transform duration-150 ease-out motion-reduce:transition-none"
+        className="flex min-h-full flex-col transition-transform duration-150 ease-out motion-reduced:transition-none"
       >
         {children}
       </div>

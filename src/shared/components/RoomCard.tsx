@@ -174,14 +174,15 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         render={
           <button
             type="button"
+            data-motion-press
             data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
             onClick={openRoom}
             onPointerEnter={() => preloadRouteModule(roomPath)}
             onPointerDown={() => preloadRouteModule(roomPath)}
             onFocus={() => preloadRouteModule(roomPath)}
             className={cn(
-              "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left transition-transform focus-ring max-md:active:scale-[0.97]",
-              "hover:-translate-y-0.5",
+              "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring",
+              "hover:-translate-y-0.5 motion-reduced:hover:translate-y-0",
             )}
           />
         }
@@ -193,7 +194,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
               alt=""
               loading="lazy"
               decoding="async"
-              className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
+              className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04] motion-reduced:group-hover:scale-100 motion-reduced:transition-none"
               referrerPolicy="no-referrer"
             />
           ) : (

@@ -22,7 +22,7 @@ function DrawerOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
     <DialogPrimitive.Backdrop
       data-slot="drawer-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-overlay duration-200 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 motion-reduce:animate-none",
+        "fixed inset-0 isolate z-50 bg-overlay duration-200 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 motion-reduced:animate-none",
         className,
       )}
       {...props}
@@ -54,9 +54,9 @@ function DrawerContent({
           !glass && "bg-popover",
           glass && "glass-surface",
           side === "bottom" &&
-            "inset-x-0 bottom-0 max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl border border-border p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] data-open:animate-drawer-in-bottom data-closed:animate-drawer-out-bottom motion-reduce:animate-none",
+            "inset-x-0 bottom-0 max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl border border-border p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] data-open:animate-drawer-in-bottom data-closed:animate-drawer-out-bottom motion-reduced:animate-none",
           side === "right" &&
-            "inset-y-0 right-0 h-full w-[min(20rem,60vw)] max-w-full overflow-y-auto rounded-l-2xl border border-border p-4 pr-[calc(1rem+env(safe-area-inset-right))] data-open:animate-drawer-in-right data-closed:animate-drawer-out-right motion-reduce:animate-none",
+            "inset-y-0 right-0 h-full w-[min(20rem,60vw)] max-w-full overflow-y-auto rounded-l-2xl border border-border p-4 pr-[calc(1rem+env(safe-area-inset-right))] data-open:animate-drawer-in-right data-closed:animate-drawer-out-right motion-reduced:animate-none",
           className,
         )}
         {...props}

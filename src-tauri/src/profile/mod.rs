@@ -229,6 +229,7 @@ pub fn merge_into_db(
     let mut settings = settings::get(&transaction)?;
     // Merge non-secret settings fields from package
     settings.theme = package.settings.theme.clone();
+    settings.motion_mode = package.settings.motion_mode.clone();
     settings.default_site = package.settings.default_site.clone();
     settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
     settings.proxy = package.settings.proxy.clone();
@@ -506,6 +507,17 @@ mod tests {
         let imported = settings::get(&conn).unwrap();
         assert!(imported.danmaku_filter_gifts);
         assert!(!imported.super_chat_enabled);
+    }
+
+    #[test]
+    fn merge_carries_motion_preference() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.settings.motion_mode = "full".into();
+
+        merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(settings::get(&conn).unwrap().motion_mode, "full");
     }
 
     #[test]

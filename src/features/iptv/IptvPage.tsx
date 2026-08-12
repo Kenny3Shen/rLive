@@ -336,7 +336,7 @@ function IptvChannelCard({
     <li className="min-w-0">
       <Card
         size="sm"
-        className="relative h-full gap-2 py-3 transition-[background-color,box-shadow] hover:bg-card-elevated hover:ring-foreground/20"
+        className="motion-card relative h-full gap-2 py-3 hover:bg-card-elevated hover:ring-foreground/20"
       >
         <button
           type="button"
