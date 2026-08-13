@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createEngine } from "../src/features/room/canvas/danmakuEngine";
-import {
-  danmakuFrameSkip,
-  danmakuCanvasPixelRatio,
-  estimateRefreshRateHz,
-  MOBILE_DANMAKU_TARGET_FPS,
-  shouldPaintFrame,
-} from "../src/features/room/canvas/framePacing";
+import { danmakuCanvasPixelRatio } from "../src/features/room/canvas/framePacing";
 
 function chat(content: string, ts: number, user = "观众") {
   return {
@@ -32,43 +26,13 @@ function richChat(content: string, ts: number, user = "观众") {
   };
 }
 
-describe("mobile canvas frame pacing", () => {
-  test.each([60, 90, 120, 144])("keeps %d Hz callback paints evenly paced", (refreshRateHz) => {
-    const callbackIntervalMs = 1_000 / refreshRateHz;
-    const skipEvery = Math.max(1, danmakuFrameSkip(refreshRateHz, MOBILE_DANMAKU_TARGET_FPS));
-    const paintedTimes: number[] = [];
-    for (let frame = 0; frame < refreshRateHz; frame += 1) {
-      if (shouldPaintFrame(frame, skipEvery)) paintedTimes.push(frame * callbackIntervalMs);
-    }
-    const intervals = paintedTimes.slice(1).map((time, index) => time - paintedTimes[index]);
-    expect(new Set(intervals.map((interval) => interval.toFixed(6))).size).toBe(1);
-  });
-
-  test("only derives an integer skip for an evenly representable target rate", () => {
-    expect(danmakuFrameSkip(60, 60)).toBe(1);
-    expect(danmakuFrameSkip(120, 60)).toBe(2);
-    expect(danmakuFrameSkip(90, 60)).toBe(0);
-    expect(danmakuFrameSkip(144, 60)).toBe(0);
-  });
-
-  test("uses a refresh-rate-aware backing scale", () => {
-    expect(danmakuCanvasPixelRatio(3, true)).toBe(2);
-    expect(danmakuCanvasPixelRatio(3, true, 60)).toBe(2);
-    expect(danmakuCanvasPixelRatio(3, true, 90)).toBe(1.5);
+describe("mobile canvas render budget", () => {
+  test("keeps a fixed 1x mobile backing store at every device scale", () => {
+    expect(danmakuCanvasPixelRatio(1, true)).toBe(1);
+    expect(danmakuCanvasPixelRatio(2, true)).toBe(1);
+    expect(danmakuCanvasPixelRatio(3, true)).toBe(1);
     expect(danmakuCanvasPixelRatio(3, false)).toBe(1.5);
     expect(danmakuCanvasPixelRatio(Number.NaN, true)).toBe(1);
-  });
-
-  test("uses the median interval and ignores an outlier long frame", () => {
-    const nominalIntervalMs = 1_000 / 90;
-    const intervals = [
-      nominalIntervalMs,
-      nominalIntervalMs,
-      180,
-      nominalIntervalMs,
-      nominalIntervalMs,
-    ];
-    expect(estimateRefreshRateHz(intervals)).toBeCloseTo(90, 5);
   });
 });
 
@@ -529,5 +493,178 @@ describe("danmaku engine", () => {
       expect(afterFrames.activeItems).toBeLessThanOrEqual(80);
       expect(afterFrames.pendingItems).toBeLessThanOrEqual(80);
     }
+  });
+});
+
+describe("danmaku pointer hover", () => {
+  /**
+   * Advance a fresh comment into the viewport. Items spawn just past the right
+   * edge (`viewportWidth + SPAWN_PADDING`), and the hit test deliberately skips
+   * anything not yet on screen, so a pointer can only reach a comment that has
+   * scrolled in.
+   */
+  function scrollIntoView(engine: ReturnType<typeof createEngine>, frames = 60) {
+    for (let frame = 0; frame < frames; frame += 1) engine.tick(1 / 60, 1280, 720);
+  }
+
+  test("hits the comment under the pointer and misses the gap around it", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("点我试试", 1));
+    scrollIntoView(engine);
+
+    const item = engine.visibleItems()[0]!;
+    expect(item.x).toBeLessThan(1280);
+    // The border box is what the user aims at, so the padding is inside the
+    // hit area on both axes.
+    const hit = engine.hitTest(item.x + item.width / 2, item.y + item.fontSize / 2);
+    expect(hit?.item.hoverKey).toBe(item.hoverKey);
+    expect(hit?.box.height).toBe(item.fontSize);
+
+    // Well below the em square, inside the leading the lane reserves for
+    // spacing but outside the box the renderer draws.
+    expect(engine.hitTest(item.x + item.width / 2, item.y + item.fontSize * 1.3)).toBeNull();
+    expect(engine.hitTest(item.x - 40, item.y + item.fontSize / 2)).toBeNull();
+  });
+
+  test("prefers the comment drawn on top where two overlap", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1, lineCount: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("先来的", 1));
+    // A single lane forces the second comment to share the first one's row.
+    engine.push(chat("后来的", 2));
+    scrollIntoView(engine, 240);
+
+    const [first, second] = engine.visibleItems();
+    // Anti-tailgating keeps neighbours apart on screen, so overlap has to be
+    // staged through the drawn-box lookup — which is exactly the hook the
+    // renderer uses to report what it actually painted.
+    const shared = { x: first!.x, y: first!.y, width: first!.width, height: first!.fontSize };
+    const hit = engine.hitTest(
+      first!.x + first!.width / 2,
+      first!.y + first!.fontSize / 2,
+      () => shared,
+    );
+    // Later items paint over earlier ones, so the hit test scans back to front.
+    expect(hit?.item.hoverKey).toBe(second!.hoverKey);
+  });
+
+  test("uses the renderer's box instead of the wider scheduling reservation", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("预留比实绘更宽", 1));
+    scrollIntoView(engine);
+
+    const item = engine.visibleItems()[0]!;
+    const narrow = { x: item.x, y: item.y, width: item.width / 2, height: item.fontSize };
+    const pointerX = item.x + item.width * 0.8;
+
+    // Inside the reservation but past the glyphs the frame actually drew.
+    expect(engine.hitTest(pointerX, item.y + 4)).not.toBeNull();
+    expect(engine.hitTest(pointerX, item.y + 4, () => narrow)).toBeNull();
+  });
+
+  test("freezes only the hovered comment and releases it again", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("停住的", 1));
+    engine.push(chat("继续飘的", 2));
+    scrollIntoView(engine);
+
+    const [held, moving] = engine.visibleItems();
+    const heldStartX = held!.x;
+    const movingStartX = moving!.x;
+    engine.setPaused(held!.hoverKey);
+    expect(engine.pausedItem()?.hoverKey).toBe(held!.hoverKey);
+
+    for (let frame = 0; frame < 30; frame += 1) engine.tick(1 / 60, 1280, 720);
+
+    expect(engine.visibleItems().find((it) => it.hoverKey === held!.hoverKey)?.x).toBe(heldStartX);
+    const movedX = engine.visibleItems().find((it) => it.hoverKey === moving!.hoverKey)?.x;
+    expect(movedX).toBeLessThan(movingStartX);
+
+    // Releasing resumes the comment from where it was held, at its original
+    // speed: the freeze never touched it.
+    engine.setPaused(null);
+    expect(engine.pausedItem()).toBeNull();
+    engine.tick(1 / 60, 1280, 720);
+    expect(engine.visibleItems().find((it) => it.hoverKey === held!.hoverKey)?.x).toBeLessThan(
+      heldStartX,
+    );
+  });
+
+  test("routes a new comment around the lane a frozen comment blocks", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("占住第一条轨道", 1));
+
+    const held = engine.visibleItems()[0]!;
+    engine.setPaused(held.hoverKey);
+    // Hold it near the right edge so its lane can never clear.
+    for (let frame = 0; frame < 10; frame += 1) engine.tick(1 / 60, 1280, 720);
+    const frozenX = held.x;
+
+    engine.push(chat("换一条轨道", 2_000));
+    for (let frame = 0; frame < 10; frame += 1) engine.tick(1 / 60, 1280, 720);
+
+    const next = engine.visibleItems().find((it) => it.hoverKey !== held.hoverKey);
+    expect(next).toBeDefined();
+    expect(next!.y).not.toBe(held.y);
+    // The block is what forced the reroute, so the frozen comment must still be
+    // sitting where it was: a freeze that quietly resumed would prove nothing.
+    expect(held.x).toBe(frozenX);
+  });
+
+  test("drops the freeze when the frozen comment leaves the render list", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1, lineCount: 20 });
+    engine.tick(0, 1920, 1080);
+    engine.push(chat("很快就会被淘汰", 1));
+
+    const held = engine.visibleItems()[0]!;
+    engine.setPaused(held.hoverKey);
+    expect(engine.pausedItem()?.hoverKey).toBe(held.hoverKey);
+
+    // Overrun the bounded active-item list. The frozen comment holds its
+    // position, so only eviction can remove it. The waiting queue is bounded
+    // too, so the flood has to arrive in batches with frames in between —
+    // a single huge push is mostly dropped before it can fill the screen.
+    for (let round = 0; round < 12; round += 1) {
+      engine.pushBatch(
+        Array.from({ length: 80 }, (_, index) =>
+          chat(`洪水 ${round}-${index}`, 1_000 + round * 80 + index),
+        ),
+        true,
+      );
+      for (let frame = 0; frame < 90; frame += 1) engine.tick(1 / 60, 1920, 1080);
+    }
+
+    const stillPresent = engine.visibleItems().some((it) => it.hoverKey === held.hoverKey);
+    expect(stillPresent).toBe(false);
+    // A later comment must not inherit the freeze through a reused lane.
+    expect(engine.pausedItem()).toBeNull();
+  });
+
+  test("drops the freeze when a frozen fixed-top card expires", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push({ kind: "super_chat", user: "船长", content: "置顶也能悬停", color: null, ts: 1 });
+
+    const held = engine.visibleItems()[0]!;
+    expect(held.kind).toBe("top");
+    engine.setPaused(held.hoverKey);
+    expect(engine.pausedItem()?.hoverKey).toBe(held.hoverKey);
+
+    // A fixed-top card leaves on its own timer rather than by scrolling off, so
+    // it reaches `noteRemovedItem` through a different branch than eviction.
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 10_000;
+      engine.tick(1 / 60, 1280, 720);
+    } finally {
+      Date.now = realNow;
+    }
+
+    expect(engine.visibleItems()).toHaveLength(0);
+    expect(engine.pausedItem()).toBeNull();
   });
 });

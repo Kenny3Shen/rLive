@@ -1,8 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, Copy, SendHorizontal, Star } from "lucide-react";
-import { invokeCmd } from "@/shared/api/tauri";
-import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/live";
+import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,9 +15,8 @@ import {
   resolveDanmakuListUserColor,
   type DanmakuListSurface,
 } from "./danmaku/listColor";
-import { getDanmakuSendConfig } from "./danmaku/sending";
+import { formatDanmakuClipboardText, useDanmakuActions } from "./danmaku/useDanmakuActions";
 import { cn } from "@/lib/utils";
-import { copyText } from "@/shared/clipboard";
 
 // Keep the rendered DOM deliberately small even when a room is producing
 // thousands of comments per minute. The bounded queue preserves recent
@@ -44,33 +41,6 @@ function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
 
 type DanmakuLine = { id: number; event: DanmakuEvent };
 
-/**
- * Normalise text before it enters the clipboard or a user-triggered repeat
- * request. The repeat action transmits this exact content; it does not append
- * a literal “+1”.
- */
-export function formatDanmakuClipboardText(content: string): string {
-  return content.trim();
-}
-
-/**
- * The async Clipboard API can be unavailable in older WebViews, in insecure
- * origins, or when its permission is denied. Fall back to the legacy command
- * while preserving the user's active selection and focus as much as possible.
- */
-export async function copyDanmakuText(text: string): Promise<boolean> {
-  return copyText(text);
-}
-
-type ActionStatus =
-  | "copied"
-  | "copy-failed"
-  | "favorited"
-  | "favorite-failed"
-  | "sent"
-  | "send-failed"
-  | null;
-
 function DanmakuSender({
   event,
   user,
@@ -94,25 +64,6 @@ function DanmakuSender({
       </span>
     </>
   );
-}
-
-function actionStatusMessage(status: ActionStatus): string | null {
-  switch (status) {
-    case "copied":
-      return "已复制弹幕内容";
-    case "copy-failed":
-      return "复制失败，请手动选择内容";
-    case "favorited":
-      return "已收藏";
-    case "favorite-failed":
-      return "收藏失败，请稍后重试";
-    case "sent":
-      return "已发送相同的弹幕";
-    case "send-failed":
-      return "发送失败，请检查账号登录状态或直播间限制";
-    default:
-      return null;
-  }
 }
 
 /**
@@ -176,32 +127,17 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   roomUserName?: string;
   surface: DanmakuListSurface;
 }) {
-  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [actionStatus, setActionStatus] = useState<ActionStatus>(null);
-  const [favoriting, setFavoriting] = useState(false);
-  const [sending, setSending] = useState(false);
   const message = formatDanmakuClipboardText(event.content);
   const user = event.user.trim() || "匿名";
-  const sendConfig = getDanmakuSendConfig(siteId);
-  const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
-  const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
-  const canRepeat =
-    event.kind === "chat" &&
-    Boolean(sendConfig && roomId && danmakuSendEnabled && !danmakuSendPending);
-  const canFavorite = event.kind === "chat" && Boolean(siteId);
-  const repeatUnavailableLabel = !sendConfig
-    ? "当前平台暂不支持发送弹幕"
-    : danmakuSendPending
-      ? "正在同步发送权限…"
-      : !danmakuSendEnabled
-        ? "请先在账号设置启用发送功能"
-        : "发送相同的弹幕（+1）";
-  const statusMessage = actionStatusMessage(actionStatus);
-  const actionFailed =
-    actionStatus === "copy-failed" ||
-    actionStatus === "favorite-failed" ||
-    actionStatus === "send-failed";
+  const actions = useDanmakuActions({
+    message,
+    eventKind: event.kind,
+    siteId,
+    roomId,
+    roomTitle,
+    roomUserName,
+  });
 
   if (!message) {
     return (
@@ -221,56 +157,12 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     );
   }
 
-  async function copy() {
-    const copied = await copyDanmakuText(message);
-    setActionStatus(copied ? "copied" : "copy-failed");
-  }
-
-  async function repeat() {
-    if (!sendConfig || !roomId || sending) return;
-    setSending(true);
-    setActionStatus(null);
-    try {
-      await invokeCmd<void>(sendConfig.sendCommand, {
-        roomId,
-        message,
-        roomTitle,
-        roomUserName,
-      });
-      setActionStatus("sent");
-    } catch {
-      setActionStatus("send-failed");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function favorite() {
-    if (!siteId || favoriting) return;
-    setFavoriting(true);
-    setActionStatus(null);
-    const favoriteQueryKey = ["danmaku-favorites", siteId] as const;
-    try {
-      await invokeCmd<void>("danmaku_favorite_add", { siteId, content: message });
-      queryClient.setQueryData<DanmakuFavoriteItem[]>(favoriteQueryKey, (current) => [
-        { site_id: siteId, content: message, added_at: Date.now() },
-        ...(current ?? []).filter((item) => item.content !== message),
-      ]);
-      void queryClient.invalidateQueries({ queryKey: favoriteQueryKey });
-      setActionStatus("favorited");
-    } catch {
-      setActionStatus("favorite-failed");
-    } finally {
-      setFavoriting(false);
-    }
-  }
-
   return (
     <Popover
       open={open}
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
-        if (!nextOpen) setActionStatus(null);
+        if (!nextOpen) actions.resetStatus();
       }}
     >
       <PopoverTrigger
@@ -296,7 +188,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             size="sm"
             className="w-full justify-start"
             title="复制弹幕"
-            onClick={() => void copy()}
+            onClick={() => void actions.copy()}
           >
             <Copy data-icon="inline-start" aria-hidden />
             复制
@@ -306,11 +198,11 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             variant="ghost"
             size="sm"
             className="w-full justify-start"
-            disabled={!canFavorite || favoriting}
-            title={canFavorite ? "收藏弹幕" : "当前房间暂不支持收藏"}
-            onClick={() => void favorite()}
+            disabled={!actions.canFavorite || actions.favoriting}
+            title={actions.favoriteLabel}
+            onClick={() => void actions.favorite()}
           >
-            {favoriting ? (
+            {actions.favoriting ? (
               <Spinner data-icon="inline-start" aria-hidden />
             ) : (
               <Star data-icon="inline-start" aria-hidden />
@@ -322,25 +214,25 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             variant="ghost"
             size="sm"
             className="w-full justify-start"
-            disabled={!canRepeat || sending}
-            aria-label={canRepeat ? "发送相同的弹幕（+1）" : repeatUnavailableLabel}
-            title={canRepeat ? "发送相同的弹幕（+1）" : repeatUnavailableLabel}
-            onClick={() => void repeat()}
+            disabled={!actions.canRepeat || actions.sending}
+            aria-label={actions.repeatLabel}
+            title={actions.repeatLabel}
+            onClick={() => void actions.repeat()}
           >
             <SendHorizontal data-icon="inline-start" aria-hidden />
             +1
           </Button>
         </div>
-        {statusMessage && (
+        {actions.statusMessage && (
           <p
             role="status"
             aria-live="polite"
             className={cn(
               "px-1 py-1 text-center text-xs leading-snug",
-              actionFailed ? "text-destructive" : "text-muted-foreground",
+              actions.failed ? "text-destructive" : "text-muted-foreground",
             )}
           >
-            {statusMessage}
+            {actions.statusMessage}
           </p>
         )}
       </PopoverContent>

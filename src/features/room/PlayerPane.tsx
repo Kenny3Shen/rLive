@@ -1567,6 +1567,13 @@ export function PlayerPane({
                 <CanvasDanmaku
                   active={canvasActive}
                   sessionKey={danmakuSessionKey}
+                  siteId={siteId}
+                  roomId={roomId}
+                  roomTitle={roomTitle}
+                  roomUserName={roomUserName}
+                  // Fullscreen puts the picture a whole display away, where the
+                  // compact pill is hard to aim at.
+                  large={player.mode === "fullscreen"}
                   className="z-10"
                 />
               )}

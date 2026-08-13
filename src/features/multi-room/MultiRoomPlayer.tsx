@@ -147,6 +147,13 @@ function MainMultiRoomControls({
         <CanvasDanmaku
           active={canvasActive}
           sessionKey={sessionKey}
+          siteId={room.siteId}
+          roomId={detail?.room_id || room.roomId}
+          roomTitle={detail?.title || room.title}
+          roomUserName={detail?.user_name || room.userName}
+          // Fullscreen puts the picture a whole display away, where the compact
+          // pill is hard to aim at. Grid cells are small enough already.
+          large={player.mode === "fullscreen"}
           className="absolute inset-0 z-10"
         />
       )}
