@@ -55,6 +55,8 @@ const WINDOWS_RUNTIME_ARCHIVE_SHA256: &str =
 #[cfg(windows)]
 const WINDOWS_RUNTIME_ARCHIVE_ROOT: &str = "sherpa-onnx-v1.13.4-win-x64-cuda";
 #[cfg(windows)]
+const WINDOWS_RUNTIME_DIR_NAME: &str = "asr-runtime";
+#[cfg(windows)]
 const WINDOWS_RUNTIME_DLLS: &[&str] = &[
     "onnxruntime.dll",
     "onnxruntime_providers_cuda.dll",
@@ -620,7 +622,7 @@ impl AsrManager {
         let model_dir = app_directory.join("models").join("asr");
         let assets = ModelAssets::new(&model_dir);
         #[cfg(windows)]
-        let runtime_dir = app_directory.join("asr-runtime");
+        let runtime_dir = app_directory.join(WINDOWS_RUNTIME_DIR_NAME);
 
         let speaker_model_downloaded = assets.speaker_is_complete();
         let default_options = AsrRuntimeOptions::default();
@@ -1677,11 +1679,10 @@ fn cuda_runtime_available() -> bool {
         return false;
     }
 
-    let runtime_dir = std::env::current_exe().ok().and_then(|executable| {
-        executable
-            .parent()
-            .map(|directory| directory.join("asr-runtime"))
-    });
+    // The on-demand runtime is staged under the user data directory, which is
+    // where `AsrManager` downloads and loads it from.
+    let runtime_dir = crate::app_paths::application_data_root()
+        .map(|directory| directory.join(WINDOWS_RUNTIME_DIR_NAME));
     let provider_is_staged = runtime_dir.as_ref().is_some_and(|directory| {
         directory.join("onnxruntime_providers_cuda.dll").is_file()
             && directory.join("onnxruntime_providers_shared.dll").is_file()

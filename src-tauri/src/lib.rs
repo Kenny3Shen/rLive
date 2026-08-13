@@ -174,17 +174,6 @@ fn init_logging(directory: &std::path::Path) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(windows)]
-    let mut context = tauri::generate_context!();
-    #[cfg(not(windows))]
-    let context = tauri::generate_context!();
-    #[cfg(windows)]
-    for window in &mut context.config_mut().app.windows {
-        if window.label == "main" {
-            window.create = false;
-        }
-    }
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -217,23 +206,6 @@ pub fn run() {
             let state = AppState::init(&directories.root)?;
             app.manage(state);
             twitch_integrity::install(app.handle().clone());
-
-            #[cfg(windows)]
-            {
-                let config = app
-                    .config()
-                    .app
-                    .windows
-                    .iter()
-                    .find(|window| window.label == "main")
-                    .cloned()
-                    .ok_or_else(|| {
-                        error::AppError::new("window_config_error", "主窗口配置不存在")
-                    })?;
-                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
-                    .data_directory(directories.webview)
-                    .build()?;
-            }
 
             // Debug builds only: start the browser bridge without the settings
             // toggle, so the HTTP surface can be exercised from a terminal or a
@@ -340,7 +312,7 @@ pub fn run() {
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
         ])
-        .build(context)
+        .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::WindowEvent {
