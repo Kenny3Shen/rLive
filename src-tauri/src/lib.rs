@@ -1,4 +1,5 @@
 mod account;
+mod app_paths;
 #[cfg(not(target_os = "android"))]
 mod asr;
 mod commands;
@@ -19,9 +20,9 @@ mod web_bridge;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use app_paths::AppDirectories;
 use commands::account::{
     account_clear_cookie, account_get_cookie, account_get_profile, account_qr_login_poll,
     account_qr_login_start, account_set_cookie,
@@ -130,23 +131,11 @@ impl<'a> MakeWriter<'a> for AppLogWriter {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-fn app_log_directory() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("rlive")
-        .join("logs")
-}
-
 /// Persist failure diagnostics locally because release Windows builds have no
 /// console window. Deliberately log structured error state only: Cookie
 /// values, tokens, outgoing chat text, and successful operation progress must
 /// never be written to disk.
-fn init_logging(directory: Option<PathBuf>) {
-    #[cfg(target_os = "android")]
-    let directory = directory.unwrap_or_else(|| PathBuf::from("."));
-    #[cfg(not(target_os = "android"))]
-    let directory = directory.unwrap_or_else(app_log_directory);
+fn init_logging(directory: &std::path::Path) {
     if let Err(error) = fs::create_dir_all(&directory) {
         eprintln!("rLive log directory unavailable: {error}");
         return;
@@ -184,6 +173,17 @@ fn init_logging(directory: Option<PathBuf>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    let mut context = tauri::generate_context!();
+    #[cfg(not(windows))]
+    let context = tauri::generate_context!();
+    #[cfg(windows)]
+    for window in &mut context.config_mut().app.windows {
+        if window.label == "main" {
+            window.create = false;
+        }
+    }
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -208,15 +208,30 @@ pub fn run() {
             })?;
 
             #[cfg(target_os = "android")]
-            init_logging(Some(app_data_dir.join("rlive").join("logs")));
+            let directories = AppDirectories::resolve(Some(&app_data_dir))?;
             #[cfg(not(target_os = "android"))]
-            init_logging(None);
+            let directories = AppDirectories::resolve(None)?;
 
-            #[cfg(target_os = "android")]
-            let state = AppState::init(Some(&app_data_dir))?;
-            #[cfg(not(target_os = "android"))]
-            let state = AppState::init(None)?;
+            init_logging(&directories.logs);
+            let state = AppState::init(&directories.root)?;
             app.manage(state);
+
+            #[cfg(windows)]
+            {
+                let config = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|window| window.label == "main")
+                    .cloned()
+                    .ok_or_else(|| {
+                        error::AppError::new("window_config_error", "主窗口配置不存在")
+                    })?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                    .data_directory(directories.webview)
+                    .build()?;
+            }
 
             // Debug builds only: start the browser bridge without the settings
             // toggle, so the HTTP surface can be exercised from a terminal or a
@@ -323,7 +338,7 @@ pub fn run() {
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::WindowEvent {

@@ -854,13 +854,16 @@ function AsrModelField() {
 
   const invalid = presentation.error || actionError !== null;
   const busy = pending || (enabled && presentation.busy);
-  const estimatedDownloadSize = punctuationEnabled
+  const estimatedModelSize = punctuationEnabled
     ? speakerEnabled
       ? "577"
       : "550"
     : speakerEnabled
       ? "515"
       : "488";
+  const estimatedDownloadSize = isWindowsDesktop()
+    ? String(Number(estimatedModelSize) + 212)
+    : estimatedModelSize;
   return (
     <>
       <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
@@ -995,7 +998,7 @@ function AsrModelField() {
             </AlertDialogMedia>
             <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
             <AlertDialogDescription>
-              将下载约 {estimatedDownloadSize} MB 模型，完成后自动启用并保留在本机。
+              将下载约 {estimatedDownloadSize} MB 的字幕运行库和模型，完成后自动启用并保留在本机。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
