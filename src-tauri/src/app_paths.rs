@@ -45,7 +45,7 @@ fn application_root(mobile_data_dir: Option<&Path>) -> AppResult<PathBuf> {
 
 #[cfg(windows)]
 fn application_root(_mobile_data_dir: Option<&Path>) -> AppResult<PathBuf> {
-    std::env::current_exe()
+    let executable_dir = std::env::current_exe()
         .map_err(|error| {
             AppError::new(
                 "app_data_dir_error",
@@ -54,7 +54,34 @@ fn application_root(_mobile_data_dir: Option<&Path>) -> AppResult<PathBuf> {
         })?
         .parent()
         .map(Path::to_path_buf)
-        .ok_or_else(|| AppError::new("app_data_dir_error", "executable directory is unavailable"))
+        .ok_or_else(|| {
+            AppError::new("app_data_dir_error", "executable directory is unavailable")
+        })?;
+
+    // 便携版把数据放在 EXE 同级目录；通过 NSIS/MSI 安装的副本（安装目录含
+    // uninstall.exe，或位于 Program Files 等不可写位置）改用用户数据目录，
+    // 避免升级/卸载清理安装目录时丢失数据。
+    let is_installed_copy = executable_dir.join("uninstall.exe").is_file();
+    if !is_installed_copy && directory_is_writable(&executable_dir) {
+        return Ok(executable_dir);
+    }
+    Ok(dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("rlive"))
+}
+
+#[cfg(windows)]
+fn directory_is_writable(directory: &Path) -> bool {
+    let probe = directory.join(format!(".rlive-write-probe-{}", std::process::id()));
+    let created = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .is_ok();
+    if created {
+        let _ = fs::remove_file(&probe);
+    }
+    created
 }
 
 #[cfg(not(any(windows, target_os = "android")))]

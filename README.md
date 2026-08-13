@@ -90,15 +90,16 @@ rLive 是面向桌面端与 Android 的跨平台直播客户端。它把不同�
 
 | 客户端 | 直播与 IPTV | 多画面 | 本地语音字幕 | 说明 |
 | --- | --- | --- | --- | --- |
-| Windows 桌面 | 支持 | 支持 | CPU / NVIDIA CUDA | 提供单文件 EXE 和便携 ZIP；字幕运行库首次启用时下载 |
-| Linux 桌面 | 支持 | 支持 | CPU / NVIDIA CUDA | 仅 x86_64 支持 CUDA；Linux CUDA 尚未完成完整硬件和发行版测试 |
+| Windows 桌面 | 支持 | 支持 | CPU / NVIDIA CUDA | 提供 NSIS / MSI 安装包和便携 ZIP；字幕运行库首次启用时下载 |
+| Linux 桌面 | 支持 | 支持 | CPU / NVIDIA CUDA | 提供 `.deb` 安装包和便携 ZIP；仅 x86_64 支持 CUDA，Linux CUDA 尚未完成完整硬件和发行版测试 |
+| macOS 桌面 | 支持 | 支持 | CPU | 提供 Apple Silicon 和 Intel DMG；未做签名与公证，首次打开需手动允许；macOS 构建尚未完成完整硬件测试 |
 | Android arm64 | 支持 | 不支持 | 不支持 | 提供 arm64-v8a APK；最低 Android API 24 |
 | 浏览器（本机） | 支持 | 支持 | 不支持 | 由运行中的 rLive 客户端提供界面，浏览与播放均可用 |
 | 浏览器（局域网设备） | 仅浏览与弹幕 | 不支持 | 不支持 | 需显式开启并使用访问令牌；播放代理只监听本机，故暂不能播放 |
 
 电视端、iOS、录制与下载、礼物与支付、批量发送及自动回复不在当前支持范围内。浏览器访问不是独立部署的服务端：它依赖本机运行的 rLive 客户端，配置导入导出和本地语音字幕等需要本机权限的能力在浏览器中不可用。
 
-Windows EXE 与 ZIP 都不内置约 `212 MiB` 的 ASR 运行库。首次启用本地字幕时，应用会连同所选模型下载运行库并校验完整性。`rlive.exe`、`rlive.db`、`logs/`、`models/`、`asr-runtime/` 与 `webview/` 均位于同一应用文件夹，移动整个文件夹即可保留配置和数据；请将应用放在当前用户可写目录，不要直接放入 `Program Files`。
+Windows 安装包与便携 ZIP 都不内置约 `212 MiB` 的 ASR 运行库。首次启用本地字幕时，应用会连同所选模型下载运行库并校验完整性。便携版的 `rlive.exe`、`rlive.db`、`logs/`、`models/`、`asr-runtime/` 与 `webview/` 均位于同一应用文件夹，移动整个文件夹即可保留配置和数据，请将其放在当前用户可写目录；通过 NSIS / MSI 安装的版本把这些数据保存在 `%APPDATA%\rlive`，升级或卸载不影响数据。
 
 ## 从源码运行
 
