@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
 import {
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
@@ -9,7 +8,6 @@ import {
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Field,
   FieldContent,
@@ -88,11 +86,11 @@ function PreferenceSliderField({
 
   return (
     <Field
-      orientation={layout === "page" ? "horizontal" : "vertical"}
+      orientation="horizontal"
       data-disabled={disabled || undefined}
       className={fieldSurfaceClass(layout)}
     >
-      <FieldContent>
+      <FieldContent className={layout === "panel" ? "min-w-0 flex-none" : undefined}>
         <FieldTitle>
           <span id={labelId}>{title}</span>
           {description && <FieldTip>{description}</FieldTip>}
@@ -100,7 +98,10 @@ function PreferenceSliderField({
       </FieldContent>
       {/* Shares the row with the title on narrow screens; caps at 13rem on wide layouts. */}
       <div
-        className={cn("flex items-center gap-3", layout === "page" && "min-w-32 max-w-52 flex-1")}
+        className={cn(
+          "flex items-center gap-3",
+          layout === "page" ? "min-w-32 max-w-52 flex-1" : "min-w-0 flex-1",
+        )}
       >
         <Slider
           aria-labelledby={labelId}
@@ -521,11 +522,8 @@ export function DanmakuAppearanceSettingsFields({
         onPreview={(value) => useSettingsStore.setState({ danmakuSpeed: value })}
         onCommit={(value) => persist({ danmaku_speed: value })}
       />
-      <Field
-        orientation={layout === "page" ? "horizontal" : "vertical"}
-        className={fieldSurfaceClass(layout)}
-      >
-        <FieldContent>
+      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
+        <FieldContent className={layout === "panel" ? "flex-none" : undefined}>
           <FieldTitle id={weightLabelId}>字重</FieldTitle>
         </FieldContent>
         <ToggleGroup
@@ -533,8 +531,8 @@ export function DanmakuAppearanceSettingsFields({
           value={[String(fontWeight)]}
           variant="outline"
           size="sm"
-          spacing={1}
-          className="max-w-full flex-wrap"
+          spacing={layout === "panel" ? 0 : 1}
+          className="ml-auto max-w-full flex-wrap justify-end"
           onValueChange={(values) => {
             const next = Number(values[0]);
             if (!FONT_WEIGHTS.some((option) => option.value === next)) return;
@@ -568,15 +566,6 @@ export function resetDanmakuAppearanceSettings() {
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
     super_chat_opacity: DANMAKU_APPEARANCE_DEFAULTS.superChatOpacity,
   });
-}
-
-export function DanmakuAppearanceResetButton() {
-  return (
-    <Button type="button" variant="outline" size="sm" onClick={resetDanmakuAppearanceSettings}>
-      <RotateCcw data-icon="inline-start" aria-hidden />
-      恢复默认
-    </Button>
-  );
 }
 
 export function DanmakuFilterSettingsFields({
