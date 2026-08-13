@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Copy, SendHorizontal, Star } from "lucide-react";
+import { ArrowDownToLine, Copy, MessageSquarePlus, Star } from "lucide-react";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Button } from "@/components/ui/button";
@@ -219,7 +219,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             title={actions.repeatLabel}
             onClick={() => void actions.repeat()}
           >
-            <SendHorizontal data-icon="inline-start" aria-hidden />
+            <MessageSquarePlus data-icon="inline-start" aria-hidden />
             +1
           </Button>
         </div>
