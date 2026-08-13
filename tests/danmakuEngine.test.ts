@@ -26,13 +26,14 @@ function richChat(content: string, ts: number, user = "观众") {
   };
 }
 
-describe("mobile canvas render budget", () => {
-  test("keeps a fixed 1x mobile backing store at every device scale", () => {
-    expect(danmakuCanvasPixelRatio(1, true)).toBe(1);
-    expect(danmakuCanvasPixelRatio(2, true)).toBe(1);
-    expect(danmakuCanvasPixelRatio(3, true)).toBe(1);
-    expect(danmakuCanvasPixelRatio(3, false)).toBe(1.5);
-    expect(danmakuCanvasPixelRatio(Number.NaN, true)).toBe(1);
+describe("canvas backing store scale", () => {
+  test("caps the device scale identically on every client", () => {
+    expect(danmakuCanvasPixelRatio(1)).toBe(1);
+    expect(danmakuCanvasPixelRatio(1.25)).toBe(1.25);
+    expect(danmakuCanvasPixelRatio(2)).toBe(1.5);
+    expect(danmakuCanvasPixelRatio(3)).toBe(1.5);
+    expect(danmakuCanvasPixelRatio(Number.NaN)).toBe(1);
+    expect(danmakuCanvasPixelRatio(0)).toBe(1);
   });
 });
 
