@@ -894,7 +894,7 @@ export function FollowPage() {
                                       : "全部状态"}
                                 </SelectValue>
                               </SelectTrigger>
-                              <SelectContent align="start">
+                              <SelectContent align="start" alignItemWithTrigger={false}>
                                 <SelectGroup>
                                   <SelectItem value="all">全部状态</SelectItem>
                                   <SelectItem value="live">直播中</SelectItem>
@@ -974,7 +974,7 @@ export function FollowPage() {
                                       : "全部状态"}
                                 </SelectValue>
                               </SelectTrigger>
-                              <SelectContent align="start">
+                              <SelectContent align="start" alignItemWithTrigger={false}>
                                 <SelectGroup>
                                   <SelectItem value="all">全部状态</SelectItem>
                                   <SelectItem value="live">直播中</SelectItem>
