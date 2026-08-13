@@ -5,15 +5,10 @@ import { copyText } from "@/shared/clipboard";
 import { notify } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldError,
-  FieldTitle,
-} from "@/components/ui/field";
+import { Field, FieldContent, FieldError, FieldTitle } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { FieldTip } from "./FieldTip";
 import { webBridgeExposureWarning, webBridgeShareUrl, type WebBridgeInfo } from "./webBridge";
 
 function messageFromError(error: unknown): string {
@@ -86,25 +81,28 @@ export function WebBridgeField() {
   return (
     <Field data-invalid={error ? true : undefined}>
       <FieldContent className="gap-3">
-        <FieldTitle id="web-bridge-title">浏览器访问</FieldTitle>
-        <FieldDescription>
-          开启后可用浏览器打开 rLive，直播浏览、播放、弹幕与 IPTV 均通过本机服务完成。语音字幕、配置档案读写等需要本机权限的功能仍只在客户端可用。
-        </FieldDescription>
+        <FieldTitle>
+          <span id="web-bridge-title">浏览器访问</span>
+          <FieldTip>
+            开启后可用浏览器打开 rLive，直播浏览、播放、弹幕与 IPTV
+            均通过本机服务完成。语音字幕、配置档案读写等需要本机权限的功能仍只在客户端可用。
+          </FieldTip>
+        </FieldTitle>
 
         {!info ? (
           <div className="flex flex-col gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <Switch
-                checked={allowLan}
-                onCheckedChange={(checked) => setAllowLan(checked === true)}
-              />
-              允许局域网设备访问
-            </label>
-            <FieldDescription>
-              {allowLan
-                ? "将监听所有网络接口，并生成一次性访问令牌。局域网设备可以浏览和看弹幕，但播放代理只监听本机，暂不能播放。"
-                : "仅本机可访问（127.0.0.1）。"}
-            </FieldDescription>
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-2 text-sm">
+                <Switch
+                  checked={allowLan}
+                  onCheckedChange={(checked) => setAllowLan(checked === true)}
+                />
+                允许局域网设备访问
+              </label>
+              <FieldTip>
+                关闭时仅本机可访问（127.0.0.1）；开启后将监听所有网络接口，并生成一次性访问令牌。局域网设备可以浏览和看弹幕，但播放代理只监听本机，暂不能播放。
+              </FieldTip>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => void start()} disabled={pending}>
                 {pending ? <Spinner data-icon="inline-start" /> : <Globe data-icon="inline-start" aria-hidden />}
@@ -118,6 +116,12 @@ export function WebBridgeField() {
               <Badge variant={info.lan_exposed ? "destructive" : "secondary"}>
                 {info.lan_exposed ? "局域网可访问" : "仅本机"}
               </Badge>
+              {info.lan_exposed && (
+                <FieldTip>
+                  局域网设备请把地址中的 127.0.0.1 换成本机的局域网
+                  IP，端口与令牌保持不变；这些设备可以浏览和看弹幕，但暂不能播放。
+                </FieldTip>
+              )}
               <span className="font-mono text-sm break-all">{webBridgeShareUrl(info)}</span>
               <Button
                 size="sm"
@@ -142,12 +146,6 @@ export function WebBridgeField() {
                   复制令牌
                 </Button>
               </div>
-            )}
-
-            {info.lan_exposed && (
-              <FieldDescription>
-                局域网设备请把地址中的 127.0.0.1 换成本机的局域网 IP，端口与令牌保持不变；这些设备可以浏览和看弹幕，但暂不能播放。
-              </FieldDescription>
             )}
 
             {warning && <FieldError>{warning}</FieldError>}

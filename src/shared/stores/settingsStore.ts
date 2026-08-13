@@ -56,10 +56,10 @@ function parseAsrProvider(value: unknown): AsrProvider {
 
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
-const ASR_FONT_SIZE_DEFAULT = 20;
+export const ASR_FONT_SIZE_DEFAULT = 20;
 const ASR_WINDOW_SECONDS_MIN = 0.2;
 const ASR_WINDOW_SECONDS_MAX = 1;
-const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
+export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
 function parseAsrFontSize(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);

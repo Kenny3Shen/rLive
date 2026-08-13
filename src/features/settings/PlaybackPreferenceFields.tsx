@@ -17,6 +17,7 @@ import {
   FieldLabel,
   FieldTitle,
 } from "@/components/ui/field";
+import { FieldTip } from "@/features/settings/FieldTip";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -87,15 +88,20 @@ function PreferenceSliderField({
 
   return (
     <Field
-      orientation={layout === "page" ? "responsive" : "vertical"}
+      orientation={layout === "page" ? "horizontal" : "vertical"}
       data-disabled={disabled || undefined}
       className={fieldSurfaceClass(layout)}
     >
       <FieldContent>
-        <FieldTitle id={labelId}>{title}</FieldTitle>
-        {description && <FieldDescription>{description}</FieldDescription>}
+        <FieldTitle>
+          <span id={labelId}>{title}</span>
+          {description && <FieldTip>{description}</FieldTip>}
+        </FieldTitle>
       </FieldContent>
-      <div className={cn("flex items-center gap-3", layout === "page" && "min-w-52")}>
+      {/* Shares the row with the title on narrow screens; caps at 13rem on wide layouts. */}
+      <div
+        className={cn("flex items-center gap-3", layout === "page" && "min-w-32 max-w-52 flex-1")}
+      >
         <Slider
           aria-labelledby={labelId}
           value={value}
@@ -201,7 +207,6 @@ export function AsrCaptionFontSizeField({
     <PreferenceSliderField
       id={`${idPrefix}-asr-font-size`}
       title="字幕字号"
-      description={layout === "page" ? "播放器字幕字号。" : undefined}
       value={fontSize}
       min={ASR_FONT_SIZE_MIN}
       max={ASR_FONT_SIZE_MAX}
@@ -353,9 +358,11 @@ export function AsrHotwordsField({
 
   return (
     <Field data-disabled={disabled || undefined} className={fieldSurfaceClass(layout)}>
-      <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
+      <div className="flex items-center gap-1.5">
+        <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
+        {layout === "page" && <FieldTip>每行一个，最多 100 个。</FieldTip>}
+      </div>
       <FieldContent>
-        {layout === "page" && <FieldDescription>每行一个，最多 100 个。</FieldDescription>}
         <Textarea
           id={`${idPrefix}-asr-hotwords`}
           value={draft}
@@ -400,15 +407,12 @@ export function SuperChatSettingsFields({
 
   return (
     <>
-      <Field
-        orientation={layout === "page" ? "responsive" : "horizontal"}
-        className={fieldSurfaceClass(layout)}
-      >
+      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
         <FieldContent>
-          <FieldTitle id={enabledLabelId}>显示 SC 卡片</FieldTitle>
-          {layout === "page" && (
-            <FieldDescription>在支持的平台上显示醒目留言卡片。</FieldDescription>
-          )}
+          <FieldTitle>
+            <span id={enabledLabelId}>显示 SC 卡片</span>
+            {layout === "page" && <FieldTip>在支持的平台上显示醒目留言卡片。</FieldTip>}
+          </FieldTitle>
         </FieldContent>
         <Switch aria-labelledby={enabledLabelId} checked={enabled} onCheckedChange={setEnabled} />
       </Field>
@@ -518,7 +522,7 @@ export function DanmakuAppearanceSettingsFields({
         onCommit={(value) => persist({ danmaku_speed: value })}
       />
       <Field
-        orientation={layout === "page" ? "responsive" : "vertical"}
+        orientation={layout === "page" ? "horizontal" : "vertical"}
         className={fieldSurfaceClass(layout)}
       >
         <FieldContent>
@@ -549,25 +553,26 @@ export function DanmakuAppearanceSettingsFields({
   );
 }
 
-export function DanmakuAppearanceResetButton() {
-  function reset() {
-    useSettingsStore.setState(DANMAKU_APPEARANCE_DEFAULTS);
-    persist({
-      danmaku_opacity: DANMAKU_APPEARANCE_DEFAULTS.danmakuOpacity,
-      danmaku_font_size: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontSize,
-      danmaku_speed: DANMAKU_APPEARANCE_DEFAULTS.danmakuSpeed,
-      danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
-      danmaku_line_count: DANMAKU_APPEARANCE_DEFAULTS.danmakuLineCount,
-      danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
-      danmaku_filter_repeats: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterRepeats,
-      danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
-      danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
-      super_chat_opacity: DANMAKU_APPEARANCE_DEFAULTS.superChatOpacity,
-    });
-  }
+/** Resets danmaku track/text/filter settings and SC opacity; shield words stay. */
+export function resetDanmakuAppearanceSettings() {
+  useSettingsStore.setState(DANMAKU_APPEARANCE_DEFAULTS);
+  persist({
+    danmaku_opacity: DANMAKU_APPEARANCE_DEFAULTS.danmakuOpacity,
+    danmaku_font_size: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontSize,
+    danmaku_speed: DANMAKU_APPEARANCE_DEFAULTS.danmakuSpeed,
+    danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
+    danmaku_line_count: DANMAKU_APPEARANCE_DEFAULTS.danmakuLineCount,
+    danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
+    danmaku_filter_repeats: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterRepeats,
+    danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
+    danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
+    super_chat_opacity: DANMAKU_APPEARANCE_DEFAULTS.superChatOpacity,
+  });
+}
 
+export function DanmakuAppearanceResetButton() {
   return (
-    <Button type="button" variant="outline" size="sm" onClick={reset}>
+    <Button type="button" variant="outline" size="sm" onClick={resetDanmakuAppearanceSettings}>
       <RotateCcw data-icon="inline-start" aria-hidden />
       恢复默认
     </Button>
@@ -591,13 +596,12 @@ export function DanmakuFilterSettingsFields({
 
   return (
     <>
-      <Field
-        orientation={layout === "page" ? "responsive" : "horizontal"}
-        className={fieldSurfaceClass(layout)}
-      >
+      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
         <FieldContent>
-          <FieldTitle id={repeatLabelId}>合并重复消息</FieldTitle>
-          {layout === "page" && <FieldDescription>减少短时间内重复出现的弹幕。</FieldDescription>}
+          <FieldTitle>
+            <span id={repeatLabelId}>合并重复消息</span>
+            {layout === "page" && <FieldTip>减少短时间内重复出现的弹幕。</FieldTip>}
+          </FieldTitle>
         </FieldContent>
         <Switch
           aria-labelledby={repeatLabelId}
@@ -629,15 +633,12 @@ export function DanmakuFilterSettingsFields({
           persist({ danmaku_merge_window_seconds: next });
         }}
       />
-      <Field
-        orientation={layout === "page" ? "responsive" : "horizontal"}
-        className={fieldSurfaceClass(layout)}
-      >
+      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
         <FieldContent>
-          <FieldTitle id={giftLabelId}>隐藏礼物信息</FieldTitle>
-          {layout === "page" && (
-            <FieldDescription>隐藏弹幕列表和叠加层中的礼物消息。</FieldDescription>
-          )}
+          <FieldTitle>
+            <span id={giftLabelId}>隐藏礼物信息</span>
+            {layout === "page" && <FieldTip>隐藏弹幕列表和叠加层中的礼物消息。</FieldTip>}
+          </FieldTitle>
         </FieldContent>
         <Switch
           aria-labelledby={giftLabelId}
