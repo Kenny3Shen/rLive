@@ -11,6 +11,14 @@ import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import {
+  appendWithinDanmakuListWindow,
+  danmakuListAppendCapacity,
+  DANMAKU_LIST_MAX_PINNED,
+  DANMAKU_LIST_MAX_SCROLLED_UP,
+  scrollTopAfterDanmakuListTrim,
+  trimToDanmakuListWindow,
+} from "./danmaku/listWindow";
+import {
   danmakuListSurfaceFromTheme,
   resolveDanmakuListUserColor,
   type DanmakuListSurface,
@@ -20,8 +28,8 @@ import { cn } from "@/lib/utils";
 
 // Keep the rendered DOM deliberately small even when a room is producing
 // thousands of comments per minute. The bounded queue preserves recent
-// traffic without asking React to retain an ever-growing chat tree.
-const MAX = 300;
+// traffic without asking React to retain an ever-growing chat tree. The
+// rendered window itself depends on the pin state; see `listWindow.ts`.
 const MAX_BUFFERED = 200;
 const MAX_PER_FLUSH = 32;
 const MIN_FLUSH_INTERVAL_MS = 32;
@@ -263,13 +271,15 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   className,
   statusText,
 }: DanmakuPanelProps) {
-  const [items, setItems] = useState<DanmakuLine[]>([]);
+  const [items, setItems] = useState<readonly DanmakuLine[]>([]);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const autoScroll = useRef(true);
   const unreadCountRef = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
   const pendingRef = useRef(new BoundedQueue<DanmakuLine>(MAX_BUFFERED));
+  // Set when a scrolled-up trim is committed, consumed once its layout lands.
+  const pendingTrimRef = useRef<{ viewport: HTMLElement; heightBeforeTrim: number } | null>(null);
   const flushFrameRef = useRef<number | null>(null);
   const flushTimerRef = useRef<number | null>(null);
   const lastFlushAtRef = useRef(0);
@@ -341,6 +351,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       lastFlushAtRef.current = 0;
       autoScroll.current = true;
       unreadCountRef.current = 0;
+      pendingTrimRef.current = null;
       setAtBottom(true);
       setUnreadCount(0);
       setItems([]);
@@ -364,11 +375,12 @@ export const DanmakuPanel = memo(function DanmakuPanel({
         setUnreadCount(unreadCountRef.current);
       }
 
-      setItems((previous) => {
-        const next = previous.concat(batch);
-        if (next.length <= MAX) return next;
-        return next.slice(next.length - MAX);
-      });
+      // Evicting the oldest rows shifts the remaining ones up, which the
+      // reader only fails to notice while the feed is pinned to the newest
+      // message. Keep a wider window while they are reading history; the
+      // pinned window is restored by `scrollToBottom`.
+      const capacity = danmakuListAppendCapacity(autoScroll.current);
+      setItems((previous) => appendWithinDanmakuListWindow(previous, batch, capacity));
 
       // A burst should not make every animation frame reconcile hundreds of
       // nodes. The native source already coalesces messages; retain a local
@@ -430,13 +442,50 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   }, [active]);
 
   useLayoutEffect(() => {
-    if (!visible || !autoScroll.current) return;
+    if (!visible) return;
 
-    // Base UI owns a nested viewport, so scrolling a sentinel with
-    // `scrollIntoView` can select an outer ancestor instead of the chat
-    // viewport. Set only the actual viewport, once per committed batch.
-    scrollDanmakuViewportToBottom(scrollRootRef.current);
-  }, [items, visible]);
+    if (autoScroll.current) {
+      // Pinned: give back any rows retained while the reader was in history,
+      // then pin. Trimming while pinned is invisible, because the bottom of
+      // the content stays put and the browser clamps the offset for us.
+      if (items.length > DANMAKU_LIST_MAX_PINNED) {
+        setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_PINNED));
+      }
+      // Base UI owns a nested viewport, so scrolling a sentinel with
+      // `scrollIntoView` can select an outer ancestor instead of the chat
+      // viewport. Set only the actual viewport, once per committed batch.
+      scrollDanmakuViewportToBottom(scrollRootRef.current);
+      return;
+    }
+
+    // The reader is parked in history, so `flush` appended without trimming.
+    // Enforce the larger window here instead, where the removed rows can be
+    // measured: dropping them shifts everything below up by their height, and
+    // taking that off `scrollTop` in the same frame holds the reading position
+    // still. Anything the browser then clamps was below the content anyway.
+    if (items.length <= DANMAKU_LIST_MAX_SCROLLED_UP) return;
+    const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+    const heightBeforeTrim = viewport?.scrollHeight ?? 0;
+    setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_SCROLLED_UP));
+    pendingTrimRef.current = viewport ? { viewport, heightBeforeTrim } : null;
+    // `atBottom` is a dependency so re-pinning re-runs this effect even when no
+    // new batch arrived, which is what gives the retained history rows back.
+  }, [items, visible, atBottom]);
+
+  // Runs after the trim above has committed, so `scrollHeight` reflects the
+  // removed rows. Compensating here rather than in the trim's own commit keeps
+  // the measurement out of the flush path for the common pinned case.
+  useLayoutEffect(() => {
+    const pendingTrim = pendingTrimRef.current;
+    if (!pendingTrim) return;
+    pendingTrimRef.current = null;
+    const { viewport, heightBeforeTrim } = pendingTrim;
+    viewport.scrollTop = scrollTopAfterDanmakuListTrim(
+      viewport.scrollTop,
+      heightBeforeTrim,
+      viewport.scrollHeight,
+    );
+  }, [items]);
 
   useEffect(() => {
     if (!visible || typeof ResizeObserver === "undefined") return;
@@ -476,8 +525,16 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     const updateAutoScroll = () => {
       const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       const next = distanceToBottom < 48;
+      const repinned = next && !autoScroll.current;
       autoScroll.current = next;
       setAtBottom((previous) => (previous === next ? previous : next));
+      // Scrolling back down by hand re-pins the feed just like the jump-back
+      // control. Clearing the unread count re-renders, which lets the layout
+      // effect above give back the rows retained for reading history.
+      if (repinned) {
+        unreadCountRef.current = 0;
+        setUnreadCount(0);
+      }
     };
     viewport.addEventListener("scroll", updateAutoScroll, { passive: true });
     return () => viewport.removeEventListener("scroll", updateAutoScroll);
@@ -487,6 +544,9 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     autoScroll.current = true;
     unreadCountRef.current = 0;
     setUnreadCount(0);
+    // Pin now; the layout effect above gives back the retained history rows
+    // once `atBottom` flips, so the eviction shift lands while pinned.
+    setAtBottom(true);
     scrollDanmakuViewportToBottom(scrollRootRef.current);
   }, []);
 
