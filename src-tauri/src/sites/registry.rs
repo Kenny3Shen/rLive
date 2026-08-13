@@ -54,13 +54,14 @@ pub fn site_with_proxy(
     proxy: Option<&str>,
 ) -> AppResult<Box<dyn LiveSite>> {
     let client = http_client::client_for_proxy(proxy)?;
-    site_with_client(id, cookie, client)
+    site_with_client(id, cookie, client, proxy.map(str::to_owned))
 }
 
 fn site_with_client(
     id: &SiteId,
     cookie: Option<String>,
     client: reqwest::Client,
+    proxy: Option<String>,
 ) -> AppResult<Box<dyn LiveSite>> {
     match id {
         SiteId::Bilibili => {
@@ -76,7 +77,7 @@ fn site_with_client(
             client,
             cookie.unwrap_or_default(),
         ))),
-        SiteId::Twitch => Ok(Box::new(TwitchSite::new(client))),
+        SiteId::Twitch => Ok(Box::new(TwitchSite::new_with_proxy(client, proxy))),
     }
 }
 

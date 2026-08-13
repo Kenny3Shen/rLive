@@ -61,7 +61,13 @@ async fn handle_connection(
     let request = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut stream)).await {
         Ok(Ok(request)) => request,
         _ => {
-            let _ = write_json(&mut stream, 400, "Bad Request", "{\"error\":\"bad request\"}").await;
+            let _ = write_json(
+                &mut stream,
+                400,
+                "Bad Request",
+                "{\"error\":\"bad request\"}",
+            )
+            .await;
             return;
         }
     };
@@ -264,14 +270,16 @@ const CORS_HEADERS: &str = "Access-Control-Allow-Origin: *\r\n\
      Access-Control-Allow-Headers: content-type, authorization\r\n\
      Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n";
 
-struct Request {
-    method: String,
-    path: String,
-    token: Option<String>,
-    body: Vec<u8>,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) token: Option<String>,
+    pub(crate) body: Vec<u8>,
 }
 
-async fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
+/// Also reused by `twitch_integrity`'s loopback callback endpoint, which needs
+/// the same minimal HTTP parsing without the full bridge surface.
+pub(crate) async fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
     let mut buffer = Vec::with_capacity(2048);
     let head_end = loop {
         if let Some(index) = find_head_end(&buffer) {
@@ -380,9 +388,7 @@ fn sse_data_lines(payload: &str) -> String {
 }
 
 fn find_head_end(buffer: &[u8]) -> Option<usize> {
-    buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 fn query_param(path: &str, name: &str) -> Option<String> {
@@ -435,7 +441,7 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-async fn write_json(
+pub(crate) async fn write_json(
     stream: &mut TcpStream,
     status: u16,
     reason: &str,
@@ -559,7 +565,10 @@ mod tests {
         );
         // A literal newline must become a second `data:` line, which the browser
         // rejoins, instead of terminating the field early.
-        assert_eq!(sse_data_lines("{\"a\":1}\n{\"b\":2}"), "data: {\"a\":1}\ndata: {\"b\":2}\n");
+        assert_eq!(
+            sse_data_lines("{\"a\":1}\n{\"b\":2}"),
+            "data: {\"a\":1}\ndata: {\"b\":2}\n"
+        );
         assert_eq!(sse_data_lines("a\r\nb"), "data: a\ndata: b\n");
         assert_eq!(sse_data_lines(""), "data: \n");
     }

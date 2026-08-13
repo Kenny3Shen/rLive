@@ -21,7 +21,7 @@
 //! this bridge only carries command calls, events and static assets.
 
 mod dispatch;
-mod http;
+pub(crate) mod http;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
@@ -90,10 +90,7 @@ impl WebBridge {
     }
 
     pub fn status(&self) -> Option<WebBridgeInfo> {
-        self.info
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.info.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     /// Idempotent: returns the running bridge's info when already started.
