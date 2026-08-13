@@ -10,6 +10,9 @@
 /src-tauri/target/
 *.tsbuildinfo
 
+# WebView2 runtime cache (Windows)
+/EBWebView/
+
 # Local environment and machine-specific configuration
 .env
 .env.*
