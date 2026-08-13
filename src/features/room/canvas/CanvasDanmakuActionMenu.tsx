@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type PointerEvent as ReactPointerEvent } from "react";
 import { Copy, SendHorizontal, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -39,6 +39,12 @@ export type CanvasDanmakuHoverTarget = {
 const MENU_HALF_WIDTH_PX = 92;
 const MENU_HALF_WIDTH_LARGE_PX = 116;
 /**
+ * Marks the menu so the canvas can recognise it as a `pointerleave` destination.
+ * Declared here, where the attribute is actually applied, so the canvas imports
+ * it in the same direction as the component itself.
+ */
+export const CANVAS_DANMAKU_MENU_ATTR = "data-canvas-danmaku-menu";
+/**
  * Visual distance between the comment and the pill.
  *
  * This gap is bridged by transparent padding rather than left as empty space:
@@ -65,7 +71,8 @@ type CanvasDanmakuActionMenuProps = {
   /** Touch selection keeps the menu until dismissed, so it offers a close affordance. */
   onDismiss?: () => void;
   onPointerEnter?: () => void;
-  onPointerLeave?: () => void;
+  /** Receives the event so the caller can tell where the pointer is going. */
+  onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
 export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
@@ -100,6 +107,9 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
       // toggle playback or fullscreen. `pointermove` still bubbles, keeping the
       // controls awake while the pointer rests here.
       data-player-hud
+      // Lets the canvas recognise this element as the pointer's destination on
+      // its own `pointerleave`, which fires before this element's `pointerenter`.
+      {...{ [CANVAS_DANMAKU_MENU_ATTR]: "" }}
       role="group"
       aria-label={`${target.user || "匿名"} 的弹幕操作`}
       className={cn(
