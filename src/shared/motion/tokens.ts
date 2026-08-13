@@ -70,6 +70,16 @@ export type MotionProfile = {
   tabTravel: number;
   enter: { duration: number; ease: string };
   exit: { duration: number; ease: string };
+  /**
+   * Immersive-player zoom, used by `PageZoom` for both directions.
+   *
+   * One duration rather than an enter/exit pair: entering a room and leaving it
+   * are the same crossfade played in opposite directions, and giving them
+   * different lengths made the round trip feel lopsided. Slightly longer than a
+   * page pan because two full-viewport surfaces dissolve through each other, and
+   * a room additionally has a player to bring up behind it.
+   */
+  roomZoom: { duration: number; ease: string };
 };
 
 const DESKTOP_PROFILE: MotionProfile = {
@@ -77,6 +87,7 @@ const DESKTOP_PROFILE: MotionProfile = {
   tabTravel: PAGE_PAN_PERCENT,
   enter: { duration: 0.22, ease: EASE_OUT },
   exit: { duration: 0.22, ease: EASE_OUT },
+  roomZoom: { duration: 0.26, ease: EASE_OUT },
 };
 
 const TOUCH_PROFILE: MotionProfile = {
@@ -85,6 +96,7 @@ const TOUCH_PROFILE: MotionProfile = {
   tabTravel: PAGE_PAN_PERCENT,
   enter: { duration: 0.2, ease: EASE_OUT },
   exit: { duration: 0.2, ease: EASE_OUT },
+  roomZoom: { duration: 0.22, ease: EASE_OUT },
 };
 
 export function motionProfile(mobile: boolean = isMobileClient()): MotionProfile {
