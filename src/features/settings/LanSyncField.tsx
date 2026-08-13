@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { FieldTip } from "./FieldTip";
 import {
   lanSyncCountdown,
   normalizeLanSyncCode,
@@ -174,7 +175,13 @@ export function LanSyncField() {
   return (
     <Field data-invalid={error ? true : undefined}>
       <FieldContent className="gap-3">
-        <FieldTitle id="lan-sync-mode-label">同步方式</FieldTitle>
+        <FieldTitle>
+          <span id="lan-sync-mode-label">同步方式</span>
+          <FieldTip>
+            同步关注、分组、历史和通用设置；不包含 Cookie、发送授权、ASR 本机配置或私有 M3U
+            地址。发送方创建一次性会话后，在另一台 rLive 设备输入同步地址和配对码接收。
+          </FieldTip>
+        </FieldTitle>
         <ToggleGroup
           aria-labelledby="lan-sync-mode-label"
           value={[mode]}
@@ -198,24 +205,22 @@ export function LanSyncField() {
         {mode === "send" ? (
           <FieldGroup className="gap-3">
             {!session ? (
-              <Field orientation="responsive">
-                <FieldContent>
-                  <FieldDescription>
-                    创建一次性会话后，在另一台 rLive 设备输入同步地址和配对码。
-                  </FieldDescription>
-                </FieldContent>
-                <Button type="button" disabled={sendPending} onClick={() => void startSession()}>
-                  {sendPending ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <Upload data-icon="inline-start" aria-hidden />
-                  )}
-                  {sendPending ? "正在创建…" : "创建同步会话"}
-                </Button>
-              </Field>
+              <Button
+                type="button"
+                className="w-fit"
+                disabled={sendPending}
+                onClick={() => void startSession()}
+              >
+                {sendPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Upload data-icon="inline-start" aria-hidden />
+                )}
+                {sendPending ? "正在创建…" : "创建同步会话"}
+              </Button>
             ) : (
               <>
-                <Field orientation="responsive">
+                <Field orientation="horizontal">
                   <FieldContent>
                     <div className="flex flex-wrap items-center gap-2">
                       <FieldTitle>会话状态</FieldTitle>
@@ -351,9 +356,6 @@ export function LanSyncField() {
           </form>
         )}
 
-        <FieldDescription>
-          同步关注、分组、历史和通用设置；不包含 Cookie、发送授权、ASR 本机配置或私有 M3U 地址。
-        </FieldDescription>
         {error && <FieldError>{error}</FieldError>}
         {result && (
           <FieldDescription role="status" aria-live="polite">

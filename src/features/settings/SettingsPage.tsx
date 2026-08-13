@@ -1,10 +1,8 @@
-import { useGSAP } from "@gsap/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
-import gsap from "gsap";
 import { flushSync } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import packageMetadata from "../../../package.json";
@@ -33,6 +31,7 @@ import {
   QrCode,
   Radio,
   RefreshCw,
+  RotateCcw,
   Search,
   SearchX,
   ShieldAlert,
@@ -46,7 +45,11 @@ import { revealThemeAt } from "@/app/theme";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  ASR_FONT_SIZE_DEFAULT,
+  ASR_WINDOW_SECONDS_DEFAULT,
+  useSettingsStore,
+} from "@/shared/stores/settingsStore";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import {
   isMobileClient,
@@ -54,21 +57,21 @@ import {
   supportsNativeHostFeatures,
 } from "@/shared/clientPlatform";
 import { PagePan } from "@/shared/motion/PagePan";
-import { motionProfile, prefersReducedMotion } from "@/shared/motion/tokens";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
   AsrCaptionFontSizeField,
   AsrChunkIntervalField,
   AsrHotwordsField,
-  DanmakuAppearanceResetButton,
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
+  resetDanmakuAppearanceSettings,
   SuperChatSettingsFields,
 } from "@/features/settings/PlaybackPreferenceFields";
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
+import { FieldTip } from "@/features/settings/FieldTip";
 import { LanSyncField } from "@/features/settings/LanSyncField";
 import { WebBridgeField } from "@/features/settings/WebBridgeField";
 import { Button } from "@/components/ui/button";
@@ -149,49 +152,42 @@ type AccountProfile = {
 const settingsCategories: {
   value: SettingsCategory;
   label: string;
-  description: string;
   icon: LucideIcon;
   tone: string;
 }[] = [
   {
     value: "playback",
     label: "播放与弹幕",
-    description: "画质、字幕和弹幕显示",
     icon: MonitorPlay,
     tone: "text-settings-playback bg-settings-playback/12",
   },
   {
     value: "platform",
     label: "直播平台",
-    description: "选择要显示的直播平台",
     icon: Radio,
     tone: "text-settings-platform bg-settings-platform/12",
   },
   {
     value: "network",
     label: "网络与 IPTV",
-    description: "代理和自定义频道源",
     icon: Network,
     tone: "text-settings-network bg-settings-network/12",
   },
   {
     value: "account",
     label: "账号与权限",
-    description: "平台登录和弹幕发送权限",
     icon: UserRound,
     tone: "text-settings-account bg-settings-account/12",
   },
   {
     value: "data",
     label: "数据管理",
-    description: "局域网同步与配置档案",
     icon: Database,
     tone: "text-settings-data bg-settings-data/12",
   },
   {
     value: "about",
     label: "关于 rLive",
-    description: "版本、项目主页和使用说明",
     icon: Info,
     tone: "text-settings-about bg-settings-about/12",
   },
@@ -202,7 +198,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
-    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc",
+    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 行数 文字 透明度 字号 速度 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   account:
@@ -262,7 +258,6 @@ function Section({
   return (
     <section
       data-slot="settings-section"
-      data-settings-motion-item
       className="settings-section overflow-hidden rounded-xl border border-border/80 bg-card/80 shadow-sm shadow-black/10"
     >
       <FieldSet className="gap-0 py-0">
@@ -584,7 +579,7 @@ function AccountCard({
 
   return (
     <>
-      <Field orientation="responsive">
+      <Field orientation="horizontal">
         <FieldContent>
           <div className="flex flex-wrap items-center gap-2">
             <FieldTitle>
@@ -599,7 +594,7 @@ function AccountCard({
           {notice && <FieldDescription role="status">{notice}</FieldDescription>}
           {profileError && <FieldError>{profileError}</FieldError>}
         </FieldContent>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {qrLogin && (
             <Button variant="outline" size="sm" onClick={() => setLoginMethod("qr")}>
               <QrCode data-icon="inline-start" aria-hidden />
@@ -771,6 +766,142 @@ function DanmakuSendField() {
   );
 }
 
+function PlaybackSettingsResetField() {
+  const mobileClient = isMobileClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const resetTheme = showExplicitThemeSettings(mobileClient);
+
+  async function resetAll() {
+    setResetting(true);
+    setStatus(null);
+    setError(null);
+    try {
+      const store = useSettingsStore.getState();
+      // Turn ASR off first so the remaining field resets cannot restart a
+      // recognition session mid-way.
+      if (!mobileClient && store.asrEnabled) {
+        await store.setAsrEnabled(false);
+      }
+      resetDanmakuAppearanceSettings();
+      useSettingsStore.setState({
+        ...(resetTheme ? { theme: "system" as const } : null),
+        qualityLevel: "high",
+        playbackSoftSwitchEnabled: true,
+        danmakuShieldWords: [],
+        superChatEnabled: true,
+        ...(mobileClient
+          ? null
+          : {
+              asrProvider: "auto" as const,
+              asrVadEnabled: true,
+              asrPunctuationEnabled: true,
+              asrSpeakerDiarizationEnabled: false,
+              asrHotwords: [],
+              asrWindowSeconds: ASR_WINDOW_SECONDS_DEFAULT,
+              asrFontSize: ASR_FONT_SIZE_DEFAULT,
+            }),
+      });
+      await store.persistToBackend({
+        ...(resetTheme ? { theme: "system" } : null),
+        quality_level: "high",
+        playback_soft_switch_enabled: true,
+        danmaku_shield_words: [],
+        super_chat_enabled: true,
+        ...(mobileClient
+          ? null
+          : {
+              asr_provider: "auto",
+              asr_vad_enabled: true,
+              asr_punctuation_enabled: true,
+              asr_speaker_diarization_enabled: false,
+              asr_hotwords: [],
+              asr_window_seconds: ASR_WINDOW_SECONDS_DEFAULT,
+              asr_font_size: ASR_FONT_SIZE_DEFAULT,
+            }),
+      });
+      setStatus("已恢复本页全部设置项的默认值。");
+      setConfirmOpen(false);
+    } catch (cause) {
+      setError(`恢复默认设置失败：${errorMessage(cause)}`);
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  return (
+    <Field orientation="horizontal" data-invalid={error ? true : undefined}>
+      <FieldContent>
+        <FieldTitle>
+          恢复默认设置
+          <FieldTip>重置本页全部设置项，包括屏蔽词和语音字幕热词。</FieldTip>
+        </FieldTitle>
+        {error ? (
+          <FieldError>{error}</FieldError>
+        ) : (
+          status && (
+            <FieldDescription role="status" aria-live="polite">
+              {status}
+            </FieldDescription>
+          )
+        )}
+      </FieldContent>
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          if (resetting) return;
+          setConfirmOpen(open);
+        }}
+      >
+        <AlertDialogTrigger
+          render={
+            <Button variant="outline">
+              <RotateCcw data-icon="inline-start" aria-hidden />
+              恢复默认
+            </Button>
+          }
+        />
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <RotateCcw aria-hidden />
+            </AlertDialogMedia>
+            <AlertDialogTitle>恢复默认设置？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {mobileClient
+                ? "将重置本页全部设置项，包括画质、弹幕和屏蔽词。"
+                : "将重置本页全部设置项，包括外观、画质、语音字幕、热词、弹幕和屏蔽词；已开启的语音字幕会被关闭。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              variant="destructive"
+              disabled={resetting}
+              onClick={() => void resetAll()}
+            >
+              {resetting ? (
+                <>
+                  <Spinner data-icon="inline-start" aria-hidden />
+                  正在恢复…
+                </>
+              ) : (
+                <>
+                  <RotateCcw data-icon="inline-start" aria-hidden />
+                  恢复默认
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Field>
+  );
+}
+
 function AsrModelField() {
   const enabled = useSettingsStore((state) => state.asrEnabled);
   const provider = useSettingsStore((state) => state.asrProvider);
@@ -868,7 +999,7 @@ function AsrModelField() {
     <>
       <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
         <Field
-          orientation="responsive"
+          orientation="horizontal"
           data-disabled={!model.supported || undefined}
           data-invalid={invalid || undefined}
         >
@@ -879,9 +1010,14 @@ function AsrModelField() {
                 {actionError ?? presentation.message}
               </FieldError>
             ) : (
-              <FieldDescription role="status" aria-live="polite">
-                {presentation.message}
-              </FieldDescription>
+              // Steady-state copy (ready/disabled summaries) stays hidden;
+              // only transient progress such as a model download shows here.
+              enabled &&
+              presentation.busy && (
+                <FieldDescription role="status" aria-live="polite">
+                  {presentation.message}
+                </FieldDescription>
+              )
             )}
             {enabled && presentation.error && (
               <Button
@@ -915,10 +1051,12 @@ function AsrModelField() {
           </div>
         </Field>
 
-        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
-            <FieldTitle id="asr-vad-title">VAD（静音端点检测）</FieldTitle>
-            <FieldDescription>关闭后仅按最长 20 秒切分。</FieldDescription>
+            <FieldTitle>
+              <span id="asr-vad-title">VAD（静音端点检测）</span>
+              <FieldTip>关闭后仅按最长 20 秒切分。</FieldTip>
+            </FieldTitle>
           </FieldContent>
           <Switch
             aria-labelledby="asr-vad-title"
@@ -929,10 +1067,12 @@ function AsrModelField() {
         </Field>
 
         {isWindowsDesktop() && (
-          <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+          <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
             <FieldContent>
-              <FieldTitle id="asr-provider-title">推理后端</FieldTitle>
-              <FieldDescription>自动优先使用 CUDA，不可用时回退 CPU。</FieldDescription>
+              <FieldTitle>
+                <span id="asr-provider-title">推理后端</span>
+                <FieldTip>自动优先使用 CUDA，不可用时回退 CPU。</FieldTip>
+              </FieldTitle>
             </FieldContent>
             <ToggleGroup
               aria-labelledby="asr-provider-title"
@@ -955,10 +1095,12 @@ function AsrModelField() {
           </Field>
         )}
 
-        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
-            <FieldTitle id="asr-punctuation-title">自动标点</FieldTitle>
-            <FieldDescription>关闭后保留原始文本。</FieldDescription>
+            <FieldTitle>
+              <span id="asr-punctuation-title">自动标点</span>
+              <FieldTip>关闭后保留原始文本。</FieldTip>
+            </FieldTitle>
           </FieldContent>
           <Switch
             aria-labelledby="asr-punctuation-title"
@@ -968,10 +1110,12 @@ function AsrModelField() {
           />
         </Field>
 
-        <Field orientation="responsive" data-disabled={!model.supported || pending || undefined}>
+        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
           <FieldContent>
-            <FieldTitle id="asr-speaker-title">说话人区分</FieldTitle>
-            <FieldDescription>首次启用需下载约 27 MB。</FieldDescription>
+            <FieldTitle>
+              <span id="asr-speaker-title">说话人区分</span>
+              <FieldTip>首次启用需下载约 27 MB。</FieldTip>
+            </FieldTitle>
           </FieldContent>
           <Switch
             aria-labelledby="asr-speaker-title"
@@ -1104,7 +1248,12 @@ function DirectPlaybackField() {
 
   return (
     <Field data-invalid={error ? true : undefined}>
-      <FieldLabel htmlFor="direct-playback-url">媒体直链</FieldLabel>
+      <div className="flex items-center gap-1.5">
+        <FieldLabel htmlFor="direct-playback-url">媒体直链</FieldLabel>
+        <FieldTip>
+          支持 HLS、FLV、MPEG-TS 和 MP4 等媒体地址；播放请求会通过 rLive 本机代理转发。
+        </FieldTip>
+      </div>
       <FieldContent>
         <form
           className="w-full"
@@ -1135,13 +1284,7 @@ function DirectPlaybackField() {
             </InputGroupAddon>
           </InputGroup>
         </form>
-        {error ? (
-          <FieldError>{error}</FieldError>
-        ) : (
-          <FieldDescription>
-            支持 HLS、FLV、MPEG-TS 和 MP4 等媒体地址；播放请求会通过 rLive 本机代理转发。
-          </FieldDescription>
-        )}
+        {error && <FieldError>{error}</FieldError>}
       </FieldContent>
     </Field>
   );
@@ -1306,7 +1449,6 @@ function SettingsCategoryButton({
       type="button"
       data-motion-press
       onClick={() => onOpen(category.value)}
-      data-settings-motion-item
       className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40 focus-visible:bg-muted/40 focus-ring"
     >
       <span
@@ -1317,11 +1459,8 @@ function SettingsCategoryButton({
       >
         <Icon className="size-5" aria-hidden />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">{category.label}</span>
-        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-          {category.description}
-        </span>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+        {category.label}
       </span>
       <ChevronRight
         className="motion-disclosure-icon size-4 shrink-0 text-muted-foreground transition-[transform,color] duration-150 ease-[var(--motion-ease-out)] group-hover:text-foreground motion-reduced:transition-colors"
@@ -1349,7 +1488,7 @@ function SettingsCategoryOverview({
           (category): category is (typeof settingsCategories)[number] =>
             category !== undefined &&
             matchesSearch(
-              `${category.label} ${category.description} ${settingsCategorySearchText[category.value]}`,
+              `${category.label} ${settingsCategorySearchText[category.value]}`,
               query,
             ),
         ),
@@ -1358,7 +1497,7 @@ function SettingsCategoryOverview({
 
   return (
     <div className="settings-overview flex min-h-full flex-col gap-6">
-      <div data-settings-intro className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">设置</h1>
         </div>
@@ -1389,12 +1528,7 @@ function SettingsCategoryOverview({
       {visibleGroups.length > 0 ? (
         <div className="flex max-w-4xl flex-col gap-5 px-px">
           {visibleGroups.map((group) => (
-            <section
-              key={group.label}
-              aria-label={group.label}
-              data-settings-motion-item
-              className="settings-category-group"
-            >
+            <section key={group.label} aria-label={group.label} className="settings-category-group">
               <p className="settings-category-group-label mb-2 px-1 text-xs font-semibold text-muted-foreground">
                 {group.label}
               </p>
@@ -1504,7 +1638,6 @@ function AboutSettings() {
 }
 
 export function SettingsPage() {
-  const motionRootRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
@@ -1562,7 +1695,7 @@ export function SettingsPage() {
       <SettingsContent title="播放">
         {showExplicitThemeSettings(mobileClient) && <AppearanceSettings />}
         <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
-          <Field orientation="responsive">
+          <Field orientation="horizontal">
             <FieldTitle id="quality-label">优先清晰度</FieldTitle>
             <ToggleGroup
               aria-labelledby="quality-label"
@@ -1582,12 +1715,14 @@ export function SettingsPage() {
               <ToggleGroupItem value="low">最低</ToggleGroupItem>
             </ToggleGroup>
           </Field>
-          <Field orientation="responsive">
+          <Field orientation="horizontal">
             <FieldContent>
-              <FieldTitle id="soft-switch-title">软切换</FieldTitle>
-              <FieldDescription>
-                同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。
-              </FieldDescription>
+              <FieldTitle>
+                <span id="soft-switch-title">软切换</span>
+                <FieldTip>
+                  同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。
+                </FieldTip>
+              </FieldTitle>
             </FieldContent>
             <Switch
               aria-labelledby="soft-switch-title"
@@ -1610,21 +1745,15 @@ export function SettingsPage() {
         </Section>
         <Section title="弹幕文字与节奏" keywords="弹幕 文字 透明度 字号 速度 字重">
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
-          <Field orientation="responsive">
-            <FieldContent>
-              <FieldTitle>恢复弹幕默认设置</FieldTitle>
-              <FieldDescription>
-                重置轨道、文字、过滤和 SC 透明度，屏蔽词不会被清空。
-              </FieldDescription>
-            </FieldContent>
-            <DanmakuAppearanceResetButton />
-          </Field>
         </Section>
         <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并">
           <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
         </Section>
         <Section title="醒目留言" keywords="醒目留言 sc 透明度">
           <SuperChatSettingsFields idPrefix="settings" layout="page" />
+        </Section>
+        <Section title="恢复默认" keywords="恢复 默认 重置 reset">
+          <PlaybackSettingsResetField />
         </Section>
       </SettingsContent>
     ),
@@ -1735,36 +1864,10 @@ export function SettingsPage() {
           </Section>
         )}
         <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
-          <Field data-invalid={profileError ? true : undefined}>
+          <Field orientation="horizontal" data-invalid={profileError ? true : undefined}>
             <FieldContent>
               <FieldTitle>配置档案</FieldTitle>
-              {nativeHostFeatures ? (
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <Button
-                    onClick={() => void chooseProfileForExport()}
-                    disabled={profileAction !== null}
-                  >
-                    {profileAction === "export" ? (
-                      <Spinner data-icon="inline-start" />
-                    ) : (
-                      <Download data-icon="inline-start" aria-hidden />
-                    )}
-                    {profileAction === "export" ? "正在导出…" : "导出配置"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void chooseProfileForImport()}
-                    disabled={profileAction !== null}
-                  >
-                    {profileAction === "import" ? (
-                      <Spinner data-icon="inline-start" />
-                    ) : (
-                      <Upload data-icon="inline-start" aria-hidden />
-                    )}
-                    {profileAction === "import" ? "正在导入…" : "导入配置"}
-                  </Button>
-                </div>
-              ) : (
+              {!nativeHostFeatures && (
                 // Reading or writing a file needs the OS dialog, which a browser
                 // tab cannot open. Local network sync above transfers the same
                 // profile without one.
@@ -1782,6 +1885,33 @@ export function SettingsPage() {
                 )
               )}
             </FieldContent>
+            {nativeHostFeatures && (
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <Button
+                  onClick={() => void chooseProfileForExport()}
+                  disabled={profileAction !== null}
+                >
+                  {profileAction === "export" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Download data-icon="inline-start" aria-hidden />
+                  )}
+                  {profileAction === "export" ? "正在导出…" : "导出配置"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void chooseProfileForImport()}
+                  disabled={profileAction !== null}
+                >
+                  {profileAction === "import" ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <Upload data-icon="inline-start" aria-hidden />
+                  )}
+                  {profileAction === "import" ? "正在导入…" : "导入配置"}
+                </Button>
+              </div>
+            )}
           </Field>
         </Section>
       </SettingsContent>
@@ -1796,33 +1926,6 @@ export function SettingsPage() {
   const categoryMetadata = category
     ? settingsCategories.find((item) => item.value === category)
     : undefined;
-
-  useGSAP(
-    () => {
-      const root = motionRootRef.current;
-      if (!root || prefersReducedMotion()) return;
-      const targets = gsap.utils.toArray<HTMLElement>(
-        "[data-settings-intro], [data-settings-motion-item]",
-        root,
-      );
-      if (targets.length === 0) return;
-
-      const profile = motionProfile();
-      gsap.fromTo(
-        targets,
-        { autoAlpha: 0, y: 8, willChange: "transform,opacity" },
-        {
-          autoAlpha: 1,
-          y: 0,
-          duration: Math.min(profile.enter.duration, 0.2),
-          ease: profile.enter.ease,
-          stagger: { each: 0.025, from: "start" },
-          clearProps: "transform,opacity,visibility,willChange",
-        },
-      );
-    },
-    { scope: motionRootRef, dependencies: [settingsMotionKey] },
-  );
 
   useEffect(() => {
     setProxyDraft(proxy ?? "");
@@ -1921,7 +2024,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div ref={motionRootRef} className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col">
+    <div className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col">
       <SettingsSearchContext.Provider value={normalizedSearchQuery}>
         <PagePan
           panKey={settingsMotionKey}
@@ -1931,10 +2034,7 @@ export function SettingsPage() {
         >
           {category && categoryMetadata ? (
             <div className="settings-detail flex min-h-full flex-col gap-5">
-              <div
-                data-settings-intro
-                className="settings-detail-header flex items-center gap-3 border-b border-border-subtle pb-4"
-              >
+              <div className="settings-detail-header flex items-center gap-3 border-b border-border-subtle pb-4">
                 <div className="settings-back-slot shrink-0">
                   <Button
                     type="button"
@@ -1956,7 +2056,7 @@ export function SettingsPage() {
                   </h1>
                 </div>
               </div>
-              <div data-settings-motion-item className="min-w-0 max-w-4xl">
+              <div className="min-w-0 max-w-4xl">
                 {settingsCategoryPanels[category]}
               </div>
             </div>
