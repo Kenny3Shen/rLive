@@ -7,14 +7,15 @@ export type FollowView = "live" | "iptv";
 export const FOLLOW_PLATFORM_PARAM = "platform";
 export const FOLLOW_VIEW_PARAM = "view";
 
-export function followViewFromSearch(value: string | null): FollowView {
-  return value === "iptv" ? "iptv" : "live";
+export function followViewFromSearch(_value: string | null): FollowView {
+  // Always default to "live" tab on page entry, no state memory
+  return "live";
 }
 
-export function withFollowView(searchParams: URLSearchParams, view: FollowView): URLSearchParams {
+export function withFollowView(searchParams: URLSearchParams, _view: FollowView): URLSearchParams {
   const next = new URLSearchParams(searchParams);
-  if (view === "live") next.delete(FOLLOW_VIEW_PARAM);
-  else next.set(FOLLOW_VIEW_PARAM, view);
+  // Don't persist view in URL - always start fresh
+  next.delete(FOLLOW_VIEW_PARAM);
   return next;
 }
 

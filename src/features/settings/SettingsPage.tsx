@@ -566,20 +566,36 @@ function AccountCard({
         ? "已登录"
         : "未登录";
 
-  const COOKIE_EXPIRED_NOTICE = "Cookie 已失效，弹幕将改用匿名模式获取，发送功能不可用。";
-
+  // Auto logout when cookie is expired
   useEffect(() => {
-    if (profileLoading) return;
-    if (expired) {
-      if (notice !== COOKIE_EXPIRED_NOTICE) setNotice(COOKIE_EXPIRED_NOTICE);
-    } else if (notice === COOKIE_EXPIRED_NOTICE) {
-      setNotice(null);
-    }
-  }, [expired, profileLoading, notice]);
+    if (profileLoading || !expired || !hasCookie) return;
+
+    let cancelled = false;
+    const autoLogout = async () => {
+      try {
+        await invokeCmd<void>("account_clear_cookie", { siteId });
+        if (!cancelled) {
+          await refreshProfile();
+          setCookieDraft("");
+          setManualCookieLoaded(true);
+          if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
+          refreshCookieDependentQueries();
+        }
+      } catch (error) {
+        // Silent failure - user can still manually logout
+        console.error("Auto logout failed:", error);
+      }
+    };
+    void autoLogout();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expired, hasCookie, profileLoading, siteId, refreshProfile, markDanmakuCookieChanged, refreshCookieDependentQueries]);
 
   return (
     <>
-      <Field orientation="horizontal">
+      <Field>
         <FieldContent>
           <div className="flex flex-wrap items-center gap-2">
             <FieldTitle>
@@ -589,12 +605,84 @@ function AccountCard({
             <Badge variant={expired ? "destructive" : hasCookie ? "secondary" : "outline"}>
               {accountState}
             </Badge>
-            {displayName && <span className="min-w-0 truncate text-sm">{displayName}</span>}
+            {displayName && (
+              <span className="min-w-0 truncate text-sm text-muted-foreground">
+                {displayName}
+              </span>
+            )}
           </div>
           {notice && <FieldDescription role="status">{notice}</FieldDescription>}
           {profileError && <FieldError>{profileError}</FieldError>}
+          <div className="mt-3 flex flex-wrap items-center gap-2 sm:hidden">
+            {qrLogin && (
+              <Button variant="outline" size="sm" onClick={() => setLoginMethod("qr")}>
+                <QrCode data-icon="inline-start" aria-hidden />
+                扫码
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => setLoginMethod("manual")}>
+              <UserRound data-icon="inline-start" aria-hidden />
+              输入
+            </Button>
+            {hasCookie && (
+              <AlertDialog
+                open={logoutOpen}
+                onOpenChange={(open) => {
+                  if (clearing) return;
+                  setLogoutOpen(open);
+                  setLogoutError(null);
+                }}
+              >
+                <AlertDialogTrigger
+                  render={
+                    <Button variant="destructive" size="sm">
+                      <LogOut data-icon="inline-start" aria-hidden />
+                      退出
+                    </Button>
+                  }
+                />
+                <AlertDialogContent size="sm">
+                  <AlertDialogHeader>
+                    <AlertDialogMedia className="bg-destructive/10 text-destructive">
+                      <LogOut aria-hidden />
+                    </AlertDialogMedia>
+                    <AlertDialogTitle>退出{title}登录？</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  {logoutError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {logoutError}
+                    </p>
+                  )}
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={clearing}>取消</AlertDialogCancel>
+                    <AlertDialogAction
+                      type="button"
+                      variant="destructive"
+                      disabled={clearing}
+                      onClick={() => void clearCookie()}
+                    >
+                      {clearing ? (
+                        <>
+                          <Spinner data-icon="inline-start" aria-hidden />
+                          正在退出…
+                        </>
+                      ) : (
+                        <>
+                          <LogOut data-icon="inline-start" aria-hidden />
+                          确认退出
+                        </>
+                      )}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
         </FieldContent>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="hidden flex-wrap items-center justify-end gap-2 sm:flex">
           {qrLogin && (
             <Button variant="outline" size="sm" onClick={() => setLoginMethod("qr")}>
               <QrCode data-icon="inline-start" aria-hidden />
