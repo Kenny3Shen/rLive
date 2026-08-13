@@ -315,6 +315,9 @@ jobs:
           set -euo pipefail
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.13846066"
           export NDK_HOME="$ANDROID_NDK_HOME"
+          ndk_toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$ndk_toolchain/llvm-ranlib"
+          export RANLIB_aarch64_linux_android="$ndk_toolchain/llvm-ranlib"
           bun run tauri -- android build --ci --target aarch64 --apk
 
           mapfile -t apk_files < <(
