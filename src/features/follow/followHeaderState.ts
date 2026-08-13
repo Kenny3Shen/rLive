@@ -3,15 +3,11 @@ import type { FollowView } from "./followRoute";
 
 export type FollowHeaderState = {
   view: FollowView;
-  liveCount: number | undefined;
-  iptvCount: number | undefined;
   onViewChange: (view: FollowView) => void;
 };
 
 const EMPTY_STATE: FollowHeaderState = {
   view: "live",
-  liveCount: undefined,
-  iptvCount: undefined,
   onViewChange: () => undefined,
 };
 
