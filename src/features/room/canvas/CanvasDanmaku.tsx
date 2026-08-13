@@ -1391,7 +1391,6 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           // Touch always gets the large pill; a mouse only needs it when the
           // stage is a full display away.
           large={mobile || large}
-          onDismiss={mobile ? releaseHover : undefined}
           onPointerEnter={mobile ? undefined : handleMenuPointerEnter}
           onPointerLeave={mobile ? undefined : handleMenuPointerLeave}
         />
