@@ -37,6 +37,12 @@ export const builtInSources: readonly PlaylistSource[] = [
 
 export const DEFAULT_PLAYLIST_SOURCE = builtInSources[0];
 
+/** Build the source options shared by the IPTV discovery and follow pages. */
+export function playlistSourcesForSettings(customUrl: string | null | undefined): PlaylistSource[] {
+  const customSource = playlistSourceFromRoute("custom", customUrl);
+  return customSource.id === "custom" ? [...builtInSources, customSource] : [...builtInSources];
+}
+
 /**
  * Keep favorites from different custom playlists separate without persisting
  * the private M3U address itself as a source identifier. This hash is only a

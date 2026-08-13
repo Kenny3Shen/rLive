@@ -10,6 +10,7 @@ import {
   iptvFavoriteSourceIdFromRoute,
   playlistSourceForFavorite,
   playlistSourceFromRoute,
+  playlistSourcesForSettings,
 } from "../src/features/iptv/playlistSource";
 
 describe("IPTV routes", () => {
@@ -56,6 +57,18 @@ describe("IPTV routes", () => {
       "https://example.test/custom.m3u",
     );
     expect(playlistSourceFromRoute("custom", "file:///private.m3u").id).toBe("chinese");
+  });
+
+  test("builds the shared source options from local custom-source settings", () => {
+    expect(
+      playlistSourcesForSettings("https://example.test/custom.m3u").map(({ id }) => id),
+    ).toEqual(["chinese", "mainland", "east-asia", "general", "custom"]);
+    expect(playlistSourcesForSettings("file:///private.m3u").map(({ id }) => id)).toEqual([
+      "chinese",
+      "mainland",
+      "east-asia",
+      "general",
+    ]);
   });
 
   test("separates custom-source favorites without exposing the M3U address", () => {
