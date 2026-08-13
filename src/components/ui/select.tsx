@@ -61,7 +61,10 @@ function SelectContent({
   sideOffset = 4,
   align = "center",
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  // Base UI defaults to native-select geometry, which lifts the popup so the
+  // selected option covers the trigger. Filters need the trigger to stay
+  // visible, so anchor below it unless a caller opts back in.
+  alignItemWithTrigger = false,
   container,
   glass = false,
   ...props

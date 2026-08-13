@@ -576,7 +576,6 @@ export function PlayerControls({
             container={portalContainer}
             side="top"
             align="end"
-            alignItemWithTrigger={false}
             glass={overlay}
             className={cn("max-h-64", overlay && glassPanelClass({ overlay }))}
           >
@@ -616,7 +615,6 @@ export function PlayerControls({
             container={portalContainer}
             side="top"
             align="end"
-            alignItemWithTrigger={false}
             glass={overlay}
             className={cn("max-h-64", overlay && glassPanelClass({ overlay }))}
           >

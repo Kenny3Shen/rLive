@@ -55,11 +55,7 @@ export function PlatformFilterSelect({
         )}
         <SelectValue className={cn(compact && "max-sm:hidden!")}>{label}</SelectValue>
       </SelectTrigger>
-      <SelectContent
-        align={compact ? "end" : "start"}
-        alignItemWithTrigger={false}
-        className="min-w-44"
-      >
+      <SelectContent align={compact ? "end" : "start"} className="min-w-44">
         <SelectGroup>
           <SelectItem value="all" aria-label="全部平台">
             <LayoutGrid aria-hidden />
