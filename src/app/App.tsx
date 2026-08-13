@@ -1,5 +1,5 @@
-import { lazy, useEffect, useRef } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useParams, useLocation, useNavigate } from "react-router-dom";
+import { lazy } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Shell } from "./layout/Shell";
@@ -51,27 +51,9 @@ function EnabledRoomRoute() {
   return <RoomPage />;
 }
 
-/** Reset to home page on app startup, clearing navigation history */
-function StartupRedirect() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const hasRedirectedRef = useRef(false);
-
-  useEffect(() => {
-    // Only redirect once on initial mount if not already on home page
-    if (!hasRedirectedRef.current && location.pathname !== "/") {
-      hasRedirectedRef.current = true;
-      navigate("/", { replace: true });
-    }
-  }, [location.pathname, navigate]);
-
-  return null;
-}
-
 export function App() {
   return (
     <BrowserRouter>
-      <StartupRedirect />
       <AndroidBackNavigator />
       <IptvStartupWarmup />
       <RouteModulePreloader />
