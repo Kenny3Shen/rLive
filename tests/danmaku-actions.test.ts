@@ -8,6 +8,7 @@ import {
   CANVAS_TAP_MAX_DISTANCE_PX,
   canvasDanmakuTouchHitBox,
   isCanvasDanmakuTap,
+  shouldHitTestCanvasHover,
   TOUCH_HIT_SLOP_PX,
 } from "../src/features/room/canvas/CanvasDanmaku";
 import { PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX } from "../src/features/room/PlayerPane";
@@ -56,6 +57,20 @@ describe("canvas danmaku touch selection", () => {
     // smaller than the distance at which a stage gesture activates.
     expect(CANVAS_TAP_MAX_DISTANCE_PX).toBeLessThan(PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX);
     expect(isCanvasDanmakuTap(0, PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX, 200)).toBe(false);
+  });
+
+  test("only skips hit testing while a selection actually exists", () => {
+    // The menu holds the pointer, so the frozen comment stays selected instead
+    // of the canvas hit-testing the gap behind the menu.
+    expect(shouldHitTestCanvasHover(true, true)).toBe(false);
+    expect(shouldHitTestCanvasHover(false, true)).toBe(true);
+
+    // The regression: a menu that unmounts under the pointer gets no
+    // `pointerleave`, so the claim flag can survive with no menu left to clear
+    // it. Without a selection the flag must not suppress hit testing, or hover
+    // selection stays dead for the rest of the session after the first menu.
+    expect(shouldHitTestCanvasHover(true, false)).toBe(true);
+    expect(shouldHitTestCanvasHover(false, false)).toBe(true);
   });
 
   test("widens only the tested box, leaving the drawn box as the menu anchor", () => {
