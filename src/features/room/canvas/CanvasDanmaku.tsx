@@ -27,7 +27,11 @@ import {
   type DanmakuHitBox,
   type TrackItem,
 } from "./danmakuEngine";
-import { CanvasDanmakuActionMenu, type CanvasDanmakuHoverTarget } from "./CanvasDanmakuActionMenu";
+import {
+  CANVAS_DANMAKU_MENU_ATTR,
+  CanvasDanmakuActionMenu,
+  type CanvasDanmakuHoverTarget,
+} from "./CanvasDanmakuActionMenu";
 import { danmakuCanvasPixelRatio } from "./framePacing";
 import { selfBorderTextBox } from "./selfBorder";
 import { cn } from "@/lib/utils";
@@ -118,6 +122,38 @@ export function canvasDanmakuTouchHitBox(box: DanmakuHitBox, slop: number): Danm
     width: box.width + slop * 2,
     height: box.height + slop * 2,
   };
+}
+
+/**
+ * Whether a mouse move over the canvas should hit-test, given that the pointer
+ * may be resting inside the action menu instead of on the picture.
+ *
+ * While the menu holds the pointer the current comment must stay frozen, so the
+ * canvas skips hit testing rather than testing the gap behind the menu. But that
+ * "pointer is in the menu" flag is only meaningful while a menu exists: React
+ * fires no `pointerleave` for a node it has already removed, so a menu that
+ * unmounts under the pointer would otherwise leave the flag set with nothing
+ * able to clear it — permanently disabling hover selection. Requiring a live
+ * selection makes that state unrepresentable instead of merely unlikely.
+ */
+export function shouldHitTestCanvasHover(menuHovered: boolean, hasSelection: boolean): boolean {
+  return !(menuHovered && hasSelection);
+}
+
+/**
+ * Whether the pointer is headed into the action menu, read from a `pointerleave`
+ * event's `relatedTarget`.
+ *
+ * The menu overlaps the canvas, so moving onto it makes the canvas fire
+ * `pointerleave`. Boundary events deliver leave before enter, so at that moment
+ * the menu has not yet recorded its own claim — deciding from that flag alone
+ * released the selection just as the pointer arrived. Reading the destination
+ * makes the decision independent of ordering.
+ */
+export function isCanvasDanmakuMenuTarget(target: EventTarget | null): boolean {
+  const element =
+    target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+  return Boolean(element?.closest(`[${CANVAS_DANMAKU_MENU_ATTR}]`));
 }
 
 function canvasFont(fontWeight: number, fontSize: number): string {
@@ -501,6 +537,11 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   }, [shieldMatcher, filterGifts]);
 
   const releaseHover = useCallback(() => {
+    // Unconditionally, and before the early return: releasing the selection
+    // unmounts the menu, and React fires no `pointerleave` for a node it has
+    // already removed. Leaving the flag set here is what previously wedged
+    // hover selection after the first menu closed under the pointer.
+    menuHoveredRef.current = false;
     if (hoverKeyRef.current === null) return;
     hoverKeyRef.current = null;
     engineRef.current?.setPaused(null);
@@ -555,7 +596,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       if (event.pointerType !== "mouse") return;
       // The pointer stays inside the menu's own bounds while it is used. Keep
       // the current comment frozen instead of hit-testing the gap behind it.
-      if (menuHoveredRef.current) return;
+      if (!shouldHitTestCanvasHover(menuHoveredRef.current, hoverKeyRef.current !== null)) return;
 
       const hit = hitTestAt(event.clientX, event.clientY);
       if (!hit) {
@@ -570,9 +611,14 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
 
   const handlePointerLeave = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      // Moving onto the pill leaves the canvas. Its own enter handler has
-      // already claimed the pointer in that case, so keep the freeze.
-      if (event.pointerType !== "mouse" || menuHoveredRef.current) return;
+      // Moving onto the pill leaves the canvas. Keep the freeze in that case,
+      // deciding from where the pointer is going rather than from the menu's own
+      // flag, which boundary-event ordering has not set yet.
+      if (event.pointerType !== "mouse") return;
+      if (isCanvasDanmakuMenuTarget(event.relatedTarget)) {
+        menuHoveredRef.current = true;
+        return;
+      }
       releaseHover();
     },
     [releaseHover],
@@ -676,10 +722,20 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     menuHoveredRef.current = true;
   }, []);
 
-  const handleMenuPointerLeave = useCallback(() => {
-    menuHoveredRef.current = false;
-    releaseHover();
-  }, [releaseHover]);
+  /**
+   * Leaving the menu. Going back onto the canvas only gives up the claim: the
+   * canvas's own `pointermove` decides from there, so crossing the bridge back
+   * onto the frozen comment does not flicker the menu away and rebuild it.
+   * Anywhere else releases, and `releaseHover` clears the claim itself.
+   */
+  const handleMenuPointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      menuHoveredRef.current = false;
+      if (event.relatedTarget === canvasRef.current) return;
+      releaseHover();
+    },
+    [releaseHover],
+  );
 
   // Turning the layer off invalidates the selection, and so does a room switch
   // even while it stays on: that replaces the engine, so the frozen comment
@@ -689,13 +745,11 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   // that stops reporting its box.)
   useEffect(() => {
     if (active) return;
-    menuHoveredRef.current = false;
     touchStartRef.current = null;
     releaseHover();
   }, [active, releaseHover]);
 
   useEffect(() => {
-    menuHoveredRef.current = false;
     touchStartRef.current = null;
     releaseHover();
   }, [releaseHover, sessionKey]);
@@ -1337,7 +1391,6 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           // Touch always gets the large pill; a mouse only needs it when the
           // stage is a full display away.
           large={mobile || large}
-          onDismiss={mobile ? releaseHover : undefined}
           onPointerEnter={mobile ? undefined : handleMenuPointerEnter}
           onPointerLeave={mobile ? undefined : handleMenuPointerLeave}
         />

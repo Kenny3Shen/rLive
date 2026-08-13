@@ -647,8 +647,6 @@ export function Shell() {
                         ) : isFollow ? (
                           <FollowViewSwitcher
                             value={followHeader.view}
-                            liveCount={followHeader.liveCount}
-                            iptvCount={followHeader.iptvCount}
                             onValueChange={followHeader.onViewChange}
                           />
                         ) : hasIptvSourceShell ? (

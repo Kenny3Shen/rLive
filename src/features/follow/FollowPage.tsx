@@ -773,17 +773,9 @@ export function FollowPage() {
   const headerState = useMemo(
     () => ({
       view: activeView,
-      liveCount: followsQuery.data?.length,
-      iptvCount: iptvFavoritesQuery.data === undefined ? undefined : iptvSourceFavorites.length,
       onViewChange: handleViewChange,
     }),
-    [
-      activeView,
-      followsQuery.data,
-      handleViewChange,
-      iptvFavoritesQuery.data,
-      iptvSourceFavorites.length,
-    ],
+    [activeView, handleViewChange],
   );
   useFollowHeaderState(headerState);
 
