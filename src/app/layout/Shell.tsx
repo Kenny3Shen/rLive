@@ -21,9 +21,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { IptvSearchInput, IptvSourceSwitcher } from "@/features/iptv/IptvHeaderControls";
 import { IptvControllerProvider } from "@/features/iptv/IptvController";
 import { iptvHomePath } from "@/features/iptv/iptvRoute";
-import { builtInSources, playlistSourceFromRoute } from "@/features/iptv/playlistSource";
+import {
+  playlistSourceFromRoute,
+  playlistSourcesForSettings,
+} from "@/features/iptv/playlistSource";
 import { HistoryClearButton, HistoryViewSwitcher } from "@/features/history/HistoryHeaderControls";
 import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState";
+import { FollowViewSwitcher } from "@/features/follow/FollowHeaderControls";
+import { useFollowHeaderSnapshot } from "@/features/follow/followHeaderState";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
@@ -31,15 +36,12 @@ import { categoryHomePathAfterSiteChange } from "@/features/category/categoryRou
 import {
   FOLLOW_PLATFORM_PARAM,
   FOLLOW_VIEW_PARAM,
-  type FollowPlatformFilter,
   followPlatformFromSearch,
   followViewFromSearch,
-  withFollowPlatform,
 } from "@/features/follow/followRoute";
 import {
   FOLLOW_IPTV_GROUP_PARAM,
   FOLLOW_IPTV_SOURCE_PARAM,
-  withIptvFollowSource,
 } from "@/features/follow/iptvFollowGroups";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { PagePan } from "@/shared/motion/PagePan";
@@ -134,6 +136,7 @@ export function Shell() {
   const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
   const historyHeader = useHistoryHeaderSnapshot();
+  const followHeader = useFollowHeaderSnapshot();
 
   // React Router records each pushState entry with an incrementing `idx`.
   // Comparing it across renders tells the tab transition which way the user
@@ -189,42 +192,33 @@ export function Shell() {
     [selectedSiteId, sitePlatforms],
   );
   const followView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM));
-  const isLiveFollow = isFollow && followView === "live";
   const isIptvFollow = isFollow && followView === "iptv";
-  const hasIptvSourceShell = isIptv || isIptvFollow;
+  const hasIptvSourceShell = isIptv;
   const iptvFollowGroup = isIptvFollow ? searchParams.get(FOLLOW_IPTV_GROUP_PARAM) : null;
-  // Routes carrying the live-platform strip. This gates the platform swipe and
-  // the `SiteSwitcher` itself, so IPTV must stay out of it: IPTV has its own
-  // source strip and its own swipe.
+  // Routes carrying the live-platform strip. Follow owns a separate top-level
+  // live/IPTV tab and keeps platform filtering inside the page rail.
   const showSiteSwitcher =
-    pathname === "/" ||
-    pathname.startsWith("/category") ||
-    pathname.startsWith("/search") ||
-    isLiveFollow;
+    pathname === "/" || pathname.startsWith("/category") || pathname.startsWith("/search");
   // Keep both follow views in the same content container so changing the
   // live/IPTV tab does not remount FollowPage and discard its transition state.
   // IPTV follow groups animate inside IptvFollowView rather than in this layer.
-  const useGroupedPageContainer = showSiteSwitcher || isIptv || isIptvFollow;
+  const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv;
   const showTopNavigation = useGroupedPageContainer || isHistory;
-  const iptvSourceId = hasIptvSourceShell ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
+  const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
     () => playlistSourceFromRoute(iptvSourceId, iptvSourceUrl ?? iptvCustomM3uUrl),
     [iptvCustomM3uUrl, iptvSourceId, iptvSourceUrl],
   );
-  const configuredIptvSource = useMemo(() => {
-    const resolved = playlistSourceFromRoute("custom", iptvCustomM3uUrl);
-    return resolved.id === "custom" ? resolved : null;
-  }, [iptvCustomM3uUrl]);
   const iptvSources = useMemo(() => {
-    const sources = [...builtInSources];
-    const customSource = configuredIptvSource ?? (iptvSource.id === "custom" ? iptvSource : null);
-    if (customSource) sources.push(customSource);
+    const sources = playlistSourcesForSettings(iptvCustomM3uUrl);
+    if (iptvSource.id === "custom" && !sources.some((source) => source.id === "custom")) {
+      sources.push(iptvSource);
+    }
     return sources;
-  }, [configuredIptvSource, iptvSource]);
+  }, [iptvCustomM3uUrl, iptvSource]);
   const iptvSourceOptions = useMemo(() => iptvSources.map((source) => source.id), [iptvSources]);
   const iptvKeyword = isIptv ? (searchParams.get("q") ?? "") : "";
-  const rawFollowPlatform = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
   const followPlatform = followPlatformFromSearch(
     searchParams.get(FOLLOW_PLATFORM_PARAM),
     disabledSiteIds,
@@ -248,16 +242,14 @@ export function Shell() {
   // the query cache replace only the route content.
   const pageMotionKey = pathname;
   const categoryHomePath = categoryHomePathAfterSiteChange(pathname);
-  const followPlatforms = useMemo<FollowPlatformFilter[]>(
-    () => ["all", ...sitePlatforms],
-    [sitePlatforms],
-  );
-  const platformStrip: readonly PlatformScopeValue[] = isLiveFollow
-    ? followPlatforms
-    : sitePlatforms;
+  const platformStrip: readonly PlatformScopeValue[] = sitePlatforms;
   // One ordered strip per surface, compared as strings so platforms and IPTV
   // source ids share the same direction rule.
-  const groupStrip: readonly string[] = isIptv ? iptvSourceOptions : platformStrip.map(String);
+  const groupStrip: readonly string[] = isIptv
+    ? iptvSourceOptions
+    : isFollow
+      ? ["all", ...sitePlatforms]
+      : platformStrip.map(String);
   const previousGroupIndex = groupStrip.indexOf(previousGroup);
   const currentGroupIndex = groupStrip.indexOf(groupForMotion);
   const groupDirection: "forward" | "backward" =
@@ -285,25 +277,14 @@ export function Shell() {
     [activeSiteId, categoryHomePath, navigate, setSiteId],
   );
 
-  const handleFollowPlatformChange = useCallback(
-    (platform: FollowPlatformFilter) => {
-      setSearchParams((current) => withFollowPlatform(current, platform));
-    },
-    [setSearchParams],
-  );
-
   const handleIptvSourceChange = useCallback(
     (id: string) => {
       const next = iptvSources.find((source) => source.id === id);
       if (next && next.url !== iptvSource.url) {
-        if (isIptvFollow) {
-          setSearchParams((current) => withIptvFollowSource(current, next.id));
-        } else {
-          navigate(iptvHomePath({ source: next }));
-        }
+        navigate(iptvHomePath({ source: next }));
       }
     },
-    [iptvSource.url, iptvSources, isIptvFollow, navigate, setSearchParams],
+    [iptvSource.url, iptvSources, navigate],
   );
 
   const handleIptvSearchChange = useCallback(
@@ -322,11 +303,9 @@ export function Shell() {
     [setSearchParams],
   );
 
-  // Simple Live's home/category/search use TabBarView: a horizontal content
-  // swipe changes the active platform. Keep that contract on touch clients.
-  // History owns a nested two-page strip (watch / sent danmaku). Its platform
-  // filter remains tappable in the header, but the surrounding Shell must not
-  // compete for the same horizontal gesture.
+  // Home/category/search use a horizontal content swipe to change platforms.
+  // Follow and History own their nested tab strips, so Shell does not compete
+  // for those routes' horizontal gestures.
   const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
   // `track` is the layout `liveSwipePage` below renders: every mounted platform
   // sits at its own absolute index, so the gesture pans a layer whose
@@ -337,15 +316,7 @@ export function Shell() {
     items: sitePlatforms,
     value: activeSiteId,
     onChange: handleSitePlatformChange,
-    enabled: platformSwipeEnabled && !isLiveFollow,
-    animate: platformSwipeEnabled,
-    layout: platformSwipeLayout,
-  });
-  const followPlatformSwipe = useHorizontalSwipe({
-    items: followPlatforms,
-    value: followPlatform,
-    onChange: handleFollowPlatformChange,
-    enabled: platformSwipeEnabled && isLiveFollow,
+    enabled: platformSwipeEnabled,
     animate: platformSwipeEnabled,
     layout: platformSwipeLayout,
   });
@@ -355,22 +326,13 @@ export function Shell() {
     onChange: handleIptvSourceChange,
     enabled: isIptv && mobileClient,
   });
-  const platformSwipe = isLiveFollow ? followPlatformSwipe : sitePlatformSwipe;
-  const contentSwipe = isIptv ? iptvSourceSwipe : platformSwipe;
+  const contentSwipe = isIptv ? iptvSourceSwipe : sitePlatformSwipe;
   // `PagePan` is keyed on the pathname, so returning to a swipeable route hands
   // the hook a brand new track. Binding through `bindPage` is what re-parks it
   // at the active platform's offset — assigning `pageRef` directly would leave
   // the fresh track untransformed and push every panel past the first off
   // screen, taking the page's scroller with it.
   const bindContentSwipePageRef = contentSwipe.bindPage;
-
-  // A manually opened URL may name a platform that has since been disabled.
-  // Keep the page usable on its first render, then remove that stale filter
-  // from the address bar without adding a history entry.
-  useEffect(() => {
-    if (!isFollow || rawFollowPlatform === followPlatform) return;
-    setSearchParams((current) => withFollowPlatform(current, followPlatform), { replace: true });
-  }, [followPlatform, isFollow, rawFollowPlatform, setSearchParams]);
 
   // The scroller used to be keyed by platform, so a site switch reset scrollTop
   // as a side effect of being rebuilt. Now that it persists, the position is
@@ -682,6 +644,13 @@ export function Shell() {
                             value={historyHeader.view}
                             onValueChange={historyHeader.onViewChange}
                           />
+                        ) : isFollow ? (
+                          <FollowViewSwitcher
+                            value={followHeader.view}
+                            liveCount={followHeader.liveCount}
+                            iptvCount={followHeader.iptvCount}
+                            onValueChange={followHeader.onViewChange}
+                          />
                         ) : hasIptvSourceShell ? (
                           <div
                             data-horizontal-swipe-surface
@@ -702,13 +671,6 @@ export function Shell() {
                               )}
                             />
                           </div>
-                        ) : isFollow ? (
-                          <SiteSwitcher
-                            value={followPlatform}
-                            includeAll
-                            filterMode
-                            onValueChange={handleFollowPlatformChange}
-                          />
                         ) : (
                           <SiteSwitcher
                             onValueIntent={preloadHomePlatform}
@@ -740,7 +702,7 @@ export function Shell() {
                         pending={historyHeader.clearPending}
                         onRequestClear={historyHeader.onRequestClear}
                       />
-                    ) : isIptvFollow ? null : (
+                    ) : isFollow ? null : (
                       <HeaderSearch />
                     )}
                   </div>

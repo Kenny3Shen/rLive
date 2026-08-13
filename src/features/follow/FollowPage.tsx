@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import gsap from "gsap";
@@ -13,6 +13,7 @@ import {
   type Announcements,
 } from "@dnd-kit/core";
 import {
+  Activity,
   Check,
   CirclePlay,
   Clock3,
@@ -22,10 +23,8 @@ import {
   Home,
   Inbox,
   Layers3,
-  RadioTower,
   Star,
   Trash2,
-  Tv,
   UserRoundX,
 } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
@@ -72,18 +71,28 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { PlatformFilterSelect } from "@/shared/components/PlatformFilterSelect";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
-import { usePlatformScope } from "@/shared/hooks/useSiteQuery";
+import { isMobileClient } from "@/shared/clientPlatform";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
-import { isSiteEnabled } from "@/shared/siteId";
+import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
 import {
@@ -91,17 +100,23 @@ import {
   useAllIptvFavorites,
   useIptvFavoriteGroups,
 } from "@/features/iptv/favorites";
-import { iptvFavoriteSourceId, playlistSourceFromRoute } from "@/features/iptv/playlistSource";
+import {
+  iptvFavoriteSourceId,
+  playlistSourceFromRoute,
+  playlistSourcesForSettings,
+} from "@/features/iptv/playlistSource";
 import { FollowGroupManagerDialog } from "./FollowGroupManagerDialog";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
 import { IptvFollowView } from "./IptvFollowView";
 import { useFollowDndSensors } from "./useFollowDndSensors";
+import { useFollowHeaderState } from "./followHeaderState";
 import {
   FOLLOW_IPTV_GROUP_PARAM,
   FOLLOW_IPTV_SOURCE_PARAM,
   iptvFollowGroupFromSearch,
   iptvFollowGroups,
   withIptvFollowGroup,
+  withIptvFollowSource,
 } from "./iptvFollowGroups";
 import {
   ALL_FOLLOW_GROUP_ID,
@@ -119,10 +134,12 @@ import { FOLLOW_LIST_QUERY_KEY, refreshFollows, useFollowStatusRefresh } from ".
 import {
   FOLLOW_PLATFORM_PARAM,
   FOLLOW_VIEW_PARAM,
+  type FollowPlatformFilter,
   type FollowView,
   followPlatformFromSearch,
   followViewFromSearch,
   formatFollowLiveDuration,
+  withFollowPlatform,
   withFollowView,
 } from "./followRoute";
 
@@ -403,6 +420,7 @@ export function FollowPage() {
   const activeView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM));
   const viewMotionRef = useRef<HTMLDivElement>(null);
   const previousViewRef = useRef<FollowView>(activeView);
+  const skipViewMotionRef = useRef(false);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const [selectedGroupId, setSelectedGroupId] = useState(ALL_FOLLOW_GROUP_ID);
   const [activeFollow, setActiveFollow] = useState<FollowUser | null>(null);
@@ -410,13 +428,20 @@ export function FollowPage() {
   const [pendingRemove, setPendingRemove] = useState<FollowUser | null>(null);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const iptvCustomM3uUrl = useSettingsStore((state) => state.iptvCustomM3uUrl);
-  const scopedPlatform = usePlatformScope();
   const sensors = useFollowDndSensors();
 
   useFollowStatusRefresh(activeView === "live");
-  const platformFilter =
-    scopedPlatform ??
-    followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM), disabledSiteIds);
+  const platformFilter = followPlatformFromSearch(
+    searchParams.get(FOLLOW_PLATFORM_PARAM),
+    disabledSiteIds,
+  );
+  const visibleSiteIds = useMemo(() => enabledSiteIds(disabledSiteIds), [disabledSiteIds]);
+  const rawPlatform = followPlatformFromSearch(searchParams.get(FOLLOW_PLATFORM_PARAM));
+
+  useEffect(() => {
+    if (rawPlatform === platformFilter) return;
+    setSearchParams((current) => withFollowPlatform(current, platformFilter), { replace: true });
+  }, [platformFilter, rawPlatform, setSearchParams]);
 
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
@@ -434,6 +459,13 @@ export function FollowPage() {
     () => playlistSourceFromRoute(searchParams.get(FOLLOW_IPTV_SOURCE_PARAM), iptvCustomM3uUrl),
     [iptvCustomM3uUrl, searchParams],
   );
+  const iptvSources = useMemo(() => {
+    const sources = playlistSourcesForSettings(iptvCustomM3uUrl);
+    if (iptvSource.id === "custom" && !sources.some((candidate) => candidate.id === "custom")) {
+      sources.push(iptvSource);
+    }
+    return sources;
+  }, [iptvCustomM3uUrl, iptvSource]);
   const iptvSourceFavorites = useMemo(
     () => iptvFavoritesForSource(iptvFavoritesQuery.data ?? [], iptvFavoriteSourceId(iptvSource)),
     [iptvFavoritesQuery.data, iptvSource],
@@ -479,6 +511,11 @@ export function FollowPage() {
         `[data-follow-view-panel="${activeView}"]`,
       );
       if (!panel) return;
+      if (skipViewMotionRef.current) {
+        skipViewMotionRef.current = false;
+        gsap.set(panel, { clearProps: "transform,opacity,visibility,willChange" });
+        return;
+      }
       if (prefersReducedMotion()) {
         gsap.set(panel, { clearProps: "transform,opacity,visibility,willChange" });
         return;
@@ -706,16 +743,76 @@ export function FollowPage() {
     if (groupsResult.isError) throw groupsResult.error;
   }
 
-  function handleViewChange(value: string) {
-    const view = value as FollowView;
-    setSearchParams((current) => withFollowView(current, view));
-  }
+  const handleViewChange = useCallback(
+    (value: string | FollowView) => {
+      const view = value as FollowView;
+      setSearchParams((current) => withFollowView(current, view));
+    },
+    [setSearchParams],
+  );
+
+  const handleViewChangeFromSwipe = useCallback(
+    (view: FollowView) => {
+      skipViewMotionRef.current = true;
+      handleViewChange(view);
+    },
+    [handleViewChange],
+  );
+
+  const followTabSwipe = useHorizontalSwipe({
+    items: ["live", "iptv"] as const,
+    value: activeView,
+    onChange: handleViewChangeFromSwipe,
+    enabled: isMobileClient(),
+    // Clicked tabs use the existing GSAP fade; a committed gesture settles
+    // directly from the pointer release in the hook.
+    animate: false,
+    layout: "track",
+  });
+
+  const headerState = useMemo(
+    () => ({
+      view: activeView,
+      liveCount: followsQuery.data?.length,
+      iptvCount: iptvFavoritesQuery.data === undefined ? undefined : iptvSourceFavorites.length,
+      onViewChange: handleViewChange,
+    }),
+    [
+      activeView,
+      followsQuery.data,
+      handleViewChange,
+      iptvFavoritesQuery.data,
+      iptvSourceFavorites.length,
+    ],
+  );
+  useFollowHeaderState(headerState);
+
+  const handlePlatformChange = useCallback(
+    (value: FollowPlatformFilter) => {
+      setSearchParams((current) => withFollowPlatform(current, value));
+    },
+    [setSearchParams],
+  );
+
+  const handleIptvSourceChange = useCallback(
+    (sourceId: string) => {
+      if (!iptvSources.some((source) => source.id === sourceId)) return;
+      setSearchParams((current) => withIptvFollowSource(current, sourceId));
+    },
+    [iptvSources, setSearchParams],
+  );
 
   return (
     <PullToRefresh
+      data-horizontal-swipe-surface
       onRefresh={refreshActiveView}
       refreshing={activeRefreshing}
       className="mx-auto max-w-[1600px]"
+      onPointerDownCapture={followTabSwipe.onPointerDownCapture}
+      onPointerMoveCapture={followTabSwipe.onPointerMoveCapture}
+      onPointerUpCapture={followTabSwipe.onPointerUpCapture}
+      onPointerCancelCapture={followTabSwipe.onPointerCancelCapture}
+      onClickCapture={followTabSwipe.onClickCapture}
     >
       <RefreshFab
         onRefresh={refreshActiveView}
@@ -725,272 +822,331 @@ export function FollowPage() {
 
       <div ref={viewMotionRef}>
         <Tabs value={activeView} onValueChange={handleViewChange} className="gap-4">
-          <TabsList
-            aria-label="关注类型"
-            className="grid h-11! w-full grid-cols-2 rounded-xl border border-border-subtle bg-card/60 p-1 max-md:h-12! max-md:min-h-12 max-md:p-0.5 sm:w-fit"
-          >
-            <TabsTrigger value="live" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
-              <RadioTower aria-hidden />
-              直播关注
-              <Badge variant="secondary" className="min-w-5 justify-center px-1.5 tabular-nums">
-                {allFollows.length}
-              </Badge>
-            </TabsTrigger>
-            <TabsTrigger value="iptv" className="h-9! min-w-0 gap-2 px-3 max-md:h-11!">
-              <Tv aria-hidden />
-              IPTV 频道
-              <Badge variant="secondary" className="min-w-5 justify-center px-1.5 tabular-nums">
-                {iptvSourceFavorites.length}
-              </Badge>
-            </TabsTrigger>
-          </TabsList>
+          <div data-slot="horizontal-swipe-viewport" className="min-w-0 overflow-x-clip">
+            <div
+              ref={followTabSwipe.bindPage}
+              data-slot="horizontal-swipe-track"
+              className="flex items-start"
+              style={{ width: "200%" }}
+            >
+              <TabsContent
+                value="live"
+                keepMounted
+                hidden={false}
+                inert={activeView === "live" ? undefined : true}
+                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
+                style={{ width: "50%" }}
+              >
+                <div data-follow-view-panel="live" className="flex flex-col gap-4">
+                  {(followsQuery.isError || groupsQuery.isError) && (
+                    <ErrorState
+                      error={followsQuery.error ?? groupsQuery.error}
+                      title="关注列表加载失败"
+                      onRetry={() => {
+                        void followsQuery.refetch();
+                        void groupsQuery.refetch();
+                      }}
+                    />
+                  )}
 
-          <TabsContent value="live" className="mt-0">
-            <div data-follow-view-panel="live" className="flex flex-col gap-4">
-              {(followsQuery.isError || groupsQuery.isError) && (
-                <ErrorState
-                  error={followsQuery.error ?? groupsQuery.error}
-                  title="关注列表加载失败"
-                  onRetry={() => {
-                    void followsQuery.refetch();
-                    void groupsQuery.refetch();
-                  }}
-                />
-              )}
-
-              {!followsQuery.isError && !groupsQuery.isError && (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={groupTargetCollisionDetection}
-                  accessibility={{
-                    announcements: dragAnnouncements,
-                    screenReaderInstructions: FOLLOW_DND_INSTRUCTIONS,
-                  }}
-                  onDragStart={handleDragStart}
-                  onDragCancel={() => setActiveFollow(null)}
-                  onDragEnd={handleDragEnd}
-                >
-                  <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
-                    <nav
-                      aria-label="直播分组"
-                      className="sticky top-3 hidden max-h-[calc(100dvh-7rem)] min-w-0 flex-col gap-1 border-r border-border pr-3 md:flex"
+                  {!followsQuery.isError && !groupsQuery.isError && (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={groupTargetCollisionDetection}
+                      accessibility={{
+                        announcements: dragAnnouncements,
+                        screenReaderInstructions: FOLLOW_DND_INSTRUCTIONS,
+                      }}
+                      onDragStart={handleDragStart}
+                      onDragCancel={() => setActiveFollow(null)}
+                      onDragEnd={handleDragEnd}
                     >
-                      <div className="mb-1 flex items-center justify-between gap-2 px-2">
-                        <span className="text-xs font-medium text-muted-foreground">直播分组</span>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label="管理关注分组"
-                                onClick={() => setGroupManagerOpen(true)}
-                              />
-                            }
-                          >
-                            <FolderCog aria-hidden />
-                          </TooltipTrigger>
-                          <TooltipContent>管理分组</TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto py-0.5">
-                        {groupTargets.map((group) => (
-                          <GroupTarget
-                            key={group.id}
-                            groupId={group.id}
-                            label={group.name}
-                            count={groupCounts.get(group.id) ?? 0}
-                            selected={selectedGroupId === group.id}
-                            dragActive={activeFollow != null}
-                            surface="desktop"
-                            onSelect={() => setSelectedGroupId(group.id)}
-                          />
-                        ))}
-                      </div>
-                    </nav>
-
-                    <section
-                      className="flex min-w-0 flex-col gap-3"
-                      aria-labelledby="follow-group-title"
-                    >
-                      <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden">
-                        {groupTargets.map((group) => (
-                          <GroupTarget
-                            key={group.id}
-                            groupId={group.id}
-                            label={group.name}
-                            count={groupCounts.get(group.id) ?? 0}
-                            selected={selectedGroupId === group.id}
-                            dragActive={activeFollow != null}
-                            surface="mobile"
-                            onSelect={() => setSelectedGroupId(group.id)}
-                          />
-                        ))}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="shrink-0"
-                          aria-label="管理关注分组"
-                          onClick={() => setGroupManagerOpen(true)}
+                      <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
+                        <nav
+                          aria-label="直播分组"
+                          className="sticky top-3 hidden max-h-[calc(100dvh-7rem)] min-w-0 flex-col gap-1 border-r border-border pr-3 md:flex"
                         >
-                          <FolderCog aria-hidden />
-                        </Button>
-                      </div>
-
-                      <div className="flex min-h-9 flex-wrap items-end justify-between gap-2 border-b border-border pb-2">
-                        <div className="min-w-0">
-                          <h2 id="follow-group-title" className="truncate text-sm font-semibold">
-                            {selectedGroupName}
-                          </h2>
-                          <p className="text-xs tabular-nums text-muted-foreground">
-                            {items.length} 位主播
-                          </p>
-                        </div>
-
-                        <ToggleGroup
-                          value={[liveFilter]}
-                          variant="outline"
-                          size="sm"
-                          spacing={0}
-                          aria-label="关注状态筛选"
-                          onValueChange={(value) => {
-                            const next = value[0] as LiveFilter | undefined;
-                            if (next) setLiveFilter(next);
-                          }}
-                        >
-                          <ToggleGroupItem value="all">全部</ToggleGroupItem>
-                          <ToggleGroupItem value="live">直播中</ToggleGroupItem>
-                          <ToggleGroupItem value="offline">未开播</ToggleGroupItem>
-                        </ToggleGroup>
-                      </div>
-
-                      {loading && (
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
-                          {Array.from({ length: 10 }).map((_, index) => (
-                            <Card key={index} size="sm" className="gap-2">
-                              <CardHeader className="items-center gap-x-2.5">
-                                <div className="flex min-w-0 items-center gap-2.5">
-                                  <Skeleton className="size-10 shrink-0 rounded-full" />
-                                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                                    <Skeleton className="h-3.5 w-3/5" />
-                                    <Skeleton className="h-3 w-4/5" />
-                                  </div>
-                                </div>
-                                <CardAction className="self-center">
-                                  <Skeleton className="size-7 rounded-lg" />
-                                </CardAction>
-                              </CardHeader>
-                              <CardContent className="flex min-h-5 items-center gap-1.5">
-                                <Skeleton className="h-5 w-14 rounded-full" />
-                              </CardContent>
-                            </Card>
-                          ))}
-                        </div>
-                      )}
-
-                      {!loading && allFollows.length === 0 && (
-                        <Empty className="min-h-64 py-12">
-                          <EmptyHeader>
-                            <EmptyMedia variant="icon">
-                              <Star aria-hidden />
-                            </EmptyMedia>
-                            <EmptyTitle>还没有关注任何主播</EmptyTitle>
-                            <EmptyDescription>打开直播间后即可添加关注。</EmptyDescription>
-                          </EmptyHeader>
-                          <EmptyContent>
-                            <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                              <Home data-icon="inline-start" aria-hidden />
-                              去首页看看
-                            </Button>
-                          </EmptyContent>
-                        </Empty>
-                      )}
-
-                      {!loading && allFollows.length > 0 && items.length === 0 && (
-                        <Empty className="min-h-56 py-10">
-                          <EmptyHeader>
-                            <EmptyMedia variant="icon">
-                              <Folder aria-hidden />
-                            </EmptyMedia>
-                            <EmptyTitle>当前没有主播</EmptyTitle>
-                            <EmptyDescription>这个分组或筛选条件下暂无内容。</EmptyDescription>
-                          </EmptyHeader>
-                          <EmptyContent>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setSelectedGroupId(ALL_FOLLOW_GROUP_ID);
-                                setLiveFilter("all");
+                          <div className="flex flex-col gap-2">
+                            <PlatformFilterSelect
+                              value={platformFilter}
+                              sites={visibleSiteIds}
+                              compact={false}
+                              onValueChange={handlePlatformChange}
+                            />
+                            <Select
+                              value={liveFilter}
+                              onValueChange={(value) => {
+                                const next = value as LiveFilter | null;
+                                if (next) setLiveFilter(next);
                               }}
                             >
-                              <Layers3 data-icon="inline-start" aria-hidden />
-                              查看全部关注
-                            </Button>
-                          </EmptyContent>
-                        </Empty>
-                      )}
-
-                      {items.length > 0 && (
-                        <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
-                          {items.map((user) => {
-                            const identity = followIdentity(user);
-                            return (
-                              <FollowCard
-                                key={identity}
-                                user={user}
-                                groups={groups}
-                                selectedGroupId={selectedGroupId}
-                                now={now}
-                                moving={
-                                  moveMutation.isPending &&
-                                  followIdentity(moveMutation.variables.user) === identity
+                              <SelectTrigger
+                                size="sm"
+                                className="w-full border border-input bg-background"
+                                aria-label="关注状态筛选"
+                              >
+                                <Activity data-icon="inline-start" aria-hidden />
+                                <SelectValue>
+                                  {liveFilter === "live"
+                                    ? "直播中"
+                                    : liveFilter === "offline"
+                                      ? "未开播"
+                                      : "全部状态"}
+                                </SelectValue>
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                <SelectGroup>
+                                  <SelectItem value="all">全部状态</SelectItem>
+                                  <SelectItem value="live">直播中</SelectItem>
+                                  <SelectItem value="offline">未开播</SelectItem>
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Separator className="my-1" />
+                          <div className="mb-1 flex items-center justify-between gap-2 px-2">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              直播分组
+                            </span>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    aria-label="管理关注分组"
+                                    onClick={() => setGroupManagerOpen(true)}
+                                  />
                                 }
-                                removing={
-                                  removeMutation.isPending &&
-                                  followIdentity(removeMutation.variables) === identity
-                                }
-                                removeDisabled={removeMutation.isPending}
-                                onNavigate={(path) => navigate(path)}
-                                onMove={moveFollow}
-                                onRemove={setPendingRemove}
+                              >
+                                <FolderCog aria-hidden />
+                              </TooltipTrigger>
+                              <TooltipContent>管理分组</TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <div className="flex min-h-0 flex-col gap-1 overflow-y-auto py-0.5">
+                            {groupTargets.map((group) => (
+                              <GroupTarget
+                                key={group.id}
+                                groupId={group.id}
+                                label={group.name}
+                                count={groupCounts.get(group.id) ?? 0}
+                                selected={selectedGroupId === group.id}
+                                dragActive={activeFollow != null}
+                                surface="desktop"
+                                onSelect={() => setSelectedGroupId(group.id)}
                               />
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </section>
-                  </div>
+                            ))}
+                          </div>
+                        </nav>
 
-                  <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
-                    {activeFollow ? <FollowDragOverlay user={activeFollow} /> : null}
-                  </DragOverlay>
-                </DndContext>
-              )}
-            </div>
-          </TabsContent>
+                        <section
+                          className="flex min-w-0 flex-col gap-3"
+                          aria-label={selectedGroupName}
+                        >
+                          <div className="flex min-w-0 gap-2 md:hidden">
+                            <PlatformFilterSelect
+                              value={platformFilter}
+                              sites={visibleSiteIds}
+                              compact={false}
+                              className="min-w-0 flex-1"
+                              onValueChange={handlePlatformChange}
+                            />
+                            <Select
+                              value={liveFilter}
+                              onValueChange={(value) => {
+                                const next = value as LiveFilter | null;
+                                if (next) setLiveFilter(next);
+                              }}
+                            >
+                              <SelectTrigger
+                                size="sm"
+                                className="min-w-0 flex-1 border border-input bg-background"
+                                aria-label="关注状态筛选"
+                              >
+                                <Activity data-icon="inline-start" aria-hidden />
+                                <SelectValue>
+                                  {liveFilter === "live"
+                                    ? "直播中"
+                                    : liveFilter === "offline"
+                                      ? "未开播"
+                                      : "全部状态"}
+                                </SelectValue>
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                <SelectGroup>
+                                  <SelectItem value="all">全部状态</SelectItem>
+                                  <SelectItem value="live">直播中</SelectItem>
+                                  <SelectItem value="offline">未开播</SelectItem>
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div
+                            data-horizontal-swipe-surface
+                            className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden"
+                          >
+                            {groupTargets.map((group) => (
+                              <GroupTarget
+                                key={group.id}
+                                groupId={group.id}
+                                label={group.name}
+                                count={groupCounts.get(group.id) ?? 0}
+                                selected={selectedGroupId === group.id}
+                                dragActive={activeFollow != null}
+                                surface="mobile"
+                                onSelect={() => setSelectedGroupId(group.id)}
+                              />
+                            ))}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              className="shrink-0"
+                              aria-label="管理关注分组"
+                              onClick={() => setGroupManagerOpen(true)}
+                            >
+                              <FolderCog aria-hidden />
+                            </Button>
+                          </div>
 
-          <TabsContent value="iptv" className="mt-0">
-            <div data-follow-view-panel="iptv">
-              <IptvFollowView
-                source={iptvSource}
-                favorites={iptvSourceFavorites}
-                groups={iptvGroupsQuery.data ?? []}
-                selectedGroup={selectedIptvGroup}
-                loading={iptvFavoritesQuery.isLoading || iptvGroupsQuery.isLoading}
-                error={iptvFavoritesQuery.error ?? iptvGroupsQuery.error}
-                onRetry={() => {
-                  void iptvFavoritesQuery.refetch();
-                  void iptvGroupsQuery.refetch();
-                }}
-                onGroupChange={(groupId) =>
-                  setSearchParams((current) => withIptvFollowGroup(current, groupId))
-                }
-              />
+                          {loading && (
+                            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+                              {Array.from({ length: 10 }).map((_, index) => (
+                                <Card key={index} size="sm" className="gap-2">
+                                  <CardHeader className="items-center gap-x-2.5">
+                                    <div className="flex min-w-0 items-center gap-2.5">
+                                      <Skeleton className="size-10 shrink-0 rounded-full" />
+                                      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                                        <Skeleton className="h-3.5 w-3/5" />
+                                        <Skeleton className="h-3 w-4/5" />
+                                      </div>
+                                    </div>
+                                    <CardAction className="self-center">
+                                      <Skeleton className="size-7 rounded-lg" />
+                                    </CardAction>
+                                  </CardHeader>
+                                  <CardContent className="flex min-h-5 items-center gap-1.5">
+                                    <Skeleton className="h-5 w-14 rounded-full" />
+                                  </CardContent>
+                                </Card>
+                              ))}
+                            </div>
+                          )}
+
+                          {!loading && allFollows.length === 0 && (
+                            <Empty className="min-h-64 py-12">
+                              <EmptyHeader>
+                                <EmptyMedia variant="icon">
+                                  <Star aria-hidden />
+                                </EmptyMedia>
+                                <EmptyTitle>还没有关注任何主播</EmptyTitle>
+                                <EmptyDescription>打开直播间后即可添加关注。</EmptyDescription>
+                              </EmptyHeader>
+                              <EmptyContent>
+                                <Button variant="outline" size="sm" onClick={() => navigate("/")}>
+                                  <Home data-icon="inline-start" aria-hidden />
+                                  去首页看看
+                                </Button>
+                              </EmptyContent>
+                            </Empty>
+                          )}
+
+                          {!loading && allFollows.length > 0 && items.length === 0 && (
+                            <Empty className="min-h-56 py-10">
+                              <EmptyHeader>
+                                <EmptyMedia variant="icon">
+                                  <Folder aria-hidden />
+                                </EmptyMedia>
+                                <EmptyTitle>当前没有主播</EmptyTitle>
+                                <EmptyDescription>这个分组或筛选条件下暂无内容。</EmptyDescription>
+                              </EmptyHeader>
+                              <EmptyContent>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedGroupId(ALL_FOLLOW_GROUP_ID);
+                                    setLiveFilter("all");
+                                  }}
+                                >
+                                  <Layers3 data-icon="inline-start" aria-hidden />
+                                  查看全部关注
+                                </Button>
+                              </EmptyContent>
+                            </Empty>
+                          )}
+
+                          {items.length > 0 && (
+                            <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+                              {items.map((user) => {
+                                const identity = followIdentity(user);
+                                return (
+                                  <FollowCard
+                                    key={identity}
+                                    user={user}
+                                    groups={groups}
+                                    selectedGroupId={selectedGroupId}
+                                    now={now}
+                                    moving={
+                                      moveMutation.isPending &&
+                                      followIdentity(moveMutation.variables.user) === identity
+                                    }
+                                    removing={
+                                      removeMutation.isPending &&
+                                      followIdentity(removeMutation.variables) === identity
+                                    }
+                                    removeDisabled={removeMutation.isPending}
+                                    onNavigate={(path) => navigate(path)}
+                                    onMove={moveFollow}
+                                    onRemove={setPendingRemove}
+                                  />
+                                );
+                              })}
+                            </ul>
+                          )}
+                        </section>
+                      </div>
+
+                      <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
+                        {activeFollow ? <FollowDragOverlay user={activeFollow} /> : null}
+                      </DragOverlay>
+                    </DndContext>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent
+                value="iptv"
+                keepMounted
+                hidden={false}
+                inert={activeView === "iptv" ? undefined : true}
+                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
+                style={{ width: "50%" }}
+              >
+                <div data-follow-view-panel="iptv">
+                  <IptvFollowView
+                    source={iptvSource}
+                    sources={iptvSources}
+                    favorites={iptvSourceFavorites}
+                    groups={iptvGroupsQuery.data ?? []}
+                    selectedGroup={selectedIptvGroup}
+                    loading={iptvFavoritesQuery.isLoading || iptvGroupsQuery.isLoading}
+                    error={iptvFavoritesQuery.error ?? iptvGroupsQuery.error}
+                    onRetry={() => {
+                      void iptvFavoritesQuery.refetch();
+                      void iptvGroupsQuery.refetch();
+                    }}
+                    onGroupChange={(groupId) =>
+                      setSearchParams((current) => withIptvFollowGroup(current, groupId))
+                    }
+                    onSourceChange={handleIptvSourceChange}
+                  />
+                </div>
+              </TabsContent>
             </div>
-          </TabsContent>
+          </div>
         </Tabs>
       </div>
 

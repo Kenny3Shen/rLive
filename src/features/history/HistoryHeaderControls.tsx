@@ -1,14 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import {
-  CalendarDays,
-  Clock3,
-  LayoutGrid,
-  ListFilter,
-  MessageSquareText,
-  Search,
-  Trash2,
-  X,
-} from "lucide-react";
+import { CalendarDays, Clock3, MessageSquareText, Search, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import {
@@ -19,22 +10,11 @@ import {
 } from "@/components/ui/input-group";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { SiteLogo } from "@/shared/components/SiteLogo";
-import type { SiteId } from "@/shared/types/live";
-import { cn, SITE_LABELS } from "@/lib/utils";
-import type { HistoryPlatformFilter } from "./historyGrouping";
+import { cn } from "@/lib/utils";
 import {
   HISTORY_DATE_PRESETS,
   type HistoryDateFilter,
@@ -42,6 +22,8 @@ import {
   isSpecificDayFilter,
 } from "./historyFilter";
 import { HISTORY_VIEWS, type HistoryView } from "./historyRoute";
+
+export { PlatformFilterSelect as HistoryPlatformFilterControl } from "@/shared/components/PlatformFilterSelect";
 
 const VIEW_LABELS: Record<HistoryView, string> = {
   watch: "观看历史",
@@ -179,59 +161,6 @@ export function HistorySearchInput({
         )}
       </InputGroup>
     </div>
-  );
-}
-
-export function HistoryPlatformFilterControl({
-  value,
-  sites,
-  onValueChange,
-}: {
-  value: HistoryPlatformFilter;
-  sites: readonly SiteId[];
-  onValueChange: (value: HistoryPlatformFilter) => void;
-}) {
-  const label = value === "all" ? "全部平台" : (SITE_LABELS[value] ?? value);
-
-  return (
-    <Select
-      value={value}
-      onValueChange={(next) => {
-        const filter = next as HistoryPlatformFilter | null;
-        if (filter && (filter === "all" || sites.includes(filter))) onValueChange(filter);
-      }}
-    >
-      <SelectTrigger
-        size="sm"
-        aria-label={`按平台筛选：${label}`}
-        title={label}
-        className={cn(
-          "shrink-0 border border-input bg-background max-md:h-11! max-sm:size-11! max-sm:justify-center max-sm:px-0! max-sm:[&>svg:last-child]:hidden",
-          value !== "all" && "border-primary/45 text-primary",
-        )}
-      >
-        {value === "all" ? (
-          <ListFilter data-icon="inline-start" aria-hidden />
-        ) : (
-          <SiteLogo siteId={value} />
-        )}
-        <SelectValue className="max-sm:hidden!">{label}</SelectValue>
-      </SelectTrigger>
-      <SelectContent align="end" alignItemWithTrigger={false} className="min-w-44">
-        <SelectGroup>
-          <SelectItem value="all" aria-label="全部平台">
-            <LayoutGrid aria-hidden />
-            全部平台
-          </SelectItem>
-          {sites.map((siteId) => (
-            <SelectItem key={siteId} value={siteId} aria-label={SITE_LABELS[siteId] ?? siteId}>
-              <SiteLogo siteId={siteId} />
-              {SITE_LABELS[siteId] ?? siteId}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
   );
 }
 

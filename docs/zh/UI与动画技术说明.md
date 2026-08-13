@@ -163,10 +163,10 @@ flowchart TD
 - 桌面点击侧栏：按侧栏项目顺序进行纵向平移。
 - 移动端点击底部导航：进行横向平移。
 - 浏览器/系统前进后退：根据 React Router history index 选择横向方向。
-- 首页、关注、历史等平台切换：内层 `PagePan` 进行横向平移。
+- 首页等平台切换：内层 `PagePan` 进行横向平移；关注页的平台与直播状态是侧栏 Select，不再占用 Shell 顶栏。
 - IPTV 源切换：与平台切换共用同一套 `PagePan` 横向平移（分组统一为 group，平台与 IPTV 源走同一路径）。
-- 关注页「直播关注 / IPTV 频道」切换：由作用域化 `useGSAP` 对入场内容执行短距离淡入平移，Shell 保持同一内容容器，避免重挂载丢失前一页签状态。
-- IPTV 关注来源与分组切换：Shell 顶栏复用发现页的频道源控件并更新 `source` 查询参数；桌面左侧分组栏与移动端横向分组条更新 `group`，`IptvFollowView` 内层 `PagePan` 保留旧频道列表并按分组顺序平移。
+- 关注页「直播关注 / IPTV 频道」切换：移动端由 `useHorizontalSwipe` 驱动两个保持挂载的面板 track，Shell 顶栏 Tab 与页面手势使用同一 `view`；桌面点击由作用域化 `useGSAP` 对入场内容执行短距离淡入平移。Shell 保持同一内容容器，避免重挂载丢失前一页签状态。
+- IPTV 关注来源与分组切换：关注页桌面左栏顶部与移动端分组条上方的频道源 Select 更新 `source` 查询参数；桌面左侧分组栏与移动端横向分组条更新 `group`，`IptvFollowView` 内层 `PagePan` 保留旧频道列表并按分组顺序平移。
 - 不属于上述来源的普通内容更新：直接替换，不自动添加整页动画。
 
 直接侧栏导航时，`RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，使 compositor 先启动平移，避免大列表首帧卡住。
@@ -206,7 +206,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - 释放后由 Web Animations 接管剩余位移，时长按 `horizontalSwipeSettleDuration` 从剩余距离和释放速度推导。这里不能用 GSAP：翻页会触发 React 提交，rAF ticker 与该提交争抢主线程，重路由下会吞掉收尾动画的大部分帧——这正是「先切页再平移」的直接原因。Web Animations 的 transform 由 Chromium 合成器推进，不受主线程占用影响。
 - 手势中途抓住正在收尾的页面时，从其当前实际像素位置接管（`DOMMatrixReadOnly` 读取），不回跳。
 - `layout` 只保留两种承载方式：
-  - `track`：所有挂载页按**绝对索引**排布在 `index × width`，整层平移到 `-活动索引 × width`。提交时没有任何页需要位移，释放时启动的收尾动画可以一路走完。用于 Shell 移动端平台切换、历史页双 Tab 和房间侧栏 Tab。
+  - `track`：所有挂载页按**绝对索引**排布在 `index × width`，整层平移到 `-活动索引 × width`。提交时没有任何页需要位移，释放时启动的收尾动画可以一路走完。用于 Shell 移动端平台切换、关注页双 Tab、历史页双 Tab 和房间侧栏 Tab。
   - `page`：移动层只承载当前一页，供相邻页未挂载的条带使用。提交时先按 `horizontalSwipeCommitOffset` 把新页重基到一屏外，再滑入 `0`。
   - 原 `panels` 布局已移除：它让各页按 `(索引 - 活动索引) × 100%` 定位，于是提交瞬间所有面板整体重锚一屏，收尾动画不得不围绕这次跳变重基。多出的这一步就是关注页卡顿最明显的来源。改为绝对索引后，各页仍保留独立滚动容器。
 - 收尾动画在通知 React 之前启动，顺序不能颠倒：`track` 的提交不移动任何页，先行启动可以避免整个 React 提交挤在松手与首个动画帧之间。

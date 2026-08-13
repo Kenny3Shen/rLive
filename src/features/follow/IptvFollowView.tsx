@@ -36,6 +36,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import {
   Card,
   CardAction,
   CardContent,
@@ -386,6 +395,7 @@ function IptvFavoriteDragOverlay({ favorite }: { favorite: IptvFavorite }) {
 
 export function IptvFollowView({
   source,
+  sources,
   favorites,
   groups,
   selectedGroup,
@@ -393,8 +403,10 @@ export function IptvFollowView({
   error,
   onRetry,
   onGroupChange,
+  onSourceChange,
 }: {
   source: PlaylistSource;
+  sources: readonly PlaylistSource[];
   favorites: readonly IptvFavorite[];
   groups: readonly IptvFavoriteGroup[];
   selectedGroup: string | null;
@@ -402,6 +414,7 @@ export function IptvFollowView({
   error: unknown;
   onRetry: () => void;
   onGroupChange: (groupId: string | null) => void;
+  onSourceChange: (sourceId: string) => void;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -520,6 +533,26 @@ export function IptvFollowView({
             aria-label="IPTV 分组"
             className="sticky top-3 hidden max-h-[calc(100dvh-7rem)] min-w-0 flex-col gap-1 border-r border-border pr-3 md:flex"
           >
+            <Select value={source.id} onValueChange={(value) => value && onSourceChange(value)}>
+              <SelectTrigger
+                size="sm"
+                className="w-full border border-input bg-background"
+                aria-label="频道源"
+              >
+                <Tv data-icon="inline-start" aria-hidden />
+                <SelectValue>{source.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectGroup>
+                  {sources.map((candidate) => (
+                    <SelectItem key={candidate.id} value={candidate.id}>
+                      {candidate.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Separator className="my-1" />
             <div className="mb-1 flex items-center justify-between gap-2 px-2">
               <span className="text-xs font-medium text-muted-foreground">IPTV 分组</span>
               <Tooltip>
@@ -562,8 +595,32 @@ export function IptvFollowView({
             </div>
           </nav>
 
-          <section className="flex min-w-0 flex-col gap-3" aria-labelledby="iptv-group-title">
-            <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden">
+          <section className="flex min-w-0 flex-col gap-3" aria-label={selectedGroupName}>
+            <div className="flex md:hidden">
+              <Select value={source.id} onValueChange={(value) => value && onSourceChange(value)}>
+                <SelectTrigger
+                  size="sm"
+                  className="w-full border border-input bg-background max-md:h-11!"
+                  aria-label="频道源"
+                >
+                  <Tv data-icon="inline-start" aria-hidden />
+                  <SelectValue>{source.label}</SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start">
+                  <SelectGroup>
+                    {sources.map((candidate) => (
+                      <SelectItem key={candidate.id} value={candidate.id}>
+                        {candidate.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <div
+              data-horizontal-swipe-surface
+              className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden"
+            >
               <IptvGroupTarget
                 group={null}
                 total={favorites.length}
@@ -593,15 +650,6 @@ export function IptvFollowView({
               >
                 <FolderCog aria-hidden />
               </Button>
-            </div>
-
-            <div className="flex min-h-9 items-end border-b border-border pb-2">
-              <div className="min-w-0">
-                <h2 id="iptv-group-title" className="truncate text-sm font-semibold">
-                  {selectedGroupName}
-                </h2>
-                <p className="text-xs tabular-nums text-muted-foreground">{items.length} 个频道</p>
-              </div>
             </div>
 
             <PagePan
