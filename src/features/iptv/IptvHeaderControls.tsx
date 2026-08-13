@@ -1,10 +1,11 @@
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, Heart, ListFilter, Radio, Search, X } from "lucide-react";
+import { Activity, ListFilter, Search, X } from "lucide-react";
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
   InputGroupInput,
-  InputGroupText,
 } from "@/components/ui/input-group";
 import {
   Select,
@@ -17,7 +18,6 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIptvController } from "./IptvController";
 import type { IptvAvailabilityFilter } from "./availability";
@@ -30,44 +30,26 @@ type IptvSourceSwitcherProps = {
   className?: string;
 };
 
-/** Source tabs for the same application-bar slot used by live platforms. */
+/**
+ * Source tabs for the same application-bar slot used by live platforms. The
+ * strip stays a tablist on every viewport — on mobile it expands to fill the
+ * header row, mirroring the history page's view switcher.
+ */
 export function IptvSourceSwitcher({
   sources,
   value,
   onValueChange,
   className,
 }: IptvSourceSwitcherProps) {
-  const selected = sources.find((source) => source.id === value) ?? sources[0];
-
   return (
     <div className={cn("min-w-0", className)}>
       <span id="iptv-source-label" className="sr-only">
         频道源
       </span>
-      <div className="min-w-0 lg:hidden">
-        <Select value={value} onValueChange={(next) => next && onValueChange(next)}>
-          <SelectTrigger
-            className="w-full border border-input bg-background"
-            aria-labelledby="iptv-source-label"
-          >
-            <Radio className="size-4 text-primary" aria-hidden />
-            <SelectValue>{selected?.label ?? "选择频道源"}</SelectValue>
-          </SelectTrigger>
-          <SelectContent align="start">
-            <SelectGroup>
-              {sources.map((source) => (
-                <SelectItem key={source.id} value={source.id}>
-                  {source.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </div>
       <div
         role="tablist"
         aria-labelledby="iptv-source-label"
-        className="hidden h-full min-w-0 max-w-full items-stretch gap-1 lg:flex"
+        className="flex h-full min-w-0 max-w-full items-stretch gap-1 max-md:w-full max-md:gap-0"
       >
         {sources.map((source) => {
           const active = source.id === value;
@@ -82,13 +64,14 @@ export function IptvSourceSwitcher({
               title={source.label}
               onClick={() => onValueChange(source.id)}
               className={cn(
-                "relative flex h-full shrink-0 items-center px-3 text-sm font-medium transition-colors duration-150 focus-ring",
+                "relative flex h-full items-center px-3 text-sm font-medium transition-colors duration-150 focus-ring",
+                "md:shrink-0 max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-1",
                 active
                   ? "text-foreground"
                   : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
               )}
             >
-              {label}
+              <span className="truncate">{label}</span>
               {active && (
                 <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
               )}
@@ -102,17 +85,32 @@ export function IptvSourceSwitcher({
 
 type IptvSearchInputProps = {
   keyword: string;
-  resultCount?: number | null;
   onChange: (query: string) => void;
   className?: string;
 };
 
-export function IptvSearchInput({
-  keyword,
-  resultCount = null,
-  onChange,
-  className,
-}: IptvSearchInputProps) {
+/**
+ * Channel search with a short debounce: the keyword lives in the address bar,
+ * and writing it per keystroke would re-filter thousands of channels while the
+ * user is still typing.
+ */
+export function IptvSearchInput({ keyword, onChange, className }: IptvSearchInputProps) {
+  const [draft, setDraft] = useState(keyword);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  // Adopt external changes (a cleared filter, a restored URL) without
+  // clobbering what the user is currently typing.
+  useEffect(() => {
+    if (keyword !== draftRef.current) setDraft(keyword);
+  }, [keyword]);
+
+  useEffect(() => {
+    if (draft === keyword) return;
+    const timer = window.setTimeout(() => onChange(draft), 220);
+    return () => window.clearTimeout(timer);
+  }, [draft, keyword, onChange]);
+
   return (
     <div className={cn("min-w-0", className)}>
       <label htmlFor="iptv-channel-search" className="sr-only">
@@ -124,14 +122,32 @@ export function IptvSearchInput({
         </InputGroupAddon>
         <InputGroupInput
           id="iptv-channel-search"
-          value={keyword}
-          onChange={(event) => onChange(event.target.value)}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && draft) {
+              event.preventDefault();
+              setDraft("");
+              onChange("");
+            }
+          }}
           placeholder="搜索频道或分类"
           autoComplete="off"
         />
-        {resultCount !== null && (
+        {draft && (
           <InputGroupAddon align="inline-end">
-            <InputGroupText>{resultCount} 个</InputGroupText>
+            <InputGroupButton
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="清除搜索"
+              onClick={() => {
+                setDraft("");
+                onChange("");
+              }}
+            >
+              <X aria-hidden />
+            </InputGroupButton>
           </InputGroupAddon>
         )}
       </InputGroup>
@@ -146,121 +162,141 @@ function availabilityFilterLabel(filter: IptvAvailabilityFilter): string {
   return "全部状态";
 }
 
-type IptvHeaderStatusControlsProps = {
+type IptvAvailabilitySelectProps = {
   className?: string;
-  /** Include the channel-group selector in the control stack. */
-  showGroup?: boolean;
-  /** Use the compact application-header button treatment. */
-  compact?: boolean;
+  /** Collapse to an icon-only touch button, as used by the mobile toolbar. */
+  iconOnly?: boolean;
 };
 
-/** Filters for the IPTV content, shared by the page rail and mobile toolbar. */
-export function IptvHeaderStatusControls({
-  className,
-  showGroup = true,
-  compact = true,
-}: IptvHeaderStatusControlsProps) {
+/** Availability filter shared by the desktop rail and the mobile toolbar. */
+export function IptvAvailabilitySelect({ className, iconOnly = false }: IptvAvailabilitySelectProps) {
+  const { availabilityFilter, setAvailabilityFilter } = useIptvController();
+  const label = availabilityFilterLabel(availabilityFilter);
+
+  return (
+    <Select
+      value={availabilityFilter}
+      onValueChange={(value) =>
+        setAvailabilityFilter((value as IptvAvailabilityFilter | null) ?? "all")
+      }
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={`按可用状态筛选：${label}`}
+        title={label}
+        className={cn(
+          "border border-input bg-background",
+          iconOnly
+            ? "size-11! shrink-0 justify-center px-0! [&>svg:last-child]:hidden"
+            : "w-full",
+          availabilityFilter !== "all" && "border-primary/45 text-primary",
+          className,
+        )}
+      >
+        <Activity data-icon="inline-start" aria-hidden />
+        <SelectValue className={cn(iconOnly && "hidden!")}>{label}</SelectValue>
+      </SelectTrigger>
+      <SelectContent align={iconOnly ? "end" : "start"}>
+        <SelectGroup>
+          <SelectItem value="all">全部状态</SelectItem>
+          <SelectItem value="available">可用</SelectItem>
+          <SelectItem value="unavailable">不可用</SelectItem>
+          <SelectItem value="unchecked">未检测</SelectItem>
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  );
+}
+
+type IptvRailControlsProps = {
+  className?: string;
+};
+
+/** Search and availability filter stacked at the top of the desktop page rail. */
+export function IptvRailControls({ className }: IptvRailControlsProps) {
+  const { keyword, navigateHome, hasFilters, clearFilters } = useIptvController();
+
+  return (
+    <div className={cn("flex min-w-0 flex-col gap-2", className)}>
+      <IptvSearchInput
+        keyword={keyword}
+        onChange={(query) => navigateHome({ query }, true)}
+      />
+      <IptvAvailabilitySelect />
+      {hasFilters && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={clearFilters}
+          className="justify-start"
+        >
+          <X data-icon="inline-start" aria-hidden />
+          清除筛选
+        </Button>
+      )}
+    </div>
+  );
+}
+
+type IptvContentToolbarProps = {
+  className?: string;
+};
+
+/**
+ * Mobile toolbar above the channel grid: the search box plus icon-only group
+ * and availability filters in one row, mirroring the history page. Desktop
+ * carries these controls in the page rail instead.
+ */
+export function IptvContentToolbar({ className }: IptvContentToolbarProps) {
   const {
+    keyword,
     groupOptions,
     selectedGroup,
     navigateHome,
-    availabilityFilter,
-    setAvailabilityFilter,
-    favoriteOnly,
-    setFavoriteOnly,
-    favoriteCount,
     hasFilters,
     clearFilters,
   } = useIptvController();
+  const groupLabel = selectedGroup === "all" ? "全部分类" : selectedGroup;
 
   return (
-    <div
-      className={cn(
-        "flex min-w-0 items-center gap-1",
-        !compact && "flex-col items-stretch gap-2",
-        className,
-      )}
-    >
-      {showGroup && (
-        <Select
-          value={selectedGroup}
-          onValueChange={(value) => navigateHome({ group: value ?? "all" })}
-        >
-          <SelectTrigger
-            size="sm"
-            className={cn(
-              compact
-                ? "w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
-                : "w-full",
-            )}
-            aria-label="频道分类"
-            title={selectedGroup === "all" ? "全部分类" : selectedGroup}
-          >
-            <ListFilter data-icon="inline-start" aria-hidden />
-            <SelectValue>{selectedGroup === "all" ? "全部分类" : selectedGroup}</SelectValue>
-          </SelectTrigger>
-          <SelectContent align="start">
-            <SelectGroup>
-              <SelectItem value="all">全部分类</SelectItem>
-              {groupOptions.map((group) => (
-                <SelectItem key={group.value} value={group.value}>
-                  <span className="min-w-0 flex-1 truncate">{group.value}</span>
-                  <span className="text-xs text-muted-foreground">{group.count}</span>
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      )}
+    <div className={cn("flex min-w-0 items-center gap-2", className)}>
+      <IptvSearchInput
+        keyword={keyword}
+        onChange={(query) => navigateHome({ query }, true)}
+        className="min-w-0 flex-1"
+      />
 
       <Select
-        value={availabilityFilter}
-        onValueChange={(value) =>
-          setAvailabilityFilter((value as IptvAvailabilityFilter | null) ?? "all")
-        }
+        value={selectedGroup}
+        onValueChange={(value) => navigateHome({ group: value ?? "all" })}
       >
         <SelectTrigger
           size="sm"
+          aria-label={`按分类筛选：${groupLabel}`}
+          title={groupLabel}
           className={cn(
-            compact
-              ? "w-32 max-xl:w-28 max-lg:w-8 max-lg:justify-center max-lg:px-0 [&>[data-slot=select-value]]:max-lg:hidden max-lg:[&>svg:last-child]:hidden"
-              : "w-full",
+            "size-11! shrink-0 justify-center border border-input bg-background px-0! [&>svg:last-child]:hidden",
+            selectedGroup !== "all" && "border-primary/45 text-primary",
           )}
-          aria-label="可用状态"
-          title={availabilityFilterLabel(availabilityFilter)}
         >
-          <Activity data-icon="inline-start" aria-hidden />
-          <SelectValue>{availabilityFilterLabel(availabilityFilter)}</SelectValue>
+          <ListFilter data-icon="inline-start" aria-hidden />
+          <SelectValue className="hidden!">{groupLabel}</SelectValue>
         </SelectTrigger>
-        <SelectContent align="start">
+        <SelectContent align="end">
           <SelectGroup>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="available">可用</SelectItem>
-            <SelectItem value="unavailable">不可用</SelectItem>
-            <SelectItem value="unchecked">未检测</SelectItem>
+            <SelectItem value="all">全部分类</SelectItem>
+            {groupOptions.map((group) => (
+              <SelectItem key={group.value} value={group.value}>
+                <span className="min-w-0 flex-1 truncate">{group.value}</span>
+                <span className="text-xs text-muted-foreground">{group.count}</span>
+              </SelectItem>
+            ))}
           </SelectGroup>
         </SelectContent>
       </Select>
 
-      <Toggle
-        variant="outline"
-        size="sm"
-        pressed={favoriteOnly}
-        onPressedChange={setFavoriteOnly}
-        aria-label="只看关注频道"
-        title={`只看关注频道（${favoriteCount}）`}
-        className={cn(
-          compact ? "max-lg:size-8 max-lg:px-0" : "w-full justify-start",
-          favoriteOnly && "text-primary",
-        )}
-      >
-        <Heart
-          className={cn(favoriteOnly && "fill-current")}
-          data-icon="inline-start"
-          aria-hidden
-        />
-        <span className={cn(compact && "max-lg:hidden")}>关注 {favoriteCount}</span>
-      </Toggle>
+      <IptvAvailabilitySelect iconOnly />
 
       {hasFilters && (
         <Button
@@ -270,6 +306,7 @@ export function IptvHeaderStatusControls({
           onClick={clearFilters}
           aria-label="清除筛选"
           title="清除筛选"
+          className="size-11 shrink-0"
         >
           <X aria-hidden />
         </Button>

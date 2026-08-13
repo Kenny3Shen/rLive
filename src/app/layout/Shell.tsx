@@ -18,7 +18,7 @@ import {
 } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Spinner } from "@/components/ui/spinner";
-import { IptvSearchInput, IptvSourceSwitcher } from "@/features/iptv/IptvHeaderControls";
+import { IptvSourceSwitcher } from "@/features/iptv/IptvHeaderControls";
 import { IptvControllerProvider } from "@/features/iptv/IptvController";
 import { iptvHomePath } from "@/features/iptv/iptvRoute";
 import {
@@ -125,7 +125,7 @@ export function Shell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const outlet = useOutlet();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const isRoom = pathname.startsWith("/room/");
   const isMultiRoom = pathname === "/multi-room";
   const isIptv = pathname === "/iptv";
@@ -218,7 +218,6 @@ export function Shell() {
     return sources;
   }, [iptvCustomM3uUrl, iptvSource]);
   const iptvSourceOptions = useMemo(() => iptvSources.map((source) => source.id), [iptvSources]);
-  const iptvKeyword = isIptv ? (searchParams.get("q") ?? "") : "";
   const followPlatform = followPlatformFromSearch(
     searchParams.get(FOLLOW_PLATFORM_PARAM),
     disabledSiteIds,
@@ -285,22 +284,6 @@ export function Shell() {
       }
     },
     [iptvSource.url, iptvSources, navigate],
-  );
-
-  const handleIptvSearchChange = useCallback(
-    (query: string) => {
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          const trimmed = query.trim();
-          if (trimmed) next.set("q", trimmed);
-          else next.delete("q");
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
   );
 
   // Home/category/search use a horizontal content swipe to change platforms.
@@ -624,17 +607,13 @@ export function Shell() {
                   data-mobile-empty={showTopNavigation ? undefined : "true"}
                   className={cn(
                     "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
-                    isIptv && "max-md:grid max-md:grid-cols-[minmax(0,1fr)_auto]",
                     !showTopNavigation && "max-md:hidden",
                   )}
                 >
                   <div
                     className={cn(
                       "pointer-events-none absolute inset-0 flex h-full items-center justify-center",
-                      !hasIptvSourceShell &&
-                        "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
-                      hasIptvSourceShell &&
-                        "max-md:static max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:overflow-hidden",
+                      "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
                     )}
                   >
                     {showTopNavigation && (
@@ -663,10 +642,7 @@ export function Shell() {
                               sources={iptvSources}
                               value={iptvSource.id}
                               onValueChange={handleIptvSourceChange}
-                              className={cn(
-                                "h-full max-w-full lg:w-auto",
-                                isIptv ? "w-40 max-md:w-36" : "w-44 max-md:w-full",
-                              )}
+                              className="h-full w-auto max-w-full max-md:w-full"
                             />
                           </div>
                         ) : (
@@ -681,26 +657,15 @@ export function Shell() {
                       </div>
                     )}
                   </div>
-                  <div
-                    className={cn(
-                      "relative z-10 ml-auto flex min-w-0 items-center gap-1.5",
-                      isIptv && "max-md:ml-0",
-                    )}
-                  >
-                    {isIptv ? (
-                      <IptvSearchInput
-                        keyword={iptvKeyword}
-                        onChange={handleIptvSearchChange}
-                        className="w-64 max-xl:w-48 max-md:w-[min(11rem,43vw)]"
-                      />
-                    ) : isHistory ? (
+                  <div className="relative z-10 ml-auto flex min-w-0 items-center gap-1.5">
+                    {isHistory ? (
                       <HistoryClearButton
                         view={historyHeader.view}
                         canClear={historyHeader.canClear}
                         pending={historyHeader.clearPending}
                         onRequestClear={historyHeader.onRequestClear}
                       />
-                    ) : isFollow ? null : (
+                    ) : isFollow || isIptv ? null : (
                       <HeaderSearch />
                     )}
                   </div>
