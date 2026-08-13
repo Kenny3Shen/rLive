@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(any(windows, target_os = "linux"))]
 use libloading::Library;
+#[cfg(windows)]
+use sha2::{Digest, Sha256};
 #[cfg(any(windows, target_os = "linux"))]
 use std::sync::OnceLock;
 
@@ -42,6 +44,23 @@ const SPEAKER_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/
 const SPEAKER_MODEL_SIZE_BYTES: u64 = 28_281_164;
 const HOTWORDS_FILE: &str = "hotwords.txt";
 const HOTWORDS_SCORE: f32 = 2.0;
+
+#[cfg(windows)]
+const WINDOWS_RUNTIME_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-cuda.tar.bz2";
+#[cfg(windows)]
+const WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES: u64 = 221_905_418;
+#[cfg(windows)]
+const WINDOWS_RUNTIME_ARCHIVE_SHA256: &str =
+    "9cc16169fb073ab0acd304ae144ccad21af03e8360921a12285105599f0f692a";
+#[cfg(windows)]
+const WINDOWS_RUNTIME_ARCHIVE_ROOT: &str = "sherpa-onnx-v1.13.4-win-x64-cuda";
+#[cfg(windows)]
+const WINDOWS_RUNTIME_DLLS: &[&str] = &[
+    "onnxruntime.dll",
+    "onnxruntime_providers_cuda.dll",
+    "onnxruntime_providers_shared.dll",
+    "sherpa-onnx-c-api.dll",
+];
 
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
@@ -116,7 +135,7 @@ impl AsrModelStatus {
         options: &AsrRuntimeOptions,
         speaker_model_downloaded: bool,
     ) -> Self {
-        let model_size_bytes = configured_model_size(options);
+        let model_size_bytes = configured_download_size(options);
         Self {
             state,
             downloaded_bytes: 0,
@@ -584,6 +603,8 @@ pub struct AsrManager {
 
 struct AsrInner {
     model_dir: PathBuf,
+    #[cfg(windows)]
+    runtime_dir: PathBuf,
     assets: ModelAssets,
     status: Mutex<AsrModelStatus>,
     requested: std::sync::atomic::AtomicBool,
@@ -595,14 +616,20 @@ struct AsrInner {
 }
 
 impl AsrManager {
-    pub fn new(app_data_dir: Option<&Path>) -> Self {
-        let model_dir = model_directory(app_data_dir);
+    pub fn new(app_directory: &Path) -> Self {
+        let model_dir = app_directory.join("models").join("asr");
         let assets = ModelAssets::new(&model_dir);
+        #[cfg(windows)]
+        let runtime_dir = app_directory.join("asr-runtime");
 
         let speaker_model_downloaded = assets.speaker_is_complete();
         let default_options = AsrRuntimeOptions::default();
+        #[cfg(windows)]
+        let runtime_downloaded = windows_runtime_is_complete(&runtime_dir);
+        #[cfg(not(windows))]
+        let runtime_downloaded = true;
         let mut status = AsrModelStatus::new(
-            if assets.is_complete(default_options.punctuation_enabled) {
+            if runtime_downloaded && assets.is_complete(default_options.punctuation_enabled) {
                 AsrModelState::Downloaded
             } else {
                 AsrModelState::NotDownloaded
@@ -610,11 +637,18 @@ impl AsrManager {
             &default_options,
             speaker_model_downloaded,
         );
-        status.downloaded_bytes = assets.downloaded_bytes(&default_options);
+        status.downloaded_bytes = assets.downloaded_bytes(&default_options)
+            + if runtime_downloaded {
+                windows_runtime_download_size()
+            } else {
+                0
+            };
 
         Self {
             inner: Arc::new(AsrInner {
                 model_dir,
+                #[cfg(windows)]
+                runtime_dir,
                 assets,
                 status: Mutex::new(status),
                 requested: std::sync::atomic::AtomicBool::new(false),
@@ -672,7 +706,7 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
         self.write_hotwords_file(&options.hotwords)?;
         let was_requested = self.inner.requested.swap(true, Ordering::AcqRel);
-        let model_exists = self.inner.assets.required_assets_complete(&options);
+        let model_exists = self.required_assets_complete(&options);
         let next_state = if model_exists {
             AsrModelState::Loading
         } else {
@@ -716,8 +750,8 @@ impl AsrManager {
             status.punctuation_enabled = options.punctuation_enabled;
             status.hotwords_count = options.hotwords.len() as u32;
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = configured_model_size(&options);
-            status.downloaded_bytes = self.inner.assets.downloaded_bytes(&options);
+            status.model_size_bytes = configured_download_size(&options);
+            status.downloaded_bytes = self.downloaded_bytes(&options);
             status.total_bytes = Some(status.model_size_bytes);
             status.threads = asr_thread_count();
             status.provider = effective_asr_provider(&options.provider).to_string();
@@ -824,6 +858,15 @@ impl AsrManager {
             return;
         }
 
+        if let Err(error) = self.preload_runtime() {
+            tracing::warn!(%error, "ASR runtime load failed");
+            self.set_error_status_for_request(
+                generation,
+                "字幕运行库加载失败，请检查应用目录权限后重试",
+            );
+            return;
+        }
+
         self.set_loading_status(generation, &options);
         let assets = self.inner.assets.clone();
         let threads = asr_thread_count();
@@ -882,7 +925,7 @@ impl AsrManager {
             status.punctuation_enabled = options.punctuation_enabled;
             status.hotwords_count = options.hotwords.len() as u32;
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = configured_model_size(&options);
+            status.model_size_bytes = configured_download_size(&options);
             status.downloaded_bytes = status.model_size_bytes;
             status.total_bytes = Some(status.model_size_bytes);
             status.provider = active_provider.clone();
@@ -899,15 +942,23 @@ impl AsrManager {
         if !self.request_is_current(generation) {
             return Ok(false);
         }
-        if self.inner.assets.required_assets_complete(options) {
+        if self.required_assets_complete(options) {
             return Ok(true);
         }
 
-        let total_size = configured_model_size(options);
+        let total_size = configured_download_size(options);
 
         tokio::fs::create_dir_all(&self.inner.model_dir)
             .await
             .map_err(|_| AppError::new("asr_model_dir", "无法创建模型目录"))?;
+
+        if !self
+            .ensure_windows_runtime(proxy, generation, total_size)
+            .await?
+        {
+            return Ok(false);
+        }
+        let runtime_offset = windows_runtime_download_size();
 
         if !self.inner.assets.recognizer_is_complete()
             && !self
@@ -916,7 +967,7 @@ impl AsrManager {
                     generation,
                     MODEL_ARCHIVE_URL,
                     MODEL_ARCHIVE_SIZE_BYTES,
-                    0,
+                    runtime_offset,
                     "streaming-zipformer.tar.bz2.part",
                     &self.inner.assets.root,
                     "Zipformer 识别模型",
@@ -945,7 +996,7 @@ impl AsrManager {
                     generation,
                     PUNCTUATION_ARCHIVE_URL,
                     PUNCTUATION_ARCHIVE_SIZE_BYTES,
-                    MODEL_ARCHIVE_SIZE_BYTES,
+                    runtime_offset + MODEL_ARCHIVE_SIZE_BYTES,
                     "punctuation-ct-transformer.tar.bz2.part",
                     &self.inner.assets.punctuation_root,
                     "中英标点模型",
@@ -976,7 +1027,8 @@ impl AsrManager {
                     SPEAKER_MODEL_URL,
                     &partial_path,
                     SPEAKER_MODEL_SIZE_BYTES,
-                    MODEL_ARCHIVE_SIZE_BYTES
+                    runtime_offset
+                        + MODEL_ARCHIVE_SIZE_BYTES
                         + if options.punctuation_enabled {
                             PUNCTUATION_ARCHIVE_SIZE_BYTES
                         } else {
@@ -1014,7 +1066,7 @@ impl AsrManager {
             });
         }
 
-        if !self.inner.assets.required_assets_complete(options) {
+        if !self.required_assets_complete(options) {
             return Err(AppError::new("asr_model_download", "字幕模型文件不完整"));
         }
         Ok(true)
@@ -1165,6 +1217,135 @@ impl AsrManager {
         Ok(true)
     }
 
+    fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
+        #[cfg(windows)]
+        if !windows_runtime_is_complete(&self.inner.runtime_dir) {
+            return false;
+        }
+        self.inner.assets.required_assets_complete(options)
+    }
+
+    fn downloaded_bytes(&self, options: &AsrRuntimeOptions) -> u64 {
+        let runtime = {
+            #[cfg(windows)]
+            {
+                if windows_runtime_is_complete(&self.inner.runtime_dir) {
+                    WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES
+                } else {
+                    0
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                0
+            }
+        };
+        runtime + self.inner.assets.downloaded_bytes(options)
+    }
+
+    #[cfg(windows)]
+    async fn ensure_windows_runtime(
+        &self,
+        proxy: Option<&str>,
+        generation: u64,
+        total_size: u64,
+    ) -> AppResult<bool> {
+        if windows_runtime_is_complete(&self.inner.runtime_dir) {
+            return Ok(true);
+        }
+
+        let app_directory = self
+            .inner
+            .runtime_dir
+            .parent()
+            .ok_or_else(|| AppError::new("asr_runtime_dir", "应用目录不可用"))?;
+        tokio::fs::create_dir_all(app_directory)
+            .await
+            .map_err(|_| AppError::new("asr_runtime_dir", "无法创建字幕运行库目录"))?;
+        let archive = app_directory.join("asr-runtime.tar.bz2.part");
+        let staging = app_directory.join("asr-runtime.extracting");
+        remove_file_if_present(&archive).await?;
+        remove_dir_if_present(&staging).await?;
+        remove_dir_if_present(&self.inner.runtime_dir).await?;
+
+        let downloaded = self
+            .download_model_file(
+                proxy,
+                WINDOWS_RUNTIME_ARCHIVE_URL,
+                &archive,
+                WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES,
+                0,
+                total_size,
+                generation,
+                "Windows 字幕运行库",
+            )
+            .await?;
+        if !downloaded {
+            return Ok(false);
+        }
+
+        let archive_for_hash = archive.clone();
+        let digest = tokio::task::spawn_blocking(move || sha256_file(&archive_for_hash))
+            .await
+            .map_err(|_| AppError::new("asr_runtime_hash", "字幕运行库校验任务失败"))??;
+        if digest != WINDOWS_RUNTIME_ARCHIVE_SHA256 {
+            let _ = remove_file_if_present(&archive).await;
+            return Err(AppError::new(
+                "asr_runtime_hash",
+                "字幕运行库完整性校验失败",
+            ));
+        }
+
+        self.update_status_for_request(generation, |status| {
+            status.state = AsrModelState::Extracting;
+            status.downloaded_bytes = WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES;
+            status.total_bytes = Some(total_size);
+            status.message = Some("正在解压 Windows 字幕运行库…".to_owned());
+        });
+        let archive_for_extract = archive.clone();
+        let staging_for_extract = staging.clone();
+        tokio::task::spawn_blocking(move || {
+            extract_tar_bz2(&archive_for_extract, &staging_for_extract)
+        })
+        .await
+        .map_err(|_| AppError::new("asr_runtime_extract", "字幕运行库解压任务失败"))??;
+        let _ = remove_file_if_present(&archive).await;
+
+        let extracted_lib = staging.join(WINDOWS_RUNTIME_ARCHIVE_ROOT).join("lib");
+        if !windows_runtime_is_complete(&extracted_lib) {
+            let _ = remove_dir_if_present(&staging).await;
+            return Err(AppError::new(
+                "asr_runtime_extract",
+                "字幕运行库解压结果不完整",
+            ));
+        }
+        tokio::fs::rename(&extracted_lib, &self.inner.runtime_dir)
+            .await
+            .map_err(|_| AppError::new("asr_runtime_write", "字幕运行库替换失败"))?;
+        let _ = remove_dir_if_present(&staging).await;
+        Ok(self.request_is_current(generation))
+    }
+
+    #[cfg(not(windows))]
+    async fn ensure_windows_runtime(
+        &self,
+        _proxy: Option<&str>,
+        _generation: u64,
+        _total_size: u64,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    #[cfg(windows)]
+    fn preload_runtime(&self) -> AppResult<()> {
+        preload_windows_runtime(&self.inner.runtime_dir)
+    }
+
+    #[cfg(not(windows))]
+    fn preload_runtime(&self) -> AppResult<()> {
+        Ok(())
+    }
+
     pub async fn transcribe_pcm(&self, pcm: Vec<f32>) -> AppResult<AsrTranscribeResult> {
         if pcm.is_empty() {
             return Ok(AsrTranscribeResult {
@@ -1230,7 +1411,7 @@ impl AsrManager {
     }
 
     fn set_loading_status(&self, generation: u64, options: &AsrRuntimeOptions) {
-        let total_size = configured_model_size(options);
+        let total_size = configured_download_size(options);
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Loading;
             status.speaker_enabled = options.speaker_enabled;
@@ -1255,8 +1436,8 @@ impl AsrManager {
                 speaker_enabled: status.speaker_enabled,
                 hotwords: Vec::new(),
             };
-            let model_exists = self.inner.assets.required_assets_complete(&options);
-            let total_size = configured_model_size(&options);
+            let model_exists = self.required_assets_complete(&options);
+            let total_size = configured_download_size(&options);
             status.state = if model_exists {
                 AsrModelState::Downloaded
             } else {
@@ -1264,7 +1445,7 @@ impl AsrManager {
             };
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
             status.model_size_bytes = total_size;
-            status.downloaded_bytes = self.inner.assets.downloaded_bytes(&options);
+            status.downloaded_bytes = self.downloaded_bytes(&options);
             status.total_bytes = Some(total_size);
             status.provider = effective_asr_provider(&options.provider).to_string();
             status.message = None;
@@ -1340,6 +1521,20 @@ fn configured_model_size(options: &AsrRuntimeOptions) -> u64 {
         } else {
             0
         }
+}
+
+fn configured_download_size(options: &AsrRuntimeOptions) -> u64 {
+    windows_runtime_download_size().saturating_add(configured_model_size(options))
+}
+
+#[cfg(windows)]
+fn windows_runtime_download_size() -> u64 {
+    WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES
+}
+
+#[cfg(not(windows))]
+fn windows_runtime_download_size() -> u64 {
+    0
 }
 
 fn normalize_hotwords(hotwords: &mut Vec<String>) {
@@ -1476,58 +1671,56 @@ fn cuda_compute_capability() -> Option<(i32, i32)> {
 
 #[cfg(windows)]
 fn cuda_runtime_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    if !cuda_compute_capability()
+        .is_some_and(|(major, minor)| cuda_compute_capability_supported(major, minor))
+    {
+        return false;
+    }
 
-    *AVAILABLE.get_or_init(|| {
-        if !cuda_compute_capability()
-            .is_some_and(|(major, minor)| cuda_compute_capability_supported(major, minor))
-        {
-            return false;
+    let runtime_dir = std::env::current_exe().ok().and_then(|executable| {
+        executable
+            .parent()
+            .map(|directory| directory.join("asr-runtime"))
+    });
+    let provider_is_staged = runtime_dir.as_ref().is_some_and(|directory| {
+        directory.join("onnxruntime_providers_cuda.dll").is_file()
+            && directory.join("onnxruntime_providers_shared.dll").is_file()
+    });
+    if !provider_is_staged {
+        return false;
+    }
+
+    fn can_load(name: &str, runtime_dir: Option<&Path>) -> bool {
+        let mut candidates = Vec::new();
+        if let Some(directory) = runtime_dir {
+            candidates.push(directory.join(name));
         }
-
-        let executable_dir = std::env::current_exe()
-            .ok()
-            .and_then(|executable| executable.parent().map(Path::to_path_buf));
-        let provider_is_staged = executable_dir.as_ref().is_some_and(|directory| {
-            directory.join("onnxruntime_providers_cuda.dll").is_file()
-                && directory.join("onnxruntime_providers_shared.dll").is_file()
-        });
-        if !provider_is_staged {
-            return false;
+        if let Some(cuda_path) = std::env::var_os("CUDA_PATH") {
+            let cuda_path = PathBuf::from(cuda_path);
+            candidates.push(cuda_path.join("bin").join("x64").join(name));
+            candidates.push(cuda_path.join("bin").join(name));
         }
+        candidates.push(PathBuf::from(name));
 
-        fn can_load(name: &str, executable_dir: Option<&Path>) -> bool {
-            let mut candidates = Vec::new();
-            if let Some(directory) = executable_dir {
-                candidates.push(directory.join(name));
-            }
-            if let Some(cuda_path) = std::env::var_os("CUDA_PATH") {
-                let cuda_path = PathBuf::from(cuda_path);
-                candidates.push(cuda_path.join("bin").join("x64").join(name));
-                candidates.push(cuda_path.join("bin").join(name));
-            }
-            candidates.push(PathBuf::from(name));
+        candidates
+            .into_iter()
+            .any(|candidate| unsafe { Library::new(candidate).is_ok() })
+    }
 
-            candidates
-                .into_iter()
-                .any(|candidate| unsafe { Library::new(candidate).is_ok() })
-        }
-
-        // CUDA provider DLLs are initialized by ONNX Runtime and cannot be
-        // probed with LoadLibrary in isolation. Validate the staged provider
-        // files and the independently loadable driver/runtime dependencies.
-        [
-            "nvcuda.dll",
-            "cublasLt64_11.dll",
-            "cublas64_11.dll",
-            "cufft64_10.dll",
-            "cudart64_110.dll",
-            "cudnn64_8.dll",
-            "onnxruntime_providers_shared.dll",
-        ]
-        .into_iter()
-        .all(|name| can_load(name, executable_dir.as_deref()))
-    })
+    // CUDA provider DLLs are initialized by ONNX Runtime and cannot be
+    // probed with LoadLibrary in isolation. Validate the staged provider
+    // files and the independently loadable driver/runtime dependencies.
+    [
+        "nvcuda.dll",
+        "cublasLt64_11.dll",
+        "cublas64_11.dll",
+        "cufft64_10.dll",
+        "cudart64_110.dll",
+        "cudnn64_8.dll",
+        "onnxruntime_providers_shared.dll",
+    ]
+    .into_iter()
+    .all(|name| can_load(name, runtime_dir.as_deref()))
 }
 
 #[cfg(target_os = "linux")]
@@ -1591,27 +1784,6 @@ fn asr_thread_count_for_available(available: usize) -> i32 {
     available.clamp(1, ASR_THREAD_LIMIT) as i32
 }
 
-fn model_directory(app_data_dir: Option<&Path>) -> PathBuf {
-    #[cfg(target_os = "android")]
-    {
-        return app_data_dir
-            .map(|directory| directory.join("rlive"))
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("models")
-            .join("asr");
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app_data_dir;
-        dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("rlive")
-            .join("models")
-            .join("asr")
-    }
-}
-
 fn extract_tar_bz2(archive: &Path, destination: &Path) -> AppResult<()> {
     let file = std::fs::File::open(archive)
         .map_err(|_| AppError::new("asr_model_extract", "无法打开模型压缩包"))?;
@@ -1619,6 +1791,65 @@ fn extract_tar_bz2(archive: &Path, destination: &Path) -> AppResult<()> {
     let mut tar = tar::Archive::new(decoder);
     tar.unpack(destination)
         .map_err(|_| AppError::new("asr_model_extract", "模型解压失败"))
+}
+
+#[cfg(windows)]
+fn windows_runtime_is_complete(directory: &Path) -> bool {
+    WINDOWS_RUNTIME_DLLS
+        .iter()
+        .all(|name| file_is_non_empty(&directory.join(name)))
+}
+
+#[cfg(windows)]
+fn sha256_file(path: &Path) -> AppResult<String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|_| AppError::new("asr_runtime_hash", "无法打开字幕运行库归档"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| AppError::new("asr_runtime_hash", "无法读取字幕运行库归档"))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+#[cfg(windows)]
+fn preload_windows_runtime(directory: &Path) -> AppResult<()> {
+    use libloading::os::windows::{
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        Library as WindowsLibrary,
+    };
+
+    static LOADED: OnceLock<()> = OnceLock::new();
+    if LOADED.get().is_some() {
+        return Ok(());
+    }
+    if !windows_runtime_is_complete(directory) {
+        return Err(AppError::new("asr_runtime_load", "字幕运行库文件不完整"));
+    }
+    for name in ["onnxruntime.dll", "sherpa-onnx-c-api.dll"] {
+        let path = directory.join(name);
+        let library = unsafe {
+            WindowsLibrary::load_with_flags(
+                &path,
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            )
+        }
+        .map_err(|error| AppError::new("asr_runtime_load", format!("加载 {name} 失败：{error}")))?;
+        library.pin().map_err(|error| {
+            AppError::new("asr_runtime_load", format!("固定 {name} 失败：{error}"))
+        })?;
+        let _ = library.into_raw();
+    }
+    let _ = LOADED.set(());
+    Ok(())
 }
 
 fn file_is_non_empty(path: &Path) -> bool {

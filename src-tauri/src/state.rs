@@ -157,21 +157,13 @@ impl HuyaDanmakuSendLimiter {
 }
 
 impl AppState {
-    /// Creates the application state using the platform-owned data directory
-    /// when one is supplied by the mobile host.
-    ///
-    /// `dirs` deliberately does not expose Android's app sandbox. Falling
-    /// back to a relative path there makes startup depend on the process
-    /// working directory (normally `/`), which is not writable by an app.
-    /// Desktop callers keep the historic `dirs` location so existing local
-    /// databases continue to be found without a migration.
-    pub fn init(app_data_dir: Option<&Path>) -> AppResult<Self> {
-        let path = db_path(app_data_dir)?;
+    pub fn init(app_directory: &Path) -> AppResult<Self> {
+        let path = create_db_path(app_directory.to_path_buf())?;
         let conn = Db::open(&path)?;
         Ok(Self {
             db: Mutex::new(conn),
             #[cfg(not(target_os = "android"))]
-            asr: AsrManager::new(app_data_dir),
+            asr: AsrManager::new(app_directory),
             danmaku: DanmakuManager::new(),
             bilibili_send_limiter: BilibiliDanmakuSendLimiter::new(),
             douyu_send_limiter: DouyuDanmakuSendLimiter::new(),
@@ -192,26 +184,6 @@ fn create_db_path(dir: PathBuf) -> AppResult<PathBuf> {
         )
     })?;
     Ok(dir.join("rlive.db"))
-}
-
-#[cfg(target_os = "android")]
-fn db_path(app_data_dir: Option<&Path>) -> AppResult<PathBuf> {
-    let data_dir = app_data_dir.ok_or_else(|| {
-        AppError::new(
-            "db_io_error",
-            "Android app data directory is unavailable during startup",
-        )
-    })?;
-    create_db_path(data_dir.join("rlive"))
-}
-
-#[cfg(not(target_os = "android"))]
-fn db_path(_app_data_dir: Option<&Path>) -> AppResult<PathBuf> {
-    if let Some(data_dir) = dirs::data_dir() {
-        create_db_path(data_dir.join("rlive"))
-    } else {
-        Ok(PathBuf::from("./rlive.db"))
-    }
 }
 
 #[cfg(test)]

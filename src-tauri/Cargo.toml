@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.30.6"
+version = "0.31.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -73,6 +73,7 @@ bzip2 = "0.4"
 # still permits SHERPA_ONNX_GPU=0 for a CPU-only build without changing Rust
 # code or the model/provider settings.
 sherpa-onnx = { version = "1.13.4", default-features = false, features = ["shared"] }
+sha2 = "0.10"
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 libloading = "0.8"
