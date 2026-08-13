@@ -326,13 +326,12 @@ jobs:
           set -euo pipefail
           bun run tauri -- build --ci --bundles dmg --target "${{ matrix.target }}"
 
-          app_binary="src-tauri/target/${{ matrix.target }}/release/bundle/macos/rLive.app/Contents/MacOS/rLive"
-          test -x "$app_binary"
-          file "$app_binary"
-
-          # macOS links sherpa-onnx statically; the binary must not depend on
-          # loose ASR runtime dylibs that the bundle does not ship.
-          if otool -L "$app_binary" | grep -Ei 'sherpa|onnxruntime'; then
+          # Tauri deletes rLive.app after creating the DMG, so verify the
+          # remaining cargo binary and the app copied into the disk image.
+          binary="src-tauri/target/${{ matrix.target }}/release/rlive"
+          test -x "$binary"
+          file "$binary"
+          if otool -L "$binary" | grep -Ei 'sherpa|onnxruntime'; then
             echo "macOS binary unexpectedly links shared ASR runtime libraries." >&2
             exit 1
           fi
@@ -341,6 +340,18 @@ jobs:
           dmg_count="$(find "$dmg_dir" -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')"
           test "$dmg_count" -eq 1
           dmg_file="$(find "$dmg_dir" -maxdepth 1 -type f -name '*.dmg')"
+
+          mount_point="$RUNNER_TEMP/rlive-dmg"
+          mkdir -p "$mount_point"
+          hdiutil attach "$dmg_file" -readonly -nobrowse -mountpoint "$mount_point"
+          app_binary="$mount_point/rLive.app/Contents/MacOS/rLive"
+          test -x "$app_binary"
+          if otool -L "$app_binary" | grep -Ei 'sherpa|onnxruntime'; then
+            echo "macOS app unexpectedly links shared ASR runtime libraries." >&2
+            hdiutil detach "$mount_point" || true
+            exit 1
+          fi
+          hdiutil detach "$mount_point"
 
           mkdir -p release-assets/macos
           cp "$dmg_file" \
