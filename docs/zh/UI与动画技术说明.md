@@ -177,10 +177,18 @@ flowchart TD
 
 `src/shared/motion/PageZoom.tsx` 专门处理直播间路由：
 
-- 进入：`scale: 0.92 -> 1`，同时 `autoAlpha: 0 -> 1`。
-- 退出：当前直播 subtree 保持挂载，执行 `scale: 1 -> 0.92` 与 `autoAlpha: 1 -> 0`，最终帧绘制后再卸载。
-- 出场节点 `pointer-events: none`，避免旧页面在过渡期接收输入。
+进出共用 `motionProfile().roomZoom` 的同一个时长（桌面 `0.26s`，触摸 `0.22s`），而不是各自取 `enter` / `exit`。进入直播间和离开直播间是同一段动效的正反两个方向，两端时长不同会让一次往返显得头重脚轻。它比整页平移略长，因为这里是两个全屏表面互相溶解，且直播间还要在后面把播放器顶起来。
+
+- 进入：`scale: ROOM_ZOOM_START_SCALE (0.96) -> 1`，同时 `autoAlpha: 0 -> 1`。此时浏览列表已立即卸载，直播间是屏幕上唯一的表面。
+- 退出：改为双层交叉溶解，两层在同一条 `gsap.timeline()` 上从时间 `0` 同时开始：
+  - 离场的直播间 subtree 保持挂载，执行 `scale: 1 -> 0.96` 与 `autoAlpha: 1 -> 0`，是进入动画的逆向播放；
+  - 目标页从 `scale: ROOM_ZOOM_BACKDROP_SCALE (1.02) -> 1` 与 `autoAlpha: 0 -> 1` 展开。这个反向缩放刻意比 `0.96` 更贴近 `1`：目标页是背景而非主体，给它同样的位移会让两层看起来走了一样的距离，反而压平了 zoom 想表达的纵深。
+  - 离场补间只跑 `duration * ROOM_ZOOM_EXIT_RATIO (0.72)`，让两层有重叠，避免视口中间穿过一帧全空画面。
+- 退出期间入场节点带 `bg-background`：它是从透明淡入的，没有自己的底色时，离场直播间会在整段交叉溶解里透过目标页继续可见。
+- 出场节点 `pointer-events: none`，避免旧页面在过渡期接收输入；退出期间入场节点同样不接收输入。
 - 入场完成后清除 transform、opacity、visibility、transform origin 和 `will-change`，保证全屏播放器没有永久 transformed ancestor；退出节点在最终帧后直接卸载，不先恢复这些属性。
+
+离场直播间在整条 timeline 完成后才卸载，而不是在它自己那条更短的补间结束时卸载。React 在 timeline 中途移除一个活跃播放器，会在仍在动的那层背景上表现为一次可见的顿挫。
 
 不要在 `onComplete` 中先恢复出场节点的 opacity 再卸载，这会导致最后一帧闪出直播内容。退出 subtree 只在最终帧之后删除。
 
@@ -343,7 +351,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
 - 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
 - Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定 GSAP ticker。
-- 移动端 Canvas 弹幕跟随 WebView 的 `requestAnimationFrame` 刷新节奏，不使用固定 60 FPS 的墙钟节流；需要降档时只能按整数回调帧跳过，避免 90/144 Hz 等非整数倍刷新率产生规律性 judder。移动端 backing scale 在 60 Hz 默认最高 2×，实测高于 75 Hz 时最高 1.5×；刷新率探测完成后同步重建并重绘 Canvas，运动时间按真实帧间隔推进，长暂停由引擎上限兜底；桌面端仍跟随浏览器刷新率，backing scale 最高 1.5×。
+- 移动端 Canvas 弹幕直接消费 WebView 提供的每一次 `requestAnimationFrame`，不设置目标 FPS、不做回调跳帧，也不采样刷新率。移动端 backing scale 固定为 1×，优先把每一帧预算用于连续滚动，并避免运行中切换像素比造成 Canvas 重建闪烁；运动时间按真实帧间隔推进，长暂停由引擎上限兜底。桌面端同样跟随浏览器刷新率，backing scale 最高 1.5×。
 - 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器回退亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。

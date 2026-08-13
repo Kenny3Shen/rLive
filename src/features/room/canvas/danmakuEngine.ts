@@ -16,7 +16,22 @@ import {
 
 export type TrackItem = {
   id: string;
+  /**
+   * Stable identity for pointer interaction. Content aggregation rewrites `id`
+   * on every count change so the canvas raster cache picks up the new `×N`
+   * suffix; this key stays fixed for the lifetime of the floating item.
+   */
+  hoverKey: string;
   text: string;
+  /**
+   * Raw comment body, without the aggregation suffix or the fixed-top `【SC】`
+   * marker. The pointer action menu copies, favourites and repeats this.
+   */
+  content: string;
+  /** Sender name, used by the pointer action menu for its accessible label. */
+  user: string;
+  /** Source event kind. The action menu offers favourite/+1 only for chat. */
+  eventKind: DanmakuEvent["kind"];
   /**
    * Ordered Bilibili image-emote fragments. The canvas uses `text` until all
    * images are ready, so a slow or failed CDN image never makes a message
@@ -38,6 +53,34 @@ export type TrackItem = {
   lane?: number;
   /** Top items expire after this timestamp (ms). */
   expireAt?: number;
+  /**
+   * Pointer hover freezes this single comment in place. Its `speed` is left
+   * untouched so lane spacing keeps treating it as the same message; `tick`
+   * only skips its own advance.
+   */
+  paused?: boolean;
+};
+
+/** Screen-space box of a hovered comment, in CSS pixels relative to the canvas. */
+export type DanmakuHitBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * The engine schedules with a reserved width that can be wider than the glyphs
+ * a frame actually draws (aggregation suffix headroom, or a rich comment whose
+ * raw token fallback is wider than its emote). The renderer already knows the
+ * real box, so it feeds it back here for exact pointer hit testing.
+ */
+export type DanmakuDrawnBoxLookup = (item: TrackItem) => DanmakuHitBox | null;
+
+export type DanmakuHit = {
+  item: TrackItem;
+  /** Visual box actually drawn, i.e. the em-square border box. */
+  box: DanmakuHitBox;
 };
 
 export type DanmakuEngine = {
@@ -59,6 +102,16 @@ export type DanmakuEngine = {
   visibleItems: () => readonly TrackItem[];
   /** Whether the canvas needs another frame to move or expire an item. */
   hasWork: () => boolean;
+  /**
+   * Topmost comment under a canvas-relative CSS-pixel point, or null. The
+   * renderer supplies the drawn width of fixed-top items, which are centered
+   * against real glyph metrics rather than the scheduling reservation.
+   */
+  hitTest: (x: number, y: number, drawnBoxFor?: DanmakuDrawnBoxLookup) => DanmakuHit | null;
+  /** Freezes a single comment by `hoverKey`; pass null to release. */
+  setPaused: (hoverKey: string | null) => void;
+  /** The currently frozen comment, or null once it expired or was released. */
+  pausedItem: () => TrackItem | null;
   setOpts: (opts: DanmakuEngineOptions) => void;
   opacity: () => number;
   fontWeight: () => number;
@@ -146,6 +199,9 @@ const SPAWN_PADDING = 12;
 const TOP_PADDING = 12;
 export const DANMAKU_SELF_BORDER_PADDING_X = 4;
 export const DANMAKU_SELF_BORDER_PADDING_Y = 3;
+// A hover-frozen comment blocks its lane for as long as the pointer holds it.
+// Re-check at a calm cadence instead of rescanning every lane on every frame.
+const PAUSED_LANE_RETRY_SECONDS = 0.25;
 // A fixed suffix reservation lets an aggregated item reveal a growing count
 // without moving into either neighbour on its lane. The cap is far beyond a
 // practical five-second burst; pathological counts use the `+` form.
@@ -289,6 +345,26 @@ function layoutFor(height: number, fontSize: number, area: number, lineCount: nu
   };
 }
 
+/**
+ * Visual box of a comment, as drawn. `textBaseline` is `"top"`, so `item.y`
+ * anchors the em square rather than the reserved line box — the same reasoning
+ * as `selfBorderTextBox`, which centers the self/hover border on it.
+ */
+function defaultDrawnBox(item: TrackItem, viewportWidth: number): DanmakuHitBox {
+  const x = item.kind === "top" ? Math.max(0, (viewportWidth - item.width) / 2) : item.x;
+  return { x, y: item.y, width: item.width, height: item.fontSize };
+}
+
+/** Pointer tolerance matches the stroked border, so the outline is the target. */
+function boxContainsPoint(box: DanmakuHitBox, x: number, y: number): boolean {
+  return (
+    x >= box.x - DANMAKU_SELF_BORDER_PADDING_X &&
+    x <= box.x + box.width + DANMAKU_SELF_BORDER_PADDING_X &&
+    y >= box.y - DANMAKU_SELF_BORDER_PADDING_Y &&
+    y <= box.y + box.height + DANMAKU_SELF_BORDER_PADDING_Y
+  );
+}
+
 function sameLayout(first: LaneLayout | null, second: LaneLayout): boolean {
   return (
     first !== null &&
@@ -380,9 +456,20 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let scheduleSkips = 0;
   let laneChecks = 0;
   let laneItemChecks = 0;
+  // Pointer hover freezes exactly one comment. Keep the key rather than the
+  // item so a frozen message that still ages out of the bounded render list
+  // cannot be resurrected by a later lookup.
+  let pausedHoverKey: string | null = null;
 
   function pendingCount(): number {
     return pending.length - pendingHead;
+  }
+
+  function findByHoverKey(hoverKey: string): EngineTrackItem | null {
+    for (const item of items) {
+      if (item.hoverKey === hoverKey) return item;
+    }
+    return null;
   }
 
   function resetPendingScheduling(): void {
@@ -526,6 +613,14 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   }
 
   function noteRemovedItem(item: TrackItem | undefined): void {
+    // A frozen comment can still be evicted by the visible-item cap or expire
+    // as a fixed-top card. Drop the hover reference so a later message that
+    // happens to reuse this lane is not silently held in place.
+    if (item && pausedHoverKey !== null && item.hoverKey === pausedHoverKey) {
+      pausedHoverKey = null;
+      item.paused = false;
+      resetPendingScheduling();
+    }
     if (item?.kind === "scroll" && item.fontSize >= largestScrollFontSize) {
       // This is deliberately lazy: a scan is only needed if an item that may
       // have determined the lane height actually leaves the screen.
@@ -598,6 +693,14 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       if (collectDebugStats) laneItemChecks += 1;
       const leadingRight = item.x + item.width;
       if (leadingRight <= 0) continue;
+
+      // A hover-frozen comment never clears its lane, so no spawn position is
+      // safe: anything placed behind it would eventually run into it. Send the
+      // candidate to another lane and re-check this one at a calm cadence.
+      if (item.paused) {
+        retryAfter = Math.max(retryAfter, PAUSED_LANE_RETRY_SECONDS);
+        continue;
+      }
 
       // If the candidate is faster, it must leave enough room that it cannot
       // catch this leading item before that item exits. Algebraically this is
@@ -707,7 +810,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       makeRoomForItem();
       const item: EngineTrackItem = {
         id: candidate.id,
+        hoverKey: candidate.hoverKey,
         text: candidate.text,
+        content: candidate.content,
+        user: candidate.user,
+        eventKind: candidate.eventKind,
         richSpans: candidate.richSpans,
         color: candidate.color,
         isSelf: candidate.isSelf,
@@ -783,6 +890,13 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const text = aggregatedText(baseText, aggregation.count);
     const itemFontSize = fontSize;
     const id = `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`;
+    // `id` is rewritten as an aggregated count grows, because the canvas keys
+    // its raster cache by it. Pointer interaction needs the opposite: a key
+    // that survives every suffix change for the life of the floating item.
+    const hoverKey = id;
+    const content = ev.content;
+    const user = ev.user;
+    const eventKind = ev.kind;
     const isSelf = ev.is_self === true;
     const color = ev.color || (isTop ? "#ffb020" : "#ffffff");
     const baseRichSpans = floatingRichSpans(ev);
@@ -803,7 +917,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       makeRoomForItem();
       appendItem({
         id,
+        hoverKey,
         text,
+        content,
+        user,
+        eventKind,
         richSpans,
         color,
         isSelf,
@@ -822,7 +940,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
 
     const pendingItem: PendingScroll = {
       id,
+      hoverKey,
       text,
+      content,
+      user,
+      eventKind,
       richSpans,
       color,
       isSelf,
@@ -903,7 +1025,10 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         continue;
       }
 
-      item.x -= item.speed * elapsedSeconds;
+      // A hovered comment holds its position while every other lane keeps
+      // scrolling. `speed` stays intact so lane spacing still describes the
+      // same message once the pointer leaves.
+      if (!item.paused) item.x -= item.speed * elapsedSeconds;
       if (item.x + item.width < -20) {
         forgetAggregationTarget(item);
         removeFromLane(item);
@@ -921,12 +1046,54 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     trySchedulePending(true);
   }
 
+  function hitTest(x: number, y: number, drawnBoxFor?: DanmakuDrawnBoxLookup): DanmakuHit | null {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+    // Later items paint over earlier ones, so scan back to front to return the
+    // comment the user actually sees on an overlap.
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item.kind === "scroll" && (item.x >= viewportWidth || item.x + item.width <= 0)) {
+        continue;
+      }
+      const box = drawnBoxFor?.(item) ?? defaultDrawnBox(item, viewportWidth);
+      if (!boxContainsPoint(box, x, y)) continue;
+      return { item, box };
+    }
+    return null;
+  }
+
+  function setPaused(hoverKey: string | null): void {
+    if (pausedHoverKey === hoverKey) return;
+
+    if (pausedHoverKey !== null) {
+      const previous = findByHoverKey(pausedHoverKey);
+      if (previous) previous.paused = false;
+    }
+    pausedHoverKey = hoverKey;
+    if (hoverKey === null) {
+      // The lane it was blocking is free again from this frame on.
+      resetPendingScheduling();
+      return;
+    }
+    const next = findByHoverKey(hoverKey);
+    if (next) {
+      next.paused = true;
+      return;
+    }
+    // The comment left the render list between the hit test and this call.
+    pausedHoverKey = null;
+  }
+
   return {
     push,
     pushBatch,
     tick,
     visibleItems: () => items,
     hasWork: () => items.length > 0 || pendingCount() > 0,
+    hitTest,
+    setPaused,
+    pausedItem: () => (pausedHoverKey === null ? null : findByHoverKey(pausedHoverKey)),
     setOpts: (nextOpts) => {
       const nextFontSize = clampFontSize(nextOpts.fontSize);
       const nextScrollArea = clampArea(nextOpts.area);
