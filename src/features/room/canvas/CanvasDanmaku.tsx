@@ -808,7 +808,6 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const mobileClient = isMobileClient();
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
@@ -1228,7 +1227,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       if (stopped) return;
       const parent = canvas.parentElement;
       if (!parent) return;
-      const nextPixelRatio = danmakuCanvasPixelRatio(window.devicePixelRatio, mobileClient);
+      const nextPixelRatio = danmakuCanvasPixelRatio(window.devicePixelRatio);
       const nextWidth = parent.clientWidth;
       const nextHeight = parent.clientHeight;
       const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
