@@ -16,6 +16,7 @@ mod settings;
 mod sites;
 mod state;
 mod stream_proxy;
+mod twitch_integrity;
 mod web_bridge;
 
 use std::fs::{self, File, OpenOptions};
@@ -215,6 +216,7 @@ pub fn run() {
             init_logging(&directories.logs);
             let state = AppState::init(&directories.root)?;
             app.manage(state);
+            twitch_integrity::install(app.handle().clone());
 
             #[cfg(windows)]
             {

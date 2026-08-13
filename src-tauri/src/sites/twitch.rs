@@ -6,12 +6,13 @@
 //! anonymous visitor.  The public web client id is discovered from the
 //! bootstrap document at runtime; it is neither hard-coded nor persisted.
 //!
-//! The public endpoint can request a browser integrity challenge for cursor
-//! pagination.  Deliberately do not emulate that browser-only challenge or
-//! ship a volatile third-party bypass.  Browse/search expose one honest,
-//! server-sized page (up to 30 streams) and set `has_more` to false.  Room
-//! metadata, playback tokens and anonymous chat remain independent of that
-//! limitation.
+//! Cursor pagination can require a short-lived browser integrity token. On
+//! desktop, rLive obtains it by letting Twitch's own JavaScript challenge run
+//! in an isolated hidden WebView, then keeps that browser request context in
+//! memory for its declared lifetime. No challenge implementation, account
+//! Cookie, embedded app secret or persistent credential is involved. Mobile
+//! builds retain the reliable first page when a secondary WebView is not
+//! available.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -26,12 +27,20 @@ use crate::models::live::{
     PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
+use crate::twitch_integrity;
 
 const TWITCH_WEB_ROOT: &str = "https://www.twitch.tv/";
 const TWITCH_GQL_URL: &str = "https://gql.twitch.tv/gql";
 const TWITCH_USHER_URL: &str = "https://usher.ttvnw.net/api/channel/hls";
 const PAGE_SIZE: u32 = 30;
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const CURSOR_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+const BROWSE_POPULAR_HASH: &str =
+    "97fed6737c9ef90e8552fb7d02bf4e5d20da0af3cad2a5492d9c93f94e95c29e";
+const DIRECTORY_GAME_HASH: &str =
+    "86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd";
+const SEARCH_RESULTS_HASH: &str =
+    "22d9f9b96e28afdcd918f1c5b93e87979c4673d29a851da7c823e0a808dd5bf3";
 
 /// Twitch decides server-side ad stitching per playback token, and the
 /// `playerType` the token was minted for is part of that decision.  `site` stays
@@ -114,7 +123,16 @@ fn gql_device_id() -> &'static str {
 pub struct TwitchSite {
     client: Client,
     site_id: SiteId,
+    proxy: Option<String>,
 }
+
+#[derive(Debug, Clone)]
+struct CursorFeed {
+    cursors: HashMap<u32, String>,
+    touched_at: Instant,
+}
+
+static CURSOR_CACHE: OnceLock<Mutex<HashMap<String, CursorFeed>>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TwitchVariant {
@@ -142,9 +160,14 @@ struct HlsStreamInfo {
 
 impl TwitchSite {
     pub fn new(client: Client) -> Self {
+        Self::new_with_proxy(client, None)
+    }
+
+    pub fn new_with_proxy(client: Client, proxy: Option<String>) -> Self {
         Self {
             client,
             site_id: SiteId::Twitch,
+            proxy,
         }
     }
 
@@ -211,12 +234,9 @@ impl TwitchSite {
         Ok(context)
     }
 
-    async fn graphql(
-        &self,
-        operation_name: &str,
-        query: &str,
-        variables: Value,
-    ) -> AppResult<Value> {
+    /// One anonymous-web-visit GraphQL POST: the headers and text/plain
+    /// content type mirror Twitch's own bootstrap requests.
+    async fn post_gql(&self, body: &Value) -> AppResult<Value> {
         let context = self.public_web_context().await?;
         let response = self
             .client
@@ -225,14 +245,8 @@ impl TwitchSite {
             .header("referer", TWITCH_WEB_ROOT)
             .header("client-id", context.client_id)
             .header("x-device-id", gql_device_id())
-            // Twitch's own bootstrap uses text/plain for this request.  This
-            // keeps the request equivalent to a normal anonymous web visit.
             .header("content-type", "text/plain; charset=UTF-8")
-            .json(&json!({
-                "operationName": operation_name,
-                "query": query,
-                "variables": variables,
-            }))
+            .json(body)
             .send()
             .await
             .map_err(|error| Self::err(format!("Twitch GraphQL 请求失败: {error}")))?;
@@ -247,8 +261,23 @@ impl TwitchSite {
                 preview(&text)
             )));
         }
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|error| Self::parse_err(format!("Twitch GraphQL JSON 解析失败: {error}")))?;
+        serde_json::from_str(&text)
+            .map_err(|error| Self::parse_err(format!("Twitch GraphQL JSON 解析失败: {error}")))
+    }
+
+    async fn graphql(
+        &self,
+        operation_name: &str,
+        query: &str,
+        variables: Value,
+    ) -> AppResult<Value> {
+        let value = self
+            .post_gql(&json!({
+                "operationName": operation_name,
+                "query": query,
+                "variables": variables,
+            }))
+            .await?;
         if let Some(error) = graphql_error(&value) {
             return Err(error);
         }
@@ -258,95 +287,215 @@ impl TwitchSite {
             .ok_or_else(|| Self::parse_err("Twitch GraphQL 响应缺少 data"))
     }
 
-    async fn recommend_page(&self) -> AppResult<RoomListPage> {
+    async fn persisted_graphql(&self, payload: Value, page: u32) -> AppResult<Value> {
+        let value = if page <= 1 {
+            self.post_gql(&payload).await?
+        } else {
+            twitch_integrity::graphql(self.proxy.as_deref(), payload).await?
+        };
+        let envelope = value
+            .as_array()
+            .and_then(|values| values.first())
+            .unwrap_or(&value);
+        if (twitch_integrity::contains_integrity_error(envelope) || envelope.get("data").is_none())
+            && let Some(error) = graphql_error(envelope)
+        {
+            return Err(error);
+        }
+        envelope
+            .get("data")
+            .cloned()
+            .ok_or_else(|| Self::parse_err("Twitch persisted GraphQL 响应缺少 data"))
+    }
+
+    fn cursor_for_page(feed_key: &str, page: u32) -> AppResult<Option<String>> {
+        if page <= 1 {
+            return Ok(None);
+        }
+        let mut cache = CURSOR_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| Self::parse_err("Twitch 分页游标状态暂不可用"))?;
+        cache.retain(|_, feed| feed.touched_at.elapsed() < CURSOR_CACHE_TTL);
+        cache
+            .get_mut(feed_key)
+            .and_then(|feed| {
+                feed.touched_at = Instant::now();
+                feed.cursors.get(&page).cloned()
+            })
+            .map(Some)
+            .ok_or_else(|| {
+                AppError::new(
+                    "twitch_pagination_sequence",
+                    "Twitch 分页游标已失效，请刷新当前列表后重试",
+                )
+                .with_site("twitch")
+                .retryable()
+            })
+    }
+
+    fn remember_next_cursor(feed_key: &str, page: u32, cursor: Option<&str>) -> AppResult<()> {
+        let mut cache = CURSOR_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| Self::parse_err("Twitch 分页游标状态暂不可用"))?;
+        cache.retain(|_, feed| feed.touched_at.elapsed() < CURSOR_CACHE_TTL);
+        let feed = cache
+            .entry(feed_key.to_string())
+            .or_insert_with(|| CursorFeed {
+                cursors: HashMap::new(),
+                touched_at: Instant::now(),
+            });
+        if page <= 1 {
+            feed.cursors.clear();
+        }
+        feed.touched_at = Instant::now();
+        feed.cursors
+            .retain(|cached_page, _| *cached_page <= page + 1);
+        if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
+            feed.cursors.insert(page + 1, cursor.to_string());
+        } else {
+            feed.cursors.remove(&(page + 1));
+        }
+        Ok(())
+    }
+
+    async fn recommend_page(&self, page: u32) -> AppResult<RoomListPage> {
+        let page = page.max(1);
+        if page > 1 && !cursor_pagination_supported() {
+            return Ok(empty_page());
+        }
+        let feed_key = "recommend";
+        let input_cursor = Self::cursor_for_page(feed_key, page)?;
+        let mut variables = json!({
+            "imageWidth": 50,
+            "limit": PAGE_SIZE,
+            "platformType": "all",
+            "options": {
+                "sort": "RELEVANCE",
+                "freeformTags": null,
+                "tags": [],
+                "recommendationsContext": { "platform": "web" },
+                "requestID": "JIRA-VXP-2397",
+                "broadcasterLanguages": [],
+            },
+            "sortTypeIsRecency": false,
+            "includeCostreaming": true,
+        });
+        if let Some(cursor) = input_cursor.as_ref() {
+            variables["cursor"] = Value::String(cursor.clone());
+        }
         let data = self
-            .graphql(
-                "RLiveTwitchTopStreams",
-                r#"
-                    query RLiveTwitchTopStreams($first: Int!) {
-                      streams(first: $first) {
-                        edges {
-                          node {
-                            title
-                            viewersCount
-                            previewImageURL(width: 440, height: 248)
-                            broadcaster {
-                              login
-                              displayName
-                            }
-                          }
-                        }
-                      }
-                    }
-                "#,
-                json!({ "first": PAGE_SIZE }),
+            .persisted_graphql(
+                persisted_payload("BrowsePage_Popular", variables, BROWSE_POPULAR_HASH),
+                page,
             )
             .await?;
+        let page_info = connection_page_info(&data, "/streams", input_cursor.as_deref());
+        let has_more = page_info.has_more && cursor_pagination_supported();
+        Self::remember_next_cursor(
+            feed_key,
+            page,
+            has_more.then_some(page_info.cursor.as_deref()).flatten(),
+        )?;
         Ok(RoomListPage {
-            has_more: false,
+            has_more,
             items: parse_stream_edges(&data, "/streams/edges", &self.site_id),
         })
     }
 
-    async fn category_page(&self, category_id: &str) -> AppResult<RoomListPage> {
-        let category_id = normalize_category_id(category_id)?;
+    async fn category_page(&self, category_id: &str, page: u32) -> AppResult<RoomListPage> {
+        let page = page.max(1);
+        if page > 1 && !cursor_pagination_supported() {
+            return Ok(empty_page());
+        }
+        let slug = normalize_category_slug(category_id)?;
+        let feed_key = format!("category:{slug}");
+        let input_cursor = Self::cursor_for_page(&feed_key, page)?;
+        let mut variables = json!({
+            "imageWidth": 50,
+            "slug": slug,
+            "options": {
+                "sort": "RELEVANCE",
+                "recommendationsContext": { "platform": "web" },
+                "requestID": "JIRA-VXP-2397",
+                "freeformTags": null,
+                "tags": [],
+                "broadcasterLanguages": [],
+                "systemFilters": [],
+            },
+            "sortTypeIsRecency": false,
+            "limit": PAGE_SIZE,
+            "includeCostreaming": true,
+        });
+        if let Some(cursor) = input_cursor.as_ref() {
+            variables["cursor"] = Value::String(cursor.clone());
+        }
         let data = self
-            .graphql(
-                "RLiveTwitchCategoryStreams",
-                r#"
-                    query RLiveTwitchCategoryStreams($id: ID!, $first: Int!) {
-                      game(id: $id) {
-                        streams(first: $first) {
-                          edges {
-                            node {
-                              title
-                              viewersCount
-                              previewImageURL(width: 440, height: 248)
-                              broadcaster {
-                                login
-                                displayName
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                "#,
-                json!({ "id": category_id, "first": PAGE_SIZE }),
+            .persisted_graphql(
+                persisted_payload("DirectoryPage_Game", variables, DIRECTORY_GAME_HASH),
+                page,
             )
             .await?;
+        let page_info = connection_page_info(&data, "/game/streams", input_cursor.as_deref());
+        let has_more = page_info.has_more && cursor_pagination_supported();
+        Self::remember_next_cursor(
+            &feed_key,
+            page,
+            has_more.then_some(page_info.cursor.as_deref()).flatten(),
+        )?;
         Ok(RoomListPage {
-            has_more: false,
+            has_more,
             items: parse_stream_edges(&data, "/game/streams/edges", &self.site_id),
         })
     }
 
-    async fn search_page(&self, keyword: &str) -> AppResult<RoomListPage> {
+    async fn search_page(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
+        let page = page.max(1);
+        if page > 1 && !cursor_pagination_supported() {
+            return Ok(empty_page());
+        }
+        let feed_key = format!("search:{}", keyword.to_ascii_lowercase());
+        let input_cursor = Self::cursor_for_page(&feed_key, page)?;
+        let targets = input_cursor.as_ref().map(|cursor| {
+            json!([{
+                "index": "CHANNEL",
+                "cursor": cursor,
+            }])
+        });
         let data = self
-            .graphql(
-                "RLiveTwitchSearch",
-                r#"
-                    query RLiveTwitchSearch($query: String!) {
-                      searchFor(userQuery: $query, platform: "web") {
-                        channels {
-                          items {
-                            login
-                            displayName
-                            stream {
-                              title
-                              viewersCount
-                              previewImageURL(width: 440, height: 248)
-                            }
-                          }
-                        }
-                      }
-                    }
-                "#,
-                json!({ "query": keyword }),
+            .persisted_graphql(
+                persisted_payload(
+                    "SearchResultsPage_SearchResults",
+                    json!({
+                        "platform": "web",
+                        "query": keyword,
+                        "options": {
+                            "targets": targets,
+                            "shouldSkipDiscoveryControl": false,
+                        },
+                        "requestID": uuid::Uuid::new_v4().to_string(),
+                    }),
+                    SEARCH_RESULTS_HASH,
+                ),
+                page,
             )
             .await?;
+        let cursor = data
+            .pointer("/searchFor/channels/cursor")
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty());
+        let item_count = data
+            .pointer("/searchFor/channels/edges")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let has_more = cursor_pagination_supported()
+            && item_count > 0
+            && cursor.is_some()
+            && cursor != input_cursor.as_deref();
+        Self::remember_next_cursor(&feed_key, page, has_more.then_some(cursor).flatten())?;
         Ok(RoomListPage {
-            has_more: false,
+            has_more,
             items: parse_search_items(&data, &self.site_id),
         })
     }
@@ -502,6 +651,7 @@ impl LiveSite for TwitchSite {
                         edges {
                           node {
                             id
+                            slug
                             name
                             displayName
                             boxArtURL(width: 285, height: 380)
@@ -521,12 +671,12 @@ impl LiveSite for TwitchSite {
             .flatten()
             .filter_map(|edge| edge.get("node"))
         {
-            let id = json_string(node.get("id"));
+            let id = json_string(node.get("slug"));
             let name = first_non_empty([
                 json_string(node.get("displayName")),
                 json_string(node.get("name")),
             ]);
-            if normalize_category_id(&id).is_err() || name.is_empty() {
+            if normalize_category_slug(&id).is_err() || name.is_empty() {
                 continue;
             }
             children.push(LiveSubCategory {
@@ -547,10 +697,7 @@ impl LiveSite for TwitchSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
-        if page.max(1) > 1 {
-            return Ok(empty_page());
-        }
-        self.recommend_page().await
+        self.recommend_page(page).await
     }
 
     async fn get_category_rooms(
@@ -565,21 +712,15 @@ impl LiveSite for TwitchSite {
         if is_all_categories_entry(&category.id) {
             return self.get_recommend_rooms(page).await;
         }
-        if page.max(1) > 1 {
-            return Ok(empty_page());
-        }
-        self.category_page(&category.id).await
+        self.category_page(&category.id, page).await
     }
 
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
-        if page.max(1) > 1 {
-            return Ok(empty_page());
-        }
         let keyword = keyword.trim();
         if keyword.is_empty() {
             return Ok(empty_page());
         }
-        self.search_page(keyword).await
+        self.search_page(keyword, page).await
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
@@ -715,6 +856,47 @@ fn empty_page() -> RoomListPage {
     }
 }
 
+fn cursor_pagination_supported() -> bool {
+    !cfg!(any(target_os = "android", target_os = "ios"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConnectionPageInfo {
+    has_more: bool,
+    cursor: Option<String>,
+}
+
+fn connection_page_info(
+    data: &Value,
+    connection_path: &str,
+    input_cursor: Option<&str>,
+) -> ConnectionPageInfo {
+    let page_info_path = format!("{connection_path}/pageInfo");
+    let page_info = data.pointer(&page_info_path);
+    let has_next_page = page_info
+        .and_then(|value| value.get("hasNextPage"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let cursor = page_info
+        .and_then(|value| value.get("endCursor"))
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .or_else(|| {
+            let edges_path = format!("{connection_path}/edges");
+            data.pointer(&edges_path)
+                .and_then(Value::as_array)
+                .and_then(|edges| edges.last())
+                .and_then(|edge| edge.get("cursor"))
+                .and_then(Value::as_str)
+                .filter(|cursor| !cursor.is_empty())
+        })
+        .map(str::to_owned);
+    ConnectionPageInfo {
+        has_more: has_next_page && cursor.is_some() && cursor.as_deref() != input_cursor,
+        cursor,
+    }
+}
+
 fn parse_public_client_id(html: &str) -> Option<String> {
     // Current public Twitch bootstrap assigns `clientId="..."`.  The second
     // marker handles an equivalent object-literal form without treating an
@@ -758,11 +940,16 @@ fn normalize_login(value: &str) -> AppResult<String> {
     Ok(login)
 }
 
-fn normalize_category_id(value: &str) -> AppResult<String> {
+fn normalize_category_slug(value: &str) -> AppResult<String> {
     let value = value.trim();
-    if value.is_empty() || value.len() > 32 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+    if value.is_empty()
+        || value.len() > 96
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
         return Err(
-            AppError::new("twitch_invalid_category_id", "无效的 Twitch 分类 ID")
+            AppError::new("twitch_invalid_category_id", "无效的 Twitch 分类标识")
                 .with_site("twitch"),
         );
     }
@@ -803,10 +990,19 @@ fn stream_to_item(stream: &Value, site_id: &SiteId) -> Option<LiveRoomItem> {
 }
 
 fn parse_search_items(data: &Value, site_id: &SiteId) -> Vec<LiveRoomItem> {
-    data.pointer("/searchFor/channels/items")
+    let users = data
+        .pointer("/searchFor/channels/edges")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .filter_map(|edge| edge.get("item"))
+        .chain(
+            data.pointer("/searchFor/channels/items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        );
+    users
         .filter_map(|user| {
             let stream = user.get("stream").filter(|stream| stream.is_object())?;
             let room_id = normalize_login(&json_string(user.get("login"))).ok()?;
@@ -1144,28 +1340,32 @@ fn hls_attribute_piece(piece: &str, key: &str) -> Option<String> {
 }
 
 fn graphql_error(value: &Value) -> Option<AppError> {
-    let errors = value.get("errors")?.as_array()?;
-    let first = errors.first()?;
+    let errors = value.get("errors").and_then(Value::as_array);
     let challenge = value
         .pointer("/extensions/challenge/type")
         .and_then(Value::as_str)
         .or_else(|| {
-            first
-                .pointer("/extensions/code")
-                .and_then(Value::as_str)
-                .filter(|code| *code == "IntegrityCheckFailed")
-                .map(|_| "integrity")
+            errors.into_iter().flatten().find_map(|error| {
+                (error.pointer("/extensions/code").and_then(Value::as_str)
+                    == Some("IntegrityCheckFailed")
+                    || error
+                        .pointer("/extensions/challenge/type")
+                        .and_then(Value::as_str)
+                        == Some("integrity"))
+                .then_some("integrity")
+            })
         });
     if challenge == Some("integrity") {
         return Some(
             AppError::new(
                 "twitch_integrity_challenge",
-                "Twitch 当前要求浏览器完整性验证；为避免使用不稳定的绕过方式，已停止本次请求，请稍后重试",
+                "Twitch 浏览器完整性上下文已失效，自动刷新后仍未通过，请稍后重试",
             )
             .with_site("twitch")
             .retryable(),
         );
     }
+    let first = errors?.first()?;
     let message = first
         .get("message")
         .and_then(Value::as_str)
@@ -1208,6 +1408,19 @@ fn first_non_empty<const N: usize>(values: [String; N]) -> String {
 
 fn preview(value: &str) -> String {
     value.chars().take(180).collect()
+}
+
+fn persisted_payload(operation_name: &str, variables: Value, hash: &str) -> Value {
+    json!([{
+        "operationName": operation_name,
+        "variables": variables,
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": hash,
+            }
+        }
+    }])
 }
 
 #[cfg(test)]
@@ -1295,6 +1508,91 @@ mod tests {
     }
 
     #[test]
+    fn connection_page_info_requires_both_flag_and_cursor() {
+        let data = json!({
+            "streams": {
+                "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "next-page"
+                }
+            }
+        });
+        assert_eq!(
+            connection_page_info(&data, "/streams", None),
+            ConnectionPageInfo {
+                has_more: true,
+                cursor: Some("next-page".into()),
+            }
+        );
+
+        let missing_cursor = json!({
+            "streams": { "pageInfo": { "hasNextPage": true, "endCursor": null } }
+        });
+        assert!(!connection_page_info(&missing_cursor, "/streams", None).has_more);
+    }
+
+    #[test]
+    fn connection_page_info_uses_the_official_last_edge_cursor() {
+        let data = json!({
+            "streams": {
+                "pageInfo": { "hasNextPage": true },
+                "edges": [
+                    { "cursor": "first" },
+                    { "cursor": "official-next-page" }
+                ]
+            }
+        });
+        assert_eq!(
+            connection_page_info(&data, "/streams", None),
+            ConnectionPageInfo {
+                has_more: true,
+                cursor: Some("official-next-page".into()),
+            }
+        );
+
+        assert!(!connection_page_info(&data, "/streams", Some("official-next-page")).has_more);
+    }
+
+    #[test]
+    fn persisted_payload_matches_twitch_web_contract() {
+        let payload = persisted_payload(
+            "BrowsePage_Popular",
+            json!({ "limit": PAGE_SIZE }),
+            BROWSE_POPULAR_HASH,
+        );
+        assert_eq!(payload[0]["operationName"], "BrowsePage_Popular");
+        assert_eq!(payload[0]["variables"]["limit"], PAGE_SIZE);
+        assert_eq!(
+            payload[0]["extensions"]["persistedQuery"]["sha256Hash"],
+            BROWSE_POPULAR_HASH
+        );
+    }
+
+    #[test]
+    fn cursor_cache_requires_sequential_pages_and_resets_on_first_page() {
+        let feed_key = format!("test:{}", uuid::Uuid::new_v4());
+        TwitchSite::remember_next_cursor(&feed_key, 1, Some("cursor-2")).unwrap();
+        assert_eq!(
+            TwitchSite::cursor_for_page(&feed_key, 2)
+                .unwrap()
+                .as_deref(),
+            Some("cursor-2")
+        );
+        assert!(TwitchSite::cursor_for_page(&feed_key, 3).is_err());
+
+        TwitchSite::remember_next_cursor(&feed_key, 2, Some("cursor-3")).unwrap();
+        assert_eq!(
+            TwitchSite::cursor_for_page(&feed_key, 3)
+                .unwrap()
+                .as_deref(),
+            Some("cursor-3")
+        );
+
+        TwitchSite::remember_next_cursor(&feed_key, 1, None).unwrap();
+        assert!(TwitchSite::cursor_for_page(&feed_key, 2).is_err());
+    }
+
+    #[test]
     fn search_skips_offline_channels() {
         let data = json!({
             "searchFor": {
@@ -1317,6 +1615,32 @@ mod tests {
         let items = parse_search_items(&data, &SiteId::Bilibili);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].room_id, "online");
+    }
+
+    #[test]
+    fn search_parses_official_edge_items() {
+        let data = json!({
+            "searchFor": {
+                "channels": {
+                    "cursor": "MjU=",
+                    "edges": [{
+                        "item": {
+                            "login": "official",
+                            "displayName": "Official",
+                            "stream": {
+                                "title": "Live",
+                                "viewersCount": 12,
+                                "previewImageURL": "https://img.example/official.jpg"
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+        let items = parse_search_items(&data, &SiteId::Twitch);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].room_id, "official");
+        assert_eq!(items[0].online, 12);
     }
 
     #[test]
@@ -1466,6 +1790,50 @@ mod tests {
         let error = graphql_error(&value).expect("must map challenge");
         assert_eq!(error.code, "twitch_integrity_challenge");
         assert!(error.retryable);
+    }
+
+    #[test]
+    fn recognizes_integrity_challenge_after_another_graphql_error() {
+        let value = json!({
+            "errors": [
+                { "message": "partial warning" },
+                {
+                    "message": "failed integrity check",
+                    "extensions": { "code": "IntegrityCheckFailed" }
+                }
+            ],
+            "data": { "streams": null }
+        });
+        let error = graphql_error(&value).expect("must map challenge");
+        assert_eq!(error.code, "twitch_integrity_challenge");
+        assert!(error.retryable);
+    }
+
+    #[tokio::test]
+    #[ignore = "live Twitch persisted browse contracts; requires external network"]
+    async fn live_persisted_browse_contracts_smoke() {
+        let site = TwitchSite::new(reqwest::Client::new());
+        let page = site.get_recommend_rooms(1).await.expect("recommend page");
+        assert!(!page.items.is_empty(), "Twitch returned no live rooms");
+        assert!(page.has_more, "official browse connection lost its cursor");
+
+        let categories = site.get_categories().await.expect("categories");
+        let category = categories[0].children.first().expect("category");
+        normalize_category_slug(&category.id).expect("category slug");
+        let category_page = site
+            .get_category_rooms(category, 1)
+            .await
+            .expect("category page");
+        assert!(
+            !category_page.items.is_empty(),
+            "category returned no rooms"
+        );
+
+        let search = site.search_rooms("music", 1).await.expect("search page");
+        assert!(
+            search.has_more,
+            "official search connection lost its cursor"
+        );
     }
 
     #[tokio::test]
