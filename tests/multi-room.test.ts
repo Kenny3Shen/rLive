@@ -89,7 +89,7 @@ describe("multi-room audio defaults", () => {
     expect(roles[1]).toMatchObject({ muted: true });
   });
 
-  test("returns a demoted feed to its remembered secondary slot", () => {
+  test("swaps the demoted main feed into the promoted feed's slot", () => {
     const main = room("main");
     const topLeft = { ...room("top-left"), secondarySlot: 1 };
     const bottomRight = { ...room("bottom-right"), secondarySlot: 5 };
@@ -99,9 +99,12 @@ describe("multi-room audio defaults", () => {
     );
     const afterBottomRight = promoteMultiRoomSlot(afterTopLeft, 5);
 
+    expect(afterTopLeft[0]?.key).toBe(topLeft.key);
+    expect(afterTopLeft[1]?.key).toBe(main.key);
+
     expect(afterBottomRight[0]?.key).toBe(bottomRight.key);
-    expect(afterBottomRight[1]?.key).toBe(topLeft.key);
-    expect(afterBottomRight[5]?.key).toBe(main.key);
+    expect(afterBottomRight[1]?.key).toBe(main.key);
+    expect(afterBottomRight[5]?.key).toBe(topLeft.key);
   });
 
   test("keeps a silent secondary muted after autoplay fallback", async () => {
