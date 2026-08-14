@@ -396,9 +396,7 @@ export function IptvPlayerPage() {
                   ? "已就绪"
                   : "连接中"}
           </Badge>
-          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-            仅观看你所在地允许访问、且你有权使用的频道。
-          </p>
+          <div className="min-w-0 flex-1" />
           <Tv className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         </footer>
       </main>
