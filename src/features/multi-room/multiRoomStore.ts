@@ -172,9 +172,9 @@ export function restoreMultiRoomSlotsForLayout(
 }
 
 /**
- * Promote a secondary feed without losing its previous secondary position.
- * The current main feed is placed into the promoted feed's remembered slot;
- * an occupant there is carried into the old main feed's former slot.
+ * Promote a secondary feed by swapping it with the current main feed: the
+ * promoted feed takes the main slot while the demoted main feed takes the
+ * promoted feed's slot, leaving every other feed where it is.
  */
 export function promoteMultiRoomSlot(
   slots: readonly (MultiRoomEntry | null)[],
@@ -192,15 +192,9 @@ export function promoteMultiRoomSlot(
 
   const selected = withSecondarySlot(next[sourceIndex], sourceIndex);
   const previousMain = next[MULTI_ROOM_MAIN_SLOT];
-  const rememberedSlot = validSecondarySlot(previousMain.secondarySlot)
-    ? previousMain.secondarySlot
-    : sourceIndex;
-  const demotionSlot = rememberedSlot === sourceIndex ? sourceIndex : rememberedSlot;
-  const displaced = demotionSlot === sourceIndex ? null : next[demotionSlot];
 
   next[MULTI_ROOM_MAIN_SLOT] = selected;
-  next[sourceIndex] = displaced ? withSecondarySlot(displaced, sourceIndex) : null;
-  next[demotionSlot] = withSecondarySlot(previousMain, demotionSlot);
+  next[sourceIndex] = withSecondarySlot(previousMain, sourceIndex);
   return next;
 }
 
