@@ -21,7 +21,7 @@
 //! this bridge only carries command calls, events and static assets.
 
 mod dispatch;
-pub(crate) mod http;
+mod http;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;

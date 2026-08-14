@@ -270,16 +270,14 @@ const CORS_HEADERS: &str = "Access-Control-Allow-Origin: *\r\n\
      Access-Control-Allow-Headers: content-type, authorization\r\n\
      Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n";
 
-pub(crate) struct Request {
-    pub(crate) method: String,
-    pub(crate) path: String,
-    pub(crate) token: Option<String>,
-    pub(crate) body: Vec<u8>,
+struct Request {
+    method: String,
+    path: String,
+    token: Option<String>,
+    body: Vec<u8>,
 }
 
-/// Also reused by `twitch_integrity`'s loopback callback endpoint, which needs
-/// the same minimal HTTP parsing without the full bridge surface.
-pub(crate) async fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
+async fn read_request(stream: &mut TcpStream) -> std::io::Result<Request> {
     let mut buffer = Vec::with_capacity(2048);
     let head_end = loop {
         if let Some(index) = find_head_end(&buffer) {
@@ -441,7 +439,7 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-pub(crate) async fn write_json(
+async fn write_json(
     stream: &mut TcpStream,
     status: u16,
     reason: &str,

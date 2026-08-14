@@ -6,19 +6,20 @@
 //! anonymous visitor.  The public web client id is discovered from the
 //! bootstrap document at runtime; it is neither hard-coded nor persisted.
 //!
-//! Cursor pagination can require a short-lived browser integrity token. On
-//! desktop, rLive obtains it by letting Twitch's own JavaScript challenge run
-//! in an isolated hidden WebView, then keeps that browser request context in
-//! memory for its declared lifetime. No challenge implementation, account
-//! Cookie, embedded app secret or persistent credential is involved. Mobile
-//! builds retain the reliable first page when a secondary WebView is not
-//! available.
+//! Browsing is paginated by *language shard* rather than by Relay cursor.
+//! Twitch answers any `after:` cursor with `IntegrityCheckFailed` unless the
+//! request comes from a browser context that passed its JavaScript integrity
+//! challenge, whereas a plain `broadcasterLanguages` filter needs nothing but
+//! the public client id.  Walking the language list therefore reaches the same
+//! depth with no token, no hidden WebView and identical behaviour on mobile.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use futures_util::future;
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 
@@ -28,20 +29,35 @@ use crate::models::live::{
     PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
-use crate::twitch_integrity;
 
 const TWITCH_WEB_ROOT: &str = "https://www.twitch.tv/";
 const TWITCH_GQL_URL: &str = "https://gql.twitch.tv/gql";
 const TWITCH_USHER_URL: &str = "https://usher.ttvnw.net/api/channel/hls";
 const PAGE_SIZE: u32 = 30;
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
-const CURSOR_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
-const MAX_CACHED_CURSORS: usize = 50;
-const MAX_RELAY_REPLAY: u32 = 5;
-const BROWSE_POPULAR_HASH: &str =
-    "97fed6737c9ef90e8552fb7d02bf4e5d20da0af3cad2a5492d9c93f94e95c29e";
-const DIRECTORY_GAME_HASH: &str =
-    "86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd";
+
+/// The pagination axis: one shard is one `broadcasterLanguages` filter, and the
+/// empty string means "no filter", i.e. the global top-viewed listing that used
+/// to be the only reachable page.
+///
+/// `first` is capped at 30 server-side, so a single unfiltered request can never
+/// see past the 30 most-watched channels. Sharding by language is what makes the
+/// tail reachable: measured against the global feed the 27 shards below yield 735
+/// distinct live channels, versus 30 without them.
+///
+/// Ordered by audience size so the first pages stay the most interesting ones,
+/// and kept to languages Twitch's own directory filter offers -- an unknown code
+/// is not an error, it just returns nothing and wastes a request.
+const LANGUAGE_SHARDS: &[&str] = &[
+    "", "EN", "ZH", "JA", "KO", "ES", "PT", "DE", "FR", "RU", "IT", "PL", "TR", "TH", "VI", "AR",
+    "NL", "SV", "CS", "HU", "FI", "DA", "NO", "ID", "MS", "EL", "RO",
+];
+
+/// Shards merged into one list page. Three keeps the burst small while still
+/// filling a page: the shards overlap (a channel can be listed under both the
+/// global and its language shard), so three 30-item shards land at roughly
+/// 70-80 distinct rooms.
+const SHARD_WINDOW: usize = 3;
 
 /// Twitch decides server-side ad stitching per playback token, and the
 /// `playerType` the token was minted for is part of that decision.  `site` stays
@@ -124,60 +140,61 @@ fn gql_device_id() -> &'static str {
 pub struct TwitchSite {
     client: Client,
     site_id: SiteId,
-    proxy: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct CursorFeed {
-    cursors: HashMap<u32, String>,
-    touched_at: Instant,
+/// First shard index of `page`'s window, or `None` once the shard list is
+/// exhausted. Pure arithmetic, so a page can be requested directly without
+/// having walked the pages before it.
+fn shard_window_start(page: u32) -> Option<usize> {
+    let start = (page.max(1) as usize - 1).checked_mul(SHARD_WINDOW)?;
+    (start < LANGUAGE_SHARDS.len()).then_some(start)
 }
 
-static CURSOR_CACHE: OnceLock<Mutex<HashMap<String, CursorFeed>>> = OnceLock::new();
-
-/// Relay feed abstraction: each feed type (recommend, category) provides its
-/// own payload builder and JSON path, and the pagination walker handles the
-/// rest uniformly.
-trait RelayFeed {
-    fn feed_key(&self) -> String;
-    fn payload(&self, cursor: Option<&str>) -> Value;
-    fn connection_path(&self) -> &str;
-    fn edges_path(&self) -> String {
-        format!("{}/edges", self.connection_path())
-    }
+/// A language-sharded feed: each feed type (recommend, category) knows how to
+/// ask Twitch for one language shard and where its edges live in the response.
+/// Paging walks shards instead of Relay cursors, so every page is independent
+/// and needs no per-process state.
+trait ShardFeed {
+    fn operation_name(&self) -> &'static str;
+    fn query(&self) -> &'static str;
+    fn variables(&self, language: &str) -> Value;
+    fn edges_path(&self) -> &'static str;
 }
 
 struct RecommendFeed;
 
-impl RelayFeed for RecommendFeed {
-    fn feed_key(&self) -> String {
-        "recommend".to_string()
+impl ShardFeed for RecommendFeed {
+    fn operation_name(&self) -> &'static str {
+        "RLiveTwitchStreams"
     }
 
-    fn payload(&self, cursor: Option<&str>) -> Value {
-        let mut variables = json!({
-            "imageWidth": 50,
-            "limit": PAGE_SIZE,
-            "platformType": "all",
-            "options": {
-                "sort": "RELEVANCE",
-                "freeformTags": null,
-                "tags": [],
-                "recommendationsContext": { "platform": "web" },
-                "requestID": "JIRA-VXP-2397",
-                "broadcasterLanguages": [],
-            },
-            "sortTypeIsRecency": false,
-            "includeCostreaming": true,
-        });
-        if let Some(cursor) = cursor {
-            variables["cursor"] = Value::String(cursor.to_string());
+    fn query(&self) -> &'static str {
+        r#"
+        query RLiveTwitchStreams($limit: Int!, $languages: [String!]) {
+          streams(first: $limit, options: { broadcasterLanguages: $languages, sort: VIEWER_COUNT }) {
+            edges {
+              node {
+                id
+                title
+                viewersCount
+                previewImageURL(width: 440, height: 248)
+                broadcaster { id login displayName }
+              }
+            }
+          }
         }
-        persisted_payload("BrowsePage_Popular", variables, BROWSE_POPULAR_HASH)
+        "#
     }
 
-    fn connection_path(&self) -> &str {
-        "/streams"
+    fn variables(&self, language: &str) -> Value {
+        json!({
+            "limit": PAGE_SIZE,
+            "languages": language_filter(language),
+        })
+    }
+
+    fn edges_path(&self) -> &'static str {
+        "/streams/edges"
     }
 }
 
@@ -185,44 +202,52 @@ struct CategoryFeed<'a> {
     slug: &'a str,
 }
 
-impl RelayFeed for CategoryFeed<'_> {
-    fn feed_key(&self) -> String {
-        format!("category:{}", self.slug)
+impl ShardFeed for CategoryFeed<'_> {
+    fn operation_name(&self) -> &'static str {
+        "RLiveTwitchCategoryStreams"
     }
 
-    fn payload(&self, cursor: Option<&str>) -> Value {
-        let mut variables = json!({
-            "imageWidth": 50,
-            "slug": self.slug,
-            "options": {
-                "sort": "RELEVANCE",
-                "recommendationsContext": { "platform": "web" },
-                "requestID": "JIRA-VXP-2397",
-                "freeformTags": null,
-                "tags": [],
-                "broadcasterLanguages": [],
-                "systemFilters": [],
-            },
-            "sortTypeIsRecency": false,
-            "limit": PAGE_SIZE,
-            "includeCostreaming": true,
-        });
-        if let Some(cursor) = cursor {
-            variables["cursor"] = Value::String(cursor.to_string());
+    fn query(&self) -> &'static str {
+        r#"
+        query RLiveTwitchCategoryStreams($slug: String!, $limit: Int!, $languages: [String!]) {
+          game(slug: $slug) {
+            streams(first: $limit, options: { broadcasterLanguages: $languages, sort: VIEWER_COUNT }) {
+              edges {
+                node {
+                  id
+                  title
+                  viewersCount
+                  previewImageURL(width: 440, height: 248)
+                  broadcaster { id login displayName }
+                }
+              }
+            }
+          }
         }
-        persisted_payload("DirectoryPage_Game", variables, DIRECTORY_GAME_HASH)
+        "#
     }
 
-    fn connection_path(&self) -> &str {
-        "/game/streams"
+    fn variables(&self, language: &str) -> Value {
+        json!({
+            "slug": self.slug,
+            "limit": PAGE_SIZE,
+            "languages": language_filter(language),
+        })
+    }
+
+    fn edges_path(&self) -> &'static str {
+        "/game/streams/edges"
     }
 }
 
-/// Space out replay requests so a deep cache miss does not burst-fetch the
-/// entire walk in parallel against Twitch's public endpoint. The delay is
-/// small enough to stay responsive but large enough to signal pacing.
-async fn pace_replay_request() {
-    tokio::time::sleep(Duration::from_millis(300)).await;
+/// `broadcasterLanguages: []` means "every language" and is what page 1 uses;
+/// a concrete code restricts the shard to that language.
+fn language_filter(language: &str) -> Value {
+    if language.is_empty() {
+        json!([])
+    } else {
+        json!([language])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,14 +276,9 @@ struct HlsStreamInfo {
 
 impl TwitchSite {
     pub fn new(client: Client) -> Self {
-        Self::new_with_proxy(client, None)
-    }
-
-    pub fn new_with_proxy(client: Client, proxy: Option<String>) -> Self {
         Self {
             client,
             site_id: SiteId::Twitch,
-            proxy,
         }
     }
 
@@ -378,152 +398,77 @@ impl TwitchSite {
             .ok_or_else(|| Self::parse_err("Twitch GraphQL 响应缺少 data"))
     }
 
-    async fn persisted_graphql(&self, payload: Value, page: u32) -> AppResult<Value> {
-        let value = if page <= 1 {
-            self.post_gql(&payload).await?
-        } else {
-            twitch_integrity::graphql(self.proxy.as_deref(), payload).await?
-        };
-        let envelope = value
-            .as_array()
-            .and_then(|values| values.first())
-            .unwrap_or(&value);
-        if (twitch_integrity::contains_integrity_error(envelope) || envelope.get("data").is_none())
-            && let Some(error) = graphql_error(envelope)
-        {
-            return Err(error);
-        }
-        envelope
-            .get("data")
-            .cloned()
-            .ok_or_else(|| Self::parse_err("Twitch persisted GraphQL 响应缺少 data"))
-    }
-
-    /// Relay cursors are opaque and only valid as the successor of the page
-    /// that produced them, so a page number cannot be turned into a cursor by
-    /// arithmetic. Return the deepest cached page at or before `page` together
-    /// with its input cursor; the caller replays forward from there. A cold or
-    /// expired cache simply resumes from page 1 instead of failing the request.
-    fn resume_point(feed_key: &str, page: u32) -> (u32, Option<String>) {
-        if page <= 1 {
-            return (1, None);
-        }
-        let Ok(mut cache) = CURSOR_CACHE
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-        else {
-            return (1, None);
-        };
-        cache.retain(|_, feed| feed.touched_at.elapsed() < CURSOR_CACHE_TTL);
-        let Some(feed) = cache.get_mut(feed_key) else {
-            return (1, None);
-        };
-        feed.touched_at = Instant::now();
-        // Cache key K holds the *input* cursor needed to fetch page K, so the
-        // deepest cached key at or before `page` is the page the walk can start
-        // on directly. Page 1 never needs a cursor, hence the range starts at 2.
-        (2..=page)
-            .rev()
-            .find_map(|candidate| {
-                feed.cursors
-                    .get(&candidate)
-                    .cloned()
-                    .map(|cursor| (candidate, Some(cursor)))
-            })
-            .unwrap_or((1, None))
-    }
-
-    fn remember_next_cursor(feed_key: &str, page: u32, cursor: Option<&str>) {
-        let Ok(mut cache) = CURSOR_CACHE
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-        else {
-            return;
-        };
-        cache.retain(|_, feed| feed.touched_at.elapsed() < CURSOR_CACHE_TTL);
-        let feed = cache
-            .entry(feed_key.to_string())
-            .or_insert_with(|| CursorFeed {
-                cursors: HashMap::new(),
-                touched_at: Instant::now(),
-            });
-        if page <= 1 {
-            // A fresh first page invalidates the whole chain behind it.
-            feed.cursors.clear();
-        }
-        feed.touched_at = Instant::now();
-        // Keep the walked prefix so a later jump can resume mid-chain, but
-        // drop anything past the page we just observed: those cursors were
-        // derived from a listing that has now moved on.
-        feed.cursors
-            .retain(|cached_page, _| *cached_page <= page + 1);
-        if feed.cursors.len() > MAX_CACHED_CURSORS {
-            let cutoff = page.saturating_sub(MAX_CACHED_CURSORS as u32);
-            feed.cursors.retain(|cached_page, _| *cached_page > cutoff);
-        }
-        match cursor.filter(|cursor| !cursor.is_empty()) {
-            Some(cursor) => {
-                feed.cursors.insert(page + 1, cursor.to_string());
-            }
-            None => {
-                feed.cursors.remove(&(page + 1));
-            }
-        }
-    }
-
-    /// Fetch one Relay-cursor page, replaying the cursor chain from the
-    /// deepest cached point when the requested page is not directly reachable.
-    /// Replay is bounded and paced so a cold deep page cannot turn into an
-    /// unthrottled request burst against the public endpoint.
-    async fn relay_page(&self, feed: impl RelayFeed, page: u32) -> AppResult<RoomListPage> {
+    /// Fetch the language shards belonging to `page` and merge them into one
+    /// list page.
+    ///
+    /// Twitch rejects every Relay `after:` cursor that is not backed by a live
+    /// browser integrity context, which is why page 2 used to be reachable only
+    /// through the hidden WebView and not at all on mobile. A shard request
+    /// carries no cursor, so the public `Client-ID` is enough and the same depth
+    /// is reachable on every platform.
+    ///
+    /// The page-to-shard mapping is fixed arithmetic, so no cursor state has to
+    /// survive between requests. Sparse categories can interleave empty shards
+    /// (measured on `factorio`: 20 of 26 languages return nothing), therefore an
+    /// empty page does not mean the feed is exhausted: `has_more` remains true
+    /// until the language list itself ends, allowing the frontend to scan on to
+    /// a later shard that still contains rooms.
+    async fn shard_page(&self, feed: impl ShardFeed, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        if page > 1 && !cursor_pagination_supported() {
+        let Some(start) = shard_window_start(page) else {
             return Ok(empty_page());
-        }
-        let feed_key = feed.feed_key();
-        let (start_page, mut cursor) = Self::resume_point(&feed_key, page);
-        if page.saturating_sub(start_page) > MAX_RELAY_REPLAY {
-            // Refuse to walk an unreasonable distance; the caller's list is
-            // stale enough that restarting from the top is the honest answer.
-            return Ok(empty_page());
-        }
+        };
+        let window_end = (start + SHARD_WINDOW).min(LANGUAGE_SHARDS.len());
 
-        for current in start_page..=page {
-            if current > start_page {
-                pace_replay_request().await;
+        // Warm the shared context before fan-out. Otherwise a cold page would
+        // race three bootstrap GETs, because each shard needs the same Client-ID.
+        self.public_web_context().await?;
+
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        self.collect_shards(&feed, start..window_end, &mut items, &mut seen)
+            .await?;
+
+        Ok(RoomListPage {
+            has_more: shard_window_start(page + 1).is_some(),
+            items,
+        })
+    }
+
+    /// Request a shard range concurrently and append the new rooms in shard
+    /// order. The range is at most `SHARD_WINDOW` wide, which keeps the burst
+    /// comparable to what Twitch's own web client issues for one directory view.
+    async fn collect_shards(
+        &self,
+        feed: &impl ShardFeed,
+        shards: Range<usize>,
+        items: &mut Vec<LiveRoomItem>,
+        seen: &mut HashSet<String>,
+    ) -> AppResult<()> {
+        let requests = LANGUAGE_SHARDS[shards].iter().map(|language| {
+            self.graphql(
+                feed.operation_name(),
+                feed.query(),
+                feed.variables(language),
+            )
+        });
+        for data in future::try_join_all(requests).await? {
+            for item in parse_stream_edges(&data, feed.edges_path(), &self.site_id) {
+                if seen.insert(item.room_id.to_ascii_lowercase()) {
+                    items.push(item);
+                }
             }
-            let data = self
-                .persisted_graphql(feed.payload(cursor.as_deref()), current)
-                .await?;
-            let page_info = connection_page_info(&data, feed.connection_path(), cursor.as_deref());
-            let has_more = page_info.has_more && cursor_pagination_supported();
-            Self::remember_next_cursor(
-                &feed_key,
-                current,
-                has_more.then_some(page_info.cursor.as_deref()).flatten(),
-            );
-            if current == page {
-                return Ok(RoomListPage {
-                    has_more,
-                    items: parse_stream_edges(&data, &feed.edges_path(), &self.site_id),
-                });
-            }
-            if !has_more {
-                // The feed ended before the requested page exists.
-                return Ok(empty_page());
-            }
-            cursor = page_info.cursor;
         }
-        Ok(empty_page())
+        Ok(())
     }
 
     async fn recommend_page(&self, page: u32) -> AppResult<RoomListPage> {
-        self.relay_page(RecommendFeed, page).await
+        self.shard_page(RecommendFeed, page).await
     }
 
     async fn category_page(&self, category_id: &str, page: u32) -> AppResult<RoomListPage> {
         let slug = normalize_category_slug(category_id)?;
-        self.relay_page(CategoryFeed { slug: &slug }, page).await
+        self.shard_page(CategoryFeed { slug: &slug }, page).await
     }
 
     async fn search_page(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
@@ -944,48 +889,6 @@ fn empty_page() -> RoomListPage {
     RoomListPage {
         has_more: false,
         items: Vec::new(),
-    }
-}
-
-fn cursor_pagination_supported() -> bool {
-    !cfg!(any(target_os = "android", target_os = "ios"))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ConnectionPageInfo {
-    has_more: bool,
-    cursor: Option<String>,
-}
-
-/// Twitch's Relay connections expose `pageInfo { hasNextPage }` but no
-/// `endCursor`; the cursor to continue from is the last edge's own `cursor`.
-/// Empirically verified against `BrowsePage_Popular` and `DirectoryPage_Game`.
-fn connection_page_info(
-    data: &Value,
-    connection_path: &str,
-    input_cursor: Option<&str>,
-) -> ConnectionPageInfo {
-    let page_info_path = format!("{connection_path}/pageInfo");
-    let has_next_page = data
-        .pointer(&page_info_path)
-        .and_then(|value| value.get("hasNextPage"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let edges_path = format!("{connection_path}/edges");
-    let edges = data.pointer(&edges_path).and_then(Value::as_array);
-    let cursor = edges
-        .and_then(|edges| edges.last())
-        .and_then(|edge| edge.get("cursor"))
-        .and_then(Value::as_str)
-        .filter(|cursor| !cursor.is_empty())
-        .map(str::to_owned);
-    let has_edges = edges.is_some_and(|edges| !edges.is_empty());
-    ConnectionPageInfo {
-        has_more: has_next_page
-            && has_edges
-            && cursor.is_some()
-            && cursor.as_deref() != input_cursor,
-        cursor,
     }
 }
 
@@ -1451,7 +1354,7 @@ fn graphql_error(value: &Value) -> Option<AppError> {
         return Some(
             AppError::new(
                 "twitch_integrity_challenge",
-                "Twitch 浏览器完整性上下文已失效，自动刷新后仍未通过，请稍后重试",
+                "Twitch 拒绝了受浏览器完整性保护的 GraphQL 请求，请稍后重试",
             )
             .with_site("twitch")
             .retryable(),
@@ -1500,19 +1403,6 @@ fn first_non_empty<const N: usize>(values: [String; N]) -> String {
 
 fn preview(value: &str) -> String {
     value.chars().take(180).collect()
-}
-
-fn persisted_payload(operation_name: &str, variables: Value, hash: &str) -> Value {
-    json!([{
-        "operationName": operation_name,
-        "variables": variables,
-        "extensions": {
-            "persistedQuery": {
-                "version": 1,
-                "sha256Hash": hash,
-            }
-        }
-    }])
 }
 
 #[cfg(test)]
@@ -1600,106 +1490,60 @@ mod tests {
     }
 
     #[test]
-    fn connection_page_info_requires_both_flag_and_cursor() {
-        // Twitch never returns `pageInfo.endCursor`: the successor cursor only
-        // ever comes from the last edge, so a bare `hasNextPage` is not enough.
-        let flag_without_edges = json!({
-            "streams": { "pageInfo": { "hasNextPage": true } }
-        });
-        assert_eq!(
-            connection_page_info(&flag_without_edges, "/streams", None),
-            ConnectionPageInfo {
-                has_more: false,
-                cursor: None,
-            }
-        );
+    fn shard_windows_tile_the_language_list_without_gaps_or_overlap() {
+        assert_eq!(shard_window_start(1), Some(0));
+        // Page 1 must stay the unfiltered global listing so the first screen is
+        // unchanged from what cursor pagination used to show.
+        assert_eq!(LANGUAGE_SHARDS[0], "");
+        assert_eq!(shard_window_start(2), Some(SHARD_WINDOW));
+        assert_eq!(shard_window_start(3), Some(SHARD_WINDOW * 2));
 
-        let empty_edges = json!({
-            "streams": { "pageInfo": { "hasNextPage": true }, "edges": [] }
-        });
-        assert!(!connection_page_info(&empty_edges, "/streams", None).has_more);
-
-        let blank_cursor = json!({
-            "streams": { "pageInfo": { "hasNextPage": true }, "edges": [{ "cursor": "" }] }
-        });
-        assert!(!connection_page_info(&blank_cursor, "/streams", None).has_more);
-
-        // A trailing cursor without the flag is the end of the feed.
-        let cursor_without_flag = json!({
-            "streams": {
-                "pageInfo": { "hasNextPage": false },
-                "edges": [{ "cursor": "next-page" }]
-            }
-        });
-        let info = connection_page_info(&cursor_without_flag, "/streams", None);
-        assert!(!info.has_more);
-        assert_eq!(info.cursor.as_deref(), Some("next-page"));
+        // Consecutive windows are adjacent: no shard is skipped and none is
+        // fetched twice, which is what keeps the merged listing gap-free.
+        let mut expected = 0;
+        while let Some(start) = shard_window_start((expected / SHARD_WINDOW) as u32 + 1) {
+            assert_eq!(start, expected);
+            expected += SHARD_WINDOW;
+        }
+        assert!(expected >= LANGUAGE_SHARDS.len());
     }
 
     #[test]
-    fn connection_page_info_uses_the_official_last_edge_cursor() {
-        let data = json!({
-            "streams": {
-                "pageInfo": { "hasNextPage": true },
-                "edges": [
-                    { "cursor": "first" },
-                    { "cursor": "official-next-page" }
-                ]
-            }
-        });
-        assert_eq!(
-            connection_page_info(&data, "/streams", None),
-            ConnectionPageInfo {
-                has_more: true,
-                cursor: Some("official-next-page".into()),
-            }
-        );
+    fn shard_windows_end_with_the_language_list() {
+        let last_page = LANGUAGE_SHARDS.len().div_ceil(SHARD_WINDOW) as u32;
+        assert!(shard_window_start(last_page).is_some());
+        // One page past the tail reports exhaustion instead of wrapping around
+        // or emitting an out-of-range slice.
+        assert_eq!(shard_window_start(last_page + 1), None);
+        assert_eq!(shard_window_start(u32::MAX), None);
 
-        assert!(!connection_page_info(&data, "/streams", Some("official-next-page")).has_more);
+        // A zero page number is treated as page 1 rather than underflowing.
+        assert_eq!(shard_window_start(0), Some(0));
     }
 
     #[test]
-    fn persisted_payload_matches_twitch_web_contract() {
-        let payload = persisted_payload(
-            "BrowsePage_Popular",
-            json!({ "limit": PAGE_SIZE }),
-            BROWSE_POPULAR_HASH,
-        );
-        assert_eq!(payload[0]["operationName"], "BrowsePage_Popular");
-        assert_eq!(payload[0]["variables"]["limit"], PAGE_SIZE);
-        assert_eq!(
-            payload[0]["extensions"]["persistedQuery"]["sha256Hash"],
-            BROWSE_POPULAR_HASH
-        );
+    fn language_filter_distinguishes_all_languages_from_one() {
+        // An empty array is Twitch's "no language restriction"; a code narrows
+        // the shard. Sending `[""]` instead would match no broadcaster at all.
+        assert_eq!(language_filter(""), json!([]));
+        assert_eq!(language_filter("ZH"), json!(["ZH"]));
     }
 
     #[test]
-    fn cursor_cache_resumes_from_deepest_point_and_resets_on_first_page() {
-        let feed_key = format!("test:{}", uuid::Uuid::new_v4());
-        TwitchSite::remember_next_cursor(&feed_key, 1, Some("cursor-2"));
-        TwitchSite::remember_next_cursor(&feed_key, 2, Some("cursor-3"));
-        TwitchSite::remember_next_cursor(&feed_key, 3, Some("cursor-4"));
+    fn shard_feeds_request_the_capped_page_size_and_their_own_language() {
+        let recommend = RecommendFeed.variables("JA");
+        assert_eq!(recommend["limit"], PAGE_SIZE);
+        assert_eq!(recommend["languages"], json!(["JA"]));
+        assert_eq!(RecommendFeed.edges_path(), "/streams/edges");
 
-        // Requesting page 4 resumes from page 4 (the deepest cached input cursor).
-        let (start, cursor) = TwitchSite::resume_point(&feed_key, 4);
-        assert_eq!(start, 4);
-        assert_eq!(cursor.as_deref(), Some("cursor-4"));
-
-        // Requesting page 2 directly hits the cache.
-        let (start, cursor) = TwitchSite::resume_point(&feed_key, 2);
-        assert_eq!(start, 2);
-        assert_eq!(cursor.as_deref(), Some("cursor-2"));
-
-        // Requesting page 6 with keys 2/3/4 cached resumes from page 4.
-        let (start, cursor) = TwitchSite::resume_point(&feed_key, 6);
-        assert_eq!(start, 4);
-        assert_eq!(cursor.as_deref(), Some("cursor-4"));
-
-        // A fresh first page invalidates the entire chain; key 2 is re-inserted.
-        TwitchSite::remember_next_cursor(&feed_key, 1, Some("new-cursor-2"));
-        let (start, cursor) = TwitchSite::resume_point(&feed_key, 3);
-        assert_eq!(start, 2);
-        assert_eq!(cursor.as_deref(), Some("new-cursor-2"));
+        let category = CategoryFeed { slug: "factorio" }.variables("");
+        assert_eq!(category["slug"], "factorio");
+        assert_eq!(category["limit"], PAGE_SIZE);
+        assert_eq!(category["languages"], json!([]));
+        assert_eq!(
+            CategoryFeed { slug: "factorio" }.edges_path(),
+            "/game/streams/edges"
+        );
     }
 
     #[test]
