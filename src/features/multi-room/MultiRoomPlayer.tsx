@@ -439,7 +439,7 @@ export function MultiRoomPlayer({
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity group-data-[main=true]/player:opacity-100 group-focus-within/player:opacity-100 group-hover/player:opacity-100">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity group-data-[main=true]/player:opacity-100 group-focus-within/player:opacity-100 group-hover/player:opacity-100">
         <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
           {dragHandle}
           {main && <Badge variant="secondary">主画面</Badge>}
