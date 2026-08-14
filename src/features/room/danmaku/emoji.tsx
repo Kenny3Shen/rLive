@@ -157,9 +157,13 @@ export function DanmakuEmojiText({
             alt={segment.value.label}
             draggable={false}
             className={cn(
-              "mx-px inline-block size-[1.25em] select-none align-[-0.22em] object-contain",
+              "mx-px inline-block select-none align-[-0.25em] object-contain",
               emojiClassName,
             )}
+            style={{
+              width: `${DANMAKU_IMAGE_SCALE}em`,
+              height: `${DANMAKU_IMAGE_SCALE}em`,
+            }}
           />
         ),
       )}
