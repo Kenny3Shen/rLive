@@ -1,12 +1,12 @@
 # Twitch 平台 API 文档
 
-更新时间：2026-08-13。本页说明 rLive 对 Twitch 网页浏览、HLS 播放与匿名 IRC 弹幕的接入范围。
+更新时间：2026-08-14。本页说明 rLive 对 Twitch 网页浏览、HLS 播放与匿名 IRC 弹幕的接入范围。
 
 ## 能力总览
 
 | 能力 | 状态 | rLive 行为 |
 | --- | --- | --- |
-| 分类、推荐、搜索 | 桌面端尽力分页；移动端首屏 | 首屏使用公开网页上下文；后续页在隐藏 WebView 中运行官方完整性挑战，并使用网页 persisted operations。 |
+| 分类、推荐、搜索 | 已支持分页（桌面与移动一致） | 推荐和分区按语言分片翻页，搜索使用官方 offset cursor，均只需公开网页 `Client-ID`。 |
 | 房间详情 | 已支持 | 通过主播 login 解析直播标题、游戏、观众数、封面与开播状态。 |
 | HLS 播放与清晰度 | 已支持 | 取得短时播放访问令牌并解析 HLS master playlist；切换清晰度会重新获取。 |
 | 广告占位规避 | 尽力支持 | 检测服务端插播后依次尝试备用播放器类型；实测 Twitch 按 `playerType` 区别插播，`popout` 可在保留完整清晰度的前提下避开，`autoplay` 干净但上限 `360p`。 |
@@ -16,15 +16,17 @@
 
 ## rLive 接入接口
 
-Twitch 实现统一的分类、推荐、分区房间、搜索、详情、清晰度和播放 URL 接口。房间、播放和首屏请求先从公开网页初始化 `Client-ID`，并使用进程内随机 `X-Device-Id`。推荐、分类和搜索对齐 Twitch 当前网页的 persisted operations，从 `pageInfo.hasNextPage` 与最后一个 edge cursor 判断下一页；搜索按官方 `CHANNEL` target cursor 请求。页码并非 Twitch 协议字段，因此 rLive 在进程内按推荐、分类 slug 和搜索词维护 30 分钟的页码到 cursor 映射，只允许从首屏开始连续加载。刷新首屏会重置该列表的旧游标；游标缺失、重复、过期或跨进程直接请求后续页时返回可重试的刷新提示，不合成页码或重复结果。
+Twitch 实现统一的分类、推荐、分区房间、搜索、详情、清晰度和播放 URL 接口。房间、播放和列表请求先从公开网页初始化 `Client-ID`，并使用进程内随机 `X-Device-Id`。推荐和分区房间使用自有命名的 GraphQL 查询（不依赖会轮换的 persisted query hash），搜索按官方 `CHANNEL` target 的 offset cursor 请求。
 
-### 浏览器完整性分页
+### 语言分片分页
 
-Twitch 的 cursor 请求除了短时 `Client-Integrity` 令牌，还会校验产生令牌的浏览器会话。把令牌、Cookie 和请求头复制到 `reqwest` 或 `curl` 不能稳定通过；账号 Cookie 也不会免除挑战。桌面端首次请求第 2 页时，`twitch_integrity.rs` 创建隐藏、incognito、不进入任务栏且继承应用代理的 Twitch WebView，加载官方 `/directory/all` 页面并滚动触发 Twitch 自己的 JavaScript 挑战。取得上下文后，受保护的 persisted GraphQL 请求仍在同一个 WebView 中执行。
+Twitch 拒绝所有没有浏览器完整性上下文的 Relay 游标：只要请求带 `after:`，服务端就返回 `IntegrityCheckFailed`，且把 `Client-Integrity` 令牌、Cookie 和请求头复制到 `reqwest` 或 `curl` 也不能稳定通过，账号 Cookie 同样不免除挑战。因此 rLive 不再翻游标，而是沿 `broadcasterLanguages` 分片翻页——该参数只需公开 `Client-ID`。
 
-Rust 只向 WebView 发送 operation payload，并接收 GraphQL JSON；`Client-Integrity`、挑战相关 Cookie 和浏览器身份不离开 WebView，不写日志或磁盘。WebView 通过 `twitch_integrity.rs` 自有的仅回环（`127.0.0.1`）HTTP 端点单次 POST 回传就绪与响应消息；每条消息绑定随机会话 ID 和请求 ID，会话 ID 与当前活动会话不符即丢弃。该端点独立于用户可选启用的 web_bridge 服务，只接受桥接消息，不暴露任何应用命令。令牌到期、代理变化或完整性失败时销毁 WebView；单次请求会重建上下文并重试一次，仍失败则返回可重试错误。该实现没有复刻 Twitch 挑战算法，没有引入第三方绕过，也不需要 Twitch 账号、Cookie 或 OAuth app secret。
+`streams(first:)` 被服务端硬性限制为 30，所以不带筛选时永远只能看到最热门的 30 个频道。分片正是打开长尾的手段：2026-08-14 实测全站推荐用 27 个语言分片可取得 735 个不重复直播间，而不分片只有 30 个。分片列表为空串（不限语言，即原首屏）加 26 个 Twitch 目录自身提供的语言代码，按受众规模排序，使前几页仍是最热内容。
 
-这是一项尽力能力，不是稳定的官方 API 契约。2026-08-13 的外网验证确认三个首屏 persisted operations 均返回真实数据和可继续 cursor；同日 Linux headless Chromium 的 `/fp` 指纹请求返回 `429`，连官方页面自己的后续页也可能得到 `IntegrityCheckFailed`，因此未在该环境证明第 2 页成功。Windows WebView2 的实际通过率仍取决于 Twitch 风控、网络、地区与网页版本。Android 和 iOS 不创建第二 WebView，首屏即设置 `has_more = false`。
+每页取固定的 3 个连续分片，页码到分片的映射是纯算术（第 N 页对应分片 `3(N-1)..3N`），没有跨请求状态需要维护，也没有 30 分钟游标缓存与「必须从首屏连续加载」的限制，任意页都可直接请求。分片之间会重叠（一个频道同时出现在全局分片和其语言分片中），后端按 login 去重，前端再按 `site_id + room_id` 去重，因此三个 30 条分片实际约落在 70–80 个不重复直播间。冷门分区会夹杂空分片（实测 `factorio` 有 20 个语言返回空），所以空页不代表结束：`has_more` 只在分片列表本身走完时才为 `false`，让「加载更多」能越过空分片继续扫到后面仍有内容的语言。
+
+这条路径不需要隐藏 WebView、完整性令牌、Twitch 账号、Cookie 或 OAuth app secret，桌面与 Android / iOS 行为一致。代价是排序不再是全站统一的观众数降序，而是「分片内按观众数降序」的分段拼接；这是换取移动端可用深度分页与去掉风控依赖的取舍。分片能力仍取决于 Twitch 的公开网页接口，其可用性可能随上游变化。
 
 播放时，适配器按频道 login 获取短时 HLS 播放许可，并立即解析 master playlist。短时 URL 不保存到前端缓存；在真正播放或切换清晰度时重新获取，以避免过期 token 被复用。GraphQL 请求附带 `X-Device-Id`：Twitch 网页客户端始终发送该头，缺失会被识别为未知客户端，而这是决定令牌是否被服务端插播广告的信号之一。该值是每个进程随机生成的 32 位小写字母数字，不落盘、不来自机器标识，也不关联账号。
 
@@ -56,6 +58,5 @@ Twitch 的广告插播由服务端在签发播放令牌时决定，令牌申请�
 
 上游可用性、广告投放、地区、频道状态和网页接口可能变化。请勿同时叠加多个 Twitch 专用广告处理方案，以免不同播放列表改写互相冲突。
 
-- 站点与播放：`src-tauri/src/sites/twitch.rs`
-- 浏览器完整性分页：`src-tauri/src/twitch_integrity.rs`
+- 站点、语言分片分页与播放：`src-tauri/src/sites/twitch.rs`
 - 匿名 IRC 弹幕：`src-tauri/src/danmu_rs/twitch.rs`

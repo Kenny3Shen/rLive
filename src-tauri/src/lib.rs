@@ -16,7 +16,6 @@ mod settings;
 mod sites;
 mod state;
 mod stream_proxy;
-mod twitch_integrity;
 mod web_bridge;
 
 use std::fs::{self, File, OpenOptions};
@@ -205,7 +204,6 @@ pub fn run() {
             init_logging(&directories.logs);
             let state = AppState::init(&directories.root)?;
             app.manage(state);
-            twitch_integrity::install(app.handle().clone());
 
             // Debug builds only: start the browser bridge without the settings
             // toggle, so the HTTP surface can be exercised from a terminal or a
