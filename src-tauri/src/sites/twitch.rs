@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 
@@ -35,12 +36,12 @@ const TWITCH_USHER_URL: &str = "https://usher.ttvnw.net/api/channel/hls";
 const PAGE_SIZE: u32 = 30;
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const CURSOR_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+const MAX_CACHED_CURSORS: usize = 50;
+const MAX_RELAY_REPLAY: u32 = 5;
 const BROWSE_POPULAR_HASH: &str =
     "97fed6737c9ef90e8552fb7d02bf4e5d20da0af3cad2a5492d9c93f94e95c29e";
 const DIRECTORY_GAME_HASH: &str =
     "86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd";
-const SEARCH_RESULTS_HASH: &str =
-    "22d9f9b96e28afdcd918f1c5b93e87979c4673d29a851da7c823e0a808dd5bf3";
 
 /// Twitch decides server-side ad stitching per playback token, and the
 /// `playerType` the token was minted for is part of that decision.  `site` stays
@@ -133,6 +134,96 @@ struct CursorFeed {
 }
 
 static CURSOR_CACHE: OnceLock<Mutex<HashMap<String, CursorFeed>>> = OnceLock::new();
+
+/// Relay feed abstraction: each feed type (recommend, category) provides its
+/// own payload builder and JSON path, and the pagination walker handles the
+/// rest uniformly.
+trait RelayFeed {
+    fn feed_key(&self) -> String;
+    fn payload(&self, cursor: Option<&str>) -> Value;
+    fn connection_path(&self) -> &str;
+    fn edges_path(&self) -> String {
+        format!("{}/edges", self.connection_path())
+    }
+}
+
+struct RecommendFeed;
+
+impl RelayFeed for RecommendFeed {
+    fn feed_key(&self) -> String {
+        "recommend".to_string()
+    }
+
+    fn payload(&self, cursor: Option<&str>) -> Value {
+        let mut variables = json!({
+            "imageWidth": 50,
+            "limit": PAGE_SIZE,
+            "platformType": "all",
+            "options": {
+                "sort": "RELEVANCE",
+                "freeformTags": null,
+                "tags": [],
+                "recommendationsContext": { "platform": "web" },
+                "requestID": "JIRA-VXP-2397",
+                "broadcasterLanguages": [],
+            },
+            "sortTypeIsRecency": false,
+            "includeCostreaming": true,
+        });
+        if let Some(cursor) = cursor {
+            variables["cursor"] = Value::String(cursor.to_string());
+        }
+        persisted_payload("BrowsePage_Popular", variables, BROWSE_POPULAR_HASH)
+    }
+
+    fn connection_path(&self) -> &str {
+        "/streams"
+    }
+}
+
+struct CategoryFeed<'a> {
+    slug: &'a str,
+}
+
+impl RelayFeed for CategoryFeed<'_> {
+    fn feed_key(&self) -> String {
+        format!("category:{}", self.slug)
+    }
+
+    fn payload(&self, cursor: Option<&str>) -> Value {
+        let mut variables = json!({
+            "imageWidth": 50,
+            "slug": self.slug,
+            "options": {
+                "sort": "RELEVANCE",
+                "recommendationsContext": { "platform": "web" },
+                "requestID": "JIRA-VXP-2397",
+                "freeformTags": null,
+                "tags": [],
+                "broadcasterLanguages": [],
+                "systemFilters": [],
+            },
+            "sortTypeIsRecency": false,
+            "limit": PAGE_SIZE,
+            "includeCostreaming": true,
+        });
+        if let Some(cursor) = cursor {
+            variables["cursor"] = Value::String(cursor.to_string());
+        }
+        persisted_payload("DirectoryPage_Game", variables, DIRECTORY_GAME_HASH)
+    }
+
+    fn connection_path(&self) -> &str {
+        "/game/streams"
+    }
+}
+
+/// Space out replay requests so a deep cache miss does not burst-fetch the
+/// entire walk in parallel against Twitch's public endpoint. The delay is
+/// small enough to stay responsive but large enough to signal pacing.
+async fn pace_replay_request() {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TwitchVariant {
@@ -308,37 +399,47 @@ impl TwitchSite {
             .ok_or_else(|| Self::parse_err("Twitch persisted GraphQL 响应缺少 data"))
     }
 
-    fn cursor_for_page(feed_key: &str, page: u32) -> AppResult<Option<String>> {
+    /// Relay cursors are opaque and only valid as the successor of the page
+    /// that produced them, so a page number cannot be turned into a cursor by
+    /// arithmetic. Return the deepest cached page at or before `page` together
+    /// with its input cursor; the caller replays forward from there. A cold or
+    /// expired cache simply resumes from page 1 instead of failing the request.
+    fn resume_point(feed_key: &str, page: u32) -> (u32, Option<String>) {
         if page <= 1 {
-            return Ok(None);
+            return (1, None);
         }
-        let mut cache = CURSOR_CACHE
+        let Ok(mut cache) = CURSOR_CACHE
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
-            .map_err(|_| Self::parse_err("Twitch 分页游标状态暂不可用"))?;
+        else {
+            return (1, None);
+        };
         cache.retain(|_, feed| feed.touched_at.elapsed() < CURSOR_CACHE_TTL);
-        cache
-            .get_mut(feed_key)
-            .and_then(|feed| {
-                feed.touched_at = Instant::now();
-                feed.cursors.get(&page).cloned()
+        let Some(feed) = cache.get_mut(feed_key) else {
+            return (1, None);
+        };
+        feed.touched_at = Instant::now();
+        // Cache key K holds the *input* cursor needed to fetch page K, so the
+        // deepest cached key at or before `page` is the page the walk can start
+        // on directly. Page 1 never needs a cursor, hence the range starts at 2.
+        (2..=page)
+            .rev()
+            .find_map(|candidate| {
+                feed.cursors
+                    .get(&candidate)
+                    .cloned()
+                    .map(|cursor| (candidate, Some(cursor)))
             })
-            .map(Some)
-            .ok_or_else(|| {
-                AppError::new(
-                    "twitch_pagination_sequence",
-                    "Twitch 分页游标已失效，请刷新当前列表后重试",
-                )
-                .with_site("twitch")
-                .retryable()
-            })
+            .unwrap_or((1, None))
     }
 
-    fn remember_next_cursor(feed_key: &str, page: u32, cursor: Option<&str>) -> AppResult<()> {
-        let mut cache = CURSOR_CACHE
+    fn remember_next_cursor(feed_key: &str, page: u32, cursor: Option<&str>) {
+        let Ok(mut cache) = CURSOR_CACHE
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
-            .map_err(|_| Self::parse_err("Twitch 分页游标状态暂不可用"))?;
+        else {
+            return;
+        };
         cache.retain(|_, feed| feed.touched_at.elapsed() < CURSOR_CACHE_TTL);
         let feed = cache
             .entry(feed_key.to_string())
@@ -347,153 +448,143 @@ impl TwitchSite {
                 touched_at: Instant::now(),
             });
         if page <= 1 {
+            // A fresh first page invalidates the whole chain behind it.
             feed.cursors.clear();
         }
         feed.touched_at = Instant::now();
+        // Keep the walked prefix so a later jump can resume mid-chain, but
+        // drop anything past the page we just observed: those cursors were
+        // derived from a listing that has now moved on.
         feed.cursors
             .retain(|cached_page, _| *cached_page <= page + 1);
-        if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
-            feed.cursors.insert(page + 1, cursor.to_string());
-        } else {
-            feed.cursors.remove(&(page + 1));
+        if feed.cursors.len() > MAX_CACHED_CURSORS {
+            let cutoff = page.saturating_sub(MAX_CACHED_CURSORS as u32);
+            feed.cursors.retain(|cached_page, _| *cached_page > cutoff);
         }
-        Ok(())
+        match cursor.filter(|cursor| !cursor.is_empty()) {
+            Some(cursor) => {
+                feed.cursors.insert(page + 1, cursor.to_string());
+            }
+            None => {
+                feed.cursors.remove(&(page + 1));
+            }
+        }
+    }
+
+    /// Fetch one Relay-cursor page, replaying the cursor chain from the
+    /// deepest cached point when the requested page is not directly reachable.
+    /// Replay is bounded and paced so a cold deep page cannot turn into an
+    /// unthrottled request burst against the public endpoint.
+    async fn relay_page(&self, feed: impl RelayFeed, page: u32) -> AppResult<RoomListPage> {
+        let page = page.max(1);
+        if page > 1 && !cursor_pagination_supported() {
+            return Ok(empty_page());
+        }
+        let feed_key = feed.feed_key();
+        let (start_page, mut cursor) = Self::resume_point(&feed_key, page);
+        if page.saturating_sub(start_page) > MAX_RELAY_REPLAY {
+            // Refuse to walk an unreasonable distance; the caller's list is
+            // stale enough that restarting from the top is the honest answer.
+            return Ok(empty_page());
+        }
+
+        for current in start_page..=page {
+            if current > start_page {
+                pace_replay_request().await;
+            }
+            let data = self
+                .persisted_graphql(feed.payload(cursor.as_deref()), current)
+                .await?;
+            let page_info = connection_page_info(&data, feed.connection_path(), cursor.as_deref());
+            let has_more = page_info.has_more && cursor_pagination_supported();
+            Self::remember_next_cursor(
+                &feed_key,
+                current,
+                has_more.then_some(page_info.cursor.as_deref()).flatten(),
+            );
+            if current == page {
+                return Ok(RoomListPage {
+                    has_more,
+                    items: parse_stream_edges(&data, &feed.edges_path(), &self.site_id),
+                });
+            }
+            if !has_more {
+                // The feed ended before the requested page exists.
+                return Ok(empty_page());
+            }
+            cursor = page_info.cursor;
+        }
+        Ok(empty_page())
     }
 
     async fn recommend_page(&self, page: u32) -> AppResult<RoomListPage> {
-        let page = page.max(1);
-        if page > 1 && !cursor_pagination_supported() {
-            return Ok(empty_page());
-        }
-        let feed_key = "recommend";
-        let input_cursor = Self::cursor_for_page(feed_key, page)?;
-        let mut variables = json!({
-            "imageWidth": 50,
-            "limit": PAGE_SIZE,
-            "platformType": "all",
-            "options": {
-                "sort": "RELEVANCE",
-                "freeformTags": null,
-                "tags": [],
-                "recommendationsContext": { "platform": "web" },
-                "requestID": "JIRA-VXP-2397",
-                "broadcasterLanguages": [],
-            },
-            "sortTypeIsRecency": false,
-            "includeCostreaming": true,
-        });
-        if let Some(cursor) = input_cursor.as_ref() {
-            variables["cursor"] = Value::String(cursor.clone());
-        }
-        let data = self
-            .persisted_graphql(
-                persisted_payload("BrowsePage_Popular", variables, BROWSE_POPULAR_HASH),
-                page,
-            )
-            .await?;
-        let page_info = connection_page_info(&data, "/streams", input_cursor.as_deref());
-        let has_more = page_info.has_more && cursor_pagination_supported();
-        Self::remember_next_cursor(
-            feed_key,
-            page,
-            has_more.then_some(page_info.cursor.as_deref()).flatten(),
-        )?;
-        Ok(RoomListPage {
-            has_more,
-            items: parse_stream_edges(&data, "/streams/edges", &self.site_id),
-        })
+        self.relay_page(RecommendFeed, page).await
     }
 
     async fn category_page(&self, category_id: &str, page: u32) -> AppResult<RoomListPage> {
-        let page = page.max(1);
-        if page > 1 && !cursor_pagination_supported() {
-            return Ok(empty_page());
-        }
         let slug = normalize_category_slug(category_id)?;
-        let feed_key = format!("category:{slug}");
-        let input_cursor = Self::cursor_for_page(&feed_key, page)?;
-        let mut variables = json!({
-            "imageWidth": 50,
-            "slug": slug,
-            "options": {
-                "sort": "RELEVANCE",
-                "recommendationsContext": { "platform": "web" },
-                "requestID": "JIRA-VXP-2397",
-                "freeformTags": null,
-                "tags": [],
-                "broadcasterLanguages": [],
-                "systemFilters": [],
-            },
-            "sortTypeIsRecency": false,
-            "limit": PAGE_SIZE,
-            "includeCostreaming": true,
-        });
-        if let Some(cursor) = input_cursor.as_ref() {
-            variables["cursor"] = Value::String(cursor.clone());
-        }
-        let data = self
-            .persisted_graphql(
-                persisted_payload("DirectoryPage_Game", variables, DIRECTORY_GAME_HASH),
-                page,
-            )
-            .await?;
-        let page_info = connection_page_info(&data, "/game/streams", input_cursor.as_deref());
-        let has_more = page_info.has_more && cursor_pagination_supported();
-        Self::remember_next_cursor(
-            &feed_key,
-            page,
-            has_more.then_some(page_info.cursor.as_deref()).flatten(),
-        )?;
-        Ok(RoomListPage {
-            has_more,
-            items: parse_stream_edges(&data, "/game/streams/edges", &self.site_id),
-        })
+        self.relay_page(CategoryFeed { slug: &slug }, page).await
     }
 
     async fn search_page(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        if page > 1 && !cursor_pagination_supported() {
-            return Ok(empty_page());
-        }
-        let feed_key = format!("search:{}", keyword.to_ascii_lowercase());
-        let input_cursor = Self::cursor_for_page(&feed_key, page)?;
-        let targets = input_cursor.as_ref().map(|cursor| {
-            json!([{
-                "index": "CHANNEL",
-                "cursor": cursor,
-            }])
+        // Search uses offset-based cursors (base64-encoded integers) and does
+        // not require the integrity token. Compute cursor arithmetically.
+        let offset = (page.saturating_sub(1)) * PAGE_SIZE;
+        let cursor =
+            base64::engine::general_purpose::STANDARD.encode(offset.to_string().as_bytes());
+        let target = json!({
+            "index": "CHANNEL",
+            "cursor": cursor,
+            "limit": PAGE_SIZE,
         });
         let data = self
-            .persisted_graphql(
-                persisted_payload(
-                    "SearchResultsPage_SearchResults",
-                    json!({
-                        "platform": "web",
-                        "query": keyword,
-                        "options": {
-                            "targets": targets,
-                            "shouldSkipDiscoveryControl": false,
-                        },
-                        "requestID": uuid::Uuid::new_v4().to_string(),
-                    }),
-                    SEARCH_RESULTS_HASH,
-                ),
-                page,
+            .graphql(
+                "RLiveTwitchSearch",
+                r#"
+                query RLiveTwitchSearch($query: String!, $options: SearchForOptions) {
+                  searchFor(userQuery: $query, platform: "web", options: $options) {
+                    channels {
+                      cursor
+                      totalMatches
+                      edges {
+                        item {
+                          ... on User {
+                            id
+                            login
+                            displayName
+                            profileImageURL(width: 150)
+                            stream {
+                              id
+                              title
+                              viewersCount
+                              previewImageURL(width: 440, height: 248)
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                "#,
+                json!({
+                    "query": keyword,
+                    "options": {
+                        "targets": [target],
+                    },
+                }),
             )
             .await?;
-        let cursor = data
+        let returned_cursor = data
             .pointer("/searchFor/channels/cursor")
             .and_then(Value::as_str)
-            .filter(|cursor| !cursor.is_empty());
+            .filter(|c| !c.is_empty());
         let item_count = data
             .pointer("/searchFor/channels/edges")
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
-        let has_more = cursor_pagination_supported()
-            && item_count > 0
-            && cursor.is_some()
-            && cursor != input_cursor.as_deref();
-        Self::remember_next_cursor(&feed_key, page, has_more.then_some(cursor).flatten())?;
+        let has_more =
+            item_count > 0 && returned_cursor.is_some() && returned_cursor != Some(&cursor);
         Ok(RoomListPage {
             has_more,
             items: parse_search_items(&data, &self.site_id),
@@ -866,33 +957,34 @@ struct ConnectionPageInfo {
     cursor: Option<String>,
 }
 
+/// Twitch's Relay connections expose `pageInfo { hasNextPage }` but no
+/// `endCursor`; the cursor to continue from is the last edge's own `cursor`.
+/// Empirically verified against `BrowsePage_Popular` and `DirectoryPage_Game`.
 fn connection_page_info(
     data: &Value,
     connection_path: &str,
     input_cursor: Option<&str>,
 ) -> ConnectionPageInfo {
     let page_info_path = format!("{connection_path}/pageInfo");
-    let page_info = data.pointer(&page_info_path);
-    let has_next_page = page_info
+    let has_next_page = data
+        .pointer(&page_info_path)
         .and_then(|value| value.get("hasNextPage"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let cursor = page_info
-        .and_then(|value| value.get("endCursor"))
+    let edges_path = format!("{connection_path}/edges");
+    let edges = data.pointer(&edges_path).and_then(Value::as_array);
+    let cursor = edges
+        .and_then(|edges| edges.last())
+        .and_then(|edge| edge.get("cursor"))
         .and_then(Value::as_str)
         .filter(|cursor| !cursor.is_empty())
-        .or_else(|| {
-            let edges_path = format!("{connection_path}/edges");
-            data.pointer(&edges_path)
-                .and_then(Value::as_array)
-                .and_then(|edges| edges.last())
-                .and_then(|edge| edge.get("cursor"))
-                .and_then(Value::as_str)
-                .filter(|cursor| !cursor.is_empty())
-        })
         .map(str::to_owned);
+    let has_edges = edges.is_some_and(|edges| !edges.is_empty());
     ConnectionPageInfo {
-        has_more: has_next_page && cursor.is_some() && cursor.as_deref() != input_cursor,
+        has_more: has_next_page
+            && has_edges
+            && cursor.is_some()
+            && cursor.as_deref() != input_cursor,
         cursor,
     }
 }
@@ -1509,26 +1601,39 @@ mod tests {
 
     #[test]
     fn connection_page_info_requires_both_flag_and_cursor() {
-        let data = json!({
-            "streams": {
-                "pageInfo": {
-                    "hasNextPage": true,
-                    "endCursor": "next-page"
-                }
-            }
+        // Twitch never returns `pageInfo.endCursor`: the successor cursor only
+        // ever comes from the last edge, so a bare `hasNextPage` is not enough.
+        let flag_without_edges = json!({
+            "streams": { "pageInfo": { "hasNextPage": true } }
         });
         assert_eq!(
-            connection_page_info(&data, "/streams", None),
+            connection_page_info(&flag_without_edges, "/streams", None),
             ConnectionPageInfo {
-                has_more: true,
-                cursor: Some("next-page".into()),
+                has_more: false,
+                cursor: None,
             }
         );
 
-        let missing_cursor = json!({
-            "streams": { "pageInfo": { "hasNextPage": true, "endCursor": null } }
+        let empty_edges = json!({
+            "streams": { "pageInfo": { "hasNextPage": true }, "edges": [] }
         });
-        assert!(!connection_page_info(&missing_cursor, "/streams", None).has_more);
+        assert!(!connection_page_info(&empty_edges, "/streams", None).has_more);
+
+        let blank_cursor = json!({
+            "streams": { "pageInfo": { "hasNextPage": true }, "edges": [{ "cursor": "" }] }
+        });
+        assert!(!connection_page_info(&blank_cursor, "/streams", None).has_more);
+
+        // A trailing cursor without the flag is the end of the feed.
+        let cursor_without_flag = json!({
+            "streams": {
+                "pageInfo": { "hasNextPage": false },
+                "edges": [{ "cursor": "next-page" }]
+            }
+        });
+        let info = connection_page_info(&cursor_without_flag, "/streams", None);
+        assert!(!info.has_more);
+        assert_eq!(info.cursor.as_deref(), Some("next-page"));
     }
 
     #[test]
@@ -1569,27 +1674,32 @@ mod tests {
     }
 
     #[test]
-    fn cursor_cache_requires_sequential_pages_and_resets_on_first_page() {
+    fn cursor_cache_resumes_from_deepest_point_and_resets_on_first_page() {
         let feed_key = format!("test:{}", uuid::Uuid::new_v4());
-        TwitchSite::remember_next_cursor(&feed_key, 1, Some("cursor-2")).unwrap();
-        assert_eq!(
-            TwitchSite::cursor_for_page(&feed_key, 2)
-                .unwrap()
-                .as_deref(),
-            Some("cursor-2")
-        );
-        assert!(TwitchSite::cursor_for_page(&feed_key, 3).is_err());
+        TwitchSite::remember_next_cursor(&feed_key, 1, Some("cursor-2"));
+        TwitchSite::remember_next_cursor(&feed_key, 2, Some("cursor-3"));
+        TwitchSite::remember_next_cursor(&feed_key, 3, Some("cursor-4"));
 
-        TwitchSite::remember_next_cursor(&feed_key, 2, Some("cursor-3")).unwrap();
-        assert_eq!(
-            TwitchSite::cursor_for_page(&feed_key, 3)
-                .unwrap()
-                .as_deref(),
-            Some("cursor-3")
-        );
+        // Requesting page 4 resumes from page 4 (the deepest cached input cursor).
+        let (start, cursor) = TwitchSite::resume_point(&feed_key, 4);
+        assert_eq!(start, 4);
+        assert_eq!(cursor.as_deref(), Some("cursor-4"));
 
-        TwitchSite::remember_next_cursor(&feed_key, 1, None).unwrap();
-        assert!(TwitchSite::cursor_for_page(&feed_key, 2).is_err());
+        // Requesting page 2 directly hits the cache.
+        let (start, cursor) = TwitchSite::resume_point(&feed_key, 2);
+        assert_eq!(start, 2);
+        assert_eq!(cursor.as_deref(), Some("cursor-2"));
+
+        // Requesting page 6 with keys 2/3/4 cached resumes from page 4.
+        let (start, cursor) = TwitchSite::resume_point(&feed_key, 6);
+        assert_eq!(start, 4);
+        assert_eq!(cursor.as_deref(), Some("cursor-4"));
+
+        // A fresh first page invalidates the entire chain; key 2 is re-inserted.
+        TwitchSite::remember_next_cursor(&feed_key, 1, Some("new-cursor-2"));
+        let (start, cursor) = TwitchSite::resume_point(&feed_key, 3);
+        assert_eq!(start, 2);
+        assert_eq!(cursor.as_deref(), Some("new-cursor-2"));
     }
 
     #[test]
