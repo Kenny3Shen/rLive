@@ -289,7 +289,7 @@ function drawRichDanmaku(
   const metrics = richLineMetrics(ctx, item);
   if (!metrics) return false;
 
-  const textY = y + Math.max(0, (metrics.lineHeight - item.fontSize * 1.35) / 2);
+  const textY = y + (metrics.lineHeight - item.fontSize) / 2;
   const imageY = y + (metrics.lineHeight - metrics.imageSize) / 2;
   let cursor = x;
   for (const span of spans) {
