@@ -94,7 +94,7 @@ function MainMultiRoomControls({
   onVolume,
   onToggleMute,
 }: MainMultiRoomControlsProps) {
-  const [osdOn, setOsdOn] = useState(true);
+  const [osdOn, setOsdOn] = useState(false);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
   const asrPending = useSettingsStore((state) => state.asrPending);
