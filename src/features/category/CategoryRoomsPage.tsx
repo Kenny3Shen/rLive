@@ -86,10 +86,19 @@ export function CategoryRoomsPage() {
     ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
-  const rooms = useMemo(
-    () => roomsQuery.data?.pages.flatMap((page) => page.items) ?? [],
-    [roomsQuery.data],
-  );
+  const rooms = useMemo(() => {
+    const seen = new Set<string>();
+    return (
+      roomsQuery.data?.pages.flatMap((page) =>
+        page.items.filter((room) => {
+          const key = `${room.site_id}:${room.room_id}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }),
+      ) ?? []
+    );
+  }, [roomsQuery.data]);
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     hasNextPage: roomsQuery.hasNextPage,
     isFetchingNextPage: roomsQuery.isFetchingNextPage,
