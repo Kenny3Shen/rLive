@@ -275,6 +275,29 @@ export function shouldShowRoomDanmakuPanel(
   return sidePanelOpen && !fullscreen && activeSideTab === "chat";
 }
 
+/**
+ * Whether this player stacks the picture above the chat when windowed.
+ *
+ * Deliberately independent of fullscreen. `player.mode` is derived from a
+ * `fullscreenchange` state update, so it trails the browser's own `:fullscreen`
+ * by a frame; the CSS that closes that gap (see `data-portrait-stack` in
+ * styles.css) needs a marker that is already correct during the transition.
+ */
+export function usesPortraitStackLayout(
+  inlineCompactSidePanel: boolean,
+  sidePanelOpen: boolean,
+): boolean {
+  return inlineCompactSidePanel && sidePanelOpen;
+}
+
+/** The stack only applies while windowed; fullscreen gives the picture the screen. */
+export function isPortraitStackedPlayer(
+  portraitStackLayout: boolean,
+  fullscreen: boolean,
+): boolean {
+  return portraitStackLayout && !fullscreen;
+}
+
 export function showDanmakuComposerInPlayerControls(
   inlineCompactSidePanel: boolean,
   fullscreen: boolean,
@@ -653,8 +676,11 @@ export function PlayerPane({
   });
   const compactLandscapeSidePanelClassName =
     "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl";
-  const portraitStackedPlayer =
-    inlineCompactSidePanel && sidePanelOpen && player.mode !== "fullscreen";
+  const portraitStackLayout = usesPortraitStackLayout(inlineCompactSidePanel, sidePanelOpen);
+  const portraitStackedPlayer = isPortraitStackedPlayer(
+    portraitStackLayout,
+    player.mode === "fullscreen",
+  );
   const fullscreenHudVisible = showPlayerFullscreenHud({
     fullscreen: player.mode === "fullscreen",
     hasRoomIdentity: Boolean(roomTitle?.trim() || roomUserName?.trim()),
@@ -1476,6 +1502,9 @@ export function PlayerPane({
           ref={player.stageRef}
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
+          // Fullscreen-independent, so CSS can restore the 16:9 stack in the
+          // same frame the browser leaves fullscreen.
+          data-portrait-stack={portraitStackLayout ? "true" : undefined}
           data-audio-only={audioOnly ? "true" : undefined}
           // Overlays anchored above the controls (super chat, captions) must
           // clear the same gesture-bar allowance the chrome uses, and only
