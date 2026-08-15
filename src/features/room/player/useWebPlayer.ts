@@ -13,6 +13,12 @@ import {
   setNativePlayerFullscreen,
   toggleNativePlayerFullscreen,
 } from "@/shared/nativePlayerFullscreen";
+import {
+  beginFullscreenTransition,
+  frozenSafeAreaTopValue,
+  shouldFreezeFullscreenInsets,
+  FULLSCREEN_TRANSITION_TIMEOUT_MS,
+} from "@/shared/fullscreenTransition";
 import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
@@ -627,6 +633,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
   const qualityRef = useRef<string | null>(quality);
   const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
+  // Releases the shell-padding freeze held across an entering fullscreen
+  // transition; null whenever no freeze is active.
+  const fullscreenInsetFreezeRef = useRef<(() => void) | null>(null);
+  const fullscreenInsetFreezeTimerRef = useRef<number | null>(null);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
@@ -1545,24 +1555,66 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
   }, [hardStreamKey, mediaKey, profile.telemetry]);
 
+  const releaseFullscreenInsets = useCallback(() => {
+    if (fullscreenInsetFreezeTimerRef.current !== null) {
+      window.clearTimeout(fullscreenInsetFreezeTimerRef.current);
+      fullscreenInsetFreezeTimerRef.current = null;
+    }
+    fullscreenInsetFreezeRef.current?.();
+    fullscreenInsetFreezeRef.current = null;
+  }, []);
+
+  const freezeFullscreenInsets = useCallback(() => {
+    if (typeof document === "undefined") return;
+    if (!shouldFreezeFullscreenInsets(getClientPlatform())) return;
+    // A previous freeze can still be open if the user toggles twice in quick
+    // succession. Release it first so only one is ever outstanding.
+    releaseFullscreenInsets();
+    const shell = document.querySelector<HTMLElement>(".app-shell");
+    const root = document.documentElement;
+    if (!shell || !root) return;
+    // Pin the padding the shell already has rather than a guess, so the freeze
+    // is a true hold: the layout must not move at the moment it is installed.
+    const frozen = frozenSafeAreaTopValue(window.getComputedStyle(shell).paddingTop);
+    if (!frozen) return;
+    fullscreenInsetFreezeRef.current = beginFullscreenTransition(root, frozen);
+    // Backstop for a WebView that resolves the request without ever firing
+    // fullscreenchange, so a freeze can never outlive the interaction.
+    fullscreenInsetFreezeTimerRef.current = window.setTimeout(
+      releaseFullscreenInsets,
+      FULLSCREEN_TRANSITION_TIMEOUT_MS,
+    );
+  }, [releaseFullscreenInsets]);
+
+  // Nothing may outlive the player: a route change mid-transition would
+  // otherwise leave the shell pinned to a stale padding.
+  useEffect(() => releaseFullscreenInsets, [releaseFullscreenInsets]);
+
   useEffect(() => {
     if (!ownsFullscreen) {
       setMode("windowed");
       return;
     }
-    const onFs = () => {
+    const syncMode = () => {
       const el = stageRef.current;
       const fs = fullscreenElementFor(getFullscreenDocument());
       setMode(fs && el && (fs === el || el.contains(fs)) ? "fullscreen" : "windowed");
     };
-    onFs();
+    const onFs = () => {
+      syncMode();
+      // The stage now owns the screen, so any further inset change reflows only
+      // what it already covers. Ending the freeze here keeps it as short as the
+      // transition itself instead of leaning on the timeout backstop.
+      releaseFullscreenInsets();
+    };
+    syncMode();
     document.addEventListener("fullscreenchange", onFs);
     document.addEventListener("webkitfullscreenchange", onFs);
     return () => {
       document.removeEventListener("fullscreenchange", onFs);
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
-  }, [ownsFullscreen]);
+  }, [ownsFullscreen, releaseFullscreenInsets]);
 
   // Desktop Tauri drives fullscreen through the native window, so the OS (F11,
   // a window manager shortcut, or exiting via the title bar) can change it
@@ -1713,21 +1765,29 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     const stage = stageRef.current;
     if (!stage) return;
+    // Entering fullscreen moves the system-bar insets before `:fullscreen`
+    // applies, which would reflow the still-windowed room for a few frames (see
+    // fullscreenTransition). Freeze the shell padding across the request; the
+    // fullscreenchange handler releases it once the stage owns the screen.
+    const entering = !fullscreenElementFor(getFullscreenDocument());
+    if (entering) freezeFullscreenInsets();
     try {
       const toggled = await toggleElementFullscreen(getFullscreenDocument(), stage);
       if (!toggled) {
+        releaseFullscreenInsets();
         setFullscreenError("当前设备不支持全屏播放");
         return;
       }
       setFullscreenError(null);
     } catch (e) {
+      releaseFullscreenInsets();
       const msg =
         typeof e === "object" && e && "message" in e
           ? String((e as { message: string }).message)
           : String(e);
       setFullscreenError(msg || "全屏切换失败");
     }
-  }, [ownsFullscreen]);
+  }, [freezeFullscreenInsets, ownsFullscreen, releaseFullscreenInsets]);
 
   const exitFullscreen = useCallback(async () => {
     // Desktop Tauri drives fullscreen through the native window, which has no
