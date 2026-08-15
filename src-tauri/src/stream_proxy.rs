@@ -164,20 +164,11 @@ pub struct StreamProxy {
 /// also need to remember which playback session is allowed to install it.
 /// Otherwise two overlapping `start` commands can each bind a listener and
 /// the later assignment can orphan the former task.
+#[derive(Default)]
 struct ProxyState {
     active: HashMap<String, ProxyInner>,
     pending: HashMap<String, u64>,
     generation: u64,
-}
-
-impl Default for ProxyState {
-    fn default() -> Self {
-        Self {
-            active: HashMap::new(),
-            pending: HashMap::new(),
-            generation: 0,
-        }
-    }
 }
 
 struct ProxyInner {
@@ -294,14 +285,26 @@ struct TwitchManifestReplacement {
     upstream_url: Url,
 }
 
+#[derive(Clone)]
+struct ProxyLoopContext {
+    client: Client,
+    url: Arc<str>,
+    headers: Arc<HashMap<String, String>>,
+    hls_resources: Arc<HlsResources>,
+    local_origin: Arc<str>,
+    force_hls: bool,
+    twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
+    telemetry: Arc<ProxyTelemetryCounters>,
+}
+
 impl TwitchAdRecoverySession {
     fn new(config: TwitchAdRecovery, client: Client) -> Self {
         Self {
             config,
             client,
             state: AsyncMutex::new(TwitchAdRecoveryState {
-                fallback_urls: [const { None }; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES
-                    .len()],
+                fallback_urls: [const { None };
+                    crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
                 active_profile: None,
                 last_clean_manifest: None,
             }),
@@ -440,12 +443,11 @@ impl HlsResources {
         Self::touch(&mut entries, id);
 
         while entries.access_order.len() > self.max_entries {
-            if let Some(expired) = entries.access_order.pop_front() {
-                if let Some(expired_url) = entries.by_id.remove(&expired) {
-                    if entries.by_url.get(&expired_url) == Some(&expired) {
-                        entries.by_url.remove(&expired_url);
-                    }
-                }
+            if let Some(expired) = entries.access_order.pop_front()
+                && let Some(expired_url) = entries.by_id.remove(&expired)
+                && entries.by_url.get(&expired_url) == Some(&expired)
+            {
+                entries.by_url.remove(&expired_url);
             }
         }
         id
@@ -596,21 +598,18 @@ impl StreamProxy {
         let hls_resources = Arc::new(HlsResources::new());
         let telemetry = Arc::new(ProxyTelemetryCounters::new());
         let local_origin = Arc::<str>::from(format!("http://127.0.0.1:{port}"));
-        let task_telemetry = telemetry.clone();
+        let context = ProxyLoopContext {
+            client,
+            url: Arc::<str>::from(url),
+            headers: Arc::new(headers),
+            hls_resources,
+            local_origin,
+            force_hls,
+            twitch_ad_recovery,
+            telemetry: telemetry.clone(),
+        };
         let task = tauri::async_runtime::spawn(async move {
-            run_proxy_loop(
-                listener,
-                client,
-                Arc::<str>::from(url),
-                Arc::new(headers),
-                hls_resources,
-                local_origin,
-                force_hls,
-                twitch_ad_recovery,
-                task_telemetry,
-                shutdown_rx,
-            )
-            .await;
+            run_proxy_loop(listener, context, shutdown_rx).await;
         });
         // Keep this session's old listener alive until its replacement is
         // completely bound and configured. Other sessions are untouched.
@@ -662,6 +661,7 @@ impl StreamProxy {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use std::collections::HashMap;
     use std::io::{Read, Write};
@@ -1177,14 +1177,7 @@ fn build_probe_client(proxy: Option<&str>) -> AppResult<Client> {
 
 async fn run_proxy_loop(
     listener: TcpListener,
-    client: Client,
-    url: Arc<str>,
-    headers: Arc<HashMap<String, String>>,
-    hls_resources: Arc<HlsResources>,
-    local_origin: Arc<str>,
-    force_hls: bool,
-    twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
-    telemetry: Arc<ProxyTelemetryCounters>,
+    context: ProxyLoopContext,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
@@ -1197,28 +1190,10 @@ async fn run_proxy_loop(
             accept = listener.accept() => {
                 match accept {
                     Ok((mut socket, _)) => {
-                        let client = client.clone();
-                        let url = url.clone();
-                        let headers = headers.clone();
-                        let hls_resources = hls_resources.clone();
-                        let local_origin = local_origin.clone();
-                        let telemetry = telemetry.clone();
-                        let twitch_ad_recovery = twitch_ad_recovery.clone();
-                        let force_hls = force_hls;
+                        let context = context.clone();
+                        let telemetry = context.telemetry.clone();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = handle_client(
-                                &mut socket,
-                                &client,
-                                url.as_ref(),
-                                headers.as_ref(),
-                                hls_resources.as_ref(),
-                                local_origin.as_ref(),
-                                force_hls,
-                                twitch_ad_recovery.as_deref(),
-                                telemetry.as_ref(),
-                            )
-                            .await
-                            {
+                            if let Err(e) = handle_client(&mut socket, context).await {
                                 telemetry.upstream_failures.fetch_add(1, Ordering::Relaxed);
                                 tracing::debug!(%e, "stream proxy client ended");
                             }
@@ -1236,15 +1211,19 @@ async fn run_proxy_loop(
 
 async fn handle_client(
     socket: &mut tokio::net::TcpStream,
-    client: &Client,
-    url: &str,
-    headers: &HashMap<String, String>,
-    hls_resources: &HlsResources,
-    local_origin: &str,
-    force_hls: bool,
-    twitch_ad_recovery: Option<&TwitchAdRecoverySession>,
-    telemetry: &ProxyTelemetryCounters,
+    context: ProxyLoopContext,
 ) -> Result<(), String> {
+    let ProxyLoopContext {
+        client,
+        url,
+        headers,
+        hls_resources,
+        local_origin,
+        force_hls,
+        twitch_ad_recovery,
+        telemetry,
+    } = context;
+
     // Read request head (we only need method/path; body unused for GET).
     let mut buf = [0u8; 4096];
     let n = socket
@@ -1284,7 +1263,8 @@ async fn handle_client(
         return Ok(());
     }
 
-    let target = match resolve_upstream_target(request_target, url, hls_resources) {
+    let target = match resolve_upstream_target(request_target, url.as_ref(), hls_resources.as_ref())
+    {
         Ok(target) => target,
         Err(message) => {
             write_text_response(socket, 404, "Not Found", message).await?;
@@ -1293,7 +1273,7 @@ async fn handle_client(
     };
 
     let mut req = client.get(target);
-    for (k, v) in headers {
+    for (k, v) in headers.as_ref() {
         req = req.header(k.as_str(), v.as_str());
     }
     // Avoid compressed bodies that confuse MSE demuxers.
@@ -1345,9 +1325,9 @@ async fn handle_client(
         telemetry.record_bytes(body.len());
         if is_primary_request
             && is_twitch_ad_manifest(&body)
-            && let Some(recovery) = twitch_ad_recovery
+            && let Some(recovery) = twitch_ad_recovery.as_deref()
             && let Some(replacement) = recovery
-                .replace_ad_manifest(&body, &upstream_url, headers)
+                .replace_ad_manifest(&body, &upstream_url, headers.as_ref())
                 .await
         {
             write_hls_manifest(
@@ -1356,8 +1336,8 @@ async fn handle_client(
                 "OK",
                 &replacement.body,
                 &replacement.upstream_url,
-                local_origin,
-                hls_resources,
+                local_origin.as_ref(),
+                hls_resources.as_ref(),
             )
             .await?;
             return Ok(());
@@ -1382,9 +1362,9 @@ async fn handle_client(
         telemetry.record_bytes(manifest.len());
         let mut manifest_url = upstream_url;
         if is_primary_request
-            && let Some(recovery) = twitch_ad_recovery
+            && let Some(recovery) = twitch_ad_recovery.as_deref()
             && let Some(replacement) = recovery
-                .replace_ad_manifest(&manifest, &manifest_url, headers)
+                .replace_ad_manifest(&manifest, &manifest_url, headers.as_ref())
                 .await
         {
             manifest = replacement.body;
@@ -1396,8 +1376,8 @@ async fn handle_client(
             status_reason,
             &manifest,
             &manifest_url,
-            local_origin,
-            hls_resources,
+            local_origin.as_ref(),
+            hls_resources.as_ref(),
         )
         .await?;
         return Ok(());
@@ -1439,8 +1419,8 @@ async fn handle_client(
                 status_reason,
                 &manifest,
                 &upstream_url,
-                local_origin,
-                hls_resources,
+                local_origin.as_ref(),
+                hls_resources.as_ref(),
             )
             .await?;
             return Ok(());

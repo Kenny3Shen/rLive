@@ -922,7 +922,7 @@ fn normalize_login(value: &str) -> AppResult<String> {
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    if login.len() < 1
+    if login.is_empty()
         || login.len() > 25
         || !login
             .bytes()
@@ -1114,13 +1114,13 @@ fn parse_hls_variants(manifest: &str, master_url: &Url) -> Vec<TwitchVariant> {
     for raw_line in manifest.lines() {
         let line = raw_line.trim();
         if let Some(attributes) = line.strip_prefix("#EXT-X-MEDIA:") {
-            if hls_attribute(attributes, "TYPE").as_deref() == Some("VIDEO") {
-                if let (Some(group_id), Some(name)) = (
+            if hls_attribute(attributes, "TYPE").as_deref() == Some("VIDEO")
+                && let (Some(group_id), Some(name)) = (
                     hls_attribute(attributes, "GROUP-ID"),
                     hls_attribute(attributes, "NAME"),
-                ) {
-                    media_names.insert(group_id, name);
-                }
+                )
+            {
+                media_names.insert(group_id, name);
             }
             continue;
         }

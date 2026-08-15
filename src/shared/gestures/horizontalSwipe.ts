@@ -33,7 +33,7 @@ const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
  * finger by then, so a drag carried that far already reads as committed. Near
  * the midpoint it did not — a deliberate third-of-a-screen drag sprang back.
  */
-export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.10;
+export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.1;
 /**
  * Release speed, in px/ms, above which a flick pages regardless of progress.
  *

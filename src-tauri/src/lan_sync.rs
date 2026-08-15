@@ -172,10 +172,10 @@ fn pairing_code() -> String {
 }
 
 fn set_session_state(info: &Arc<Mutex<LanSyncSessionInfo>>, state: LanSyncSessionState) {
-    if let Ok(mut info) = info.lock() {
-        if info.status == LanSyncSessionState::Waiting {
-            info.status = state;
-        }
+    if let Ok(mut info) = info.lock()
+        && info.status == LanSyncSessionState::Waiting
+    {
+        info.status = state;
     }
 }
 

@@ -504,10 +504,10 @@ fn for_each_packet(data: &[u8], mut visit: impl FnMut(&str)) {
             continue;
         };
 
-        if let Ok(stt) = std::str::from_utf8(body) {
-            if !stt.is_empty() {
-                visit(stt);
-            }
+        if let Ok(stt) = std::str::from_utf8(body)
+            && !stt.is_empty()
+        {
+            visit(stt);
         }
         offset += total;
         resync_bytes = 0;
@@ -531,10 +531,10 @@ pub fn unescape_slash_at(s: &str) -> String {
 /// the first field, but retain the generic fallback so malformed/reordered
 /// packets keep the former parser's behaviour.
 fn stt_type(stt: &str) -> Option<&str> {
-    if let Some(rest) = stt.strip_prefix("type@=") {
-        if let Some(value) = rest.split('/').next().filter(|value| !value.is_empty()) {
-            return Some(value);
-        }
+    if let Some(rest) = stt.strip_prefix("type@=")
+        && let Some(value) = rest.split('/').next().filter(|value| !value.is_empty())
+    {
+        return Some(value);
     }
 
     stt.split('/').find_map(|field| {
@@ -853,7 +853,7 @@ async fn discover_send_proxy_urls(
             .with_site("douyu")
             .retryable()
         })?;
-    let urls = parse_send_proxy_urls(payload).map_err(|error| {
+    let urls = parse_send_proxy_urls(payload).inspect_err(|error| {
         tracing::warn!(
             %attempt_id,
             room_id,
@@ -861,7 +861,6 @@ async fn discover_send_proxy_urls(
             error_code = %error.code,
             "douyu send server discovery response was rejected"
         );
-        error
     })?;
     Ok(urls)
 }
@@ -996,7 +995,7 @@ async fn fetch_send_encryption_key(
                 .with_site("douyu")
                 .retryable()
         })?;
-    encryption_key_from_response(response).map_err(|error| {
+    encryption_key_from_response(response).inspect_err(|error| {
         tracing::warn!(
             %attempt_id,
             room_id,
@@ -1004,7 +1003,6 @@ async fn fetch_send_encryption_key(
             error_code = %error.code,
             "douyu send encryption response was rejected"
         );
-        error
     })
 }
 
@@ -1487,9 +1485,7 @@ fn send_gateway_reply_from_binary(data: &[u8]) -> Option<SendGatewayReply> {
             &candidate,
             SendGatewayReply::Rejected(_) | SendGatewayReply::EncryptionChallengeInvalid
         );
-        if terminal {
-            reply = Some(candidate);
-        } else if reply.is_none() {
+        if terminal || reply.is_none() {
             reply = Some(candidate);
         }
     });

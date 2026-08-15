@@ -84,10 +84,10 @@ impl SelfDanmakuIdentity {
         // An event ID is authoritative when the Cookie yielded an ID as well.
         // Falling back to the display name in that case could highlight a
         // different user whose visible nickname happens to match ours.
-        if let Some(event_id) = event.user_id.as_deref().and_then(normalize_user_id) {
-            if !self.user_ids.is_empty() {
-                return self.user_ids.contains(&event_id);
-            }
+        if let Some(event_id) = event.user_id.as_deref().and_then(normalize_user_id)
+            && !self.user_ids.is_empty()
+        {
+            return self.user_ids.contains(&event_id);
         }
 
         normalize_user_name(&event.user).is_some_and(|name| self.user_names.contains(&name))
@@ -413,18 +413,32 @@ fn emit_batch(app: &AppHandle, generation: u64, batch: &mut Vec<DanmakuEvent>) {
     batch.clear();
 }
 
+pub(crate) struct DanmakuConnectRequest<'a> {
+    pub(crate) generation: u64,
+    pub(crate) site_id: SiteId,
+    pub(crate) room_id: &'a str,
+    pub(crate) detail_raw: &'a serde_json::Value,
+    pub(crate) cookie: &'a str,
+    pub(crate) identity_cookie: &'a str,
+    pub(crate) proxy: Option<&'a str>,
+    pub(crate) notice: Option<String>,
+}
+
 pub async fn connect(
     app: AppHandle,
     manager: &DanmakuManager,
-    generation: u64,
-    site_id: SiteId,
-    room_id: &str,
-    detail_raw: &serde_json::Value,
-    cookie: &str,
-    identity_cookie: &str,
-    proxy: Option<&str>,
-    notice: Option<String>,
+    request: DanmakuConnectRequest<'_>,
 ) -> AppResult<()> {
+    let DanmakuConnectRequest {
+        generation,
+        site_id,
+        room_id,
+        detail_raw,
+        cookie,
+        identity_cookie,
+        proxy,
+        notice,
+    } = request;
     if !manager.is_current(generation) {
         return Ok(());
     }

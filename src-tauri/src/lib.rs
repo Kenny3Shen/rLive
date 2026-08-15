@@ -134,7 +134,7 @@ impl<'a> MakeWriter<'a> for AppLogWriter {
 /// values, tokens, outgoing chat text, and successful operation progress must
 /// never be written to disk.
 fn init_logging(directory: &std::path::Path) {
-    if let Err(error) = fs::create_dir_all(&directory) {
+    if let Err(error) = fs::create_dir_all(directory) {
         eprintln!("rLive log directory unavailable: {error}");
         return;
     }
