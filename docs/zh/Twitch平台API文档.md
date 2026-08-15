@@ -4,15 +4,15 @@
 
 ## 能力总览
 
-| 能力 | 状态 | rLive 行为 |
-| --- | --- | --- |
-| 分类、推荐、搜索 | 已支持分页（桌面与移动一致） | 推荐和分区按语言分片翻页，搜索使用官方 offset cursor，均只需公开网页 `Client-ID`。 |
-| 房间详情 | 已支持 | 通过主播 login 解析直播标题、游戏、观众数、封面与开播状态。 |
-| HLS 播放与清晰度 | 已支持 | 取得短时播放访问令牌并解析 HLS master playlist；切换清晰度会重新获取。 |
-| 广告占位规避 | 尽力支持 | 检测服务端插播后依次尝试备用播放器类型；实测 Twitch 按 `playerType` 区别插播，`popout` 可在保留完整清晰度的前提下避开，`autoplay` 干净但上限 `360p`。 |
-| 实时弹幕接收 | 已支持 | 匿名 IRC WebSocket 接收普通频道聊天。 |
-| 账号与登录 | 未接入 | 当前没有 Twitch Cookie/OAuth 登录或账户操作。 |
-| 弹幕发送 | 未支持 | 匿名 IRC 仅用于接收；不发送聊天。 |
+| 能力             | 状态                         | rLive 行为                                                                                                                                                   |
+| ---------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 分类、推荐、搜索 | 已支持分页（桌面与移动一致） | 推荐和分区按语言分片翻页，搜索使用官方 offset cursor，均只需公开网页`Client-ID`。                                                                          |
+| 房间详情         | 已支持                       | 通过主播 login 解析直播标题、游戏、观众数、封面与开播状态。                                                                                                  |
+| HLS 播放与清晰度 | 已支持                       | 取得短时播放访问令牌并解析 HLS master playlist；切换清晰度会重新获取。                                                                                       |
+| 广告占位规避     | 尽力支持                     | 检测服务端插播后依次尝试备用播放器类型；实测 Twitch 按`playerType` 区别插播，`popout` 可在保留完整清晰度的前提下避开，`autoplay` 干净但上限 `360p`。 |
+| 实时弹幕接收     | 已支持                       | 匿名 IRC WebSocket 接收普通频道聊天。                                                                                                                        |
+| 账号与登录       | 未接入                       | 当前没有 Twitch Cookie/OAuth 登录或账户操作。                                                                                                                |
+| 弹幕发送         | 未支持                       | 匿名 IRC 仅用于接收；不发送聊天。                                                                                                                            |
 
 ## rLive 接入接口
 
@@ -34,13 +34,13 @@ Twitch 拒绝所有没有浏览器完整性上下文的 Relay 游标：只要请
 
 Twitch 的广告插播由服务端在签发播放令牌时决定，令牌申请所用的 `playerType` 是决定因素之一，而且**不同 `playerType` 的结果并不相同**。对 `kaicenat` 连续采样 6 次（每次间隔 15–20 秒），各档位判定完全稳定：
 
-| `playerType` | 是否被插播 | 清晰度阶梯 |
-|---|---|---|
-| `site`（主令牌） | 否 | 7 档，最高 `1080p60 (source)` |
-| `popout` | 否 | 7 档，最高 `1080p60 (source)` |
-| `autoplay`（android） | 否 | 3 档，上限 `360p` |
-| `embed` | 是 | 7 档 |
-| `picture-by-picture` | 是 | 3 档，上限 `360p` |
+| `playerType`          | 是否被插播 | 清晰度阶梯                     |
+| ----------------------- | ---------- | ------------------------------ |
+| `site`（主令牌）      | 否         | 7 档，最高`1080p60 (source)` |
+| `popout`              | 否         | 7 档，最高`1080p60 (source)` |
+| `autoplay`（android） | 否         | 3 档，上限`360p`             |
+| `embed`               | 是         | 7 档                           |
+| `picture-by-picture`  | 是         | 3 档，上限`360p`             |
 
 因此主令牌保持网页默认的 `site/web`（`TWITCH_PRIMARY_PLAYER_TYPE`）：它同时具备「无插播」和「完整清晰度阶梯」两个条件。
 
@@ -60,3 +60,8 @@ Twitch 的广告插播由服务端在签发播放令牌时决定，令牌申请�
 
 - 站点、语言分片分页与播放：`src-tauri/src/sites/twitch.rs`
 - 匿名 IRC 弹幕：`src-tauri/src/danmu_rs/twitch.rs`
+
+## 参考
+
+- [twitch-graphql-api](https://deepwiki.com/mauricew/twitch-graphql-api)
+- [TwitchAdSolutions](https://github.com/pixeltris/TwitchAdSolutions)
