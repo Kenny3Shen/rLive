@@ -51,11 +51,7 @@ import {
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
 import { SiteLogo } from "@/shared/components/SiteLogo";
-import {
-  isMobileClient,
-  isWindowsDesktop,
-  supportsNativeHostFeatures,
-} from "@/shared/clientPlatform";
+import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
 import { PagePan } from "@/shared/motion/PagePan";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
@@ -73,7 +69,6 @@ import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { LanSyncField } from "@/features/settings/LanSyncField";
-import { WebBridgeField } from "@/features/settings/WebBridgeField";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -591,7 +586,15 @@ function AccountCard({
     return () => {
       cancelled = true;
     };
-  }, [expired, hasCookie, profileLoading, siteId, refreshProfile, markDanmakuCookieChanged, refreshCookieDependentQueries]);
+  }, [
+    expired,
+    hasCookie,
+    profileLoading,
+    siteId,
+    refreshProfile,
+    markDanmakuCookieChanged,
+    refreshCookieDependentQueries,
+  ]);
 
   return (
     <>
@@ -606,9 +609,7 @@ function AccountCard({
               {accountState}
             </Badge>
             {displayName && (
-              <span className="min-w-0 truncate text-sm text-muted-foreground">
-                {displayName}
-              </span>
+              <span className="min-w-0 truncate text-sm text-muted-foreground">{displayName}</span>
             )}
           </div>
           {notice && <FieldDescription role="status">{notice}</FieldDescription>}
@@ -648,7 +649,8 @@ function AccountCard({
                     </AlertDialogMedia>
                     <AlertDialogTitle>退出{title}登录？</AlertDialogTitle>
                     <AlertDialogDescription>
-                      将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
+                      将删除本机保存的{title}{" "}
+                      Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   {logoutError && (
@@ -1575,10 +1577,7 @@ function SettingsCategoryOverview({
         .filter(
           (category): category is (typeof settingsCategories)[number] =>
             category !== undefined &&
-            matchesSearch(
-              `${category.label} ${settingsCategorySearchText[category.value]}`,
-              query,
-            ),
+            matchesSearch(`${category.label} ${settingsCategorySearchText[category.value]}`, query),
         ),
     }))
     .filter((group) => group.categories.length > 0);
@@ -1745,7 +1744,6 @@ export function SettingsPage() {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const mobileClient = isMobileClient();
-  const nativeHostFeatures = supportsNativeHostFeatures(isTauri());
   const {
     category,
     key: settingsMotionKey,
@@ -1946,23 +1944,10 @@ export function SettingsPage() {
         <Section title="局域网同步" keywords="局域网 同步 Wi-Fi 配对 发送 接收">
           <LanSyncField />
         </Section>
-        {nativeHostFeatures && (
-          <Section title="浏览器访问" keywords="web 浏览器 网页 局域网 端口 令牌">
-            <WebBridgeField />
-          </Section>
-        )}
         <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
           <Field orientation="horizontal" data-invalid={profileError ? true : undefined}>
             <FieldContent>
               <FieldTitle>配置档案</FieldTitle>
-              {!nativeHostFeatures && (
-                // Reading or writing a file needs the OS dialog, which a browser
-                // tab cannot open. Local network sync above transfers the same
-                // profile without one.
-                <FieldDescription>
-                  浏览器访问不支持读写本机文件，请在 rLive 客户端中导入或导出配置，或使用上方的局域网同步。
-                </FieldDescription>
-              )}
               {profileError ? (
                 <FieldError>{profileError}</FieldError>
               ) : (
@@ -1973,33 +1958,31 @@ export function SettingsPage() {
                 )
               )}
             </FieldContent>
-            {nativeHostFeatures && (
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                <Button
-                  onClick={() => void chooseProfileForExport()}
-                  disabled={profileAction !== null}
-                >
-                  {profileAction === "export" ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <Download data-icon="inline-start" aria-hidden />
-                  )}
-                  {profileAction === "export" ? "正在导出…" : "导出配置"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => void chooseProfileForImport()}
-                  disabled={profileAction !== null}
-                >
-                  {profileAction === "import" ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : (
-                    <Upload data-icon="inline-start" aria-hidden />
-                  )}
-                  {profileAction === "import" ? "正在导入…" : "导入配置"}
-                </Button>
-              </div>
-            )}
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <Button
+                onClick={() => void chooseProfileForExport()}
+                disabled={profileAction !== null}
+              >
+                {profileAction === "export" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Download data-icon="inline-start" aria-hidden />
+                )}
+                {profileAction === "export" ? "正在导出…" : "导出配置"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void chooseProfileForImport()}
+                disabled={profileAction !== null}
+              >
+                {profileAction === "import" ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Upload data-icon="inline-start" aria-hidden />
+                )}
+                {profileAction === "import" ? "正在导入…" : "导入配置"}
+              </Button>
+            </div>
           </Field>
         </Section>
       </SettingsContent>
@@ -2144,9 +2127,7 @@ export function SettingsPage() {
                   </h1>
                 </div>
               </div>
-              <div className="min-w-0 max-w-4xl">
-                {settingsCategoryPanels[category]}
-              </div>
+              <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
             </div>
           ) : (
             <SettingsCategoryOverview

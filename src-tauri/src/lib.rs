@@ -16,7 +16,6 @@ mod settings;
 mod sites;
 mod state;
 mod stream_proxy;
-mod web_bridge;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -68,7 +67,6 @@ use commands::site::{
 use commands::stream_proxy::{
     stream_proxy_probe_sources, stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry,
 };
-use commands::web_bridge::{web_bridge_start, web_bridge_status, web_bridge_stop};
 use state::AppState;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -205,26 +203,6 @@ pub fn run() {
             let state = AppState::init(&directories.root)?;
             app.manage(state);
 
-            // Debug builds only: start the browser bridge without the settings
-            // toggle, so the HTTP surface can be exercised from a terminal or a
-            // headless environment where the UI cannot be clicked. Release
-            // builds keep the bridge strictly opt-in from the client, which is
-            // the security property documented for it -- hence
-            // `debug_assertions` rather than a runtime flag a shipped binary
-            // could be coaxed into honouring. Loopback only: LAN exposure stays
-            // a deliberate in-app choice because it hands over local accounts.
-            #[cfg(debug_assertions)]
-            if std::env::var_os("RLIVE_WEB_BRIDGE_AUTOSTART").is_some() {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let bridge = &handle.state::<AppState>().inner().web_bridge;
-                    match bridge.start(handle.clone(), false).await {
-                        Ok(info) => tracing::info!(url = %info.url, "web bridge autostarted"),
-                        Err(error) => tracing::error!(?error, "web bridge autostart failed"),
-                    }
-                });
-            }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -301,9 +279,6 @@ pub fn run() {
             lan_sync_status,
             lan_sync_stop,
             lan_sync_receive,
-            web_bridge_start,
-            web_bridge_status,
-            web_bridge_stop,
             android_player_controls_get_state,
             android_player_controls_set_media_volume,
             android_player_controls_set_brightness,
@@ -324,7 +299,6 @@ pub fn run() {
                     state.stream_proxy.stop();
                     state.image_proxy.stop();
                     state.lan_sync.stop();
-                    state.web_bridge.stop();
                     state.danmaku.disconnect();
                 }
                 std::process::exit(0);

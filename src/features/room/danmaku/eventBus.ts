@@ -1,6 +1,4 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { webBridgeStatus, withBridgeToken } from "@/shared/api/webBridge";
 import type { DanmakuEvent } from "@/shared/types/live";
 import { type DanmakuBatch, validatedDanmakuBatch } from "./batch";
 
@@ -50,49 +48,15 @@ function dispatch(payload: unknown): void {
   }
 }
 
-/**
- * Attaches the transport-appropriate batch listener.
- *
- * The WebView receives batches as Tauri events. A browser tab served by rLive's
- * local bridge receives the identical envelopes as Server-Sent Events, so the
- * validation, epoch fencing, and fan-out below are shared by both transports.
- */
-function attachBatchListener(handler: (payload: unknown) => void): Promise<UnlistenFn> {
-  if (isTauri()) {
-    return listen<DanmakuBatch>("danmaku-batch", (event) => handler(event.payload));
-  }
-  return attachBridgeListener(handler);
-}
-
-async function attachBridgeListener(handler: (payload: unknown) => void): Promise<UnlistenFn> {
-  if (!(await webBridgeStatus())) {
-    throw new Error("danmaku batches require the rLive client or its local bridge");
-  }
-
-  const source = new EventSource(withBridgeToken("/api/events"));
-  source.addEventListener("danmaku-batch", (event) => {
-    try {
-      handler(JSON.parse((event as MessageEvent<string>).data));
-    } catch {
-      // A truncated or malformed frame is dropped like any other invalid batch.
-    }
-  });
-  // EventSource reconnects on its own, so a transient network error must not
-  // tear the subscription down; only an explicit unsubscribe closes it.
-  return () => {
-    source.close();
-  };
-}
-
 function ensureNativeListener(): void {
   if (nativeUnlisten || listenerPromise || listenerRetryTimer !== null || subscribers.size === 0) {
     return;
   }
 
   const generation = ++listenerGeneration;
-  listenerPromise = attachBatchListener((payload) => {
+  listenerPromise = listen<DanmakuBatch>("danmaku-batch", (event) => {
     if (generation !== listenerGeneration) return;
-    dispatch(payload);
+    dispatch(event.payload);
   }).then(
     (unlisten) => {
       listenerPromise = null;
@@ -108,9 +72,8 @@ function ensureNativeListener(): void {
     },
     () => {
       listenerPromise = null;
-      // A transient bridge failure should not leave every mounted danmaku
-      // sink permanently disconnected. Retry at a bounded cadence instead of
-      // spinning while Tauri is starting or recovering.
+      // A transient native listener failure should not leave every mounted
+      // danmaku sink permanently disconnected. Retry at a bounded cadence.
       if (subscribers.size > 0 && listenerRetryTimer === null) {
         listenerRetryTimer = window.setTimeout(() => {
           listenerRetryTimer = null;
