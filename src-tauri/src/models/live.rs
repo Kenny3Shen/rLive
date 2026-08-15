@@ -161,18 +161,14 @@ fn is_plausible_live_started_at(value: i64) -> bool {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PlaybackProtocol {
     Flv,
     Hls,
     MpegTs,
     Native,
+    #[default]
     Unknown,
-}
-
-impl Default for PlaybackProtocol {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl PlaybackProtocol {

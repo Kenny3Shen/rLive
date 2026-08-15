@@ -4,13 +4,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardAction, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Empty,
   EmptyContent,
@@ -242,7 +236,11 @@ function IptvChannelGridSkeleton() {
 }
 
 /** Compact card-corner status: icon plus latency, no textual verdict. */
-function IptvCardAvailability({ availability }: { availability: IptvAvailabilityState | undefined }) {
+function IptvCardAvailability({
+  availability,
+}: {
+  availability: IptvAvailabilityState | undefined;
+}) {
   if (!availability) return null;
   if (availability.status === "checking") {
     return <Spinner className="size-4 text-muted-foreground" aria-label="检测中" />;

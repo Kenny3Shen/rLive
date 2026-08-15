@@ -285,8 +285,8 @@ impl BilibiliSite {
         if !self.cookie.is_empty() {
             request = request.header("cookie", &self.cookie);
         }
-        let resp = request.send().await.map_err(|e| map_http(e))?;
-        let text = resp.text().await.map_err(|e| map_http(e))?;
+        let resp = request.send().await.map_err(map_http)?;
+        let text = resp.text().await.map_err(map_http)?;
         parse_buvid(&text)
     }
 
@@ -333,21 +333,19 @@ impl BilibiliSite {
             .with_site("bilibili"));
         }
         // Bilibili often returns code != 0 in body with HTTP 200.
-        if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
-                if code != 0 {
-                    let msg = v
-                        .get("message")
-                        .or_else(|| v.get("msg"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("unknown");
-                    return Err(AppError::new(
-                        "bilibili_api_error",
-                        format!("code={code} message={msg}"),
-                    )
-                    .with_site("bilibili"));
-                }
-            }
+        if let Ok(v) = serde_json::from_str::<Value>(&text)
+            && let Some(code) = v.get("code").and_then(|c| c.as_i64())
+            && code != 0
+        {
+            let msg = v
+                .get("message")
+                .or_else(|| v.get("msg"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown");
+            return Err(
+                AppError::new("bilibili_api_error", format!("code={code} message={msg}"))
+                    .with_site("bilibili"),
+            );
         }
         Ok(text)
     }
@@ -389,21 +387,20 @@ impl BilibiliSite {
             )
             .with_site("bilibili"));
         }
-        if let Ok(response) = serde_json::from_str::<Value>(&text) {
-            if let Some(code) = response.get("code").and_then(Value::as_i64) {
-                if code != 0 {
-                    let message = response
-                        .get("message")
-                        .or_else(|| response.get("msg"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown");
-                    return Err(AppError::new(
-                        "bilibili_api_error",
-                        format!("code={code} message={message}"),
-                    )
-                    .with_site("bilibili"));
-                }
-            }
+        if let Ok(response) = serde_json::from_str::<Value>(&text)
+            && let Some(code) = response.get("code").and_then(Value::as_i64)
+            && code != 0
+        {
+            let message = response
+                .get("message")
+                .or_else(|| response.get("msg"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return Err(AppError::new(
+                "bilibili_api_error",
+                format!("code={code} message={message}"),
+            )
+            .with_site("bilibili"));
         }
         Ok(text)
     }
@@ -497,21 +494,19 @@ impl BilibiliSite {
                     .with_site("bilibili"),
             );
         }
-        if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
-                if code != 0 {
-                    let msg = v
-                        .get("message")
-                        .or_else(|| v.get("msg"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("unknown");
-                    return Err(AppError::new(
-                        "bilibili_api_error",
-                        format!("code={code} message={msg}"),
-                    )
-                    .with_site("bilibili"));
-                }
-            }
+        if let Ok(v) = serde_json::from_str::<Value>(&text)
+            && let Some(code) = v.get("code").and_then(|c| c.as_i64())
+            && code != 0
+        {
+            let msg = v
+                .get("message")
+                .or_else(|| v.get("msg"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown");
+            return Err(
+                AppError::new("bilibili_api_error", format!("code={code} message={msg}"))
+                    .with_site("bilibili"),
+            );
         }
         Ok(text)
     }
@@ -574,7 +569,12 @@ impl BilibiliSite {
         const RETRY_DELAYS_MS: &[u64] = &[800, 1600];
         let url = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
         let mut last_err = None;
-        for attempt in 0..=RETRY_DELAYS_MS.len() {
+        for (attempt, delay) in RETRY_DELAYS_MS
+            .iter()
+            .copied()
+            .chain(std::iter::once(0))
+            .enumerate()
+        {
             // Throttle: min 450ms between play-info calls.
             {
                 let mut gate = self.play_gate.lock().await;
@@ -592,7 +592,6 @@ impl BilibiliSite {
                 Err(e) => {
                     let is_429 = e.code == "bilibili_rate_limit";
                     if is_429 && attempt < RETRY_DELAYS_MS.len() {
-                        let delay = RETRY_DELAYS_MS[attempt];
                         tracing::warn!(
                             attempt = attempt + 1,
                             delay_ms = delay,
@@ -640,21 +639,19 @@ impl BilibiliSite {
                     .with_site("bilibili"),
             );
         }
-        if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
-                if code != 0 {
-                    let msg = v
-                        .get("message")
-                        .or_else(|| v.get("msg"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("unknown");
-                    return Err(AppError::new(
-                        "bilibili_api_error",
-                        format!("code={code} message={msg}"),
-                    )
-                    .with_site("bilibili"));
-                }
-            }
+        if let Ok(v) = serde_json::from_str::<Value>(&text)
+            && let Some(code) = v.get("code").and_then(|c| c.as_i64())
+            && code != 0
+        {
+            let msg = v
+                .get("message")
+                .or_else(|| v.get("msg"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown");
+            return Err(
+                AppError::new("bilibili_api_error", format!("code={code} message={msg}"))
+                    .with_site("bilibili"),
+            );
         }
         Ok(text)
     }
@@ -971,11 +968,11 @@ mod live_tests {
 
         let mut detail = None;
         for item in page.items.iter().take(10) {
-            if let Ok(d) = site.get_room_detail(&item.room_id).await {
-                if d.status {
-                    detail = Some(d);
-                    break;
-                }
+            if let Ok(d) = site.get_room_detail(&item.room_id).await
+                && d.status
+            {
+                detail = Some(d);
+                break;
             }
         }
         let detail = detail.expect("need at least one live room in recommend");

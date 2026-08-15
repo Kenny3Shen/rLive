@@ -96,9 +96,7 @@ impl DouyuSite {
             .get_json(&url, &format!("https://www.douyu.com/{room_id}"))
             .await?;
         // Sometimes wrapped
-        if v.get("room").is_some() {
-            Ok(v)
-        } else if v.get("data").is_some() {
+        if v.get("room").is_some() || v.get("data").is_some() {
             Ok(v)
         } else {
             Ok(serde_json::json!({ "room": v }))

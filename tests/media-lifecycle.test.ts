@@ -23,6 +23,8 @@ describe("shared media lifecycle interface", () => {
     expect(html).toContain("data-iptv-player-stage");
     expect(html).toContain("data-player-engine-root");
     expect(html).toContain("data-player-video");
+    expect(html).toContain("data-player-hud");
+    expect(html).toContain("data-[visible=false]:opacity-0");
     expect(html).toContain("新闻频道");
   });
 

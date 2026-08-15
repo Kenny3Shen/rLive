@@ -98,11 +98,11 @@ pub struct Db;
 impl Db {
     pub fn open(path: impl AsRef<Path>) -> AppResult<Connection> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| AppError::new("db_io_error", format!("create data dir: {e}")))?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::new("db_io_error", format!("create data dir: {e}")))?;
         }
         let conn =
             Connection::open(path).map_err(|e| AppError::new("db_open_error", e.to_string()))?;
