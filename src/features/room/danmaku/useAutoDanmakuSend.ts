@@ -14,7 +14,7 @@ import { getDanmakuSendConfig, type DanmakuSendStatus } from "./sending";
 
 export type AutoDanmakuSendPhase = "off" | "waiting" | "sending" | "paused";
 
-/** Session-only state consumed by the right-side danmaku settings panel. */
+/** Session-only state shared by the room title bar and player action menus. */
 export type AutoDanmakuSendController = {
   text: string;
   intervalSeconds: number;
