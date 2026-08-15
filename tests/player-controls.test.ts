@@ -31,6 +31,8 @@ import {
   shouldRunDanmakuCanvas,
   shouldShowRoomDanmakuPanel,
   sidePanelStartsOpen,
+  usesPortraitStackLayout,
+  isPortraitStackedPlayer,
 } from "../src/features/room/PlayerPane";
 import {
   playerHudOnlineLabel,
@@ -155,6 +157,20 @@ describe("mobile player layout", () => {
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {
     expect(sidePanelStartsOpen(false)).toBe(true);
     expect(sidePanelStartsOpen(true)).toBe(false);
+  });
+
+  test("the portrait stack marker ignores fullscreen so CSS can lead the re-render", () => {
+    // `player.mode` trails the browser's `:fullscreen` by one state update. The
+    // marker must stay true across that frame, or the CSS keyed off it would lag
+    // exactly as much as the React classes it exists to pre-empt.
+    expect(usesPortraitStackLayout(true, true)).toBe(true);
+    expect(usesPortraitStackLayout(true, false)).toBe(false);
+    expect(usesPortraitStackLayout(false, true)).toBe(false);
+
+    // The stack itself still yields the screen to fullscreen.
+    expect(isPortraitStackedPlayer(true, false)).toBe(true);
+    expect(isPortraitStackedPlayer(true, true)).toBe(false);
+    expect(isPortraitStackedPlayer(false, false)).toBe(false);
   });
 
   test("retains the mounted danmaku panel while mobile fullscreen hides it", () => {
