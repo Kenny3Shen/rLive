@@ -19,6 +19,7 @@ import {
   shouldFreezeFullscreenInsets,
   FULLSCREEN_TRANSITION_TIMEOUT_MS,
 } from "@/shared/fullscreenTransition";
+import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
 import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
@@ -637,6 +638,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   // transition; null whenever no freeze is active.
   const fullscreenInsetFreezeRef = useRef<(() => void) | null>(null);
   const fullscreenInsetFreezeTimerRef = useRef<number | null>(null);
+  /** Mirrors the in-page fullscreen state for teardown paths that have no `mode`. */
+  const inPageFullscreenRef = useRef(false);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
@@ -1593,8 +1596,18 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   useEffect(() => {
     if (!ownsFullscreen) {
       setMode("windowed");
+      // Losing ownership mid-fullscreen (a secondary player taking over) drops
+      // the in-page layer, so the bars it hid have to come back with it.
+      if (inPageFullscreenRef.current) {
+        inPageFullscreenRef.current = false;
+        void setAndroidImmersive(false).catch(() => {});
+      }
       return;
     }
+    // Android Tauri and desktop Tauri both own `mode` themselves. Syncing from
+    // the fullscreen element there would immediately force `windowed`, since
+    // neither path ever produces one.
+    if (isTauriDesktop() || runningOnAndroidTauri()) return;
     const syncMode = () => {
       const el = stageRef.current;
       const fs = fullscreenElementFor(getFullscreenDocument());
@@ -1738,6 +1751,35 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     await exitPictureInPictureForVideo(getPictureInPictureDocument(), videoRef.current);
   }, []);
 
+  /**
+   * Enters or leaves the in-page fullscreen layer used by Android Tauri.
+   *
+   * `mode` is the whole layout switch here — no browser fullscreen element is
+   * involved — so it is set first and the native bars follow. A failed or
+   * missing native command still leaves a working fullscreen (just with the
+   * status bar visible), which is why the invoke never blocks the mode change.
+   *
+   * The bar animation still moves `env(safe-area-inset-top)` over several
+   * frames, and `.app-shell` behind the layer consumes it as `padding-top`. The
+   * stage is already `position: fixed` by then so the picture itself cannot
+   * move, but the room chrome underneath would still reflow — visible around
+   * the edges before the layer settles. Freezing the shell padding across the
+   * transition holds it still; the timeout releases it, since no
+   * `fullscreenchange` is coming on this path.
+   */
+  const setInPageFullscreen = useCallback(
+    (next: boolean) => {
+      if (next) freezeFullscreenInsets();
+      else releaseFullscreenInsets();
+      setMode(next ? "fullscreen" : "windowed");
+      inPageFullscreenRef.current = next;
+      void setAndroidImmersive(next).catch(() => {
+        // An older APK without the command must not break fullscreen.
+      });
+    },
+    [freezeFullscreenInsets, releaseFullscreenInsets],
+  );
+
   const toggleFullscreen = useCallback(async () => {
     if (!ownsFullscreen) return;
     // Desktop Tauri uses a real OS-window fullscreen. This covers the taskbar
@@ -1760,6 +1802,15 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             : String(e);
         setFullscreenError(msg || "全屏切换失败");
       }
+      return;
+    }
+
+    // Android Tauri reuses the same in-page layer. Requesting browser
+    // fullscreen there makes Chromium reparent the rendered content into a new
+    // View, and that surface handoff is the black flicker (see androidImmersive).
+    if (runningOnAndroidTauri()) {
+      setInPageFullscreen(mode !== "fullscreen");
+      setFullscreenError(null);
       return;
     }
 
@@ -1787,7 +1838,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           : String(e);
       setFullscreenError(msg || "全屏切换失败");
     }
-  }, [freezeFullscreenInsets, ownsFullscreen, releaseFullscreenInsets]);
+  }, [freezeFullscreenInsets, mode, ownsFullscreen, releaseFullscreenInsets, setInPageFullscreen]);
 
   const exitFullscreen = useCallback(async () => {
     // Desktop Tauri drives fullscreen through the native window, which has no
@@ -1805,6 +1856,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       }
       return;
     }
+    // Android's in-page layer is page state, so leaving it is a mode change
+    // plus restoring the system bars. Driven off the ref rather than `mode` so
+    // this callback keeps a stable identity for its many consumers.
+    if (runningOnAndroidTauri()) {
+      if (inPageFullscreenRef.current) setInPageFullscreen(false);
+      return;
+    }
     if (!fullscreenElementFor(getFullscreenDocument())) return;
     const documentRef = getFullscreenDocument();
     const exit =
@@ -1814,7 +1872,23 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     if (exit && documentRef) {
       await Promise.resolve(exit.call(documentRef)).catch(() => {});
     }
-  }, []);
+  }, [setInPageFullscreen]);
+
+  /**
+   * The immersive bars belong to the fullscreen player, not to the Activity.
+   *
+   * Leaving the room straight from fullscreen (Back on the room, a route
+   * change, a room switch) unmounts this hook without any exit call, so restore
+   * the bars here or the next page would be laid out under hidden ones.
+   */
+  useEffect(
+    () => () => {
+      if (!inPageFullscreenRef.current) return;
+      inPageFullscreenRef.current = false;
+      void setAndroidImmersive(false).catch(() => {});
+    },
+    [],
+  );
 
   useEffect(() => {
     if (mode !== "fullscreen") return;

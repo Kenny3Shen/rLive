@@ -9,6 +9,10 @@ import {
   videoAspectRatio,
 } from "../src/features/room/player/androidOrientation";
 import {
+  setAndroidImmersive,
+  usesInPageFullscreen,
+} from "../src/features/room/player/androidImmersive";
+import {
   createNativeFullscreenSession,
   restoreNativePlayerMaximizedState,
   setNativePlayerFullscreen,
@@ -149,5 +153,87 @@ describe("Android fullscreen orientation", () => {
     expect(videoAspectRatio({ videoWidth: 0, videoHeight: 1080 })).toBeNull();
     expect(videoAspectRatio({ videoWidth: 1920, videoHeight: 0 })).toBeNull();
     expect(videoAspectRatio(null)).toBeNull();
+  });
+});
+
+describe("Android in-page fullscreen", () => {
+  test("only the Android Tauri client skips the browser Fullscreen API", () => {
+    // The HTML Fullscreen API triggers onShowCustomView, whose render surface
+    // handoff is the black flicker. Android Tauri must never take that path.
+    expect(usesInPageFullscreen({ tauriRuntime: true, platform: "android" })).toBe(true);
+    // A mobile browser has no native bridge and cannot hide its own chrome with
+    // a fixed layer, so it keeps the real Fullscreen API.
+    expect(usesInPageFullscreen({ tauriRuntime: false, platform: "android" })).toBe(false);
+    // Desktop and iOS keep their existing paths.
+    expect(usesInPageFullscreen({ tauriRuntime: true, platform: "desktop" })).toBe(false);
+    expect(usesInPageFullscreen({ tauriRuntime: true, platform: "ios" })).toBe(false);
+  });
+
+  test("requests and releases the native immersive bars", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const fakeInvoke = async <T,>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      return undefined as T;
+    };
+
+    await setAndroidImmersive(true, fakeInvoke);
+    await setAndroidImmersive(false, fakeInvoke);
+
+    expect(calls).toEqual([
+      { command: "android_player_controls_set_immersive", args: { immersive: true } },
+      { command: "android_player_controls_set_immersive", args: { immersive: false } },
+    ]);
+  });
+
+  test("the Activity leaves Back to the page while immersive", async () => {
+    // Our OnBackPressedCallbacks are registered from `onWebViewCreate`, which
+    // runs after Tauri's AppPlugin registered its own — and the dispatcher is
+    // LIFO, so ours run first. Consuming Back there for the in-page fullscreen
+    // would preempt `rlive:android-back` entirely, and with it the HUD menu and
+    // volume panel listeners that expect to close first. Only the native custom
+    // view, which the page cannot dismiss, may be handled natively.
+    const mainActivity = await Bun.file(
+      new URL(
+        "../src-tauri/gen/android/app/src/main/java/com/shenss/rlive/MainActivity.kt",
+        import.meta.url,
+      ),
+    ).text();
+
+    const backHandlers = mainActivity.match(/handleOnBackPressed\(\)/g);
+    expect(backHandlers).toHaveLength(2);
+    // Both Back handlers consult the custom view and nothing else. The immersive
+    // flag stays readable for `onResume`, which must keep the bars hidden.
+    expect(mainActivity.match(/fullscreenChromeClient\?\.exitFullscreen\(\) == true/g))
+      .toHaveLength(2);
+    const backHandlerBodies = mainActivity
+      .split("handleOnBackPressed()")
+      .slice(1)
+      .map((body) => body.slice(0, body.indexOf("isEnabled = false")));
+    expect(backHandlerBodies).toHaveLength(2);
+    for (const body of backHandlerBodies) {
+      expect(body).not.toContain("isImmersiveActive");
+      expect(body).not.toContain("evaluateJavascript");
+    }
+  });
+
+  test("the immersive command is registered end to end", async () => {
+    // An unregistered command rejects at runtime, which this path deliberately
+    // swallows so fullscreen still works — so a missing registration would only
+    // show up as the status bar never hiding on a device. Check the chain here.
+    const [rust, lib, kotlin] = await Promise.all(
+      [
+        "../src-tauri/src/commands/android_player_controls.rs",
+        "../src-tauri/src/lib.rs",
+        "../src-tauri/gen/android/app/src/main/java/com/shenss/rlive/RlivePlayerControlsPlugin.kt",
+      ].map((path) => Bun.file(new URL(path, import.meta.url)).text()),
+    );
+
+    // Both cfg branches define it, and the Android one forwards to Kotlin.
+    expect(rust.match(/fn android_player_controls_set_immersive/g)).toHaveLength(2);
+    expect(rust).toContain('run(controls, "setImmersive"');
+    // Registered in the handler list, or the webview cannot reach it at all.
+    expect(lib).toContain("android_player_controls_set_immersive,");
+    // And the Kotlin @Command it resolves to actually exists.
+    expect(kotlin).toContain("fun setImmersive(invoke: Invoke)");
   });
 });
