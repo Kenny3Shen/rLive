@@ -7,6 +7,9 @@ import android.media.AudioManager
 import android.os.Build
 import android.provider.Settings
 import android.view.WindowManager
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -25,6 +28,12 @@ class PlayerControlValueArgs {
 @InvokeArg
 class PlayerOrientationArgs {
   var orientation: String = "auto"
+}
+
+/** Whether the player wants the system bars hidden for an immersive surface. */
+@InvokeArg
+class PlayerImmersiveArgs {
+  var immersive: Boolean = false
 }
 
 /**
@@ -61,9 +70,33 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
      */
     private var activeInstance: RlivePlayerControlsPlugin? = null
 
+    /**
+     * Whether the in-page fullscreen player currently owns the system bars.
+     *
+     * Kept in the companion rather than on the instance so `MainActivity` can
+     * read it without a plugin handle: `onResume` must not restore the bars
+     * under a player that is still fullscreen. Back is deliberately not routed
+     * through this — see the Back handlers in [MainActivity].
+     */
+    private var immersive: Boolean = false
+
+    fun isImmersiveActive(): Boolean = immersive
+
     fun restoreBrightnessOverride() {
       val instance = activeInstance ?: return
       instance.activity.runOnUiThread { instance.restoreBrightness() }
+    }
+
+    /**
+     * Drops the immersive flag without touching the window.
+     *
+     * An Activity recreation keeps this static state but reloads the page, so
+     * the restored player starts windowed. Clearing the flag on create stops a
+     * stale "still fullscreen" from keeping the bars hidden under a windowed
+     * room (see [MainActivity]).
+     */
+    fun forgetImmersive() {
+      immersive = false
     }
   }
 
@@ -171,6 +204,49 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
     "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
     // Anything else releases the lock rather than guessing a direction.
     else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+  }
+
+  /**
+   * Hides or restores the system bars for the in-page fullscreen player.
+   *
+   * rLive deliberately does not use the WebView's HTML Fullscreen API on
+   * Android. `WebChromeClient.onShowCustomView` reparents the rendered content
+   * into a brand-new View, and that surface handoff shows several fully black
+   * frames before the new View draws its first one — the flicker users see. The
+   * player therefore fills the screen as an in-page fixed layer (the same layer
+   * desktop uses) and asks for the immersive bars separately through here, so
+   * nothing ever hands the render surface over.
+   *
+   * Because the custom view no longer exists, this is the only path that hides
+   * the bars. It records the state in the companion so `MainActivity.onResume`
+   * keeps them hidden for a player that is still fullscreen.
+   */
+  @Command
+  fun setImmersive(invoke: Invoke) {
+    val args = invoke.parseArgs(PlayerImmersiveArgs::class.java)
+    activity.runOnUiThread {
+      try {
+        applyImmersive(args.immersive)
+        invoke.resolve(JSObject().apply { put("immersive", args.immersive) })
+      } catch (error: Exception) {
+        invoke.reject(error.message ?: "切换全屏显示失败")
+      }
+    }
+  }
+
+  private fun applyImmersive(wantsImmersive: Boolean) {
+    immersive = wantsImmersive
+    if (wantsImmersive) {
+      val controller =
+        WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+      controller.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+      // Shared with the video custom-view path so both exits reset the
+      // behaviour as well as the visibility (see that method's comment).
+      RliveFullscreenWebChromeClient.restoreSystemBars(activity)
+    }
   }
 
   private fun state(): JSObject = JSObject().apply {

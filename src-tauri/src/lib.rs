@@ -30,8 +30,8 @@ use commands::account::{
 use commands::android_player_controls::AndroidPlayerControls;
 use commands::android_player_controls::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
-    android_player_controls_set_brightness, android_player_controls_set_media_volume,
-    android_player_controls_set_orientation,
+    android_player_controls_set_brightness, android_player_controls_set_immersive,
+    android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
@@ -284,6 +284,7 @@ pub fn run() {
             android_player_controls_set_brightness,
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
+            android_player_controls_set_immersive,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -643,15 +643,18 @@ html[data-fullscreen-transition="true"] .app-shell {
 /* Fullscreen player stage.
 
    Two mechanisms feed this one rule:
-   - Mobile/web use the HTML Fullscreen API, matched by the `:fullscreen`
-     pseudo-classes, and the WebView promotes the element to the top layer.
-   - Desktop Tauri uses NATIVE window fullscreen (see toggleFullscreen). WebView2
-     will not grow a maximized window past the work area for HTML fullscreen, so
-     an HTML `:fullscreen` element renders at screen height while the viewport is
-     still work-area height — the taskbar-height black band at the bottom. The
-     native window instead covers the whole screen, and `data-fullscreen="true"`
-     lifts this flex-child stage out of flow to overlay the app chrome as a
-     fixed, full-window layer.
+   - Mobile web uses the HTML Fullscreen API, matched by the `:fullscreen`
+     pseudo-classes, and the browser promotes the element to the top layer.
+   - Both Tauri clients instead lift this flex-child stage out of flow with
+     `data-fullscreen="true"`, so it overlays the app chrome as a fixed,
+     full-window layer. Desktop pairs that with a NATIVE window fullscreen,
+     because WebView2 will not grow a maximized window past the work area for
+     HTML fullscreen — an HTML `:fullscreen` element renders at screen height
+     while the viewport is still work-area height, the taskbar-height black band
+     at the bottom. Android pairs it with native immersive system bars, because
+     `WebChromeClient.onShowCustomView` reparents the rendered content into a new
+     View and that surface handoff shows several fully black frames before the
+     new View draws (see androidImmersive.ts).
 
    `inset: 0` fills whichever surface applies. The z-index sits above the app
    title bar and the room's bottom action bar so no chrome shows through. */

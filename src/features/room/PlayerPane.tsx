@@ -736,9 +736,10 @@ export function PlayerPane({
     return () => setToastPortalContainer(null);
   }, [player.mode, player.stageRef]);
 
-  // Prefer exiting HTML/WebView fullscreen before room navigation. Native
-  // custom-view fullscreen is already handled in MainActivity; this covers
-  // the rare path where the browser reports fullscreen without a custom view.
+  // Prefer exiting fullscreen before room navigation. This is the only Back
+  // handling the Android in-page fullscreen has: the Activity deliberately does
+  // not consume Back for it, so that overlay listeners above (HUD menu, volume
+  // panel) keep their turn at the same event.
   useEffect(() => {
     if (player.mode !== "fullscreen") return;
     const exitOnAndroidBack = (event: Event) => {
@@ -1477,11 +1478,12 @@ export function PlayerPane({
     return () => window.clearTimeout(timer);
   }, [overlayInteractionOpen, resumeControlsAutoHide]);
 
+  // Show the controls after every fullscreen switch, whichever implementation
+  // performed it. Keyed on `player.mode` rather than `fullscreenchange`, because
+  // the desktop and Android in-page layers never fire that event.
   useEffect(() => {
-    const onFullscreenChange = () => revealControls();
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
-  }, [revealControls]);
+    revealControls();
+  }, [player.mode, revealControls]);
 
   return (
     <div

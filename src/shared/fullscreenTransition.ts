@@ -1,17 +1,24 @@
 /**
  * Pins the app shell's safe-area padding across an entering fullscreen transition.
  *
- * Entering video fullscreen on Android moves the system-bar insets before the
- * stage leaves normal flow: `RliveFullscreenWebChromeClient` hides the bars
- * immersively, and a landscape orientation lock can change the status-bar inset
- * too. Chromium reports each intermediate value through
- * `env(safe-area-inset-top)`, which `.app-shell` consumes as `padding-top`.
+ * Entering fullscreen on Android hides the system bars immersively, and a
+ * landscape orientation lock can change the status-bar inset too. Chromium
+ * reports each intermediate value through `env(safe-area-inset-top)`, which
+ * `.app-shell` consumes as `padding-top`.
  *
- * While `:fullscreen` has not applied yet, the room is still laid out normally,
- * so every intermediate inset relaid out the windowed page: the top bar and the
- * fixed-ratio video slid up and the `flex-1` danmaku panel absorbed the freed
- * height. That is the reported bug — the chat grows taller for a few frames
- * before the picture finally fills the screen.
+ * Both fullscreen implementations need the hold, for the same reason from two
+ * directions:
+ *
+ * - The in-page layer (Android Tauri, see `androidImmersive`) lifts the stage
+ *   out of flow in the same frame the mode changes, so the picture cannot move —
+ *   but the room chrome still behind it keeps reflowing for every intermediate
+ *   inset, which shows around the layer's edges until it settles.
+ * - The browser Fullscreen API (mobile web) applies `:fullscreen` only after the
+ *   request resolves, so until then the room is laid out normally and every
+ *   intermediate inset relaid it out: the top bar and the fixed-ratio video slid
+ *   up and the `flex-1` danmaku panel absorbed the freed height. That is the
+ *   originally reported bug — the chat growing taller for a few frames before
+ *   the picture finally fills the screen.
  *
  * Freezing the padding at the value it had when the gesture started keeps the
  * page behind the stage stationary, so the inset animation no longer reflows it.
