@@ -89,13 +89,28 @@ mod android {
         )
         .await
     }
+
+    /// Hides or restores the system bars for the in-page fullscreen player.
+    ///
+    /// Android fullscreen deliberately avoids the HTML Fullscreen API — see the
+    /// Kotlin `setImmersive` for why the custom-view surface handoff is the
+    /// flicker — so the immersive bars are requested separately from the page
+    /// laying the stage out as a fixed layer.
+    #[tauri::command]
+    pub async fn android_player_controls_set_immersive(
+        controls: State<'_, AndroidPlayerControls>,
+        immersive: bool,
+    ) -> AppResult<Value> {
+        run(controls, "setImmersive", json!({ "immersive": immersive })).await
+    }
 }
 
 #[cfg(target_os = "android")]
 pub use android::{
     AndroidPlayerControls, android_player_controls_get_state,
     android_player_controls_reset_brightness, android_player_controls_set_brightness,
-    android_player_controls_set_media_volume, android_player_controls_set_orientation,
+    android_player_controls_set_immersive, android_player_controls_set_media_volume,
+    android_player_controls_set_orientation,
 };
 
 #[cfg(not(target_os = "android"))]
@@ -137,11 +152,16 @@ mod fallback {
     pub async fn android_player_controls_set_orientation(_orientation: String) -> AppResult<Value> {
         Err(unsupported())
     }
+
+    #[tauri::command]
+    pub async fn android_player_controls_set_immersive(_immersive: bool) -> AppResult<Value> {
+        Err(unsupported())
+    }
 }
 
 #[cfg(not(target_os = "android"))]
 pub use fallback::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
-    android_player_controls_set_brightness, android_player_controls_set_media_volume,
-    android_player_controls_set_orientation,
+    android_player_controls_set_brightness, android_player_controls_set_immersive,
+    android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };

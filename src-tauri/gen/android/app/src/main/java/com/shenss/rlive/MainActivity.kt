@@ -20,6 +20,11 @@ class MainActivity : TauriActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
 
+    // The immersive flag is static, so an Activity recreation would carry it
+    // across while the reloaded page starts windowed. Clear it here or onResume
+    // would keep the bars hidden under a windowed room.
+    RlivePlayerControlsPlugin.forgetImmersive()
+
     // Android 7.0/7.1 cannot expose WebView's currently installed Chrome
     // client. Keep an equivalent Tauri client ready for those devices.
     fallbackChromeClient = RustWebChromeClient(this)
@@ -43,10 +48,11 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * Video fullscreen is the only path that hides the system bars, and it always
-   * restores them on exit. Returning to the foreground in any other state means
-   * the bars should be visible — after a process death that dropped the custom
-   * view, or after the system interrupted playback mid-fullscreen.
+   * Video fullscreen and the in-page player fullscreen are the only paths that
+   * hide the system bars, and both restore them on exit. Returning to the
+   * foreground in any other state means the bars should be visible — after a
+   * process death that dropped the custom view, or after the system interrupted
+   * playback mid-fullscreen.
    *
    * Without this the window can stay laid out as if the bars were present while
    * they are not, which collapses every `env(safe-area-inset-*)` to 0 in the
@@ -55,6 +61,11 @@ class MainActivity : TauriActivity() {
   private fun restoreSystemBarsUnlessFullscreen() {
     val client = fullscreenChromeClient
     if (client?.isShowingCustomView == true) {
+      return
+    }
+    // The in-page player keeps its fixed layer across a pause/resume, so the
+    // bars must stay hidden for it just as they do for a custom view.
+    if (RlivePlayerControlsPlugin.isImmersiveActive()) {
       return
     }
     client?.restoreSystemBars() ?: RliveFullscreenWebChromeClient.restoreSystemBars(this)
