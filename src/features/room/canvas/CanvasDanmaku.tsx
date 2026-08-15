@@ -9,7 +9,12 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  DANMAKU_AREA_DEFAULT,
+  DANMAKU_OPACITY_DEFAULT,
+  defaultDanmakuFontSize,
+  useSettingsStore,
+} from "@/shared/stores/settingsStore";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
   DANMAKU_IMAGE_HORIZONTAL_GAP,
@@ -760,10 +765,10 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   if (engineRef.current === null || engineSessionRef.current !== sessionKey) {
     engineSessionRef.current = sessionKey;
     engineRef.current = createEngine({
-      fontSize: fontSize || 18,
+      fontSize: fontSize || defaultDanmakuFontSize(mobile),
       speed: speed || 8,
-      opacity: opacity ?? 1,
-      area: area || 0.9,
+      opacity: opacity ?? DANMAKU_OPACITY_DEFAULT,
+      area: area || DANMAKU_AREA_DEFAULT,
       lineCount,
       fontWeight,
       aggregateRepeats: filterRepeats,
@@ -773,17 +778,27 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
 
   useEffect(() => {
     engineRef.current?.setOpts({
-      fontSize: fontSize || 18,
+      fontSize: fontSize || defaultDanmakuFontSize(mobile),
       speed: speed || 8,
-      opacity: opacity ?? 1,
-      area: area || 0.9,
+      opacity: opacity ?? DANMAKU_OPACITY_DEFAULT,
+      area: area || DANMAKU_AREA_DEFAULT,
       lineCount,
       fontWeight,
       aggregateRepeats: filterRepeats,
       aggregateWindowMs: mergeWindowSeconds * 1_000,
     });
     requestFrameRef.current();
-  }, [fontSize, speed, opacity, area, lineCount, fontWeight, filterRepeats, mergeWindowSeconds]);
+  }, [
+    fontSize,
+    speed,
+    opacity,
+    area,
+    lineCount,
+    fontWeight,
+    filterRepeats,
+    mergeWindowSeconds,
+    mobile,
+  ]);
 
   useEffect(() => {
     if (!active) return;

@@ -153,7 +153,7 @@ fn default_iptv_availability_auto_check_interval_hours() -> u32 {
 }
 
 fn default_danmaku_area() -> f32 {
-    0.9
+    0.25
 }
 
 fn default_danmaku_font_weight() -> u16 {
@@ -205,7 +205,7 @@ fn default_super_chat_enabled() -> bool {
 }
 
 fn default_super_chat_opacity() -> f32 {
-    1.0
+    0.8
 }
 
 impl Default for AppSettings {
@@ -281,7 +281,7 @@ mod tests {
         }"#;
         let settings: AppSettings = serde_json::from_str(legacy).unwrap();
 
-        assert_eq!(settings.danmaku_area, 0.9);
+        assert_eq!(settings.danmaku_area, 0.25);
         assert_eq!(settings.motion_mode, "full");
         assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
@@ -289,6 +289,7 @@ mod tests {
         assert!(settings.danmaku_filter_gifts);
         assert_eq!(settings.danmaku_merge_window_seconds, 10);
         assert!(settings.super_chat_enabled);
+        assert_eq!(settings.super_chat_opacity, 0.8);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.playback_smart_line_selection);
         assert!(settings.playback_soft_switch_enabled);
