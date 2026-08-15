@@ -13,7 +13,6 @@ use crate::error::{AppError, AppResult};
 use crate::image_proxy::ImageProxy;
 use crate::lan_sync::LanSyncManager;
 use crate::stream_proxy::StreamProxy;
-use crate::web_bridge::WebBridge;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
@@ -26,8 +25,6 @@ pub struct AppState {
     pub stream_proxy: StreamProxy,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
-    /// Serves the frontend to an ordinary browser. Idle until the user starts it.
-    pub web_bridge: WebBridge,
 }
 
 /// Conservative per-room write gate for the Bilibili sender.
@@ -171,7 +168,6 @@ impl AppState {
             stream_proxy: StreamProxy::new(),
             image_proxy: ImageProxy::new(),
             lan_sync: LanSyncManager::new(),
-            web_bridge: WebBridge::new(),
         })
     }
 }

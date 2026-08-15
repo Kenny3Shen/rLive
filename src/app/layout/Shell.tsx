@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { ArrowLeft } from "lucide-react";
 import {
   useLocation,
   useNavigate,
@@ -17,6 +18,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { IptvSourceSwitcher } from "@/features/iptv/IptvHeaderControls";
 import { IptvControllerProvider } from "@/features/iptv/IptvController";
@@ -29,6 +31,7 @@ import { HistoryClearButton, HistoryViewSwitcher } from "@/features/history/Hist
 import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState";
 import { FollowViewSwitcher } from "@/features/follow/FollowHeaderControls";
 import { useFollowHeaderSnapshot } from "@/features/follow/followHeaderState";
+import { canSearchNavigateBack } from "@/features/search/search";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
@@ -131,6 +134,7 @@ export function Shell() {
   const isIptv = pathname === "/iptv";
   const isIptvPlayer = pathname === "/iptv/play";
   const isImmersivePlayer = isRoom || isIptvPlayer || isMultiRoom;
+  const isSearch = pathname === "/search";
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
   const isSettings = pathname === "/settings";
@@ -285,6 +289,14 @@ export function Shell() {
     },
     [iptvSource.url, iptvSources, navigate],
   );
+
+  const goBackFromSearch = useCallback(() => {
+    if (canSearchNavigateBack(window.history.state)) {
+      navigate(-1);
+      return;
+    }
+    navigate("/", { replace: true });
+  }, [navigate]);
 
   // Home/category/search use a horizontal content swipe to change platforms.
   // Follow and History own their nested tab strips, so Shell does not compete
@@ -610,6 +622,20 @@ export function Shell() {
                     !showTopNavigation && "max-md:hidden",
                   )}
                 >
+                  {isSearch && (
+                    <div className="relative z-10 flex shrink-0 items-center max-md:hidden">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="返回上一页"
+                        title="返回上一页"
+                        onClick={goBackFromSearch}
+                      >
+                        <ArrowLeft aria-hidden />
+                      </Button>
+                    </div>
+                  )}
                   <div
                     className={cn(
                       "pointer-events-none absolute inset-0 flex h-full items-center justify-center",

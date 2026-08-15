@@ -61,22 +61,3 @@ export function isWindowsDesktop(
   const userAgent = navigatorRef?.userAgent ?? "";
   return platform === "windows" || /Windows NT/i.test(userAgent);
 }
-
-/**
- * Which shell the code is running inside, as opposed to which OS the device is.
- *
- * `getClientPlatform` answers "phone or desktop" and drives layout. This answers
- * "native app or browser tab" and drives capability: a browser reaches Rust over
- * the local HTTP bridge, so it can browse, play and chat, but it has no OS file
- * dialog, no microphone IPC and no Android window controls.
- */
-export type ClientRuntime = "native" | "web";
-
-export function getClientRuntime(tauriRuntime: boolean): ClientRuntime {
-  return tauriRuntime ? "native" : "web";
-}
-
-/** Local ASR, profile files and window controls need the native shell. */
-export function supportsNativeHostFeatures(tauriRuntime: boolean): boolean {
-  return getClientRuntime(tauriRuntime) === "native";
-}

@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Search } from "lucide-react";
+import { ListFilter, Loader2, Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { PageHeader } from "@/shared/components/PageHeader";
 import { RoomCard } from "@/shared/components/RoomCard";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -19,13 +18,18 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   parseSearchScope,
-  canSearchNavigateBack,
   prepareSearchResults,
   roomFromDetail,
   SEARCH_SCOPES,
@@ -128,14 +132,6 @@ export function SearchPage() {
     if (keyword) navigate(searchPath(keyword, next));
   }
 
-  function goBack() {
-    if (canSearchNavigateBack(window.history.state)) {
-      navigate(-1);
-      return;
-    }
-    navigate("/", { replace: true });
-  }
-
   function retry() {
     if (scope === "room") {
       void roomLookup.refetch();
@@ -149,67 +145,49 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-5 pb-6">
-      <PageHeader
-        title="搜索"
-        description="主播、房间号、标题"
-        actions={
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label="返回上一页"
-            title="返回上一页"
-            onClick={goBack}
+      <form onSubmit={submit} className="flex w-full max-w-3xl items-center gap-2">
+        <Input
+          ref={inputRef}
+          id="search-keyword"
+          type="search"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="输入主播、房间号或标题"
+          autoComplete="off"
+          aria-label="搜索关键词"
+          className="min-w-0 flex-1"
+        />
+        <Button type="submit" size="icon" aria-label="搜索" title="搜索">
+          <Search aria-hidden />
+        </Button>
+        <Select
+          value={draftScope}
+          onValueChange={(value) => {
+            if (!value) return;
+            const next = parseSearchScope(value);
+            if (next !== draftScope) changeScope(next);
+          }}
+        >
+          <SelectTrigger
+            size="default"
+            aria-label={`筛选搜索字段：${searchScopeLabel(draftScope)}`}
+            title={`筛选搜索字段：${searchScopeLabel(draftScope)}`}
+            className="shrink-0 border border-input bg-background"
           >
-            <ArrowLeft data-icon="inline-start" aria-hidden />
-            返回
-          </Button>
-        }
-      />
-
-      <form onSubmit={submit} className="max-w-2xl">
-        <FieldGroup>
-          <Field orientation="horizontal">
-            <FieldLabel className="sr-only" htmlFor="search-keyword">
-              搜索关键词
-            </FieldLabel>
-            <Input
-              ref={inputRef}
-              id="search-keyword"
-              type="search"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="输入主播、房间号或标题"
-              autoComplete="off"
-              className="min-w-0 flex-1"
-            />
-            <Button type="submit" className="shrink-0">
-              <Search data-icon="inline-start" />
-              搜索
-            </Button>
-          </Field>
-        </FieldGroup>
+            <ListFilter data-icon="inline-start" aria-hidden />
+            <SelectValue>{searchScopeLabel(draftScope)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent align="end" className="min-w-32">
+            <SelectGroup>
+              {SEARCH_SCOPES.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
       </form>
-
-      <ToggleGroup
-        aria-label="搜索方式"
-        value={[draftScope]}
-        variant="outline"
-        size="sm"
-        spacing={1}
-        onValueChange={(values) => {
-          const value = values[0];
-          if (!value) return;
-          const next = parseSearchScope(value);
-          if (next !== draftScope) changeScope(next);
-        }}
-      >
-        {SEARCH_SCOPES.map((item) => (
-          <ToggleGroupItem key={item.value} value={item.value}>
-            {item.label}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
 
       {keyword.length === 0 && (
         <Empty className="min-h-56 border-0 py-10">
