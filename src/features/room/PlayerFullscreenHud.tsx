@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Ellipsis, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Car, Ellipsis, Timer, type LucideIcon } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -24,6 +24,9 @@ import {
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import type { SiteId } from "@/shared/types/live";
 import { cn, formatOnline } from "@/lib/utils";
+import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
+import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
+import type { SleepTimerController } from "./useSleepTimer";
 
 export { roomIdentityOverflowDistance };
 
@@ -56,6 +59,10 @@ export type PlayerFullscreenHudProps = {
   roomActions?: readonly PlayerHudRoomAction[];
   /** Player toggles already published for the mobile room-actions sheet. */
   playerActions?: readonly PlayerHudRoomAction[];
+  /** Room-scoped automatic danmaku sender exposed from the overflow menu. */
+  autoSend?: AutoDanmakuSendController;
+  /** Room-scoped countdown exposed from the overflow menu. */
+  sleepTimer?: SleepTimerController;
   /** Compact viewport (portrait phone or short landscape). */
   compact?: boolean;
   /** Portal target — a `:fullscreen` ancestor owns the top layer. */
@@ -105,12 +112,16 @@ export function PlayerFullscreenHud({
   roomOnline,
   roomActions = [],
   playerActions = [],
+  autoSend,
+  sleepTimer,
   compact = false,
   portalContainer,
   onOverlayInteractionChange,
   onExitFullscreen,
 }: PlayerFullscreenHudProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [autoSendExpanded, setAutoSendExpanded] = useState(false);
+  const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
   const portrait = usePortraitOrientation();
 
   useEffect(() => {
@@ -135,7 +146,11 @@ export function PlayerFullscreenHud({
     return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
   }, [menuOpen]);
 
-  const hasMenu = roomActions.length > 0 || playerActions.length > 0;
+  const hasMenu =
+    roomActions.length > 0 ||
+    playerActions.length > 0 ||
+    autoSend !== undefined ||
+    sleepTimer !== undefined;
 
   function runAction(action: PlayerHudRoomAction) {
     setMenuOpen(false);
@@ -158,15 +173,51 @@ export function PlayerFullscreenHud({
           ))}
         </div>
       )}
-      {roomActions.length > 0 && playerActions.length > 0 && (
+      {roomActions.length > 0 && (playerActions.length > 0 || autoSend || sleepTimer) && (
         <Separator className={cn("my-2", glassSeparatorClass({ overlay: true }))} />
       )}
-      {playerActions.length > 0 && (
+      {(playerActions.length > 0 || autoSend || sleepTimer) && (
         <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
           {playerActions.map((action) => (
             <HudActionTile key={action.id} action={action} onRun={runAction} />
           ))}
+          {autoSend && (
+            <RoomToolTile
+              icon={Car}
+              label={autoSend.enabled ? "发送中" : "自动发送"}
+              pressed={autoSendExpanded || autoSend.enabled}
+              onClick={() => {
+                setAutoSendExpanded((expanded) => !expanded);
+                setSleepTimerExpanded(false);
+              }}
+            />
+          )}
+          {sleepTimer && (
+            <RoomToolTile
+              icon={Timer}
+              label={sleepTimer.active ? "定时中" : "定时关闭"}
+              pressed={sleepTimerExpanded || sleepTimer.active}
+              onClick={() => {
+                setSleepTimerExpanded((expanded) => !expanded);
+                setAutoSendExpanded(false);
+              }}
+            />
+          )}
         </div>
+      )}
+      {autoSend && autoSendExpanded && (
+        <RoomToolPanel>
+          <AutoDanmakuSendMenu
+            autoSend={autoSend}
+            variant="overlay"
+            idPrefix="fullscreen-auto-danmaku"
+          />
+        </RoomToolPanel>
+      )}
+      {sleepTimer && sleepTimerExpanded && (
+        <RoomToolPanel>
+          <SleepTimerMenu timer={sleepTimer} showTrigger={false} variant="overlay" showHeader />
+        </RoomToolPanel>
       )}
     </>
   );
@@ -243,7 +294,10 @@ export function PlayerFullscreenHud({
               collisionPadding={{ top: 12, right: 12, bottom: 24, left: 12 }}
               sticky
               glass
-              className={cn("w-64 gap-0 p-1.5", glassPanelClass({ overlay: true }))}
+              className={cn(
+                "max-h-[calc(100dvh-5rem)] w-[min(32rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] overflow-y-auto gap-0 p-1.5",
+                glassPanelClass({ overlay: true }),
+              )}
             >
               <PopoverTitle
                 className={cn(
@@ -275,7 +329,7 @@ function HudActionTile({
       type="button"
       variant="ghost"
       className={cn(
-        "h-auto flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
+        "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
         glassOptionClass({ overlay: true }),
         action.pressed && glassOptionSelectedClass({ overlay: true }),
       )}
@@ -284,7 +338,44 @@ function HudActionTile({
       onClick={() => onRun(action)}
     >
       <Icon className="size-5" aria-hidden />
-      {action.label}
+      <span className="max-w-full truncate">{action.label}</span>
     </Button>
+  );
+}
+
+function RoomToolTile({
+  icon: Icon,
+  label,
+  pressed,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  pressed?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn(
+        "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
+        glassOptionClass({ overlay: true }),
+        pressed && glassOptionSelectedClass({ overlay: true }),
+      )}
+      aria-pressed={pressed}
+      onClick={onClick}
+    >
+      <Icon className="size-5" aria-hidden />
+      <span className="max-w-full truncate">{label}</span>
+    </Button>
+  );
+}
+
+function RoomToolPanel({ children }: { children: ReactNode }) {
+  return (
+    <div className={cn("mt-2 min-w-0 rounded-lg p-3", glassPanelClass({ overlay: true }))}>
+      {children}
+    </div>
   );
 }

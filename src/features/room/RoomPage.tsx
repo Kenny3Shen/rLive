@@ -2,23 +2,30 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Car,
   ChevronLeft,
   Ellipsis,
   Heart,
   Link2,
   PanelsTopLeft,
   Share2,
+  Timer,
+  type LucideIcon,
   UserRoundX,
 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { glassSurfaceClass } from "@/shared/components/player/glassSurface";
+import { glassPanelClass, glassSurfaceClass } from "@/shared/components/player/glassSurface";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
 import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
+import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
+import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
+import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
+import { useSleepTimer, type SleepTimerController } from "./useSleepTimer";
 import { RoomHostInfo } from "./RoomHostInfo";
 import {
   roomBackTargetFromNavigationState,
@@ -31,6 +38,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
@@ -47,6 +55,7 @@ import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
 import { useMultiRoomStore } from "../multi-room/multiRoomStore";
+import { cn } from "@/lib/utils";
 
 export function RoomPage() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
@@ -144,6 +153,19 @@ export function RoomPage() {
     return followQuery.data.some((f) => f.site_id === siteId && f.room_id === roomId);
   }, [followQuery.data, siteId, roomId]);
 
+  const detail = detailQuery.data;
+  const roomSessionKey = siteId && roomId ? `${siteId}:${roomId}` : undefined;
+  // These controls belong to the room session rather than the settings tab,
+  // so title-bar and fullscreen surfaces keep the same live controller.
+  const autoDanmakuSend = useAutoDanmakuSend({
+    siteId,
+    roomId: detail?.room_id,
+    roomTitle: detail?.title,
+    roomUserName: detail?.user_name,
+    roomSessionKey,
+  });
+  const sleepTimer = useSleepTimer(roomSessionKey);
+
   async function toggleFollow(groupId = UNGROUPED_FOLLOW_GROUP_ID): Promise<boolean> {
     const detail = detailQuery.data;
     if (!detail || !siteId || !roomId) return false;
@@ -225,8 +247,6 @@ export function RoomPage() {
       </div>
     );
   }
-
-  const detail = detailQuery.data;
 
   if (detailQuery.isLoading) {
     return (
@@ -314,6 +334,18 @@ export function RoomPage() {
         backTarget={backTarget}
         rightSlot={
           <div className="flex items-center gap-1">
+            <div className="hidden md:flex md:items-center md:gap-1">
+              <RoomToolPopover icon={Timer} label="定时关闭">
+                <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
+              </RoomToolPopover>
+              <RoomToolPopover icon={Car} label="自动发送弹幕" wide>
+                <AutoDanmakuSendMenu
+                  autoSend={autoDanmakuSend}
+                  idPrefix="title-auto-danmaku"
+                  showHeader={false}
+                />
+              </RoomToolPopover>
+            </div>
             <div className="hidden md:block">
               <Tooltip>
                 <TooltipTrigger
@@ -337,6 +369,8 @@ export function RoomPage() {
                 roomUrl={detail.url || window.location.href}
                 playbackUrl={playback.playUrl?.url}
                 playerActions={playerMobileActions}
+                autoSend={autoDanmakuSend}
+                sleepTimer={sleepTimer}
                 onCopy={copyRoomValue}
               />
             </div>
@@ -373,6 +407,8 @@ export function RoomPage() {
           roomUserName={detail.user_name}
           roomUserAvatar={detail.user_avatar}
           roomOnline={detail.online}
+          autoDanmakuSend={autoDanmakuSend}
+          sleepTimer={sleepTimer}
           fullscreenRoomActions={fullscreenRoomActions}
           onMobileRoomActionsChange={setPlayerMobileActions}
         />
@@ -514,18 +550,64 @@ function RoomTopBar({
   );
 }
 
+function RoomToolPopover({
+  icon: Icon,
+  label,
+  wide = false,
+  children,
+}: {
+  icon: LucideIcon;
+  label: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={label} title={label} />
+        }
+      >
+        <Icon data-icon="inline-start" aria-hidden />
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="end"
+        collisionPadding={12}
+        glass
+        className={cn(
+          "max-h-[calc(100vh-4rem)] overflow-y-auto p-3",
+          glassPanelClass(),
+          wide
+            ? "w-[min(30rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)]"
+            : "w-[min(20rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)]",
+        )}
+      >
+        <PopoverTitle className="mb-3 text-sm font-semibold">{label}</PopoverTitle>
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function RoomMobileActions({
   roomUrl,
   playbackUrl,
   playerActions,
+  autoSend,
+  sleepTimer,
   onCopy,
 }: {
   roomUrl: string;
   playbackUrl?: string;
   playerActions: readonly PlayerMobileRoomAction[];
+  autoSend: AutoDanmakuSendController;
+  sleepTimer: SleepTimerController;
   onCopy: (value: string, successMessage: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const [autoSendExpanded, setAutoSendExpanded] = useState(false);
+  const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
 
   function copy(value: string, successMessage: string) {
     setOpen(false);
@@ -551,7 +633,11 @@ function RoomMobileActions({
           </Button>
         }
       />
-      <DrawerContent side="bottom" glass className={`space-y-4 ${glassSurfaceClass()}`}>
+      <DrawerContent
+        side="bottom"
+        glass
+        className={`max-h-[calc(100dvh-1rem)] overflow-y-auto space-y-4 ${glassSurfaceClass()}`}
+      >
         <DrawerTitle>房间操作</DrawerTitle>
         {/* Top row: link/copy actions. Bottom row: player feature toggles.
            Both are icon-over-label tiles so touch targets stay large. */}
@@ -578,7 +664,7 @@ function RoomMobileActions({
             复制直链
           </Button>
         </div>
-        {playerActions.length > 0 && (
+        {(playerActions.length > 0 || autoSend || sleepTimer) && (
           <>
             <Separator />
             <div className="grid grid-cols-4 gap-2">
@@ -595,12 +681,54 @@ function RoomMobileActions({
                     onClick={() => runPlayerAction(action)}
                   >
                     <Icon className="size-5" aria-hidden />
-                    {action.label}
+                    <span className="max-w-full truncate">{action.label}</span>
                   </Button>
                 );
               })}
+              <Button
+                type="button"
+                variant={autoSendExpanded || autoSend.enabled ? "secondary" : "ghost"}
+                className="h-auto min-w-0 flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
+                aria-pressed={autoSendExpanded || autoSend.enabled}
+                aria-expanded={autoSendExpanded}
+                onClick={() => {
+                  setAutoSendExpanded((expanded) => !expanded);
+                  setSleepTimerExpanded(false);
+                }}
+              >
+                <Car className="size-5" aria-hidden />
+                <span className="max-w-full truncate">
+                  {autoSend.enabled ? "发送中" : "自动发送"}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant={sleepTimerExpanded || sleepTimer.active ? "secondary" : "ghost"}
+                className="h-auto min-w-0 flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
+                aria-pressed={sleepTimerExpanded || sleepTimer.active}
+                aria-expanded={sleepTimerExpanded}
+                onClick={() => {
+                  setSleepTimerExpanded((expanded) => !expanded);
+                  setAutoSendExpanded(false);
+                }}
+              >
+                <Timer className="size-5" aria-hidden />
+                <span className="max-w-full truncate">
+                  {sleepTimer.active ? "定时中" : "定时关闭"}
+                </span>
+              </Button>
             </div>
           </>
+        )}
+        {sleepTimerExpanded && (
+          <div className={cn("rounded-lg p-3", glassPanelClass())}>
+            <SleepTimerMenu timer={sleepTimer} showTrigger={false} />
+          </div>
+        )}
+        {autoSendExpanded && (
+          <div className={cn("rounded-lg p-3", glassPanelClass())}>
+            <AutoDanmakuSendMenu autoSend={autoSend} idPrefix="mobile-auto-danmaku" />
+          </div>
         )}
       </DrawerContent>
     </Drawer>

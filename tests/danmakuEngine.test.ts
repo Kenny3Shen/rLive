@@ -430,6 +430,7 @@ describe("danmaku engine", () => {
       fontSize: 18,
       speed: 8,
       opacity: 1,
+      area: 1,
       lineCount: 20,
       debug: true,
     });

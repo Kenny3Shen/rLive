@@ -46,7 +46,8 @@ import {
 } from "@/shared/components/player/PlayerControls";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
-import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
+import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
+import type { SleepTimerController } from "./useSleepTimer";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { useWebPlayer } from "./player/useWebPlayer";
 import { useAndroidPlayerControls } from "./player/androidPlayerControls";
@@ -385,6 +386,9 @@ type PlayerPaneProps = {
   roomUserName?: string;
   roomUserAvatar?: string;
   roomOnline?: number;
+  /** Room-scoped tools rendered by the title bar and fullscreen HUD. */
+  autoDanmakuSend?: AutoDanmakuSendController;
+  sleepTimer?: SleepTimerController;
   /**
    * Room-level entries for the fullscreen HUD overflow menu (copy link, follow,
    * multi-room). The app chrome that normally hosts them is covered by the
@@ -429,6 +433,8 @@ export function PlayerPane({
   roomUserName,
   roomUserAvatar,
   roomOnline,
+  autoDanmakuSend,
+  sleepTimer,
   fullscreenRoomActions = [],
   onMobileRoomActionsChange,
 }: PlayerPaneProps) {
@@ -536,16 +542,6 @@ export function PlayerPane({
   const togglePlayerPictureInPicture = player.togglePictureInPicture;
   const togglePlayerFullscreen = player.toggleFullscreen;
   useScreenWakeLock(player.running && !player.paused && !audioOnly);
-  // This stays above the conditional side panel, so hiding that panel never
-  // silently stops a session the user explicitly enabled.
-  const autoDanmakuSend = useAutoDanmakuSend({
-    siteId,
-    roomId,
-    roomTitle,
-    roomUserName,
-    roomSessionKey,
-  });
-
   const displayError =
     error ??
     (player.loadError
@@ -641,7 +637,7 @@ export function PlayerPane({
     if (asr.desktopClient) {
       actions.push({
         id: "asr",
-        label: asr.controlLabel,
+        label: asr.captionsOn ? "关闭字幕" : "开启字幕",
         icon: asr.captionsOn ? Captions : CaptionsOff,
         pressed: asr.captionsOn,
         disabled: asr.controlDisabled,
@@ -662,7 +658,6 @@ export function PlayerPane({
   }, [
     asr.captionsOn,
     asr.controlDisabled,
-    asr.controlLabel,
     asr.desktopClient,
     asr.toggle,
     audioOnly,
@@ -707,7 +702,11 @@ export function PlayerPane({
   const fullscreenHudVisible = showPlayerFullscreenHud({
     fullscreen: player.mode === "fullscreen",
     hasRoomIdentity: Boolean(roomTitle?.trim() || roomUserName?.trim()),
-    hasActions: fullscreenRoomActions.length > 0 || mobileRoomActions.length > 0,
+    hasActions:
+      fullscreenRoomActions.length > 0 ||
+      mobileRoomActions.length > 0 ||
+      autoDanmakuSend !== undefined ||
+      sleepTimer !== undefined,
   });
 
   // Entering short landscape switches to an overlay drawer; rotating back to
@@ -1774,6 +1773,8 @@ export function PlayerPane({
                 roomOnline={roomOnline}
                 roomActions={fullscreenRoomActions}
                 playerActions={mobileRoomActions}
+                autoSend={autoDanmakuSend}
+                sleepTimer={sleepTimer}
                 compact={compactViewport}
                 portalContainer={player.stageRef}
                 onOverlayInteractionChange={handleHudOverlayInteractionChange}
@@ -2009,7 +2010,6 @@ export function PlayerPane({
                 >
                   <DanmakuSettingsPanel
                     className="h-full"
-                    autoSend={autoDanmakuSend}
                     siteId={siteId}
                   />
                 </div>

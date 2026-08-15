@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { invokeCmd } from "../api/tauri";
+import { isMobileClient } from "../clientPlatform";
 import {
   DEFAULT_SITE_ID,
   normalizeDisabledSiteIds,
@@ -22,6 +23,16 @@ import type {
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
+
+export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 18;
+export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 14;
+export const DANMAKU_OPACITY_DEFAULT = 0.8;
+export const DANMAKU_AREA_DEFAULT = 0.25;
+export const SUPER_CHAT_OPACITY_DEFAULT = 0.8;
+
+export function defaultDanmakuFontSize(mobile = isMobileClient()): number {
+  return mobile ? DANMAKU_FONT_SIZE_MOBILE_DEFAULT : DANMAKU_FONT_SIZE_DESKTOP_DEFAULT;
+}
 
 // `settings_set` writes one complete object. Serialize writes so rapid room
 // controls (for example two slider commits) cannot resolve out of order and
@@ -170,17 +181,17 @@ const defaultSettings: AppSettings = {
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
   proxy: null,
-  danmaku_opacity: 0.8,
-  danmaku_font_size: 18,
+  danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
+  danmaku_font_size: defaultDanmakuFontSize(),
   danmaku_speed: 8,
-  danmaku_area: 0.9,
+  danmaku_area: DANMAKU_AREA_DEFAULT,
   danmaku_line_count: 0,
   danmaku_font_weight: 600,
   danmaku_filter_repeats: true,
   danmaku_filter_gifts: true,
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
-  super_chat_opacity: 1,
+  super_chat_opacity: SUPER_CHAT_OPACITY_DEFAULT,
   danmaku_shield_words: [],
   quality_level: "high",
   playback_smart_line_selection: true,
@@ -245,17 +256,17 @@ export const useSettingsStore = create<SettingsState>()(
       siteId: DEFAULT_SITE_ID,
       disabledSiteIds: [],
       proxy: null,
-      danmakuOpacity: 1,
-      danmakuFontSize: 18,
+      danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
+      danmakuFontSize: defaultDanmakuFontSize(),
       danmakuSpeed: 8,
-      danmakuArea: 0.9,
+      danmakuArea: DANMAKU_AREA_DEFAULT,
       danmakuLineCount: 0,
       danmakuFontWeight: 600,
       danmakuFilterRepeats: true,
       danmakuFilterGifts: true,
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
-      superChatOpacity: 1,
+      superChatOpacity: SUPER_CHAT_OPACITY_DEFAULT,
       danmakuShieldWords: [],
       qualityLevel: "high",
       playbackSmartLineSelection: true,
@@ -527,7 +538,7 @@ export const useSettingsStore = create<SettingsState>()(
             settings.danmaku_merge_window_seconds,
           ),
           superChatEnabled: settings.super_chat_enabled ?? true,
-          superChatOpacity: settings.super_chat_opacity ?? 1,
+          superChatOpacity: settings.super_chat_opacity ?? SUPER_CHAT_OPACITY_DEFAULT,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSmartLineSelection: settings.playback_smart_line_selection ?? true,
@@ -575,6 +586,7 @@ export const useSettingsStore = create<SettingsState>()(
 
           get().applyFromBackend({
             ...settings,
+            ...(hasSavedSettings ? {} : { danmaku_font_size: defaultDanmakuFontSize() }),
             motion_mode: "full",
             default_site: siteId,
             disabled_site_ids: disabledSiteIds,

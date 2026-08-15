@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "@/shared/types/live";
 import {
+  DANMAKU_AREA_DEFAULT,
+  DANMAKU_OPACITY_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
+  SUPER_CHAT_OPACITY_DEFAULT,
+  defaultDanmakuFontSize,
   parseDanmakuMergeWindowSeconds,
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
@@ -37,16 +41,16 @@ const ASR_CHUNK_SECONDS_MIN = 0.2;
 const ASR_CHUNK_SECONDS_MAX = 1;
 
 const DANMAKU_APPEARANCE_DEFAULTS = {
-  danmakuOpacity: 1,
-  danmakuFontSize: 18,
+  danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
+  danmakuFontSize: defaultDanmakuFontSize(),
   danmakuSpeed: 8,
-  danmakuArea: 0.9,
+  danmakuArea: DANMAKU_AREA_DEFAULT,
   danmakuLineCount: 0,
   danmakuFontWeight: 600,
   danmakuFilterRepeats: true,
   danmakuFilterGifts: true,
   danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
-  superChatOpacity: 1,
+  superChatOpacity: SUPER_CHAT_OPACITY_DEFAULT,
 };
 
 type PreferenceSliderFieldProps = {

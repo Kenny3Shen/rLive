@@ -215,13 +215,14 @@ mod tests {
         assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_size, 18);
         assert_eq!(s.danmaku_speed, 8);
-        assert_eq!(s.danmaku_area, 0.9);
+        assert_eq!(s.danmaku_area, 0.25);
         assert_eq!(s.danmaku_line_count, 0);
         assert_eq!(s.danmaku_font_weight, 600);
         assert!(s.danmaku_filter_repeats);
         assert!(s.danmaku_filter_gifts);
         assert_eq!(s.danmaku_merge_window_seconds, 10);
         assert!(s.super_chat_enabled);
+        assert_eq!(s.super_chat_opacity, 0.8);
         assert_eq!(s.asr_font_size, 20);
         assert!(s.asr_vad_enabled);
         assert!(s.asr_punctuation_enabled);
