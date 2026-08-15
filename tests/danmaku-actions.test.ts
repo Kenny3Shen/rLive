@@ -51,10 +51,8 @@ describe("canvas danmaku touch selection", () => {
   });
 
   test("stays below the stage's gesture intent threshold", () => {
-    // Selecting a comment claims the `pointerup`, which skips the stage's own
-    // gesture teardown. A contact that could satisfy both would leave the stage
-    // holding a gesture it never ends, so the tap allowance must be strictly
-    // smaller than the distance at which a stage gesture activates.
+    // Canvas must receive `pointerup` to select a comment, so its tap allowance
+    // stays below the point where the stage captures a brightness/volume drag.
     expect(CANVAS_TAP_MAX_DISTANCE_PX).toBeLessThan(PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX);
     expect(isCanvasDanmakuTap(0, PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX, 200)).toBe(false);
   });
