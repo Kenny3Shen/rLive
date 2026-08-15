@@ -76,19 +76,18 @@ pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> 
 
     // Fallback: retain channel IDs alongside each parsed stream line. A
     // presenter's uid (`lPid`) is not interchangeable with a channel id.
-    if top_sid == 0 {
-        if let Some(lines) = raw.get("lines").and_then(|v| v.as_array()) {
-            for line in lines {
-                if let Some(channel) = line
-                    .get("topSid")
-                    .or_else(|| line.get("lChannelId"))
-                    .and_then(json_i64)
-                {
-                    if channel > 0 {
-                        top_sid = channel;
-                        break;
-                    }
-                }
+    if top_sid == 0
+        && let Some(lines) = raw.get("lines").and_then(|v| v.as_array())
+    {
+        for line in lines {
+            if let Some(channel) = line
+                .get("topSid")
+                .or_else(|| line.get("lChannelId"))
+                .and_then(json_i64)
+                && channel > 0
+            {
+                top_sid = channel;
+                break;
             }
         }
     }
@@ -99,11 +98,10 @@ pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> 
                     .get("subSid")
                     .or_else(|| line.get("lSubChannelId"))
                     .and_then(json_i64)
+                    && channel > 0
                 {
-                    if channel > 0 {
-                        sub_sid = channel;
-                        break;
-                    }
+                    sub_sid = channel;
+                    break;
                 }
             }
         }

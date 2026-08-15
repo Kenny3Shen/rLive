@@ -709,9 +709,11 @@ fn decode_member(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
     event_if_content(
         DanmakuKind::Enter,
         user.clone(),
-        (!user.is_empty())
-            .then(|| format!("{user} 进入直播间"))
-            .unwrap_or_default(),
+        if !user.is_empty() {
+            format!("{user} 进入直播间")
+        } else {
+            Default::default()
+        },
         None,
     )
 }

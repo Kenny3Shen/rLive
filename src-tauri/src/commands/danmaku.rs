@@ -140,16 +140,15 @@ fn record_successful_danmaku_send(
         .and_then(|conn| {
             let mut title = room_title.unwrap_or_default().trim().to_owned();
             let mut user_name = room_user_name.unwrap_or_default().trim().to_owned();
-            if title.is_empty() || user_name.is_empty() {
-                if let Some((history_title, history_user_name)) =
+            if (title.is_empty() || user_name.is_empty())
+                && let Some((history_title, history_user_name)) =
                     history::metadata_for_room(&conn, site_id.as_str(), room_id).unwrap_or_default()
-                {
-                    if title.is_empty() {
-                        title = history_title;
-                    }
-                    if user_name.is_empty() {
-                        user_name = history_user_name;
-                    }
+            {
+                if title.is_empty() {
+                    title = history_title;
+                }
+                if user_name.is_empty() {
+                    user_name = history_user_name;
                 }
             }
             danmaku_send_history::record(
@@ -232,14 +231,16 @@ pub async fn danmaku_connect(
     danmu_rs::connect(
         app,
         &state.danmaku,
-        connection_epoch,
-        site_id,
-        &room_id,
-        &detail.raw,
-        &danmaku_cookie,
-        identity_cookie.as_deref().unwrap_or_default(),
-        settings.proxy.as_deref(),
-        notice,
+        danmu_rs::DanmakuConnectRequest {
+            generation: connection_epoch,
+            site_id,
+            room_id: &room_id,
+            detail_raw: &detail.raw,
+            cookie: &danmaku_cookie,
+            identity_cookie: identity_cookie.as_deref().unwrap_or_default(),
+            proxy: settings.proxy.as_deref(),
+            notice,
+        },
     )
     .await
 }
@@ -417,17 +418,15 @@ pub async fn douyu_danmaku_send(
         .with_site("douyu"));
     }
     let (room_id, message) =
-        validate_and_reserve_douyu_send(&state.douyu_send_limiter, &room_id, &message).map_err(
-            |error| {
+        validate_and_reserve_douyu_send(&state.douyu_send_limiter, &room_id, &message)
+            .inspect_err(|error| {
                 tracing::warn!(
                     room_id = %room_id.trim(),
                     stage = "preflight",
                     error_code = %error.code,
                     "douyu send rejected by local validation"
                 );
-                error
-            },
-        )?;
+            })?;
     danmu_rs::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
     record_successful_danmaku_send(
         state.inner(),

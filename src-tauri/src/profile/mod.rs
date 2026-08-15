@@ -428,15 +428,17 @@ mod tests {
     #[test]
     fn export_package_clears_local_only_settings() {
         let conn = open_in_memory().unwrap();
-        let mut local = AppSettings::default();
-        local.danmaku_send_enabled = true;
-        local.asr_enabled = true;
-        local.asr_vad_enabled = true;
-        local.asr_speaker_diarization_enabled = true;
-        local.asr_translation_enabled = true;
-        local.asr_translation_from = "en".into();
-        local.asr_translation_to = "ja".into();
-        local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
+        let local = AppSettings {
+            danmaku_send_enabled: true,
+            asr_enabled: true,
+            asr_vad_enabled: true,
+            asr_speaker_diarization_enabled: true,
+            asr_translation_enabled: true,
+            asr_translation_from: "en".into(),
+            asr_translation_to: "ja".into(),
+            iptv_custom_m3u_url: Some("https://example.invalid/local.m3u".into()),
+            ..AppSettings::default()
+        };
         settings::set(&conn, &local).unwrap();
 
         let package = export_package(&conn).unwrap();
@@ -536,17 +538,19 @@ mod tests {
     #[test]
     fn merge_preserves_local_only_settings() {
         let mut conn = open_in_memory().unwrap();
-        let mut local = AppSettings::default();
-        local.danmaku_send_enabled = true;
-        local.asr_enabled = true;
-        local.asr_vad_enabled = true;
-        local.asr_punctuation_enabled = false;
-        local.asr_hotwords = vec!["本地热词".into()];
-        local.asr_speaker_diarization_enabled = true;
-        local.asr_translation_enabled = true;
-        local.asr_translation_from = "en".into();
-        local.asr_translation_to = "ja".into();
-        local.iptv_custom_m3u_url = Some("https://example.invalid/local.m3u".into());
+        let local = AppSettings {
+            danmaku_send_enabled: true,
+            asr_enabled: true,
+            asr_vad_enabled: true,
+            asr_punctuation_enabled: false,
+            asr_hotwords: vec!["本地热词".into()],
+            asr_speaker_diarization_enabled: true,
+            asr_translation_enabled: true,
+            asr_translation_from: "en".into(),
+            asr_translation_to: "ja".into(),
+            iptv_custom_m3u_url: Some("https://example.invalid/local.m3u".into()),
+            ..AppSettings::default()
+        };
         settings::set(&conn, &local).unwrap();
 
         let mut package = ProfilePackage::sample();

@@ -19,8 +19,7 @@
 export const FULLSCREEN_TRANSITION_ATTRIBUTE = "data-fullscreen-transition";
 
 /** Custom property the CSS rule pins `.app-shell`'s `padding-top` to. */
-export const FULLSCREEN_TRANSITION_SAFE_AREA_TOP_PROPERTY =
-  "--fullscreen-transition-safe-area-top";
+export const FULLSCREEN_TRANSITION_SAFE_AREA_TOP_PROPERTY = "--fullscreen-transition-safe-area-top";
 
 /**
  * Upper bound for the freeze, in case no `fullscreenchange` ever arrives.

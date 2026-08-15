@@ -122,23 +122,22 @@ impl HuyaSite {
         // Never fall back to the public short room id: it is not lTid/lSid.
         let mut desktop_presenter = 0;
         let mut desktop_ayyuid = 0;
-        if top == 0 || sub == 0 {
-            if let Ok(desktop_html) = self
+        if (top == 0 || sub == 0)
+            && let Ok(desktop_html) = self
                 .get_text(&format!("https://www.huya.com/{room_id}"), DESKTOP_UA)
                 .await
-            {
-                let room_data = parse_js_json_assignment(&desktop_html, "TT_ROOM_DATA");
-                let profile_data = parse_js_json_assignment(&desktop_html, "TT_PROFILE_INFO");
-                let (desktop_channel, presenter, ayyuid) =
-                    desktop_room_ids(room_data.as_ref(), profile_data.as_ref(), mobile_presenter);
-                desktop_presenter = presenter;
-                desktop_ayyuid = ayyuid;
-                if top == 0 {
-                    top = desktop_channel;
-                }
-                if sub == 0 {
-                    sub = desktop_channel;
-                }
+        {
+            let room_data = parse_js_json_assignment(&desktop_html, "TT_ROOM_DATA");
+            let profile_data = parse_js_json_assignment(&desktop_html, "TT_PROFILE_INFO");
+            let (desktop_channel, presenter, ayyuid) =
+                desktop_room_ids(room_data.as_ref(), profile_data.as_ref(), mobile_presenter);
+            desktop_presenter = presenter;
+            desktop_ayyuid = ayyuid;
+            if top == 0 {
+                top = desktop_channel;
+            }
+            if sub == 0 {
+                sub = desktop_channel;
             }
         }
         if let Some(map) = obj.as_object_mut() {
@@ -341,12 +340,13 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(a), Some(b)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2])) {
-                out.push((a << 4) | b);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(a), Some(b)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2]))
+        {
+            out.push((a << 4) | b);
+            i += 3;
+            continue;
         }
         out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
         i += 1;
@@ -630,7 +630,7 @@ impl LiveSite for HuyaSite {
         ]
         .into_iter()
         .find(|value| *value > 0)
-        .unwrap_or_else(|| if top_sid > 0 { top_sid } else { sub_sid });
+        .unwrap_or(if top_sid > 0 { top_sid } else { sub_sid });
         let ayyuid = {
             let y = json_i64(live_info.get("lYyid").unwrap_or(&Value::Null));
             if y != 0 {

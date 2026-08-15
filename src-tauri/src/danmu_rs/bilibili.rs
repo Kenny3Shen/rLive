@@ -48,12 +48,12 @@ fn cookie_value(cookie: &str, key: &str) -> Option<String> {
     let cookie = cookie_header_value(cookie);
     for part in cookie.split(';') {
         let part = part.trim();
-        if let Some((k, v)) = part.split_once('=') {
-            if k.trim().eq_ignore_ascii_case(key) {
-                let v = v.trim();
-                if !v.is_empty() {
-                    return Some(v.to_string());
-                }
+        if let Some((k, v)) = part.split_once('=')
+            && k.trim().eq_ignore_ascii_case(key)
+        {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
             }
         }
     }
@@ -350,9 +350,11 @@ impl BilibiliDanmakuArgs {
 
     fn refresh_cookie(&self) -> String {
         if self.session_cookie.is_empty() {
-            return (!self.buvid.is_empty())
-                .then(|| format!("buvid3={};", self.buvid))
-                .unwrap_or_default();
+            return if !self.buvid.is_empty() {
+                format!("buvid3={};", self.buvid)
+            } else {
+                Default::default()
+            };
         }
         if self.buvid.is_empty() || self.session_cookie.contains("buvid3=") {
             return self.session_cookie.clone();
@@ -540,20 +542,21 @@ fn parse_notify_body_with(body: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     // One WS body may contain multiple JSON objects glued by control bytes.
     for part in text.split(|c: char| c.is_control()) {
         let part = part.trim();
-        if part.len() > 2 && part.starts_with('{') {
-            if let Some(ev) = parse_message_json(part) {
-                emit(ev);
-                emitted = true;
-            }
+        if part.len() > 2
+            && part.starts_with('{')
+            && let Some(ev) = parse_message_json(part)
+        {
+            emit(ev);
+            emitted = true;
         }
     }
     // Fallback: whole body as single JSON
     if !emitted {
         let trimmed = text.trim();
-        if trimmed.starts_with('{') {
-            if let Some(ev) = parse_message_json(trimmed) {
-                emit(ev);
-            }
+        if trimmed.starts_with('{')
+            && let Some(ev) = parse_message_json(trimmed)
+        {
+            emit(ev);
         }
     }
 }
@@ -825,7 +828,7 @@ pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
             return None;
         }
         let color_num = info
-            .get(0)
+            .first()
             .and_then(|v| v.as_array())
             .and_then(|a| a.get(3))
             .and_then(|v| v.as_i64())
@@ -1138,10 +1141,10 @@ async fn run_connection(
             "User-Agent",
             HeaderValue::from_static(crate::sites::bilibili::DEFAULT_USER_AGENT),
         );
-        if let Ok(cookie) = HeaderValue::from_str(&args.refresh_cookie()) {
-            if !cookie.is_empty() {
-                headers.insert("Cookie", cookie);
-            }
+        if let Ok(cookie) = HeaderValue::from_str(&args.refresh_cookie())
+            && !cookie.is_empty()
+        {
+            headers.insert("Cookie", cookie);
         }
     }
     let (ws, _) = match connect_async(request).await {

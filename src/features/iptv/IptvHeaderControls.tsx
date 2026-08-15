@@ -169,7 +169,10 @@ type IptvAvailabilitySelectProps = {
 };
 
 /** Availability filter shared by the desktop rail and the mobile toolbar. */
-export function IptvAvailabilitySelect({ className, iconOnly = false }: IptvAvailabilitySelectProps) {
+export function IptvAvailabilitySelect({
+  className,
+  iconOnly = false,
+}: IptvAvailabilitySelectProps) {
   const { availabilityFilter, setAvailabilityFilter } = useIptvController();
   const label = availabilityFilterLabel(availabilityFilter);
 
@@ -186,9 +189,7 @@ export function IptvAvailabilitySelect({ className, iconOnly = false }: IptvAvai
         title={label}
         className={cn(
           "border border-input bg-background",
-          iconOnly
-            ? "size-11! shrink-0 justify-center px-0! [&>svg:last-child]:hidden"
-            : "w-full",
+          iconOnly ? "size-11! shrink-0 justify-center px-0! [&>svg:last-child]:hidden" : "w-full",
           availabilityFilter !== "all" && "border-primary/45 text-primary",
           className,
         )}
@@ -218,10 +219,7 @@ export function IptvRailControls({ className }: IptvRailControlsProps) {
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-2", className)}>
-      <IptvSearchInput
-        keyword={keyword}
-        onChange={(query) => navigateHome({ query }, true)}
-      />
+      <IptvSearchInput keyword={keyword} onChange={(query) => navigateHome({ query }, true)} />
       <IptvAvailabilitySelect />
       {hasFilters && (
         <Button
@@ -249,14 +247,8 @@ type IptvContentToolbarProps = {
  * carries these controls in the page rail instead.
  */
 export function IptvContentToolbar({ className }: IptvContentToolbarProps) {
-  const {
-    keyword,
-    groupOptions,
-    selectedGroup,
-    navigateHome,
-    hasFilters,
-    clearFilters,
-  } = useIptvController();
+  const { keyword, groupOptions, selectedGroup, navigateHome, hasFilters, clearFilters } =
+    useIptvController();
   const groupLabel = selectedGroup === "all" ? "全部分类" : selectedGroup;
 
   return (

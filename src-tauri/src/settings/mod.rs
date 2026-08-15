@@ -237,11 +237,13 @@ mod tests {
     #[test]
     fn set_and_get_roundtrip() {
         let conn = open_in_memory().unwrap();
-        let mut s = AppSettings::default();
-        s.theme = "dark".into();
-        s.proxy = Some("http://127.0.0.1:7890".into());
-        s.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
-        s.danmaku_font_size = 22;
+        let s = AppSettings {
+            theme: "dark".into(),
+            proxy: Some("http://127.0.0.1:7890".into()),
+            iptv_custom_m3u_url: Some("https://example.invalid/private.m3u".into()),
+            danmaku_font_size: 22,
+            ..AppSettings::default()
+        };
         set(&conn, &s).unwrap();
         let (back, has_saved_settings) = get_with_status(&conn).unwrap();
         assert!(has_saved_settings);
@@ -346,12 +348,14 @@ mod tests {
     #[test]
     fn set_keeps_one_platform_enabled_when_all_are_disabled() {
         let conn = open_in_memory().unwrap();
-        let mut settings = AppSettings::default();
-        settings.default_site = "douyin".into();
-        settings.disabled_site_ids = crate::sites::registry::all_meta()
-            .into_iter()
-            .map(|site| site.id.as_str().to_owned())
-            .collect();
+        let settings = AppSettings {
+            default_site: "douyin".into(),
+            disabled_site_ids: crate::sites::registry::all_meta()
+                .into_iter()
+                .map(|site| site.id.as_str().to_owned())
+                .collect(),
+            ..AppSettings::default()
+        };
 
         set(&conn, &settings).unwrap();
         let (back, has_saved_settings) = get_with_status(&conn).unwrap();

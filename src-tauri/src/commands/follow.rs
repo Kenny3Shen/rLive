@@ -191,10 +191,7 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
             let _permit = permit;
             let live_info = match SiteId::from_str_loose(&site_id) {
                 Some(sid) => match sites::site_with_proxy(&sid, cookie, proxy.as_deref()) {
-                    Ok(site) => match site.get_room_live_status(&room_id).await {
-                        Ok(status) => Some(status),
-                        Err(_) => None,
-                    },
+                    Ok(site) => site.get_room_live_status(&room_id).await.ok(),
                     Err(_) => None,
                 },
                 None => None,

@@ -397,14 +397,13 @@ fn insert_session(key: String, session: QrSession) -> AppResult<()> {
             .with_site("bilibili")
     })?;
     prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS {
-        if let Some(oldest_key) = sessions
+    if sessions.len() >= MAX_ACTIVE_SESSIONS
+        && let Some(oldest_key) = sessions
             .iter()
             .min_by_key(|(_, session)| session.created_at)
             .map(|(key, _)| key.clone())
-        {
-            sessions.remove(&oldest_key);
-        }
+    {
+        sessions.remove(&oldest_key);
     }
     sessions.insert(key, session);
     Ok(())

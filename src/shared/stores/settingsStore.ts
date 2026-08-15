@@ -582,10 +582,7 @@ export const useSettingsStore = create<SettingsState>()(
 
           // Migrate a pre-backend local platform choice once. This makes the
           // choice durable without changing the first-run Bilibili default.
-          if (
-            !hasSavedSettings &&
-            (siteId !== DEFAULT_SITE_ID || disabledSiteIds.length > 0)
-          ) {
+          if (!hasSavedSettings && (siteId !== DEFAULT_SITE_ID || disabledSiteIds.length > 0)) {
             await get().persistToBackend({
               default_site: siteId,
               disabled_site_ids: disabledSiteIds,

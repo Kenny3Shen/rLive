@@ -261,7 +261,7 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
             let domain_urls = domain_url_list(data);
             Ok(PollState::Success { domain_urls })
         }
-        5 | 6 | 7 => Ok(PollState::Expired),
+        5..=7 => Ok(PollState::Expired),
         8 => Err(
             AppError::new("huya_qr_account", "扫码账号异常，请更换账号后重试")
                 .with_site("huya")
@@ -469,14 +469,13 @@ fn insert_session(key: String, session: QrSession) -> AppResult<()> {
         AppError::new("huya_qr_session", "二维码登录会话初始化失败，请重试").with_site("huya")
     })?;
     prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS {
-        if let Some(oldest_key) = sessions
+    if sessions.len() >= MAX_ACTIVE_SESSIONS
+        && let Some(oldest_key) = sessions
             .iter()
             .min_by_key(|(_, session)| session.created_at)
             .map(|(key, _)| key.clone())
-        {
-            sessions.remove(&oldest_key);
-        }
+    {
+        sessions.remove(&oldest_key);
     }
     sessions.insert(key, session);
     Ok(())

@@ -435,14 +435,13 @@ fn insert_session(key: String, session: QrSession) -> AppResult<()> {
         AppError::new("douyu_qr_session", "二维码登录会话初始化失败，请重试").with_site("douyu")
     })?;
     prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS {
-        if let Some(oldest_key) = sessions
+    if sessions.len() >= MAX_ACTIVE_SESSIONS
+        && let Some(oldest_key) = sessions
             .iter()
             .min_by_key(|(_, session)| session.created_at)
             .map(|(key, _)| key.clone())
-        {
-            sessions.remove(&oldest_key);
-        }
+    {
+        sessions.remove(&oldest_key);
     }
     sessions.insert(key, session);
     Ok(())

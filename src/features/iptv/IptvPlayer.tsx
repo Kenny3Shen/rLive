@@ -113,6 +113,7 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const channelId = channel?.id ?? null;
   const channelUrl = channel?.url ?? null;
   const controlsRef = useRef<HTMLDivElement | null>(null);
+  const hudRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
   const retryTimerRef = useRef<number | null>(null);
   const controlsHideTimerRef = useRef<number | null>(null);
@@ -262,11 +263,12 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
   const setControlVisibility = useCallback((visible: boolean) => {
     if (controlsVisibleRef.current === visible) return;
     controlsVisibleRef.current = visible;
-    const controls = controlsRef.current;
-    if (!controls) return;
-    controls.dataset.visible = visible ? "true" : "false";
-    controls.setAttribute("aria-hidden", String(!visible));
-    controls.toggleAttribute("inert", !visible);
+    for (const layer of [controlsRef.current, hudRef.current]) {
+      if (!layer) continue;
+      layer.dataset.visible = visible ? "true" : "false";
+      layer.setAttribute("aria-hidden", String(!visible));
+      layer.toggleAttribute("inert", !visible);
+    }
   }, []);
 
   const scheduleControlsHide = useCallback(() => {
@@ -424,7 +426,13 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
         )}
 
         {channel && (
-          <div className="pointer-events-none absolute top-3 left-3 z-20 flex items-center gap-2">
+          <div
+            ref={hudRef}
+            data-player-hud
+            data-visible={controlsVisibleRef.current ? "true" : "false"}
+            aria-hidden={!controlsVisibleRef.current}
+            className="pointer-events-none absolute top-3 left-3 z-20 flex items-center gap-2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:opacity-0"
+          >
             <Badge
               variant="destructive"
               className="gap-1.5 bg-destructive text-destructive-foreground"

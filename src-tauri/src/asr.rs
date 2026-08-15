@@ -98,7 +98,7 @@ const ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH: f32 = 20.0;
 const ENDPOINT_DISABLED_TRAILING_SILENCE: f32 = 3_600.0;
 
 const MAX_PCM_BYTES: usize = 2 * 1024 * 1024;
-const MAX_BASE64_PCM_BYTES: usize = ((MAX_PCM_BYTES + 2) / 3) * 4;
+const MAX_BASE64_PCM_BYTES: usize = MAX_PCM_BYTES.div_ceil(3) * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1612,12 +1612,12 @@ fn asr_provider_fallback_message(preference: &str) -> Option<String> {
 
 #[cfg(any(windows, target_os = "linux"))]
 fn cuda_provider_fallback_message() -> String {
-    if let Some((major, minor)) = cuda_compute_capability() {
-        if !cuda_compute_capability_supported(major, minor) {
-            return format!(
-                "当前 NVIDIA GPU Compute Capability {major}.{minor}，官方 CUDA 运行库要求 6.1 及以上，已回退 CPU"
-            );
-        }
+    if let Some((major, minor)) = cuda_compute_capability()
+        && !cuda_compute_capability_supported(major, minor)
+    {
+        return format!(
+            "当前 NVIDIA GPU Compute Capability {major}.{minor}，官方 CUDA 运行库要求 6.1 及以上，已回退 CPU"
+        );
     }
     "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
 }

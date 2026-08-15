@@ -417,7 +417,7 @@ impl<'a> TarsReader<'a> {
             return Err(err(format!("map type mismatch {}", hd.typ)));
         }
         let size = self.read_i64(0, true)?;
-        if size < 0 || size > 16_384 {
+        if !(0..=16_384).contains(&size) {
             return Err(err(format!("invalid map size {size}")));
         }
         let mut out = Vec::with_capacity(size as usize);
@@ -443,7 +443,7 @@ impl<'a> TarsReader<'a> {
             return Err(err(format!("map type mismatch {}", hd.typ)));
         }
         let size = self.read_i64(0, true)?;
-        if size < 0 || size > 16_384 {
+        if !(0..=16_384).contains(&size) {
             return Err(err(format!("invalid map size {size}")));
         }
         let mut out = Vec::with_capacity(size as usize);
@@ -468,7 +468,7 @@ impl<'a> TarsReader<'a> {
             return Err(err(format!("list type mismatch {}", hd.typ)));
         }
         let size = self.read_i64(0, true)?;
-        if size < 0 || size > 65_536 {
+        if !(0..=65_536).contains(&size) {
             return Err(err(format!("invalid list size {size}")));
         }
         Ok(size as usize)
