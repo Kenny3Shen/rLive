@@ -622,6 +622,24 @@ html[data-platform="android"] .app-shell {
   padding-top: env(safe-area-inset-top);
 }
 
+/* Hold that padding still while a player enters fullscreen.
+
+   Entering fullscreen hides the system bars (and may lock orientation), which
+   animates `env(safe-area-inset-top)` down over several frames. The stage only
+   leaves normal flow once `:fullscreen` applies, so until then each intermediate
+   inset reflowed the windowed room: the top bar and the fixed-ratio video slid
+   up while the `flex-1` danmaku panel stretched to absorb the freed height —
+   visible as the chat growing taller just before the picture takes over.
+
+   `beginFullscreenTransition` records the pre-transition padding in the custom
+   property below, so this pins the shell to exactly the height it already had
+   rather than to a guess. `!important` is required: the shell also carries a
+   Tailwind `max-md:pt-[env(safe-area-inset-top)]` utility, which this rule
+   cannot outrank on specificity alone. */
+html[data-fullscreen-transition="true"] .app-shell {
+  padding-top: var(--fullscreen-transition-safe-area-top) !important;
+}
+
 /* Fullscreen player stage.
 
    Two mechanisms feed this one rule:
