@@ -668,6 +668,72 @@ html[data-fullscreen-transition="true"] .app-shell {
   max-height: none;
 }
 
+/* Let the picture fill that stage in the SAME frame it becomes fullscreen.
+
+   The browser applies `:fullscreen` synchronously, but the matching React
+   layout (`portraitStackedPlayer`) only flips after fullscreenchange dispatches
+   a state update. For the frame in between, the stage already covers the screen
+   while the video surface still carries the portrait-stack sizing
+   (`aspect-video` + `shrink-0`) — the picture stays a 16:9 band at the top with
+   black below it. That one frame is the flash users still saw after the
+   safe-area freeze removed the reflow.
+
+   Restating the fullscreen geometry in CSS makes both halves land together, so
+   the React re-render that follows is a no-op rather than a correction. */
+[data-player-stage]:fullscreen > [data-player-video-surface],
+[data-player-stage]:-webkit-full-screen > [data-player-video-surface],
+[data-player-stage][data-fullscreen="true"] > [data-player-video-surface] {
+  flex: 1 1 0%;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
+/* The same gap exists on the way out, in the opposite direction.
+
+   Leaving fullscreen drops `:fullscreen` synchronously while the React classes
+   are still the fullscreen variant, so for one frame the stage is back in flow
+   with the picture stretched by `flex-1` instead of held at 16:9 — the video
+   reads as jumping taller before snapping back.
+
+   `data-portrait-stack` is derived without `player.mode`, so it is already true
+   at that moment and restores the ratio in the same frame. The `:not()` guard
+   hands control back to the rule above while fullscreen actually applies. */
+[data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not(
+    [data-fullscreen="true"]
+  )
+  > [data-player-video-surface] {
+  flex: none;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+}
+
+/* The stage and its wrapper shed their own fullscreen sizing on the same frame,
+   so the ratio above has a parent that hugs it instead of one still filling the
+   column. */
+[data-room-player-frame]:has(
+    > [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not(
+        [data-fullscreen="true"]
+      )
+  ),
+[data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"]) {
+  flex: none;
+  width: 100%;
+  min-height: 0;
+}
+
+/* The chrome inset belongs to the same frame.
+
+   Portrait stacking sets it to 0 because the controls float over the video's
+   bottom edge rather than the window's; fullscreen owns the window again and
+   must reserve the gesture bar. It is written as an inline style, so `!important`
+   is the only way a rule can win — without it the overlays anchored to this
+   variable (super chat, captions) would shift once React catches up. */
+[data-player-stage]:fullscreen,
+[data-player-stage]:-webkit-full-screen,
+[data-player-stage][data-fullscreen="true"] {
+  --player-chrome-inset: env(safe-area-inset-bottom) !important;
+}
+
 /* Room and IPTV channel grids can retain many cards after infinite scrolling or
    a "show more" page. Chromium can skip offscreen layout/paint for each complete
    card while preserving a stable placeholder size for scrolling. */
