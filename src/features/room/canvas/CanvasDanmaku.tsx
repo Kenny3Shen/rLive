@@ -87,9 +87,10 @@ const HOVER_DANMAKU_BORDER_RADIUS = 6;
  *
  * The distance is deliberately *below* the stage's brightness/volume gesture
  * intent threshold (`PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX`, 12px) rather than
- * matching its tap allowance (14px). Selecting a comment claims the `pointerup`,
- * which skips the stage's own gesture teardown, so the two must not be able to
- * trigger on the same contact. Duration matches the stage tap.
+ * matching its tap allowance (14px). This keeps a comment tap below the point
+ * where the stage captures the pointer for brightness/volume adjustment, so
+ * Canvas still receives the matching `pointerup`. Duration matches the stage
+ * tap.
  *
  * Copied rather than imported because `PlayerPane` imports this module, and
  * importing back would form a cycle.
@@ -673,8 +674,10 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         return;
       }
 
+      // The stage still receives this event to clear its pending gesture state,
+      // and recognises defaultPrevented as a child-overlay claim. Stopping
+      // propagation here would leave that state alive until the next press.
       event.preventDefault();
-      event.stopPropagation();
       if (hit.item.hoverKey === hoverKeyRef.current) {
         // Tapping the selected comment again closes the menu.
         releaseHover();
@@ -1387,9 +1390,10 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           roomId={roomId}
           roomTitle={roomTitle}
           roomUserName={roomUserName}
-          // Touch always gets the large pill; a mouse only needs it when the
-          // stage is a full display away.
-          large={mobile || large}
+          // Touch uses the compact pill even in fullscreen; only a desktop
+          // fullscreen stage needs the larger aiming target.
+          large={large && !mobile}
+          touch={mobile}
           onPointerEnter={mobile ? undefined : handleMenuPointerEnter}
           onPointerLeave={mobile ? undefined : handleMenuPointerLeave}
         />

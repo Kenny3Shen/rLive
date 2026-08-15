@@ -30,11 +30,12 @@ export type CanvasDanmakuHoverTarget = {
  *
  * Kept close to the real half-width: `clamp` stops centering once the anchor is
  * within this distance of an edge, so an inflated value visibly detaches the pill
- * from the comment it belongs to. Compact is three 36px buttons with 6px gaps and
- * padding (~72px, plus margin for the coarse-pointer `min-w-11` step); large is
- * three 44px buttons with 8px gaps and padding (~88px).
+ * from the comment it belongs to. Compact is three 36px buttons with 6px gaps
+ * and padding (~72px, plus the coarse-pointer floor); touch compact is slightly
+ * tighter; large is three 44px buttons with 8px gaps and padding (~88px).
  */
 const MENU_HALF_WIDTH_PX = 90;
+const MENU_HALF_WIDTH_TOUCH_PX = 78;
 const MENU_HALF_WIDTH_LARGE_PX = 96;
 /**
  * Marks the menu so the canvas can recognise it as a `pointerleave` destination.
@@ -60,12 +61,10 @@ type CanvasDanmakuActionMenuProps = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
-  /**
-   * Larger touch/aim targets. Set for touch selection and for a fullscreen
-   * stage, where the picture is a whole big display away from the user and the
-   * compact desktop pill is hard to hit.
-   */
+  /** Larger aiming targets for a fullscreen desktop stage. */
   large?: boolean;
+  /** Compact spacing and controls for a touch-selected comment. */
+  touch?: boolean;
   onPointerEnter?: () => void;
   /** Receives the event so the caller can tell where the pointer is going. */
   onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -78,6 +77,7 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
   roomTitle,
   roomUserName,
   large = false,
+  touch = false,
   onPointerEnter,
   onPointerLeave,
 }: CanvasDanmakuActionMenuProps) {
@@ -92,11 +92,20 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
   });
   const flipBelow = target.top < MENU_FLIP_THRESHOLD_PX;
   const anchorX = target.left + target.width / 2;
-  const halfWidth = large ? MENU_HALF_WIDTH_LARGE_PX : MENU_HALF_WIDTH_PX;
-  // `icon-lg` (36px) is the largest built-in step, so the large variant sets its
-  // own box. 44px is the conventional minimum comfortable touch target, which is
-  // what this variant exists for.
-  const buttonClass = large ? "size-11" : undefined;
+  const halfWidth = large
+    ? MENU_HALF_WIDTH_LARGE_PX
+    : touch
+      ? MENU_HALF_WIDTH_TOUCH_PX
+      : MENU_HALF_WIDTH_PX;
+  // Keep the touch menu compact instead of inheriting the app-wide 44px coarse
+  // pointer floor. Its buttons are still easy to hit through the surrounding
+  // bridge/padding, while the popup no longer covers an oversized part of the
+  // picture.
+  const buttonClass = large
+    ? "size-11"
+    : touch
+      ? "size-9 [@media(pointer:coarse)]:size-9! [@media(pointer:coarse)]:min-h-9! [@media(pointer:coarse)]:min-w-9!"
+      : undefined;
   const iconClass = large ? "size-6" : "size-5";
 
   return (
@@ -143,7 +152,7 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
           // moving picture, and a mis-hit here sends a comment or writes the
           // clipboard, so the gap is deliberate rather than cosmetic.
           "flex items-center rounded-full",
-          large ? "gap-2 p-2" : "gap-1.5 p-1.5",
+          large ? "gap-2 p-2" : touch ? "gap-1 p-1" : "gap-1.5 p-1.5",
           glassPanelClass({ overlay: true }),
         )}
       >

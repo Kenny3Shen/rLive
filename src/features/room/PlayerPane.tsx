@@ -148,6 +148,29 @@ export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boo
   );
 }
 
+export type PlayerEdgeGestureIntent = "pending" | "adjust" | "reject";
+
+/**
+ * Keep short contacts with their original picture target until they either
+ * become a vertical adjustment or clearly turn into another gesture. This is
+ * especially important for Canvas overlays: they need the matching pointerup
+ * to finish touch hit testing.
+ */
+export function playerEdgeGestureIntent(
+  deltaX: number,
+  deltaY: number,
+): PlayerEdgeGestureIntent {
+  const horizontalDistance = Math.abs(deltaX);
+  const verticalDistance = Math.abs(deltaY);
+  if (
+    horizontalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
+    verticalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX
+  ) {
+    return "pending";
+  }
+  return isVerticalPlayerEdgeGesture(deltaX, deltaY) ? "adjust" : "reject";
+}
+
 /**
  * Drag distance that maps to a full 0–100 adjustment. Using the whole stage
  * makes small finger movements continuous and controllable rather than jumpy.
@@ -1128,9 +1151,6 @@ export function PlayerPane({
         active: false,
         native,
       };
-      // Capturing keeps an adjustment continuous when the finger reaches a
-      // stage edge in Android WebView fullscreen.
-      event.currentTarget.setPointerCapture(event.pointerId);
     },
     [
       mobileClient,
@@ -1150,24 +1170,23 @@ export function PlayerPane({
 
       const deltaX = event.clientX - gesture.startX;
       const deltaY = event.clientY - gesture.startY;
-      const horizontalDistance = Math.abs(deltaX);
-      const verticalDistance = Math.abs(deltaY);
       let beganAdjustment = false;
 
       if (!gesture.active) {
-        if (
-          horizontalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
-          verticalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX
-        ) {
-          return true;
-        }
-        if (!isVerticalPlayerEdgeGesture(deltaX, deltaY)) {
+        const intent = playerEdgeGestureIntent(deltaX, deltaY);
+        if (intent === "pending") return true;
+        if (intent === "reject") {
           playerEdgeGestureRef.current = null;
           releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
           return false;
         }
         gesture.active = true;
         beganAdjustment = true;
+        // Do not capture on pointerdown: a short touch must keep its original
+        // target so Canvas danmaku can receive pointerup and finish hit testing.
+        // Once the contact is a real adjustment, capture keeps it continuous
+        // when the finger reaches a stage edge in Android WebView fullscreen.
+        event.currentTarget.setPointerCapture(event.pointerId);
         // A recognised volume/brightness drag cancels any pending stage tap.
         clearPlayerStageTapTimer();
         lastPlayerStageTapAtRef.current = 0;
@@ -1311,7 +1330,10 @@ export function PlayerPane({
       const tap = playerStageTapRef.current;
       if (!tap || tap.pointerId !== event.pointerId) return;
       playerStageTapRef.current = null;
-      if (gestureConsumed) return;
+      // Child picture overlays use preventDefault to claim a completed tap.
+      // Still let the event reach here so pending edge/tap state is cleared,
+      // but never turn that claimed press into playback or fullscreen chrome.
+      if (gestureConsumed || event.defaultPrevented) return;
       if (
         !mobileClient ||
         !isTouchPointer(event.pointerType) ||

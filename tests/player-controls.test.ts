@@ -24,6 +24,7 @@ import {
   playerBrightnessShadeOpacity,
   playerEdgeGestureDragExtent,
   playerEdgeGestureForStart,
+  playerEdgeGestureIntent,
   playerEdgeGestureValue,
   PLAYER_STAGE_DOUBLE_TAP_MS,
   showDanmakuComposerInPlayerControls,
@@ -243,6 +244,15 @@ describe("mobile player edge gestures", () => {
     expect(playerEdgeGestureValue(50, -1.5, 320)).toBeCloseTo(50.46875);
     expect(playerEdgeGestureValue(98, -400, 320)).toBe(100);
     expect(playerEdgeGestureValue(2, 400, 320)).toBe(0);
+  });
+
+  test("keeps taps on their picture target until a vertical adjustment is recognised", () => {
+    // A pending contact must not be captured by the stage, otherwise Canvas
+    // danmaku never receives pointerup and cannot open its touch action menu.
+    expect(playerEdgeGestureIntent(0, 0)).toBe("pending");
+    expect(playerEdgeGestureIntent(6, 6)).toBe("pending");
+    expect(playerEdgeGestureIntent(0, 12)).toBe("adjust");
+    expect(playerEdgeGestureIntent(12, 0)).toBe("reject");
   });
 
   test("uses most of the picture and preserves continuous native values", () => {
