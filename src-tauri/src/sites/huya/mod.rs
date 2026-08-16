@@ -792,7 +792,7 @@ impl LiveSite for HuyaSite {
 
     async fn get_play_urls(
         &self,
-        _detail: &LiveRoomDetail,
+        detail: &LiveRoomDetail,
         quality: &LivePlayQuality,
     ) -> AppResult<Vec<PlayUrl>> {
         let bit_rate = json_i64(quality.data.get("bitRate").unwrap_or(&Value::Null));
@@ -810,7 +810,11 @@ impl LiveSite for HuyaSite {
             .unwrap_or_default();
         let mut headers = HashMap::new();
         headers.insert("user-agent".into(), UA.into());
-        headers.insert("referer".into(), "https://www.huya.com/".into());
+        headers.insert(
+            "referer".into(),
+            format!("https://www.huya.com/{}", detail.room_id),
+        );
+        headers.insert("origin".into(), "https://www.huya.com".into());
 
         let mut urls = Vec::new();
         for (index, line) in lines.into_iter().enumerate() {
@@ -822,13 +826,10 @@ impl LiveSite for HuyaSite {
                 continue;
             }
             let q = process_anticode(&anti, &uid, &stream);
-            // Prefer https for the local stream proxy / TLS stacks.
-            let base = if let Some(rest) = base.strip_prefix("http://") {
-                format!("https://{rest}")
-            } else {
-                base
-            };
-            let mut url = format!("{base}/{stream}.flv?{q}");
+            // The signed Huya FLV endpoints currently returned by the room
+            // bootstrap are HTTP-only. Rewriting the scheme invalidates some
+            // CDN lines and surfaces as an immediate 403/connection close.
+            let mut url = format!("{}/{stream}.flv?{q}", base.trim_end_matches('/'));
             if bit_rate > 0 {
                 url.push_str(&format!("&ratio={bit_rate}"));
             }
@@ -934,5 +935,56 @@ mod tests {
         assert!(q.contains("wsSecret="), "{q}");
         assert!(q.contains("uid=1234567890"), "{q}");
         assert!(q.contains("ctype=tars_mobile"), "{q}");
+    }
+
+    #[tokio::test]
+    async fn play_urls_preserve_http_cdn_scheme_and_use_room_referer() {
+        let detail = LiveRoomDetail {
+            site_id: SiteId::Huya,
+            room_id: "test-room".into(),
+            title: String::new(),
+            cover: String::new(),
+            user_name: String::new(),
+            user_avatar: String::new(),
+            online: 0,
+            status: true,
+            live_started_at: None,
+            notice: String::new(),
+            url: "https://www.huya.com/test-room".into(),
+            raw: serde_json::json!({}),
+        };
+        let quality = LivePlayQuality {
+            quality: "原画".into(),
+            data: serde_json::json!({
+                "bitRate": 0,
+                "uid": "1234567890",
+                "lines": [{
+                    "line": "http://al.flv.huya.com/src/",
+                    "streamName": "stream-name",
+                    "flvAntiCode": "fm=UkZkeE9FSmpTak5vTmtSS2REWlVXVjhrTUY4a01WOGtNbDhrTXclM0QlM0Q%3D&ctype=tars_mobile&fs=bgct&t=103",
+                    "cdnType": "AL"
+                }]
+            }),
+        };
+
+        let urls = HuyaSite::default()
+            .get_play_urls(&detail, &quality)
+            .await
+            .unwrap();
+
+        assert_eq!(urls.len(), 1);
+        assert!(
+            urls[0]
+                .url
+                .starts_with("http://al.flv.huya.com/src/stream-name.flv?")
+        );
+        assert_eq!(
+            urls[0].headers.get("referer").map(String::as_str),
+            Some("https://www.huya.com/test-room")
+        );
+        assert_eq!(
+            urls[0].headers.get("origin").map(String::as_str),
+            Some("https://www.huya.com")
+        );
     }
 }

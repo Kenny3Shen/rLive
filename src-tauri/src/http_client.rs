@@ -61,6 +61,29 @@ pub fn client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
     }
 }
 
+/// Build the raw HTTP/1.1 client used by long-running live-stream recordings.
+///
+/// Unlike API requests, a healthy live response can remain open indefinitely,
+/// so this client deliberately has no total request timeout. Automatic content
+/// decoding is disabled as well: media bytes must be written exactly as the CDN
+/// sends them, even when a CDN incorrectly attaches a Content-Encoding header.
+pub fn recording_stream_client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
+    with_proxy(
+        Client::builder()
+            .use_native_tls()
+            .gzip(false)
+            .brotli(false)
+            .http1_only()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(45))
+            .pool_max_idle_per_host(2)
+            .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT),
+        proxy,
+    )?
+    .build()
+    .map_err(|_| AppError::new("http_client_build", "录制网络客户端初始化失败"))
+}
+
 /// Build a client for requests that carry a secret and must not follow a
 /// server-selected destination (for example a Cookie-bearing signer request).
 pub fn build_no_redirect_client(proxy: Option<&str>) -> AppResult<Client> {
@@ -90,7 +113,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    use super::{build_no_redirect_client, client_for_proxy};
+    use super::{build_no_redirect_client, client_for_proxy, recording_stream_client_for_proxy};
 
     #[tokio::test]
     async fn no_redirect_client_returns_the_signer_redirect_response() {
@@ -145,6 +168,36 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.text().await.unwrap(), "via-proxy");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn recording_client_preserves_raw_content_encoded_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 9\r\nConnection: close\r\n\r\nraw-media",
+                )
+                .unwrap();
+        });
+
+        let bytes = recording_stream_client_for_proxy(None)
+            .unwrap()
+            .get(format!("http://{address}/live.flv"))
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+
+        assert_eq!(bytes.as_ref(), b"raw-media");
         server.join().unwrap();
     }
 }
