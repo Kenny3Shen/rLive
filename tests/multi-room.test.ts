@@ -7,6 +7,7 @@ import {
   normalizeMultiRoomLayout,
   normalizeMultiRoomSlots,
   swapMultiRoomMain,
+  swapMultiRoomSlots,
   type MultiRoomEntry,
 } from "../src/features/multi-room/multiRoomStore";
 import {
@@ -189,6 +190,58 @@ describe("multi-room director layout", () => {
 
     expect(moved[0]?.key).toBe(secondary.key);
     expect(moved[1]?.key).toBe(main.key);
+  });
+
+  test("preserves unrelated slot positions when promoting with the button", () => {
+    const main = room("main");
+    const selected = room("selected");
+    const other = room("other");
+    const moved = swapMultiRoomMain([main, null, selected, null, other], 2);
+
+    expect(moved[0]).toMatchObject({ key: selected.key, muted: false });
+    expect(moved[1]).toBeNull();
+    expect(moved[2]).toMatchObject({ key: main.key, muted: true });
+    expect(moved[3]).toBeNull();
+    expect(moved[4]?.key).toBe(other.key);
+  });
+
+  test("swaps two occupied secondary feeds", () => {
+    const main = room("main");
+    const first = room("first");
+    const second = room("second");
+    const moved = swapMultiRoomSlots([main, first, second], 1, 2);
+
+    expect(moved[0]?.key).toBe(main.key);
+    expect(moved[1]?.key).toBe(second.key);
+    expect(moved[2]?.key).toBe(first.key);
+  });
+
+  test("swaps main and secondary feeds while normalizing audio roles", () => {
+    const main = room("main");
+    const secondary = { ...room("secondary"), volume: 0, muted: true };
+    const moved = swapMultiRoomSlots([main, secondary], 0, 1);
+
+    expect(moved[0]).toMatchObject({ key: secondary.key, volume: 80, muted: false });
+    expect(moved[1]).toMatchObject({ key: main.key, muted: true });
+  });
+
+  test("moves an occupied secondary feed into an empty slot", () => {
+    const main = room("main");
+    const secondary = room("secondary");
+    const moved = swapMultiRoomSlots([main, secondary, null], 1, 2);
+
+    expect(moved[1]).toBeNull();
+    expect(moved[2]?.key).toBe(secondary.key);
+  });
+
+  test("keeps a main feed when it is moved into an empty slot", () => {
+    const main = room("main");
+    const secondary = room("secondary");
+    const moved = swapMultiRoomSlots([main, secondary, null], 0, 2);
+
+    expect(moved[0]).toMatchObject({ key: secondary.key, muted: false });
+    expect(moved[1]).toBeNull();
+    expect(moved[2]).toMatchObject({ key: main.key, muted: true });
   });
 
   test("compacts remaining feeds after a slot is removed", () => {
