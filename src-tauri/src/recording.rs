@@ -9,13 +9,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{Local, TimeZone};
 use futures_util::StreamExt;
+use percent_encoding::percent_decode_str;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime::JoinHandle;
@@ -454,7 +456,11 @@ impl RecordingManager {
             input.source.protocol
         };
         let root = self.current_root();
-        let media_file = media_file_name(protocol, &input.source.url);
+        let started_at = unix_ms();
+        let title = normalize_text(&input.title, "未命名直播");
+        let user_name = normalize_text(&input.user_name, "");
+        let file_stem = recording_file_stem(&user_name, &title, started_at);
+        let media_file = media_file_name(protocol, &input.source.url, &file_stem);
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).map_err(|error| {
             AppError::new(
@@ -496,12 +502,12 @@ impl RecordingManager {
             source_kind: normalize_text(&input.source_kind, "live"),
             site_id: optional_text(input.site_id),
             room_id: optional_text(input.room_id),
-            title: normalize_text(&input.title, "未命名直播"),
-            user_name: normalize_text(&input.user_name, ""),
+            title,
+            user_name,
             cover: normalize_text(&input.cover, ""),
             protocol,
             status: RecordingStatus::Recording,
-            started_at: unix_ms(),
+            started_at,
             ended_at: None,
             duration_ms: 0,
             size_bytes: 0,
@@ -614,6 +620,28 @@ impl RecordingManager {
         let file = root.join(id).join(media_file);
         if !file.exists() {
             return Err(AppError::new("recording_media_missing", "录制文件不存在"));
+        }
+        if stored.protocol == PlaybackProtocol::Flv {
+            let normalize_path = file.clone();
+            match tokio::task::spawn_blocking(move || normalize_flv_timestamps(&normalize_path))
+                .await
+            {
+                Ok(Ok(Some(duration_ms))) if duration_ms > 0 => {
+                    if stored.duration_ms != duration_ms {
+                        let mut updated = stored.clone();
+                        updated.duration_ms = duration_ms;
+                        updated.size_bytes = bundle_size(&root.join(id));
+                        let _ = write_metadata(&root.join(id), &updated);
+                    }
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %error, "无法修复历史 FLV 时间戳，继续使用原始录制文件");
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "历史 FLV 修复任务未完成，继续使用原始录制文件");
+                }
+            }
         }
         self.playback.url(id, &stored.media_file).await
     }
@@ -838,9 +866,8 @@ async fn run_direct_recording(
             opened_stream = true;
             preferred_candidate = candidate_index;
             let mut stream = response.bytes_stream();
-            let mut reconnect_prefix = (protocol == PlaybackProtocol::Flv
-                && state.bytes.load(Ordering::Relaxed) > 0)
-                .then(Vec::new);
+            let mut flv_stream = (protocol == PlaybackProtocol::Flv)
+                .then(|| FlvResponseBuffer::new(state.bytes.load(Ordering::Relaxed) == 0));
             let mut received_media = false;
             let mut cancelled = false;
             let stream_error = loop {
@@ -865,7 +892,7 @@ async fn run_direct_recording(
                 if chunk.is_empty() {
                     continue;
                 }
-                match write_direct_chunk(&mut file, &chunk, &mut reconnect_prefix).await {
+                match write_direct_chunk(&mut file, &chunk, &mut flv_stream).await {
                     Ok(written) => {
                         if written > 0 {
                             received_media = true;
@@ -893,30 +920,13 @@ async fn run_direct_recording(
                 }
             };
 
-            match flush_direct_prefix(&mut file, &mut reconnect_prefix).await {
-                Ok(written) if written > 0 => {
-                    received_media = true;
-                    errors = 0;
-                    state.bytes.fetch_add(written as u64, Ordering::Relaxed);
-                    state.duration_ms.store(
-                        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                        Ordering::Relaxed,
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    return finalize_direct_recording(
-                        file,
-                        &part,
-                        &final_path,
-                        &state,
-                        TaskOutcome {
-                            status: RecordingStatus::Failed,
-                            error: Some(format!("写入录制文件失败: {error}")),
-                        },
-                    )
-                    .await;
-                }
+            if let Some(stream) = flv_stream.as_ref()
+                && !stream.pending.is_empty()
+            {
+                tracing::debug!(
+                    discarded_bytes = stream.pending.len(),
+                    "丢弃连接末尾不完整的 FLV tag"
+                );
             }
 
             if cancelled {
@@ -1000,40 +1010,94 @@ async fn run_direct_recording(
     }
 }
 
+struct FlvResponseBuffer {
+    pending: Vec<u8>,
+    header_processed: bool,
+    keep_header: bool,
+}
+
+impl FlvResponseBuffer {
+    fn new(keep_header: bool) -> Self {
+        Self {
+            pending: Vec::new(),
+            header_processed: false,
+            keep_header,
+        }
+    }
+}
+
 async fn write_direct_chunk(
     file: &mut tokio::fs::File,
     chunk: &[u8],
-    reconnect_prefix: &mut Option<Vec<u8>>,
+    flv_stream: &mut Option<FlvResponseBuffer>,
 ) -> std::io::Result<usize> {
-    if let Some(prefix) = reconnect_prefix.as_mut() {
-        prefix.extend_from_slice(chunk);
-        if prefix.len() < FLV_HEADER_BYTES {
+    let Some(stream) = flv_stream.as_mut() else {
+        file.write_all(chunk).await?;
+        return Ok(chunk.len());
+    };
+    stream.pending.extend_from_slice(chunk);
+
+    if !stream.header_processed {
+        if stream.pending.len() < FLV_HEADER_BYTES {
             return Ok(0);
         }
-        let mut bytes = reconnect_prefix.take().unwrap_or_default();
-        if bytes.starts_with(b"FLV") {
-            bytes.drain(..FLV_HEADER_BYTES);
+        if !stream.pending.starts_with(b"FLV") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "FLV 响应缺少文件头",
+            ));
         }
-        file.write_all(&bytes).await?;
-        return Ok(bytes.len());
+        stream.header_processed = true;
+        if !stream.keep_header {
+            stream.pending.drain(..FLV_HEADER_BYTES);
+        }
     }
-    file.write_all(chunk).await?;
-    Ok(chunk.len())
-}
 
-async fn flush_direct_prefix(
-    file: &mut tokio::fs::File,
-    reconnect_prefix: &mut Option<Vec<u8>>,
-) -> std::io::Result<usize> {
-    let Some(mut bytes) = reconnect_prefix.take() else {
-        return Ok(0);
+    let mut offset = if stream.keep_header {
+        FLV_HEADER_BYTES
+    } else {
+        0
     };
-    if bytes.starts_with(b"FLV") {
-        let header = bytes.len().min(FLV_HEADER_BYTES);
-        bytes.drain(..header);
+    let first_tag_offset = offset;
+    loop {
+        if stream.pending.len().saturating_sub(offset) < 11 {
+            break;
+        }
+        let tag_type = stream.pending[offset] & 0x1f;
+        if !matches!(tag_type, 8 | 9 | 18) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "FLV tag 类型无效",
+            ));
+        }
+        let data_size = (usize::from(stream.pending[offset + 1]) << 16)
+            | (usize::from(stream.pending[offset + 2]) << 8)
+            | usize::from(stream.pending[offset + 3]);
+        let tag_size = 11_usize
+            .checked_add(data_size)
+            .and_then(|size| size.checked_add(4))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "FLV tag 长度溢出")
+            })?;
+        if tag_size > MAX_SEGMENT_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "FLV tag 超过大小限制",
+            ));
+        }
+        if stream.pending.len().saturating_sub(offset) < tag_size {
+            break;
+        }
+        offset += tag_size;
     }
-    file.write_all(&bytes).await?;
-    Ok(bytes.len())
+    if offset == first_tag_offset {
+        return Ok(0);
+    }
+
+    file.write_all(&stream.pending[..offset]).await?;
+    stream.pending.drain(..offset);
+    stream.keep_header = false;
+    Ok(offset)
 }
 
 async fn finalize_direct_recording(
@@ -1056,6 +1120,27 @@ async fn finalize_direct_recording(
             error: Some(format!("完成录制文件失败: {error}")),
         };
     }
+    let is_flv = state
+        .stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .protocol
+        == PlaybackProtocol::Flv;
+    if is_flv {
+        let normalize_path = part.to_path_buf();
+        match tokio::task::spawn_blocking(move || normalize_flv_timestamps(&normalize_path)).await {
+            Ok(Ok(Some(duration_ms))) if duration_ms > 0 => {
+                state.duration_ms.store(duration_ms, Ordering::Relaxed);
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "无法连续化 FLV 时间戳，保留原始录制文件");
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "FLV 时间戳处理任务未完成，保留原始录制文件");
+            }
+        }
+    }
     if let Err(error) = finalize_part(part, final_path).await {
         return TaskOutcome {
             status: RecordingStatus::Failed,
@@ -1063,6 +1148,361 @@ async fn finalize_direct_recording(
         };
     }
     outcome
+}
+
+const FLV_RESYNC_SCAN_BYTES: u64 = 16 * 1024 * 1024;
+const FLV_ABSOLUTE_CLOCK_THRESHOLD_MS: u32 = 1_000_000;
+
+fn flv_tag_length(bytes: &[u8], offset: usize) -> Option<usize> {
+    if bytes.len().saturating_sub(offset) < 11 {
+        return None;
+    }
+    let tag_type = bytes[offset] & 0x1f;
+    if !matches!(tag_type, 8 | 9 | 18) {
+        return None;
+    }
+    let data_size = (usize::from(bytes[offset + 1]) << 16)
+        | (usize::from(bytes[offset + 2]) << 8)
+        | usize::from(bytes[offset + 3]);
+    let total = 11_usize.checked_add(data_size)?.checked_add(4)?;
+    (total <= MAX_SEGMENT_BYTES && bytes.len().saturating_sub(offset) >= total).then_some(total)
+}
+
+fn flv_tag_timestamp(bytes: &[u8], offset: usize) -> Option<u32> {
+    (bytes.len().saturating_sub(offset) >= 8).then(|| {
+        (u32::from(bytes[offset + 4]) << 16)
+            | (u32::from(bytes[offset + 5]) << 8)
+            | u32::from(bytes[offset + 6])
+            | (u32::from(bytes[offset + 7]) << 24)
+    })
+}
+
+fn find_flv_resync(
+    input: &mut std::fs::File,
+    start: u64,
+    file_len: u64,
+) -> std::io::Result<Option<u64>> {
+    if start >= file_len {
+        return Ok(None);
+    }
+    let scan_len = (file_len - start).min(FLV_RESYNC_SCAN_BYTES) as usize;
+    input.seek(SeekFrom::Start(start))?;
+    let mut scan = vec![0_u8; scan_len];
+    input.read_exact(&mut scan)?;
+    for offset in 0..=scan.len().saturating_sub(15) {
+        let Some(tag_len) = flv_tag_length(&scan, offset) else {
+            continue;
+        };
+        let previous_size = u32::from_be_bytes(
+            scan[offset + tag_len - 4..offset + tag_len]
+                .try_into()
+                .expect("FLV previous tag size is four bytes"),
+        );
+        if previous_size != (tag_len - 4) as u32 {
+            continue;
+        }
+        let absolute = start + offset as u64;
+        // Require a second tag when there is enough data. This rejects almost
+        // all byte patterns inside H.264 payloads without scanning unboundedly.
+        let mut cursor = offset + tag_len;
+        let mut previous_timestamp = flv_tag_timestamp(&scan, offset);
+        let mut sequence_tags = 1;
+        while sequence_tags < 3 {
+            let Some(next_len) = flv_tag_length(&scan, cursor) else {
+                break;
+            };
+            let Some(next_timestamp) = flv_tag_timestamp(&scan, cursor) else {
+                break;
+            };
+            if previous_timestamp
+                .is_some_and(|previous| previous.abs_diff(next_timestamp) > 120_000)
+            {
+                sequence_tags = 0;
+                break;
+            }
+            previous_timestamp = Some(next_timestamp);
+            cursor += next_len;
+            sequence_tags += 1;
+        }
+        if sequence_tags < 2 && offset + tag_len != scan.len() {
+            continue;
+        }
+        return Ok(Some(absolute));
+    }
+    Ok(None)
+}
+
+fn has_future_flv_media_timestamp(
+    input: &mut std::fs::File,
+    start: u64,
+    file_len: u64,
+    threshold: u32,
+) -> std::io::Result<bool> {
+    if start >= file_len {
+        return Ok(false);
+    }
+    let original_position = input.stream_position()?;
+    let scan_len = (file_len - start).min(FLV_RESYNC_SCAN_BYTES) as usize;
+    input.seek(SeekFrom::Start(start))?;
+    let mut scan = vec![0_u8; scan_len];
+    input.read_exact(&mut scan)?;
+    let mut offset = 0;
+    let mut found = false;
+    while offset + 11 <= scan.len() {
+        let tag_type = scan[offset] & 0x1f;
+        let data_size = (usize::from(scan[offset + 1]) << 16)
+            | (usize::from(scan[offset + 2]) << 8)
+            | usize::from(scan[offset + 3]);
+        let Some(total) = 11_usize
+            .checked_add(data_size)
+            .and_then(|size| size.checked_add(4))
+        else {
+            offset += 1;
+            continue;
+        };
+        if !matches!(tag_type, 8 | 9 | 18)
+            || total > MAX_SEGMENT_BYTES
+            || offset + total > scan.len()
+        {
+            offset += 1;
+            continue;
+        }
+        let previous_size = u32::from_be_bytes(
+            scan[offset + total - 4..offset + total]
+                .try_into()
+                .expect("FLV previous tag size is four bytes"),
+        );
+        if previous_size != (total - 4) as u32 {
+            offset += 1;
+            continue;
+        }
+        if matches!(tag_type, 8 | 9) {
+            let timestamp = (u32::from(scan[offset + 4]) << 16)
+                | (u32::from(scan[offset + 5]) << 8)
+                | u32::from(scan[offset + 6])
+                | (u32::from(scan[offset + 7]) << 24);
+            if timestamp > threshold {
+                found = true;
+                break;
+            }
+        }
+        offset += total;
+    }
+    input.seek(SeekFrom::Start(original_position))?;
+    Ok(found)
+}
+
+/// Reconnectable FLV sources often restart their timestamp clock at zero for
+/// every HTTP response. Browsers then treat all later tags as overlapping the
+/// first second. Rebase every detected timestamp reset onto the previous tag
+/// timeline before publishing the file. A reconnect can also leave a partial
+/// tag before the next response's metadata; bounded resynchronization drops
+/// that fragment and continues with the next valid tag.
+fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
+    let mut input = std::fs::File::open(path)?;
+    let mut header = [0_u8; 9];
+    input.read_exact(&mut header)?;
+    if &header[..3] != b"FLV" {
+        return Ok(None);
+    }
+    let mut previous_tag_size = [0_u8; 4];
+    input.read_exact(&mut previous_tag_size)?;
+
+    let mut temporary_name = path.file_name().unwrap_or_default().to_os_string();
+    temporary_name.push(format!(".normalized-{}", Uuid::new_v4().simple()));
+    let temporary = path.with_file_name(temporary_name);
+    let mut output = std::fs::File::create(&temporary)?;
+    output.write_all(&header)?;
+    output.write_all(&previous_tag_size)?;
+
+    let mut previous_input_timestamp = None;
+    let mut timestamp_offset = 0_i64;
+    let mut first_output_timestamp = None;
+    let mut last_output_timestamp = 0_u32;
+    let mut changed = false;
+    let mut skipping_replayed_preamble = false;
+
+    let file_len = input.metadata()?.len();
+    loop {
+        let tag_start = input.stream_position()?;
+        let mut tag_header = [0_u8; 11];
+        let read = input.read(&mut tag_header)?;
+        if read == 0 {
+            break;
+        }
+        if read != tag_header.len() {
+            changed = true;
+            break;
+        }
+
+        let tag_type = tag_header[0] & 0x1f;
+        let data_size = (usize::from(tag_header[1]) << 16)
+            | (usize::from(tag_header[2]) << 8)
+            | usize::from(tag_header[3]);
+        if !matches!(tag_type, 8 | 9 | 18) || data_size > MAX_SEGMENT_BYTES {
+            changed = true;
+            let Some(resync) = find_flv_resync(&mut input, tag_start + 1, file_len)? else {
+                if file_len.saturating_sub(tag_start + 1) > FLV_RESYNC_SCAN_BYTES {
+                    let _ = std::fs::remove_file(&temporary);
+                    return Ok(None);
+                }
+                break;
+            };
+            input.seek(SeekFrom::Start(resync))?;
+            continue;
+        }
+        let data_start = tag_start + 11;
+        let previous_size_position = data_start + data_size as u64;
+        if previous_size_position + 4 > file_len {
+            changed = true;
+            break;
+        }
+        input.seek(SeekFrom::Start(previous_size_position))?;
+        let mut actual_previous_size = [0_u8; 4];
+        input.read_exact(&mut actual_previous_size)?;
+        if u32::from_be_bytes(actual_previous_size) != (data_size as u32).saturating_add(11) {
+            changed = true;
+            let Some(resync) = find_flv_resync(&mut input, tag_start + 1, file_len)? else {
+                if file_len.saturating_sub(tag_start + 1) > FLV_RESYNC_SCAN_BYTES {
+                    let _ = std::fs::remove_file(&temporary);
+                    return Ok(None);
+                }
+                break;
+            };
+            input.seek(SeekFrom::Start(resync))?;
+            continue;
+        }
+
+        let input_timestamp = (u32::from(tag_header[4]) << 16)
+            | (u32::from(tag_header[5]) << 8)
+            | u32::from(tag_header[6])
+            | (u32::from(tag_header[7]) << 24);
+        let is_media_tag = matches!(tag_type, 8 | 9);
+        let mut replayed_preamble_tag = false;
+        if is_media_tag {
+            if skipping_replayed_preamble {
+                let still_replayed = previous_input_timestamp.map_or(
+                    input_timestamp < FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
+                    |previous| input_timestamp.saturating_add(500) < previous,
+                );
+                if still_replayed {
+                    changed = true;
+                    replayed_preamble_tag = true;
+                } else {
+                    skipping_replayed_preamble = false;
+                }
+            }
+
+            if replayed_preamble_tag {
+                // Codec sequence headers are commonly replayed before the
+                // response returns to its absolute media clock. They must stay
+                // in the file for AAC/H.264 initialization, but must not move
+                // the playback timeline or become its timestamp reference.
+            } else if let Some(previous) = previous_input_timestamp {
+                if input_timestamp.saturating_add(500) < previous {
+                    let repeats_replayed_preamble = previous > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS
+                        && input_timestamp < 1_000
+                        && has_future_flv_media_timestamp(
+                            &mut input,
+                            previous_size_position + 4,
+                            file_len,
+                            previous.saturating_sub(10_000),
+                        )?;
+                    if repeats_replayed_preamble {
+                        skipping_replayed_preamble = true;
+                        changed = true;
+                        replayed_preamble_tag = true;
+                    } else {
+                        timestamp_offset = i64::from(last_output_timestamp)
+                            .saturating_add(1)
+                            .saturating_sub(i64::from(input_timestamp));
+                        changed = true;
+                    }
+                }
+            } else if input_timestamp < 1_000
+                && has_future_flv_media_timestamp(
+                    &mut input,
+                    previous_size_position + 4,
+                    file_len,
+                    FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
+                )?
+            {
+                skipping_replayed_preamble = true;
+                changed = true;
+                replayed_preamble_tag = true;
+            } else {
+                // FLV timestamps may start at the source's absolute clock
+                // (several hours into uptime). Normalize that base to zero so
+                // MediaSource duration and seek math remain bounded.
+                timestamp_offset = -i64::from(input_timestamp);
+                changed |= input_timestamp != 0;
+            }
+        }
+        // Reconnected FLV responses commonly insert an onMetaData tag at zero
+        // even when audio/video keep their absolute source clock. Do not let
+        // that script tag shift every subsequent media timestamp by an entire
+        // source-clock epoch.
+        let output_timestamp = if replayed_preamble_tag
+            || (!is_media_tag && input_timestamp == 0 && first_output_timestamp.is_some())
+        {
+            i64::from(last_output_timestamp)
+        } else {
+            i64::from(input_timestamp).saturating_add(timestamp_offset)
+        };
+        if !(0..=i64::from(u32::MAX)).contains(&output_timestamp) {
+            let _ = std::fs::remove_file(&temporary);
+            return Ok(None);
+        }
+        let output_timestamp = output_timestamp as u32;
+        changed |= output_timestamp != input_timestamp;
+        tag_header[4] = (output_timestamp >> 16) as u8;
+        tag_header[5] = (output_timestamp >> 8) as u8;
+        tag_header[6] = output_timestamp as u8;
+        tag_header[7] = (output_timestamp >> 24) as u8;
+        output.write_all(&tag_header)?;
+        input.seek(SeekFrom::Start(data_start))?;
+        let copied = std::io::copy(
+            &mut std::io::Read::by_ref(&mut input).take(data_size as u64),
+            &mut output,
+        )?;
+        if copied != data_size as u64 {
+            changed = true;
+            break;
+        }
+        let read = input.read(&mut previous_tag_size)?;
+        if read != previous_tag_size.len() {
+            changed = true;
+            break;
+        }
+        output.write_all(&((data_size as u32).saturating_add(11)).to_be_bytes())?;
+
+        if is_media_tag && !replayed_preamble_tag {
+            previous_input_timestamp = Some(input_timestamp);
+            first_output_timestamp.get_or_insert(output_timestamp);
+            last_output_timestamp = last_output_timestamp.max(output_timestamp);
+        }
+    }
+
+    let duration_ms = first_output_timestamp.map(|first| u64::from(last_output_timestamp - first));
+    drop(input);
+    output.flush()?;
+    output.sync_data()?;
+    drop(output);
+    if changed {
+        let mut backup_name = path.file_name().unwrap_or_default().to_os_string();
+        backup_name.push(format!(".original-{}", Uuid::new_v4().simple()));
+        let backup = path.with_file_name(backup_name);
+        std::fs::rename(path, &backup)?;
+        if let Err(error) = std::fs::rename(&temporary, path) {
+            let _ = std::fs::rename(&backup, path);
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+        let _ = std::fs::remove_file(backup);
+    } else {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    Ok(duration_ms)
 }
 
 fn direct_failure_status(state: &SessionState) -> RecordingStatus {
@@ -1183,10 +1623,10 @@ fn validate_start_input(input: &RecordingStartInput) -> AppResult<()> {
     Ok(())
 }
 
-fn media_file_name(protocol: PlaybackProtocol, source_url: &str) -> String {
+fn media_file_name(protocol: PlaybackProtocol, source_url: &str, file_stem: &str) -> String {
     match protocol {
-        PlaybackProtocol::Hls => "index.m3u8".into(),
-        PlaybackProtocol::MpegTs => "stream.ts".into(),
+        PlaybackProtocol::Hls => format!("{file_stem}.m3u8"),
+        PlaybackProtocol::MpegTs => format!("{file_stem}.ts"),
         PlaybackProtocol::Native => {
             let path = Url::parse(source_url)
                 .ok()
@@ -1195,12 +1635,48 @@ fn media_file_name(protocol: PlaybackProtocol, source_url: &str) -> String {
                 .as_deref()
                 .is_some_and(|value| value.ends_with(".webm"))
             {
-                "stream.webm".into()
+                format!("{file_stem}.webm")
             } else {
-                "stream.mp4".into()
+                format!("{file_stem}.mp4")
             }
         }
-        _ => "stream.flv".into(),
+        _ => format!("{file_stem}.flv"),
+    }
+}
+
+fn recording_file_stem(user_name: &str, title: &str, started_at: i64) -> String {
+    let user = sanitize_filename_component(user_name, "未知用户");
+    let title = sanitize_filename_component(title, "未命名直播");
+    let timestamp = Local
+        .timestamp_millis_opt(started_at)
+        .single()
+        .map(|value| value.format("%Y%m%d-%H%M%S").to_string())
+        .unwrap_or_else(|| started_at.to_string());
+    format!("{user}_{title}_{timestamp}")
+}
+
+fn sanitize_filename_component(value: &str, fallback: &str) -> String {
+    let mut sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(80)
+        .collect();
+    sanitized = sanitized.trim().trim_matches('.').to_string();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
     }
 }
 
@@ -1559,6 +2035,7 @@ struct ArchiveEntry {
 
 struct HlsArchive {
     bundle: PathBuf,
+    playlist_file: String,
     entries: Vec<ArchiveEntry>,
     seen: HashSet<String>,
     keys: HashMap<String, String>,
@@ -1568,9 +2045,10 @@ struct HlsArchive {
 }
 
 impl HlsArchive {
-    fn new(bundle: PathBuf) -> Self {
+    fn new(bundle: PathBuf, playlist_file: String) -> Self {
         Self {
             bundle,
+            playlist_file,
             entries: Vec::new(),
             seen: HashSet::new(),
             keys: HashMap::new(),
@@ -1751,7 +2229,7 @@ impl HlsArchive {
 
     async fn write_manifest(&self, end_list: bool) -> std::io::Result<()> {
         tokio::fs::write(
-            self.bundle.join("index.m3u8"),
+            self.bundle.join(&self.playlist_file),
             self.render_manifest(end_list),
         )
         .await
@@ -1773,7 +2251,13 @@ async fn run_hls_recording(
             };
         }
     };
-    let mut archive = HlsArchive::new(state.bundle.clone());
+    let playlist_file = state
+        .stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .media_file
+        .clone();
+    let mut archive = HlsArchive::new(state.bundle.clone(), playlist_file);
     let mut initialized = false;
     let mut errors = 0;
     loop {
@@ -2301,10 +2785,7 @@ impl PlaybackServer {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(server) = state.as_ref() {
-                return Ok(format!(
-                    "{}/{}/{}/{}",
-                    server.base_url, server.token, id, media_file
-                ));
+                return local_playback_url(&server.base_url, &server.token, id, media_file);
             }
         }
 
@@ -2344,10 +2825,7 @@ impl PlaybackServer {
             task.abort();
         }
         let server = state.as_ref().expect("playback server installed");
-        Ok(format!(
-            "{}/{}/{}/{}",
-            server.base_url, server.token, id, media_file
-        ))
+        local_playback_url(&server.base_url, &server.token, id, media_file)
     }
 
     fn stop(&self) {
@@ -2360,6 +2838,33 @@ impl PlaybackServer {
             server.task.abort();
         }
     }
+}
+
+fn local_playback_url(base_url: &str, token: &str, id: &str, relative: &str) -> AppResult<String> {
+    let mut url = Url::parse(base_url).map_err(|error| {
+        AppError::new(
+            "recording_server_error",
+            format!("录制回放地址无效: {error}"),
+        )
+    })?;
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| AppError::new("recording_server_error", "录制回放地址不支持文件路径"))?;
+    segments.clear().push(token).push(id);
+    for component in Path::new(relative).components() {
+        let Component::Normal(value) = component else {
+            return Err(AppError::new(
+                "recording_metadata_error",
+                "录制媒体路径无效",
+            ));
+        };
+        let value = value.to_str().ok_or_else(|| {
+            AppError::new("recording_metadata_error", "录制媒体路径不是有效 UTF-8")
+        })?;
+        segments.push(value);
+    }
+    drop(segments);
+    Ok(url.into())
 }
 
 async fn run_playback_server(
@@ -2444,15 +2949,10 @@ async fn handle_playback_client(
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
-    let relative: PathBuf = components
-        .collect::<Vec<_>>()
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect();
-    if relative.as_os_str().is_empty() || !safe_relative_path(&relative) {
+    let Some(relative) = decode_playback_relative_path(components) else {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
-    }
+    };
     let roots = storage
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -2482,6 +2982,24 @@ async fn handle_playback_client(
         request_header(&head, "range"),
     )
     .await
+}
+
+fn decode_playback_relative_path<'a>(
+    segments: impl IntoIterator<Item = &'a str>,
+) -> Option<PathBuf> {
+    let mut relative = PathBuf::new();
+    for encoded in segments {
+        let decoded = percent_decode_str(encoded).decode_utf8().ok()?;
+        if decoded.is_empty() || decoded.contains('/') || decoded.contains('\\') {
+            return None;
+        }
+        let mut components = Path::new(decoded.as_ref()).components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return None;
+        }
+        relative.push(decoded.as_ref());
+    }
+    safe_relative_path(&relative).then_some(relative)
 }
 
 fn safe_relative_path(path: &Path) -> bool {
@@ -2667,9 +3185,10 @@ mod tests {
     use super::{
         ArchiveEntry, HlsArchive, RecordingManager, RecordingStartInput, RecordingStatus,
         SessionState, StoredDanmakuBatch, StoredRecording, attribute_value,
-        direct_source_candidates, hls_media_sequence_iv, http_byte_range_bounds,
-        parse_media_playlist, parse_range, run_direct_recording, safe_relative_path,
-        select_master_variant, write_metadata,
+        decode_playback_relative_path, direct_source_candidates, hls_media_sequence_iv,
+        http_byte_range_bounds, local_playback_url, media_file_name, normalize_flv_timestamps,
+        parse_media_playlist, parse_range, recording_file_stem, run_direct_recording,
+        safe_relative_path, select_master_variant, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use reqwest::Url;
@@ -2686,6 +3205,31 @@ mod tests {
         assert_eq!(
             attribute_value("METHOD=AES-128,URI=\"keys/a,b\",IV=0x01", "URI").as_deref(),
             Some("keys/a,b")
+        );
+    }
+
+    #[test]
+    fn names_recording_media_from_user_title_and_start_time() {
+        let stem = recording_file_stem("主播:甲", "标题/测试", 1_700_000_000_000);
+
+        assert!(stem.starts_with("主播_甲_标题_测试_"));
+        assert!(!stem.contains(':'));
+        assert!(!stem.contains('/'));
+        assert_eq!(
+            media_file_name(
+                PlaybackProtocol::Flv,
+                "https://example.test/live.flv",
+                &stem
+            ),
+            format!("{stem}.flv")
+        );
+        assert_eq!(
+            media_file_name(
+                PlaybackProtocol::Hls,
+                "https://example.test/live.m3u8",
+                &stem
+            ),
+            format!("{stem}.m3u8")
         );
     }
 
@@ -2774,7 +3318,7 @@ mod tests {
 
     #[test]
     fn renders_hls_manifest_with_key_map_and_endlist_in_order() {
-        let mut archive = HlsArchive::new(PathBuf::new());
+        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
         archive.target_duration = 4.0;
         archive.entries = vec![
             ArchiveEntry {
@@ -2839,6 +3383,164 @@ mod tests {
         assert!(!safe_relative_path(
             PathBuf::from("metadata.json").as_path()
         ));
+    }
+
+    #[test]
+    fn local_playback_urls_round_trip_unicode_and_spaces() {
+        let file = "斗鱼主播_标题 测试_20260816-120000.flv";
+        let url = local_playback_url("http://127.0.0.1:1234", "token", "id", file).unwrap();
+
+        assert!(url.contains("%E6%96%97%E9%B1%BC%E4%B8%BB%E6%92%AD"));
+        assert!(url.contains("%20"));
+        let encoded = Url::parse(&url)
+            .unwrap()
+            .path_segments()
+            .unwrap()
+            .last()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            decode_playback_relative_path([encoded.as_str()]),
+            Some(PathBuf::from(file))
+        );
+    }
+
+    #[test]
+    fn encoded_playback_paths_cannot_add_separators_or_parent_segments() {
+        assert!(decode_playback_relative_path(["%2E%2E", "metadata.json"]).is_none());
+        assert!(decode_playback_relative_path(["segments%2Fsecret.ts"]).is_none());
+        assert!(decode_playback_relative_path(["segments%5Csecret.ts"]).is_none());
+    }
+
+    #[test]
+    fn rebases_flv_timestamps_after_a_stream_reconnect() {
+        fn append_tag(file: &mut Vec<u8>, timestamp: u32) {
+            file.push(9);
+            file.extend_from_slice(&[0, 0, 1]);
+            file.push((timestamp >> 16) as u8);
+            file.push((timestamp >> 8) as u8);
+            file.push(timestamp as u8);
+            file.push((timestamp >> 24) as u8);
+            file.extend_from_slice(&[0, 0, 0]);
+            file.push(0);
+            file.extend_from_slice(&[0, 0, 0, 12]);
+        }
+
+        fn timestamp_at(file: &[u8], offset: usize) -> u32 {
+            (u32::from(file[offset + 4]) << 16)
+                | (u32::from(file[offset + 5]) << 8)
+                | u32::from(file[offset + 6])
+                | (u32::from(file[offset + 7]) << 24)
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rlive-flv-normalize-{}.flv",
+            Uuid::new_v4().simple()
+        ));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        append_tag(&mut file, 0);
+        append_tag(&mut file, 1000);
+        append_tag(&mut file, 0);
+        append_tag(&mut file, 1000);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2001));
+        let normalized = std::fs::read(&path).unwrap();
+        assert_eq!(timestamp_at(&normalized, 13), 0);
+        assert_eq!(timestamp_at(&normalized, 29), 1000);
+        assert_eq!(timestamp_at(&normalized, 45), 1001);
+        assert_eq!(timestamp_at(&normalized, 61), 2001);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn drops_a_partial_tag_before_a_reconnect_tag() {
+        fn append_tag(file: &mut Vec<u8>, timestamp: u32, payload: &[u8]) {
+            file.push(9);
+            file.extend_from_slice(&[
+                0,
+                0,
+                payload.len() as u8,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+        }
+
+        let path =
+            std::env::temp_dir().join(format!("rlive-flv-resync-{}.flv", Uuid::new_v4().simple()));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        append_tag(&mut file, 0, b"first");
+        // The reconnect cuts this tag after three payload bytes. The next
+        // response starts with a complete tag at a new timestamp.
+        file.extend_from_slice(&[9, 0, 0, 10, 0, 0, 1, 0, 0, 0, 0]);
+        file.extend_from_slice(b"bad");
+        append_tag(&mut file, 1000, b"second");
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(1000));
+        let normalized = std::fs::read(&path).unwrap();
+        assert_eq!(normalized.len(), 13 + (11 + 5 + 4) + (11 + 6 + 4));
+        assert_eq!(normalized[13], 9);
+        assert_eq!(normalized[33], 9);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn normalizes_absolute_flv_clock_after_replayed_preamble() {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32) {
+            file.extend_from_slice(&[
+                tag_type,
+                0,
+                0,
+                1,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(&[0, 0, 0, 12]);
+        }
+
+        let path =
+            std::env::temp_dir().join(format!("rlive-flv-clock-{}.flv", Uuid::new_v4().simple()));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        append_tag(&mut file, 9, 12);
+        append_tag(&mut file, 8, 6_559);
+        append_tag(&mut file, 9, 2_000_000);
+        append_tag(&mut file, 8, 2_001_000);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(1000));
+        let normalized = std::fs::read(&path).unwrap();
+        assert_eq!(normalized.len(), 13 + (11 + 1 + 4) * 4);
+        for offset in [13, 29, 45] {
+            assert_eq!(
+                (u32::from(normalized[offset + 4]) << 16)
+                    | (u32::from(normalized[offset + 5]) << 8)
+                    | u32::from(normalized[offset + 6])
+                    | (u32::from(normalized[offset + 7]) << 24),
+                0
+            );
+        }
+        assert_eq!(
+            (u32::from(normalized[65]) << 16)
+                | (u32::from(normalized[66]) << 8)
+                | u32::from(normalized[67])
+                | (u32::from(normalized[68]) << 24),
+            1000
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     fn completed_recording(id: String, title: &str) -> StoredRecording {
@@ -2909,19 +3611,47 @@ mod tests {
 
     #[tokio::test]
     async fn direct_recording_reconnects_after_eof_until_cancelled() {
+        fn tag(timestamp: u32, payload: &[u8]) -> Vec<u8> {
+            let mut value = vec![9, 0, 0, payload.len() as u8];
+            value.extend_from_slice(&[
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            value.extend_from_slice(payload);
+            value.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+            value
+        }
+
+        let header = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00";
+        let first_tag = tag(0, b"first");
+        let mut incomplete_tag = tag(500, b"discard-me");
+        incomplete_tag.truncate(incomplete_tag.len() - 4);
+        let mut first_response = header.to_vec();
+        first_response.extend_from_slice(&first_tag);
+        first_response.extend_from_slice(&incomplete_tag);
+        let mut second_response = header.to_vec();
+        let second_tag = tag(1000, b"second");
+        second_response.extend_from_slice(&second_tag);
+        let expected_size = header.len() + first_tag.len() + second_tag.len();
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            for _ in 0..2 {
+            for body in [first_response, second_response] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0_u8; 2048];
                 let _ = socket.read(&mut request).await.unwrap();
-                socket
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: 20\r\nConnection: close\r\n\r\nFLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00PAYLOAD",
-                    )
-                    .await
-                    .unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
             }
         });
 
@@ -2962,7 +3692,7 @@ mod tests {
         });
 
         tokio::time::timeout(std::time::Duration::from_secs(4), async {
-            while state.bytes.load(std::sync::atomic::Ordering::Relaxed) < 27 {
+            while state.bytes.load(std::sync::atomic::Ordering::Relaxed) < expected_size as u64 {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         })
@@ -2974,10 +3704,10 @@ mod tests {
 
         assert_eq!(outcome.status, RecordingStatus::Completed);
         assert_eq!(outcome.error, None);
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv")).unwrap(),
-            b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00PAYLOADPAYLOAD"
-        );
+        let mut expected = header.to_vec();
+        expected.extend_from_slice(&first_tag);
+        expected.extend_from_slice(&second_tag);
+        assert_eq!(std::fs::read(bundle.join("stream.flv")).unwrap(), expected);
         std::fs::remove_dir_all(root).unwrap();
     }
 
