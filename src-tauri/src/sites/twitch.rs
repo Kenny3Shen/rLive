@@ -170,7 +170,7 @@ impl ShardFeed for RecommendFeed {
 
     fn query(&self) -> &'static str {
         r#"
-        query RLiveTwitchStreams($limit: Int!, $languages: [String!]) {
+        query RLiveTwitchStreams($limit: Int!, $languages: [Language!]) {
           streams(first: $limit, options: { broadcasterLanguages: $languages, sort: VIEWER_COUNT }) {
             edges {
               node {
@@ -209,7 +209,7 @@ impl ShardFeed for CategoryFeed<'_> {
 
     fn query(&self) -> &'static str {
         r#"
-        query RLiveTwitchCategoryStreams($slug: String!, $limit: Int!, $languages: [String!]) {
+        query RLiveTwitchCategoryStreams($slug: String!, $limit: Int!, $languages: [Language!]) {
           game(slug: $slug) {
             streams(first: $limit, options: { broadcasterLanguages: $languages, sort: VIEWER_COUNT }) {
               edges {
