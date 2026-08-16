@@ -25,14 +25,15 @@ import {
   danmuBandLayout,
   danmuBandStyle,
   danmuCommentFromEvent,
+  enqueueDanmuJsPending,
+  flushDanmuJsPending,
   updateDanmuAggregation,
   updateDanmuAppearance,
   type DanmuJsBandLayout,
   type DanmuJsBulletMeta,
+  type DanmuJsPendingEvent,
   DANMU_JS_MAX_ACTIVE_COMMENTS,
-  DANMU_JS_MAX_PENDING_COMMENTS,
   DANMU_JS_MAX_SUPER_CHATS,
-  DANMU_JS_PENDING_MAX_AGE_MS,
 } from "./danmuJsAdapter";
 import { loadDanmuJs } from "./danmuJsLoader";
 import {
@@ -106,11 +107,6 @@ type RuntimeBullet = {
   meta: DanmuJsBulletMeta;
 };
 
-type PendingEvent = {
-  event: DanmakuEvent;
-  queuedAt: number;
-};
-
 type TouchStart = {
   pointerId: number;
   x: number;
@@ -131,6 +127,21 @@ function useReducedMotionPreference(): boolean {
   }, []);
 
   return reduced;
+}
+
+function usePageVisibility(): boolean {
+  const [visible, setVisible] = useState(() =>
+    typeof document === "undefined" ? true : !document.hidden,
+  );
+
+  useEffect(() => {
+    const sync = () => setVisible(!document.hidden);
+    document.addEventListener("visibilitychange", sync);
+    sync();
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+
+  return visible;
 }
 
 function isMenuTarget(target: EventTarget | null): boolean {
@@ -190,8 +201,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const recordsRef = useRef(new Map<string, RuntimeBullet>());
   const recordOrderRef = useRef<string[]>([]);
   const aggregationTargetsRef = useRef(new Map<string, string>());
-  const pendingEventsRef = useRef<PendingEvent[]>([]);
+  const pendingEventsRef = useRef<DanmuJsPendingEvent[]>([]);
   const superChatIdsRef = useRef<string[]>([]);
+  const superChatTimersRef = useRef(new Map<string, number>());
   const superChatDedupeKeysRef = useRef(new Set<string>());
   const superChatDedupeOrderRef = useRef<string[]>([]);
   const sequenceRef = useRef(0);
@@ -201,6 +213,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const touchStartRef = useRef<TouchStart | null>(null);
   const mobile = useMemo(isMobileClient, []);
   const reducedMotion = useReducedMotionPreference();
+  const pageVisible = usePageVisibility();
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [hoverTarget, setHoverTarget] = useState<DanmakuHoverTarget | null>(null);
 
@@ -300,6 +313,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const removeRecord = useCallback((id: string, removeFromInstance: boolean) => {
     const record = recordsRef.current.get(id);
     if (!record) return;
+    const superChatTimer = superChatTimersRef.current.get(id);
+    if (superChatTimer !== undefined) {
+      window.clearTimeout(superChatTimer);
+      superChatTimersRef.current.delete(id);
+    }
     recordsRef.current.delete(id);
     const recordIndex = recordOrderRef.current.indexOf(id);
     if (recordIndex >= 0) recordOrderRef.current.splice(recordIndex, 1);
@@ -351,10 +369,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   );
 
   const queueEvents = useCallback((events: readonly DanmakuEvent[]) => {
-    const queuedAt = Date.now();
-    for (const event of events) pendingEventsRef.current.push({ event, queuedAt });
-    const overflow = pendingEventsRef.current.length - DANMU_JS_MAX_PENDING_COMMENTS;
-    if (overflow > 0) pendingEventsRef.current.splice(0, overflow);
+    enqueueDanmuJsPending(pendingEventsRef.current, events);
   }, []);
 
   const renderEvents = useCallback(
@@ -418,6 +433,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
         if (event.kind === "super_chat") {
           superChatIdsRef.current.push(id);
+          const duration = Math.max(1, comment.duration ?? 0);
+          superChatTimersRef.current.set(
+            id,
+            window.setTimeout(() => removeRecordRef.current(id, true), duration),
+          );
           while (superChatIdsRef.current.length > DANMU_JS_MAX_SUPER_CHATS) {
             const oldest = superChatIdsRef.current[0];
             if (!oldest) break;
@@ -439,11 +459,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const flushPending = useCallback(() => {
     if (!instanceRef.current || document.hidden) return;
-    const now = Date.now();
-    const events = pendingEventsRef.current
-      .splice(0)
-      .filter((pending) => now - pending.queuedAt <= DANMU_JS_PENDING_MAX_AGE_MS)
-      .map((pending) => pending.event);
+    const events = flushDanmuJsPending(pendingEventsRef.current);
     if (events.length > 0) renderEventsRef.current(events);
   }, []);
   const flushPendingRef = useRef(flushPending);
@@ -453,10 +469,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const processBatch = useCallback(
     (events: readonly DanmakuEvent[]) => {
+      if (!active || reducedMotion || !pageVisible) return;
       if (!instanceRef.current || document.hidden) queueEvents(events);
       else renderEventsRef.current(events);
     },
-    [queueEvents],
+    [active, pageVisible, queueEvents, reducedMotion],
   );
   const processBatchRef = useRef(processBatch);
   useLayoutEffect(() => {
@@ -472,24 +489,46 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [filterRepeats, mergeWindowSeconds, sessionKey]);
 
   useEffect(() => {
-    if (!active || reducedMotion) return;
+    if (!active || reducedMotion || !pageVisible) return;
     return subscribeDanmakuBatches((events) => processBatchRef.current(events));
-  }, [active, reducedMotion, sessionKey]);
+  }, [active, pageVisible, reducedMotion, sessionKey]);
 
   const sizeReady = stageSize.width > 0 && bandLayout.height > 0;
   useEffect(() => {
     const container = containerRef.current;
-    if (!active || reducedMotion || !sizeReady || !container) return;
     const records = recordsRef.current;
     const recordOrder = recordOrderRef.current;
     const aggregationTargets = aggregationTargetsRef.current;
     const pendingEvents = pendingEventsRef.current;
     const superChatIds = superChatIdsRef.current;
+    const superChatTimers = superChatTimersRef.current;
     const superChatDedupeKeys = superChatDedupeKeysRef.current;
     const superChatDedupeOrder = superChatDedupeOrderRef.current;
-    const aggregator = aggregatorRef.current;
     let disposed = false;
     let instance: DanmuJsInstance | null = null;
+
+    const clearSessionState = () => {
+      releaseSelectionRef.current(true);
+      if (instance) instance.destroy();
+      if (instanceRef.current === instance) instanceRef.current = null;
+      for (const timer of superChatTimers.values()) window.clearTimeout(timer);
+      superChatTimers.clear();
+      records.clear();
+      recordOrder.length = 0;
+      aggregationTargets.clear();
+      aggregatorRef.current.clear();
+      pendingEvents.length = 0;
+      superChatIds.length = 0;
+      superChatDedupeKeys.clear();
+      superChatDedupeOrder.length = 0;
+      sequenceRef.current = 0;
+      container?.replaceChildren();
+    };
+
+    if (!active || reducedMotion || !pageVisible || !sizeReady || !container) {
+      return clearSessionState;
+    }
+
     runtimeEpochRef.current += 1;
 
     const onBulletRemove = (payload: { bullet: DanmuJsBullet }) => {
@@ -534,6 +573,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
                 meta.element = undefined;
                 meta.countElement = undefined;
               }
+              // A real-time comment can be rejected when every channel is
+              // occupied. danmu.js does not emit bullet_remove for that path,
+              // so release the local record from the detach hook as well.
+              if (meta) removeRecordRef.current(meta.id, false);
             },
           },
         });
@@ -552,40 +595,12 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
     return () => {
       disposed = true;
-      releaseSelectionRef.current(true);
       if (instance) {
         instance.off("bullet_remove", onBulletRemove);
-        instance.destroy();
       }
-      if (instanceRef.current === instance) instanceRef.current = null;
-      records.clear();
-      recordOrder.length = 0;
-      aggregationTargets.clear();
-      aggregator.clear();
-      pendingEvents.length = 0;
-      superChatIds.length = 0;
-      superChatDedupeKeys.clear();
-      superChatDedupeOrder.length = 0;
-      sequenceRef.current = 0;
-      container.replaceChildren();
+      clearSessionState();
     };
-  }, [active, reducedMotion, sessionKey, sizeReady]);
-
-  useEffect(() => {
-    if (!active || reducedMotion) return;
-    const syncVisibility = () => {
-      const instance = instanceRef.current;
-      if (document.hidden) {
-        if (instance?.status === "playing") instance.pause();
-        releaseSelectionRef.current();
-        return;
-      }
-      if (instance && recordsRef.current.size > 0 && instance.status === "paused") instance.play();
-      flushPendingRef.current();
-    };
-    document.addEventListener("visibilitychange", syncVisibility);
-    return () => document.removeEventListener("visibilitychange", syncVisibility);
-  }, [active, reducedMotion, sessionKey]);
+  }, [active, pageVisible, reducedMotion, sessionKey, sizeReady]);
 
   useEffect(() => {
     const instance = instanceRef.current;

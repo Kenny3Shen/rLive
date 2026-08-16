@@ -8,7 +8,7 @@ import { getDanmakuSendConfig } from "./sending";
 
 /**
  * Shared copy / favourite / repeat behaviour for one comment. The side list and
- * the floating canvas overlay both present the same three actions, so they must
+ * the floating DOM overlay both present the same three actions, so they must
  * agree on availability rules, optimistic cache updates and status wording.
  */
 

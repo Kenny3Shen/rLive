@@ -6,7 +6,7 @@ export { prefersReducedMotion } from "./preference";
 /**
  * Shared motion vocabulary, on GSAP.
  *
- * Two rules keep this affordable on a busy canvas-danmaku/player frame:
+ * Two rules keep this affordable on a busy live-player frame:
  *
  * 1. Only transforms and opacity are ever animated, so every sequence stays on
  *    the compositor. No width/height/color/filter tweens.

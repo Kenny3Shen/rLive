@@ -5,6 +5,8 @@ import {
   DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT,
   danmuBandLayout,
   danmuCommentFromEvent,
+  enqueueDanmuJsPending,
+  flushDanmuJsPending,
   safeDanmuColor,
   updateDanmuAggregation,
 } from "../src/features/room/danmaku/danmuJsAdapter";
@@ -38,6 +40,7 @@ describe("danmu.js loader interop", () => {
     class NestedNamedConstructor {}
     class NestedDefaultConstructor {}
 
+    expect(resolveDanmuJsConstructor(NamedConstructor)).toBe(NamedConstructor);
     expect(resolveDanmuJsConstructor({ DanmuJs: NamedConstructor })).toBe(NamedConstructor);
     expect(resolveDanmuJsConstructor({ default: DefaultConstructor })).toBe(DefaultConstructor);
     expect(
@@ -87,6 +90,20 @@ describe("danmu.js event mapping", () => {
     expect(comment?.prior).toBe(true);
     expect(comment?.txt).toBe("【SC】加油");
     expect(comment?.__rliveMeta.baseText).toBe("【SC】加油");
+  });
+
+  test("keeps the SC marker when rich spans replace the text node", () => {
+    const comment = danmuCommentFromEvent(
+      chat({
+        kind: "super_chat",
+        content: "加油",
+        super_chat: { id: "sc-rich", duration: 30 },
+        spans: [{ type: "image", image_url: "https://i0.hdslb.com/bfs/emote/a.png" }],
+      }),
+      mappingOptions({ id: "sc-rich-bullet" }),
+    );
+
+    expect(comment?.__rliveMeta.spans?.[0]).toEqual({ type: "text", text: "【SC】" });
   });
 
   test("returns no comment for blank content", () => {
@@ -144,5 +161,25 @@ describe("danmu.js repeat aggregation", () => {
     expect(comment?.__rliveMeta.aggregationCount).toBe(
       DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT + 10,
     );
+  });
+});
+
+describe("danmu.js bounded pending lifecycle", () => {
+  test("retains the newest 80 messages and drops stale entries on flush", () => {
+    const queue = [] as Parameters<typeof enqueueDanmuJsPending>[0];
+    const events = Array.from({ length: 81 }, (_, index) =>
+      chat({ content: `消息 ${index}` }),
+    );
+
+    enqueueDanmuJsPending(queue, events, 100);
+    expect(queue).toHaveLength(80);
+    expect(queue[0]?.event.content).toBe("消息 1");
+
+    const fresh = flushDanmuJsPending(queue, 4_900, 5_000);
+    expect(fresh).toHaveLength(80);
+    expect(queue).toHaveLength(0);
+
+    enqueueDanmuJsPending(queue, [chat({ content: "过期" })], 100);
+    expect(flushDanmuJsPending(queue, 5_101, 5_000)).toEqual([]);
   });
 });

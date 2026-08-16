@@ -152,7 +152,7 @@ export type PlayerEdgeGestureIntent = "pending" | "adjust" | "reject";
 /**
  * Keep short contacts with their original picture target until they either
  * become a vertical adjustment or clearly turn into another gesture. This is
- * especially important for Canvas overlays: they need the matching pointerup
+ * especially important for the live danmaku overlay: it needs the matching pointerup
  * to finish touch hit testing.
  */
 export function playerEdgeGestureIntent(deltaX: number, deltaY: number): PlayerEdgeGestureIntent {
@@ -785,10 +785,10 @@ export function PlayerPane({
     controlsVisibleRef.current = visible;
 
     // Hiding controls used to update PlayerPane state. That re-rendered the
-    // live canvas and every keep-mounted side tab at the exact moment the
+    // live danmaku layer and every keep-mounted side tab at the exact moment the
     // animation started, which is perceptible during a busy danmaku stream.
     // This small DOM-only state is deliberately isolated to the overlay: CSS
-    // still performs the composited fade, while the video, canvas and lists
+    // still performs the composited fade, while the video, danmaku layer and lists
     // continue their existing work without a React reconciliation.
     //
     // Both chrome layers are driven from here so the fullscreen top HUD and the
@@ -1176,7 +1176,7 @@ export function PlayerPane({
         gesture.active = true;
         beganAdjustment = true;
         // Do not capture on pointerdown: a short touch must keep its original
-        // target so Canvas danmaku can receive pointerup and finish hit testing.
+        // target so the danmaku layer can receive pointerup and finish hit testing.
         // Once the contact is a real adjustment, capture keeps it continuous
         // when the finger reaches a stage edge in Android WebView fullscreen.
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -1624,7 +1624,7 @@ export function PlayerPane({
                 />
               )}
               {/* Dimming only needs alpha composition. A full-surface CSS
-                  brightness filter would re-filter both video and Canvas on
+                  brightness filter would re-filter both video and the danmaku layer on
                   every gesture step in browser/bridge-fallback playback. */}
               <div
                 ref={brightnessShadeRef}
@@ -1780,7 +1780,7 @@ export function PlayerPane({
               // back to the video. Keep the filtered surface stationary: moving
               // backdrop blur would resample the video on every transition
               // frame. The data attribute changes imperatively, so this
-              // compositor-only fade also avoids reconciling the video, canvas
+              // compositor-only fade also avoids reconciling the video, danmaku layer
               // and side panels.
               "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
             )}

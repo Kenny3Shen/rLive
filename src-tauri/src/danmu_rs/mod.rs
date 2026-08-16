@@ -414,7 +414,7 @@ fn emit_batch(app: &AppHandle, generation: u64, source_key: &str, batch: &mut Ve
     }
     // The frontend owns retention and rendering policy. The tiny envelope
     // retains the connection fence while carrying all events for this tick,
-    // so ordinary chat, Super Chat, and canvas listeners each process one
+    // so ordinary chat, Super Chat, and floating-layer listeners each process one
     // native callback instead of one callback per message.
     let _ = app.emit(
         "danmaku-batch",
