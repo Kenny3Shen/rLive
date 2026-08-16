@@ -13,14 +13,11 @@ import {
   richDanmakuContent,
   withDanmakuContentSuffix,
 } from "../danmaku/content";
+import { DANMAKU_MAX_FRAME_SECONDS } from "./framePacing";
 
 export type TrackItem = {
   id: string;
-  /**
-   * Stable identity for pointer interaction. Content aggregation rewrites `id`
-   * on every count change so the canvas raster cache picks up the new `×N`
-   * suffix; this key stays fixed for the lifetime of the floating item.
-   */
+  /** Stable identity for pointer interaction, fixed for the item's lifetime. */
   hoverKey: string;
   text: string;
   /**
@@ -41,6 +38,20 @@ export type TrackItem = {
   color: string;
   /** Whether this item came from the locally saved account. */
   isSelf: boolean;
+  /**
+   * Cache keys for the renderer's glyph bitmaps, derived from everything a
+   * bitmap's pixels depend on: text, font size, colour and the self marker.
+   *
+   * Maintained here rather than rebuilt in the paint loop. Composing them per
+   * visible item per frame allocated three strings — each carrying the full
+   * comment body — and hashed them again for every cache lookup, so a busy room
+   * generated thousands of short-lived strings a second on the render thread.
+   * That garbage is exactly the kind of load whose collection pauses land as
+   * dropped frames on an Android WebView. The content stays the key, so two
+   * identical comments still share one bitmap.
+   */
+  textRasterKey: string;
+  richRasterKey: string;
   /** Top-left y position in CSS pixels. */
   y: number;
   /** Left x position in CSS pixels. */
@@ -157,7 +168,6 @@ type PendingScroll = Omit<TrackItem, "kind" | "lane" | "x" | "y"> & {
   queuedAt: number;
   active: boolean;
   aggregationKey?: string;
-  aggregationBaseId?: string;
   aggregationReservedWidth?: number;
   aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
 };
@@ -168,18 +178,24 @@ type EngineTrackItem = TrackItem & {
   /** Stale entries in the amortized scroll eviction queue are marked inactive. */
   active: boolean;
   aggregationKey?: string;
-  aggregationBaseId?: string;
   aggregationReservedWidth?: number;
   aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
 };
 
 type AggregationTarget = Pick<
   TrackItem,
-  "id" | "text" | "richSpans" | "width" | "fontSize" | "isSelf"
+  | "id"
+  | "text"
+  | "richSpans"
+  | "width"
+  | "fontSize"
+  | "isSelf"
+  | "color"
+  | "textRasterKey"
+  | "richRasterKey"
 > & {
   active: boolean;
   aggregationKey?: string;
-  aggregationBaseId?: string;
   aggregationReservedWidth?: number;
   aggregationBaseRichSpans?: readonly DanmakuContentSpan[];
 };
@@ -196,9 +212,24 @@ const MAX_QUEUE_AGE_MS = 5000;
 const TOP_DURATION_MS = 3000;
 const DEFAULT_SCROLL_AREA_RATIO = 0.25;
 const SPAWN_PADDING = 12;
-const TOP_PADDING = 12;
 export const DANMAKU_SELF_BORDER_PADDING_X = 4;
 export const DANMAKU_SELF_BORDER_PADDING_Y = 3;
+/**
+ * Inset of the first lane from the top edge of the picture.
+ *
+ * This used to be a flat 12px, chosen against an 18px desktop comment. On a
+ * phone the mobile default is 14px, so the same 12px reads as most of a line
+ * height of empty space above the first row — the gap the Bilibili app does not
+ * have. Scaling it with the glyph size keeps the same optical inset at every
+ * setting instead of a constant that only suits one of them.
+ *
+ * The floor is the vertical border padding: the local-account marker and the
+ * hover highlight are stroked that far above the em square, and a smaller inset
+ * would clip them against the top edge. The ceiling keeps a 48px comment from
+ * pushing the first row down again.
+ */
+const TOP_INSET_MIN = DANMAKU_SELF_BORDER_PADDING_Y + 1;
+const TOP_INSET_MAX = 8;
 // A hover-frozen comment blocks its lane for as long as the pointer holds it.
 // Re-check at a calm cadence instead of rescanning every lane on every frame.
 const PAUSED_LANE_RETRY_SECONDS = 0.25;
@@ -285,6 +316,26 @@ function measureTrackWidth(
   return Math.max(textWidth, measureRichWidth(richSpans, fontSize)) + borderSpace;
 }
 
+/**
+ * Cache key for a comment's glyph bitmap. Everything the drawn pixels depend on
+ * and nothing else, so a repeated comment reuses one bitmap and an aggregation
+ * count change produces exactly one new key.
+ */
+function rasterKeyFor(text: string, fontSize: number, color: string, isSelf: boolean): string {
+  return `${fontSize}:${color}:${isSelf ? "s" : "n"}:${text}`;
+}
+
+function applyRasterKeys(
+  target: Pick<
+    TrackItem,
+    "text" | "fontSize" | "color" | "isSelf" | "textRasterKey" | "richRasterKey"
+  >,
+): void {
+  const base = rasterKeyFor(target.text, target.fontSize, target.color, target.isSelf);
+  target.textRasterKey = `${base}:t`;
+  target.richRasterKey = `${base}:r`;
+}
+
 function speedPx(logical: number, fontSize: number): number {
   // logical 1–10 → ~80–220 px/s
   const speed = Math.max(1, Math.min(10, logical || 8));
@@ -330,10 +381,22 @@ function createTopDownLaneOrder(count: number): number[] {
   return Array.from({ length: count }, (_, lane) => lane);
 }
 
+/**
+ * Lane geometry for a viewport.
+ *
+ * `laneHeight` used to be `max(fontSize + 9, 24)`. At the 14px mobile default
+ * that floor won, reserving 24px for a 14px glyph — 10px of slack that all
+ * lands below the em square, because `textBaseline` is `"top"`. On the first
+ * lane that slack stacks under the top inset and reads as the oversized gap
+ * above the topmost row. A proportional line height spaces every lane the same
+ * way regardless of the font setting, and 1.4em is still comfortably clear of
+ * the ~1.15–1.2em font box a CJK face actually occupies.
+ */
 function layoutFor(height: number, fontSize: number, area: number, lineCount: number): LaneLayout {
   const safeHeight = Math.max(1, Math.floor(height));
-  const laneHeight = Math.max(fontSize + 9, 24);
-  const top = Math.min(TOP_PADDING, Math.max(0, safeHeight - fontSize));
+  const laneHeight = Math.max(16, Math.round(fontSize * 1.4));
+  const inset = Math.min(TOP_INSET_MAX, Math.max(TOP_INSET_MIN, Math.round(fontSize * 0.35)));
+  const top = Math.min(inset, Math.max(0, safeHeight - fontSize));
   const usableHeight = Math.max(1, safeHeight - top);
   const preferredArea = Math.max(laneHeight, Math.floor(usableHeight * area));
   const autoCount = Math.max(1, Math.floor(preferredArea / laneHeight));
@@ -491,7 +554,6 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const key = previous.aggregationKey;
     if (!key || aggregationTargets.get(key) !== previous) return;
     next.aggregationKey = key;
-    next.aggregationBaseId = previous.aggregationBaseId;
     next.aggregationBaseRichSpans = previous.aggregationBaseRichSpans;
     aggregationTargets.set(key, next);
   }
@@ -509,11 +571,11 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     target.text = nextText;
     target.richSpans = nextRichSpans;
     target.width = Math.max(nextWidth, target.aggregationReservedWidth ?? nextWidth);
-    const baseId = target.aggregationBaseId ?? target.id;
-    target.aggregationBaseId = baseId;
-    // Canvas raster entries are keyed by id, so a bounded count update needs
-    // a new key to redraw the existing floating item with its new suffix.
-    target.id = `${baseId}-x${count}`;
+    // `id` is the item's stable identity and is deliberately *not* rewritten
+    // here. The renderer keys its bitmap cache by drawn content, so the new
+    // suffix is picked up by refreshing these keys — an id-keyed cache used to
+    // orphan one bitmap per `×N` step.
+    applyRasterKeys(target);
   }
 
   function compactPending(): void {
@@ -818,6 +880,8 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         richSpans: candidate.richSpans,
         color: candidate.color,
         isSelf: candidate.isSelf,
+        textRasterKey: candidate.textRasterKey,
+        richRasterKey: candidate.richRasterKey,
         width: candidate.width,
         speed: candidate.speed,
         fontSize: candidate.fontSize,
@@ -828,7 +892,6 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         itemIndex: -1,
         active: true,
         aggregationKey: candidate.aggregationKey,
-        aggregationBaseId: candidate.aggregationBaseId,
         aggregationReservedWidth: candidate.aggregationReservedWidth,
         aggregationBaseRichSpans: candidate.aggregationBaseRichSpans,
       };
@@ -890,9 +953,8 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const text = aggregatedText(baseText, aggregation.count);
     const itemFontSize = fontSize;
     const id = `${isTop ? "t" : "s"}-${++sequence}-${ev.ts}`;
-    // `id` is rewritten as an aggregated count grows, because the canvas keys
-    // its raster cache by it. Pointer interaction needs the opposite: a key
-    // that survives every suffix change for the life of the floating item.
+    // Pointer interaction and the item's own identity are the same thing now
+    // that the raster cache is keyed by drawn content instead of by `id`.
     const hoverKey = id;
     const content = ev.content;
     const user = ev.user;
@@ -912,6 +974,9 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const width =
       aggregationReservedWidth ?? measureTrackWidth(text, richSpans, itemFontSize, isSelf);
     const speed = speedPx(logicalSpeed, itemFontSize);
+    const rasterKey = rasterKeyFor(text, itemFontSize, color, isSelf);
+    const textRasterKey = `${rasterKey}:t`;
+    const richRasterKey = `${rasterKey}:r`;
 
     if (isTop) {
       makeRoomForItem();
@@ -925,10 +990,14 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         richSpans,
         color,
         isSelf,
+        textRasterKey,
+        richRasterKey,
         width,
         speed,
         fontSize: itemFontSize,
-        y: Math.max(TOP_PADDING, Math.round(itemFontSize * 0.5)),
+        // A fixed-top card sits on the same optical inset as the first scroll
+        // lane rather than half a line lower.
+        y: Math.min(TOP_INSET_MAX, Math.max(TOP_INSET_MIN, Math.round(itemFontSize * 0.35))),
         x: 0, // centered by the canvas renderer
         kind: "top",
         expireAt: Date.now() + TOP_DURATION_MS,
@@ -948,13 +1017,14 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       richSpans,
       color,
       isSelf,
+      textRasterKey,
+      richRasterKey,
       width,
       speed,
       fontSize: itemFontSize,
       queuedAt: Date.now(),
       active: true,
       aggregationKey: aggregation.key ?? undefined,
-      aggregationBaseId: aggregation.key ? id : undefined,
       aggregationReservedWidth,
       aggregationBaseRichSpans: aggregation.key ? baseRichSpans : undefined,
     };
@@ -1004,7 +1074,13 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
 
     refreshLayout();
     const now = Date.now();
-    const elapsedSeconds = Math.max(0, Math.min(0.2, dt));
+    // Charge the real frame time. Clamping this below the length of an actual
+    // WebView hiccup used to convert a dropped frame into a *slowdown* — the
+    // comment fell behind where constant velocity would have put it and then
+    // caught up over the following frames, which is what reads as stutter. The
+    // remaining bound only guards against a multi-second suspension teleporting
+    // everything across the picture.
+    const elapsedSeconds = Math.max(0, Math.min(DANMAKU_MAX_FRAME_SECONDS, dt));
     if (pendingBlocked && Number.isFinite(pendingRetrySeconds)) {
       pendingRetrySeconds = Math.max(0, pendingRetrySeconds - elapsedSeconds);
     }
