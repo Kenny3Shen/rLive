@@ -17,10 +17,16 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { glassPanelClass, glassSurfaceClass } from "@/shared/components/player/glassSurface";
+import {
+  glassPanelClass,
+  glassSurfaceClass,
+  glassTitleClass,
+} from "@/shared/components/player/glassSurface";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
+import type { RecordingContext } from "@/features/recording/recording";
+import { RecordingControl } from "@/features/recording/RecordingControl";
 import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
@@ -155,6 +161,22 @@ export function RoomPage() {
 
   const detail = detailQuery.data;
   const roomSessionKey = siteId && roomId ? `${siteId}:${roomId}` : undefined;
+  const recordingContext = useMemo<RecordingContext | null>(
+    () =>
+      playback.playUrl
+        ? {
+            source: playback.playUrl,
+            sourceKey: `live:${detail?.site_id ?? siteId}:${detail?.room_id ?? roomId}`,
+            sourceKind: "live",
+            siteId: detail?.site_id ?? siteId,
+            roomId: detail?.room_id ?? roomId,
+            title: detail?.title ?? "直播间",
+            userName: detail?.user_name ?? "",
+            cover: detail?.cover ?? "",
+          }
+        : null,
+    [detail, playback.playUrl, roomId, siteId],
+  );
   // These controls belong to the room session rather than the settings tab,
   // so title-bar and fullscreen surfaces keep the same live controller.
   const autoDanmakuSend = useAutoDanmakuSend({
@@ -335,6 +357,10 @@ export function RoomPage() {
         rightSlot={
           <div className="flex items-center gap-1">
             <div className="hidden md:flex md:items-center md:gap-1">
+              <RecordingControl
+                context={recordingContext}
+                disabled={playback.loading || Boolean(playback.error)}
+              />
               <RoomToolPopover icon={Timer} label="定时关闭">
                 <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
               </RoomToolPopover>
@@ -583,7 +609,7 @@ function RoomToolPopover({
             : "w-[min(20rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)]",
         )}
       >
-        <PopoverTitle className="mb-3 text-sm font-semibold">{label}</PopoverTitle>
+        <PopoverTitle className={cn("mb-2 px-0.5", glassTitleClass())}>{label}</PopoverTitle>
         {children}
       </PopoverContent>
     </Popover>

@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { glassTitleClass } from "@/shared/components/player/glassSurface";
 import { cn } from "@/lib/utils";
 import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
 import { insertBilibiliDanmakuText } from "./danmaku/outgoing";
@@ -233,11 +234,7 @@ function DanmakuQuickPicker({
           overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
         )}
       >
-        <PopoverTitle
-          className={cn("px-0.5 text-xs", overlay ? "text-white/70" : "text-muted-foreground")}
-        >
-          快捷弹幕
-        </PopoverTitle>
+        <PopoverTitle className={cn("px-0.5", glassTitleClass({ overlay }))}>快捷弹幕</PopoverTitle>
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
