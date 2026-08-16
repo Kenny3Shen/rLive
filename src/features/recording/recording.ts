@@ -86,6 +86,37 @@ export function clampRecordingPlaybackTime(currentTime: number, duration: number
   return Math.min(time, duration);
 }
 
+/** Snap a real EOF to metadata duration without hiding an earlier media stop. */
+export function recordingEndedPlaybackTime(
+  currentTime: number,
+  duration: number,
+  toleranceSeconds: number,
+): number {
+  const bounded = clampRecordingPlaybackTime(currentTime, duration);
+  if (!Number.isFinite(duration) || duration <= 0) return bounded;
+  const tolerance = Number.isFinite(toleranceSeconds) ? Math.max(0, toleranceSeconds) : 0;
+  return duration - bounded <= tolerance ? duration : bounded;
+}
+
+/** A seek may complete on EOF only when it was explicitly aimed at the end. */
+export function recordingSeekReached(
+  currentTime: number,
+  target: number,
+  duration: number,
+  mediaEnded: boolean,
+  toleranceSeconds: number,
+): boolean {
+  if (!Number.isFinite(target)) return false;
+  const tolerance = Number.isFinite(toleranceSeconds) ? Math.max(0, toleranceSeconds) : 0;
+  if (!mediaEnded) return Math.abs(currentTime - target) <= tolerance;
+  return (
+    Number.isFinite(duration) &&
+    duration > 0 &&
+    Math.abs(target - duration) <= tolerance &&
+    Math.abs(recordingEndedPlaybackTime(currentTime, duration, tolerance) - target) <= tolerance
+  );
+}
+
 export function formatRecordingSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
