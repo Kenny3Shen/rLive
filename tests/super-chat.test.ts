@@ -65,7 +65,7 @@ describe("Super Chat de-duplication", () => {
     expect(superChatDedupeKey(first)).toBe(superChatDedupeKey(replay));
   });
 
-  test("uses a bounded key budget for the Canvas subscriber", () => {
+  test("uses a bounded key budget for the floating subscriber", () => {
     expect(MAX_SUPER_CHAT_DEDUPE_KEYS).toBe(240);
     const first = superChat({ super_chat: { duration: 60 }, ts: 1 });
     const replay = superChat({ super_chat: { duration: 60 }, ts: 1 });

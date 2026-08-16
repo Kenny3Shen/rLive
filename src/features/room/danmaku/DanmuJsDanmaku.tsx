@@ -12,7 +12,6 @@ import type { DanmuJsBullet, DanmuJsComment, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { isMobileClient } from "@/shared/clientPlatform";
 import { cn } from "@/lib/utils";
 import { subscribeDanmakuBatches } from "./eventBus";
 import {
@@ -21,20 +20,23 @@ import {
   shouldShowValidatedOnFloatingDanmaku,
 } from "./filter";
 import {
+  clampDanmuArea,
   createDanmuBulletElement,
-  danmuBandLayout,
-  danmuBandStyle,
   danmuCommentFromEvent,
+  danmuLayerAreaConfig,
+  danmuLaneHeight,
+  danmuRenderLayer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
   updateDanmuAggregation,
   updateDanmuAppearance,
-  type DanmuJsBandLayout,
   type DanmuJsBulletMeta,
   type DanmuJsPendingEvent,
+  type DanmuJsRenderLayer,
   DANMU_JS_MAX_ACTIVE_COMMENTS,
   DANMU_JS_MAX_SUPER_CHATS,
 } from "./danmuJsAdapter";
+import { installDanmuJsFixedPriorCompat } from "./danmuJsCompat";
 import { loadDanmuJs } from "./danmuJsLoader";
 import {
   MAX_SUPER_CHAT_DEDUPE_KEYS,
@@ -43,10 +45,6 @@ import {
 } from "../superChat";
 import { DANMAKU_MENU_ATTR, DanmakuActionMenu, type DanmakuHoverTarget } from "./DanmakuActionMenu";
 
-export const DANMAKU_TAP_MAX_DISTANCE_PX = 11;
-export const DANMAKU_TAP_MAX_DURATION_MS = 320;
-export const DANMAKU_TOUCH_HIT_SLOP_PX = 10;
-
 export type DanmakuHitRect = {
   x: number;
   y: number;
@@ -54,29 +52,30 @@ export type DanmakuHitRect = {
   height: number;
 };
 
-export function isDanmakuTap(deltaX: number, deltaY: number, durationMs: number): boolean {
-  return (
-    durationMs >= 0 &&
-    durationMs <= DANMAKU_TAP_MAX_DURATION_MS &&
-    Math.hypot(deltaX, deltaY) <= DANMAKU_TAP_MAX_DISTANCE_PX
+export function danmakuVisibleContentRect(
+  contentRect: DanmakuHitRect | null,
+  countRect: DanmakuHitRect | null,
+  aggregationCount: number,
+  fallbackRect: DanmakuHitRect | null = null,
+): DanmakuHitRect | null {
+  const rects = [contentRect, aggregationCount > 1 ? countRect : null].filter(
+    (rect): rect is DanmakuHitRect =>
+      Boolean(
+        rect &&
+        Number.isFinite(rect.x) &&
+        Number.isFinite(rect.y) &&
+        Number.isFinite(rect.width) &&
+        Number.isFinite(rect.height) &&
+        rect.width > 0 &&
+        rect.height > 0,
+      ),
   );
-}
-
-export function expandedDanmakuHitRect(
-  rect: DanmakuHitRect,
-  slop = DANMAKU_TOUCH_HIT_SLOP_PX,
-): DanmakuHitRect {
-  const safeSlop = Number.isFinite(slop) ? Math.max(0, slop) : 0;
-  return {
-    x: rect.x - safeSlop,
-    y: rect.y - safeSlop,
-    width: rect.width + safeSlop * 2,
-    height: rect.height + safeSlop * 2,
-  };
-}
-
-export function shouldHitTestDanmakuHover(menuHovered: boolean, hasSelection: boolean): boolean {
-  return !menuHovered || !hasSelection;
+  if (rects.length === 0) return fallbackRect;
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 type DanmuJsDanmakuProps = {
@@ -104,14 +103,11 @@ type RuntimeConfig = {
 type RuntimeBullet = {
   comment: DanmuJsComment & { __rliveMeta: DanmuJsBulletMeta };
   meta: DanmuJsBulletMeta;
+  layer: DanmuJsRenderLayer;
+  instance: DanmuJsInstance;
 };
 
-type TouchStart = {
-  pointerId: number;
-  x: number;
-  y: number;
-  at: number;
-};
+type DanmuJsInstances = Record<DanmuJsRenderLayer, DanmuJsInstance>;
 
 function useReducedMotionPreference(): boolean {
   const [reduced, setReduced] = useState(prefersReducedMotion);
@@ -120,9 +116,14 @@ function useReducedMotionPreference(): boolean {
     if (typeof window.matchMedia !== "function") return;
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const sync = () => setReduced(query.matches);
-    query.addEventListener("change", sync);
+    if (typeof query.addEventListener === "function") query.addEventListener("change", sync);
+    else if (typeof query.addListener === "function") query.addListener(sync);
     sync();
-    return () => query.removeEventListener("change", sync);
+    return () => {
+      if (typeof query.removeEventListener === "function")
+        query.removeEventListener("change", sync);
+      else if (typeof query.removeListener === "function") query.removeListener(sync);
+    };
   }, []);
 
   return reduced;
@@ -180,8 +181,34 @@ function relativeRect(container: HTMLElement, element: HTMLElement): DanmakuHitR
   };
 }
 
-function containsPoint(rect: DanmakuHitRect, x: number, y: number): boolean {
-  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+function visualRect(meta: DanmuJsBulletMeta): DanmakuHitRect | null {
+  const toHitRect = (element: HTMLElement | undefined): DanmakuHitRect | null => {
+    if (!element?.isConnected) return null;
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+  };
+  if (meta.event.kind === "super_chat") return toHitRect(meta.element);
+  return danmakuVisibleContentRect(
+    toHitRect(meta.contentElement),
+    toHitRect(meta.countElement),
+    meta.aggregationCount,
+    toHitRect(meta.element),
+  );
+}
+
+function relativeVisualRect(
+  container: HTMLElement,
+  meta: DanmuJsBulletMeta,
+): DanmakuHitRect | null {
+  const rect = visualRect(meta);
+  if (!rect) return null;
+  const containerRect = container.getBoundingClientRect();
+  return {
+    x: rect.x - containerRect.left,
+    y: rect.y - containerRect.top,
+    width: rect.width,
+    height: rect.height,
+  };
 }
 
 export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
@@ -195,8 +222,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   large = false,
 }: DanmuJsDanmakuProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const instanceRef = useRef<DanmuJsInstance | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const bottomContainerRef = useRef<HTMLDivElement>(null);
+  const instancesRef = useRef<DanmuJsInstances | null>(null);
   const recordsRef = useRef(new Map<string, RuntimeBullet>());
   const recordOrderRef = useRef<string[]>([]);
   const aggregationTargetsRef = useRef(new Map<string, string>());
@@ -208,9 +236,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const sequenceRef = useRef(0);
   const runtimeEpochRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
-  const menuHoveredRef = useRef(false);
-  const touchStartRef = useRef<TouchStart | null>(null);
-  const mobile = useMemo(isMobileClient, []);
   const reducedMotion = useReducedMotionPreference();
   const pageVisible = usePageVisibility();
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -219,18 +244,18 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
   const area = useSettingsStore((state) => state.danmakuArea);
-  const lineCount = useSettingsStore((state) => state.danmakuLineCount);
   const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
-  const bandLayout = useMemo(
-    () => danmuBandLayout(stageSize.height, fontSize, area, lineCount),
-    [area, fontSize, lineCount, stageSize.height],
-  );
-  const bandLayoutRef = useRef<DanmuJsBandLayout>(bandLayout);
+  const normalizedArea = clampDanmuArea(area);
+  const laneHeight = danmuLaneHeight(fontSize);
+  const sizeReady = stageSize.width > 0 && stageSize.height > 0;
+  const sizeReadyRef = useRef(sizeReady);
+  const areaRef = useRef(normalizedArea);
+  const laneHeightRef = useRef(laneHeight);
 
   const configRef = useRef<RuntimeConfig>({
     fontSize: 18,
@@ -245,7 +270,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const aggregatorRef = useRef(createDanmakuContentAggregator(true, 10_000));
 
   useLayoutEffect(() => {
-    bandLayoutRef.current = bandLayout;
+    areaRef.current = normalizedArea;
+    laneHeightRef.current = laneHeight;
+    sizeReadyRef.current = sizeReady;
     configRef.current = {
       fontSize,
       fontWeight,
@@ -257,15 +284,17 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       siteId,
     };
   }, [
-    bandLayout,
     filterGifts,
     fontSize,
     fontWeight,
+    laneHeight,
     mergeWindowSeconds,
+    normalizedArea,
     opacity,
     shieldMatcher,
     siteId,
     superChatEnabled,
+    sizeReady,
   ]);
 
   useLayoutEffect(() => {
@@ -282,22 +311,25 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       );
     };
     measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
     const observer = new ResizeObserver(measure);
     observer.observe(host);
     return () => observer.disconnect();
-  }, []);
+  }, [active, pageVisible]);
 
   const releaseSelection = useCallback((removed = false) => {
-    menuHoveredRef.current = false;
     const selectedId = selectedIdRef.current;
     selectedIdRef.current = null;
-    const element = selectedId ? recordsRef.current.get(selectedId)?.meta.element : undefined;
+    const record = selectedId ? recordsRef.current.get(selectedId) : undefined;
+    const element = record?.meta.element;
     if (element) {
       delete element.dataset.rliveDanmakuSelected;
-      element.style.outline = "";
-      element.style.outlineOffset = "";
+      element.style.removeProperty("z-index");
     }
-    if (selectedId && !removed) instanceRef.current?.restartComment(selectedId);
+    if (selectedId && !removed) record?.instance.restartComment(selectedId);
     setHoverTarget(null);
   }, []);
   const releaseSelectionRef = useRef(releaseSelection);
@@ -324,11 +356,15 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       aggregatorRef.current.forget(key);
     }
     record.meta.element = undefined;
+    record.meta.contentElement = undefined;
     record.meta.countElement = undefined;
+    record.meta.countSlotElement = undefined;
     if (selectedIdRef.current === id) releaseSelectionRef.current(true);
-    if (removeFromInstance) instanceRef.current?.removeComment(id);
-    const instance = instanceRef.current;
-    if (recordsRef.current.size === 0 && instance?.status === "playing") instance.pause();
+    if (removeFromInstance) record.instance.removeComment(id);
+    const layerHasRecords = Array.from(recordsRef.current.values()).some(
+      (candidate) => candidate.instance === record.instance,
+    );
+    if (!layerHasRecords && record.instance.status === "playing") record.instance.pause();
   }, []);
   const removeRecordRef = useRef(removeRecord);
   useLayoutEffect(() => {
@@ -338,17 +374,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const selectBullet = useCallback(
     (id: string, element: HTMLElement) => {
       const record = recordsRef.current.get(id);
-      const container = containerRef.current;
-      const instance = instanceRef.current;
-      if (!record || !container || !instance) return;
+      const host = hostRef.current;
+      if (!record || !host) return;
       if (selectedIdRef.current && selectedIdRef.current !== id) releaseSelection();
 
       selectedIdRef.current = id;
       element.dataset.rliveDanmakuSelected = "true";
-      element.style.outline = "1px solid rgba(255,255,255,.92)";
-      element.style.outlineOffset = "2px";
-      instance.freezeComment(id);
-      const rect = relativeRect(container, element);
+      record.instance.freezeComment(id);
+      const rect = relativeVisualRect(host, record.meta) ?? relativeRect(host, element);
       setHoverTarget({
         hoverKey: id,
         content: record.meta.event.content,
@@ -369,8 +402,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const renderEvents = useCallback(
     (events: readonly DanmakuEvent[]) => {
-      const instance = instanceRef.current;
-      if (!instance) {
+      const instances = instancesRef.current;
+      if (!sizeReadyRef.current || !instances) {
         queueEvents(events);
         return;
       }
@@ -421,8 +454,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           aggregationCount: aggregation.count,
         });
         if (!comment) continue;
+        const layer = danmuRenderLayer(comment);
+        const instance = instances[layer];
         const meta = comment.__rliveMeta;
-        recordsRef.current.set(id, { comment, meta });
+        recordsRef.current.set(id, { comment, meta, layer, instance });
         recordOrderRef.current.push(id);
         if (meta.aggregationKey) aggregationTargetsRef.current.set(meta.aggregationKey, id);
 
@@ -453,7 +488,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [renderEvents]);
 
   const flushPending = useCallback(() => {
-    if (!instanceRef.current || document.hidden) return;
+    if (!sizeReadyRef.current || !instancesRef.current || document.hidden) return;
     const events = flushDanmuJsPending(pendingEventsRef.current);
     if (events.length > 0) renderEventsRef.current(events);
   }, []);
@@ -465,7 +500,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const processBatch = useCallback(
     (events: readonly DanmakuEvent[]) => {
       if (!active || reducedMotion || !pageVisible) return;
-      if (!instanceRef.current || document.hidden) queueEvents(events);
+      if (!sizeReadyRef.current || !instancesRef.current || document.hidden) queueEvents(events);
       else renderEventsRef.current(events);
     },
     [active, pageVisible, queueEvents, reducedMotion],
@@ -488,9 +523,20 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return subscribeDanmakuBatches((events) => processBatchRef.current(events));
   }, [active, pageVisible, reducedMotion, sessionKey]);
 
-  const sizeReady = stageSize.width > 0 && bandLayout.height > 0;
+  // Pending messages belong to a room session, not to one renderer instance.
+  // The instance below is recreated when a zero-sized host becomes measurable,
+  // so keep this boundary independent of `sizeReady` and clear the queue only
+  // when the room/visibility session actually ends.
   useEffect(() => {
-    const container = containerRef.current;
+    const pendingEvents = pendingEventsRef.current;
+    return () => {
+      pendingEvents.length = 0;
+    };
+  }, [active, pageVisible, reducedMotion, sessionKey]);
+
+  useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
+    const bottomContainer = bottomContainerRef.current;
     const records = recordsRef.current;
     const recordOrder = recordOrderRef.current;
     const aggregationTargets = aggregationTargetsRef.current;
@@ -500,108 +546,168 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     const superChatDedupeKeys = superChatDedupeKeysRef.current;
     const superChatDedupeOrder = superChatDedupeOrderRef.current;
     let disposed = false;
-    let instance: DanmuJsInstance | null = null;
-
-    const clearSessionState = () => {
-      releaseSelectionRef.current(true);
-      if (instance) instance.destroy();
-      if (instanceRef.current === instance) instanceRef.current = null;
-      for (const timer of superChatTimers.values()) window.clearTimeout(timer);
-      superChatTimers.clear();
-      records.clear();
-      recordOrder.length = 0;
-      aggregationTargets.clear();
-      aggregatorRef.current.clear();
-      pendingEvents.length = 0;
-      superChatIds.length = 0;
-      superChatDedupeKeys.clear();
-      superChatDedupeOrder.length = 0;
-      sequenceRef.current = 0;
-      container?.replaceChildren();
-    };
-
-    if (!active || reducedMotion || !pageVisible || !sizeReady || !container) {
-      return clearSessionState;
-    }
-
-    runtimeEpochRef.current += 1;
+    let instances: DanmuJsInstances | null = null;
+    let listenersAttached = false;
+    let restoreFixedPriorCompat = () => {};
 
     const onBulletRemove = (payload: { bullet: DanmuJsBullet }) => {
       const id = bulletId(payload?.bullet?.id);
       if (id) removeRecordRef.current(id, false);
     };
+    const onBulletHover = (payload: { bullet: DanmuJsBullet }) => {
+      const id = bulletId(payload?.bullet?.id);
+      const element = payload?.bullet?.el;
+      if (id && element instanceof HTMLElement) selectBullet(id, element);
+    };
+
+    const destroyInstances = () => {
+      const current = instances;
+      if (!current) return;
+      if (listenersAttached) {
+        current.scroll.off("bullet_remove", onBulletRemove);
+        current.scroll.off("bullet_hover", onBulletHover);
+        current.bottom.off("bullet_remove", onBulletRemove);
+        current.bottom.off("bullet_hover", onBulletHover);
+        listenersAttached = false;
+      }
+      restoreFixedPriorCompat();
+      restoreFixedPriorCompat = () => {};
+      current.scroll.destroy();
+      current.bottom.destroy();
+      if (instancesRef.current === current) instancesRef.current = null;
+      instances = null;
+    };
+
+    const clearRenderedState = (preservePending: boolean) => {
+      releaseSelectionRef.current(true);
+      for (const timer of superChatTimers.values()) window.clearTimeout(timer);
+      superChatTimers.clear();
+      for (const record of records.values()) {
+        record.meta.element = undefined;
+        record.meta.contentElement = undefined;
+        record.meta.countElement = undefined;
+        record.meta.countSlotElement = undefined;
+      }
+      records.clear();
+      recordOrder.length = 0;
+      aggregationTargets.clear();
+      aggregatorRef.current.clear();
+      if (!preservePending) pendingEvents.length = 0;
+      superChatIds.length = 0;
+      superChatDedupeKeys.clear();
+      superChatDedupeOrder.length = 0;
+      sequenceRef.current = 0;
+      destroyInstances();
+      scrollContainer?.replaceChildren();
+      bottomContainer?.replaceChildren();
+    };
+
+    if (!active || reducedMotion || !pageVisible || !scrollContainer || !bottomContainer) {
+      clearRenderedState(false);
+      return;
+    }
+
+    // A zero-sized host is common while a room tab or grid cell is entering.
+    // Tear down any old bullets, but leave the bounded pending queue intact so
+    // the first valid measurement can flush messages received in the interim.
+    if (!sizeReady) {
+      clearRenderedState(true);
+      return;
+    }
+
+    runtimeEpochRef.current += 1;
 
     void loadDanmuJs()
       .then((Constructor) => {
         if (disposed) return;
-        const layout = bandLayoutRef.current;
-        instance = new Constructor({
-          container,
-          comments: [],
-          live: true,
-          defaultOff: true,
-          area: { start: 0, end: 1 },
-          channelSize: layout.laneHeight,
-          mouseControl: false,
-          mouseControlPause: false,
-          needResizeObserver: true,
-          maxCommentsLength: DANMU_JS_MAX_ACTIVE_COMMENTS,
-          interval: 250,
-          chaseEffect: true,
-          disableCopyDOM: true,
-          hooks: {
-            bulletCreateEl: (comment: DanmuJsComment) => createDanmuBulletElement(comment),
-            bulletAttached: (comment: DanmuJsComment, element: HTMLElement) => {
-              const meta = commentMeta(comment);
-              if (!meta) return;
-              meta.element = element;
-              element.dataset.rliveDanmakuId = meta.id;
-              if (selectedIdRef.current === meta.id) {
-                element.dataset.rliveDanmakuSelected = "true";
-                element.style.outline = "1px solid rgba(255,255,255,.92)";
-                element.style.outlineOffset = "2px";
-              }
-            },
-            bulletDetached: (comment: DanmuJsComment, element: HTMLElement) => {
-              const meta = commentMeta(comment);
-              if (meta?.element === element) {
-                meta.element = undefined;
-                meta.countElement = undefined;
-              }
-              // A real-time comment can be rejected when every channel is
-              // occupied. danmu.js does not emit bullet_remove for that path,
-              // so release the local record from the detach hook as well.
-              if (meta) removeRecordRef.current(meta.id, false);
-            },
+        const hooks = {
+          bulletCreateEl: (comment: DanmuJsComment) => createDanmuBulletElement(comment),
+          bulletAttached: (comment: DanmuJsComment, element: HTMLElement) => {
+            const meta = commentMeta(comment);
+            if (!meta) return;
+            meta.element = element;
+            element.dataset.rliveDanmakuId = meta.id;
+            if (selectedIdRef.current === meta.id) {
+              element.dataset.rliveDanmakuSelected = "true";
+            }
           },
-        });
+          bulletDetached: (comment: DanmuJsComment, element: HTMLElement) => {
+            const meta = commentMeta(comment);
+            if (meta?.element === element) {
+              meta.element = undefined;
+              meta.contentElement = undefined;
+              meta.countElement = undefined;
+              meta.countSlotElement = undefined;
+            }
+            // A real-time comment can be rejected when every channel is
+            // occupied. danmu.js does not emit bullet_remove for that path,
+            // so release the local record from the detach hook as well.
+            if (meta) removeRecordRef.current(meta.id, false);
+          },
+        };
+        const createInstance = (container: HTMLElement, layer: DanmuJsRenderLayer) =>
+          new Constructor({
+            container,
+            comments: [],
+            live: true,
+            defaultOff: true,
+            area: danmuLayerAreaConfig(layer, areaRef.current),
+            channelSize: laneHeightRef.current,
+            mouseControl: true,
+            mouseControlPause: true,
+            needResizeObserver: true,
+            maxCommentsLength: DANMU_JS_MAX_ACTIVE_COMMENTS,
+            interval: 250,
+            chaseEffect: true,
+            disableCopyDOM: true,
+            hooks,
+          });
+
+        let scrollInstance: DanmuJsInstance | null = null;
+        try {
+          scrollInstance = createInstance(scrollContainer, "scroll");
+          const bottomInstance = createInstance(bottomContainer, "bottom");
+          instances = { scroll: scrollInstance, bottom: bottomInstance };
+        } catch (error) {
+          scrollInstance?.destroy();
+          throw error;
+        }
         if (disposed) {
-          instance.destroy();
+          destroyInstances();
           return;
         }
-        instanceRef.current = instance;
-        instance.on("bullet_remove", onBulletRemove);
-        instance.resize();
+        restoreFixedPriorCompat = installDanmuJsFixedPriorCompat(instances.bottom);
+        instancesRef.current = instances;
+        instances.scroll.on("bullet_remove", onBulletRemove);
+        instances.scroll.on("bullet_hover", onBulletHover);
+        instances.bottom.on("bullet_remove", onBulletRemove);
+        instances.bottom.on("bullet_hover", onBulletHover);
+        listenersAttached = true;
+        instances.scroll.resize();
+        instances.bottom.resize();
         flushPendingRef.current();
       })
       .catch((error: unknown) => {
-        if (!disposed) console.error("Unable to initialize danmu.js", error);
+        if (!disposed) {
+          clearRenderedState(true);
+          console.error("Unable to initialize danmu.js", error);
+        }
       });
 
     return () => {
       disposed = true;
-      if (instance) {
-        instance.off("bullet_remove", onBulletRemove);
-      }
-      clearSessionState();
+      // Size changes and the session-boundary cleanup both pass through here.
+      // The separate session effect above owns pending-queue invalidation.
+      clearRenderedState(true);
     };
-  }, [active, pageVisible, reducedMotion, sessionKey, sizeReady]);
+  }, [active, pageVisible, reducedMotion, selectBullet, sessionKey, sizeReady]);
 
   useEffect(() => {
-    const instance = instanceRef.current;
-    if (!instance) return;
-    instance.setFontSize(fontSize, bandLayout.laneHeight);
-    instance.setArea({ start: 0, end: 1, reflow: true });
+    const instances = instancesRef.current;
+    if (!instances) return;
+    instances.scroll.setFontSize(fontSize, laneHeight);
+    instances.bottom.setFontSize(fontSize, laneHeight);
+    instances.scroll.setArea({ ...danmuLayerAreaConfig("scroll", normalizedArea), reflow: true });
     for (const { comment } of recordsRef.current.values()) {
       updateDanmuAppearance(comment, {
         fontSize,
@@ -609,8 +715,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         opacity,
       });
     }
-    instance.resize();
-  }, [bandLayout.height, bandLayout.laneHeight, fontSize, fontWeight, opacity]);
+  }, [fontSize, fontWeight, laneHeight, normalizedArea, opacity]);
 
   useEffect(() => {
     if (superChatEnabled && siteSupportsSuperChat(siteId)) return;
@@ -621,22 +726,21 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [siteId, superChatEnabled]);
 
   useEffect(() => {
-    touchStartRef.current = null;
     releaseSelectionRef.current(true);
   }, [active, reducedMotion, sessionKey]);
 
   useEffect(() => {
     const selectedId = hoverTarget?.hoverKey;
-    const container = containerRef.current;
-    if (!selectedId || !container) return;
+    const host = hostRef.current;
+    if (!selectedId || !host) return;
     let frame = 0;
     const update = () => {
-      const element = recordsRef.current.get(selectedId)?.meta.element;
-      if (!element || !element.isConnected) {
+      const meta = recordsRef.current.get(selectedId)?.meta;
+      const rect = meta && relativeVisualRect(host, meta);
+      if (!meta || !rect) {
         if (selectedIdRef.current === selectedId) releaseSelectionRef.current(true);
         return;
       }
-      const rect = relativeRect(container, element);
       setHoverTarget((current) =>
         current && current.hoverKey === selectedId
           ? current.left === rect.x &&
@@ -659,107 +763,21 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return () => window.cancelAnimationFrame(frame);
   }, [hoverTarget?.hoverKey]);
 
-  const touchBulletAtPoint = useCallback(
-    (target: EventTarget | null, clientX: number, clientY: number): HTMLElement | null => {
-      const direct = bulletElementFromTarget(target);
-      if (direct) return direct;
-      for (let index = recordOrderRef.current.length - 1; index >= 0; index -= 1) {
-        const id = recordOrderRef.current[index];
-        const element = recordsRef.current.get(id)?.meta.element;
-        if (!element) continue;
-        const rect = element.getBoundingClientRect();
-        const expanded = expandedDanmakuHitRect(
-          { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-          DANMAKU_TOUCH_HIT_SLOP_PX,
-        );
-        if (containsPoint(expanded, clientX, clientY)) return element;
-      }
-      return null;
-    },
-    [],
-  );
-
-  const handlePointerMove = useCallback(
+  const handlePointerOut = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!active || mobile || event.pointerType !== "mouse") return;
-      if (!shouldHitTestDanmakuHover(menuHoveredRef.current, selectedIdRef.current !== null))
-        return;
-      if (isMenuTarget(event.target)) return;
-      const element = bulletElementFromTarget(event.target);
-      const id = element?.dataset.rliveDanmakuId;
-      if (!element || !id) {
-        if (selectedIdRef.current) releaseSelection();
-        return;
-      }
-      if (selectedIdRef.current !== id) selectBullet(id, element);
-    },
-    [active, mobile, releaseSelection, selectBullet],
-  );
-
-  const handlePointerLeave = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (mobile || isMenuTarget(event.relatedTarget)) return;
+      const selectedId = selectedIdRef.current;
+      if (!selectedId || isMenuTarget(event.relatedTarget)) return;
+      const relatedBullet = bulletElementFromTarget(event.relatedTarget);
+      if (relatedBullet?.dataset.rliveDanmakuId === selectedId) return;
       releaseSelection();
     },
-    [mobile, releaseSelection],
+    [releaseSelection],
   );
-
-  const handlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!mobile || !active || event.pointerType === "mouse" || !event.isPrimary) return;
-      if (isMenuTarget(event.target)) return;
-      touchStartRef.current = {
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        at: Date.now(),
-      };
-    },
-    [active, mobile],
-  );
-
-  const handlePointerUp = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const start = touchStartRef.current;
-      if (!start || start.pointerId !== event.pointerId) return;
-      touchStartRef.current = null;
-      if (!mobile || !active || event.pointerType === "mouse") return;
-      if (!isDanmakuTap(event.clientX - start.x, event.clientY - start.y, Date.now() - start.at)) {
-        return;
-      }
-
-      const element = touchBulletAtPoint(event.target, event.clientX, event.clientY);
-      const id = element?.dataset.rliveDanmakuId;
-      if (!element || !id) {
-        if (selectedIdRef.current) {
-          event.preventDefault();
-          releaseSelection();
-        }
-        return;
-      }
-      event.preventDefault();
-      if (selectedIdRef.current === id) releaseSelection();
-      else selectBullet(id, element);
-    },
-    [active, mobile, releaseSelection, selectBullet, touchBulletAtPoint],
-  );
-
-  const handlePointerCancel = useCallback(() => {
-    touchStartRef.current = null;
-  }, []);
-
-  const handleMenuPointerEnter = useCallback(() => {
-    menuHoveredRef.current = true;
-  }, []);
   const handleMenuPointerLeave = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      menuHoveredRef.current = false;
-      if (
-        event.relatedTarget instanceof Node &&
-        containerRef.current?.contains(event.relatedTarget)
-      ) {
-        return;
-      }
+      const selectedId = selectedIdRef.current;
+      const relatedBullet = bulletElementFromTarget(event.relatedTarget);
+      if (selectedId && relatedBullet?.dataset.rliveDanmakuId === selectedId) return;
       releaseSelection();
     },
     [releaseSelection],
@@ -768,29 +786,45 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   return (
     <div ref={hostRef} className={cn("pointer-events-none absolute inset-0", className)}>
       <div
-        ref={containerRef}
+        ref={scrollContainerRef}
         aria-hidden="true"
-        className="pointer-events-auto absolute top-0 left-0 w-full overflow-hidden"
-        style={{ ...danmuBandStyle(bandLayout), opacity: 1 }}
-        onPointerMove={handlePointerMove}
-        onPointerLeave={handlePointerLeave}
-        onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerCancel}
+        data-rlive-danmaku-layer="scroll"
+        className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
+        style={{ opacity: 1 }}
+        onPointerOut={handlePointerOut}
+      />
+      <div
+        ref={bottomContainerRef}
+        aria-hidden="true"
+        data-rlive-danmaku-layer="bottom"
+        className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
+        style={{ opacity: 1 }}
+        onPointerOut={handlePointerOut}
       />
       {hoverTarget && (
-        <DanmakuActionMenu
-          key={hoverTarget.hoverKey}
-          target={hoverTarget}
-          siteId={siteId}
-          roomId={roomId}
-          roomTitle={roomTitle}
-          roomUserName={roomUserName}
-          large={large && !mobile}
-          touch={mobile}
-          onPointerEnter={mobile ? undefined : handleMenuPointerEnter}
-          onPointerLeave={mobile ? undefined : handleMenuPointerLeave}
-        />
+        <>
+          <div
+            aria-hidden="true"
+            data-rlive-danmaku-selection
+            className="pointer-events-none absolute z-[11] box-border border border-white/90"
+            style={{
+              left: hoverTarget.left,
+              top: hoverTarget.top,
+              width: hoverTarget.width,
+              height: hoverTarget.height,
+            }}
+          />
+          <DanmakuActionMenu
+            key={hoverTarget.hoverKey}
+            target={hoverTarget}
+            siteId={siteId}
+            roomId={roomId}
+            roomTitle={roomTitle}
+            roomUserName={roomUserName}
+            large={large}
+            onPointerLeave={handleMenuPointerLeave}
+          />
+        </>
       )}
     </div>
   );
