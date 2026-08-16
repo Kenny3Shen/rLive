@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.45.5"
+version = "0.45.6"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -36,6 +36,7 @@ async-trait = "0.1.91"
 base64 = "0.22"
 md-5 = "0.10"
 hex = "0.4"
+percent-encoding = "2"
 # Single TLS backend everywhere: native-tls (SChannel on Windows / OpenSSL
 # elsewhere). Douyu's danmaku proxy ports offer only static-RSA suites that
 # rustls does not support, so HTTP (reqwest) and WebSocket (tokio-tungstenite)

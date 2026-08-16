@@ -39,6 +39,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -47,15 +55,8 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { notify } from "@/components/ui/toast";
-import { normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import type { SiteId } from "@/shared/types/live";
 import { RecordingPlayer } from "./RecordingPlayer";
@@ -165,7 +166,7 @@ function ActiveRecordingCard({
           <RecordingStatusBadge status={item.status} />
         </CardAction>
       </CardHeader>
-      <CardContent className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
+      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 font-mono text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <Clock3 aria-hidden />
           {formatRecordingDuration(item.duration_ms)}
@@ -198,48 +199,85 @@ function ActiveRecordingCard({
 function RecordingListItem({
   item,
   selected,
+  revealing,
   onSelect,
+  onReveal,
+  onDelete,
 }: {
   item: RecordingItem;
   selected: boolean;
+  revealing: boolean;
   onSelect: () => void;
+  onReveal: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <li>
-      <Button
-        type="button"
-        variant={selected ? "secondary" : "ghost"}
-        className="h-auto w-full justify-start gap-3 rounded-xl p-2 text-left whitespace-normal"
-        aria-pressed={selected}
-        onClick={onSelect}
+    <li className="min-w-0">
+      <Card
+        size="sm"
+        className={cn("min-w-0 gap-0 py-1.5", selected && "bg-muted/50 ring-2 ring-primary/40")}
       >
-        <RecordingArtwork item={item} />
-        <span className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
-          <span className="max-w-full truncate font-medium text-foreground">{item.title}</span>
-          <span className="flex max-w-full items-center gap-1.5 text-xs font-normal text-muted-foreground">
-            <span className="truncate">{item.user_name || recordingSourceLabel(item)}</span>
-            <span aria-hidden>·</span>
-            <span className="shrink-0">{formatRecordingSize(item.size_bytes)}</span>
-          </span>
-          <span className="flex max-w-full items-center gap-1.5 text-xs font-normal text-muted-foreground">
-            <span className="shrink-0">{formatRecordingDate(item.started_at)}</span>
-            {item.include_danmaku && (
-              <span className="flex shrink-0 items-center gap-1">
-                <MessageSquareText data-icon="inline-start" aria-hidden />
-                {item.danmaku_count}
+        <CardContent className="flex min-w-0 items-center gap-1.5 px-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-auto min-w-0 flex-1 justify-start gap-2 overflow-hidden rounded-lg p-1.5 text-left whitespace-normal"
+            aria-pressed={selected}
+            onClick={onSelect}
+          >
+            <RecordingArtwork item={item} />
+            <span className="flex min-w-0 flex-1 flex-col items-start gap-1.5 overflow-hidden">
+              <span className="w-full truncate font-medium text-foreground">{item.title}</span>
+              <span className="flex w-full min-w-0 items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                <span className="truncate">{item.user_name || recordingSourceLabel(item)}</span>
+                <span aria-hidden>·</span>
+                <span className="shrink-0">{formatRecordingSize(item.size_bytes)}</span>
               </span>
-            )}
-            <RecordingStatusBadge status={item.status} />
-          </span>
-        </span>
-      </Button>
+              <span className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs font-normal text-muted-foreground">
+                <span>{formatRecordingDate(item.started_at)}</span>
+                {item.include_danmaku && (
+                  <span className="flex items-center gap-1">
+                    <MessageSquareText data-icon="inline-start" aria-hidden />
+                    {item.danmaku_count}
+                  </span>
+                )}
+                <RecordingStatusBadge status={item.status} />
+              </span>
+            </span>
+          </Button>
+          <div className="flex shrink-0 flex-col gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={revealing}
+              aria-label="在文件管理器中显示"
+              title="在文件管理器中显示"
+              onClick={onReveal}
+            >
+              {revealing ? <Spinner aria-hidden /> : <FolderOpen aria-hidden />}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              aria-label="删除录制"
+              title="删除录制"
+              onClick={onDelete}
+            >
+              <Trash2 aria-hidden />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </li>
   );
 }
 
 function RecordingsSkeleton() {
   return (
-    <div className="grid gap-5 xl:grid-cols-[23rem_minmax(0,1fr)]">
+    <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,23rem)_minmax(0,1fr)]">
       <Card>
         <CardHeader>
           <CardTitle>
@@ -291,6 +329,7 @@ export function RecordingsPage() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RecordingItem | null>(null);
+  const [storageOpen, setStorageOpen] = useState(false);
 
   const items = recordings.data ?? [];
   const activeItems = items.filter((item) => item.status === "recording");
@@ -301,7 +340,14 @@ export function RecordingsPage() {
   const playback = useQuery({
     queryKey: [RECORDING_PLAYBACK_QUERY_KEY, selectedItem?.id],
     enabled: supported && Boolean(selectedItem),
-    queryFn: () => recordingPlaybackUrl(selectedItem!.id),
+    queryFn: async () => {
+      const url = await recordingPlaybackUrl(selectedItem!.id);
+      // playback_url may normalize a legacy FLV and persist its measured
+      // duration. Refresh the list before rendering the player so the slider
+      // uses that corrected metadata instead of the stale card snapshot.
+      await queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
+      return url;
+    },
     staleTime: Number.POSITIVE_INFINITY,
   });
 
@@ -377,7 +423,7 @@ export function RecordingsPage() {
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[1440px] flex-col gap-5">
-      <header className="flex items-start justify-between gap-4 max-sm:flex-col">
+      <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
@@ -395,85 +441,17 @@ export function RecordingsPage() {
             默认离页前确认；选择继续后任务在后台运行，结束后可随时本地回放。
           </p>
         </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          onClick={() => setStorageOpen(true)}
+        >
+          <HardDrive data-icon="inline-start" aria-hidden />
+          保存位置
+        </Button>
       </header>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>录制保存位置</CardTitle>
-          <CardDescription>
-            新录制写入当前目录；正在进行和历史录制仍保留在原位置并可继续回放。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="recording-storage-path">当前目录</FieldLabel>
-              <InputGroup>
-                <InputGroupAddon>
-                  <HardDrive aria-hidden />
-                </InputGroupAddon>
-                <InputGroupInput
-                  id="recording-storage-path"
-                  value={storage.data?.path ?? ""}
-                  placeholder={storage.isPending ? "正在读取录制目录…" : "录制目录不可用"}
-                  readOnly
-                  title={storage.data?.path}
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    disabled={storage.isPending || storageMutation.isPending}
-                    onClick={() => void chooseStorageDirectory()}
-                  >
-                    <FolderOpen data-icon="inline-start" aria-hidden />
-                    更改位置
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-            </Field>
-          </FieldGroup>
-        </CardContent>
-        <CardFooter className="flex-wrap justify-between gap-2">
-          <p className="text-xs text-muted-foreground">
-            {storage.isPending
-              ? "正在读取当前目录"
-              : storage.isError
-                ? "当前目录读取失败，可重新选择保存位置"
-                : storage.data?.is_default
-                  ? "正在使用应用默认目录"
-                  : "正在使用自定义目录"}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {!storage.data?.is_default && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={storageMutation.isPending}
-                onClick={() => storageMutation.mutate(null)}
-              >
-                <RotateCcw data-icon="inline-start" aria-hidden />
-                恢复默认
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={revealMutation.isPending || !storage.data?.path}
-              onClick={() => {
-                if (storage.data?.path) revealMutation.mutate(storage.data.path);
-              }}
-            >
-              {revealMutation.isPending && revealMutation.variables === storage.data?.path ? (
-                <Spinner data-icon="inline-start" aria-hidden />
-              ) : (
-                <FolderOpen data-icon="inline-start" aria-hidden />
-              )}
-              显示目录
-            </Button>
-          </div>
-        </CardFooter>
-      </Card>
 
       {recordings.isPending ? (
         <RecordingsSkeleton />
@@ -506,46 +484,56 @@ export function RecordingsPage() {
             </section>
           )}
 
-          <div className="grid items-start gap-5 xl:grid-cols-[23rem_minmax(0,1fr)]">
-            <Card>
-              <CardHeader>
-                <CardTitle>已保存</CardTitle>
-                <CardDescription>
-                  {savedItems.length > 0 ? `${savedItems.length} 段本地录制` : "等待第一段录制完成"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {savedItems.length > 0 ? (
-                  <ul className="flex flex-col gap-1">
-                    {savedItems.map((item) => (
-                      <RecordingListItem
-                        key={item.id}
-                        item={item}
-                        selected={item.id === selectedItem?.id}
-                        onSelect={() => setSelectedId(item.id)}
-                      />
-                    ))}
-                  </ul>
-                ) : (
-                  <Empty className="min-h-64 border">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <Videotape aria-hidden />
-                      </EmptyMedia>
-                      <EmptyTitle>还没有本地录制</EmptyTitle>
-                      <EmptyDescription>
-                        进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </CardContent>
-            </Card>
+          <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,23rem)_minmax(0,1fr)]">
+            <section
+              className="flex min-w-0 flex-col gap-3"
+              aria-labelledby="saved-recordings-title"
+            >
+              <div>
+                <h2 id="saved-recordings-title" className="font-heading text-base font-medium">
+                  已保存
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {savedItems.length > 0
+                    ? `${savedItems.length} 段本地录制`
+                    : "等待第一段录制完成"}
+                </p>
+              </div>
+              {savedItems.length > 0 ? (
+                <ul className="flex min-w-0 flex-col gap-2">
+                  {savedItems.map((item) => (
+                    <RecordingListItem
+                      key={item.id}
+                      item={item}
+                      selected={item.id === selectedItem?.id}
+                      revealing={
+                        revealMutation.isPending && revealMutation.variables === item.file_path
+                      }
+                      onSelect={() => setSelectedId(item.id)}
+                      onReveal={() => revealMutation.mutate(item.file_path)}
+                      onDelete={() => setDeleteTarget(item)}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <Empty className="min-h-64 border">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Videotape aria-hidden />
+                    </EmptyMedia>
+                    <EmptyTitle>还没有本地录制</EmptyTitle>
+                    <EmptyDescription>
+                      进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+            </section>
 
             {selectedItem ? (
-              <Card className="xl:sticky xl:top-0">
-                <CardHeader>
-                  <CardTitle className="min-w-0 truncate pr-2">{selectedItem.title}</CardTitle>
+              <Card className="min-w-0 xl:sticky xl:top-0">
+                <CardHeader className="min-w-0">
+                  <CardTitle className="min-w-0 truncate">{selectedItem.title}</CardTitle>
                   <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span>{recordingSourceLabel(selectedItem)}</span>
                     {selectedItem.user_name && (
@@ -555,8 +543,6 @@ export function RecordingsPage() {
                       </span>
                     )}
                     <span>{formatRecordingDate(selectedItem.started_at)}</span>
-                  </CardDescription>
-                  <CardAction className="flex items-center gap-1.5">
                     <Badge variant="outline">{recordingProtocolLabel(selectedItem.protocol)}</Badge>
                     {selectedItem.include_danmaku && (
                       <Badge variant="outline">
@@ -565,7 +551,7 @@ export function RecordingsPage() {
                       </Badge>
                     )}
                     <RecordingStatusBadge status={selectedItem.status} />
-                  </CardAction>
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">
                   {playback.isPending ? (
@@ -608,30 +594,6 @@ export function RecordingsPage() {
                     />
                   )}
                 </CardContent>
-                <CardFooter className="flex-wrap justify-between gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={revealMutation.isPending}
-                    onClick={() => revealMutation.mutate(selectedItem.file_path)}
-                  >
-                    {revealMutation.isPending &&
-                    revealMutation.variables === selectedItem.file_path ? (
-                      <Spinner data-icon="inline-start" aria-hidden />
-                    ) : (
-                      <FolderOpen data-icon="inline-start" aria-hidden />
-                    )}
-                    在文件管理器中显示
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    onClick={() => setDeleteTarget(selectedItem)}
-                  >
-                    <Trash2 data-icon="inline-start" aria-hidden />
-                    删除录制
-                  </Button>
-                </CardFooter>
               </Card>
             ) : (
               <Card className="xl:sticky xl:top-0">
@@ -655,6 +617,76 @@ export function RecordingsPage() {
           </div>
         </>
       )}
+
+      <Dialog open={storageOpen} onOpenChange={setStorageOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>录制保存位置</DialogTitle>
+            <DialogDescription>
+              新录制写入当前目录，已有录制仍保留在原位置。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex min-w-0 items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2.5">
+            <HardDrive className="shrink-0 text-muted-foreground" aria-hidden />
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-xs"
+              title={storage.data?.path}
+            >
+              {storage.isPending
+                ? "正在读取录制目录…"
+                : storage.data?.path || "录制目录不可用"}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {storage.isPending
+              ? "正在读取当前目录"
+              : storage.isError
+                ? "当前目录读取失败，可重新选择保存位置"
+                : storage.data?.is_default
+                  ? "正在使用应用默认目录"
+                  : "正在使用自定义目录"}
+          </p>
+          <DialogFooter className="flex-wrap">
+            {!storage.data?.is_default && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={storageMutation.isPending}
+                onClick={() => storageMutation.mutate(null)}
+              >
+                <RotateCcw data-icon="inline-start" aria-hidden />
+                恢复默认
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={revealMutation.isPending || !storage.data?.path}
+              onClick={() => {
+                if (storage.data?.path) revealMutation.mutate(storage.data.path);
+              }}
+            >
+              {revealMutation.isPending && revealMutation.variables === storage.data?.path ? (
+                <Spinner data-icon="inline-start" aria-hidden />
+              ) : (
+                <FolderOpen data-icon="inline-start" aria-hidden />
+              )}
+              显示目录
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={storage.isPending || storageMutation.isPending}
+              onClick={() => void chooseStorageDirectory()}
+            >
+              <FolderOpen data-icon="inline-start" aria-hidden />
+              更改位置
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={Boolean(deleteTarget)}
