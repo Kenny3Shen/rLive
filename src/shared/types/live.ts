@@ -194,7 +194,6 @@ export type AppSettings = {
   proxy: string | null;
   danmaku_opacity: number;
   danmaku_font_size: number;
-  danmaku_speed: number;
   danmaku_area: number;
   danmaku_line_count: number;
   danmaku_font_weight: number;
@@ -204,8 +203,6 @@ export type AppSettings = {
   danmaku_merge_window_seconds?: number;
   /** Show supported-platform Super Chat cards over the player. */
   super_chat_enabled?: boolean;
-  /** SC card transparency 0.0 ..= 1.0 */
-  super_chat_opacity?: number;
   danmaku_shield_words: string[];
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
   quality_level?: "high" | "mid" | "low";

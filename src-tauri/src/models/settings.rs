@@ -20,7 +20,6 @@ pub struct AppSettings {
     /// 0.0 ..= 1.0
     pub danmaku_opacity: f32,
     pub danmaku_font_size: u32,
-    pub danmaku_speed: u32,
     /// Portion of the video height used by scrolling danmaku, 0.1 ..= 1.0.
     #[serde(default = "default_danmaku_area")]
     pub danmaku_area: f32,
@@ -44,9 +43,6 @@ pub struct AppSettings {
     /// Whether Super Chat cards are enabled for the current site.
     #[serde(default = "default_super_chat_enabled")]
     pub super_chat_enabled: bool,
-    /// 0.0 ..= 1.0 for SC card transparency
-    #[serde(default = "default_super_chat_opacity")]
-    pub super_chat_opacity: f32,
     pub danmaku_shield_words: Vec<String>,
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
     #[serde(default = "default_quality_level")]
@@ -114,6 +110,12 @@ pub struct AppSettings {
     /// so it is intentionally excluded from profile export and import.
     #[serde(default)]
     pub iptv_custom_m3u_url: Option<String>,
+    /// Keep a running recording alive in the background after leaving its page.
+    ///
+    /// Disabled by default: leaving a room or player while recording asks the
+    /// user and stops the session, saving what was captured so far.
+    #[serde(default)]
+    pub recording_continue_after_leave: bool,
     /// Legacy compatibility field. The client now performs one startup probe
     /// and no longer schedules periodic checks, but old profiles still carry
     /// this value and must remain deserializable.
@@ -204,10 +206,6 @@ fn default_super_chat_enabled() -> bool {
     true
 }
 
-fn default_super_chat_opacity() -> f32 {
-    0.8
-}
-
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -218,14 +216,12 @@ impl Default for AppSettings {
             proxy: None,
             danmaku_opacity: 0.8,
             danmaku_font_size: 18,
-            danmaku_speed: 8,
             danmaku_area: default_danmaku_area(),
             danmaku_line_count: 0,
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_repeats: default_danmaku_filter_repeats(),
             danmaku_filter_gifts: default_danmaku_filter_gifts(),
             danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
-            super_chat_opacity: default_super_chat_opacity(),
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
@@ -245,6 +241,7 @@ impl Default for AppSettings {
             asr_translation_from: default_asr_translation_from(),
             asr_translation_to: default_asr_translation_to(),
             iptv_custom_m3u_url: None,
+            recording_continue_after_leave: false,
             iptv_availability_auto_check: true,
             iptv_availability_auto_check_interval_hours: 1,
         }
@@ -265,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_settings_receive_new_danmaku_defaults() {
+    fn legacy_settings_ignore_removed_fields_and_receive_new_danmaku_defaults() {
         // A former Bilibili-only consent must not become the new shared
         // Bilibili/Douyu/Huya write permission during deserialization.
         let legacy = r#"{
@@ -275,12 +272,16 @@ mod tests {
           "danmaku_opacity": 0.8,
           "danmaku_font_size": 18,
           "danmaku_speed": 8,
+          "super_chat_opacity": 0.6,
           "danmaku_shield_words": [],
           "mpv_path": "/legacy/mpv",
           "bilibili_danmaku_send_enabled": true
         }"#;
         let settings: AppSettings = serde_json::from_str(legacy).unwrap();
+        let serialized = serde_json::to_value(&settings).unwrap();
 
+        assert!(serialized.get("danmaku_speed").is_none());
+        assert!(serialized.get("super_chat_opacity").is_none());
         assert_eq!(settings.danmaku_area, 0.25);
         assert_eq!(settings.motion_mode, "full");
         assert_eq!(settings.danmaku_line_count, 0);
@@ -289,7 +290,6 @@ mod tests {
         assert!(settings.danmaku_filter_gifts);
         assert_eq!(settings.danmaku_merge_window_seconds, 10);
         assert!(settings.super_chat_enabled);
-        assert_eq!(settings.super_chat_opacity, 0.8);
         assert!(!settings.danmaku_send_enabled);
         assert!(settings.playback_smart_line_selection);
         assert!(settings.playback_soft_switch_enabled);

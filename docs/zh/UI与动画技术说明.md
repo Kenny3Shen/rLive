@@ -9,8 +9,8 @@
 - 保持 Simple Live 风格的安静、紧凑和工作导向界面，优先保证浏览、筛选、播放和设置效率。
 - 动画用于表达导航层级、操作来源和状态变化，不作为持续装饰。
 - 桌面与移动端共享业务组件，但允许按输入方式、视口和安全区域调整布局及动画时长。
-- 播放、Canvas 弹幕、滚动和手势同时工作时，动画仍应保持可中断、可清理且不阻塞交互。
-- 桌面与移动端统一使用完整动态效果；`src/main.tsx` 在 React 首帧前固定根元素 `data-motion="full"`，不再提供系统 / 完整 / 减少选择项。
+- 播放、DOM 画面弹幕、滚动和手势同时工作时，动画仍应保持可中断、可清理且不阻塞交互。
+- 桌面与移动端的页面与控件统一使用完整动态效果；`src/main.tsx` 在 React 首帧前固定根元素 `data-motion="full"`，不再提供系统 / 完整 / 减少选择项。直播飘屏与录制回放弹幕作为持续运动例外，单独遵循 `prefers-reduced-motion`，右侧弹幕列表不受影响。
 
 代码是最终事实来源。本文列出的数值与行为发生变化时，应同步更新本文。
 
@@ -26,7 +26,8 @@
 | 浏览器动画 | Web Animations API | 路由整页平移 |
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题 Radial Reveal |
 | 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、主题揭示、加载旋转和短状态过渡 |
-| Canvas 帧循环 | `requestAnimationFrame` | 弹幕绘制；不属于页面 UI 动画层 |
+| 直播画面弹幕 | `danmu.js@1.2.1` + CSS transition | DOM 轨道与飘屏；不属于页面 UI 动画层 |
+| 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 仅按本地媒体时间绘制录制 sidecar |
 
 当前项目不使用 Framer Motion，也没有启用 ScrollTrigger。不要为一个局部效果引入第二套并行动画体系；先判断现有 GSAP、CSS、`PagePan`、`PageZoom` 或 View Transition 是否已经覆盖需求。
 
@@ -70,7 +71,7 @@
 - `@theme inline` 将 CSS 变量映射为 Tailwind 的 `bg-background`、`text-foreground`、`bg-card`、`text-muted-foreground` 等 utilities。
 - `applyTheme()` 根据 `light`、`dark` 或 `system` 切换根元素 `.dark` class；Zustand 设置变化由 `src/main.tsx` 订阅并立即应用。
 
-新增颜色时应先确定语义，再同时补齐亮暗值和 `@theme inline` 映射。组件中使用语义 token，不写 `bg-white dark:bg-gray-*`，也不使用原始蓝、红、绿值代替状态语义。Canvas 无法消费 Tailwind class 时，才使用明确记录用途的中性描边颜色；本机账号弹幕沿用平台原色，以边框区分身份。
+新增颜色时应先确定语义，再同时补齐亮暗值和 `@theme inline` 映射。组件中使用语义 token，不写 `bg-white dark:bg-gray-*`，也不使用原始蓝、红、绿值代替状态语义。`RecordedDanmakuCanvas` 等底层绘图无法消费 Tailwind class 时，才使用明确记录用途的中性描边颜色；本机账号弹幕沿用平台原色，以边框区分身份。
 
 字体栈以 Geist Variable 的 Latin 子集为首选，中文依次回退到系统的 `PingFang SC`、`Microsoft YaHei`、`Noto Sans SC`。紧凑面板和工具区保持小字号、短行高，不使用按视口宽度缩放的字体。
 
@@ -240,7 +241,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 - 频道卡片复用 `.room-card`，共享其 `content-visibility: auto` 长列表优化和移动端按压 `max-md:active:scale-[0.97]` 反馈。
 - 录制库 `RecordingsPage` 使用保存位置卡、左侧已保存列表、右侧 `RecordingPlayer` 回放和活动任务卡；标题栏右侧的 `RecordingControl` 与「定时关闭」并列，开始时用玻璃 `Popover + FieldGroup + Switch` 选择是否写入弹幕 sidecar，以及是否允许无提示离页继续。该离页选项按任务保存且默认关闭；`RecordingLeaveGuard` 在录制中使用 `AlertDialog` 提供留在页面、继续录制并离开、停止录制并离开三种明确动作。录制中的圆点与时间码是唯一持续状态提示。停止、删除、目录切换和文件定位使用现有 `Button` / `AlertDialog` / `Dialog` / `Empty` / `Skeleton` 组合，不新增平行基础组件。`RecordedDanmakuCanvas` 只在回放阶段按媒体时间绘制可开关弹幕，尊重 `prefers-reduced-motion`；页面只在桌面客户端提供完整内容，移动端以明确的 Empty 状态说明能力边界。
 
-长列表不得为所有项目同时创建 tween。优先只动画首屏或有界数量；无限滚动追加内容默认直接出现，避免动画持续争用播放器和 Canvas 帧预算。
+长列表不得为所有项目同时创建 tween。优先只动画首屏或有界数量；无限滚动追加内容默认直接出现，避免动画持续争用播放器和画面弹幕的主线程预算。
 
 ### 4.7 主题 Radial Reveal
 
@@ -351,21 +352,18 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - 同一 target 开始新动画前调用 `gsap.killTweensOf()`，避免手势、导航或快速点击产生叠加 tween。
 - 相同列表效果使用一个 tween 加 `stagger`，不要为每项创建独立 delay；动画目标数量必须有界。
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
-- 播放器、Canvas 弹幕和页面动画共享帧预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
+- 播放器、danmu.js DOM 弹幕和页面动画共享主线程与合成预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
 - Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定 GSAP ticker。
-- Canvas 弹幕不区分客户端：两端直接消费浏览器或 WebView 提供的每一次 `requestAnimationFrame`，不设置目标 FPS、不做回调跳帧，也不采样刷新率。运动时间按真实帧间隔推进，长暂停由引擎上限兜底。
-- 帧间隔按真实墙钟时间计费，渲染循环与引擎共用 `DANMAKU_MAX_FRAME_SECONDS`（250 ms）。旧的 100 ms 上限低于 Android WebView 在解码繁忙时真实产生的卡顿长度：一次 150 ms 的间隔只把弹幕推进 100 ms，于是掉帧不只是掉一帧，还顺带减速、随后又追赶回来——这正是被看成「卡顿」而不是「掉了一帧」的原因。改为计入真实耗时后，屏上速度在墙钟意义上恒定，与单条 linear CSS transition 提供的保证一致（bytedance/danmu.js 同样以 `pastDuration * moveV` 反推位置）；剩下的上限只用于防止一次数秒级挂起把弹幕瞬移过整幅画面，常见挂起已由 `visibilitychange` / `focus` 重置时钟。
-- 渲染线程上不做可以只做一次的分配：位图 key 由引擎维护（仅在聚合计数真的改变绘制文本时刷新），不再每帧为每条可见弹幕拼三个携带完整弹幕正文的字符串；命中框改为带帧号原地改写，不再每帧 `Map#clear` 再逐条 `set`（前者重新分配整张哈希表，后者每条弹幕分配一个新对象），画面清空时发布哨兵帧号一次性作废旧框；`richImagesReady` 在遍历前提前返回，不再为每条纯文本弹幕分配一个空数组。这些短生命周期垃圾的回收停顿正是在 Android WebView 上表现为掉帧的负载。
-- 弹幕车道高度与首行内缩随字号缩放：车道高度取 `max(16, round(fontSize * 1.4))`，首行内缩取 `clamp(round(fontSize * 0.35), 4, 8)`（下限即自己弹幕边框的垂直内边距，再小会被顶边裁掉）。旧实现是固定 12px 内缩叠加 `max(fontSize + 9, 24)` 的车道高度，两者都按 18px 桌面弹幕调过：移动端默认 14px 时 24px 下限接管，且 `textBaseline = "top"` 让车道内多余空隙全部落在字形下方并在第 0 条上累加，于是顶部空出接近一整行。顶部固定弹幕使用同一内缩，不再比首条飘屏弹幕低半行。
-- Canvas 弹幕的 backing store 按总设备像素数封顶（`DANMAKU_MAX_BACKING_PIXELS`，4K 等效），而不是按设备像素比封顶：像素比是比例，要限制的成本却是像素数。旧的 1.5× 比例上限对桌面 1080p（像素比 1）没有任何约束，却把手机的 2.75× 屏砍掉近一半，位图放大进显示屏后字形明显比旁边的 DOM 文本发虚。改为像素预算后，CSS 尺寸小的手机画面可以用满原生像素比（`DANMAKU_MAX_PIXEL_RATIO` 3×），只有高 DPI 全屏桌面舞台会被回退，且回退值按 0.25 量化，避免窗口拖拽时反复失效位图缓存。
-- 弹幕位图只对齐「在整段飞行中恒定」的坐标：`it.y` 是车道位置，弹幕在屏期间不变，对齐后是真正 1:1 的像素复制；`snapStaticAxis` / `snapToDevicePixel` 按 `1 / pixelRatio` 取整（整数 CSS 值在 2.75× 下仍偏 3/4 像素），并按 backing store 的实际设备尺寸回算 CSS 拷贝尺寸。顶部固定弹幕居中后 `x` 也是静态的，同样对齐。**飘动轴任何密度下都不取整**：默认速度是 197 px/s，60fps 下每帧前进 3.3 CSS px，取整到整设备像素无法得到恒定步长，位置会在 floor/ceil 之间交替，于是每帧走 3,3,4,3,3,4… 个设备像素——1× 屏上是帧率级别 ±30% 的速度抖动，也就是「非垂直同步的撕裂感」；它换回来的只是一张本来就在移动的位图上最多半个设备像素的静态模糊。关键在于抖动随密度降低而**加剧**：量化步长恒为一个整设备像素，每帧步长（按设备像素计）越小，取整占它的比例就越大，所以 1× 桌面是最坏情形（±30%）而非安全情形——按密度分档放行的做法方向是错的。bytedance/danmu.js 把单条 linear transform transition 交给合成器、完全不对插值位置取整，是从另一个方向得到同一结论：移动物体的亚像素定位本就是合成器的职责。
-- 弹幕描边与阴影沿用 v0.43.1 的取值（`danmakuOutline`）：描边 `max(2, fontSize * 0.13)`，阴影固定 `blur 2 / offset 1 / alpha 0.75`，且**描边与填充在同一组阴影下连续绘制**——填充二次投下阴影所形成的加重暗边正是弹幕在动态画面上的重量感来源，不是缺陷。曾有一轮把描边改为 `clamp(fontSize * 0.1, 1, 3)`、阴影 alpha 降到 0.55、blur 绑定线宽，并把描边/填充拆成两遍让填充落在无阴影的干净像素上：各字号轮廓削弱 23–52%（3px 上限让 48px 弹幕损失过半），弹幕失去可读的重量感，看久了累。小字号发虚的真实原因是 backing store 按设备**像素比**而非总像素数封顶导致位图被放大进显示屏，由 `danmakuCanvasPixelRatio` 解决，与描边无关；`strokeText` 以字形轮廓为中心确实有一半线宽吃进笔画，但 12px 下 `max(2, …)` 恰为 2px（内吃 1px），这正是让细笔画获得明确暗边而非被抹掉的量。阴影须与 `lineWidth` 解耦：绑定后描边最细处阴影同时最弱，两处损失叠加。图片表情绘制时临时关闭阴影，表情自带画面不需要投影。
-- 弹幕位图缓存以绘制内容（字号、颜色、自己/他人、文本）为 key，不再用 `it.id`：内容聚合每次计数变化都会改写 `id`，id 作 key 会让一条重复弹幕的每个 `×N` 阶段都留下一张孤儿位图，挤掉在飞行中的活跃位图并迫使其重新栅格化；改为内容 key 后相同文本的两条弹幕也共享一张位图，`id` 也回归为稳定身份、不再被聚合重写。文本测量统一走共享 1×1 上下文，不再为每条弹幕分配两次 backing store。
+- 实时飘屏的位置与时序由 danmu.js 的单条 linear transform transition 管理，不再维护应用级逐帧渲染循环、目标 FPS、跳帧或位图缓存。普通消息统一使用 15 秒持续时长，SC 只使用平台提供的持续时长；不要为调整飘屏快慢再叠加 GSAP tween 或新增设置。
+- `DanmuJsDanmaku` 必须等容器有非零尺寸后才创建实例，零尺寸期间只保留有界、带过期时间的 pending；`active`、`sessionKey`、页面可见性、减少动态效果偏好或组件卸载变化时销毁旧实例和 listener，避免隐藏播放器继续分配 DOM。
+- danmu.js 数据池、本地 metadata、聚合目标和 SC 计时器都必须有界，并在 `bullet_remove` / `destroy` 时同步释放。普通聊天聚合只更新同一活动 bullet 的文本与计数槽，不为每次 `×N` 变化重新创建动画。
+- B 站图片表情使用预设尺寸的安全 DOM 节点，加载失败回退原文，避免图片就绪后改变轨道高度或让弹幕跳动。平台文本不得写入 `innerHTML`。
+- 弹幕容器保持 `opacity: 1`；普通消息与 SC 都从统一的 `danmaku_opacity` 读取值并写到各自元素，避免容器与子项透明度相乘，也不再提供 SC 独立透明度。字号、字重、区域和行数变化应更新现有 DOM 与后续 comment，轨道高度随字号统一计算。
 - 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
-- 浏览器回退亮度使用覆盖视频与 Canvas 的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
+- 浏览器回退亮度使用覆盖视频与实时弹幕 DOM 容器的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
 - 播放器控制栏使用 `player-scrim-overlay`：由底边向画面上方淡出的黑色渐变，参考常规播放器，不设上边框也不使用 `backdrop-filter`。渐变画在 `::before` 上并高于控制栏自身高度，让淡出在第一个控件之前完成，避免出现可见的条带边界；控制栏材质贴合播放器左右和底边，自动显隐仅合成 opacity，不触发播放器 React 重渲染。
-- 音量和播放设置 Drawer / 弹层仍使用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层和房间卡片角标同样不采样动态背景，避免滚动、视频解码与 Canvas 弹幕争抢 GPU 帧预算。
+- 音量和播放设置 Drawer / 弹层仍使用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层和房间卡片角标同样不采样动态背景，避免滚动、视频解码与 DOM 弹幕争抢 GPU 合成预算。
 - 移动端紧凑播放器控制栏使用 `32px` 按钮和输入组，底部内边距压缩到 `1px + safe-area`，顶部保留渐变淡出所需的少量留白；这是仅限视频边缘常用媒体操作的触控尺寸例外，应用导航和表单仍遵守 `44px` 目标。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，实际纵向滚动留给 `app-page`。
 - fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 和页面动画完成时必须恢复普通绘制。
@@ -407,7 +405,7 @@ bun run build
 - 桌面 `1280x720` 或更大视口。
 - 手机竖屏约 `360x732`。
 - coarse pointer 的短横屏约 `844x390`。
-- 操作系统开启 `prefers-reduced-motion: reduce` 时，确认应用仍保持完整动态效果。
+- 操作系统开启 `prefers-reduced-motion: reduce` 时，页面导航仍沿用应用的完整动效策略，但直播画面飘屏与录制回放弹幕必须停用；偏好恢复后直播弹幕建立全新会话，不补放旧消息。
 
 每个动画检查开始帧、中间帧、最终帧和快速重复操作：
 
@@ -420,7 +418,7 @@ bun run build
 - Home Card、关注 Card、深链接和“关注栏切房后返回 `/follow`”均使用 `PageZoom`，导航目标正确。
 - 退出动画结束后旧直播 subtree 直接卸载，不恢复 opacity，避免直播内容末帧闪烁。
 
-主题和 Canvas 类视觉效果不能只检查 DOM 存在；应结合截图或像素检查确认实际画面非空且方向正确。
+主题和播放器叠层类视觉效果不能只检查 DOM 存在；应结合截图或像素检查确认实际画面非空且方向正确。
 
 ### 9.3 WSL 到 Windows
 

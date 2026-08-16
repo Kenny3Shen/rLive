@@ -29,7 +29,7 @@ import {
   PLAYER_STAGE_DOUBLE_TAP_MS,
   showDanmakuComposerInPlayerControls,
   shouldRetainRoomSidePanel,
-  shouldRunDanmakuCanvas,
+  shouldRunFloatingDanmaku,
   shouldShowRoomDanmakuPanel,
   sidePanelStartsOpen,
   usesPortraitStackLayout,
@@ -191,16 +191,16 @@ describe("mobile player layout", () => {
     expect(shouldRetainRoomSidePanel(false, false, false)).toBe(true);
   });
 
-  test("pauses the danmaku canvas only when an overlay actually obscures the picture", () => {
+  test("pauses floating danmaku only when an overlay actually obscures the picture", () => {
     expect(
-      shouldRunDanmakuCanvas({
+      shouldRunFloatingDanmaku({
         danmakuActive: true,
         osdOn: true,
         sidePanelOverlaysPlayer: true,
       }),
     ).toBe(false);
     expect(
-      shouldRunDanmakuCanvas({
+      shouldRunFloatingDanmaku({
         danmakuActive: true,
         osdOn: true,
         sidePanelOverlaysPlayer: false,
@@ -210,7 +210,7 @@ describe("mobile player layout", () => {
 
   test("respects the user's danmaku visibility switch", () => {
     expect(
-      shouldRunDanmakuCanvas({
+      shouldRunFloatingDanmaku({
         danmakuActive: true,
         osdOn: false,
         sidePanelOverlaysPlayer: false,
@@ -247,8 +247,8 @@ describe("mobile player edge gestures", () => {
   });
 
   test("keeps taps on their picture target until a vertical adjustment is recognised", () => {
-    // A pending contact must not be captured by the stage, otherwise Canvas
-    // danmaku never receives pointerup and cannot open its touch action menu.
+    // A pending contact must not be captured by the stage, otherwise the
+    // floating bullet never receives pointerup and cannot open its touch action menu.
     expect(playerEdgeGestureIntent(0, 0)).toBe("pending");
     expect(playerEdgeGestureIntent(6, 6)).toBe("pending");
     expect(playerEdgeGestureIntent(0, 12)).toBe("adjust");
