@@ -94,7 +94,6 @@ type RuntimeConfig = {
   fontSize: number;
   fontWeight: number;
   opacity: number;
-  filterRepeats: boolean;
   mergeWindowSeconds: number;
   filterGifts: boolean;
   shieldMatcher: (event: DanmakuEvent) => boolean;
@@ -222,7 +221,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const area = useSettingsStore((state) => state.danmakuArea);
   const lineCount = useSettingsStore((state) => state.danmakuLineCount);
   const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
-  const filterRepeats = useSettingsStore((state) => state.danmakuFilterRepeats);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
@@ -238,7 +236,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     fontSize: 18,
     fontWeight: 600,
     opacity: 0.8,
-    filterRepeats: true,
     mergeWindowSeconds: 10,
     filterGifts: true,
     shieldMatcher: () => false,
@@ -253,7 +250,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       fontSize,
       fontWeight,
       opacity,
-      filterRepeats,
       mergeWindowSeconds,
       filterGifts,
       shieldMatcher,
@@ -263,7 +259,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [
     bandLayout,
     filterGifts,
-    filterRepeats,
     fontSize,
     fontWeight,
     mergeWindowSeconds,
@@ -482,11 +477,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   useEffect(() => {
     aggregatorRef.current = createDanmakuContentAggregator(
-      filterRepeats,
+      mergeWindowSeconds > 0,
       mergeWindowSeconds * 1_000,
     );
     aggregationTargetsRef.current.clear();
-  }, [filterRepeats, mergeWindowSeconds, sessionKey]);
+  }, [mergeWindowSeconds, sessionKey]);
 
   useEffect(() => {
     if (!active || reducedMotion || !pageVisible) return;

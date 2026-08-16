@@ -1826,10 +1826,8 @@ export function SettingsPage() {
             <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
           </Section>
         )}
-        <Section title="弹幕轨道" keywords="弹幕 轨道 区域 行数">
+        <Section title="弹幕设置" keywords="弹幕 轨道 区域 行数 文字 透明度 字号 字重">
           <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
-        </Section>
-        <Section title="弹幕文字外观" keywords="弹幕 文字 透明度 字号 字重">
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
         <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc">

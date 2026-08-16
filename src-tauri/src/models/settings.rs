@@ -29,12 +29,9 @@ pub struct AppSettings {
     /// Danmaku font weight (400 / 500 / 600 / 700).
     #[serde(default = "default_danmaku_font_weight")]
     pub danmaku_font_weight: u16,
-    /// Suppress consecutive duplicate chat messages in the visual clients.
-    #[serde(default = "default_danmaku_filter_repeats")]
-    pub danmaku_filter_repeats: bool,
     /// Sliding window used to merge duplicate chat messages, in seconds.
-    /// Only meaningful while `danmaku_filter_repeats` is enabled; normalized
-    /// to 5 ..= 30 at the settings persistence boundary.
+    /// Zero disables merging; normalized to 0 ..= 30 at the settings
+    /// persistence boundary.
     #[serde(default = "default_danmaku_merge_window_seconds")]
     pub danmaku_merge_window_seconds: u32,
     /// Whether gift-related messages should be hidden from the danmaku stream.
@@ -162,10 +159,6 @@ fn default_danmaku_font_weight() -> u16 {
     600
 }
 
-fn default_danmaku_filter_repeats() -> bool {
-    true
-}
-
 fn default_danmaku_filter_gifts() -> bool {
     true
 }
@@ -219,7 +212,6 @@ impl Default for AppSettings {
             danmaku_area: default_danmaku_area(),
             danmaku_line_count: 0,
             danmaku_font_weight: default_danmaku_font_weight(),
-            danmaku_filter_repeats: default_danmaku_filter_repeats(),
             danmaku_filter_gifts: default_danmaku_filter_gifts(),
             danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
             super_chat_enabled: default_super_chat_enabled(),
@@ -282,11 +274,11 @@ mod tests {
 
         assert!(serialized.get("danmaku_speed").is_none());
         assert!(serialized.get("super_chat_opacity").is_none());
+        assert!(serialized.get("danmaku_filter_repeats").is_none());
         assert_eq!(settings.danmaku_area, 0.25);
         assert_eq!(settings.motion_mode, "full");
         assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
-        assert!(settings.danmaku_filter_repeats);
         assert!(settings.danmaku_filter_gifts);
         assert_eq!(settings.danmaku_merge_window_seconds, 10);
         assert!(settings.super_chat_enabled);

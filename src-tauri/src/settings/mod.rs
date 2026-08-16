@@ -6,7 +6,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::AppSettings;
 
 const SETTINGS_KEY: &str = "app_settings";
-const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 5;
+const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 0;
 const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 
 fn normalize_motion_preference(settings: &mut AppSettings) {
@@ -217,7 +217,6 @@ mod tests {
         assert_eq!(s.danmaku_area, 0.25);
         assert_eq!(s.danmaku_line_count, 0);
         assert_eq!(s.danmaku_font_weight, 600);
-        assert!(s.danmaku_filter_repeats);
         assert!(s.danmaku_filter_gifts);
         assert_eq!(s.danmaku_merge_window_seconds, 10);
         assert!(s.super_chat_enabled);
@@ -258,7 +257,12 @@ mod tests {
         };
 
         set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 5);
+        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 1);
+
+        // Zero is the explicit "merge off" value and must survive the boundary.
+        settings.danmaku_merge_window_seconds = 0;
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 0);
 
         settings.danmaku_merge_window_seconds = 60;
         set(&conn, &settings).unwrap();

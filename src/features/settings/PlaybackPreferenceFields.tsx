@@ -45,7 +45,6 @@ const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuArea: DANMAKU_AREA_DEFAULT,
   danmakuLineCount: 0,
   danmakuFontWeight: 600,
-  danmakuFilterRepeats: true,
   danmakuFilterGifts: true,
   danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
 };
@@ -510,7 +509,6 @@ export function resetDanmakuAppearanceSettings() {
     danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
     danmaku_line_count: DANMAKU_APPEARANCE_DEFAULTS.danmakuLineCount,
     danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
-    danmaku_filter_repeats: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterRepeats,
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
   });
@@ -525,45 +523,26 @@ export function DanmakuFilterSettingsFields({
   layout: PlaybackSettingsFieldLayout;
   showSuperChat?: boolean;
 }) {
-  const filterRepeats = useSettingsStore((state) => state.danmakuFilterRepeats);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const setSuperChatEnabled = useSettingsStore((state) => state.setSuperChatEnabled);
   const shield = useShieldWordsDraft();
-  const repeatLabelId = `${idPrefix}-danmaku-repeat-filter-label`;
   const giftLabelId = `${idPrefix}-danmaku-gift-filter-label`;
   const superChatLabelId = `${idPrefix}-super-chat-enabled-label`;
   const shieldInputId = `${idPrefix}-danmaku-shield-words`;
 
   return (
     <>
-      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
-        <FieldContent>
-          <FieldTitle>
-            <span id={repeatLabelId}>合并重复消息</span>
-            {layout === "page" && <FieldTip>减少短时间内重复出现的弹幕。</FieldTip>}
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby={repeatLabelId}
-          checked={filterRepeats}
-          onCheckedChange={(checked) => {
-            useSettingsStore.setState({ danmakuFilterRepeats: checked });
-            persist({ danmaku_filter_repeats: checked });
-          }}
-        />
-      </Field>
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-merge-window`}
         title="合并窗口"
-        description={layout === "page" ? "相同弹幕在此时间内合并计数。" : undefined}
+        description={layout === "page" ? "相同弹幕在此时间内合并计数，0 秒表示关闭。" : undefined}
         value={mergeWindowSeconds}
         min={DANMAKU_MERGE_WINDOW_SECONDS_MIN}
         max={DANMAKU_MERGE_WINDOW_SECONDS_MAX}
         displayValue={`${mergeWindowSeconds} 秒`}
         layout={layout}
-        disabled={!filterRepeats}
         onPreview={(value) =>
           useSettingsStore.setState({
             danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(value),

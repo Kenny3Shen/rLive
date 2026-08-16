@@ -23,6 +23,11 @@ describe("danmaku merge window settings", () => {
     expect(parseDanmakuMergeWindowSeconds(12.4)).toBe(12);
   });
 
+  test("keeps zero as the explicit merge-off value", () => {
+    expect(DANMAKU_MERGE_WINDOW_SECONDS_MIN).toBe(0);
+    expect(parseDanmakuMergeWindowSeconds(0)).toBe(0);
+  });
+
   test("falls back to ten seconds for invalid values", () => {
     expect(parseDanmakuMergeWindowSeconds(undefined)).toBe(DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT);
     expect(parseDanmakuMergeWindowSeconds(null)).toBe(DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT);
@@ -47,5 +52,6 @@ describe("danmaku appearance defaults", () => {
     expect("danmakuSpeed" in state).toBe(false);
     expect("superChatOpacity" in state).toBe(false);
     expect("setSuperChatOpacity" in state).toBe(false);
+    expect("danmakuFilterRepeats" in state).toBe(false);
   });
 });
