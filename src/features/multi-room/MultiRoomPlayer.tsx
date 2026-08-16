@@ -14,7 +14,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import type { LiveRoomDetail } from "@/shared/types/live";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
-import { CanvasDanmaku } from "@/features/room/canvas/CanvasDanmaku";
+import { DanmuJsDanmaku } from "@/features/room/danmaku/DanmuJsDanmaku";
 import { useDanmakuConnection } from "@/features/room/danmaku/useDanmakuConnection";
 import { usePlaybackController } from "@/features/room/playback/usePlaybackController";
 import type { PlaybackController } from "@/features/room/playback/usePlaybackController";
@@ -136,13 +136,13 @@ function MainMultiRoomControls({
     }
     onToggleAudioOnly();
   }, [audioOnly, onToggleAudioOnly, player]);
-  const canvasActive = danmaku.active && osdOn && !audioOnly;
+  const floatingDanmakuActive = danmaku.active && osdOn && !audioOnly;
 
   return (
     <>
       {showHost && !audioOnly && (
-        <CanvasDanmaku
-          active={canvasActive}
+        <DanmuJsDanmaku
+          active={floatingDanmakuActive}
           sessionKey={sessionKey}
           siteId={room.siteId}
           roomId={detail?.room_id || room.roomId}

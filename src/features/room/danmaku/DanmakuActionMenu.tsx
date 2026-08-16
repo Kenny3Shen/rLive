@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  * node, so the renderer hands over the box it actually drew (element-relative
  * CSS pixels, border padding included) and this menu anchors itself to it.
  */
-export type CanvasDanmakuHoverTarget = {
+export type DanmakuHoverTarget = {
   hoverKey: string;
   /** Raw comment body, without the aggregation suffix. */
   content: string;
@@ -42,7 +42,7 @@ const MENU_HALF_WIDTH_LARGE_PX = 96;
  * Declared here, where the attribute is actually applied, so the canvas imports
  * it in the same direction as the component itself.
  */
-export const CANVAS_DANMAKU_MENU_ATTR = "data-canvas-danmaku-menu";
+export const DANMAKU_MENU_ATTR = "data-danmaku-menu";
 /**
  * Visual distance between the comment and the pill.
  *
@@ -55,8 +55,8 @@ const MENU_GAP_PX = 6;
 /** Below this the pill would clip the top edge, so it flips under the comment. */
 const MENU_FLIP_THRESHOLD_PX = 56;
 
-type CanvasDanmakuActionMenuProps = {
-  target: CanvasDanmakuHoverTarget;
+type DanmakuActionMenuProps = {
+  target: DanmakuHoverTarget;
   siteId?: SiteId;
   roomId?: string;
   roomTitle?: string;
@@ -70,7 +70,7 @@ type CanvasDanmakuActionMenuProps = {
   onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
-export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
+export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   target,
   siteId,
   roomId,
@@ -80,7 +80,7 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
   touch = false,
   onPointerEnter,
   onPointerLeave,
-}: CanvasDanmakuActionMenuProps) {
+}: DanmakuActionMenuProps) {
   const message = target.content.trim();
   const actions = useDanmakuActions({
     message,
@@ -117,7 +117,7 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
       data-player-hud
       // Lets the canvas recognise this element as the pointer's destination on
       // its own `pointerleave`, which fires before this element's `pointerenter`.
-      {...{ [CANVAS_DANMAKU_MENU_ATTR]: "" }}
+      {...{ [DANMAKU_MENU_ATTR]: "" }}
       role="group"
       aria-label={`${target.user || "匿名"} 的弹幕操作`}
       className={cn(
@@ -144,7 +144,7 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
       onDoubleClick={(event) => event.stopPropagation()}
     >
       {flipBelow && actions.statusMessage && (
-        <CanvasDanmakuActionStatus message={actions.statusMessage} failed={actions.failed} />
+        <DanmakuActionStatus message={actions.statusMessage} failed={actions.failed} />
       )}
       <div
         className={cn(
@@ -201,13 +201,13 @@ export const CanvasDanmakuActionMenu = memo(function CanvasDanmakuActionMenu({
         </Button>
       </div>
       {!flipBelow && actions.statusMessage && (
-        <CanvasDanmakuActionStatus message={actions.statusMessage} failed={actions.failed} />
+        <DanmakuActionStatus message={actions.statusMessage} failed={actions.failed} />
       )}
     </div>
   );
 });
 
-function CanvasDanmakuActionStatus({ message, failed }: { message: string; failed: boolean }) {
+function DanmakuActionStatus({ message, failed }: { message: string; failed: boolean }) {
   return (
     <p
       role="status"

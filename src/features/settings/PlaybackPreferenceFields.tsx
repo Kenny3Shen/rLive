@@ -6,7 +6,6 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
-  SUPER_CHAT_OPACITY_DEFAULT,
   defaultDanmakuFontSize,
   parseDanmakuMergeWindowSeconds,
   useSettingsStore,
@@ -43,14 +42,12 @@ const ASR_CHUNK_SECONDS_MAX = 1;
 const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
   danmakuFontSize: defaultDanmakuFontSize(),
-  danmakuSpeed: 8,
   danmakuArea: DANMAKU_AREA_DEFAULT,
   danmakuLineCount: 0,
   danmakuFontWeight: 600,
   danmakuFilterRepeats: true,
   danmakuFilterGifts: true,
   danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
-  superChatOpacity: SUPER_CHAT_OPACITY_DEFAULT,
 };
 
 type PreferenceSliderFieldProps = {
@@ -398,45 +395,6 @@ export function AsrHotwordsField({
   );
 }
 
-export function SuperChatSettingsFields({
-  idPrefix,
-  layout,
-}: {
-  idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
-}) {
-  const enabled = useSettingsStore((state) => state.superChatEnabled);
-  const opacity = useSettingsStore((state) => state.superChatOpacity);
-  const setEnabled = useSettingsStore((state) => state.setSuperChatEnabled);
-  const enabledLabelId = `${idPrefix}-super-chat-enabled-label`;
-
-  return (
-    <>
-      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
-        <FieldContent>
-          <FieldTitle>
-            <span id={enabledLabelId}>显示 SC 特殊弹幕</span>
-            {layout === "page" && <FieldTip>在支持的平台上显示底部固定的 SC 特殊弹幕。</FieldTip>}
-          </FieldTitle>
-        </FieldContent>
-        <Switch aria-labelledby={enabledLabelId} checked={enabled} onCheckedChange={setEnabled} />
-      </Field>
-      <PreferenceSliderField
-        id={`${idPrefix}-super-chat-opacity`}
-        title="SC 透明度"
-        value={Math.round(opacity * 100)}
-        min={0}
-        max={100}
-        step={5}
-        displayValue={`${Math.round(opacity * 100)}%`}
-        layout={layout}
-        onPreview={(value) => useSettingsStore.setState({ superChatOpacity: value / 100 })}
-        onCommit={(value) => persist({ super_chat_opacity: value / 100 })}
-      />
-    </>
-  );
-}
-
 export function DanmakuTrackSettingsFields({
   idPrefix,
   layout,
@@ -487,7 +445,6 @@ export function DanmakuAppearanceSettingsFields({
 }) {
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
-  const speed = useSettingsStore((state) => state.danmakuSpeed);
   const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
   const weightLabelId = `${idPrefix}-danmaku-font-weight-label`;
 
@@ -514,17 +471,6 @@ export function DanmakuAppearanceSettingsFields({
         layout={layout}
         onPreview={(value) => useSettingsStore.setState({ danmakuFontSize: value })}
         onCommit={(value) => persist({ danmaku_font_size: value })}
-      />
-      <PreferenceSliderField
-        id={`${idPrefix}-danmaku-speed`}
-        title="滚动速度"
-        value={speed}
-        min={1}
-        max={10}
-        displayValue={`${speed} / 10`}
-        layout={layout}
-        onPreview={(value) => useSettingsStore.setState({ danmakuSpeed: value })}
-        onCommit={(value) => persist({ danmaku_speed: value })}
       />
       <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
         <FieldContent className={layout === "panel" ? "flex-none" : undefined}>
@@ -555,36 +501,39 @@ export function DanmakuAppearanceSettingsFields({
   );
 }
 
-/** Resets danmaku track/text/filter settings and SC opacity; shield words stay. */
+/** Resets danmaku track/text/filter settings; shield words stay. */
 export function resetDanmakuAppearanceSettings() {
   useSettingsStore.setState(DANMAKU_APPEARANCE_DEFAULTS);
   persist({
     danmaku_opacity: DANMAKU_APPEARANCE_DEFAULTS.danmakuOpacity,
     danmaku_font_size: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontSize,
-    danmaku_speed: DANMAKU_APPEARANCE_DEFAULTS.danmakuSpeed,
     danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
     danmaku_line_count: DANMAKU_APPEARANCE_DEFAULTS.danmakuLineCount,
     danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
     danmaku_filter_repeats: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterRepeats,
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
-    super_chat_opacity: DANMAKU_APPEARANCE_DEFAULTS.superChatOpacity,
   });
 }
 
 export function DanmakuFilterSettingsFields({
   idPrefix,
   layout,
+  showSuperChat = false,
 }: {
   idPrefix: string;
   layout: PlaybackSettingsFieldLayout;
+  showSuperChat?: boolean;
 }) {
   const filterRepeats = useSettingsStore((state) => state.danmakuFilterRepeats);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
+  const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
+  const setSuperChatEnabled = useSettingsStore((state) => state.setSuperChatEnabled);
   const shield = useShieldWordsDraft();
   const repeatLabelId = `${idPrefix}-danmaku-repeat-filter-label`;
   const giftLabelId = `${idPrefix}-danmaku-gift-filter-label`;
+  const superChatLabelId = `${idPrefix}-super-chat-enabled-label`;
   const shieldInputId = `${idPrefix}-danmaku-shield-words`;
 
   return (
@@ -642,6 +591,21 @@ export function DanmakuFilterSettingsFields({
           }}
         />
       </Field>
+      {showSuperChat && (
+        <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
+          <FieldContent>
+            <FieldTitle>
+              <span id={superChatLabelId}>显示醒目留言</span>
+              {layout === "page" && <FieldTip>显示支持平台的固定醒目留言。</FieldTip>}
+            </FieldTitle>
+          </FieldContent>
+          <Switch
+            aria-labelledby={superChatLabelId}
+            checked={superChatEnabled}
+            onCheckedChange={setSuperChatEnabled}
+          />
+        </Field>
+      )}
       <Field className={fieldSurfaceClass(layout)}>
         <FieldLabel htmlFor={shieldInputId}>屏蔽词</FieldLabel>
         <FieldContent>

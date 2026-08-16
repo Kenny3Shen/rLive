@@ -234,7 +234,6 @@ pub fn merge_into_db(
     settings.proxy = package.settings.proxy.clone();
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_size = package.settings.danmaku_font_size;
-    settings.danmaku_speed = package.settings.danmaku_speed;
     settings.danmaku_area = package.settings.danmaku_area;
     settings.danmaku_line_count = package.settings.danmaku_line_count;
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
@@ -343,6 +342,20 @@ mod tests {
         assert!(!text.contains("asr_translation_from"));
         assert!(!text.contains("asr_translation_to"));
         assert!(!text.contains("iptv_custom_m3u_url"));
+    }
+
+    #[test]
+    fn legacy_profile_ignores_removed_danmaku_fields_on_import_and_export() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]["danmaku_speed"] = serde_json::json!(8);
+        value["settings"]["super_chat_opacity"] = serde_json::json!(0.6);
+        let legacy = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&legacy).unwrap();
+        let encoded = encode_package(&package).unwrap();
+
+        assert!(!encoded.contains("danmaku_speed"));
+        assert!(!encoded.contains("super_chat_opacity"));
     }
 
     #[test]

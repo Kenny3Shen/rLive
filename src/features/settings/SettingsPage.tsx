@@ -62,7 +62,6 @@ import {
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
   resetDanmakuAppearanceSettings,
-  SuperChatSettingsFields,
 } from "@/features/settings/PlaybackPreferenceFields";
 import { cn, SITE_LABELS } from "@/lib/utils";
 import { directPlayerPath } from "@/features/iptv/iptvRoute";
@@ -692,6 +691,7 @@ function AccountCard({
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={() => setLoginMethod("manual")}>
+            <UserRound data-icon="inline-start" aria-hidden />
             手动输入
           </Button>
           {hasCookie && (
@@ -1832,11 +1832,8 @@ export function SettingsPage() {
         <Section title="弹幕文字与节奏" keywords="弹幕 文字 透明度 字号 速度 字重">
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
-        <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并">
+        <Section title="弹幕过滤" keywords="弹幕 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc">
           <DanmakuFilterSettingsFields idPrefix="settings" layout="page" />
-        </Section>
-        <Section title="醒目留言" keywords="醒目留言 sc 透明度">
-          <SuperChatSettingsFields idPrefix="settings" layout="page" />
         </Section>
         <Section title="恢复默认" keywords="恢复 默认 重置 reset">
           <PlaybackSettingsResetField />

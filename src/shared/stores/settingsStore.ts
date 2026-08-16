@@ -28,7 +28,6 @@ export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 18;
 export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 14;
 export const DANMAKU_OPACITY_DEFAULT = 0.8;
 export const DANMAKU_AREA_DEFAULT = 0.25;
-export const SUPER_CHAT_OPACITY_DEFAULT = 0.8;
 
 export function defaultDanmakuFontSize(mobile = isMobileClient()): number {
   return mobile ? DANMAKU_FONT_SIZE_MOBILE_DEFAULT : DANMAKU_FONT_SIZE_DESKTOP_DEFAULT;
@@ -107,7 +106,6 @@ type SettingsState = {
   proxy: string | null;
   danmakuOpacity: number;
   danmakuFontSize: number;
-  danmakuSpeed: number;
   danmakuArea: number;
   danmakuLineCount: number;
   danmakuFontWeight: number;
@@ -115,7 +113,6 @@ type SettingsState = {
   danmakuFilterGifts: boolean;
   danmakuMergeWindowSeconds: number;
   superChatEnabled: boolean;
-  superChatOpacity: number;
   danmakuShieldWords: string[];
   qualityLevel: QualityLevel;
   playbackSmartLineSelection: boolean;
@@ -154,7 +151,6 @@ type SettingsState = {
   setPlaybackSmartLineSelection: (enabled: boolean) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
-  setSuperChatOpacity: (opacity: number) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrProvider: (provider: AsrProvider) => Promise<void>;
@@ -183,7 +179,6 @@ const defaultSettings: AppSettings = {
   proxy: null,
   danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
   danmaku_font_size: defaultDanmakuFontSize(),
-  danmaku_speed: 8,
   danmaku_area: DANMAKU_AREA_DEFAULT,
   danmaku_line_count: 0,
   danmaku_font_weight: 600,
@@ -191,7 +186,6 @@ const defaultSettings: AppSettings = {
   danmaku_filter_gifts: true,
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
-  super_chat_opacity: SUPER_CHAT_OPACITY_DEFAULT,
   danmaku_shield_words: [],
   quality_level: "high",
   playback_smart_line_selection: true,
@@ -220,7 +214,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_size: state.danmakuFontSize,
-    danmaku_speed: state.danmakuSpeed,
     danmaku_area: state.danmakuArea,
     danmaku_line_count: state.danmakuLineCount,
     danmaku_font_weight: state.danmakuFontWeight,
@@ -228,7 +221,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
     super_chat_enabled: state.superChatEnabled,
-    super_chat_opacity: state.superChatOpacity,
     danmaku_shield_words: state.danmakuShieldWords,
     quality_level: state.qualityLevel,
     playback_smart_line_selection: state.playbackSmartLineSelection,
@@ -258,7 +250,6 @@ export const useSettingsStore = create<SettingsState>()(
       proxy: null,
       danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
       danmakuFontSize: defaultDanmakuFontSize(),
-      danmakuSpeed: 8,
       danmakuArea: DANMAKU_AREA_DEFAULT,
       danmakuLineCount: 0,
       danmakuFontWeight: 600,
@@ -266,7 +257,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuFilterGifts: true,
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
-      superChatOpacity: SUPER_CHAT_OPACITY_DEFAULT,
       danmakuShieldWords: [],
       qualityLevel: "high",
       playbackSmartLineSelection: true,
@@ -329,10 +319,6 @@ export const useSettingsStore = create<SettingsState>()(
       setSuperChatEnabled: (superChatEnabled) => {
         set({ superChatEnabled });
         void get().persistToBackend({ super_chat_enabled: superChatEnabled });
-      },
-      setSuperChatOpacity: (superChatOpacity) => {
-        set({ superChatOpacity });
-        void get().persistToBackend({ super_chat_opacity: superChatOpacity });
       },
       setDanmakuSendEnabled: (danmakuSendEnabled) => {
         const epoch = ++danmakuSendSettingEpoch;
@@ -528,7 +514,6 @@ export const useSettingsStore = create<SettingsState>()(
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontSize: settings.danmaku_font_size,
-          danmakuSpeed: settings.danmaku_speed,
           danmakuArea: settings.danmaku_area,
           danmakuLineCount: settings.danmaku_line_count,
           danmakuFontWeight: settings.danmaku_font_weight,
@@ -538,7 +523,6 @@ export const useSettingsStore = create<SettingsState>()(
             settings.danmaku_merge_window_seconds,
           ),
           superChatEnabled: settings.super_chat_enabled ?? true,
-          superChatOpacity: settings.super_chat_opacity ?? SUPER_CHAT_OPACITY_DEFAULT,
           danmakuShieldWords: settings.danmaku_shield_words ?? [],
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSmartLineSelection: settings.playback_smart_line_selection ?? true,

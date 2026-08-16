@@ -8,8 +8,8 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   parseDanmakuMergeWindowSeconds,
-  SUPER_CHAT_OPACITY_DEFAULT,
   defaultDanmakuFontSize,
+  useSettingsStore,
 } from "../src/shared/stores/settingsStore";
 
 describe("danmaku merge window settings", () => {
@@ -39,7 +39,13 @@ describe("danmaku appearance defaults", () => {
 
   test("uses 80 percent opacity and a 25 percent display area", () => {
     expect(DANMAKU_OPACITY_DEFAULT).toBe(0.8);
-    expect(SUPER_CHAT_OPACITY_DEFAULT).toBe(0.8);
     expect(DANMAKU_AREA_DEFAULT).toBe(0.25);
+  });
+
+  test("does not retain removed danmaku preferences in frontend state", () => {
+    const state = useSettingsStore.getState();
+    expect("danmakuSpeed" in state).toBe(false);
+    expect("superChatOpacity" in state).toBe(false);
+    expect("setSuperChatOpacity" in state).toBe(false);
   });
 });

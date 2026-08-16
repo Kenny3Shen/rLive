@@ -12,7 +12,6 @@ import {
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
-  SuperChatSettingsFields,
 } from "@/features/settings/PlaybackPreferenceFields";
 import { siteSupportsSuperChat } from "./superChat";
 /**
@@ -45,18 +44,6 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
           </Card>
         )}
 
-        {siteSupportsSuperChat(siteId) && (
-          <Card size="sm">
-            <CardHeader className="border-b">
-              <CardTitle>醒目留言</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <FieldGroup className="gap-2">
-                <SuperChatSettingsFields idPrefix="room" layout="panel" />
-              </FieldGroup>
-            </CardContent>
-          </Card>
-        )}
         <Card size="sm">
           <CardHeader className="border-b">
             <CardTitle>弹幕轨道</CardTitle>
@@ -85,7 +72,11 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
           </CardHeader>
           <CardContent className="pt-0">
             <FieldGroup className="gap-2">
-              <DanmakuFilterSettingsFields idPrefix="room" layout="panel" />
+              <DanmakuFilterSettingsFields
+                idPrefix="room"
+                layout="panel"
+                showSuperChat={siteSupportsSuperChat(siteId)}
+              />
             </FieldGroup>
           </CardContent>
         </Card>
