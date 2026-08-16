@@ -1,6 +1,6 @@
 {
   "name": "rlive",
-  "version": "0.45.1",
+  "version": "0.45.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "format": "oxfmt --write src package.json vite.config.ts tsconfig.json tsconfig.node.json",
     "format:check": "oxfmt --check src package.json vite.config.ts tsconfig.json tsconfig.node.json",
     "check": "bun run lint && bunx tsc --noEmit",
-    "test:danmaku": "bun test tests/danmakuEngine.test.ts tests/playback-failover.test.ts",
+    "test:danmaku": "bun test tests/danmu-js-adapter.test.ts tests/danmaku-actions.test.ts tests/playback-failover.test.ts",
     "test:unit": "bun test tests/",
     "preview": "vite preview",
     "tauri": "tauri"

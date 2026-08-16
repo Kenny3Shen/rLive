@@ -57,7 +57,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
 
         <Card size="sm">
           <CardHeader className="border-b">
-            <CardTitle>文字与节奏</CardTitle>
+            <CardTitle>文字外观</CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
             <FieldGroup className="gap-2">

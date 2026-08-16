@@ -8,9 +8,9 @@ import { useDanmakuActions } from "../danmaku/useDanmakuActions";
 import { cn } from "@/lib/utils";
 
 /**
- * Comment under the pointer on the video canvas. Canvas danmaku have no DOM
- * node, so the renderer hands over the box it actually drew (element-relative
- * CSS pixels, border padding included) and this menu anchors itself to it.
+ * Comment under the pointer on the live video stage. The renderer hands over
+ * the element-relative CSS box (including border padding) and this menu
+ * anchors itself to it.
  */
 export type DanmakuHoverTarget = {
   hoverKey: string;
@@ -38,9 +38,9 @@ const MENU_HALF_WIDTH_PX = 90;
 const MENU_HALF_WIDTH_TOUCH_PX = 78;
 const MENU_HALF_WIDTH_LARGE_PX = 96;
 /**
- * Marks the menu so the canvas can recognise it as a `pointerleave` destination.
- * Declared here, where the attribute is actually applied, so the canvas imports
- * it in the same direction as the component itself.
+ * Marks the menu so the stage renderer can recognise it as a `pointerleave`
+ * destination. Declared here, where the attribute is actually applied, so the
+ * pointer delegate imports it in the same direction as the component itself.
  */
 export const DANMAKU_MENU_ATTR = "data-danmaku-menu";
 /**
@@ -48,7 +48,7 @@ export const DANMAKU_MENU_ATTR = "data-danmaku-menu";
  *
  * This gap is bridged by transparent padding rather than left as empty space:
  * the pointer has to cross it to reach the buttons, and an unbridged gap fires
- * `pointerleave` on the canvas before `pointerenter` on the pill, which released
+ * `pointerleave` on the stage before `pointerenter` on the pill, which released
  * the freeze and took the menu away before it could be clicked.
  */
 const MENU_GAP_PX = 6;
@@ -115,7 +115,7 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
       // toggle playback or fullscreen. `pointermove` still bubbles, keeping the
       // controls awake while the pointer rests here.
       data-player-hud
-      // Lets the canvas recognise this element as the pointer's destination on
+      // Lets the stage recognise this element as the pointer's destination on
       // its own `pointerleave`, which fires before this element's `pointerenter`.
       {...{ [DANMAKU_MENU_ATTR]: "" }}
       role="group"

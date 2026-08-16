@@ -210,7 +210,7 @@ export function createDanmakuContentAggregator(
 }
 
 /**
- * Floating track text (Simple Live / canvas_danmaku style): content only.
+ * Floating track text (Simple Live style): content only.
  * Super chat keeps a short SC marker for emphasis.
  */
 export function floatingDanmakuText(event: DanmakuEvent): string {

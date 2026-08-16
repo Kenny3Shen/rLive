@@ -6,7 +6,7 @@ export const DANMAKU_IMAGE_SCALE = 1.35;
 export const DANMAKU_IMAGE_HORIZONTAL_GAP = 2;
 /**
  * Bilibili's CDN rejects the desktop webview's `tauri://…` Referer with 403.
- * Explicitly omitting it keeps both DOM and canvas image requests compatible
+ * Explicitly omitting it keeps DOM image requests compatible
  * with the same CDN URLs that normal Bilibili pages use.
  */
 export const BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY = "no-referrer" as const;
@@ -29,7 +29,7 @@ function isTrustedBilibiliImageHost(hostname: string): boolean {
 /**
  * Bilibili's danmaku payload may use a protocol-relative CDN URL. Convert it
  * to HTTPS and keep only the platform's image CDNs before it reaches an img
- * tag or canvas image loader.
+ * tag.
  */
 export function normalizeDanmakuImageUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;

@@ -17,6 +17,37 @@ export const DANMU_JS_PENDING_MAX_AGE_MS = 5_000;
 export const DANMU_JS_DEFAULT_DURATION_MS = 15_000;
 export const DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 
+export type DanmuJsPendingEvent = {
+  event: DanmakuEvent;
+  queuedAt: number;
+};
+
+/** Add a batch to the bounded zero-size queue, retaining the newest events. */
+export function enqueueDanmuJsPending(
+  queue: DanmuJsPendingEvent[],
+  events: readonly DanmakuEvent[],
+  queuedAt = Date.now(),
+  capacity = DANMU_JS_MAX_PENDING_COMMENTS,
+): void {
+  for (const event of events) queue.push({ event, queuedAt });
+  const safeCapacity = Math.max(0, Math.floor(capacity));
+  const overflow = queue.length - safeCapacity;
+  if (overflow > 0) queue.splice(0, overflow);
+}
+
+/** Remove and return only pending events that have not exceeded their age. */
+export function flushDanmuJsPending(
+  queue: DanmuJsPendingEvent[],
+  now = Date.now(),
+  maxAge = DANMU_JS_PENDING_MAX_AGE_MS,
+): DanmakuEvent[] {
+  const safeMaxAge = Math.max(0, Number.isFinite(maxAge) ? maxAge : DANMU_JS_PENDING_MAX_AGE_MS);
+  return queue
+    .splice(0)
+    .filter((pending) => now - pending.queuedAt <= safeMaxAge)
+    .map((pending) => pending.event);
+}
+
 export type DanmuJsBulletMeta = {
   id: string;
   event: DanmakuEvent;
@@ -111,7 +142,10 @@ function aggregateSuffix(count: number): string {
 function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentSpan[] | undefined {
   const spans = richDanmakuContent(event.spans);
   if (!spans) return undefined;
-  if (event.kind === "super_chat" && !event.content.trim().startsWith("【SC】")) {
+  const firstSpan = spans[0];
+  const hasSuperChatMarker =
+    firstSpan?.type === "text" && firstSpan.text.trimStart().startsWith("【SC】");
+  if (event.kind === "super_chat" && !hasSuperChatMarker) {
     return [{ type: "text", text: "【SC】" }, ...spans];
   }
   return spans;
@@ -149,6 +183,10 @@ export function danmuStyleForEvent(
     );
     style.border = "1px solid rgba(255,220,115,.72)";
     style.boxShadow = "0 2px 8px rgba(0,0,0,.35)";
+    if (event.is_self === true) {
+      style.boxShadow =
+        "0 0 0 1px rgba(255,255,255,.86) inset, 0 2px 8px rgba(0,0,0,.35)";
+    }
   }
   return style;
 }

@@ -4,7 +4,7 @@ import { type DanmakuBatch, validatedDanmakuBatch } from "./batch";
 
 type DanmakuBatchSubscriber = (events: readonly DanmakuEvent[], connectionEpoch: number) => void;
 
-// A room renders the same native batch in the Canvas, chat, and SC overlay.
+// A room renders the same native batch in the floating DOM layer, chat, and SC overlay.
 // Keep one Tauri listener and validate each event once before fanning out to
 // those bounded, sink-specific queues.
 const subscribers = new Set<DanmakuBatchSubscriber>();
