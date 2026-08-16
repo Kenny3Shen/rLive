@@ -194,6 +194,8 @@ export type AppSettings = {
   proxy: string | null;
   danmaku_opacity: number;
   danmaku_font_size: number;
+  /** Scrolling danmaku speed in CSS pixels per second, 50..=200. */
+  danmaku_speed: number;
   danmaku_area: number;
   danmaku_font_weight: number;
   danmaku_filter_gifts: boolean;

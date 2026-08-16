@@ -234,6 +234,7 @@ pub fn merge_into_db(
     settings.proxy = package.settings.proxy.clone();
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_size = package.settings.danmaku_font_size;
+    settings.danmaku_speed = package.settings.danmaku_speed;
     settings.danmaku_area = package.settings.danmaku_area;
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
@@ -343,17 +344,18 @@ mod tests {
     }
 
     #[test]
-    fn legacy_profile_ignores_removed_danmaku_fields_on_import_and_export() {
+    fn profile_keeps_speed_and_ignores_removed_danmaku_fields() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]["danmaku_speed"] = serde_json::json!(8);
+        value["settings"]["danmaku_speed"] = serde_json::json!(150);
         value["settings"]["super_chat_opacity"] = serde_json::json!(0.6);
         value["settings"]["danmaku_line_count"] = serde_json::json!(8);
-        let legacy = serde_json::to_string(&value).unwrap();
+        let text = serde_json::to_string(&value).unwrap();
 
-        let package = decode_package(&legacy).unwrap();
+        let package = decode_package(&text).unwrap();
         let encoded = encode_package(&package).unwrap();
+        let roundtrip: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
-        assert!(!encoded.contains("danmaku_speed"));
+        assert_eq!(roundtrip["settings"]["danmaku_speed"], 150);
         assert!(!encoded.contains("super_chat_opacity"));
         assert!(!encoded.contains("danmaku_line_count"));
     }
@@ -513,12 +515,14 @@ mod tests {
     fn merge_carries_room_display_preferences() {
         let mut conn = open_in_memory().unwrap();
         let mut package = ProfilePackage::sample();
+        package.settings.danmaku_speed = 150;
         package.settings.danmaku_filter_gifts = true;
         package.settings.super_chat_enabled = false;
 
         merge_into_db(&mut conn, &package).unwrap();
 
         let imported = settings::get(&conn).unwrap();
+        assert_eq!(imported.danmaku_speed, 150);
         assert!(imported.danmaku_filter_gifts);
         assert!(!imported.super_chat_enabled);
     }

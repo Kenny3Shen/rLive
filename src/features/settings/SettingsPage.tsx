@@ -192,7 +192,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
-    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 字重 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
+    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 字重 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   account:
@@ -1826,7 +1826,7 @@ export function SettingsPage() {
             <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
           </Section>
         )}
-        <Section title="弹幕设置" keywords="弹幕 轨道 区域 文字 透明度 字号 字重">
+        <Section title="弹幕设置" keywords="弹幕 轨道 区域 文字 透明度 字号 字重 速度">
           <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
