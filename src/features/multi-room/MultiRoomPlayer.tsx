@@ -1,10 +1,13 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
   type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
   type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -53,11 +56,13 @@ function OverlayIconButton({
   onClick,
   children,
   disabled,
+  portalContainer,
 }: {
   label: string;
   onClick: () => void;
   children: ReactNode;
   disabled?: boolean;
+  portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
 }) {
   return (
     <Tooltip>
@@ -80,14 +85,13 @@ function OverlayIconButton({
       >
         {children}
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent container={portalContainer}>{label}</TooltipContent>
     </Tooltip>
   );
 }
 
 type MainMultiRoomControlsProps = {
   room: MultiRoomEntry;
-  detail: LiveRoomDetail | undefined;
   playback: PlaybackController;
   player: WebPlayerApi;
   loading: boolean;
@@ -97,11 +101,37 @@ type MainMultiRoomControlsProps = {
   onRefresh: () => void;
   onVolume: (value: unknown) => void;
   onToggleMute: () => void;
+  osdOn: boolean;
+  onToggleOsd: () => void;
   onControlsOverlayInteractionChange: (open: boolean) => void;
   onComposerOverlayInteractionChange: (open: boolean) => void;
 };
 
-function MainMultiRoomControls({
+type MainMultiRoomAsrContextValue = {
+  asr: ReturnType<typeof useAsrCaptions>;
+  asrFontSize: number;
+  asrPending: boolean;
+  asrSpeakerDiarizationEnabled: boolean;
+  asrTranslationEnabled: boolean;
+  asrTranslationFrom: Parameters<typeof useAsrCaptions>[0]["translationFrom"];
+  asrTranslationTo: Parameters<typeof useAsrCaptions>[0]["translationTo"];
+  setAsrSpeakerDiarizationEnabled: (enabled: boolean) => void | Promise<void>;
+  setAsrTranslationEnabled: (enabled: boolean) => void;
+  setAsrTranslationFrom: (
+    from: Parameters<typeof useAsrCaptions>[0]["translationFrom"],
+  ) => void;
+  setAsrTranslationTo: (to: Parameters<typeof useAsrCaptions>[0]["translationTo"]) => void;
+};
+
+const MainMultiRoomAsrContext = createContext<MainMultiRoomAsrContextValue | null>(null);
+
+function useMainMultiRoomAsr(): MainMultiRoomAsrContextValue {
+  const value = useContext(MainMultiRoomAsrContext);
+  if (!value) throw new Error("MainMultiRoomAsrContext is unavailable");
+  return value;
+}
+
+function MainMultiRoomDanmaku({
   room,
   detail,
   playback,
@@ -109,14 +139,54 @@ function MainMultiRoomControls({
   loading,
   error,
   audioOnly,
-  onToggleAudioOnly,
-  onRefresh,
-  onVolume,
-  onToggleMute,
-  onControlsOverlayInteractionChange,
-  onComposerOverlayInteractionChange,
-}: MainMultiRoomControlsProps) {
-  const [osdOn, setOsdOn] = useState(false);
+  osdOn,
+}: {
+  room: MultiRoomEntry;
+  detail: LiveRoomDetail | undefined;
+  playback: PlaybackController;
+  player: WebPlayerApi;
+  loading: boolean;
+  error: unknown;
+  audioOnly: boolean;
+  osdOn: boolean;
+}) {
+  const danmaku = useDanmakuConnection({
+    siteId: room.siteId,
+    roomId: room.roomId,
+    detailRoomId: detail?.room_id,
+    enabled: true,
+  });
+  const showHost = !loading && error == null && !!playback.playUrl;
+  if (!showHost || audioOnly) return null;
+
+  const sessionKey = `multi-room:${room.key}`;
+  return (
+    <DanmuJsDanmaku
+      active={danmaku.active && osdOn}
+      sessionKey={sessionKey}
+      siteId={room.siteId}
+      roomId={detail?.room_id || room.roomId}
+      roomTitle={detail?.title || room.title}
+      roomUserName={detail?.user_name || room.userName}
+      // Fullscreen puts the picture a whole display away, where the compact
+      // pill is hard to aim at. Grid cells are small enough already.
+      large={player.mode === "fullscreen"}
+      className="absolute inset-0 z-10"
+    />
+  );
+}
+
+function MainMultiRoomAsrProvider({
+  children,
+  player,
+  sessionKey,
+  mediaAvailable,
+}: {
+  children: ReactNode;
+  player: WebPlayerApi;
+  sessionKey: string;
+  mediaAvailable: boolean;
+}) {
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
@@ -133,52 +203,54 @@ function MainMultiRoomControls({
   const setAsrSpeakerDiarizationEnabled = useSettingsStore(
     (state) => state.setAsrSpeakerDiarizationEnabled,
   );
-  const danmaku = useDanmakuConnection({
-    siteId: room.siteId,
-    roomId: room.roomId,
-    detailRoomId: detail?.room_id,
-    enabled: true,
-  });
-  const showHost = !loading && error == null && !!playback.playUrl;
-  const sessionKey = `multi-room:${room.key}`;
   const asr = useAsrCaptions({
     videoRef: player.videoRef,
     mediaKey: player.mediaKey,
     sessionKey,
     featureEnabled: asrEnabled,
     settingPending: asrPending,
-    mediaAvailable: showHost,
+    mediaAvailable,
     chunkSeconds: asrWindowSeconds,
     translationEnabled: asrTranslationEnabled,
     translationFrom: asrTranslationFrom,
     translationTo: asrTranslationTo,
   });
-  const loadError = playback.loadError ?? player.loadError ?? player.fullscreenError;
-  const toggleAudioOnly = useCallback(() => {
-    if (!audioOnly && player.pictureInPictureActive) {
-      void player.togglePictureInPicture();
-    }
-    onToggleAudioOnly();
-  }, [audioOnly, onToggleAudioOnly, player]);
-  const floatingDanmakuActive = danmaku.active && osdOn && !audioOnly;
+
+  return (
+    <MainMultiRoomAsrContext.Provider
+      value={{
+        asr,
+        asrFontSize,
+        asrPending,
+        asrSpeakerDiarizationEnabled,
+        asrTranslationEnabled,
+        asrTranslationFrom,
+        asrTranslationTo,
+        setAsrSpeakerDiarizationEnabled,
+        setAsrTranslationEnabled,
+        setAsrTranslationFrom,
+        setAsrTranslationTo,
+      }}
+    >
+      {children}
+    </MainMultiRoomAsrContext.Provider>
+  );
+}
+
+function MainMultiRoomStageOverlays({
+  showHost,
+  audioOnly,
+  playerRunning,
+}: {
+  showHost: boolean;
+  audioOnly: boolean;
+  playerRunning: boolean;
+}) {
+  const { asr, asrFontSize, asrTranslationTo } = useMainMultiRoomAsr();
 
   return (
     <>
-      {showHost && !audioOnly && (
-        <DanmuJsDanmaku
-          active={floatingDanmakuActive}
-          sessionKey={sessionKey}
-          siteId={room.siteId}
-          roomId={detail?.room_id || room.roomId}
-          roomTitle={detail?.title || room.title}
-          roomUserName={detail?.user_name || room.userName}
-          // Fullscreen puts the picture a whole display away, where the compact
-          // pill is hard to aim at. Grid cells are small enough already.
-          large={player.mode === "fullscreen"}
-          className="absolute inset-0 z-10"
-        />
-      )}
-      {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
+      {showHost && audioOnly && playerRunning && <AudioOnlyIndicator />}
       {showHost &&
         !audioOnly &&
         (asr.captionsOn || asr.notice) &&
@@ -219,6 +291,48 @@ function MainMultiRoomControls({
             </p>
           </div>
         )}
+    </>
+  );
+}
+
+function MainMultiRoomControls({
+  room,
+  playback,
+  player,
+  loading,
+  error,
+  audioOnly,
+  onToggleAudioOnly,
+  onRefresh,
+  onVolume,
+  onToggleMute,
+  osdOn,
+  onToggleOsd,
+  onControlsOverlayInteractionChange,
+  onComposerOverlayInteractionChange,
+}: MainMultiRoomControlsProps) {
+  const {
+    asr,
+    asrPending,
+    asrSpeakerDiarizationEnabled,
+    asrTranslationEnabled,
+    asrTranslationFrom,
+    asrTranslationTo,
+    setAsrSpeakerDiarizationEnabled,
+    setAsrTranslationEnabled,
+    setAsrTranslationFrom,
+    setAsrTranslationTo,
+  } = useMainMultiRoomAsr();
+  const showHost = !loading && error == null && !!playback.playUrl;
+  const loadError = playback.loadError ?? player.loadError ?? player.fullscreenError;
+  const toggleAudioOnly = useCallback(() => {
+    if (!audioOnly && player.pictureInPictureActive) {
+      void player.togglePictureInPicture();
+    }
+    onToggleAudioOnly();
+  }, [audioOnly, onToggleAudioOnly, player]);
+  return (
+    <>
       <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-30">
         <PlayerControls
           paused={player.paused}
@@ -258,6 +372,7 @@ function MainMultiRoomControls({
               siteId={room.siteId}
               roomId={room.roomId}
               overlay
+              portalContainer={player.stageRef}
               onOverlayInteractionChange={onComposerOverlayInteractionChange}
             />
           }
@@ -267,7 +382,7 @@ function MainMultiRoomControls({
           onVolume={(value) => onVolume(value)}
           onToggleMute={onToggleMute}
           onToggleAudioOnly={toggleAudioOnly}
-          onToggleOsd={() => setOsdOn((visible) => !visible)}
+          onToggleOsd={onToggleOsd}
           onToggleAsr={asr.toggle}
           onAsrTranslationEnabledChange={setAsrTranslationEnabled}
           onAsrTranslationFromChange={setAsrTranslationFrom}
@@ -297,6 +412,7 @@ export function MultiRoomPlayer({
   const updateAudio = useMultiRoomStore((state) => state.updateAudio);
   const updateMetadata = useMultiRoomStore((state) => state.updateMetadata);
   const [audioOnly, setAudioOnly] = useState(false);
+  const [osdOn, setOsdOn] = useState(false);
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
@@ -352,6 +468,10 @@ export function MultiRoomPlayer({
     if (!main) setAudioOnly(false);
   }, [main]);
 
+  useEffect(() => {
+    if (!main) setOsdOn(false);
+  }, [main]);
+
   // A feed can be demoted, dragged away or removed while it is the fullscreen
   // stage. Fullscreen belongs to whichever feed is main, so give it up as soon
   // as this one stops being main — including on unmount — instead of leaving
@@ -380,6 +500,7 @@ export function MultiRoomPlayer({
   const cover = normalizeImageUrl(detail?.cover || room.cover);
   const loading = detailQuery.isLoading || playback.loading;
   const error = detailQuery.error ?? playback.error ?? playback.loadError ?? player.loadError;
+  const showHost = !loading && error == null && !!playback.playUrl;
   const audibleVolume = player.muted ? 0 : player.volume;
 
   function changeVolume(value: unknown) {
@@ -625,6 +746,19 @@ export function MultiRoomPlayer({
         />
       </div>
 
+      {main && (
+        <MainMultiRoomDanmaku
+          room={room}
+          detail={detail}
+          playback={playback}
+          player={player}
+          loading={loading}
+          error={error}
+          audioOnly={audioOnly}
+          osdOn={osdOn}
+        />
+      )}
+
       {loading && !player.running && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Spinner className="size-7 text-white/80" aria-label="正在加载直播流" />
@@ -683,56 +817,77 @@ export function MultiRoomPlayer({
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-1">
           {!main && (
-            <OverlayIconButton label="设为主画面" onClick={() => setMainRoom(room.key)}>
+            <OverlayIconButton
+              label="设为主画面"
+              portalContainer={player.stageRef}
+              onClick={() => setMainRoom(room.key)}
+            >
               <Maximize2 aria-hidden />
             </OverlayIconButton>
           )}
-          <OverlayIconButton label="刷新此路" onClick={retry}>
+          <OverlayIconButton label="刷新此路" portalContainer={player.stageRef} onClick={retry}>
             <RefreshCw aria-hidden />
           </OverlayIconButton>
-          <OverlayIconButton label="移除此路" onClick={() => removeRoom(room.key)}>
+          <OverlayIconButton
+            label="移除此路"
+            portalContainer={player.stageRef}
+            onClick={() => removeRoom(room.key)}
+          >
             <X aria-hidden />
           </OverlayIconButton>
         </div>
       </div>
 
       {main ? (
-        <div
-          ref={controlsRef}
-          data-player-controls
-          data-visible={controlsVisibleRef.current ? "true" : "false"}
-          aria-hidden={!controlsVisibleRef.current}
-          className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
-          onPointerEnter={holdControlsVisible}
-          onPointerMove={(event) => {
-            event.stopPropagation();
-            holdControlsVisible();
-          }}
-          onPointerDown={handleChromePointerDown}
-          onPointerLeave={resumeControlsAutoHide}
-          onFocusCapture={handleChromeFocusCapture}
-          onBlurCapture={handleChromeBlurCapture}
+        <MainMultiRoomAsrProvider
+          player={player}
+          sessionKey={`multi-room:${room.key}`}
+          mediaAvailable={showHost}
         >
-          <MainMultiRoomControls
-            room={room}
-            detail={detail}
-            playback={playback}
-            player={player}
-            loading={loading}
-            error={error}
+          <MainMultiRoomStageOverlays
+            showHost={showHost}
             audioOnly={audioOnly}
-            onToggleAudioOnly={() => setAudioOnly((enabled) => !enabled)}
-            onRefresh={retry}
-            onVolume={changeVolume}
-            onToggleMute={toggleMute}
-            onControlsOverlayInteractionChange={handleControlsOverlayInteractionChange}
-            onComposerOverlayInteractionChange={handleComposerOverlayInteractionChange}
+            playerRunning={player.running}
           />
-        </div>
+          <div
+            ref={controlsRef}
+            data-player-controls
+            data-visible={controlsVisibleRef.current ? "true" : "false"}
+            aria-hidden={!controlsVisibleRef.current}
+            className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+            onPointerEnter={holdControlsVisible}
+            onPointerMove={(event) => {
+              event.stopPropagation();
+              holdControlsVisible();
+            }}
+            onPointerDown={handleChromePointerDown}
+            onPointerLeave={resumeControlsAutoHide}
+            onFocusCapture={handleChromeFocusCapture}
+            onBlurCapture={handleChromeBlurCapture}
+          >
+            <MainMultiRoomControls
+              room={room}
+              playback={playback}
+              player={player}
+              loading={loading}
+              error={error}
+              audioOnly={audioOnly}
+              osdOn={osdOn}
+              onToggleAudioOnly={() => setAudioOnly((enabled) => !enabled)}
+              onRefresh={retry}
+              onVolume={changeVolume}
+              onToggleMute={toggleMute}
+              onToggleOsd={() => setOsdOn((visible) => !visible)}
+              onControlsOverlayInteractionChange={handleControlsOverlayInteractionChange}
+              onComposerOverlayInteractionChange={handleComposerOverlayInteractionChange}
+            />
+          </div>
+        </MainMultiRoomAsrProvider>
       ) : (
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/85 to-transparent p-2 pt-7 text-white opacity-0 transition-opacity group-focus-within/player:opacity-100 group-hover/player:opacity-100">
           <OverlayIconButton
             label={player.paused ? "继续播放" : "暂停播放"}
+            portalContainer={player.stageRef}
             onClick={player.togglePause}
             disabled={!playback.playUrl}
           >
@@ -740,6 +895,7 @@ export function MultiRoomPlayer({
           </OverlayIconButton>
           <OverlayIconButton
             label={player.muted || player.volume === 0 ? "取消静音" : "静音"}
+            portalContainer={player.stageRef}
             onClick={toggleMute}
             disabled={!playback.playUrl}
           >

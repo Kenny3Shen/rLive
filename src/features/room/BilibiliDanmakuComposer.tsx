@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SendHorizontal, SmilePlus, Star, Trash2 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -60,6 +60,8 @@ type DanmakuComposerProps = {
   roomUserName?: string;
   /** Compact transparent variant for the player-overlay control bar. */
   overlay?: boolean;
+  /** Portal target for fullscreen player overlays. */
+  portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
   /** Keeps the player chrome visible while the emoji picker is open. */
   onOverlayInteractionChange?: (open: boolean) => void;
 };
@@ -82,6 +84,7 @@ type DanmakuQuickPickerProps = {
   supportsNativeBilibiliEmoji: boolean;
   disabled: boolean;
   overlay: boolean;
+  portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   draft: string;
@@ -99,6 +102,7 @@ function DanmakuQuickPicker({
   supportsNativeBilibiliEmoji,
   disabled,
   overlay,
+  portalContainer,
   open,
   onOpenChange,
   draft,
@@ -225,6 +229,7 @@ function DanmakuQuickPicker({
         <SmilePlus aria-hidden />
       </PopoverTrigger>
       <PopoverContent
+        container={portalContainer}
         data-mobile-static-backdrop
         side="top"
         align="start"
@@ -588,6 +593,7 @@ export function DanmakuComposer({
   roomTitle,
   roomUserName,
   overlay = false,
+  portalContainer,
   onOverlayInteractionChange,
 }: DanmakuComposerProps) {
   const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
@@ -747,6 +753,7 @@ export function DanmakuComposer({
             supportsNativeBilibiliEmoji={config.supportsNativeBilibiliEmoji === true}
             disabled={!ready || sending}
             overlay={overlay}
+            portalContainer={portalContainer}
             open={quickPickerOpen}
             onOpenChange={setQuickPickerOpen}
             draft={draft}
