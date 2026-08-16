@@ -912,6 +912,16 @@ mod tests {
             "X-TV-TWITCH-STREAM-SOURCE=\"midroll\"\n",
             "#EXTINF:2.000,\nad.ts\n"
         )));
+        // END-ON-NEXT closes the older source range. A rolling window can
+        // retain the ad row briefly after a newer live row has resumed.
+        assert!(!is_twitch_ad_manifest(concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"source-ad\",CLASS=\"twitch-stream-source\",",
+            "END-ON-NEXT=YES,X-TV-TWITCH-STREAM-SOURCE=\"Amazon|old-ad\"\n",
+            "#EXT-X-DATERANGE:ID=\"source-live\",CLASS=\"twitch-stream-source\",",
+            "END-ON-NEXT=YES,X-TV-TWITCH-STREAM-SOURCE=\"live\"\n",
+            "#EXTINF:2.000,live\nlive.ts\n"
+        )));
     }
 
     #[test]
@@ -1542,21 +1552,28 @@ async fn fetch_twitch_playlist(
 /// textless breaks this function exists to catch.
 pub(crate) fn is_twitch_ad_manifest(manifest: &str) -> bool {
     let lower = manifest.to_ascii_lowercase();
-    if lower.contains("stitched") || lower.contains("commercial break in progress") {
+    if lower.contains("commercial break in progress") {
         return true;
     }
     // Twitch labels the current rendition through a `twitch-stream-source`
     // DATERANGE. A clean live playlist reports `live`; during a server-side
     // commercial it names the ad source instead. This catches an ad break that
     // carries neither of the textual markers above.
-    manifest
+    let current_source = manifest
         .lines()
         .filter(|line| line.trim_start().starts_with("#EXT-X-DATERANGE:"))
         .filter_map(|line| {
             let value = line.split("X-TV-TWITCH-STREAM-SOURCE=").nth(1)?;
             Some(value.trim_start_matches('"').split('"').next()?.to_string())
         })
-        .any(|source| !source.eq_ignore_ascii_case("live"))
+        .next_back();
+    if let Some(source) = current_source {
+        return !source.eq_ignore_ascii_case("live");
+    }
+    manifest.lines().any(|line| {
+        line.trim_start().starts_with("#EXT-X-DATERANGE:")
+            && line.to_ascii_lowercase().contains("stitched")
+    })
 }
 
 fn mark_twitch_ad_segments_as_gaps(manifest: &str) -> String {

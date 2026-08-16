@@ -16,6 +16,8 @@ import {
 import {
   clampRecordingPlaybackTime,
   formatRecordingDuration,
+  recordingEndedPlaybackTime,
+  recordingSeekReached,
   recordingDanmakuUrl,
   type RecordingItem,
 } from "./recording";
@@ -201,14 +203,15 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
         endedRef.current && nextDuration <= 0 ? previousDuration : nextDuration,
       );
       const target = seekTargetRef.current;
-      const targetIsEnd =
-        target !== null &&
-        nextDuration > 0 &&
-        Math.abs(target - nextDuration) <= RECORDING_SEEK_TOLERANCE_SECONDS;
       if (
         target !== null &&
-        (Math.abs(actualTime - target) <= RECORDING_SEEK_TOLERANCE_SECONDS ||
-          (media.ended && targetIsEnd))
+        recordingSeekReached(
+          actualTime,
+          target,
+          nextDuration,
+          media.ended,
+          RECORDING_SEEK_TOLERANCE_SECONDS,
+        )
       ) {
         completeSeek();
       }
@@ -249,16 +252,29 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
         recordedDuration > 0
           ? recordedDuration
           : finiteDuration(media) || clampRecordingPlaybackTime(media.currentTime, 0);
+      const endedTime = recordingEndedPlaybackTime(
+        media.currentTime,
+        endDuration,
+        RECORDING_SEEK_TOLERANCE_SECONDS,
+      );
       const target = seekTargetRef.current;
+      // Keep the existing seek timeout/rebuild path for a media gap reported
+      // before a non-terminal seek has reached its target.
       if (
         target !== null &&
-        (endDuration <= 0 || Math.abs(target - endDuration) > RECORDING_SEEK_TOLERANCE_SECONDS)
+        !recordingSeekReached(
+          media.currentTime,
+          target,
+          endDuration,
+          true,
+          RECORDING_SEEK_TOLERANCE_SECONDS,
+        )
       ) {
         return;
       }
       endedRef.current = true;
       setDuration(endDuration);
-      setCurrentTime(endDuration);
+      setCurrentTime(endedTime);
       setPaused(true);
       if (seekTargetRef.current === null) setWaiting(false);
       else completeSeek();

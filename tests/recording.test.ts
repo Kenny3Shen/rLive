@@ -4,6 +4,8 @@ import {
   clampRecordingPlaybackTime,
   formatRecordingDuration,
   formatRecordingSize,
+  recordingEndedPlaybackTime,
+  recordingSeekReached,
   recordingProtocolLabel,
   type RecordingContext,
   type RecordingItem,
@@ -64,6 +66,18 @@ describe("recording presentation helpers", () => {
     expect(clampRecordingPlaybackTime(-1, 32)).toBe(0);
     expect(clampRecordingPlaybackTime(Number.NaN, 32)).toBe(0);
     expect(clampRecordingPlaybackTime(37, 0)).toBe(37);
+  });
+
+  test("does not disguise an early media EOF as the recording end", () => {
+    expect(recordingEndedPlaybackTime(20, 60, 1.5)).toBe(20);
+    expect(recordingEndedPlaybackTime(59, 60, 1.5)).toBe(60);
+    expect(recordingEndedPlaybackTime(61, 60, 1.5)).toBe(60);
+  });
+
+  test("does not complete a non-terminal seek when media ends at its target", () => {
+    expect(recordingSeekReached(20, 20, 60, true, 1.5)).toBe(false);
+    expect(recordingSeekReached(59, 60, 60, true, 1.5)).toBe(true);
+    expect(recordingSeekReached(20, 20, 60, false, 1.5)).toBe(true);
   });
 
   test("formats local storage sizes with stable units", () => {

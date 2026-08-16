@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::http_client;
-use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol};
+use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol, TwitchAdRecovery};
 
 const RECORDINGS_DIRECTORY: &str = "recordings";
 const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage.json";
@@ -38,6 +38,8 @@ const MAX_SEGMENT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_KEY_BYTES: usize = 64 * 1024;
 const HLS_ERROR_LIMIT: u32 = 10;
 const HLS_RETRY_DELAY: Duration = Duration::from_secs(2);
+const TWITCH_HLS_REFRESH_RETRY_DELAY: Duration = Duration::from_secs(8);
+const TWITCH_EMPTY_PLAYLIST_REFRESH_LIMIT: u32 = 3;
 const DIRECT_ERROR_LIMIT: u32 = 10;
 const DIRECT_RETRY_DELAY: Duration = Duration::from_secs(1);
 const DIRECT_MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
@@ -2108,6 +2110,10 @@ struct HlsSegment {
     key: Option<HlsKey>,
     map: Option<HlsMap>,
     range: Option<String>,
+    /// Absolute epoch when the playlist declares DISCONTINUITY-SEQUENCE.
+    /// Without that tag this stays None; the explicit marker below is the
+    /// only boundary that can be carried safely across rolling windows.
+    discontinuity_sequence: Option<u64>,
     discontinuity: bool,
     gap: bool,
 }
@@ -2115,6 +2121,7 @@ struct HlsSegment {
 #[derive(Debug, Default)]
 struct ParsedPlaylist {
     media_sequence: u64,
+    discontinuity_sequence: Option<u64>,
     target_duration: f64,
     end_list: bool,
     segments: Vec<HlsSegment>,
@@ -2139,6 +2146,29 @@ struct HlsArchive {
     maps: HashMap<String, String>,
     target_duration: f64,
     next_segment: u64,
+    last_discontinuity_sequence: Option<u64>,
+    pending_discontinuity: bool,
+}
+
+#[derive(Debug, Default)]
+struct TwitchHlsRefreshState {
+    last_attempt: Option<Instant>,
+    /// Profile zero is the normal `site/web` token; subsequent attempts walk
+    /// the same fallback profiles used by the playback proxy so an ad-bound
+    /// token does not get renewed forever with the same player type.
+    next_profile: usize,
+}
+
+#[derive(Debug)]
+enum TwitchHlsRefreshResult {
+    /// A newly signed child playlist URL is ready to probe.
+    Refreshed(Url),
+    /// Twitch explicitly says the channel is no longer live.
+    NotLive,
+    /// No Twitch recovery context exists (ordinary HLS recording).
+    Unavailable,
+    /// The refresh request is still inside its backoff window.
+    Throttled,
 }
 
 impl HlsArchive {
@@ -2152,7 +2182,50 @@ impl HlsArchive {
             maps: HashMap::new(),
             target_duration: 6.0,
             next_segment: 0,
+            last_discontinuity_sequence: None,
+            pending_discontinuity: false,
         }
+    }
+
+    /// The first playlist is a rolling live window. Recording starts at its
+    /// newest segment, so older entries in that same window must be treated as
+    /// consumed or the next poll would append them behind the live edge.
+    fn skip_before_live_edge(&mut self, segments: &[HlsSegment]) {
+        // Keep the previous source epoch as the archive cursor. If the live
+        // edge follows a discontinuity (including a GAP segment), the first
+        // segment we actually save must carry that boundary into the local
+        // playlist even though the earlier segment is intentionally skipped.
+        if let Some(previous) = segments.get(segments.len().saturating_sub(2))
+            && let Some(sequence) = previous.discontinuity_sequence
+        {
+            self.last_discontinuity_sequence = Some(sequence);
+        }
+        for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+            self.skip_segment(segment);
+        }
+    }
+
+    fn skip_segment(&mut self, segment: &HlsSegment) {
+        // A boundary attached to a GAP has no bytes to archive, but it still
+        // applies to the next real segment in the source timeline.
+        self.pending_discontinuity |= segment.discontinuity;
+        self.seen.insert(segment.identity.clone());
+    }
+
+    fn advance_discontinuity_sequence(&mut self, sequence: Option<u64>) -> bool {
+        let Some(sequence) = sequence else {
+            return false;
+        };
+        let discontinuity = self
+            .last_discontinuity_sequence
+            .is_some_and(|previous| previous != sequence);
+        self.last_discontinuity_sequence = Some(sequence);
+        discontinuity
+    }
+
+    fn take_segment_discontinuity(&mut self, segment: &HlsSegment) -> bool {
+        let epoch_changed = self.advance_discontinuity_sequence(segment.discontinuity_sequence);
+        std::mem::take(&mut self.pending_discontinuity) || segment.discontinuity || epoch_changed
     }
 
     async fn append_segments(
@@ -2165,7 +2238,11 @@ impl HlsArchive {
         self.target_duration = self.target_duration.max(playlist.target_duration);
         let mut appended = 0;
         for segment in &playlist.segments {
-            if segment.gap || self.seen.contains(&segment.identity) {
+            if self.seen.contains(&segment.identity) {
+                continue;
+            }
+            if segment.gap {
+                self.skip_segment(segment);
                 continue;
             }
             let key_file = if let Some(key) = &segment.key {
@@ -2205,6 +2282,7 @@ impl HlsArchive {
             state
                 .duration_ms
                 .fetch_add((duration * 1000.0).round() as u64, Ordering::Relaxed);
+            let discontinuity = self.take_segment_discontinuity(segment);
             self.entries.push(ArchiveEntry {
                 file,
                 duration,
@@ -2215,7 +2293,7 @@ impl HlsArchive {
                         .unwrap_or_else(|| hls_media_sequence_iv(segment.sequence))
                 }),
                 map: map_file,
-                discontinuity: segment.discontinuity,
+                discontinuity,
             });
             self.seen.insert(segment.identity.clone());
             appended += 1;
@@ -2333,6 +2411,116 @@ impl HlsArchive {
     }
 }
 
+async fn refresh_twitch_hls_url(
+    client: &Client,
+    recovery: Option<&TwitchAdRecovery>,
+    refresh_state: &mut TwitchHlsRefreshState,
+) -> Result<TwitchHlsRefreshResult, String> {
+    let Some(recovery) = recovery else {
+        return Ok(TwitchHlsRefreshResult::Unavailable);
+    };
+    if refresh_state
+        .last_attempt
+        .is_some_and(|attempt| attempt.elapsed() < TWITCH_HLS_REFRESH_RETRY_DELAY)
+    {
+        return Ok(TwitchHlsRefreshResult::Throttled);
+    }
+    refresh_state.last_attempt = Some(Instant::now());
+    let fallback_profiles = crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES;
+    let profile_count = fallback_profiles.len() + 1;
+    let profile_index = refresh_state.next_profile % profile_count;
+    refresh_state.next_profile = (profile_index + 1) % profile_count;
+    let (player_type, platform) = if profile_index == 0 {
+        crate::sites::twitch::TWITCH_PRIMARY_PLAYER_TYPE
+    } else {
+        fallback_profiles[profile_index - 1]
+    };
+    let url = match crate::sites::twitch::twitch_ad_fallback_url(
+        client.clone(),
+        recovery,
+        player_type,
+        platform,
+    )
+    .await
+    {
+        Ok(url) => url,
+        Err(error) if error.code == "twitch_not_live" && profile_index == 0 => {
+            return Ok(TwitchHlsRefreshResult::NotLive);
+        }
+        Err(error) => {
+            return Err(format!(
+                "刷新 Twitch 录制地址失败 [{}]: {}",
+                error.code, error.message
+            ));
+        }
+    };
+    Url::parse(&url)
+        .map(TwitchHlsRefreshResult::Refreshed)
+        .map_err(|error| format!("刷新后的 Twitch 录制地址无效: {error}"))
+}
+
+enum TwitchEndlistDecision {
+    Continue,
+    Complete,
+    Interrupted(String),
+}
+
+/// A live Twitch child playlist should not be trusted just because one poll
+/// contains `#EXT-X-ENDLIST`: an expired token and a stitched ad response can
+/// briefly look like a finished VOD. Probe a freshly signed URL first and only
+/// accept the terminal state when Twitch explicitly reports the channel offline.
+async fn handle_twitch_endlist(
+    client: &Client,
+    recovery: Option<&TwitchAdRecovery>,
+    refresh_state: &mut TwitchHlsRefreshState,
+    archive: &mut HlsArchive,
+    manifest_url: &mut Url,
+    cancel: &mut watch::Receiver<bool>,
+    refreshes: &mut u32,
+    refresh_errors: &mut u32,
+) -> TwitchEndlistDecision {
+    let Some(recovery) = recovery else {
+        return TwitchEndlistDecision::Complete;
+    };
+    match refresh_twitch_hls_url(client, Some(recovery), refresh_state).await {
+        Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
+            *refreshes = (*refreshes).saturating_add(1);
+            *refresh_errors = 0;
+            *manifest_url = refreshed_url;
+            archive.pending_discontinuity = true;
+            tracing::info!(
+                attempt = *refreshes,
+                "Twitch 清单意外包含 ENDLIST，已刷新地址确认直播状态"
+            );
+            TwitchEndlistDecision::Continue
+        }
+        Ok(TwitchHlsRefreshResult::NotLive) => TwitchEndlistDecision::Complete,
+        Ok(TwitchHlsRefreshResult::Throttled) => {
+            if wait_or_cancel(cancel, HLS_RETRY_DELAY).await {
+                TwitchEndlistDecision::Complete
+            } else {
+                TwitchEndlistDecision::Continue
+            }
+        }
+        Ok(TwitchHlsRefreshResult::Unavailable) => TwitchEndlistDecision::Complete,
+        Err(error) => {
+            *refresh_errors = (*refresh_errors).saturating_add(1);
+            tracing::warn!(
+                attempt = *refresh_errors,
+                error = %error,
+                "Twitch ENDLIST 状态确认失败，准备重试"
+            );
+            if *refresh_errors >= HLS_ERROR_LIMIT {
+                TwitchEndlistDecision::Interrupted(error)
+            } else if wait_or_cancel(cancel, HLS_RETRY_DELAY).await {
+                TwitchEndlistDecision::Complete
+            } else {
+                TwitchEndlistDecision::Continue
+            }
+        }
+    }
+}
+
 async fn run_hls_recording(
     client: Client,
     source: PlayUrl,
@@ -2348,6 +2536,7 @@ async fn run_hls_recording(
             };
         }
     };
+    let twitch_recovery = source.twitch_ad_recovery.clone();
     let playlist_file = state
         .stored
         .lock()
@@ -2357,6 +2546,10 @@ async fn run_hls_recording(
     let mut archive = HlsArchive::new(state.bundle.clone(), playlist_file);
     let mut initialized = false;
     let mut errors = 0;
+    let mut twitch_refresh = TwitchHlsRefreshState::default();
+    let mut empty_playlists = 0_u32;
+    let mut twitch_endlist_refreshes = 0_u32;
+    let mut twitch_endlist_errors = 0_u32;
     loop {
         if *cancel.borrow() {
             let _ = archive.write_manifest(true).await;
@@ -2377,6 +2570,29 @@ async fn run_hls_recording(
                         error: Some(error),
                     };
                 }
+                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
+                    .await
+                {
+                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
+                        manifest_url = refreshed_url;
+                        archive.pending_discontinuity = true;
+                        tracing::info!("Twitch 录制地址已刷新");
+                        continue;
+                    }
+                    Ok(TwitchHlsRefreshResult::NotLive) => {
+                        let _ = archive.write_manifest(true).await;
+                        return TaskOutcome {
+                            status: RecordingStatus::Completed,
+                            error: None,
+                        };
+                    }
+                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
+                    }
+                    Err(refresh_error) => {
+                        tracing::warn!(error = %refresh_error, "无法刷新 Twitch 录制地址");
+                    }
+                }
+                tracing::warn!(attempt = errors, error = %error, "HLS 录制清单读取失败，准备重试");
                 if wait_or_cancel(&mut cancel, HLS_RETRY_DELAY).await {
                     let _ = archive.write_manifest(true).await;
                     return TaskOutcome {
@@ -2387,32 +2603,171 @@ async fn run_hls_recording(
                 continue;
             }
         };
-        if let Some(master) = select_master_variant(&body, &effective_url) {
-            manifest_url = master;
-            continue;
-        }
-        let parsed = match parse_media_playlist(&body, &effective_url) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                let _ = archive.write_manifest(true).await;
-                return TaskOutcome {
-                    status: if archive.entries.is_empty() {
-                        RecordingStatus::Failed
-                    } else {
-                        RecordingStatus::Interrupted
-                    },
-                    error: Some(error),
-                };
+        manifest_url = effective_url.clone();
+        let twitch_ad_manifest =
+            twitch_recovery.is_some() && crate::stream_proxy::is_twitch_ad_manifest(&body);
+        if twitch_ad_manifest {
+            match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
+                .await
+            {
+                Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
+                    manifest_url = refreshed_url;
+                    archive.pending_discontinuity = true;
+                    tracing::info!("Twitch 广告时段已切换到新的录制地址");
+                    continue;
+                }
+                Ok(TwitchHlsRefreshResult::NotLive) => {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: RecordingStatus::Completed,
+                        error: None,
+                    };
+                }
+                Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {}
+                Err(refresh_error) => {
+                    tracing::warn!(error = %refresh_error, "Twitch 广告时段刷新录制地址失败");
+                }
             }
-        };
-        if parsed.segments.is_empty() {
-            errors = 0;
-            if parsed.end_list {
+            // Twitch can return a 200 text response or a stitched ad playlist
+            // for longer than the ordinary retry budget. This is temporary
+            // platform content, not an ended live stream; keep the EVENT open
+            // and resume from the next clean child playlist.
+            if wait_or_cancel(&mut cancel, HLS_RETRY_DELAY).await {
                 let _ = archive.write_manifest(true).await;
                 return TaskOutcome {
                     status: RecordingStatus::Completed,
                     error: None,
                 };
+            }
+            continue;
+        }
+        if let Some(master) = select_master_variant(&body, &effective_url) {
+            manifest_url = master;
+            continue;
+        }
+        let parsed = match parse_media_playlist_with_identity(
+            &body,
+            &effective_url,
+            twitch_recovery.is_some(),
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                if !retryable_hls_playlist_error(&error) {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: if archive.entries.is_empty() {
+                            RecordingStatus::Failed
+                        } else {
+                            RecordingStatus::Interrupted
+                        },
+                        error: Some(error),
+                    };
+                }
+                errors += 1;
+                if errors >= HLS_ERROR_LIMIT {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: if archive.entries.is_empty() {
+                            RecordingStatus::Failed
+                        } else {
+                            RecordingStatus::Interrupted
+                        },
+                        error: Some(error),
+                    };
+                }
+                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
+                    .await
+                {
+                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
+                        manifest_url = refreshed_url;
+                        archive.pending_discontinuity = true;
+                        tracing::info!("Twitch 录制清单异常后已刷新地址");
+                        continue;
+                    }
+                    Ok(TwitchHlsRefreshResult::NotLive) => {
+                        let _ = archive.write_manifest(true).await;
+                        return TaskOutcome {
+                            status: RecordingStatus::Completed,
+                            error: None,
+                        };
+                    }
+                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
+                    }
+                    Err(refresh_error) => {
+                        tracing::warn!(error = %refresh_error, "Twitch 录制清单异常且刷新失败");
+                    }
+                }
+                tracing::warn!(attempt = errors, error = %error, "HLS 录制清单暂时不可解析，准备重试");
+                if wait_or_cancel(&mut cancel, HLS_RETRY_DELAY).await {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: RecordingStatus::Completed,
+                        error: None,
+                    };
+                }
+                continue;
+            }
+        };
+        if parsed.segments.is_empty() {
+            if !parsed.end_list {
+                errors = 0;
+            }
+            empty_playlists = empty_playlists.saturating_add(1);
+            if parsed.end_list {
+                match handle_twitch_endlist(
+                    &client,
+                    twitch_recovery.as_ref(),
+                    &mut twitch_refresh,
+                    &mut archive,
+                    &mut manifest_url,
+                    &mut cancel,
+                    &mut twitch_endlist_refreshes,
+                    &mut twitch_endlist_errors,
+                )
+                .await
+                {
+                    TwitchEndlistDecision::Continue => continue,
+                    TwitchEndlistDecision::Complete => {
+                        let _ = archive.write_manifest(true).await;
+                        return TaskOutcome {
+                            status: RecordingStatus::Completed,
+                            error: None,
+                        };
+                    }
+                    TwitchEndlistDecision::Interrupted(error) => {
+                        let _ = archive.write_manifest(true).await;
+                        return TaskOutcome {
+                            status: RecordingStatus::Interrupted,
+                            error: Some(error),
+                        };
+                    }
+                }
+            }
+            if twitch_recovery.is_some() && empty_playlists >= TWITCH_EMPTY_PLAYLIST_REFRESH_LIMIT {
+                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
+                    .await
+                {
+                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
+                        manifest_url = refreshed_url;
+                        archive.pending_discontinuity = true;
+                        empty_playlists = 0;
+                        tracing::info!("Twitch 空清单持续出现，已刷新录制地址");
+                        continue;
+                    }
+                    Ok(TwitchHlsRefreshResult::NotLive) => {
+                        let _ = archive.write_manifest(true).await;
+                        return TaskOutcome {
+                            status: RecordingStatus::Completed,
+                            error: None,
+                        };
+                    }
+                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
+                    }
+                    Err(refresh_error) => {
+                        tracing::warn!(error = %refresh_error, "Twitch 空清单且刷新地址失败");
+                    }
+                }
+                empty_playlists = 0;
             }
             if wait_or_cancel(&mut cancel, target_delay(parsed.target_duration)).await {
                 let _ = archive.write_manifest(true).await;
@@ -2423,6 +2778,10 @@ async fn run_hls_recording(
             }
             continue;
         }
+        empty_playlists = 0;
+        if !initialized {
+            archive.skip_before_live_edge(&parsed.segments);
+        }
         let candidates: Vec<HlsSegment> = if initialized {
             parsed.segments.clone()
         } else {
@@ -2431,6 +2790,7 @@ async fn run_hls_recording(
         initialized = true;
         let candidate_playlist = ParsedPlaylist {
             media_sequence: parsed.media_sequence,
+            discontinuity_sequence: parsed.discontinuity_sequence,
             target_duration: parsed.target_duration,
             end_list: parsed.end_list,
             segments: candidates,
@@ -2439,7 +2799,19 @@ async fn run_hls_recording(
             .append_segments(&client, &candidate_playlist, &source.headers, &state)
             .await
         {
-            Ok(_) => errors = 0,
+            Ok(appended) => {
+                if appended > 0 {
+                    errors = 0;
+                    if !parsed.end_list {
+                        // A refreshed URL is only considered healthy after a
+                        // complete new segment has been archived.
+                        twitch_refresh.last_attempt = None;
+                        twitch_refresh.next_profile = 0;
+                        twitch_endlist_refreshes = 0;
+                        twitch_endlist_errors = 0;
+                    }
+                }
+            }
             Err(error) => {
                 errors += 1;
                 if errors >= HLS_ERROR_LIMIT {
@@ -2449,14 +2821,69 @@ async fn run_hls_recording(
                         error: Some(error),
                     };
                 }
+                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
+                    .await
+                {
+                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
+                        manifest_url = refreshed_url;
+                        archive.pending_discontinuity = true;
+                        // Keep the retry budget until a refreshed playlist
+                        // actually contributes a complete segment.
+                        tracing::info!("Twitch 分片读取失败后已刷新录制地址");
+                        continue;
+                    }
+                    Ok(TwitchHlsRefreshResult::NotLive) => {
+                        let _ = archive.write_manifest(true).await;
+                        return TaskOutcome {
+                            status: RecordingStatus::Completed,
+                            error: None,
+                        };
+                    }
+                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
+                    }
+                    Err(refresh_error) => {
+                        tracing::warn!(error = %refresh_error, "Twitch 分片读取失败且刷新地址失败");
+                    }
+                }
+                if wait_or_cancel(&mut cancel, target_delay(parsed.target_duration)).await {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: RecordingStatus::Completed,
+                        error: None,
+                    };
+                }
+                continue;
             }
         }
         if parsed.end_list {
-            let _ = archive.write_manifest(true).await;
-            return TaskOutcome {
-                status: RecordingStatus::Completed,
-                error: None,
-            };
+            match handle_twitch_endlist(
+                &client,
+                twitch_recovery.as_ref(),
+                &mut twitch_refresh,
+                &mut archive,
+                &mut manifest_url,
+                &mut cancel,
+                &mut twitch_endlist_refreshes,
+                &mut twitch_endlist_errors,
+            )
+            .await
+            {
+                TwitchEndlistDecision::Continue => continue,
+                TwitchEndlistDecision::Complete => {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: RecordingStatus::Completed,
+                        error: None,
+                    };
+                }
+                TwitchEndlistDecision::Interrupted(error) => {
+                    let _ = archive.write_manifest(true).await;
+                    return TaskOutcome {
+                        status: RecordingStatus::Interrupted,
+                        error: Some(error),
+                    };
+                }
+            }
         }
         if wait_or_cancel(&mut cancel, target_delay(parsed.target_duration)).await {
             let _ = archive.write_manifest(true).await;
@@ -2626,7 +3053,24 @@ fn select_master_variant(body: &str, base: &Url) -> Option<Url> {
     best.map(|(_, url)| url)
 }
 
+fn retryable_hls_playlist_error(error: &str) -> bool {
+    // A CDN or ad server can briefly answer a child-playlist request with
+    // plain text or HTML. Structural errors inside an actual manifest (for
+    // example unsupported encryption or an invalid BYTERANGE) are permanent
+    // for that source and should still fail immediately.
+    error == "HLS 清单缺少 #EXTM3U 头"
+}
+
+#[cfg(test)]
 fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String> {
+    parse_media_playlist_with_identity(body, base, false)
+}
+
+fn parse_media_playlist_with_identity(
+    body: &str,
+    base: &Url,
+    stable_sequence_identity: bool,
+) -> Result<ParsedPlaylist, String> {
     let header = body
         .lines()
         .map(str::trim)
@@ -2640,9 +3084,12 @@ fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String
     let mut current_map: Option<HlsMap> = None;
     let mut next_duration: Option<f64> = None;
     let mut next_range: Option<String> = None;
-    let mut discontinuity = false;
+    let mut next_program_date_time: Option<String> = None;
+    let mut discontinuity_sequence: Option<u64> = None;
+    let mut next_discontinuity = false;
     let mut gap = false;
     let mut sequence = 0_u64;
+    let mut media_sequence_declared = false;
     let mut previous_segment_range: Option<(String, u64)> = None;
     let mut previous_map_range: Option<(String, u64)> = None;
     for line in body.lines().map(str::trim) {
@@ -2652,10 +3099,17 @@ fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String
         if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
             playlist.media_sequence = value.parse().unwrap_or(0);
             sequence = playlist.media_sequence;
+            media_sequence_declared = true;
             continue;
         }
         if let Some(value) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
             playlist.target_duration = value.parse().unwrap_or(0.0);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("#EXT-X-DISCONTINUITY-SEQUENCE:") {
+            let sequence = value.parse().unwrap_or(0);
+            playlist.discontinuity_sequence = Some(sequence);
+            discontinuity_sequence = Some(sequence);
             continue;
         }
         if line == "#EXT-X-ENDLIST" {
@@ -2663,7 +3117,10 @@ fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String
             continue;
         }
         if line == "#EXT-X-DISCONTINUITY" {
-            discontinuity = true;
+            next_discontinuity = true;
+            if let Some(sequence) = discontinuity_sequence.as_mut() {
+                *sequence = sequence.saturating_add(1);
+            }
             continue;
         }
         if line == "#EXT-X-GAP" {
@@ -2672,6 +3129,10 @@ fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String
         }
         if let Some(value) = line.strip_prefix("#EXTINF:") {
             next_duration = value.split(',').next().and_then(|value| value.parse().ok());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
+            next_program_date_time = Some(value.trim().to_string());
             continue;
         }
         if let Some(value) = line.strip_prefix("#EXT-X-BYTERANGE:") {
@@ -2742,7 +3203,34 @@ fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String
             previous_segment_range = None;
             None
         };
-        let identity = format!("{}|{}|{}", sequence, uri, range.as_deref().unwrap_or(""));
+        let identity = if stable_sequence_identity && media_sequence_declared {
+            // Signed Twitch URLs change when their short-lived playback token
+            // is renewed. RFC media and absolute discontinuity sequence
+            // numbers remain stable even if PROGRAM-DATE-TIME is sparse or
+            // changes textual precision between overlapping windows.
+            format!(
+                "sequence|{}|{}|{}",
+                discontinuity_sequence
+                    .map_or_else(|| "relative".to_string(), |sequence| sequence.to_string()),
+                sequence,
+                range.as_deref().unwrap_or("")
+            )
+        } else if stable_sequence_identity
+            && let Some(program_date_time) = next_program_date_time.as_deref()
+        {
+            // A nonstandard Twitch playlist without MEDIA-SEQUENCE can still
+            // use its wall-clock timestamp as a stable fallback identity.
+            format!(
+                "program-date-time|{}|{}|{}",
+                discontinuity_sequence
+                    .map_or_else(|| "relative".to_string(), |sequence| sequence.to_string()),
+                program_date_time,
+                range.as_deref().unwrap_or("")
+            )
+        } else {
+            format!("{}|{}|{}", sequence, uri, range.as_deref().unwrap_or(""))
+        };
+        next_program_date_time = None;
         playlist.segments.push(HlsSegment {
             uri,
             sequence,
@@ -2751,12 +3239,13 @@ fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String
             key: current_key.clone(),
             map: current_map.clone(),
             range,
-            discontinuity,
+            discontinuity_sequence,
+            discontinuity: next_discontinuity,
             gap,
         });
         sequence = sequence.saturating_add(1);
         next_duration = None;
-        discontinuity = false;
+        next_discontinuity = false;
         gap = false;
     }
     Ok(playlist)
@@ -3285,14 +3774,15 @@ mod tests {
         decode_playback_relative_path, direct_source_candidates,
         flv_payload_is_codec_sequence_header, hls_media_sequence_iv, http_byte_range_bounds,
         local_playback_url, media_file_name, normalize_flv_timestamps, parse_media_playlist,
-        parse_range, recording_file_stem, run_direct_recording, safe_relative_path,
+        parse_media_playlist_with_identity, parse_range, recording_file_stem,
+        retryable_hls_playlist_error, run_direct_recording, run_hls_recording, safe_relative_path,
         select_master_variant, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use reqwest::Url;
     use std::collections::HashSet;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::watch;
@@ -3359,11 +3849,292 @@ mod tests {
     }
 
     #[test]
+    fn keeps_hls_identity_stable_when_twitch_renews_signed_urls() {
+        let first_base = Url::parse("https://video-a.example.test/token-one/index.m3u8").unwrap();
+        let second_base = Url::parse("https://video-b.example.test/token-two/index.m3u8").unwrap();
+        let first = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2,live\nfirst.m4s\n",
+            &first_base,
+            true,
+        )
+        .unwrap();
+        let renewed = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2,live\nrenewed.m4s\n",
+            &second_base,
+            true,
+        )
+        .unwrap();
+        let restarted = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,live\nrestart.m4s\n",
+            &second_base,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(first.segments[0].identity, renewed.segments[0].identity);
+        assert_ne!(first.segments[0].identity, restarted.segments[0].identity);
+    }
+
+    #[test]
+    fn includes_the_discontinuity_epoch_in_program_date_time_identity() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let first = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:2\n#EXT-X-PROGRAM-DATE-TIME:2026-08-17T00:00:00Z\n#EXTINF:2,live\nfirst.m4s\n",
+            &base,
+            true,
+        )
+        .unwrap();
+        let next_epoch = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:3\n#EXT-X-PROGRAM-DATE-TIME:2026-08-17T00:00:00Z\n#EXTINF:2,live\nnext.m4s\n",
+            &base,
+            true,
+        )
+        .unwrap();
+
+        assert_ne!(first.segments[0].identity, next_epoch.segments[0].identity);
+    }
+
+    #[test]
+    fn tracks_hls_discontinuity_epoch_across_gaps_and_rolling_windows() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-DISCONTINUITY-SEQUENCE:7\n#EXTINF:2,live\nfirst.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2,ad\n#EXT-X-GAP\ngap.ts\n#EXTINF:2,live\nsecond.ts\n",
+            &base,
+        )
+        .unwrap();
+        let rolled = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:103\n#EXT-X-DISCONTINUITY-SEQUENCE:8\n#EXTINF:2,live\nthird.ts\n",
+            &base,
+        )
+        .unwrap();
+
+        assert_eq!(playlist.discontinuity_sequence, Some(7));
+        assert_eq!(
+            playlist
+                .segments
+                .iter()
+                .map(|segment| segment.discontinuity_sequence)
+                .collect::<Vec<_>>(),
+            [Some(7), Some(8), Some(8)]
+        );
+        assert!(playlist.segments[1].gap);
+        assert_eq!(rolled.segments[0].discontinuity_sequence, Some(8));
+    }
+
+    #[test]
+    fn archive_marks_the_first_saved_segment_after_a_skipped_hls_epoch() {
+        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
+
+        assert!(!archive.advance_discontinuity_sequence(Some(7)));
+        // A GAP segment in epoch 8 is not written and therefore must not move
+        // the archive cursor. The next real segment crosses the boundary.
+        assert!(archive.advance_discontinuity_sequence(Some(8)));
+        assert!(!archive.advance_discontinuity_sequence(Some(8)));
+    }
+
+    #[test]
+    fn marks_the_initial_hls_window_before_the_live_edge_as_consumed() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2,\nold-a.ts\n#EXTINF:2,\nold-b.ts\n#EXTINF:2,\nedge.ts\n",
+            &base,
+        )
+        .unwrap();
+        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
+
+        archive.skip_before_live_edge(&playlist.segments);
+
+        assert!(archive.seen.contains(&playlist.segments[0].identity));
+        assert!(archive.seen.contains(&playlist.segments[1].identity));
+        assert!(!archive.seen.contains(&playlist.segments[2].identity));
+    }
+
+    #[test]
+    fn carries_an_initial_discontinuity_to_the_first_saved_live_edge() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-DISCONTINUITY-SEQUENCE:4\n#EXTINF:2,old\nold.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2,edge\nedge.ts\n",
+            &base,
+        )
+        .unwrap();
+        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
+
+        archive.skip_before_live_edge(&playlist.segments);
+
+        assert_eq!(archive.last_discontinuity_sequence, Some(4));
+        assert!(archive.advance_discontinuity_sequence(Some(5)));
+    }
+
+    #[test]
+    fn does_not_compare_relative_discontinuity_counts_across_windows() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let first = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2,old\nold.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2,edge\nedge.ts\n",
+            &base,
+        )
+        .unwrap();
+        let next = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:11\n#EXTINF:2,new\nnew.ts\n",
+            &base,
+        )
+        .unwrap();
+        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
+
+        archive.skip_before_live_edge(&first.segments);
+
+        assert!(first.segments[1].discontinuity);
+        assert!(!archive.advance_discontinuity_sequence(next.segments[0].discontinuity_sequence));
+    }
+
+    #[test]
+    fn carries_an_explicit_gap_boundary_without_an_absolute_sequence() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let playlist = parse_media_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-DISCONTINUITY\n#EXTINF:2,gap\n#EXT-X-GAP\ngap.ts\n#EXTINF:2,live\nlive.ts\n",
+            &base,
+        )
+        .unwrap();
+        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
+
+        archive.skip_before_live_edge(&playlist.segments);
+
+        assert!(playlist.segments[0].gap);
+        assert!(!playlist.segments[1].discontinuity);
+        assert!(archive.take_segment_discontinuity(&playlist.segments[1]));
+        assert!(!archive.pending_discontinuity);
+    }
+
+    #[tokio::test]
+    async fn hls_recording_recovers_after_a_temporary_non_manifest_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let playlist_requests = Arc::new(AtomicUsize::new(0));
+        let requested_paths = Arc::new(Mutex::new(Vec::<String>::new()));
+        let server_playlist_requests = playlist_requests.clone();
+        let server_requested_paths = requested_paths.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let length = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                server_requested_paths.lock().unwrap().push(path.clone());
+                let (content_type, body): (&str, Vec<u8>) = match path.as_str() {
+                    "/live.m3u8" => {
+                        let attempt = server_playlist_requests.fetch_add(1, Ordering::Relaxed);
+                        let text = match attempt {
+                            0 => {
+                                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-TARGETDURATION:1\n#EXTINF:2,\nold.ts\n#EXTINF:2,\nedge.ts\n"
+                            }
+                            1 => "Commercial break in progress. Please wait.",
+                            _ => {
+                                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:11\n#EXT-X-TARGETDURATION:1\n#EXTINF:2,\nedge.ts\n#EXTINF:2,\nnew.ts\n"
+                            }
+                        };
+                        ("application/vnd.apple.mpegurl", text.as_bytes().to_vec())
+                    }
+                    "/old.ts" => ("video/mp2t", b"\x47old".to_vec()),
+                    "/edge.ts" => ("video/mp2t", b"\x47edge".to_vec()),
+                    "/new.ts" => ("video/mp2t", b"\x47new".to_vec()),
+                    _ => ("text/plain", b"missing".to_vec()),
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!("rlive-hls-retry-{}", Uuid::new_v4()));
+        let bundle = root.join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(bundle.join("segments")).unwrap();
+        for directory in ["keys", "maps"] {
+            std::fs::create_dir_all(bundle.join(directory)).unwrap();
+        }
+        let stored = completed_recording(
+            bundle.file_name().unwrap().to_string_lossy().into_owned(),
+            "hls-retry",
+        );
+        let state = Arc::new(SessionState {
+            root: root.clone(),
+            bundle: bundle.clone(),
+            stored: Mutex::new(StoredRecording {
+                protocol: PlaybackProtocol::Hls,
+                status: RecordingStatus::Recording,
+                media_file: "index.m3u8".into(),
+                ..stored
+            }),
+            bytes: AtomicU64::new(0),
+            duration_ms: AtomicU64::new(0),
+            danmaku_count: AtomicU64::new(0),
+            danmaku_writer: Mutex::new(None),
+            danmaku_closed: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+        });
+        let source = crate::models::live::PlayUrl::inferred(
+            "test:hls",
+            "测试 HLS",
+            0,
+            format!("http://{address}/live.m3u8"),
+            Default::default(),
+        );
+        let client = crate::http_client::client_for_proxy(None).unwrap();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let task_state = state.clone();
+        let task =
+            tokio::spawn(
+                async move { run_hls_recording(client, source, task_state, cancel_rx).await },
+            );
+
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while state.duration_ms.load(Ordering::Relaxed) < 4_000 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel_tx.send(true).unwrap();
+        let outcome = task.await.unwrap();
+        server.abort();
+        let _ = server.await;
+
+        assert_eq!(outcome.status, RecordingStatus::Completed);
+        assert_eq!(outcome.error, None);
+        let manifest = std::fs::read_to_string(bundle.join("index.m3u8")).unwrap();
+        assert_eq!(manifest.matches("#EXTINF:").count(), 2);
+        assert_eq!(
+            std::fs::read(bundle.join("segments/00000000.ts")).unwrap(),
+            b"\x47edge"
+        );
+        assert_eq!(
+            std::fs::read(bundle.join("segments/00000001.ts")).unwrap(),
+            b"\x47new"
+        );
+        assert!(
+            !requested_paths
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path == "/old.ts")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_a_non_hls_response_before_polling_it_forever() {
         let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
         let error = parse_media_playlist("<html>sign in</html>", &base).unwrap_err();
 
         assert!(error.contains("#EXTM3U"));
+        assert!(retryable_hls_playlist_error(&error));
     }
 
     #[test]
@@ -3403,6 +4174,28 @@ mod tests {
     }
 
     #[test]
+    fn keeps_twitch_identity_stable_when_program_date_time_is_sparse() {
+        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
+        let with_timestamp = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXT-X-PROGRAM-DATE-TIME:2026-08-17T00:00:00.000Z\n#EXTINF:2,live\nfirst.m4s\n",
+            &base,
+            true,
+        )
+        .unwrap();
+        let without_timestamp = parse_media_playlist_with_identity(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2,live\nrenewed.m4s\n",
+            &base,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            with_timestamp.segments[0].identity,
+            without_timestamp.segments[0].identity
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_hls_encryption_methods() {
         let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
         let error = parse_media_playlist(
@@ -3412,6 +4205,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.contains("SAMPLE-AES"));
+        assert!(!retryable_hls_playlist_error(&error));
     }
 
     #[test]
