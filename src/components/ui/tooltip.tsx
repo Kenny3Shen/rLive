@@ -1,4 +1,5 @@
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
+import type { RefObject } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -21,11 +22,14 @@ function TooltipContent({
   align = "center",
   alignOffset = 0,
   children,
+  container,
   ...props
 }: TooltipPrimitive.Popup.Props &
-  Pick<TooltipPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
+  Pick<TooltipPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset"> & {
+    container?: HTMLElement | RefObject<HTMLElement | null> | null;
+  }) {
   return (
-    <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Portal container={container}>
       <TooltipPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

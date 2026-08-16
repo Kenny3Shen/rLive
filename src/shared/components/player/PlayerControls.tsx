@@ -1,4 +1,10 @@
-import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Captions,
   CaptionsOff,
@@ -226,6 +232,7 @@ type ControlButtonProps = Omit<
   children: ReactNode;
   /** Desktop hover tooltip. Disabled on compact touch layouts. */
   tooltip?: boolean;
+  tooltipContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
 };
 
 /**
@@ -253,6 +260,7 @@ function ControlButton({
   variant = "ghost",
   className,
   tooltip = true,
+  tooltipContainer,
   ...props
 }: ControlButtonProps) {
   const button = (
@@ -273,7 +281,7 @@ function ControlButton({
   return (
     <Tooltip>
       <TooltipTrigger render={button} />
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent container={tooltipContainer}>{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -671,6 +679,7 @@ export function PlayerControls({
           <ControlButton
             label="刷新播放"
             className={cn(overlayButtonClass)}
+            tooltipContainer={portalContainer}
             disabled={refreshDisabled}
             onClick={onRefresh}
             tooltip={!compact}
@@ -681,6 +690,7 @@ export function PlayerControls({
         <ControlButton
           label={paused ? pauseLabel : pauseActiveLabel}
           className={overlayButtonClass}
+          tooltipContainer={portalContainer}
           disabled={disabled}
           onClick={onTogglePause}
           tooltip={!compact}
@@ -755,6 +765,7 @@ export function PlayerControls({
             label={audioOnlyControl.label}
             variant={overlay ? "ghost" : audioOnly ? "secondary" : "ghost"}
             className={cn(overlayButtonClass, audioOnly && overlay && "bg-white/18 text-white")}
+            tooltipContainer={portalContainer}
             disabled={disabled && !audioOnly}
             aria-pressed={audioOnlyControl.enabled}
             onClick={onToggleAudioOnly}
@@ -857,6 +868,7 @@ export function PlayerControls({
             label={danmakuControl.label}
             variant="ghost"
             className={overlayButtonClass}
+            tooltipContainer={portalContainer}
             disabled={disabled}
             data-slot="danmaku-toggle"
             data-state={danmakuControl.enabled ? "on" : "off"}
@@ -926,6 +938,7 @@ export function PlayerControls({
             label={resolvedSidePanelLabel}
             variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
             className={overlayButtonClass}
+            tooltipContainer={portalContainer}
             aria-pressed={sidePanelOpen}
             onClick={onToggleSidePanel}
             tooltip={!compact}
@@ -937,6 +950,7 @@ export function PlayerControls({
           <ControlButton
             label={pictureInPictureActive ? "退出画中画" : "画中画"}
             className={overlayButtonClass}
+            tooltipContainer={portalContainer}
             disabled={disabled || pictureInPictureDisabled}
             aria-pressed={pictureInPictureActive}
             onClick={onTogglePictureInPicture}
@@ -948,6 +962,7 @@ export function PlayerControls({
         <ControlButton
           label={fullscreenLabel}
           className={overlayButtonClass}
+          tooltipContainer={portalContainer}
           disabled={disabled}
           aria-pressed={fullscreen}
           onClick={(event) => {
