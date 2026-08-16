@@ -36,6 +36,10 @@ const MAX_SEGMENT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_KEY_BYTES: usize = 64 * 1024;
 const HLS_ERROR_LIMIT: u32 = 10;
 const HLS_RETRY_DELAY: Duration = Duration::from_secs(2);
+const DIRECT_ERROR_LIMIT: u32 = 10;
+const DIRECT_RETRY_DELAY: Duration = Duration::from_secs(1);
+const DIRECT_MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
+const FLV_HEADER_BYTES: usize = 13;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -441,6 +445,7 @@ impl RecordingManager {
         // not leave behind metadata that looks like an active recording but
         // has no task attached to it.
         let client = http_client::client_for_proxy(proxy)?;
+        let stream_client = http_client::recording_stream_client_for_proxy(proxy)?;
 
         let id = Uuid::new_v4().to_string();
         let protocol = if input.source.protocol == PlaybackProtocol::Unknown {
@@ -523,7 +528,9 @@ impl RecordingManager {
         let task_state = state.clone();
         let source = input.source;
         let task = tauri::async_runtime::spawn(async move {
-            let outcome = run_recording_task(client, source, task_state.clone(), cancel_rx).await;
+            let outcome =
+                run_recording_task(client, stream_client, source, task_state.clone(), cancel_rx)
+                    .await;
             finish_session(&task_state, outcome);
         });
         let item = state.snapshot();
@@ -715,6 +722,7 @@ struct TaskOutcome {
 
 async fn run_recording_task(
     client: Client,
+    stream_client: Client,
     source: PlayUrl,
     state: Arc<SessionState>,
     cancel: watch::Receiver<bool>,
@@ -726,7 +734,7 @@ async fn run_recording_task(
         .protocol;
     match protocol {
         PlaybackProtocol::Hls => run_hls_recording(client, source, state, cancel).await,
-        _ => run_direct_recording(client, source, state, cancel).await,
+        _ => run_direct_recording(stream_client, source, state, cancel).await,
     }
 }
 
@@ -736,32 +744,25 @@ async fn run_direct_recording(
     state: Arc<SessionState>,
     mut cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
-    let media_file_name = {
-        state
+    let (media_file_name, protocol, site_id) = {
+        let stored = state
             .stored
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .media_file
-            .clone()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            stored.media_file.clone(),
+            stored.protocol,
+            stored.site_id.clone(),
+        )
     };
     let part = state.bundle.join(format!("{media_file_name}.part"));
     let final_path = state.bundle.join(media_file_name);
-    let response = match build_request(&client, &source).send().await {
-        Ok(response) if response.status().is_success() => response,
-        Ok(response) => {
-            return TaskOutcome {
-                status: RecordingStatus::Failed,
-                error: Some(format!("直播源返回 HTTP {}", response.status().as_u16())),
-            };
-        }
-        Err(error) => {
-            return TaskOutcome {
-                status: RecordingStatus::Failed,
-                error: Some(format!("连接直播源失败: {}", error.without_url())),
-            };
-        }
-    };
-    let mut file = match tokio::fs::File::create(&part).await {
+    let mut file = match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&part)
+        .await
+    {
         Ok(file) => file,
         Err(error) => {
             return TaskOutcome {
@@ -771,62 +772,350 @@ async fn run_direct_recording(
         }
     };
     let started = Instant::now();
-    let mut stream = response.bytes_stream();
-    let mut cancelled = false;
+    let candidates = direct_source_candidates(&source, site_id.as_deref());
+    let mut preferred_candidate = 0_usize;
+    let mut errors = 0_u32;
+    let mut last_error = "直播流连接已关闭".to_string();
+
     loop {
-        let next = tokio::select! {
-            value = stream.next() => value,
-            changed = cancel.changed() => {
-                if changed.is_ok() && *cancel.borrow() {
-                    cancelled = true;
+        if *cancel.borrow() {
+            return finalize_direct_recording(
+                file,
+                &part,
+                &final_path,
+                &state,
+                TaskOutcome {
+                    status: RecordingStatus::Completed,
+                    error: None,
+                },
+            )
+            .await;
+        }
+
+        let mut round_error = None;
+        let mut round_retryable = false;
+        let mut opened_stream = false;
+
+        for offset in 0..candidates.len() {
+            let candidate_index = (preferred_candidate + offset) % candidates.len();
+            let candidate = &candidates[candidate_index];
+            let response = tokio::select! {
+                response = build_request(&client, candidate).send() => response,
+                changed = cancel.changed() => {
+                    if changed.is_err() || *cancel.borrow() {
+                        return finalize_direct_recording(
+                            file,
+                            &part,
+                            &final_path,
+                            &state,
+                            TaskOutcome {
+                                status: RecordingStatus::Completed,
+                                error: None,
+                            },
+                        ).await;
+                    }
+                    continue;
                 }
-                None
-            }
-        };
-        let Some(next) = next else { break };
-        let chunk = match next {
-            Ok(chunk) => chunk,
-            Err(error) => {
-                let _ = file.flush().await;
-                let _ = finalize_part(&part, &final_path).await;
-                return TaskOutcome {
-                    status: RecordingStatus::Interrupted,
-                    error: Some(format!("读取直播流中断: {}", error.without_url())),
-                };
-            }
-        };
-        if chunk.is_empty() {
-            continue;
-        }
-        if let Err(error) = file.write_all(&chunk).await {
-            let _ = file.flush().await;
-            let _ = finalize_part(&part, &final_path).await;
-            return TaskOutcome {
-                status: RecordingStatus::Failed,
-                error: Some(format!("写入录制文件失败: {error}")),
             };
-        }
-        state.bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-        state.duration_ms.store(
-            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-            Ordering::Relaxed,
-        );
-        if cancelled {
+
+            let response = match response {
+                Ok(response) if response.status().is_success() => response,
+                Ok(response) => {
+                    let status = response.status();
+                    round_retryable |= retryable_direct_status(status);
+                    round_error
+                        .get_or_insert_with(|| format!("直播源返回 HTTP {}", status.as_u16()));
+                    continue;
+                }
+                Err(error) => {
+                    round_retryable = true;
+                    round_error
+                        .get_or_insert_with(|| format!("连接直播源失败: {}", error.without_url()));
+                    continue;
+                }
+            };
+
+            opened_stream = true;
+            preferred_candidate = candidate_index;
+            let mut stream = response.bytes_stream();
+            let mut reconnect_prefix = (protocol == PlaybackProtocol::Flv
+                && state.bytes.load(Ordering::Relaxed) > 0)
+                .then(Vec::new);
+            let mut received_media = false;
+            let mut cancelled = false;
+            let stream_error = loop {
+                let next = tokio::select! {
+                    value = stream.next() => value,
+                    changed = cancel.changed() => {
+                        if changed.is_err() || *cancel.borrow() {
+                            cancelled = true;
+                        }
+                        None
+                    }
+                };
+                let Some(next) = next else {
+                    break "直播流连接已关闭".to_string();
+                };
+                let chunk = match next {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        break format!("读取直播流中断: {}", error.without_url());
+                    }
+                };
+                if chunk.is_empty() {
+                    continue;
+                }
+                match write_direct_chunk(&mut file, &chunk, &mut reconnect_prefix).await {
+                    Ok(written) => {
+                        if written > 0 {
+                            received_media = true;
+                            errors = 0;
+                            state.bytes.fetch_add(written as u64, Ordering::Relaxed);
+                            state.duration_ms.store(
+                                started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                                Ordering::Relaxed,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        return finalize_direct_recording(
+                            file,
+                            &part,
+                            &final_path,
+                            &state,
+                            TaskOutcome {
+                                status: RecordingStatus::Failed,
+                                error: Some(format!("写入录制文件失败: {error}")),
+                            },
+                        )
+                        .await;
+                    }
+                }
+            };
+
+            match flush_direct_prefix(&mut file, &mut reconnect_prefix).await {
+                Ok(written) if written > 0 => {
+                    received_media = true;
+                    errors = 0;
+                    state.bytes.fetch_add(written as u64, Ordering::Relaxed);
+                    state.duration_ms.store(
+                        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                        Ordering::Relaxed,
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    return finalize_direct_recording(
+                        file,
+                        &part,
+                        &final_path,
+                        &state,
+                        TaskOutcome {
+                            status: RecordingStatus::Failed,
+                            error: Some(format!("写入录制文件失败: {error}")),
+                        },
+                    )
+                    .await;
+                }
+            }
+
+            if cancelled {
+                return finalize_direct_recording(
+                    file,
+                    &part,
+                    &final_path,
+                    &state,
+                    TaskOutcome {
+                        status: RecordingStatus::Completed,
+                        error: None,
+                    },
+                )
+                .await;
+            }
+
+            round_retryable = true;
+            round_error = Some(stream_error);
+            if received_media {
+                // Data from this connection proves the URL is still valid. On
+                // the next reconnect, retry this candidate before fallbacks.
+                errors = 0;
+            }
             break;
         }
+
+        if let Some(error) = round_error {
+            last_error = error;
+        }
+
+        if !round_retryable {
+            let status = direct_failure_status(&state);
+            return finalize_direct_recording(
+                file,
+                &part,
+                &final_path,
+                &state,
+                TaskOutcome {
+                    status,
+                    error: Some(last_error),
+                },
+            )
+            .await;
+        }
+
+        errors = errors.saturating_add(1);
+        if errors >= DIRECT_ERROR_LIMIT {
+            let status = direct_failure_status(&state);
+            return finalize_direct_recording(
+                file,
+                &part,
+                &final_path,
+                &state,
+                TaskOutcome {
+                    status,
+                    error: Some(last_error),
+                },
+            )
+            .await;
+        }
+
+        tracing::warn!(
+            attempt = errors,
+            opened_stream,
+            error = %last_error,
+            "直播录制连接中断，准备重连"
+        );
+        if wait_or_cancel(&mut cancel, direct_retry_delay(errors)).await {
+            return finalize_direct_recording(
+                file,
+                &part,
+                &final_path,
+                &state,
+                TaskOutcome {
+                    status: RecordingStatus::Completed,
+                    error: None,
+                },
+            )
+            .await;
+        }
     }
-    let _ = file.flush().await;
-    let _ = file.sync_data().await;
-    if let Err(error) = finalize_part(&part, &final_path).await {
+}
+
+async fn write_direct_chunk(
+    file: &mut tokio::fs::File,
+    chunk: &[u8],
+    reconnect_prefix: &mut Option<Vec<u8>>,
+) -> std::io::Result<usize> {
+    if let Some(prefix) = reconnect_prefix.as_mut() {
+        prefix.extend_from_slice(chunk);
+        if prefix.len() < FLV_HEADER_BYTES {
+            return Ok(0);
+        }
+        let mut bytes = reconnect_prefix.take().unwrap_or_default();
+        if bytes.starts_with(b"FLV") {
+            bytes.drain(..FLV_HEADER_BYTES);
+        }
+        file.write_all(&bytes).await?;
+        return Ok(bytes.len());
+    }
+    file.write_all(chunk).await?;
+    Ok(chunk.len())
+}
+
+async fn flush_direct_prefix(
+    file: &mut tokio::fs::File,
+    reconnect_prefix: &mut Option<Vec<u8>>,
+) -> std::io::Result<usize> {
+    let Some(mut bytes) = reconnect_prefix.take() else {
+        return Ok(0);
+    };
+    if bytes.starts_with(b"FLV") {
+        let header = bytes.len().min(FLV_HEADER_BYTES);
+        bytes.drain(..header);
+    }
+    file.write_all(&bytes).await?;
+    Ok(bytes.len())
+}
+
+async fn finalize_direct_recording(
+    mut file: tokio::fs::File,
+    part: &Path,
+    final_path: &Path,
+    state: &SessionState,
+    outcome: TaskOutcome,
+) -> TaskOutcome {
+    let flush_error = file.flush().await.err().or(file.sync_data().await.err());
+    drop(file);
+
+    if state.bytes.load(Ordering::Relaxed) == 0 && outcome.status != RecordingStatus::Completed {
+        let _ = tokio::fs::remove_file(part).await;
+        return outcome;
+    }
+    if let Some(error) = flush_error {
         return TaskOutcome {
             status: RecordingStatus::Failed,
             error: Some(format!("完成录制文件失败: {error}")),
         };
     }
-    TaskOutcome {
-        status: RecordingStatus::Completed,
-        error: None,
+    if let Err(error) = finalize_part(part, final_path).await {
+        return TaskOutcome {
+            status: RecordingStatus::Failed,
+            error: Some(format!("完成录制文件失败: {error}")),
+        };
     }
+    outcome
+}
+
+fn direct_failure_status(state: &SessionState) -> RecordingStatus {
+    if state.bytes.load(Ordering::Relaxed) == 0 {
+        RecordingStatus::Failed
+    } else {
+        RecordingStatus::Interrupted
+    }
+}
+
+fn retryable_direct_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::FORBIDDEN
+        || status == reqwest::StatusCode::NOT_FOUND
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+fn direct_retry_delay(errors: u32) -> Duration {
+    let multiplier = 1_u64 << errors.saturating_sub(1).min(3);
+    Duration::from_secs(
+        DIRECT_RETRY_DELAY
+            .as_secs()
+            .saturating_mul(multiplier)
+            .min(DIRECT_MAX_RETRY_DELAY.as_secs()),
+    )
+}
+
+fn direct_source_candidates(source: &PlayUrl, site_id: Option<&str>) -> Vec<PlayUrl> {
+    let mut candidates = vec![source.clone()];
+    if site_id != Some("huya") {
+        return candidates;
+    }
+    let Ok(mut alternate_url) = Url::parse(&source.url) else {
+        return candidates;
+    };
+    let Some(host) = alternate_url.host_str() else {
+        return candidates;
+    };
+    if host != "huya.com" && !host.ends_with(".huya.com") {
+        return candidates;
+    }
+    let alternate_scheme = match alternate_url.scheme() {
+        "http" => "https",
+        "https" => "http",
+        _ => return candidates,
+    };
+    if alternate_url.set_scheme(alternate_scheme).is_ok() {
+        let mut alternate = source.clone();
+        alternate.url = alternate_url.to_string();
+        candidates.push(alternate);
+    }
+    candidates
 }
 
 async fn finalize_part(part: &Path, final_path: &Path) -> std::io::Result<()> {
@@ -2377,14 +2666,19 @@ async fn write_simple_response(
 mod tests {
     use super::{
         ArchiveEntry, HlsArchive, RecordingManager, RecordingStartInput, RecordingStatus,
-        StoredDanmakuBatch, StoredRecording, attribute_value, hls_media_sequence_iv,
-        http_byte_range_bounds, parse_media_playlist, parse_range, safe_relative_path,
+        SessionState, StoredDanmakuBatch, StoredRecording, attribute_value,
+        direct_source_candidates, hls_media_sequence_iv, http_byte_range_bounds,
+        parse_media_playlist, parse_range, run_direct_recording, safe_relative_path,
         select_master_variant, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use reqwest::Url;
     use std::collections::HashSet;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::watch;
     use uuid::Uuid;
 
     #[test]
@@ -2593,6 +2887,98 @@ mod tests {
             .remove("continue_on_leave");
         let stored: StoredRecording = serde_json::from_value(legacy_metadata).unwrap();
         assert!(!stored.continue_on_leave);
+    }
+
+    #[test]
+    fn huya_direct_recording_can_fall_back_between_http_schemes() {
+        let source = crate::models::live::PlayUrl::inferred(
+            "huya:AL",
+            "线路1",
+            0,
+            "https://al.flv.huya.com/src/live.flv?token=secret".into(),
+            Default::default(),
+        );
+        let candidates = direct_source_candidates(&source, Some("huya"));
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].url, source.url);
+        assert!(candidates[1].url.starts_with("http://al.flv.huya.com/"));
+        assert_eq!(candidates[1].headers, source.headers);
+        assert_eq!(direct_source_candidates(&source, Some("douyu")).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn direct_recording_reconnects_after_eof_until_cancelled() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 2048];
+                let _ = socket.read(&mut request).await.unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: 20\r\nConnection: close\r\n\r\nFLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00PAYLOAD",
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!("rlive-direct-retry-{}", Uuid::new_v4()));
+        let bundle = root.join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&bundle).unwrap();
+        let stored = completed_recording(
+            bundle.file_name().unwrap().to_string_lossy().into_owned(),
+            "retry",
+        );
+        let state = Arc::new(SessionState {
+            root: root.clone(),
+            bundle: bundle.clone(),
+            stored: Mutex::new(StoredRecording {
+                status: RecordingStatus::Recording,
+                media_file: "stream.flv".into(),
+                ..stored
+            }),
+            bytes: AtomicU64::new(0),
+            duration_ms: AtomicU64::new(0),
+            danmaku_count: AtomicU64::new(0),
+            danmaku_writer: Mutex::new(None),
+            danmaku_closed: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+        });
+        let source = crate::models::live::PlayUrl::inferred(
+            "test:1",
+            "测试线路",
+            0,
+            format!("http://{address}/live.flv"),
+            Default::default(),
+        );
+        let client = crate::http_client::recording_stream_client_for_proxy(None).unwrap();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let task_state = state.clone();
+        let task = tokio::spawn(async move {
+            run_direct_recording(client, source, task_state, cancel_rx).await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            while state.bytes.load(std::sync::atomic::Ordering::Relaxed) < 27 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel_tx.send(true).unwrap();
+        let outcome = task.await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(outcome.status, RecordingStatus::Completed);
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv")).unwrap(),
+            b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00PAYLOADPAYLOAD"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
