@@ -22,6 +22,7 @@ import {
   glassSurfaceClass,
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
+import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
@@ -361,10 +362,10 @@ export function RoomPage() {
               context={recordingContext}
             />
             <div className="hidden md:flex md:items-center md:gap-1">
-              <RoomToolPopover icon={Timer} label="定时关闭">
+              <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
                 <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
               </RoomToolPopover>
-              <RoomToolPopover icon={Car} label="自动发送弹幕" wide>
+              <RoomToolPopover icon={Car} label="自动发送弹幕" wide active={autoDanmakuSend.enabled}>
                 <AutoDanmakuSendMenu
                   autoSend={autoDanmakuSend}
                   idPrefix="title-auto-danmaku"
@@ -581,21 +582,34 @@ function RoomToolPopover({
   icon: Icon,
   label,
   wide = false,
+  active = false,
   children,
 }: {
   icon: LucideIcon;
   label: string;
   wide?: boolean;
+  /** Whether the tool is currently switched on; renders the on-state icon. */
+  active?: boolean;
   children: ReactNode;
 }) {
   return (
     <Popover>
       <PopoverTrigger
         render={
-          <Button type="button" variant="ghost" size="icon-sm" aria-label={label} title={label} />
+          <Button
+            type="button"
+            variant={active ? "secondary" : "ghost"}
+            size="icon-sm"
+            aria-label={label}
+            title={label}
+            aria-pressed={active}
+          />
         }
       >
-        <Icon data-icon="inline-start" aria-hidden />
+        <span className="relative inline-flex">
+          <Icon data-icon="inline-start" aria-hidden className={cn(active && "text-primary")} />
+          {active && <ToolActiveDot />}
+        </span>
       </PopoverTrigger>
       <PopoverContent
         side="bottom"
@@ -723,7 +737,10 @@ function RoomMobileActions({
                   setSleepTimerExpanded(false);
                 }}
               >
-                <Car className="size-5" aria-hidden />
+                <span className="relative inline-flex">
+                  <Car className="size-5" aria-hidden />
+                  {autoSend.enabled && <ToolActiveDot />}
+                </span>
                 <span className="max-w-full truncate">
                   {autoSend.enabled ? "发送中" : "自动发送"}
                 </span>
@@ -739,7 +756,10 @@ function RoomMobileActions({
                   setAutoSendExpanded(false);
                 }}
               >
-                <Timer className="size-5" aria-hidden />
+                <span className="relative inline-flex">
+                  <Timer className="size-5" aria-hidden />
+                  {sleepTimer.active && <ToolActiveDot />}
+                </span>
                 <span className="max-w-full truncate">
                   {sleepTimer.active ? "定时中" : "定时关闭"}
                 </span>

@@ -17,6 +17,7 @@ import {
   PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
+import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import {
   RoomIdentityLine,
   roomIdentityOverflowDistance,
@@ -186,6 +187,7 @@ export function PlayerFullscreenHud({
               icon={Car}
               label={autoSend.enabled ? "发送中" : "自动发送"}
               pressed={autoSendExpanded || autoSend.enabled}
+              active={autoSend.enabled}
               onClick={() => {
                 setAutoSendExpanded((expanded) => !expanded);
                 setSleepTimerExpanded(false);
@@ -197,6 +199,7 @@ export function PlayerFullscreenHud({
               icon={Timer}
               label={sleepTimer.active ? "定时中" : "定时关闭"}
               pressed={sleepTimerExpanded || sleepTimer.active}
+              active={sleepTimer.active}
               onClick={() => {
                 setSleepTimerExpanded((expanded) => !expanded);
                 setAutoSendExpanded(false);
@@ -337,11 +340,13 @@ function RoomToolTile({
   icon: Icon,
   label,
   pressed,
+  active,
   onClick,
 }: {
   icon: LucideIcon;
   label: string;
   pressed?: boolean;
+  active?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -356,7 +361,10 @@ function RoomToolTile({
       aria-pressed={pressed}
       onClick={onClick}
     >
-      <Icon className="size-5" aria-hidden />
+      <span className="relative inline-flex">
+        <Icon className="size-5" aria-hidden />
+        {active && <ToolActiveDot />}
+      </span>
       <span className="max-w-full truncate">{label}</span>
     </Button>
   );

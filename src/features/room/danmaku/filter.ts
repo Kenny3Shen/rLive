@@ -92,7 +92,7 @@ export function createShieldMatcher(
   return (event) => matchesShieldWords(event, words);
 }
 
-/** Shared shield-word filter for list + canvas. */
+/** Shared shield-word filter for the list and live floating layer. */
 export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]): boolean {
   return matchesShieldWords(event, normalizedShieldWords(shieldWords));
 }
@@ -225,12 +225,18 @@ export function floatingDanmakuText(event: DanmakuEvent): string {
   return content;
 }
 
-export function shouldShowValidatedOnCanvas(event: DanmakuEvent, filterGifts = false): boolean {
+export function shouldShowValidatedOnFloatingDanmaku(
+  event: DanmakuEvent,
+  filterGifts = false,
+): boolean {
   if (!shouldShowValidatedInDanmakuPanel(event, filterGifts)) return false;
   if (event.kind === "system") return false;
   return true;
 }
 
-export function shouldShowOnCanvas(event: unknown, filterGifts = false): event is DanmakuEvent {
-  return isDanmakuEvent(event) && shouldShowValidatedOnCanvas(event, filterGifts);
+export function shouldShowOnFloatingDanmaku(
+  event: unknown,
+  filterGifts = false,
+): event is DanmakuEvent {
+  return isDanmakuEvent(event) && shouldShowValidatedOnFloatingDanmaku(event, filterGifts);
 }

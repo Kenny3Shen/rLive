@@ -44,7 +44,7 @@ import {
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
-import { CanvasDanmaku } from "./canvas/CanvasDanmaku";
+import { DanmuJsDanmaku } from "./danmaku/DanmuJsDanmaku";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import type { SleepTimerController } from "./useSleepTimer";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -155,10 +155,7 @@ export type PlayerEdgeGestureIntent = "pending" | "adjust" | "reject";
  * especially important for Canvas overlays: they need the matching pointerup
  * to finish touch hit testing.
  */
-export function playerEdgeGestureIntent(
-  deltaX: number,
-  deltaY: number,
-): PlayerEdgeGestureIntent {
+export function playerEdgeGestureIntent(deltaX: number, deltaY: number): PlayerEdgeGestureIntent {
   const horizontalDistance = Math.abs(deltaX);
   const verticalDistance = Math.abs(deltaY);
   if (
@@ -262,8 +259,8 @@ function isTouchPointer(pointerType: string): boolean {
   return pointerType === "touch" || pointerType === "";
 }
 
-/** Stop the canvas only while an overlay genuinely covers the video frame. */
-export function shouldRunDanmakuCanvas({
+/** Stop the floating layer only while an overlay genuinely covers the video frame. */
+export function shouldRunFloatingDanmaku({
   danmakuActive,
   osdOn,
   sidePanelOverlaysPlayer,
@@ -684,7 +681,7 @@ export function PlayerPane({
     showHost && player.running && !player.paused && !overlayInteractionOpen;
   const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
   const mobileDrawerOpen = compactLandscapeViewport && sidePanelOpen;
-  const canvasActive = shouldRunDanmakuCanvas({
+  const floatingDanmakuActive = shouldRunFloatingDanmaku({
     danmakuActive,
     osdOn,
     sidePanelOverlaysPlayer: mobileDrawerOpen,
@@ -1613,8 +1610,8 @@ export function PlayerPane({
               {/* Floating danmaku shares the picture brightness, while the
                   controls and room information keep their normal contrast. */}
               {showHost && osdOn && !audioOnly && (
-                <CanvasDanmaku
-                  active={canvasActive}
+                <DanmuJsDanmaku
+                  active={floatingDanmakuActive}
                   sessionKey={danmakuSessionKey}
                   siteId={siteId}
                   roomId={roomId}
@@ -1997,10 +1994,7 @@ export function PlayerPane({
                   className="min-h-0 min-w-0 shrink-0"
                   style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
                 >
-                  <DanmakuSettingsPanel
-                    className="h-full"
-                    siteId={siteId}
-                  />
+                  <DanmakuSettingsPanel className="h-full" siteId={siteId} />
                 </div>
               </div>
             </div>
