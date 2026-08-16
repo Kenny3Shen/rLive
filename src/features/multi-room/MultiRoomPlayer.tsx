@@ -283,7 +283,15 @@ function MainMultiRoomControls({
   );
 }
 
-export function MultiRoomPlayer({ room, main }: { room: MultiRoomEntry; main: boolean }) {
+export function MultiRoomPlayer({
+  room,
+  main,
+  dragHandle,
+}: {
+  room: MultiRoomEntry;
+  main: boolean;
+  dragHandle?: ReactNode;
+}) {
   const setMainRoom = useMultiRoomStore((state) => state.setMainRoom);
   const removeRoom = useMultiRoomStore((state) => state.removeRoom);
   const updateAudio = useMultiRoomStore((state) => state.updateAudio);
@@ -409,7 +417,7 @@ export function MultiRoomPlayer({ room, main }: { room: MultiRoomEntry; main: bo
   }, []);
 
   const setControlsVisible = useCallback((visible: boolean) => {
-    if (controlsVisibleRef.current === visible) return;
+    // Room-keyed tiles change roles in place, so stale inert state must always be resynced.
     controlsVisibleRef.current = visible;
     for (const layer of [controlsRef.current, hudRef.current]) {
       if (!layer) continue;
@@ -635,7 +643,7 @@ export function MultiRoomPlayer({ room, main }: { room: MultiRoomEntry; main: bo
       )}
 
       <div
-        ref={main ? hudRef : undefined}
+        ref={hudRef}
         data-player-hud={main ? true : undefined}
         data-visible={main ? (controlsVisibleRef.current ? "true" : "false") : undefined}
         aria-hidden={main ? !controlsVisibleRef.current : undefined}
@@ -660,6 +668,7 @@ export function MultiRoomPlayer({ room, main }: { room: MultiRoomEntry; main: bo
         onBlurCapture={main ? handleChromeBlurCapture : undefined}
       >
         <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
+          {dragHandle}
           {main && <Badge variant="secondary">主画面</Badge>}
           <RoomIdentityLine
             siteId={room.siteId}
