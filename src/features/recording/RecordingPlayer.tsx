@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Maximize2, MessageSquareText, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -26,6 +28,18 @@ function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
 }
 
+const RECORDING_SEEK_TIMEOUT_MS = 8_000;
+const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
+const RECORDING_MPEGTS_CONFIG = {
+  enableWorker: false,
+  enableStashBuffer: true,
+  lazyLoad: true,
+  autoCleanupSourceBuffer: false,
+  seekType: "range",
+  rangeLoadZeroStart: true,
+  accurateSeek: false,
+};
+
 export function RecordingPlayer({ item, url }: { item: RecordingItem; url: string }) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -43,7 +57,14 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
   const [duration, setDuration] = useState(0);
   const [danmakuEntries, setDanmakuEntries] = useState<RecordedDanmakuEntry[]>([]);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
+  const [playerRevision, setPlayerRevision] = useState(0);
+  const sliderTargetRef = useRef<number | null>(null);
+  const seekTargetRef = useRef<number | null>(null);
+  const recoverySeekRef = useRef<number | null>(null);
+  const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekRequestRef = useRef(0);
   const playbackKind = recordingPlaybackKind(item.protocol);
+  const recordedDuration = Math.max(0, item.duration_ms / 1000);
 
   const danmakuUrlQuery = useQuery({
     queryKey: ["recording-danmaku", item.id],
@@ -73,6 +94,74 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
     return () => controller.abort();
   }, [danmakuUrlQuery.data, item.include_danmaku]);
 
+  const clearSeekTimer = useCallback(() => {
+    if (seekTimerRef.current !== null) {
+      clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = null;
+    }
+  }, []);
+
+  const completeSeek = useCallback(() => {
+    seekTargetRef.current = null;
+    clearSeekTimer();
+    setWaiting(false);
+  }, [clearSeekTimer]);
+
+  const seekTo = useCallback(
+    (requestedTarget: number, allowRecovery = true) => {
+      const media = videoRef.current;
+      if (!media || !Number.isFinite(requestedTarget)) return;
+
+      const availableDuration = recordedDuration > 0 ? recordedDuration : duration;
+      const target = Math.max(
+        0,
+        Math.min(requestedTarget, availableDuration > 0 ? availableDuration : requestedTarget),
+      );
+      const request = ++seekRequestRef.current;
+      sliderTargetRef.current = null;
+      seekTargetRef.current = target;
+      clearSeekTimer();
+      setCurrentTime(target);
+      setError(null);
+      setWaiting(true);
+
+      // The progress bar can be used before mpegts.js has attached its seek
+      // handler. Preserve that target until the protocol player is ready.
+      if (!playerRef.current && playbackKind !== "native") {
+        recoverySeekRef.current = target;
+        return;
+      }
+
+      try {
+        media.currentTime = target;
+      } catch {
+        seekTargetRef.current = null;
+        setWaiting(false);
+        setError("跳转失败，请重试");
+        return;
+      }
+
+      seekTimerRef.current = setTimeout(() => {
+        if (seekRequestRef.current !== request) return;
+        const failedTarget = seekTargetRef.current;
+        seekTargetRef.current = null;
+        seekTimerRef.current = null;
+        setWaiting(false);
+        if (allowRecovery && failedTarget !== null && playbackKind !== "native") {
+          recoverySeekRef.current = failedTarget;
+          setLoading(true);
+          setPlayerRevision((revision) => revision + 1);
+        } else {
+          setError("跳转失败，请重试");
+        }
+      }, RECORDING_SEEK_TIMEOUT_MS);
+    },
+    [clearSeekTimer, duration, playbackKind, recordedDuration],
+  );
+
+  const seekToRef = useRef(seekTo);
+  seekToRef.current = seekTo;
+
   useEffect(() => {
     let cancelled = false;
     const video = videoRef.current;
@@ -85,35 +174,69 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
     setError(null);
     setPaused(true);
     setCurrentTime(0);
-    setDuration(0);
+    setDuration(recordedDuration);
     const kind = playbackKind;
 
     function syncTime() {
-      setCurrentTime(media.currentTime || 0);
-      setDuration(finiteDuration(media));
+      if (cancelled) return;
+      const actualTime = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
+      // Recorder metadata is authoritative. An FLV MediaSource can expose a
+      // transient duration of 0 or 1 second while its buffer is being rebuilt.
+      const nextDuration = recordedDuration > 0 ? recordedDuration : finiteDuration(media);
+      if (sliderTargetRef.current === null) setCurrentTime(actualTime);
+      setDuration(nextDuration);
+      const target = seekTargetRef.current;
+      if (
+        target !== null &&
+        (Math.abs(actualTime - target) <= RECORDING_SEEK_TOLERANCE_SECONDS || media.ended)
+      ) {
+        completeSeek();
+      }
     }
     function onPlay() {
+      if (cancelled) return;
       setPaused(false);
       setWaiting(false);
       setLoading(false);
     }
     function onPause() {
+      if (cancelled) return;
       setPaused(true);
     }
     function onReady() {
+      if (cancelled) return;
       setLoading(false);
-      setWaiting(false);
+      if (seekTargetRef.current === null) setWaiting(false);
       syncTime();
+      const pendingTarget = recoverySeekRef.current;
+      if (pendingTarget !== null) {
+        recoverySeekRef.current = null;
+        setTimeout(() => {
+          if (!cancelled) seekToRef.current(pendingTarget, false);
+        }, 0);
+      }
     }
     function onWaiting() {
+      if (cancelled) return;
       setWaiting(true);
     }
     function onEnded() {
+      if (cancelled) return;
       setPaused(true);
-      setWaiting(false);
+      if (seekTargetRef.current === null) setWaiting(false);
+      else completeSeek();
+    }
+    function onSeeking() {
+      if (!cancelled && seekTargetRef.current !== null) setWaiting(true);
+    }
+    function onSeeked() {
+      if (!cancelled && seekTargetRef.current !== null) syncTime();
     }
     function onNativeError() {
+      if (cancelled) return;
       if (!media.error) return;
+      seekTargetRef.current = null;
+      clearSeekTimer();
       setError(media.error.message || "录制回放失败");
       setLoading(false);
       setWaiting(false);
@@ -129,6 +252,8 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
     video.addEventListener("pause", onPause);
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("ended", onEnded);
+    video.addEventListener("seeking", onSeeking);
+    video.addEventListener("seeked", onSeeked);
     video.addEventListener("error", onNativeError);
 
     void loadXgPlayerModules(kind)
@@ -158,10 +283,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
               hasVideo: true,
             },
             mpegtsConfig: {
-              enableWorker: false,
-              enableStashBuffer: true,
-              lazyLoad: true,
-              autoCleanupSourceBuffer: false,
+              ...RECORDING_MPEGTS_CONFIG,
             },
           },
           mpegts: {
@@ -172,16 +294,15 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
               hasVideo: true,
             },
             mpegtsConfig: {
-              enableWorker: false,
-              enableStashBuffer: true,
-              lazyLoad: true,
-              autoCleanupSourceBuffer: false,
+              ...RECORDING_MPEGTS_CONFIG,
             },
           },
         });
         playerRef.current = player;
         player.on("error", (cause) => {
           if (cancelled) return;
+          seekTargetRef.current = null;
+          clearSeekTimer();
           setError(xgPlayerErrorMessage(cause, "录制回放失败"));
           setLoading(false);
           setWaiting(false);
@@ -203,7 +324,13 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       video.removeEventListener("pause", onPause);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("ended", onEnded);
+      video.removeEventListener("seeking", onSeeking);
+      video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("error", onNativeError);
+      seekRequestRef.current += 1;
+      clearSeekTimer();
+      seekTargetRef.current = null;
+      sliderTargetRef.current = null;
       const player = playerRef.current;
       playerRef.current = null;
       try {
@@ -213,7 +340,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
         // The protocol plugin may already have released its MediaSource.
       }
     };
-  }, [item.id, playbackKind, url]);
+  }, [clearSeekTimer, completeSeek, item.id, playbackKind, playerRevision, recordedDuration, url]);
 
   const togglePlayback = useCallback(() => {
     const player = playerRef.current;
@@ -293,12 +420,12 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/65 px-8 text-center text-sm text-white">
+          <div className="absolute inset-0 flex items-center justify-center break-all bg-black/65 px-8 text-center text-sm text-white">
             {error}
           </div>
         )}
       </div>
-      <div className="flex min-w-0 items-center gap-2 bg-card px-2 py-1.5">
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden bg-card px-2 py-1.5">
         <Button
           type="button"
           variant="ghost"
@@ -328,38 +455,67 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
             " / " +
             formatRecordingDuration(duration * 1000)
           }
-          className="min-w-20 flex-1"
+          className="!w-auto min-w-0 flex-1"
           onValueChange={(value) => {
             const next = Number(Array.isArray(value) ? value[0] : value);
-            if (!Number.isFinite(next) || !videoRef.current) return;
-            videoRef.current.currentTime = next;
+            if (!Number.isFinite(next)) return;
+            sliderTargetRef.current = next;
             setCurrentTime(next);
+          }}
+          onValueCommitted={(value) => {
+            const next = Number(Array.isArray(value) ? value[0] : value);
+            if (Number.isFinite(next)) seekTo(next);
           }}
         />
         <span className="w-10 shrink-0 font-mono text-xs text-muted-foreground">
           {formatRecordingDuration(duration * 1000)}
         </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={muted ? "取消静音" : "静音"}
-          aria-pressed={muted}
-          onClick={toggleMute}
-        >
-          {muted ? <VolumeX aria-hidden /> : <Volume2 aria-hidden />}
-        </Button>
-        <Slider
-          value={muted ? 0 : volume}
-          min={0}
-          max={100}
-          step={1}
-          aria-label="回放音量"
-          className="w-20 max-sm:hidden"
-          onValueChange={(value) => {
-            setPlayerVolume(Number(Array.isArray(value) ? value[0] : value));
-          }}
-        />
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={muted ? "调节音量（当前静音）" : `调节音量（当前 ${volume}%）`}
+              />
+            }
+          >
+            {muted ? <VolumeX aria-hidden /> : <Volume2 aria-hidden />}
+          </PopoverTrigger>
+          <PopoverContent
+            container={stageRef}
+            side="top"
+            align="end"
+            className="w-auto items-center gap-2 p-2.5"
+          >
+            <PopoverTitle className="sr-only">回放音量</PopoverTitle>
+            <Slider
+              orientation="vertical"
+              value={muted ? 0 : volume}
+              min={0}
+              max={100}
+              step={1}
+              aria-label="回放音量"
+              aria-valuetext={`${Math.round(muted ? 0 : volume)}%`}
+              className="h-28"
+              onValueChange={(value) => {
+                setPlayerVolume(Number(Array.isArray(value) ? value[0] : value));
+              }}
+            />
+            <Separator className="w-8" />
+            <Button
+              type="button"
+              variant={muted ? "secondary" : "ghost"}
+              size="icon-sm"
+              aria-label={muted ? "取消静音" : "静音"}
+              aria-pressed={muted}
+              onClick={toggleMute}
+            >
+              <VolumeX aria-hidden />
+            </Button>
+          </PopoverContent>
+        </Popover>
         <Button
           type="button"
           variant="ghost"
