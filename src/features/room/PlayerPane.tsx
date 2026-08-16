@@ -32,7 +32,6 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
-import { SuperChatOverlay } from "./SuperChatOverlay";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import {
   PlayerFullscreenHud,
@@ -66,7 +65,6 @@ import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
-import { siteSupportsSuperChat } from "./superChat";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
 
@@ -465,7 +463,6 @@ export function PlayerPane({
   const [osdOn, setOsdOn] = useState(true);
   const [audioOnly, setAudioOnly] = useState(false);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
-  const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
@@ -1641,14 +1638,6 @@ export function PlayerPane({
             </div>
 
             {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
-
-            {showHost && !audioOnly && superChatEnabled && siteSupportsSuperChat(siteId) && (
-              <SuperChatOverlay
-                key={`sc:${roomSessionKey ?? "room"}`}
-                active={danmakuActive}
-                className="absolute bottom-[calc(5rem+var(--player-chrome-inset))] left-[max(0.75rem,env(safe-area-inset-left))] z-20 max-h-[calc(100%_-_5.75rem_-_var(--player-chrome-inset))] w-[min(240px,calc(100%-1.5rem))]"
-              />
-            )}
 
             {showHost &&
               !audioOnly &&
