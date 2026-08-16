@@ -358,7 +358,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - `DanmuJsDanmaku` 必须等容器有非零尺寸后才创建实例，零尺寸期间只保留有界、带过期时间的 pending；`active`、`sessionKey`、页面可见性、减少动态效果偏好或组件卸载变化时销毁旧实例和 listener，避免隐藏播放器继续分配 DOM。
 - danmu.js 数据池、本地 metadata、聚合目标和 SC 计时器都必须有界，并在 `bullet_remove` / `destroy` 时同步释放。普通聊天聚合只更新同一活动 bullet 的文本与计数槽，不为每次 `×N` 变化重新创建动画。
 - B 站图片表情使用预设尺寸的安全 DOM 节点，加载失败回退原文，避免图片就绪后改变轨道高度或让弹幕跳动。平台文本不得写入 `innerHTML`。
-- 弹幕容器保持 `opacity: 1`；普通消息与 SC 都从统一的 `danmaku_opacity` 读取值并写到各自元素，避免容器与子项透明度相乘，也不再提供 SC 独立透明度。字号、字重、区域和行数变化应更新现有 DOM 与后续 comment，轨道高度随字号统一计算。
+- 弹幕容器保持 `opacity: 1`；普通消息与 SC 都从统一的 `danmaku_opacity` 读取值并写到各自元素，避免容器与子项透明度相乘。字号、字重、区域和行数变化应更新现有 DOM 与后续 comment，轨道高度随字号统一计算。
 - 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器回退亮度使用覆盖视频与实时弹幕 DOM 容器的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
