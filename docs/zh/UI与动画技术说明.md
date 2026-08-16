@@ -80,7 +80,7 @@
 - 使用 `lucide-react`，不要手绘已有语义的 SVG。
 - Button 内图标使用 `data-icon="inline-start"` 或 `data-icon="inline-end"`；基础组件负责图标尺寸时，不额外添加尺寸 class。
 - 纯图标按钮必须提供中文 `aria-label`，不熟悉的工具图标同时提供 Tooltip。
-- 焦点样式优先复用 `focus-ring` 或基础组件的 `focus-visible` 样式。
+- Tab 键触发的焦点统一由 `src/styles.css` 的全局 `:focus-visible` 规则绘制；新增交互元素仍应优先复用 `focus-ring` 或基础组件的 `focus-visible` 样式。
 - 加载与异步结果使用 `role="status"`、`aria-live` 或组件内已有语义；不要仅靠颜色表达状态。
 - 界面文案以中文为主，代码标识符、协议名和站点名保留原文。
 
