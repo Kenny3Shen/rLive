@@ -27,6 +27,7 @@ import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
 import type { RecordingContext } from "@/features/recording/recording";
 import { RecordingControl } from "@/features/recording/RecordingControl";
+import { RecordingLeaveGuard } from "@/features/recording/RecordingLeaveGuard";
 import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
@@ -166,7 +167,7 @@ export function RoomPage() {
       playback.playUrl
         ? {
             source: playback.playUrl,
-            sourceKey: `live:${detail?.site_id ?? siteId}:${detail?.room_id ?? roomId}`,
+            sourceKey: `live:${siteId}:${(roomId ?? "").trim()}`,
             sourceKind: "live",
             siteId: detail?.site_id ?? siteId,
             roomId: detail?.room_id ?? roomId,
@@ -356,11 +357,10 @@ export function RoomPage() {
         backTarget={backTarget}
         rightSlot={
           <div className="flex items-center gap-1">
+            <RecordingControl
+              context={recordingContext}
+            />
             <div className="hidden md:flex md:items-center md:gap-1">
-              <RecordingControl
-                context={recordingContext}
-                disabled={playback.loading || Boolean(playback.error)}
-              />
               <RoomToolPopover icon={Timer} label="定时关闭">
                 <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
               </RoomToolPopover>
@@ -519,6 +519,7 @@ export function RoomPage() {
           if (await toggleFollow(groupId)) setFollowGroupOpen(false);
         }}
       />
+      <RecordingLeaveGuard context={recordingContext} />
     </div>
   );
 }
@@ -566,7 +567,7 @@ function RoomTopBar({
         <TooltipContent side="bottom">返回上一页</TooltipContent>
       </Tooltip>
       <p
-        className="absolute inset-x-20 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
+        className="absolute inset-x-24 truncate text-center text-sm font-semibold tracking-tight text-foreground/90 md:inset-x-40"
         title={title}
       >
         {title}

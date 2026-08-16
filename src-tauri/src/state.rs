@@ -12,6 +12,8 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::image_proxy::ImageProxy;
 use crate::lan_sync::LanSyncManager;
+#[cfg(not(target_os = "android"))]
+use crate::recording::RecordingManager;
 use crate::stream_proxy::StreamProxy;
 
 pub struct AppState {
@@ -23,6 +25,8 @@ pub struct AppState {
     pub douyu_send_limiter: DouyuDanmakuSendLimiter,
     pub huya_send_limiter: HuyaDanmakuSendLimiter,
     pub stream_proxy: StreamProxy,
+    #[cfg(not(target_os = "android"))]
+    pub recording: RecordingManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
 }
@@ -166,6 +170,8 @@ impl AppState {
             douyu_send_limiter: DouyuDanmakuSendLimiter::new(),
             huya_send_limiter: HuyaDanmakuSendLimiter::new(),
             stream_proxy: StreamProxy::new(),
+            #[cfg(not(target_os = "android"))]
+            recording: RecordingManager::new(app_directory)?,
             image_proxy: ImageProxy::new(),
             lan_sync: LanSyncManager::new(),
         })
