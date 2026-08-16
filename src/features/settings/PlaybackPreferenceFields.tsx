@@ -415,8 +415,8 @@ export function SuperChatSettingsFields({
       <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
         <FieldContent>
           <FieldTitle>
-            <span id={enabledLabelId}>显示 SC 卡片</span>
-            {layout === "page" && <FieldTip>在支持的平台上显示醒目留言卡片。</FieldTip>}
+            <span id={enabledLabelId}>显示 SC 特殊弹幕</span>
+            {layout === "page" && <FieldTip>在支持的平台上显示底部固定的 SC 特殊弹幕。</FieldTip>}
           </FieldTitle>
         </FieldContent>
         <Switch aria-labelledby={enabledLabelId} checked={enabled} onCheckedChange={setEnabled} />
