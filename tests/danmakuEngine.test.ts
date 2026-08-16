@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createEngine } from "../src/features/room/canvas/danmakuEngine";
-import { danmakuCanvasPixelRatio } from "../src/features/room/canvas/framePacing";
+import {
+  DANMAKU_MAX_BACKING_PIXELS,
+  DANMAKU_MAX_FRAME_SECONDS,
+  DANMAKU_MAX_PIXEL_RATIO,
+  danmakuCanvasPixelRatio,
+  danmakuOutline,
+  snapStaticAxis,
+  snapToDevicePixel,
+} from "../src/features/room/canvas/framePacing";
 
 function chat(content: string, ts: number, user = "观众") {
   return {
@@ -27,13 +35,173 @@ function richChat(content: string, ts: number, user = "观众") {
 }
 
 describe("canvas backing store scale", () => {
-  test("caps the device scale identically on every client", () => {
+  test("keeps the device scale when the surface fits the pixel budget", () => {
+    // A phone player surface is physically small in CSS pixels, so its full
+    // device scale is what keeps glyphs as crisp as the DOM text beside them.
+    expect(danmakuCanvasPixelRatio(2.75, 412, 232)).toBe(2.75);
+    expect(danmakuCanvasPixelRatio(3, 390, 220)).toBe(3);
+    // A desktop 1080p stage is already 1:1 and unaffected.
+    expect(danmakuCanvasPixelRatio(1, 1920, 1080)).toBe(1);
+    expect(danmakuCanvasPixelRatio(1.25, 1536, 864)).toBe(1.25);
+  });
+
+  test("bounds the backing store by total pixels, not by ratio", () => {
+    // 2560×1440 at 2x would be 29.5 MP; the budget pulls it back to 4K-ish.
+    const large = danmakuCanvasPixelRatio(2, 2560, 1440);
+    expect(large).toBeLessThan(2);
+    expect(2560 * 1440 * large * large).toBeLessThanOrEqual(DANMAKU_MAX_BACKING_PIXELS);
+    // Quantized so layout jitter cannot invalidate the raster cache each frame.
+    expect(large * 4).toBe(Math.round(large * 4));
+    // Never below 1: a soft 1x store still beats an upscaled sub-1x one.
+    expect(danmakuCanvasPixelRatio(3, 8000, 6000)).toBe(1);
+  });
+
+  test("falls back to the plain ratio ceiling without a measured surface", () => {
     expect(danmakuCanvasPixelRatio(1)).toBe(1);
-    expect(danmakuCanvasPixelRatio(1.25)).toBe(1.25);
-    expect(danmakuCanvasPixelRatio(2)).toBe(1.5);
-    expect(danmakuCanvasPixelRatio(3)).toBe(1.5);
+    expect(danmakuCanvasPixelRatio(2)).toBe(2);
+    expect(danmakuCanvasPixelRatio(4)).toBe(DANMAKU_MAX_PIXEL_RATIO);
     expect(danmakuCanvasPixelRatio(Number.NaN)).toBe(1);
     expect(danmakuCanvasPixelRatio(0)).toBe(1);
+    // A degenerate measurement must not collapse the store either.
+    expect(danmakuCanvasPixelRatio(2, 0, 0)).toBe(2);
+    expect(danmakuCanvasPixelRatio(2, Number.NaN, 100)).toBe(2);
+  });
+});
+
+describe("danmaku glyph crispness", () => {
+  test("snaps a coordinate onto a whole device pixel", () => {
+    // 2.75x is a real Android device scale, where an integer CSS coordinate is
+    // still fractional in device pixels.
+    expect(snapToDevicePixel(10, 2.75) * 2.75).toBe(Math.round(10 * 2.75));
+    expect(snapToDevicePixel(10.4, 2.75) * 2.75).toBe(Math.round(10.4 * 2.75));
+    // A whole device pixel already: must be left exactly alone.
+    expect(snapToDevicePixel(4 / 2.75, 2.75)).toBe(4 / 2.75);
+    expect(snapToDevicePixel(7.5, 2)).toBe(7.5);
+    expect(snapToDevicePixel(7.3, 1)).toBe(7);
+    // Never move a value further than half a device pixel.
+    for (const value of [0, 1.1, 12.37, 199.94, -3.6]) {
+      expect(Math.abs(snapToDevicePixel(value, 2.75) - value)).toBeLessThanOrEqual(0.5 / 2.75);
+    }
+    // Degenerate inputs pass through rather than collapsing to zero.
+    expect(snapToDevicePixel(12.3, 0)).toBe(12.3);
+    expect(snapToDevicePixel(12.3, Number.NaN)).toBe(12.3);
+    expect(snapToDevicePixel(Number.NaN, 2)).toBeNaN();
+  });
+
+  test("keeps the v0.43.1 outline weight at every glyph size", () => {
+    const small = danmakuOutline(12);
+    const medium = danmakuOutline(18);
+    const large = danmakuOutline(48);
+
+    // 描边为 max(2, fontSize * 0.13)：12px 下取 2px 下限，之后按字号线性增长，
+    // 不设上限。曾按 clamp(fontSize * 0.1, 1, 3) 改细，各字号轮廓削弱 23–52%，
+    // 弹幕在动态画面上失去可读的重量感，看久了累。
+    expect(small.lineWidth).toBe(2);
+    expect(medium.lineWidth).toBeCloseTo(2.34, 5);
+    expect(large.lineWidth).toBeCloseTo(6.24, 5);
+
+    // 阴影固定，且与 lineWidth 解耦：曾把 blur 绑到 lineWidth，导致描边最细处
+    // 阴影同时最弱，两处损失叠加。
+    for (const outline of [small, medium, large]) {
+      expect(outline.shadowBlur).toBe(2);
+      expect(outline.shadowOffset).toBe(1);
+      expect(outline.shadowAlpha).toBe(0.75);
+    }
+
+    // 字号越大轮廓越厚，不被上限截断。
+    expect(large.lineWidth).toBeGreaterThan(medium.lineWidth);
+    expect(medium.lineWidth).toBeGreaterThan(small.lineWidth);
+
+    // 非法字号仍要给出可用轮廓。
+    expect(danmakuOutline(0).lineWidth).toBeGreaterThanOrEqual(2);
+    expect(danmakuOutline(Number.NaN).lineWidth).toBeGreaterThanOrEqual(2);
+  });
+
+  test("keeps a static coordinate on the device grid", () => {
+    // A lane's y never changes while the comment is on screen, so aligning it
+    // is free and buys a 1:1 pixel copy.
+    expect(snapStaticAxis(10.4, 2.75)).toBe(snapToDevicePixel(10.4, 2.75));
+    expect(snapStaticAxis(12.37, 1)).toBe(12);
+    expect(snapStaticAxis(12.3, 0)).toBe(12.3);
+    expect(snapStaticAxis(12.3, Number.NaN)).toBe(12.3);
+  });
+
+  test("keeps the travelling axis at a constant per-frame step", () => {
+    // The property the eye actually reads is *step uniformity*, not sub-pixel
+    // accuracy. Quantizing the moving axis cannot deliver it: at the default
+    // 197px/s a 60fps frame advances 3.3 CSS px, which rounds to an alternating
+    // 3,3,4,3,3,4… device-pixel step — a velocity jitter at frame rate, which is
+    // the out-of-vsync shearing this guards against. Lower densities are worse,
+    // not better: the quantum is a whole device pixel either way, so a smaller
+    // per-frame step means the rounding is a larger fraction of it.
+    for (const pixelRatio of [1, 1.25, 1.5, 2, 2.75, 3]) {
+      const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+      engine.tick(0, 1280, 720);
+      engine.push(chat("匀速前进的弹幕", 1));
+
+      const steps: number[] = [];
+      let previous = engine.visibleItems()[0]?.x ?? 0;
+      for (let frame = 0; frame < 12; frame += 1) {
+        engine.tick(1 / 60, 1280, 720);
+        const item = engine.visibleItems()[0];
+        if (!item) break;
+        // What the renderer would hand to drawImage for the moving axis.
+        const drawn = item.x;
+        steps.push(previous - drawn);
+        previous = drawn;
+      }
+
+      expect(steps.length).toBeGreaterThan(6);
+      const largest = Math.max(...steps);
+      const smallest = Math.min(...steps);
+      expect(smallest).toBeGreaterThan(0);
+      // Every frame advances by the same amount, at every density. Rounding to
+      // whole device pixels here would spread these by ~1/(step * pixelRatio),
+      // i.e. up to 30% at 1x.
+      expect(largest - smallest).toBeLessThan(smallest * 1e-9);
+      expect(snapStaticAxis(previous, pixelRatio)).toBeLessThanOrEqual(previous + 1);
+    }
+  });
+});
+
+describe("danmaku frame pacing", () => {
+  test("advances a comment by the real elapsed time across a long frame", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("匀速前进的弹幕", 1));
+
+    const start = engine.visibleItems()[0]?.x ?? 0;
+    // One 150ms WebView hiccup, which the old 0.1s clamp charged as 100ms — the
+    // comment then fell behind constant velocity and caught up afterwards.
+    engine.tick(0.15, 1280, 720);
+    const afterHiccup = start - (engine.visibleItems()[0]?.x ?? 0);
+
+    const steady = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    steady.tick(0, 1280, 720);
+    steady.push(chat("匀速前进的弹幕", 1));
+    const steadyStart = steady.visibleItems()[0]?.x ?? 0;
+    for (let index = 0; index < 3; index += 1) {
+      steady.tick(0.05, 1280, 720);
+    }
+    const afterSteady = steadyStart - (steady.visibleItems()[0]?.x ?? 0);
+
+    // Same wall-clock time, same distance: velocity is constant in real time.
+    expect(afterHiccup).toBeCloseTo(afterSteady, 6);
+    expect(afterHiccup).toBeGreaterThan(0);
+  });
+
+  test("bounds a multi-second suspension instead of teleporting the picture", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    engine.push(chat("挂起后恢复的弹幕", 1));
+
+    const start = engine.visibleItems()[0]?.x ?? 0;
+    const speed = engine.visibleItems()[0]?.speed ?? 0;
+    engine.tick(30, 1280, 720);
+    const moved = start - (engine.visibleItems()[0]?.x ?? start);
+
+    expect(speed).toBeGreaterThan(0);
+    expect(moved).toBeCloseTo(speed * DANMAKU_MAX_FRAME_SECONDS, 6);
   });
 });
 
@@ -65,7 +233,10 @@ describe("danmaku engine", () => {
     const positions = items.map((item) => item.y);
 
     expect(items).toHaveLength(4);
-    expect(positions).toEqual([12, 39, 66, 93]);
+    // 18px 弹幕的车道高度为 round(18 * 1.4) = 25，首行内缩为
+    // clamp(round(18 * 0.35), 4, 8) = 6。两者都随字号缩放，所以移动端的小字号
+    // 不会像旧的固定 12px 内缩 + 24px 车道下限那样在顶部留出近一行的空白。
+    expect(positions).toEqual([6, 31, 56, 81]);
     for (const item of items) {
       expect(item.y).toBeGreaterThanOrEqual(0);
       expect(item.y + item.fontSize).toBeLessThanOrEqual(720);
@@ -157,6 +328,64 @@ describe("danmaku engine", () => {
     engine.push(chat("窗口已更新", 19_500, "观众乙"));
 
     expect(engine.visibleItems().find((item) => item.text === "窗口已更新 ×2")).toBeDefined();
+  });
+
+  test("keeps the raster keys tied to drawn content, not to item identity", () => {
+    const engine = createEngine({
+      fontSize: 18,
+      speed: 8,
+      opacity: 1,
+      aggregateRepeats: true,
+      aggregateWindowMs: 5_000,
+    });
+    engine.tick(0, 1280, 720);
+
+    engine.push(chat("同款弹幕", 1_000, "观众甲"));
+    const first = engine.visibleItems()[0];
+    const firstId = first?.id;
+    const firstKey = first?.textRasterKey;
+    expect(firstKey).toBeTruthy();
+    expect(first?.richRasterKey).not.toBe(firstKey);
+
+    // 聚合改变了绘制文本，键必须随之更新，否则会继续复用 ×1 的位图。
+    engine.push(chat("同款弹幕", 2_000, "观众乙"));
+    const aggregated = engine.visibleItems()[0];
+    expect(aggregated?.text).toBe("同款弹幕 ×2");
+    expect(aggregated?.textRasterKey).not.toBe(firstKey);
+    // 而 id 是稳定身份，不再被聚合重写——旧实现按 id 缓存位图，每次 ×N
+    // 递增都会遗留一张孤儿位图。
+    expect(aggregated?.id).toBe(firstId);
+
+    // 内容相同、样式相同的两条弹幕共用同一个键，也就共用同一张位图。
+    engine.push(chat("独立弹幕", 20_000, "观众甲"));
+    engine.push(chat("独立弹幕", 40_000, "观众乙"));
+    const twins = engine.visibleItems().filter((item) => item.text === "独立弹幕");
+    expect(twins).toHaveLength(2);
+    expect(twins[0]?.id).not.toBe(twins[1]?.id);
+    expect(twins[0]?.textRasterKey).toBe(twins[1]?.textRasterKey);
+  });
+
+  test("keeps the first lane close to the top edge at every font size", () => {
+    // Image #3 的症状：移动端 14px 弹幕顶部空出接近一整行。旧实现是固定 12px
+    // 内缩叠加 24px 车道下限，两者都按 18px 桌面弹幕调过，于是小字号被放大。
+    for (const fontSize of [12, 14, 18, 24, 30, 48]) {
+      const engine = createEngine({ fontSize, speed: 8, opacity: 1 });
+      engine.tick(0, 1280, 720);
+      engine.push(chat("首行弹幕", 1));
+      engine.push(chat("次行弹幕", 2));
+
+      const [first, second] = engine.visibleItems();
+      const top = first?.y ?? -1;
+      // 内缩不小于自己弹幕边框的上边距（否则会被顶边裁掉），也不超过 8px。
+      expect(top).toBeGreaterThanOrEqual(4);
+      expect(top).toBeLessThanOrEqual(8);
+      // 顶部留白始终小于半行，任何字号下都不会像旧实现那样接近一整行。
+      expect(top).toBeLessThan(fontSize * 0.5);
+
+      // 车道间距随字号缩放，不再由固定下限接管小字号。
+      const pitch = (second?.y ?? 0) - top;
+      expect(pitch).toBe(Math.max(16, Math.round(fontSize * 1.4)));
+    }
   });
 
   test("keeps a local account comment separate without changing its color", () => {
@@ -355,9 +584,9 @@ describe("danmaku engine", () => {
 
     const newer = engine.visibleItems().find((item) => item.text === "新字号弹幕");
     expect(newer?.fontSize).toBe(30);
-    // 30px text uses a 39px lane (font + 9), not the stale 27px lane from
-    // the 18px setting. This guards the cache invalidation path.
-    expect(newer?.y).toBe(51);
+    // 30px 弹幕使用 round(30 * 1.4) = 42 的车道高度，而不是 18px 设置遗留的
+    // 25px 车道；首行内缩也提升到上限 8，故第二条落在 8 + 42 = 50。
+    expect(newer?.y).toBe(50);
   });
 
   test("shrinks cached lanes after the last larger message leaves", () => {
@@ -383,8 +612,8 @@ describe("danmaku engine", () => {
     const yPositions = engine.visibleItems().map((item) => item.y);
     expect(yPositions).toHaveLength(2);
     // Lane selection continues round-robin, but its spacing must return to
-    // the 18px setting's 27px lane rather than retaining the old 45px lane.
-    expect(yPositions[1] - yPositions[0]).toBe(27);
+    // the 18px setting's 25px lane rather than retaining the old 36px lane.
+    expect(yPositions[1] - yPositions[0]).toBe(25);
   });
 
   test("keeps a faster queued comment from catching a slower leading comment", () => {

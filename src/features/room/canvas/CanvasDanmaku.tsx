@@ -8,7 +8,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { DanmakuEvent, SiteId } from "@/shared/types/live";
+import type { DanmakuContentSpan, DanmakuEvent, SiteId } from "@/shared/types/live";
 import {
   DANMAKU_AREA_DEFAULT,
   DANMAKU_OPACITY_DEFAULT,
@@ -37,7 +37,12 @@ import {
   CanvasDanmakuActionMenu,
   type CanvasDanmakuHoverTarget,
 } from "./CanvasDanmakuActionMenu";
-import { danmakuCanvasPixelRatio } from "./framePacing";
+import {
+  danmakuCanvasPixelRatio,
+  DANMAKU_MAX_FRAME_SECONDS,
+  danmakuOutline,
+  snapStaticAxis,
+} from "./framePacing";
 import { selfBorderTextBox } from "./selfBorder";
 import { cn } from "@/lib/utils";
 
@@ -60,8 +65,18 @@ type CanvasDanmakuProps = {
 
 type TextRaster = {
   canvas: HTMLCanvasElement;
+  /** Layout box in CSS pixels. Used to recover the content box for hit testing. */
   width: number;
   height: number;
+  /**
+   * Blit size in CSS pixels, i.e. the backing store divided by the device
+   * scale. This is deliberately *not* `width`/`height`: the backing store is
+   * rounded up to whole device pixels, so drawing it at the CSS layout size
+   * would resample the glyphs by that rounding fraction on every frame — the
+   * single largest source of soft text on a fractional-DPR phone screen.
+   */
+  drawWidth: number;
+  drawHeight: number;
   offsetX: number;
   offsetY: number;
   pixelCount: number;
@@ -76,7 +91,11 @@ type DanmakuImageAsset = {
 
 const DANMAKU_FONT_FAMILY = '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 const MAX_RASTER_CSS_WIDTH = 1600;
-const MAX_RASTER_DEVICE_PIXELS = 512_000;
+// Bounds a single bitmap. Expressed generously enough that the widest allowed
+// comment still gets a raster at a phone's full device scale — otherwise raising
+// the backing-store budget would silently push long messages onto the slower
+// per-frame direct-draw path.
+const MAX_RASTER_DEVICE_PIXELS = 2_000_000;
 const MAX_RASTER_CACHE_PIXELS = 8_000_000;
 const MAX_RASTER_CACHE_ITEMS = 96;
 const MAX_IMAGE_CACHE_ITEMS = 128;
@@ -164,6 +183,24 @@ export function isCanvasDanmakuMenuTarget(target: EventTarget | null): boolean {
 
 function canvasFont(fontWeight: number, fontSize: number): string {
   return `${fontWeight} ${fontSize}px ${DANMAKU_FONT_FAMILY}`;
+}
+
+/**
+ * Shared 1×1 context used only for `measureText`.
+ *
+ * Measuring used to happen on the raster's own canvas before it was resized to
+ * its final backing store, so every comment paid for two backing allocations.
+ * On Android WebView that is a GPU texture churn per message in a busy room.
+ */
+let sharedMeasureContext: CanvasRenderingContext2D | null | undefined;
+
+function measureContext(): CanvasRenderingContext2D | null {
+  if (sharedMeasureContext !== undefined) return sharedMeasureContext;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  sharedMeasureContext = canvas.getContext("2d");
+  return sharedMeasureContext;
 }
 
 /**
@@ -279,7 +316,13 @@ function richLineMetrics(
   };
 }
 
-/** Draw ordered text/image spans after their CDN images have been resolved. */
+/**
+ * Draw ordered text/image spans after their CDN images have been resolved.
+ *
+ * Two passes over the spans: all outlines with the caller's shadow, then all
+ * glyph fills and images with it cleared. Interleaving them would cast the
+ * shadow twice per text span and force a `save`/`restore` pair per image.
+ */
 function drawRichDanmaku(
   ctx: CanvasRenderingContext2D,
   item: TrackItem,
@@ -297,17 +340,25 @@ function drawRichDanmaku(
 
   const textY = y + (metrics.lineHeight - item.fontSize) / 2;
   const imageY = y + (metrics.lineHeight - metrics.imageSize) / 2;
+  const advance = (span: DanmakuContentSpan): number =>
+    span.type === "image"
+      ? metrics.imageSize + DANMAKU_IMAGE_HORIZONTAL_GAP
+      : ctx.measureText(span.text).width;
+
   let cursor = x;
   for (const span of spans) {
     if (span.type === "text") {
+      // Stroke and fill in one pass, both carrying the caller's shadow — the
+      // v0.43.1 behaviour. The doubled dark edge is the point, not a defect.
       ctx.strokeText(span.text, cursor, textY);
       ctx.fillText(span.text, cursor, textY);
-      cursor += ctx.measureText(span.text).width;
+      cursor += advance(span);
       continue;
     }
 
     const image = imageForUrl(span.image_url);
     if (!image) return false;
+    // An emote is its own artwork and wants no text shadow cast under it.
     ctx.save();
     ctx.shadowColor = "rgba(0,0,0,0)";
     ctx.shadowBlur = 0;
@@ -321,7 +372,7 @@ function drawRichDanmaku(
       metrics.imageSize,
     );
     ctx.restore();
-    cursor += metrics.imageSize + DANMAKU_IMAGE_HORIZONTAL_GAP;
+    cursor += advance(span);
   }
   return true;
 }
@@ -330,8 +381,14 @@ function richImagesReady(
   item: TrackItem,
   imageForUrl: (url: string) => HTMLImageElement | null,
 ): boolean {
+  // Early-out before the iteration, not through it. `item.richSpans ?? []`
+  // allocated a fresh empty array for every plain comment on every frame, which
+  // is the overwhelming majority of the calls this makes.
+  const spans = item.richSpans;
+  if (!spans || spans.length === 0) return false;
+
   let foundImage = false;
-  for (const span of item.richSpans ?? []) {
+  for (const span of spans) {
     if (span.type !== "image") continue;
     foundImage = true;
     if (!imageForUrl(span.image_url)) return false;
@@ -351,22 +408,31 @@ function createTextRaster(
   pixelRatio: number,
   frame: number,
 ): TextRaster | null {
-  const scratch = document.createElement("canvas");
-  // Avoid the browser's default 300×150 backing allocation before we know the
-  // actual text dimensions.
-  scratch.width = 1;
-  scratch.height = 1;
-  const scratchContext = scratch.getContext("2d");
-  if (!scratchContext) return null;
+  const measure = measureContext();
+  if (!measure) return null;
 
   const font = canvasFont(fontWeight, item.fontSize);
-  scratchContext.font = font;
-  const textWidth = Math.ceil(scratchContext.measureText(item.text).width);
-  const lineWidth = Math.max(2, item.fontSize * 0.13);
+  measure.font = font;
+  const textWidth = Math.ceil(measure.measureText(item.text).width);
+  const outline = danmakuOutline(item.fontSize);
   // Include stroke and shadow extents so cached text has the same readable
-  // outline as the direct Canvas path without clipping at its edges.
-  const offsetX = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0));
-  const offsetY = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0));
+  // outline as the direct Canvas path without clipping at its edges. The spare
+  // 2px keeps the total at v0.43.1's `lineWidth + 5`, which the restored
+  // (thicker) stroke and its doubled shadow need in order not to be cropped.
+  const offsetX = Math.ceil(
+    outline.lineWidth +
+      outline.shadowBlur +
+      outline.shadowOffset +
+      2 +
+      (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0),
+  );
+  const offsetY = Math.ceil(
+    outline.lineWidth +
+      outline.shadowBlur +
+      outline.shadowOffset +
+      2 +
+      (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0),
+  );
   const width = textWidth + offsetX * 2;
   const height = Math.ceil(item.fontSize * 1.35) + offsetY * 2;
   const deviceWidth = Math.ceil(width * pixelRatio);
@@ -381,18 +447,26 @@ function createTextRaster(
     return null;
   }
 
+  const scratch = document.createElement("canvas");
   scratch.width = deviceWidth;
   scratch.height = deviceHeight;
+  const scratchContext = scratch.getContext("2d");
+  if (!scratchContext) return null;
+
   scratchContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   scratchContext.font = font;
   scratchContext.textBaseline = "top";
   scratchContext.lineJoin = "round";
-  scratchContext.shadowColor = "rgba(0,0,0,0.75)";
-  scratchContext.shadowBlur = 2;
-  scratchContext.shadowOffsetX = 1;
-  scratchContext.shadowOffsetY = 1;
+  // One shadow set for both passes, as in v0.43.1. The fill deliberately casts
+  // it a second time: that doubled dark edge is what gives the glyph its weight
+  // over moving video. Splitting the passes to keep the fill on "clean" pixels
+  // made the text lighter and tiring to read.
+  scratchContext.shadowColor = `rgba(0,0,0,${outline.shadowAlpha})`;
+  scratchContext.shadowBlur = outline.shadowBlur;
+  scratchContext.shadowOffsetX = outline.shadowOffset;
+  scratchContext.shadowOffsetY = outline.shadowOffset;
   scratchContext.strokeStyle = "rgba(0,0,0,0.82)";
-  scratchContext.lineWidth = lineWidth;
+  scratchContext.lineWidth = outline.lineWidth;
   scratchContext.fillStyle = item.color || "#fff";
   strokeSelfDanmakuBorder(scratchContext, item, offsetX, offsetY, textWidth, item.fontSize * 1.35);
   scratchContext.strokeText(item.text, offsetX, offsetY);
@@ -402,6 +476,8 @@ function createTextRaster(
     canvas: scratch,
     width,
     height,
+    drawWidth: deviceWidth / pixelRatio,
+    drawHeight: deviceHeight / pixelRatio,
     offsetX,
     offsetY,
     pixelCount,
@@ -421,19 +497,28 @@ function createRichRaster(
   imageForUrl: (url: string) => HTMLImageElement | null,
 ): TextRaster | null {
   if (!item.richSpans) return null;
-  const scratch = document.createElement("canvas");
-  scratch.width = 1;
-  scratch.height = 1;
-  const scratchContext = scratch.getContext("2d");
-  if (!scratchContext) return null;
+  const measure = measureContext();
+  if (!measure) return null;
 
-  scratchContext.font = canvasFont(fontWeight, item.fontSize);
-  const metrics = richLineMetrics(scratchContext, item);
+  measure.font = canvasFont(fontWeight, item.fontSize);
+  const metrics = richLineMetrics(measure, item);
   if (!metrics) return null;
 
-  const lineWidth = Math.max(2, item.fontSize * 0.13);
-  const offsetX = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0));
-  const offsetY = Math.ceil(lineWidth + 5 + (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0));
+  const outline = danmakuOutline(item.fontSize);
+  const offsetX = Math.ceil(
+    outline.lineWidth +
+      outline.shadowBlur +
+      outline.shadowOffset +
+      2 +
+      (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0),
+  );
+  const offsetY = Math.ceil(
+    outline.lineWidth +
+      outline.shadowBlur +
+      outline.shadowOffset +
+      2 +
+      (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0),
+  );
   const width = Math.ceil(metrics.contentWidth) + offsetX * 2;
   const height = Math.ceil(metrics.lineHeight) + offsetY * 2;
   const deviceWidth = Math.ceil(width * pixelRatio);
@@ -448,17 +533,21 @@ function createRichRaster(
     return null;
   }
 
+  const scratch = document.createElement("canvas");
   scratch.width = deviceWidth;
   scratch.height = deviceHeight;
+  const scratchContext = scratch.getContext("2d");
+  if (!scratchContext) return null;
+
   scratchContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   scratchContext.textBaseline = "top";
   scratchContext.lineJoin = "round";
-  scratchContext.shadowColor = "rgba(0,0,0,0.75)";
-  scratchContext.shadowBlur = 2;
-  scratchContext.shadowOffsetX = 1;
-  scratchContext.shadowOffsetY = 1;
+  scratchContext.shadowColor = `rgba(0,0,0,${outline.shadowAlpha})`;
+  scratchContext.shadowBlur = outline.shadowBlur;
+  scratchContext.shadowOffsetX = outline.shadowOffset;
+  scratchContext.shadowOffsetY = outline.shadowOffset;
   scratchContext.strokeStyle = "rgba(0,0,0,0.82)";
-  scratchContext.lineWidth = lineWidth;
+  scratchContext.lineWidth = outline.lineWidth;
   scratchContext.fillStyle = item.color || "#fff";
   // Image emotes are drawn at the full line height, so this box is already the
   // real content box.
@@ -479,11 +568,34 @@ function createRichRaster(
     canvas: scratch,
     width,
     height,
+    drawWidth: deviceWidth / pixelRatio,
+    drawHeight: deviceHeight / pixelRatio,
     offsetX,
     offsetY,
     pixelCount,
     lastUsedFrame: frame,
   };
+}
+
+/**
+ * Box a comment was last drawn at, plus the frame that drew it.
+ *
+ * The frame stamp replaces clearing the map every frame: a `Map#clear` followed
+ * by one `set` per visible comment reallocated the whole hash table on every
+ * frame of a busy room, and each `set` allocated a fresh box object. Stamping
+ * lets the same entry be rewritten in place, and a stale entry is recognised by
+ * its frame rather than by its absence.
+ */
+type DrawnBox = DanmakuHitBox & { frame: number };
+
+/** A hit box is only valid if the frame that recorded it is the last one drawn. */
+function drawnBoxAt(
+  boxes: Map<string, DrawnBox>,
+  hoverKey: string,
+  frame: number,
+): DrawnBox | null {
+  const box = boxes.get(hoverKey);
+  return box && box.frame === frame ? box : null;
 }
 
 export const CanvasDanmaku = memo(function CanvasDanmaku({
@@ -510,7 +622,9 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
    * schedules with a reserved width that can exceed the glyphs a frame actually
    * paints, so the hit test reads this instead of the reservation.
    */
-  const drawnBoxesRef = useRef(new Map<string, DanmakuHitBox>());
+  const drawnBoxesRef = useRef(new Map<string, DrawnBox>());
+  /** Frame number the boxes above belong to; older entries are stale. */
+  const drawnBoxFrameRef = useRef(0);
   const hoverKeyRef = useRef<string | null>(null);
   /** Set while the pointer is over the menu, which must not release the freeze. */
   const menuHoveredRef = useRef(false);
@@ -580,8 +694,9 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     const canvas = canvasRef.current;
     if (!engine || !canvas) return null;
     const rect = canvas.getBoundingClientRect();
+    const frame = drawnBoxFrameRef.current;
     const hit = engine.hitTest(clientX - rect.left, clientY - rect.top, (item) => {
-      const box = drawnBoxesRef.current.get(item.hoverKey);
+      const box = drawnBoxAt(drawnBoxesRef.current, item.hoverKey, frame);
       if (!box) return null;
       if (slop === 0) return box;
       // Grow the tested box, not the reported one: the caller anchors the menu
@@ -589,7 +704,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       return canvasDanmakuTouchHitBox(box, slop);
     });
     if (!hit || slop === 0) return hit;
-    const drawn = drawnBoxesRef.current.get(hit.item.hoverKey);
+    const drawn = drawnBoxAt(drawnBoxesRef.current, hit.item.hoverKey, frame);
     return drawn ? { item: hit.item, box: drawn } : hit;
   }, []);
 
@@ -1007,7 +1122,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     const sweepUnusedRasters = () => {
       // Only touch the cache periodically; its maximum is deliberately small
       // and this keeps the normal paint path allocation- and scan-free.
-      if (paintFrame % 120 !== 0) return;
+      if (paintFrame % 30 !== 0) return;
       const oldestAllowedFrame = paintFrame - 1;
       for (const [id, raster] of rasterCache) {
         if (raster.lastUsedFrame < oldestAllowedFrame) removeRaster(id, raster);
@@ -1039,14 +1154,23 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
 
       const visibleItems = engine && active ? engine.visibleItems() : [];
       const drawnBoxes = drawnBoxesRef.current;
-      // Rebuilt from the items this frame actually paints, so a comment that
-      // scrolled off or was evicted cannot leave a stale hit box behind for the
-      // pointer to catch.
-      drawnBoxes.clear();
       const hoverKey = hoverKeyRef.current;
       let hoverBox: DanmakuHitBox | null = null;
+      if (visibleItems.length === 0 || !engine || !active) {
+        // Nothing is drawn, so nothing in the map describes the screen any more.
+        // A sentinel no box can carry retires them all at once; leaving the last
+        // painted stamp published would keep the final screenful hit-testable
+        // over an empty canvas. `paintFrame` is deliberately not advanced here —
+        // it is also the raster cache's LRU clock, and idle frames must not age
+        // bitmaps that are still in flight.
+        drawnBoxFrameRef.current = -1;
+      }
       if (visibleItems.length > 0 && engine && active) {
         paintFrame += 1;
+        // Published so the pointer path can tell this frame's boxes from a
+        // comment that has since scrolled off or been evicted. Stamping is what
+        // lets the map be rewritten in place instead of cleared and refilled.
+        drawnBoxFrameRef.current = paintFrame;
         const currentFontWeight = engine.fontWeight();
         ensureRasterStyle(currentFontWeight);
         ctx.save();
@@ -1067,6 +1191,9 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
          * Publish the box this item is being drawn at, for pointer hit testing
          * and for anchoring the action pill. Both use the content box, without
          * the border padding, matching what the engine's own fallback reports.
+         *
+         * Rewrites the existing entry rather than replacing it, so a steady
+         * screenful of comments does no allocation here at all.
          */
         const recordBox = (
           item: TrackItem,
@@ -1075,8 +1202,28 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           lineHeight: number,
           fitToText: boolean,
         ) => {
-          const box = danmakuContentBox(item, left, item.y, contentWidth, lineHeight, fitToText);
-          drawnBoxes.set(item.hoverKey, box);
+          const vertical = fitToText
+            ? selfBorderTextBox(item.y, item.fontSize, lineHeight)
+            : { top: item.y, height: lineHeight };
+          const existing = drawnBoxes.get(item.hoverKey);
+          let box: DrawnBox;
+          if (existing) {
+            existing.x = left;
+            existing.y = vertical.top;
+            existing.width = contentWidth;
+            existing.height = vertical.height;
+            existing.frame = paintFrame;
+            box = existing;
+          } else {
+            box = {
+              x: left,
+              y: vertical.top,
+              width: contentWidth,
+              height: vertical.height,
+              frame: paintFrame,
+            };
+            drawnBoxes.set(item.hoverKey, box);
+          }
           if (item.hoverKey === hoverKey) hoverBox = box;
         };
 
@@ -1089,22 +1236,27 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           // the viewport.
           if (it.kind === "scroll" && (it.x >= width || it.x + it.width <= 0)) continue;
 
-          const paintKey = `${it.id}:${it.color}:${it.isSelf ? "self" : "normal"}`;
-          const richRasterKey = `${paintKey}:rich`;
+          // The engine maintains these keys, refreshing them only when an
+          // aggregation count actually changes the drawn text. Composing them
+          // here allocated three strings per visible comment per frame, each
+          // carrying the full comment body — GC pressure on the render thread,
+          // which surfaces as dropped frames on an Android WebView. Keying by
+          // content also means two identical comments share one bitmap.
+          const richRasterKey = it.richRasterKey;
           // A rich raster is self-contained, including its image pixels. Once
           // one exists we can continue drawing it even if its source image was
           // later evicted from the separate, bounded image-request cache.
           // Otherwise a cache eviction would briefly regress a live emote to
           // its raw-token fallback while the browser fetched the same URL
           // again.
-          const cachedRichRaster = rasterCache.get(richRasterKey);
+          const cachedRichRaster = it.richSpans ? rasterCache.get(richRasterKey) : undefined;
           if (cachedRichRaster) cachedRichRaster.lastUsedFrame = paintFrame;
           const richReady = Boolean(cachedRichRaster) || richImagesReady(it, imageForUrl);
           const raster = cachedRichRaster
             ? cachedRichRaster
             : richReady
               ? getRichRaster(richRasterKey, it, currentFontWeight)
-              : getTextRaster(`${paintKey}:text`, it, currentFontWeight);
+              : getTextRaster(it.textRasterKey, it, currentFontWeight);
           // A rich raster contains full-line-height emotes, so its box is
           // already the content box; a text raster needs the em-square fit.
           const usedRichRaster = Boolean(cachedRichRaster) || (richReady && Boolean(raster));
@@ -1126,19 +1278,24 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           }
 
           if (raster) {
-            if (directTextActive) {
-              ctx.shadowColor = "rgba(0,0,0,0)";
-              ctx.shadowBlur = 0;
-              ctx.shadowOffsetX = 0;
-              ctx.shadowOffsetY = 0;
-              directTextActive = false;
-            }
+            // Align only what is constant for this item's whole flight.
+            //
+            // `it.y` is a lane position and never changes while the comment is
+            // on screen, so aligning it is free and buys a 1:1 pixel copy. A
+            // fixed-top card's `x` is likewise static once centred. A scrolling
+            // `x` is deliberately left alone: rounding it cannot produce a
+            // constant step, so it converts a static sub-pixel blur into a
+            // ±30%-at-1x velocity jitter at frame rate. See `snapStaticAxis`.
+            const drawX =
+              it.kind === "scroll"
+                ? x - raster.offsetX
+                : snapStaticAxis(x - raster.offsetX, pixelRatio);
             ctx.drawImage(
               raster.canvas,
-              x - raster.offsetX,
-              it.y - raster.offsetY,
-              raster.width,
-              raster.height,
+              drawX,
+              snapStaticAxis(it.y - raster.offsetY, pixelRatio),
+              raster.drawWidth,
+              raster.drawHeight,
             );
             // The raster was built around the real content box, so subtracting
             // its symmetric padding recovers that box without re-measuring.
@@ -1155,15 +1312,16 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           if (richReady) {
             // Very long rich comments bypass the bounded bitmap cache, but
             // still retain their image emotes through this direct fallback.
+            const outline = danmakuOutline(it.fontSize);
             ctx.save();
             ctx.font = canvasFont(currentFontWeight, it.fontSize);
             ctx.lineJoin = "round";
-            ctx.shadowColor = "rgba(0,0,0,0.75)";
-            ctx.shadowBlur = 2;
-            ctx.shadowOffsetX = 1;
-            ctx.shadowOffsetY = 1;
+            ctx.shadowColor = `rgba(0,0,0,${outline.shadowAlpha})`;
+            ctx.shadowBlur = outline.shadowBlur;
+            ctx.shadowOffsetX = outline.shadowOffset;
+            ctx.shadowOffsetY = outline.shadowOffset;
             ctx.strokeStyle = "rgba(0,0,0,0.82)";
-            ctx.lineWidth = Math.max(2, it.fontSize * 0.13);
+            ctx.lineWidth = outline.lineWidth;
             ctx.fillStyle = it.color || "#fff";
             const richMetrics = richLineMetrics(ctx, it);
             if (richMetrics) {
@@ -1191,19 +1349,16 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           // Long/invalid messages fall back to the previous direct path. It
           // is uncommon, but keeps rendering resilient without unbounded cache
           // allocations.
+          const directOutline = danmakuOutline(it.fontSize);
           if (!directTextActive) {
             ctx.lineJoin = "round";
-            ctx.shadowColor = "rgba(0,0,0,0.75)";
-            ctx.shadowBlur = 2;
-            ctx.shadowOffsetX = 1;
-            ctx.shadowOffsetY = 1;
             ctx.strokeStyle = "rgba(0,0,0,0.82)";
             directTextActive = true;
           }
           if (it.fontSize !== drawnFontSize) {
             drawnFontSize = it.fontSize;
             ctx.font = canvasFont(currentFontWeight, drawnFontSize);
-            ctx.lineWidth = Math.max(2, drawnFontSize * 0.13);
+            ctx.lineWidth = directOutline.lineWidth;
           }
           const color = it.color || "#fff";
           if (color !== drawnColor) {
@@ -1213,6 +1368,12 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
           const directTextWidth = ctx.measureText(it.text).width;
           strokeSelfDanmakuBorder(ctx, it, x, it.y, directTextWidth, it.fontSize * 1.35);
           recordBox(it, x, directTextWidth, it.fontSize * 1.35, true);
+          // One shadowed pass for stroke and fill, matching the raster path and
+          // v0.43.1: the fill re-casting the shadow is what carries the weight.
+          ctx.shadowColor = `rgba(0,0,0,${directOutline.shadowAlpha})`;
+          ctx.shadowBlur = directOutline.shadowBlur;
+          ctx.shadowOffsetX = directOutline.shadowOffset;
+          ctx.shadowOffsetY = directOutline.shadowOffset;
           ctx.strokeText(it.text, x, it.y);
           ctx.fillText(it.text, x, it.y);
         }
@@ -1245,9 +1406,14 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       if (stopped) return;
       const parent = canvas.parentElement;
       if (!parent) return;
-      const nextPixelRatio = danmakuCanvasPixelRatio(window.devicePixelRatio);
       const nextWidth = parent.clientWidth;
       const nextHeight = parent.clientHeight;
+      // The backing-store budget is a pixel count, so it needs the surface size.
+      const nextPixelRatio = danmakuCanvasPixelRatio(
+        window.devicePixelRatio,
+        nextWidth,
+        nextHeight,
+      );
       const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
       const nextCanvasHeight = Math.max(1, Math.floor(nextHeight * nextPixelRatio));
       const cssSizeChanged =
@@ -1298,10 +1464,12 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       raf = null;
       if (stopped || document.hidden) return;
       if (width <= 0 || height <= 0) return;
-      // Keep medium stalls proportional to real time. The engine has its own
-      // 200ms upper bound for a long suspension, so this cap only prevents an
-      // unusually large browser pause from causing a visible teleport.
-      const dt = Math.min(0.1, (now - last) / 1000);
+      // Charge the real frame time, bounded by the one policy the engine also
+      // applies. This used to clamp at 100ms — below the length of an actual
+      // WebView hiccup — so a long frame advanced the comments less than the
+      // wall clock said it should, and they visibly caught up afterwards. The
+      // shared bound is only a guard against a multi-second suspension.
+      const dt = Math.min(DANMAKU_MAX_FRAME_SECONDS, (now - last) / 1000);
       last = now;
       lastFrameAt = now;
       const hasWork = paint(dt);
