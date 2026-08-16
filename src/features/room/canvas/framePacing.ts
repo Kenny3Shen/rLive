@@ -19,6 +19,45 @@ export const DANMAKU_MAX_PIXEL_RATIO = 3;
 export const DANMAKU_MAX_BACKING_PIXELS = 8_294_400;
 
 /**
+ * CSS height of the canvas band that can actually contain danmaku.
+ *
+ * The renderer is a transparent overlay, so giving its backing store the whole
+ * player height makes every active frame clear and upload mostly empty pixels.
+ * Scroll comments only use the engine's top track area; a fixed-top card also
+ * lives in that first track. Keeping the canvas to this band cuts the backing
+ * store by roughly the configured area without reducing device scale.
+ *
+ * This mirrors the stable, settings-driven part of `layoutFor` in
+ * `danmakuEngine.ts`. It intentionally does not follow the largest historical
+ * item font: a transient larger item must not make the backing-store ratio and
+ * every cached raster fluctuate as comments age out. The renderer keeps an
+ * already allocated taller band until the engine becomes idle.
+ */
+export function danmakuCanvasBandHeight(
+  stageHeight: number,
+  fontSize: number,
+  area: number,
+  lineCount: number,
+): number {
+  const safeStageHeight = Number.isFinite(stageHeight) ? Math.max(1, Math.floor(stageHeight)) : 1;
+  const safeFontSize = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 18;
+  const safeArea = Number.isFinite(area) ? Math.max(0.1, Math.min(1, area)) : 0.25;
+  const safeLineCount =
+    Number.isFinite(lineCount) && lineCount > 0 ? Math.min(20, Math.round(lineCount)) : 0;
+  const laneHeight = Math.max(16, Math.round(safeFontSize * 1.4));
+  const inset = Math.min(8, Math.max(4, Math.round(safeFontSize * 0.35)));
+  const top = Math.min(inset, Math.max(0, safeStageHeight - safeFontSize));
+  const usableHeight = Math.max(1, safeStageHeight - top);
+  const preferredArea = Math.max(laneHeight, Math.floor(usableHeight * safeArea));
+  const autoCount = Math.max(1, Math.floor(preferredArea / laneHeight));
+  const count = safeLineCount > 0 ? Math.min(safeLineCount, autoCount) : autoCount;
+  // The final track reserves 1.4em while a glyph/rich emote uses at most 1.35em.
+  // Keep the remaining leading plus outline/shadow/border breathing room below it.
+  const bottomPadding = Math.ceil(safeFontSize * 0.45);
+  return Math.min(safeStageHeight, Math.max(1, top + count * laneHeight + bottomPadding));
+}
+
+/**
  * Upper bound on the frame delta handed to the engine, in seconds.
  *
  * The previous 0.1s bound sat *below* the hiccups an Android WebView actually

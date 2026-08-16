@@ -24,6 +24,11 @@ import { subscribeDanmakuBatches } from "../danmaku/eventBus";
 import { createShieldMatcher, shouldShowValidatedOnCanvas } from "../danmaku/filter";
 import { isMobileClient } from "@/shared/clientPlatform";
 import {
+  MAX_SUPER_CHAT_DEDUPE_KEYS,
+  siteSupportsSuperChat,
+  superChatDedupeKey,
+} from "../superChat";
+import {
   createEngine,
   DANMAKU_SELF_BORDER_PADDING_X,
   DANMAKU_SELF_BORDER_PADDING_Y,
@@ -39,6 +44,7 @@ import {
 } from "./CanvasDanmakuActionMenu";
 import {
   danmakuCanvasPixelRatio,
+  danmakuCanvasBandHeight,
   DANMAKU_MAX_FRAME_SECONDS,
   danmakuOutline,
   snapStaticAxis,
@@ -98,6 +104,10 @@ const MAX_RASTER_CSS_WIDTH = 1600;
 const MAX_RASTER_DEVICE_PIXELS = 2_000_000;
 const MAX_RASTER_CACHE_PIXELS = 8_000_000;
 const MAX_RASTER_CACHE_ITEMS = 96;
+// A single glyph raster is a short synchronous canvas allocation plus two text
+// paint passes. Let a busy frame create only a small bounded amount, then use
+// the existing direct path until the next frame can warm the cache.
+const MAX_NEW_RASTER_PIXELS_PER_FRAME = 120_000;
 const MAX_IMAGE_CACHE_ITEMS = 128;
 const MAX_IMAGE_NATURAL_PIXELS = 1_048_576;
 const SELF_DANMAKU_BORDER_COLOR = "rgba(255,255,255,0.82)";
@@ -612,6 +622,8 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   const engineRef = useRef<DanmakuEngine | null>(null);
   const engineSessionRef = useRef<number | string | null>(sessionKey);
   const requestFrameRef = useRef<() => void>(() => {});
+  const resizeCanvasRef = useRef<() => void>(() => {});
+  const layoutSettingsRef = useRef({ fontSize: 18, area: DANMAKU_AREA_DEFAULT, lineCount: 0 });
   // Desktop uses pointer hover to freeze a comment and show the pill; touch
   // clients select via tap and keep the selection until dismissed. Both afford-
   // ances use the same target state and menu, just different triggers.
@@ -642,6 +654,8 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   const fontSize = useSettingsStore((s) => s.danmakuFontSize);
   const speed = useSettingsStore((s) => s.danmakuSpeed);
   const opacity = useSettingsStore((s) => s.danmakuOpacity);
+  const superChatEnabled = useSettingsStore((s) => s.superChatEnabled);
+  const superChatOpacity = useSettingsStore((s) => s.superChatOpacity);
   const area = useSettingsStore((s) => s.danmakuArea);
   const lineCount = useSettingsStore((s) => s.danmakuLineCount);
   const fontWeight = useSettingsStore((s) => s.danmakuFontWeight);
@@ -651,10 +665,20 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const matchersRef = useRef({ shieldMatcher, filterGifts });
-
+  const superChatDedupeKeysRef = useRef(new Set<string>());
+  const superChatDedupeOrderRef = useRef<string[]>([]);
   useLayoutEffect(() => {
     matchersRef.current = { shieldMatcher, filterGifts };
   }, [shieldMatcher, filterGifts]);
+
+  useLayoutEffect(() => {
+    layoutSettingsRef.current = {
+      fontSize: fontSize || defaultDanmakuFontSize(mobile),
+      area: area || DANMAKU_AREA_DEFAULT,
+      lineCount,
+    };
+    resizeCanvasRef.current();
+  }, [area, fontSize, lineCount, mobile]);
 
   const releaseHover = useCallback(() => {
     // Unconditionally, and before the early return: releasing the selection
@@ -883,6 +907,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       fontSize: fontSize || defaultDanmakuFontSize(mobile),
       speed: speed || 8,
       opacity: opacity ?? DANMAKU_OPACITY_DEFAULT,
+      fixedOpacity: superChatOpacity,
       area: area || DANMAKU_AREA_DEFAULT,
       lineCount,
       fontWeight,
@@ -896,6 +921,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       fontSize: fontSize || defaultDanmakuFontSize(mobile),
       speed: speed || 8,
       opacity: opacity ?? DANMAKU_OPACITY_DEFAULT,
+      fixedOpacity: superChatOpacity,
       area: area || DANMAKU_AREA_DEFAULT,
       lineCount,
       fontWeight,
@@ -913,20 +939,48 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     filterRepeats,
     mergeWindowSeconds,
     mobile,
+    superChatOpacity,
   ]);
 
   useEffect(() => {
+    if (superChatEnabled && siteSupportsSuperChat(siteId)) return;
+    engineRef.current?.clearFixed();
+    requestFrameRef.current();
+  }, [siteId, superChatEnabled]);
+
+  useEffect(() => {
+    superChatDedupeKeysRef.current.clear();
+    superChatDedupeOrderRef.current = [];
+  }, [sessionKey]);
+
+  useEffect(() => {
     if (!active) return;
+    const supportsSuperChat = superChatEnabled && siteSupportsSuperChat(siteId);
+    const dedupeKeys = superChatDedupeKeysRef.current;
+    const dedupeOrder = superChatDedupeOrderRef.current;
+    const rememberSuperChat = (message: DanmakuEvent): boolean => {
+      const key = superChatDedupeKey(message);
+      if (dedupeKeys.has(key)) return false;
+      dedupeKeys.add(key);
+      dedupeOrder.push(key);
+      if (dedupeOrder.length > MAX_SUPER_CHAT_DEDUPE_KEYS) {
+        const oldest = dedupeOrder.shift();
+        if (oldest) dedupeKeys.delete(oldest);
+      }
+      return true;
+    };
+
     return subscribeDanmakuBatches((events) => {
       const { shieldMatcher: currentShieldMatcher, filterGifts: currentFilterGifts } =
         matchersRef.current;
       const accepted: DanmakuEvent[] = [];
       for (const message of events) {
-        // Super Chats are presented by the dedicated bottom-left SC card
-        // (SuperChatOverlay) and must not also float as fixed-top danmaku.
-        if (message.kind === "super_chat") continue;
         if (!shouldShowValidatedOnCanvas(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
+        if (message.kind === "super_chat") {
+          if (!supportsSuperChat || !message.content.trim() || !rememberSuperChat(message))
+            continue;
+        }
         accepted.push(message);
       }
       if (accepted.length === 0) return;
@@ -936,7 +990,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       engineRef.current?.pushBatch(accepted, true);
       requestFrameRef.current();
     });
-  }, [active, sessionKey]);
+  }, [active, sessionKey, siteId, superChatEnabled]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -953,6 +1007,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     let needsDraw = true;
     let width = 0;
     let height = 0;
+    let bandHeight = 0;
     let bitmapCssWidth = 0;
     let bitmapCssHeight = 0;
     let pixelRatio = 0;
@@ -961,6 +1016,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     let rasterCachePixelRatio = 0;
     let rasterCacheFontWeight = 0;
     let paintFrame = 0;
+    let newRasterPixelsThisFrame = 0;
     const imageCache = new Map<string, DanmakuImageAsset>();
 
     const removeRaster = (id: string, raster: TextRaster) => {
@@ -1053,16 +1109,43 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       }
     };
 
-    const evictRaster = () => {
+    const evictRaster = (): boolean => {
       let oldestId: string | null = null;
       let oldestRaster: TextRaster | null = null;
       for (const [id, raster] of rasterCache) {
+        // Never evict a raster already used by this paint pass. If every entry
+        // is current, evicting one would recreate it later in the same pass and
+        // cascade through the cache while the frame is still being painted.
+        if (raster.lastUsedFrame >= paintFrame) continue;
         if (!oldestRaster || raster.lastUsedFrame < oldestRaster.lastUsedFrame) {
           oldestId = id;
           oldestRaster = raster;
         }
       }
-      if (oldestId && oldestRaster) removeRaster(oldestId, oldestRaster);
+      if (!oldestId || !oldestRaster) return false;
+      removeRaster(oldestId, oldestRaster);
+      return true;
+    };
+
+    const estimatedRasterPixels = (item: TrackItem): number => {
+      const outline = danmakuOutline(item.fontSize);
+      const offsetX = Math.ceil(
+        outline.lineWidth +
+          outline.shadowBlur +
+          outline.shadowOffset +
+          2 +
+          (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_X : 0),
+      );
+      const offsetY = Math.ceil(
+        outline.lineWidth +
+          outline.shadowBlur +
+          outline.shadowOffset +
+          2 +
+          (item.isSelf ? DANMAKU_SELF_BORDER_PADDING_Y : 0),
+      );
+      const cssWidth = Math.min(MAX_RASTER_CSS_WIDTH, Math.max(item.fontSize, item.width));
+      const cssHeight = Math.ceil(item.fontSize * 1.35) + offsetY * 2;
+      return Math.ceil((cssWidth + offsetX * 2) * pixelRatio) * Math.ceil(cssHeight * pixelRatio);
     };
 
     const getTextRaster = (
@@ -1077,15 +1160,21 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         return cached;
       }
 
+      if (
+        newRasterPixelsThisFrame > 0 &&
+        newRasterPixelsThisFrame + estimatedRasterPixels(item) > MAX_NEW_RASTER_PIXELS_PER_FRAME
+      ) {
+        return null;
+      }
       const raster = createTextRaster(item, currentFontWeight, pixelRatio, paintFrame);
       if (!raster || raster.pixelCount > MAX_RASTER_CACHE_PIXELS) return null;
+      newRasterPixelsThisFrame += raster.pixelCount;
 
       while (
         rasterCache.size >= MAX_RASTER_CACHE_ITEMS ||
         rasterCachePixels + raster.pixelCount > MAX_RASTER_CACHE_PIXELS
       ) {
-        if (rasterCache.size === 0) return null;
-        evictRaster();
+        if (rasterCache.size === 0 || !evictRaster()) return null;
       }
       rasterCache.set(key, raster);
       rasterCachePixels += raster.pixelCount;
@@ -1104,15 +1193,21 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         return cached;
       }
 
+      if (
+        newRasterPixelsThisFrame > 0 &&
+        newRasterPixelsThisFrame + estimatedRasterPixels(item) > MAX_NEW_RASTER_PIXELS_PER_FRAME
+      ) {
+        return null;
+      }
       const raster = createRichRaster(item, currentFontWeight, pixelRatio, paintFrame, imageForUrl);
       if (!raster || raster.pixelCount > MAX_RASTER_CACHE_PIXELS) return null;
+      newRasterPixelsThisFrame += raster.pixelCount;
 
       while (
         rasterCache.size >= MAX_RASTER_CACHE_ITEMS ||
         rasterCachePixels + raster.pixelCount > MAX_RASTER_CACHE_PIXELS
       ) {
-        if (rasterCache.size === 0) return null;
-        evictRaster();
+        if (rasterCache.size === 0 || !evictRaster()) return null;
       }
       rasterCache.set(key, raster);
       rasterCachePixels += raster.pixelCount;
@@ -1138,6 +1233,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     };
 
     const paint = (dt: number): boolean => {
+      newRasterPixelsThisFrame = 0;
       const engine = engineRef.current;
       const hadWork = active && Boolean(engine?.hasWork());
       if (engine && active) {
@@ -1148,7 +1244,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       // Do one clear after state/size changes, then leave an empty canvas
       // completely idle until a new danmaku arrives.
       if (needsDraw || hadWork || hasWork) {
-        ctx.clearRect(0, 0, width, height);
+        ctx.clearRect(0, 0, width, bandHeight);
       }
       needsDraw = false;
 
@@ -1228,6 +1324,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         };
 
         for (const it of visibleItems) {
+          ctx.globalAlpha = it.kind === "top" ? engine.opacity(true) : engine.opacity();
           // The engine retains offscreen scrolling items for lane-spacing
           // purposes. Do not start image requests or create a raster until
           // one can actually contribute a pixel to this canvas. Besides
@@ -1407,18 +1504,31 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
       const parent = canvas.parentElement;
       if (!parent) return;
       const nextWidth = parent.clientWidth;
-      const nextHeight = parent.clientHeight;
-      // The backing-store budget is a pixel count, so it needs the surface size.
+      const nextStageHeight = parent.clientHeight;
+      const layoutSettings = layoutSettingsRef.current;
+      const requestedBandHeight = danmakuCanvasBandHeight(
+        nextStageHeight,
+        layoutSettings.fontSize,
+        layoutSettings.area,
+        layoutSettings.lineCount,
+      );
+      // Existing items can still carry a larger historical font while a live
+      // setting change is taking effect. Keep their taller band until the
+      // engine goes idle rather than clipping the lowest old lane mid-flight.
+      const nextBandHeight = engineRef.current?.hasWork()
+        ? Math.min(nextStageHeight, Math.max(requestedBandHeight, bandHeight))
+        : requestedBandHeight;
+      // The backing-store budget is a pixel count, so it needs the actual
+      // painted band rather than the full player surface.
       const nextPixelRatio = danmakuCanvasPixelRatio(
         window.devicePixelRatio,
         nextWidth,
-        nextHeight,
+        nextBandHeight,
       );
       const nextCanvasWidth = Math.max(1, Math.floor(nextWidth * nextPixelRatio));
-      const nextCanvasHeight = Math.max(1, Math.floor(nextHeight * nextPixelRatio));
+      const nextCanvasHeight = Math.max(1, Math.floor(nextBandHeight * nextPixelRatio));
       const cssSizeChanged =
-        Math.abs(nextWidth - bitmapCssWidth) >= 1.5 ||
-        Math.abs(nextHeight - bitmapCssHeight) >= 1.5;
+        Math.abs(nextWidth - bitmapCssWidth) >= 1.5 || Math.abs(nextBandHeight - bandHeight) >= 1.5;
 
       // ResizeObserver can fire for layout work that leaves the canvas size
       // unchanged. Resetting a canvas erases it and costs a full redraw, so
@@ -1432,21 +1542,23 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         bitmapCssHeight > 0
       ) {
         width = nextWidth;
-        height = nextHeight;
+        height = nextStageHeight;
+        bandHeight = nextBandHeight;
         canvas.style.width = `${width}px`;
-        canvas.style.height = `${height}px`;
+        canvas.style.height = `${bandHeight}px`;
         return;
       }
 
       width = nextWidth;
-      height = nextHeight;
+      height = nextStageHeight;
+      bandHeight = nextBandHeight;
       bitmapCssWidth = nextWidth;
-      bitmapCssHeight = nextHeight;
+      bitmapCssHeight = nextBandHeight;
       pixelRatio = nextPixelRatio;
       canvas.width = nextCanvasWidth;
       canvas.height = nextCanvasHeight;
       canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+      canvas.style.height = `${bandHeight}px`;
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
       // A native window resize can temporarily throttle animation frames while
@@ -1503,6 +1615,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
     };
 
     requestFrameRef.current = requestFrame;
+    resizeCanvasRef.current = resize;
     resize();
     // Window resizing can deliver several ResizeObserver entries in one
     // paint cycle. Coalesce them so the canvas bitmap is rebuilt at most once
@@ -1558,7 +1671,7 @@ export const CanvasDanmaku = memo(function CanvasDanmaku({
         // brightness/volume gestures and tap-to-pause everywhere. On desktop no
         // press is handled here at all; on touch only a press that actually
         // lands on a comment is claimed, in `onPointerUp`.
-        className="pointer-events-auto absolute inset-0 h-full w-full"
+        className="pointer-events-auto absolute left-0 top-0 w-full"
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}

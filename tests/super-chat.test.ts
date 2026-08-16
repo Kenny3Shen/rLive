@@ -1,16 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
-  formatSuperChatAmount,
-  formatSuperChatDuration,
-  retainSuperChatItems,
-  safeSuperChatColor,
+  DEFAULT_SUPER_CHAT_DURATION_MS,
+  MAX_SUPER_CHAT_DEDUPE_KEYS,
   siteSupportsSuperChat,
-  superChatAvatarUrl,
   superChatDedupeKey,
-  superChatPalette,
-  superChatRemainingSeconds,
-  type SuperChatLine,
+  superChatDurationMs,
+  superChatDurationSeconds,
 } from "../src/features/room/superChat";
 
 function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
@@ -22,10 +18,6 @@ function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
     ts: 1,
     super_chat: {
       id: "100",
-      price: 30,
-      currency: "CNY",
-      background_color: "#2A60B2",
-      background_bottom_color: "#1D4A92",
       duration: 60,
     },
     ...overrides,
@@ -33,106 +25,50 @@ function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
 }
 
 describe("Super Chat presentation", () => {
-  test("enables the overlay only for platforms with SC event support", () => {
+  test("enables SC only for Bilibili", () => {
     expect(siteSupportsSuperChat("bilibili")).toBe(true);
     expect(siteSupportsSuperChat("douyu")).toBe(false);
     expect(siteSupportsSuperChat(undefined)).toBe(false);
   });
 
-  test("normalizes only trusted Bilibili sender avatar URLs", () => {
-    expect(superChatAvatarUrl({ avatar_url: "//i0.hdslb.com/bfs/face/sc-user.jpg" })).toBe(
-      "https://i0.hdslb.com/bfs/face/sc-user.jpg",
-    );
-    expect(
-      superChatAvatarUrl({ avatar_url: "https://user:pass@i0.hdslb.com/face.jpg" }),
-    ).toBeNull();
-    expect(superChatAvatarUrl({ avatar_url: "https://evil.example/face.jpg" })).toBeNull();
-    expect(superChatAvatarUrl({ avatar_url: "javascript:alert(1)" })).toBeNull();
+  test("accepts the complete validated duration range and converts seconds", () => {
+    expect(superChatDurationSeconds({ duration: 1 })).toBe(1);
+    expect(superChatDurationMs({ duration: 1 })).toBe(1_000);
+    expect(superChatDurationSeconds({ duration: 86_400 })).toBe(86_400);
+    expect(superChatDurationMs({ duration: 86_400 })).toBe(86_400_000);
   });
 
-  test("formats validated price and duration", () => {
-    const event = superChat();
-    expect(formatSuperChatAmount(event.super_chat)).toBe("¥30");
-    expect(formatSuperChatDuration(event.super_chat)).toBe("1 分钟");
-  });
-
-  test("does not expose unsafe colours to inline styles", () => {
-    expect(safeSuperChatColor("url(javascript:alert(1))")).toBeNull();
-    expect(safeSuperChatColor("#abc")).toBe("#abc");
-    expect(superChatPalette({ background_color: "url(bad)" })).toBeNull();
-    expect(superChatPalette(superChat().super_chat)).toEqual({
-      messageStart: "#2A60B2",
-      messageEnd: "#1D4A92",
-      headerForeground: "#ffffff",
-      contentForeground: "#ffffff",
-    });
-    expect(superChatPalette({ background_color: "#ffcc33" })).toEqual({
-      messageStart: "#ffcc33",
-      messageEnd: "#ffcc33",
-      headerForeground: "#172033",
-      contentForeground: "#172033",
-    });
-    expect(
-      superChatPalette({ background_color: "#2a60b2", background_bottom_color: "url(bad)" }),
-    ).toEqual({
-      messageStart: "#2a60b2",
-      messageEnd: "#2a60b2",
-      headerForeground: "#ffffff",
-      contentForeground: "#ffffff",
-    });
-    expect(superChatPalette({ background_color: "#2a60b280" })).toEqual({
-      messageStart: "#2a60b2",
-      messageEnd: "#2a60b2",
-      headerForeground: "#ffffff",
-      contentForeground: "#ffffff",
-    });
-
-    // Validated tier colours remain visibly distinct in the message band.
-    expect(superChatPalette({ background_color: "#2a60b2" })?.messageStart).not.toBe(
-      superChatPalette({ background_color: "#e09443" })?.messageStart,
-    );
-  });
-
-  test("uses per-band contrast and counts down from the receive timestamp", () => {
-    expect(
-      superChatPalette({ background_color: "#ffcccc", background_bottom_color: "#b81830" }),
-    ).toEqual({
-      messageStart: "#ffcccc",
-      messageEnd: "#b81830",
-      headerForeground: "#172033",
-      contentForeground: "#ffffff",
-    });
-
-    const info = { duration: 105 };
-    expect(superChatRemainingSeconds(info, 1_000_000, 1_000_000)).toBe(105);
-    expect(superChatRemainingSeconds(info, 1_000_000, 1_001_900)).toBe(104);
-    expect(superChatRemainingSeconds(info, 1_000_000, 1_105_000)).toBe(0);
-    expect(superChatRemainingSeconds(info, Number.NaN, 1_001_900)).toBe(105);
+  test("falls back for missing or invalid duration values", () => {
+    const invalidValues: SuperChatInfoLike[] = [
+      {},
+      { duration: null },
+      { duration: 0 },
+      { duration: -1 },
+      { duration: 1.5 },
+      { duration: Number.NaN },
+      { duration: Number.POSITIVE_INFINITY },
+      { duration: 86_401 },
+    ];
+    for (const info of invalidValues) {
+      expect(superChatDurationSeconds(info)).toBeNull();
+      expect(superChatDurationMs(info)).toBe(DEFAULT_SUPER_CHAT_DURATION_MS);
+    }
   });
 });
 
-describe("Super Chat queue helpers", () => {
-  test("prefers the stable SC id when de-duplicating", () => {
+type SuperChatInfoLike = { duration?: number | null };
+
+describe("Super Chat de-duplication", () => {
+  test("prefers the stable SC id when replayed", () => {
     const first = superChat({ ts: 1 });
     const replay = superChat({ ts: 999, content: "同一条重放" });
     expect(superChatDedupeKey(first)).toBe(superChatDedupeKey(replay));
   });
 
-  test("uses a conservative fallback key and retains only the newest items", () => {
-    const first = superChat({ super_chat: { price: 30 }, ts: 1 });
-    const replay = superChat({ super_chat: { price: 30 }, ts: 1 });
-    const different = superChat({ super_chat: { price: 30 }, ts: 2 });
+  test("uses a bounded key budget for the Canvas subscriber", () => {
+    expect(MAX_SUPER_CHAT_DEDUPE_KEYS).toBe(240);
+    const first = superChat({ super_chat: { duration: 60 }, ts: 1 });
+    const replay = superChat({ super_chat: { duration: 60 }, ts: 1 });
     expect(superChatDedupeKey(first)).toBe(superChatDedupeKey(replay));
-    expect(superChatDedupeKey(first)).not.toBe(superChatDedupeKey(different));
-
-    const lines: SuperChatLine[] = [
-      { id: 1, event: first },
-      { id: 2, event: different },
-    ];
-    expect(
-      retainSuperChatItems(lines, [{ id: 3, event: superChat({ ts: 3 }) }], 2).map(
-        (line) => line.id,
-      ),
-    ).toEqual([2, 3]);
   });
 });
