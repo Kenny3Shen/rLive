@@ -77,11 +77,11 @@ function parseAsrFontSize(value: unknown): number {
   return Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(numeric)));
 }
 
-export const DANMAKU_MERGE_WINDOW_SECONDS_MIN = 5;
+export const DANMAKU_MERGE_WINDOW_SECONDS_MIN = 0;
 export const DANMAKU_MERGE_WINDOW_SECONDS_MAX = 30;
 export const DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT = 10;
 
-/** Whole seconds inside 5..=30; a legacy or corrupt record falls back to 10s. */
+/** Whole seconds inside 0..=30, where 0 disables merging; invalid values fall back to 10s. */
 export function parseDanmakuMergeWindowSeconds(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT;
@@ -109,7 +109,6 @@ type SettingsState = {
   danmakuArea: number;
   danmakuLineCount: number;
   danmakuFontWeight: number;
-  danmakuFilterRepeats: boolean;
   danmakuFilterGifts: boolean;
   danmakuMergeWindowSeconds: number;
   superChatEnabled: boolean;
@@ -182,7 +181,6 @@ const defaultSettings: AppSettings = {
   danmaku_area: DANMAKU_AREA_DEFAULT,
   danmaku_line_count: 0,
   danmaku_font_weight: 600,
-  danmaku_filter_repeats: true,
   danmaku_filter_gifts: true,
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
@@ -217,7 +215,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_area: state.danmakuArea,
     danmaku_line_count: state.danmakuLineCount,
     danmaku_font_weight: state.danmakuFontWeight,
-    danmaku_filter_repeats: state.danmakuFilterRepeats,
     danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
     super_chat_enabled: state.superChatEnabled,
@@ -253,7 +250,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuArea: DANMAKU_AREA_DEFAULT,
       danmakuLineCount: 0,
       danmakuFontWeight: 600,
-      danmakuFilterRepeats: true,
       danmakuFilterGifts: true,
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
@@ -517,7 +513,6 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuArea: settings.danmaku_area,
           danmakuLineCount: settings.danmaku_line_count,
           danmakuFontWeight: settings.danmaku_font_weight,
-          danmakuFilterRepeats: settings.danmaku_filter_repeats,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
           danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(
             settings.danmaku_merge_window_seconds,

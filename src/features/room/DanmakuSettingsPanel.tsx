@@ -46,21 +46,11 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
 
         <Card size="sm">
           <CardHeader className="border-b">
-            <CardTitle>弹幕轨道</CardTitle>
+            <CardTitle>弹幕设置</CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
             <FieldGroup className="gap-2">
               <DanmakuTrackSettingsFields idPrefix="room" layout="panel" />
-            </FieldGroup>
-          </CardContent>
-        </Card>
-
-        <Card size="sm">
-          <CardHeader className="border-b">
-            <CardTitle>文字外观</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <FieldGroup className="gap-2">
               <DanmakuAppearanceSettingsFields idPrefix="room" layout="panel" />
             </FieldGroup>
           </CardContent>

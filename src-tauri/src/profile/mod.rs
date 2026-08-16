@@ -237,7 +237,6 @@ pub fn merge_into_db(
     settings.danmaku_area = package.settings.danmaku_area;
     settings.danmaku_line_count = package.settings.danmaku_line_count;
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
-    settings.danmaku_filter_repeats = package.settings.danmaku_filter_repeats;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.danmaku_merge_window_seconds = package.settings.danmaku_merge_window_seconds;
     settings.super_chat_enabled = package.settings.super_chat_enabled;
