@@ -11,7 +11,7 @@ import {
 import type { DanmuJsBullet, DanmuJsComment, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import { subscribeDanmakuBatches } from "./eventBus";
 import {
@@ -25,6 +25,7 @@ import {
   danmuCommentFromEvent,
   danmuLayerAreaConfig,
   danmuLaneHeight,
+  danmuMoveVPlayRate,
   danmuRenderLayer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
@@ -35,6 +36,7 @@ import {
   type DanmuJsRenderLayer,
   DANMU_JS_MAX_ACTIVE_COMMENTS,
   DANMU_JS_MAX_SUPER_CHATS,
+  DANMU_JS_DEFAULT_MOVE_V,
 } from "./danmuJsAdapter";
 import { installDanmuJsFixedPriorCompat } from "./danmuJsCompat";
 import { loadDanmuJs } from "./danmuJsLoader";
@@ -93,6 +95,7 @@ type RuntimeConfig = {
   fontSize: number;
   fontWeight: number;
   opacity: number;
+  danmakuSpeed: number;
   mergeWindowSeconds: number;
   filterGifts: boolean;
   shieldMatcher: (event: DanmakuEvent) => boolean;
@@ -243,6 +246,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
+  const danmakuSpeed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));
   const area = useSettingsStore((state) => state.danmakuArea);
   const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
@@ -261,6 +265,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     fontSize: 18,
     fontWeight: 600,
     opacity: 0.8,
+    danmakuSpeed: DANMU_JS_DEFAULT_MOVE_V,
     mergeWindowSeconds: 10,
     filterGifts: true,
     shieldMatcher: () => false,
@@ -277,6 +282,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       fontSize,
       fontWeight,
       opacity,
+      danmakuSpeed,
       mergeWindowSeconds,
       filterGifts,
       shieldMatcher,
@@ -285,6 +291,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     };
   }, [
     filterGifts,
+    danmakuSpeed,
     fontSize,
     fontWeight,
     laneHeight,
@@ -677,6 +684,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           return;
         }
         restoreFixedPriorCompat = installDanmuJsFixedPriorCompat(instances.bottom);
+        instances.scroll.setPlayRate("scroll", danmuMoveVPlayRate(configRef.current.danmakuSpeed));
         instancesRef.current = instances;
         instances.scroll.on("bullet_remove", onBulletRemove);
         instances.scroll.on("bullet_hover", onBulletHover);
@@ -701,6 +709,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       clearRenderedState(true);
     };
   }, [active, pageVisible, reducedMotion, selectBullet, sessionKey, sizeReady]);
+
+  useEffect(() => {
+    instancesRef.current?.scroll.setPlayRate("scroll", danmuMoveVPlayRate(danmakuSpeed));
+  }, [danmakuSpeed]);
 
   useEffect(() => {
     const instances = instancesRef.current;

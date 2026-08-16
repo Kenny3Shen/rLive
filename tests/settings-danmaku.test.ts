@@ -4,10 +4,14 @@ import {
   DANMAKU_FONT_SIZE_DESKTOP_DEFAULT,
   DANMAKU_FONT_SIZE_MOBILE_DEFAULT,
   DANMAKU_OPACITY_DEFAULT,
+  DANMAKU_SPEED_DEFAULT,
+  DANMAKU_SPEED_MAX,
+  DANMAKU_SPEED_MIN,
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   parseDanmakuMergeWindowSeconds,
+  parseDanmakuSpeed,
   defaultDanmakuFontSize,
   useSettingsStore,
 } from "../src/shared/stores/settingsStore";
@@ -47,9 +51,17 @@ describe("danmaku appearance defaults", () => {
     expect(DANMAKU_AREA_DEFAULT).toBe(0.25);
   });
 
-  test("does not retain removed danmaku preferences in frontend state", () => {
+  test("uses a 100 px/s scrolling speed and clamps it to the supported range", () => {
+    expect(DANMAKU_SPEED_DEFAULT).toBe(100);
+    expect(parseDanmakuSpeed(DANMAKU_SPEED_MIN - 1)).toBe(DANMAKU_SPEED_MIN);
+    expect(parseDanmakuSpeed(DANMAKU_SPEED_MAX + 1)).toBe(DANMAKU_SPEED_MAX);
+    expect(parseDanmakuSpeed(135.6)).toBe(136);
+    expect(parseDanmakuSpeed(undefined)).toBe(DANMAKU_SPEED_DEFAULT);
+    expect(useSettingsStore.getState().danmakuSpeed).toBe(DANMAKU_SPEED_DEFAULT);
+  });
+
+  test("does not retain other removed danmaku preferences in frontend state", () => {
     const state = useSettingsStore.getState();
-    expect("danmakuSpeed" in state).toBe(false);
     expect("danmakuLineCount" in state).toBe(false);
     expect("superChatOpacity" in state).toBe(false);
     expect("setSuperChatOpacity" in state).toBe(false);

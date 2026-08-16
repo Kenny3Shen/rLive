@@ -3,10 +3,14 @@ import type { AppSettings } from "@/shared/types/live";
 import {
   DANMAKU_AREA_DEFAULT,
   DANMAKU_OPACITY_DEFAULT,
+  DANMAKU_SPEED_DEFAULT,
+  DANMAKU_SPEED_MAX,
+  DANMAKU_SPEED_MIN,
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   defaultDanmakuFontSize,
+  parseDanmakuSpeed,
   parseDanmakuMergeWindowSeconds,
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
@@ -42,6 +46,7 @@ const ASR_CHUNK_SECONDS_MAX = 1;
 const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
   danmakuFontSize: defaultDanmakuFontSize(),
+  danmakuSpeed: DANMAKU_SPEED_DEFAULT,
   danmakuArea: DANMAKU_AREA_DEFAULT,
   danmakuFontWeight: 600,
   danmakuFilterGifts: true,
@@ -428,6 +433,7 @@ export function DanmakuAppearanceSettingsFields({
 }) {
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
+  const speed = useSettingsStore((state) => state.danmakuSpeed);
   const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
   const weightLabelId = `${idPrefix}-danmaku-font-weight-label`;
 
@@ -454,6 +460,23 @@ export function DanmakuAppearanceSettingsFields({
         layout={layout}
         onPreview={(value) => useSettingsStore.setState({ danmakuFontSize: value })}
         onCommit={(value) => persist({ danmaku_font_size: value })}
+      />
+      <PreferenceSliderField
+        id={`${idPrefix}-danmaku-speed`}
+        title="滚动速度"
+        description={layout === "page" ? "调整普通滚动弹幕的移动速度。" : undefined}
+        value={speed}
+        min={DANMAKU_SPEED_MIN}
+        max={DANMAKU_SPEED_MAX}
+        step={10}
+        displayValue={`${speed} px/s`}
+        layout={layout}
+        onPreview={(value) => useSettingsStore.setState({ danmakuSpeed: parseDanmakuSpeed(value) })}
+        onCommit={(value) => {
+          const next = parseDanmakuSpeed(value);
+          useSettingsStore.setState({ danmakuSpeed: next });
+          persist({ danmaku_speed: next });
+        }}
       />
       <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
         <FieldContent className={layout === "panel" ? "flex-none" : undefined}>
@@ -490,6 +513,7 @@ export function resetDanmakuAppearanceSettings() {
   persist({
     danmaku_opacity: DANMAKU_APPEARANCE_DEFAULTS.danmakuOpacity,
     danmaku_font_size: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontSize,
+    danmaku_speed: DANMAKU_APPEARANCE_DEFAULTS.danmakuSpeed,
     danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
     danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
