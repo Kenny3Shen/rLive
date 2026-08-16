@@ -122,7 +122,13 @@ describe("danmu.js event mapping", () => {
         kind: "super_chat",
         content: "加油",
         color: "#ffdc73",
-        super_chat: { id: "sc-1", duration: 60 },
+        super_chat: {
+          id: "sc-1",
+          price: 30,
+          duration: 60,
+          background_color: "#edf5ff",
+          background_bottom_color: "#2a60b2",
+        },
       }),
       mappingOptions({ id: "sc-bullet-1" }),
     );
@@ -135,6 +141,26 @@ describe("danmu.js event mapping", () => {
     expect(comment?.prior).toBe(true);
     expect(comment?.txt).toBe("【SC】加油");
     expect(comment?.__rliveMeta.baseText).toBe("【SC】加油");
+    expect(comment?.style?.color).toBe("#2a60b2");
+    expect(comment?.style?.backgroundColor).toBe("transparent");
+  });
+
+  test("uses each SC amount-tier color while keeping the card background transparent", () => {
+    const comment = danmuCommentFromEvent(
+      chat({
+        kind: "super_chat",
+        content: "支持",
+        super_chat: {
+          price: 2_000,
+          background_color: "#ffcccc",
+          background_bottom_color: "#b81830",
+        },
+      }),
+      mappingOptions({ id: "sc-high-tier" }),
+    );
+
+    expect(comment?.style?.color).toBe("#b81830");
+    expect(comment?.style?.backgroundColor).toBe("transparent");
   });
 
   test("keeps the SC marker when rich spans replace the text node", () => {
