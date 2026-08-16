@@ -6,11 +6,11 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import {
-  glassMutedTextClass,
   glassOptionClass,
   glassOptionSelectedClass,
   glassPanelClass,
   glassSeparatorClass,
+  glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 import {
   PLAYER_CONTROL_BUTTON_CLASS,
@@ -270,12 +270,7 @@ export function PlayerFullscreenHud({
                 glass
                 className={cn("space-y-2", glassPanelClass({ overlay: true }))}
               >
-                <DrawerTitle
-                  className={cn(
-                    "px-1 pb-1 text-xs font-medium",
-                    glassMutedTextClass({ overlay: true }),
-                  )}
-                >
+                <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay: true }))}>
                   房间操作
                 </DrawerTitle>
                 {menuBody}
@@ -299,12 +294,7 @@ export function PlayerFullscreenHud({
                 glassPanelClass({ overlay: true }),
               )}
             >
-              <PopoverTitle
-                className={cn(
-                  "px-2 py-1 text-xs font-medium",
-                  glassMutedTextClass({ overlay: true }),
-                )}
-              >
+              <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
                 房间操作
               </PopoverTitle>
               {menuBody}

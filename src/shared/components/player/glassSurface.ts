@@ -65,3 +65,11 @@ export function glassSeparatorClass({ overlay = false }: GlassSurfaceContext = {
 export function glassMutedTextClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "text-white/60" : "";
 }
+
+/**
+ * Section title inside a glass popover/drawer (播放设置、字幕设置、定时关闭…).
+ * Compact main heading — keeps player chrome titles consistent.
+ */
+export function glassTitleClass({ overlay = false }: GlassSurfaceContext = {}): string {
+  return overlay ? "text-sm font-semibold text-white" : "text-sm font-semibold text-foreground";
+}
