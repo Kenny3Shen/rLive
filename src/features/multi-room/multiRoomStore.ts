@@ -111,23 +111,67 @@ function stripLegacySecondarySlot(room: MultiRoomEntry): MultiRoomEntry {
   return entry;
 }
 
+function copyMultiRoomSlotsPreservingPositions(
+  slots: readonly (MultiRoomEntry | null)[],
+): (MultiRoomEntry | null)[] {
+  const seen = new Set<string>();
+  return Array.from({ length: MULTI_ROOM_MAX_SLOTS }, (_, index) => {
+    const room = slots[index];
+    if (!room || seen.has(room.key)) return null;
+    seen.add(room.key);
+    return stripLegacySecondarySlot(room);
+  });
+}
+
 /** Swap one occupied secondary slot with the main slot. */
 export function swapMultiRoomMain(
   slots: readonly (MultiRoomEntry | null)[],
   sourceIndex: number,
 ): (MultiRoomEntry | null)[] {
-  const next = normalizeMultiRoomSlots(slots);
+  if (sourceIndex <= MULTI_ROOM_MAIN_SLOT) {
+    return copyMultiRoomSlotsPreservingPositions(slots);
+  }
+  return swapMultiRoomSlots(slots, sourceIndex, MULTI_ROOM_MAIN_SLOT);
+}
+
+/** Move into an empty slot or swap with another occupied slot. */
+export function swapMultiRoomSlots(
+  slots: readonly (MultiRoomEntry | null)[],
+  sourceIndex: number,
+  targetIndex: number,
+): (MultiRoomEntry | null)[] {
+  const next = copyMultiRoomSlotsPreservingPositions(slots);
   if (
-    sourceIndex <= MULTI_ROOM_MAIN_SLOT ||
+    !Number.isInteger(sourceIndex) ||
+    !Number.isInteger(targetIndex) ||
+    sourceIndex < 0 ||
+    targetIndex < 0 ||
     sourceIndex >= MULTI_ROOM_MAX_SLOTS ||
-    !next[sourceIndex] ||
-    !next[MULTI_ROOM_MAIN_SLOT]
+    targetIndex >= MULTI_ROOM_MAX_SLOTS ||
+    sourceIndex === targetIndex ||
+    !next[sourceIndex]
   ) {
     return next;
   }
 
-  [next[MULTI_ROOM_MAIN_SLOT], next[sourceIndex]] = [next[sourceIndex], next[MULTI_ROOM_MAIN_SLOT]];
-  return next;
+  if (next[targetIndex]) {
+    [next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]];
+  } else if (sourceIndex === MULTI_ROOM_MAIN_SLOT) {
+    const replacementIndex = next.findIndex(
+      (room, index) => index > MULTI_ROOM_MAIN_SLOT && index !== targetIndex && room != null,
+    );
+    if (replacementIndex < 0) return next;
+    next[targetIndex] = next[sourceIndex];
+    next[sourceIndex] = next[replacementIndex];
+    next[replacementIndex] = null;
+  } else {
+    next[targetIndex] = next[sourceIndex];
+    next[sourceIndex] = null;
+  }
+
+  return sourceIndex === MULTI_ROOM_MAIN_SLOT || targetIndex === MULTI_ROOM_MAIN_SLOT
+    ? normalizeMultiRoomAudioRoles(next)
+    : next;
 }
 
 type MultiRoomState = {
@@ -137,6 +181,7 @@ type MultiRoomState = {
   addRoom: (candidate: MultiRoomCandidate) => MultiRoomAddResult;
   removeRoom: (key: string) => void;
   setMainRoom: (key: string) => void;
+  swapRooms: (sourceIndex: number, targetIndex: number) => void;
   updateAudio: (key: string, volume: number, muted: boolean) => void;
   updateMetadata: (key: string, detail: LiveRoomDetail) => void;
   setLayout: (layout: MultiRoomLayout) => boolean;
@@ -174,12 +219,13 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         set({ slots: index === MULTI_ROOM_MAIN_SLOT ? normalizeMultiRoomAudioRoles(next) : next });
       },
       setMainRoom: (key) => {
-        const slots = normalizeMultiRoomSlots(get().slots);
+        const slots = get().slots;
         const sourceIndex = slots.findIndex((room) => room?.key === key);
         if (sourceIndex <= MULTI_ROOM_MAIN_SLOT) return;
-        set({
-          slots: normalizeMultiRoomAudioRoles(swapMultiRoomMain(slots, sourceIndex)),
-        });
+        set({ slots: swapMultiRoomMain(slots, sourceIndex) });
+      },
+      swapRooms: (sourceIndex, targetIndex) => {
+        set({ slots: swapMultiRoomSlots(get().slots, sourceIndex, targetIndex) });
       },
       updateAudio: (key, volume, muted) => {
         const normalizedVolume = Math.max(0, Math.min(100, Math.round(volume)));
