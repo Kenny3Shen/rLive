@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CircleAlert, Maximize2, Pause, Play, RefreshCw, Volume2, VolumeX, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -7,9 +15,14 @@ import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
-import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import {
+  PLAYER_CONTROL_BUTTON_CLASS,
+  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  PlayerControls,
+} from "@/shared/components/player/PlayerControls";
 import { RoomIdentityLine } from "@/shared/components/player/RoomIdentityLine";
-import { normalizeImageUrl } from "@/lib/utils";
+import { cn, normalizeImageUrl } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { LiveRoomDetail } from "@/shared/types/live";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -22,6 +35,9 @@ import { useWebPlayer } from "@/features/room/player/useWebPlayer";
 import type { WebPlayerApi } from "@/features/room/player/useWebPlayer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { useMultiRoomStore, type MultiRoomEntry } from "./multiRoomStore";
+
+const MULTI_ROOM_CONTROLS_HIDE_DELAY_MS = 2_600;
+type MultiRoomOverlayInteractionSource = "controls" | "composer";
 
 function playbackErrorMessage(error: unknown): string {
   if (typeof error === "string") return error;
@@ -51,7 +67,11 @@ function OverlayIconButton({
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="bg-black/45 text-white hover:bg-black/70 hover:text-white"
+            className={cn(
+              PLAYER_CONTROL_BUTTON_CLASS,
+              PLAYER_CONTROL_ICON_CLASS,
+              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+            )}
             aria-label={label}
             disabled={disabled}
             onClick={onClick}
@@ -77,6 +97,8 @@ type MainMultiRoomControlsProps = {
   onRefresh: () => void;
   onVolume: (value: unknown) => void;
   onToggleMute: () => void;
+  onControlsOverlayInteractionChange: (open: boolean) => void;
+  onComposerOverlayInteractionChange: (open: boolean) => void;
 };
 
 function MainMultiRoomControls({
@@ -91,6 +113,8 @@ function MainMultiRoomControls({
   onRefresh,
   onVolume,
   onToggleMute,
+  onControlsOverlayInteractionChange,
+  onComposerOverlayInteractionChange,
 }: MainMultiRoomControlsProps) {
   const [osdOn, setOsdOn] = useState(false);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
@@ -229,7 +253,15 @@ function MainMultiRoomControls({
           // more grid below, so the chrome is not on the window's bottom edge.
           stackedBelowPlayer
           portalContainer={player.stageRef}
-          centerSlot={<DanmakuComposer siteId={room.siteId} roomId={room.roomId} overlay />}
+          centerSlot={
+            <DanmakuComposer
+              siteId={room.siteId}
+              roomId={room.roomId}
+              overlay
+              onOverlayInteractionChange={onComposerOverlayInteractionChange}
+            />
+          }
+          onOverlayInteractionChange={onControlsOverlayInteractionChange}
           onRefresh={onRefresh}
           onTogglePause={player.togglePause}
           onVolume={(value) => onVolume(value)}
@@ -251,20 +283,23 @@ function MainMultiRoomControls({
   );
 }
 
-export function MultiRoomPlayer({
-  room,
-  main,
-  dragHandle,
-}: {
-  room: MultiRoomEntry;
-  main: boolean;
-  dragHandle: ReactNode;
-}) {
+export function MultiRoomPlayer({ room, main }: { room: MultiRoomEntry; main: boolean }) {
   const setMainRoom = useMultiRoomStore((state) => state.setMainRoom);
   const removeRoom = useMultiRoomStore((state) => state.removeRoom);
   const updateAudio = useMultiRoomStore((state) => state.updateAudio);
   const updateMetadata = useMultiRoomStore((state) => state.updateMetadata);
   const [audioOnly, setAudioOnly] = useState(false);
+  const controlsHideTimerRef = useRef<number | null>(null);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  const hudRef = useRef<HTMLDivElement | null>(null);
+  const controlsVisibleRef = useRef(true);
+  const controlsFocusWithinRef = useRef(false);
+  const overlayInteractionOpenRef = useRef(false);
+  const overlayInteractionSourcesRef = useRef<Record<MultiRoomOverlayInteractionSource, boolean>>({
+    controls: false,
+    composer: false,
+  });
+  const lastControlsActivityAtRef = useRef(Date.now());
   const detailQuery = useQuery({
     queryKey: ["room_detail", room.siteId, room.roomId],
     queryFn: () =>
@@ -367,6 +402,172 @@ export function MultiRoomPlayer({
 
   const fullscreen = main && player.mode === "fullscreen";
 
+  const clearControlsHideTimer = useCallback(() => {
+    if (controlsHideTimerRef.current === null) return;
+    window.clearTimeout(controlsHideTimerRef.current);
+    controlsHideTimerRef.current = null;
+  }, []);
+
+  const setControlsVisible = useCallback((visible: boolean) => {
+    if (controlsVisibleRef.current === visible) return;
+    controlsVisibleRef.current = visible;
+    for (const layer of [controlsRef.current, hudRef.current]) {
+      if (!layer) continue;
+      layer.dataset.visible = visible ? "true" : "false";
+      layer.setAttribute("aria-hidden", String(!visible));
+      layer.toggleAttribute("inert", !visible);
+    }
+  }, []);
+
+  const hasKeyboardFocusWithinControls = useCallback(() => {
+    if (!controlsFocusWithinRef.current) return false;
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement) || !activeElement.matches(":focus-visible")) {
+      return false;
+    }
+    return (
+      controlsRef.current?.contains(activeElement) === true ||
+      hudRef.current?.contains(activeElement) === true
+    );
+  }, []);
+
+  const scheduleControlsHide = useCallback(() => {
+    clearControlsHideTimer();
+    setControlsVisible(true);
+    if (
+      !main ||
+      !player.running ||
+      player.paused ||
+      overlayInteractionOpenRef.current ||
+      hasKeyboardFocusWithinControls()
+    ) {
+      return;
+    }
+
+    const hideWhenIdle = () => {
+      const remaining =
+        MULTI_ROOM_CONTROLS_HIDE_DELAY_MS - (Date.now() - lastControlsActivityAtRef.current);
+      if (remaining > 0) {
+        controlsHideTimerRef.current = window.setTimeout(hideWhenIdle, remaining);
+        return;
+      }
+      controlsHideTimerRef.current = null;
+      if (
+        !main ||
+        !player.running ||
+        player.paused ||
+        overlayInteractionOpenRef.current ||
+        hasKeyboardFocusWithinControls()
+      ) {
+        setControlsVisible(true);
+        return;
+      }
+      setControlsVisible(false);
+    };
+
+    controlsHideTimerRef.current = window.setTimeout(
+      hideWhenIdle,
+      Math.max(
+        0,
+        MULTI_ROOM_CONTROLS_HIDE_DELAY_MS - (Date.now() - lastControlsActivityAtRef.current),
+      ),
+    );
+  }, [
+    clearControlsHideTimer,
+    hasKeyboardFocusWithinControls,
+    main,
+    player.paused,
+    player.running,
+    setControlsVisible,
+  ]);
+
+  const holdControlsVisible = useCallback(() => {
+    lastControlsActivityAtRef.current = Date.now();
+    clearControlsHideTimer();
+    setControlsVisible(true);
+  }, [clearControlsHideTimer, setControlsVisible]);
+
+  const revealControls = useCallback(() => {
+    lastControlsActivityAtRef.current = Date.now();
+    setControlsVisible(true);
+    scheduleControlsHide();
+  }, [scheduleControlsHide, setControlsVisible]);
+
+  const resumeControlsAutoHide = useCallback(() => {
+    lastControlsActivityAtRef.current = Date.now();
+    scheduleControlsHide();
+  }, [scheduleControlsHide]);
+
+  const handleOverlayInteractionChange = useCallback(
+    (source: MultiRoomOverlayInteractionSource, open: boolean) => {
+      overlayInteractionSourcesRef.current[source] = open;
+      const hasOpenOverlay = Object.values(overlayInteractionSourcesRef.current).some(Boolean);
+      overlayInteractionOpenRef.current = hasOpenOverlay;
+      if (hasOpenOverlay) holdControlsVisible();
+      else resumeControlsAutoHide();
+    },
+    [holdControlsVisible, resumeControlsAutoHide],
+  );
+
+  const handleControlsOverlayInteractionChange = useCallback(
+    (open: boolean) => handleOverlayInteractionChange("controls", open),
+    [handleOverlayInteractionChange],
+  );
+
+  const handleComposerOverlayInteractionChange = useCallback(
+    (open: boolean) => handleOverlayInteractionChange("composer", open),
+    [handleOverlayInteractionChange],
+  );
+
+  const handleChromePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.stopPropagation();
+      holdControlsVisible();
+    },
+    [holdControlsVisible],
+  );
+
+  const handleChromeFocusCapture = useCallback(() => {
+    controlsFocusWithinRef.current = true;
+    holdControlsVisible();
+  }, [holdControlsVisible]);
+
+  const handleChromeBlurCapture = useCallback(
+    (event: ReactFocusEvent<HTMLDivElement>) => {
+      const nextFocused = event.relatedTarget;
+      if (
+        nextFocused instanceof Node &&
+        (controlsRef.current?.contains(nextFocused) === true ||
+          hudRef.current?.contains(nextFocused) === true)
+      ) {
+        controlsFocusWithinRef.current = true;
+        holdControlsVisible();
+        return;
+      }
+      controlsFocusWithinRef.current = false;
+      resumeControlsAutoHide();
+    },
+    [holdControlsVisible, resumeControlsAutoHide],
+  );
+
+  useEffect(() => {
+    controlsFocusWithinRef.current = false;
+    overlayInteractionOpenRef.current = false;
+    overlayInteractionSourcesRef.current.controls = false;
+    overlayInteractionSourcesRef.current.composer = false;
+    lastControlsActivityAtRef.current = Date.now();
+    setControlsVisible(true);
+    scheduleControlsHide();
+    return clearControlsHideTimer;
+  }, [
+    clearControlsHideTimer,
+    main,
+    player.paused,
+    player.running,
+    scheduleControlsHide,
+    setControlsVisible,
+  ]);
+
   return (
     <article
       ref={player.stageRef}
@@ -381,6 +582,10 @@ export function MultiRoomPlayer({
       className="group/player relative size-full min-h-0 overflow-hidden bg-black outline-none"
       tabIndex={0}
       aria-label={`${main ? "主画面" : "副画面"}：${title}`}
+      onPointerEnter={main ? revealControls : undefined}
+      onPointerMove={main ? revealControls : undefined}
+      onPointerDown={main ? revealControls : undefined}
+      onPointerLeave={main ? resumeControlsAutoHide : undefined}
       onDoubleClick={() => {
         if (!main) setMainRoom(room.key);
       }}
@@ -429,9 +634,32 @@ export function MultiRoomPlayer({
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity group-data-[main=true]/player:opacity-100 group-focus-within/player:opacity-100 group-hover/player:opacity-100">
+      <div
+        ref={main ? hudRef : undefined}
+        data-player-hud={main ? true : undefined}
+        data-visible={main ? (controlsVisibleRef.current ? "true" : "false") : undefined}
+        aria-hidden={main ? !controlsVisibleRef.current : undefined}
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity",
+          main
+            ? "[will-change:opacity] duration-150 ease-out motion-reduced:transition-none data-[visible=true]:opacity-100 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+            : "group-focus-within/player:opacity-100 group-hover/player:opacity-100",
+        )}
+        onPointerEnter={main ? holdControlsVisible : undefined}
+        onPointerMove={
+          main
+            ? (event) => {
+                event.stopPropagation();
+                holdControlsVisible();
+              }
+            : undefined
+        }
+        onPointerDown={main ? handleChromePointerDown : undefined}
+        onPointerLeave={main ? resumeControlsAutoHide : undefined}
+        onFocusCapture={main ? handleChromeFocusCapture : undefined}
+        onBlurCapture={main ? handleChromeBlurCapture : undefined}
+      >
         <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
-          {dragHandle}
           {main && <Badge variant="secondary">主画面</Badge>}
           <RoomIdentityLine
             siteId={room.siteId}
@@ -460,19 +688,38 @@ export function MultiRoomPlayer({
       </div>
 
       {main ? (
-        <MainMultiRoomControls
-          room={room}
-          detail={detail}
-          playback={playback}
-          player={player}
-          loading={loading}
-          error={error}
-          audioOnly={audioOnly}
-          onToggleAudioOnly={() => setAudioOnly((enabled) => !enabled)}
-          onRefresh={retry}
-          onVolume={changeVolume}
-          onToggleMute={toggleMute}
-        />
+        <div
+          ref={controlsRef}
+          data-player-controls
+          data-visible={controlsVisibleRef.current ? "true" : "false"}
+          aria-hidden={!controlsVisibleRef.current}
+          className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+          onPointerEnter={holdControlsVisible}
+          onPointerMove={(event) => {
+            event.stopPropagation();
+            holdControlsVisible();
+          }}
+          onPointerDown={handleChromePointerDown}
+          onPointerLeave={resumeControlsAutoHide}
+          onFocusCapture={handleChromeFocusCapture}
+          onBlurCapture={handleChromeBlurCapture}
+        >
+          <MainMultiRoomControls
+            room={room}
+            detail={detail}
+            playback={playback}
+            player={player}
+            loading={loading}
+            error={error}
+            audioOnly={audioOnly}
+            onToggleAudioOnly={() => setAudioOnly((enabled) => !enabled)}
+            onRefresh={retry}
+            onVolume={changeVolume}
+            onToggleMute={toggleMute}
+            onControlsOverlayInteractionChange={handleControlsOverlayInteractionChange}
+            onComposerOverlayInteractionChange={handleComposerOverlayInteractionChange}
+          />
+        </div>
       ) : (
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/85 to-transparent p-2 pt-7 text-white opacity-0 transition-opacity group-focus-within/player:opacity-100 group-hover/player:opacity-100">
           <OverlayIconButton

@@ -1,20 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  DndContext,
-  KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
-  rectIntersection,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
   ChevronLeft,
-  Grip,
   LayoutGrid,
   LayoutPanelLeft,
   Monitor,
@@ -64,10 +51,6 @@ import {
   type MultiRoomLayout,
 } from "./multiRoomStore";
 
-const MULTI_ROOM_DND_INSTRUCTIONS = {
-  draggable: "按空格键选中画面，使用方向键移动，按空格键放置，按 Escape 取消。",
-};
-
 function EmptySlot({
   index,
   fourLayout,
@@ -79,20 +62,13 @@ function EmptySlot({
   layout: MultiRoomLayout;
   onAdd: () => void;
 }) {
-  const { isOver, setNodeRef } = useDroppable({
-    id: `multi-room-slot:${index}`,
-    data: { slotIndex: index },
-  });
-
   return (
     <div
-      ref={setNodeRef}
       data-multi-room-slot={index}
       data-empty="true"
       className={cn(
         "flex min-h-0 items-center justify-center overflow-hidden bg-muted/20",
         multiRoomSlotClassName(index, layout, fourLayout),
-        isOver && "bg-primary/15 ring-2 ring-inset ring-primary",
       )}
     >
       <Tooltip>
@@ -126,68 +102,16 @@ function OccupiedSlot({
   layout: MultiRoomLayout;
   room: MultiRoomEntry;
 }) {
-  const { isOver, setNodeRef: setDroppableNodeRef } = useDroppable({
-    id: `multi-room-slot:${index}`,
-    data: { slotIndex: index },
-  });
-  const {
-    attributes,
-    isDragging,
-    listeners,
-    setActivatorNodeRef,
-    setNodeRef: setDraggableNodeRef,
-    transform,
-  } = useDraggable({
-    id: `multi-room-player:${room.key}`,
-    data: { slotIndex: index, roomKey: room.key },
-  });
-  const setNodeRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      setDroppableNodeRef(node);
-      setDraggableNodeRef(node);
-    },
-    [setDraggableNodeRef, setDroppableNodeRef],
-  );
-  const style = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
-    : undefined;
-
-  const dragHandle = (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            ref={setActivatorNodeRef}
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="cursor-grab bg-black/45 text-white active:cursor-grabbing hover:bg-black/70 hover:text-white"
-            aria-label={`移动${room.title}`}
-            {...attributes}
-            {...listeners}
-          />
-        }
-      >
-        <Grip data-icon="inline-start" aria-hidden />
-      </TooltipTrigger>
-      <TooltipContent>移动画面</TooltipContent>
-    </Tooltip>
-  );
-
   return (
     <div
-      ref={setNodeRef}
       data-multi-room-slot={index}
       data-room-key={room.key}
       className={cn(
         "relative min-h-0 min-w-0 overflow-hidden bg-black",
         multiRoomSlotClassName(index, layout, fourLayout),
-        isOver && !isDragging && "ring-2 ring-inset ring-primary",
-        isDragging && "opacity-45",
       )}
-      style={style}
     >
-      <MultiRoomPlayer room={room} main={isMultiRoomMainSlot(index)} dragHandle={dragHandle} />
+      <MultiRoomPlayer room={room} main={isMultiRoomMainSlot(index)} />
     </div>
   );
 }
@@ -197,17 +121,11 @@ export function MultiRoomPage() {
   const slots = useMultiRoomStore((state) => state.slots);
   const layout = useMultiRoomStore((state) => state.layout);
   const fourLayout = useMultiRoomStore((state) => state.fourLayout);
-  const moveRoom = useMultiRoomStore((state) => state.moveRoom);
   const setLayout = useMultiRoomStore((state) => state.setLayout);
   const setFourLayout = useMultiRoomStore((state) => state.setFourLayout);
   const clear = useMultiRoomStore((state) => state.clear);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 5 } }),
-    useSensor(KeyboardSensor),
-  );
   const roomCount = useMemo(() => slots.filter(Boolean).length, [slots]);
   const visibleSlots = useMemo(() => slots.slice(0, layout), [layout, slots]);
 
@@ -215,13 +133,6 @@ export function MultiRoomPage() {
     const historyState = window.history.state as { idx?: number } | null;
     if (typeof historyState?.idx === "number" && historyState.idx > 0) navigate(-1);
     else navigate("/", { replace: true });
-  }
-
-  function handleDragEnd(event: DragEndEvent) {
-    const sourceIndex = Number(event.active.data.current?.slotIndex);
-    const targetIndex = Number(event.over?.data.current?.slotIndex);
-    if (!Number.isInteger(sourceIndex) || !Number.isInteger(targetIndex)) return;
-    moveRoom(sourceIndex, targetIndex);
   }
 
   if (isMobileClient()) {
@@ -370,41 +281,34 @@ export function MultiRoomPage() {
         </div>
       </header>
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={rectIntersection}
-        accessibility={{ screenReaderInstructions: MULTI_ROOM_DND_INSTRUCTIONS }}
-        onDragEnd={handleDragEnd}
+      <div
+        data-multi-room-grid
+        data-multi-room-layout={layout === 4 ? fourLayout : "six"}
+        className={cn(
+          "grid min-h-0 flex-1 gap-px overflow-hidden bg-border/60",
+          multiRoomGridClassName(layout, fourLayout),
+        )}
       >
-        <div
-          data-multi-room-grid
-          data-multi-room-layout={layout === 4 ? fourLayout : "six"}
-          className={cn(
-            "grid min-h-0 flex-1 gap-px overflow-hidden bg-border/60",
-            multiRoomGridClassName(layout, fourLayout),
-          )}
-        >
-          {visibleSlots.map((room, index) =>
-            room ? (
-              <OccupiedSlot
-                key={room.key}
-                index={index}
-                fourLayout={fourLayout}
-                layout={layout}
-                room={room}
-              />
-            ) : (
-              <EmptySlot
-                key={`empty:${index}`}
-                index={index}
-                fourLayout={fourLayout}
-                layout={layout}
-                onAdd={() => setPickerOpen(true)}
-              />
-            ),
-          )}
-        </div>
-      </DndContext>
+        {visibleSlots.map((room, index) =>
+          room ? (
+            <OccupiedSlot
+              key={room.key}
+              index={index}
+              fourLayout={fourLayout}
+              layout={layout}
+              room={room}
+            />
+          ) : (
+            <EmptySlot
+              key={`empty:${index}`}
+              index={index}
+              fourLayout={fourLayout}
+              layout={layout}
+              onAdd={() => setPickerOpen(true)}
+            />
+          ),
+        )}
+      </div>
 
       <MultiRoomPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} />
 

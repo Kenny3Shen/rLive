@@ -2,14 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   createMultiRoomEntry,
   findMultiRoomEmptySlot,
-  fitMultiRoomSlotsToLayout,
-  moveMultiRoomSlot,
   normalizeMultiRoomAudioRoles,
   normalizeMultiRoomFourLayout,
   normalizeMultiRoomLayout,
   normalizeMultiRoomSlots,
-  promoteMultiRoomSlot,
-  restoreMultiRoomSlotsForLayout,
+  swapMultiRoomMain,
   type MultiRoomEntry,
 } from "../src/features/multi-room/multiRoomStore";
 import {
@@ -89,24 +86,6 @@ describe("multi-room audio defaults", () => {
     expect(roles[1]).toMatchObject({ muted: true });
   });
 
-  test("swaps the demoted main feed into the promoted feed's slot", () => {
-    const main = room("main");
-    const topLeft = { ...room("top-left"), secondarySlot: 1 };
-    const bottomRight = { ...room("bottom-right"), secondarySlot: 5 };
-    const afterTopLeft = promoteMultiRoomSlot(
-      [main, topLeft, null, null, null, bottomRight],
-      1,
-    );
-    const afterBottomRight = promoteMultiRoomSlot(afterTopLeft, 5);
-
-    expect(afterTopLeft[0]?.key).toBe(topLeft.key);
-    expect(afterTopLeft[1]?.key).toBe(main.key);
-
-    expect(afterBottomRight[0]?.key).toBe(bottomRight.key);
-    expect(afterBottomRight[1]?.key).toBe(main.key);
-    expect(afterBottomRight[5]?.key).toBe(topLeft.key);
-  });
-
   test("keeps a silent secondary muted after autoplay fallback", async () => {
     let attempts = 0;
     const video = { muted: false } as Pick<HTMLVideoElement, "muted">;
@@ -178,50 +157,6 @@ describe("multi-room director layout", () => {
     expect(multiRoomSlotLabel(3, 4, "equal")).toBe("右下画面");
   });
 
-  test("compacts four feeds into visible slots and rejects overflowing layouts", () => {
-    const main = { ...room("main"), secondarySlot: 5 };
-    const topLeft = { ...room("top-left"), secondarySlot: 1 };
-    const rightMiddle = { ...room("right-middle"), secondarySlot: 4 };
-    const rightBottom = { ...room("right-bottom"), secondarySlot: 5 };
-    const fitted = fitMultiRoomSlotsToLayout(
-      [main, topLeft, null, null, rightMiddle, rightBottom],
-      4,
-    );
-
-    expect(fitted?.slice(0, 4).map((entry) => entry?.key)).toEqual([
-      main.key,
-      topLeft.key,
-      rightMiddle.key,
-      rightBottom.key,
-    ]);
-    expect(fitted?.[0]?.secondarySlot).toBeNull();
-    expect(fitted?.slice(1, 4).map((entry) => entry?.secondarySlot)).toEqual([1, 2, 3]);
-    expect(fitted?.slice(4)).toEqual([null, null]);
-
-    expect(
-      fitMultiRoomSlotsToLayout([main, topLeft, room("2"), room("3"), room("4")], 4),
-    ).toBeNull();
-  });
-
-  test("preserves intentional empty slots when restoring four-screen mode", () => {
-    const main = room("main");
-    const topMiddle = { ...room("top-middle"), secondarySlot: 5 };
-    const restored = restoreMultiRoomSlotsForLayout(
-      [main, null, topMiddle, null, null, null],
-      4,
-    );
-
-    expect(restored?.map((entry) => entry?.key ?? null)).toEqual([
-      main.key,
-      null,
-      topMiddle.key,
-      null,
-      null,
-      null,
-    ]);
-    expect(restored?.[2]?.secondarySlot).toBe(2);
-  });
-
   test("falls back to the six-screen layout for unknown persisted values", () => {
     expect(normalizeMultiRoomLayout(4)).toBe(4);
     expect(normalizeMultiRoomLayout(6)).toBe(6);
@@ -250,36 +185,26 @@ describe("multi-room director layout", () => {
   test("swaps any occupied secondary feed into the main slot", () => {
     const main = room("main");
     const secondary = room("secondary");
-    const moved = moveMultiRoomSlot([main, secondary], 1, 0);
+    const moved = swapMultiRoomMain([main, secondary], 1);
 
     expect(moved[0]?.key).toBe(secondary.key);
     expect(moved[1]?.key).toBe(main.key);
   });
 
-  test("moves a secondary feed into any empty top or right slot", () => {
+  test("compacts remaining feeds after a slot is removed", () => {
     const main = room("main");
     const secondary = room("secondary");
-    const moved = moveMultiRoomSlot([main, secondary], 1, 5);
+    const normalized = normalizeMultiRoomSlots([main, null, secondary]);
 
-    expect(moved[0]?.key).toBe(main.key);
-    expect(moved[1]).toBeNull();
-    expect(moved[5]?.key).toBe(secondary.key);
-  });
-
-  test("keeps a main feed when the current main is moved to an empty slot", () => {
-    const main = room("main");
-    const secondary = room("secondary");
-    const moved = moveMultiRoomSlot([main, secondary], 0, 4);
-
-    expect(moved[0]?.key).toBe(secondary.key);
-    expect(moved[4]?.key).toBe(main.key);
-  });
-
-  test("promotes the first remaining feed when the main slot is empty", () => {
-    const secondary = room("secondary");
-    const normalized = normalizeMultiRoomSlots([null, null, secondary]);
-
-    expect(normalized[0]?.key).toBe(secondary.key);
+    expect(normalized[0]?.key).toBe(main.key);
+    expect(normalized[1]?.key).toBe(secondary.key);
     expect(normalized[2]).toBeNull();
+  });
+
+  test("drops legacy secondary position metadata during normalization", () => {
+    const legacy = { ...room("secondary"), secondarySlot: 5 };
+    const normalized = normalizeMultiRoomSlots([room("main"), legacy]);
+
+    expect(normalized[1]).not.toHaveProperty("secondarySlot");
   });
 });
