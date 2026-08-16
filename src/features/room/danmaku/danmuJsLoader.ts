@@ -18,7 +18,13 @@ export function resolveDanmuJsConstructor(moduleValue: unknown): DanmuJsConstruc
   if (!root) return null;
 
   const nestedDefault = asRecord(root.default);
-  const candidates = [root.DanmuJs, root.default, nestedDefault?.DanmuJs, nestedDefault?.default];
+  const candidates = [
+    moduleValue,
+    root.DanmuJs,
+    root.default,
+    nestedDefault?.DanmuJs,
+    nestedDefault?.default,
+  ];
   const constructor = candidates.find((candidate) => typeof candidate === "function");
   return (constructor as DanmuJsConstructor | undefined) ?? null;
 }

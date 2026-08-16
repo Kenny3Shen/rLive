@@ -26,7 +26,7 @@ pub struct AppSettings {
     /// Maximum scrolling lanes. `0` chooses a suitable count automatically.
     #[serde(default)]
     pub danmaku_line_count: u32,
-    /// Canvas font weight (400 / 500 / 600 / 700).
+    /// Danmaku font weight (400 / 500 / 600 / 700).
     #[serde(default = "default_danmaku_font_weight")]
     pub danmaku_font_weight: u16,
     /// Suppress consecutive duplicate chat messages in the visual clients.
