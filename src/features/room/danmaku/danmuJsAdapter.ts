@@ -14,6 +14,7 @@ export const DANMU_JS_MAX_PENDING_COMMENTS = 80;
 export const DANMU_JS_MAX_SUPER_CHATS = 3;
 export const DANMU_JS_PENDING_MAX_AGE_MS = 5_000;
 export const DANMU_JS_DEFAULT_DURATION_MS = 15_000;
+export const DANMU_JS_DEFAULT_MOVE_V = 100;
 export const DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 
 export type DanmuJsPendingEvent = {
@@ -100,6 +101,12 @@ export function clampDanmuArea(value: number, fallback = 0.25): number {
 /** Keep danmu.js' virtual channel height aligned with the rendered line box. */
 export function danmuLaneHeight(fontSize: number): number {
   return Math.max(16, Math.round(clampDanmuFontSize(fontSize) * 1.4));
+}
+
+/** Convert the requested px/s into danmu.js' multiplier for the 100 px/s base moveV. */
+export function danmuMoveVPlayRate(moveV: number): number {
+  const safeMoveV = Number.isFinite(moveV) && moveV > 0 ? moveV : DANMU_JS_DEFAULT_MOVE_V;
+  return safeMoveV / DANMU_JS_DEFAULT_MOVE_V;
 }
 
 /** Use danmu.js' native proportional area without overriding it with `lines`. */
@@ -210,7 +217,13 @@ export function danmuCommentFromEvent(
   };
   return {
     id: options.id,
-    duration: isSuperChat ? superChatDurationMs(event.super_chat) : DANMU_JS_DEFAULT_DURATION_MS,
+    ...(isPinned
+      ? {
+          duration: isSuperChat
+            ? superChatDurationMs(event.super_chat)
+            : DANMU_JS_DEFAULT_DURATION_MS,
+        }
+      : { moveV: DANMU_JS_DEFAULT_MOVE_V }),
     mode: isPinned ? "bottom" : "scroll",
     realTime: true,
     prior: isPinned,

@@ -3,12 +3,14 @@ import type { DanmuJsBullet, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
   DANMU_JS_DEFAULT_DURATION_MS,
+  DANMU_JS_DEFAULT_MOVE_V,
   DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT,
   clampDanmuArea,
   danmuAreaConfig,
   danmuCommentFromEvent,
   danmuLayerAreaConfig,
   danmuLaneHeight,
+  danmuMoveVPlayRate,
   danmuRenderLayer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
@@ -78,19 +80,19 @@ describe("danmu.js loader interop", () => {
 });
 
 describe("danmu.js event mapping", () => {
-  test("maps live chat to a fixed 15-second scrolling comment", () => {
+  test("maps live chat to a scrolling comment moving at 100 pixels per second", () => {
     const comment = danmuCommentFromEvent(chat(), mappingOptions());
 
     expect(comment).not.toBeNull();
-    expect(comment?.duration).toBe(DANMU_JS_DEFAULT_DURATION_MS);
-    expect(comment?.duration).toBe(15_000);
+    expect(comment?.moveV).toBe(DANMU_JS_DEFAULT_MOVE_V);
+    expect(comment?.moveV).toBe(100);
+    expect(Object.hasOwn(comment ?? {}, "duration")).toBe(false);
     expect(comment?.mode).toBe("scroll");
     expect(danmuRenderLayer(comment!)).toBe("scroll");
     expect(comment?.realTime).toBe(true);
     expect(comment?.prior).toBe(false);
     expect(comment?.txt).toBe("你好");
     expect(Object.hasOwn(comment ?? {}, "start")).toBe(false);
-    expect(Object.hasOwn(comment ?? {}, "moveV")).toBe(false);
     expect(comment?.style).toMatchObject({
       display: "inline-flex",
       alignItems: "center",
@@ -111,7 +113,8 @@ describe("danmu.js event mapping", () => {
     expect(danmuRenderLayer(comment!)).toBe("bottom");
     expect(comment?.prior).toBe(true);
     expect(comment?.realTime).toBe(true);
-    expect(comment?.duration).toBe(15_000);
+    expect(comment?.duration).toBe(DANMU_JS_DEFAULT_DURATION_MS);
+    expect(Object.hasOwn(comment ?? {}, "moveV")).toBe(false);
     expect(comment?.style?.border).toBeUndefined();
     expect(comment?.style?.padding).toBeUndefined();
   });
@@ -135,6 +138,7 @@ describe("danmu.js event mapping", () => {
 
     expect(comment).not.toBeNull();
     expect(comment?.duration).toBe(60_000);
+    expect(Object.hasOwn(comment ?? {}, "moveV")).toBe(false);
     expect(comment?.mode).toBe("bottom");
     expect(danmuRenderLayer(comment!)).toBe("bottom");
     expect(comment?.realTime).toBe(true);
@@ -239,6 +243,13 @@ describe("danmu.js appearance helpers", () => {
     expect(danmuLaneHeight(18)).toBe(25);
     expect(danmuLaneHeight(48)).toBe(67);
     expect(danmuLaneHeight(Number.NaN)).toBe(25);
+  });
+
+  test("maps the configured pixel speed onto the native moveV play rate", () => {
+    expect(danmuMoveVPlayRate(50)).toBe(0.5);
+    expect(danmuMoveVPlayRate(100)).toBe(1);
+    expect(danmuMoveVPlayRate(200)).toBe(2);
+    expect(danmuMoveVPlayRate(Number.NaN)).toBe(1);
   });
 
   test("uses the native danmu.js area without a virtual line limit", () => {

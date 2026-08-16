@@ -6,6 +6,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::AppSettings;
 
 const SETTINGS_KEY: &str = "app_settings";
+const DANMAKU_SPEED_MIN: u32 = 50;
+const DANMAKU_SPEED_MAX: u32 = 200;
 const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 0;
 const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 
@@ -137,6 +139,9 @@ fn is_supported_translation_language(language: &str) -> bool {
 }
 
 fn normalize_danmaku_preferences(settings: &mut AppSettings) {
+    settings.danmaku_speed = settings
+        .danmaku_speed
+        .clamp(DANMAKU_SPEED_MIN, DANMAKU_SPEED_MAX);
     settings.danmaku_merge_window_seconds = settings.danmaku_merge_window_seconds.clamp(
         DANMAKU_MERGE_WINDOW_SECONDS_MIN,
         DANMAKU_MERGE_WINDOW_SECONDS_MAX,
@@ -214,6 +219,7 @@ mod tests {
         assert_eq!(s.motion_mode, "full");
         assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_size, 18);
+        assert_eq!(s.danmaku_speed, 100);
         assert_eq!(s.danmaku_area, 0.25);
         assert_eq!(s.danmaku_font_weight, 600);
         assert!(s.danmaku_filter_gifts);
@@ -266,6 +272,26 @@ mod tests {
         settings.danmaku_merge_window_seconds = 60;
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 30);
+    }
+
+    #[test]
+    fn set_clamps_danmaku_speed() {
+        let conn = open_in_memory().unwrap();
+        let mut settings = AppSettings {
+            danmaku_speed: 100,
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_speed, 100);
+
+        settings.danmaku_speed = 1;
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_speed, DANMAKU_SPEED_MIN);
+
+        settings.danmaku_speed = 500;
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_speed, DANMAKU_SPEED_MAX);
     }
 
     #[test]

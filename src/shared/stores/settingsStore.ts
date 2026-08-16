@@ -28,9 +28,19 @@ export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 18;
 export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 14;
 export const DANMAKU_OPACITY_DEFAULT = 0.8;
 export const DANMAKU_AREA_DEFAULT = 0.25;
+export const DANMAKU_SPEED_MIN = 50;
+export const DANMAKU_SPEED_MAX = 200;
+export const DANMAKU_SPEED_DEFAULT = 100;
 
 export function defaultDanmakuFontSize(mobile = isMobileClient()): number {
   return mobile ? DANMAKU_FONT_SIZE_MOBILE_DEFAULT : DANMAKU_FONT_SIZE_DESKTOP_DEFAULT;
+}
+
+/** Whole CSS pixels per second inside the supported scrolling-speed range. */
+export function parseDanmakuSpeed(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(numeric)) return DANMAKU_SPEED_DEFAULT;
+  return Math.min(DANMAKU_SPEED_MAX, Math.max(DANMAKU_SPEED_MIN, Math.round(numeric)));
 }
 
 // `settings_set` writes one complete object. Serialize writes so rapid room
@@ -106,6 +116,7 @@ type SettingsState = {
   proxy: string | null;
   danmakuOpacity: number;
   danmakuFontSize: number;
+  danmakuSpeed: number;
   danmakuArea: number;
   danmakuFontWeight: number;
   danmakuFilterGifts: boolean;
@@ -177,6 +188,7 @@ const defaultSettings: AppSettings = {
   proxy: null,
   danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
   danmaku_font_size: defaultDanmakuFontSize(),
+  danmaku_speed: DANMAKU_SPEED_DEFAULT,
   danmaku_area: DANMAKU_AREA_DEFAULT,
   danmaku_font_weight: 600,
   danmaku_filter_gifts: true,
@@ -210,6 +222,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_size: state.danmakuFontSize,
+    danmaku_speed: state.danmakuSpeed,
     danmaku_area: state.danmakuArea,
     danmaku_font_weight: state.danmakuFontWeight,
     danmaku_filter_gifts: state.danmakuFilterGifts,
@@ -244,6 +257,7 @@ export const useSettingsStore = create<SettingsState>()(
       proxy: null,
       danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
       danmakuFontSize: defaultDanmakuFontSize(),
+      danmakuSpeed: DANMAKU_SPEED_DEFAULT,
       danmakuArea: DANMAKU_AREA_DEFAULT,
       danmakuFontWeight: 600,
       danmakuFilterGifts: true,
@@ -506,6 +520,7 @@ export const useSettingsStore = create<SettingsState>()(
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontSize: settings.danmaku_font_size,
+          danmakuSpeed: parseDanmakuSpeed(settings.danmaku_speed),
           danmakuArea: settings.danmaku_area,
           danmakuFontWeight: settings.danmaku_font_weight,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
