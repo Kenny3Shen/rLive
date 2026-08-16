@@ -23,8 +23,6 @@ export type MultiRoomEntry = {
   title: string;
   userName: string;
   cover: string;
-  /** The secondary slot this room returns to after leaving the main slot. */
-  secondarySlot: number | null;
   volume: number;
   muted: boolean;
 };
@@ -57,7 +55,6 @@ export function multiRoomKey(siteId: SiteId, roomId: string): string {
 export function createMultiRoomEntry(
   candidate: MultiRoomCandidate,
   primary: boolean,
-  secondarySlot: number | null = null,
 ): MultiRoomEntry {
   return {
     key: multiRoomKey(candidate.site_id, candidate.room_id),
@@ -66,23 +63,9 @@ export function createMultiRoomEntry(
     title: candidate.title?.trim() || candidate.user_name?.trim() || "直播间",
     userName: candidate.user_name?.trim() || "未知主播",
     cover: candidate.cover?.trim() || "",
-    secondarySlot: primary ? null : secondarySlot,
     volume: primary ? 80 : 0,
     muted: !primary,
   };
-}
-
-function withSecondarySlot(room: MultiRoomEntry, secondarySlot: number | null): MultiRoomEntry {
-  return { ...room, secondarySlot };
-}
-
-function validSecondarySlot(slot: number | null | undefined): slot is number {
-  return (
-    typeof slot === "number" &&
-    Number.isInteger(slot) &&
-    slot > MULTI_ROOM_MAIN_SLOT &&
-    slot < MULTI_ROOM_MAX_SLOTS
-  );
 }
 
 /** Keep exactly the current main feed audible while secondary feeds stay muted. */
@@ -105,78 +88,31 @@ export function normalizeMultiRoomAudioRoles(
 export function normalizeMultiRoomSlots(
   slots: readonly (MultiRoomEntry | null)[],
 ): (MultiRoomEntry | null)[] {
-  const next = Array.from<MultiRoomEntry | null>({ length: MULTI_ROOM_MAX_SLOTS }).fill(null);
+  const occupied: MultiRoomEntry[] = [];
   const seen = new Set<string>();
   for (let index = 0; index < MULTI_ROOM_MAX_SLOTS; index += 1) {
     const room = slots[index];
     if (!room || seen.has(room.key)) continue;
     seen.add(room.key);
-    next[index] =
-      index === MULTI_ROOM_MAIN_SLOT || validSecondarySlot(room.secondarySlot)
-        ? room
-        : withSecondarySlot(room, index);
+    occupied.push(stripLegacySecondarySlot(room));
   }
-
-  if (!next[MULTI_ROOM_MAIN_SLOT]) {
-    const replacementIndex = next.findIndex((room) => room != null);
-    if (replacementIndex >= 0) {
-      next[MULTI_ROOM_MAIN_SLOT] = next[replacementIndex];
-      next[replacementIndex] = null;
-    }
-  }
-  return next;
-}
-
-export function fitMultiRoomSlotsToLayout(
-  slots: readonly (MultiRoomEntry | null)[],
-  layout: MultiRoomLayout,
-): (MultiRoomEntry | null)[] | null {
-  const normalized = normalizeMultiRoomSlots(slots);
-  const occupied = normalized.filter((room): room is MultiRoomEntry => room != null);
-  if (occupied.length > layout) return null;
 
   const next = Array.from<MultiRoomEntry | null>({ length: MULTI_ROOM_MAX_SLOTS }).fill(null);
-  const main = normalized[MULTI_ROOM_MAIN_SLOT];
-  if (main) {
-    next[MULTI_ROOM_MAIN_SLOT] =
-      validSecondarySlot(main.secondarySlot) && main.secondarySlot < layout
-        ? main
-        : withSecondarySlot(main, null);
-  }
-
-  let targetIndex = MULTI_ROOM_MAIN_SLOT + 1;
-  for (let index = MULTI_ROOM_MAIN_SLOT + 1; index < MULTI_ROOM_MAX_SLOTS; index += 1) {
-    const room = normalized[index];
-    if (!room) continue;
-    next[targetIndex] = withSecondarySlot(room, targetIndex);
-    targetIndex += 1;
-  }
+  occupied.forEach((room, index) => {
+    next[index] = room;
+  });
   return next;
 }
 
-export function restoreMultiRoomSlotsForLayout(
-  slots: readonly (MultiRoomEntry | null)[],
-  layout: MultiRoomLayout,
-): (MultiRoomEntry | null)[] | null {
-  const normalized = normalizeMultiRoomSlots(slots);
-  if (normalized.filter(Boolean).length > layout) return null;
-  if (normalized.slice(layout).some(Boolean)) return fitMultiRoomSlotsToLayout(normalized, layout);
+type LegacyMultiRoomEntry = MultiRoomEntry & { secondarySlot?: number | null };
 
-  return normalized.map((room, index) => {
-    if (!room || index >= layout) return null;
-    if (index > MULTI_ROOM_MAIN_SLOT) return withSecondarySlot(room, index);
-    return validSecondarySlot(room.secondarySlot) && room.secondarySlot < layout
-      ? room
-      : withSecondarySlot(room, null);
-  });
+function stripLegacySecondarySlot(room: MultiRoomEntry): MultiRoomEntry {
+  const { secondarySlot: _secondarySlot, ...entry } = room as LegacyMultiRoomEntry;
+  return entry;
 }
 
-/**
- * Promote a secondary feed by swapping it with the current main feed: the
- * promoted feed takes the main slot while the demoted main feed takes the
- * promoted feed's slot, leaving every other feed where it is.
- */
-export function promoteMultiRoomSlot(
+/** Swap one occupied secondary slot with the main slot. */
+export function swapMultiRoomMain(
   slots: readonly (MultiRoomEntry | null)[],
   sourceIndex: number,
 ): (MultiRoomEntry | null)[] {
@@ -190,53 +126,8 @@ export function promoteMultiRoomSlot(
     return next;
   }
 
-  const selected = withSecondarySlot(next[sourceIndex], sourceIndex);
-  const previousMain = next[MULTI_ROOM_MAIN_SLOT];
-
-  next[MULTI_ROOM_MAIN_SLOT] = selected;
-  next[sourceIndex] = withSecondarySlot(previousMain, sourceIndex);
+  [next[MULTI_ROOM_MAIN_SLOT], next[sourceIndex]] = [next[sourceIndex], next[MULTI_ROOM_MAIN_SLOT]];
   return next;
-}
-
-function syncVisibleSecondarySlots(
-  slots: readonly (MultiRoomEntry | null)[],
-): (MultiRoomEntry | null)[] {
-  return slots.map((room, index) => {
-    if (!room || index === MULTI_ROOM_MAIN_SLOT) return room;
-    return withSecondarySlot(room, index);
-  });
-}
-
-export function moveMultiRoomSlot(
-  slots: readonly (MultiRoomEntry | null)[],
-  sourceIndex: number,
-  targetIndex: number,
-): (MultiRoomEntry | null)[] {
-  const next = normalizeMultiRoomSlots(slots);
-  if (
-    sourceIndex === targetIndex ||
-    sourceIndex < 0 ||
-    targetIndex < 0 ||
-    sourceIndex >= MULTI_ROOM_MAX_SLOTS ||
-    targetIndex >= MULTI_ROOM_MAX_SLOTS ||
-    !next[sourceIndex]
-  ) {
-    return next;
-  }
-
-  if (sourceIndex === MULTI_ROOM_MAIN_SLOT && !next[targetIndex]) {
-    const replacementIndex = next.findIndex(
-      (room, index) => index !== MULTI_ROOM_MAIN_SLOT && index !== targetIndex && room != null,
-    );
-    if (replacementIndex < 0) return next;
-    next[targetIndex] = next[sourceIndex];
-    next[sourceIndex] = next[replacementIndex];
-    next[replacementIndex] = null;
-    return next;
-  }
-
-  [next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]];
-  return normalizeMultiRoomSlots(next);
 }
 
 type MultiRoomState = {
@@ -245,7 +136,6 @@ type MultiRoomState = {
   fourLayout: MultiRoomFourLayout;
   addRoom: (candidate: MultiRoomCandidate) => MultiRoomAddResult;
   removeRoom: (key: string) => void;
-  moveRoom: (sourceIndex: number, targetIndex: number) => void;
   setMainRoom: (key: string) => void;
   updateAudio: (key: string, volume: number, muted: boolean) => void;
   updateMetadata: (key: string, detail: LiveRoomDetail) => void;
@@ -271,11 +161,7 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         if (slots.some((room) => room?.key === key)) return "exists";
         const targetIndex = findMultiRoomEmptySlot(slots, layout);
         if (targetIndex < 0) return "full";
-        slots[targetIndex] = createMultiRoomEntry(
-          candidate,
-          targetIndex === MULTI_ROOM_MAIN_SLOT,
-          targetIndex === MULTI_ROOM_MAIN_SLOT ? null : targetIndex,
-        );
+        slots[targetIndex] = createMultiRoomEntry(candidate, targetIndex === MULTI_ROOM_MAIN_SLOT);
         set({ slots });
         return "added";
       },
@@ -287,29 +173,12 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         const next = normalizeMultiRoomSlots(slots);
         set({ slots: index === MULTI_ROOM_MAIN_SLOT ? normalizeMultiRoomAudioRoles(next) : next });
       },
-      moveRoom: (sourceIndex, targetIndex) => {
-        const current = normalizeMultiRoomSlots(get().slots);
-        const mainSwitchIndex =
-          sourceIndex === MULTI_ROOM_MAIN_SLOT &&
-          targetIndex > MULTI_ROOM_MAIN_SLOT &&
-          current[targetIndex]
-            ? targetIndex
-            : targetIndex === MULTI_ROOM_MAIN_SLOT && sourceIndex > MULTI_ROOM_MAIN_SLOT
-              ? sourceIndex
-              : null;
-        const next =
-          mainSwitchIndex !== null
-            ? promoteMultiRoomSlot(current, mainSwitchIndex)
-            : syncVisibleSecondarySlots(moveMultiRoomSlot(current, sourceIndex, targetIndex));
-        const mainChanged = current[MULTI_ROOM_MAIN_SLOT]?.key !== next[MULTI_ROOM_MAIN_SLOT]?.key;
-        set({ slots: mainChanged ? normalizeMultiRoomAudioRoles(next) : next });
-      },
       setMainRoom: (key) => {
         const slots = normalizeMultiRoomSlots(get().slots);
         const sourceIndex = slots.findIndex((room) => room?.key === key);
         if (sourceIndex <= MULTI_ROOM_MAIN_SLOT) return;
         set({
-          slots: normalizeMultiRoomAudioRoles(promoteMultiRoomSlot(slots, sourceIndex)),
+          slots: normalizeMultiRoomAudioRoles(swapMultiRoomMain(slots, sourceIndex)),
         });
       },
       updateAudio: (key, volume, muted) => {
@@ -339,9 +208,8 @@ export const useMultiRoomStore = create<MultiRoomState>()(
       setLayout: (layout) => {
         const normalizedLayout = normalizeMultiRoomLayout(layout);
         if (normalizedLayout === get().layout) return true;
-        const slots = fitMultiRoomSlotsToLayout(get().slots, normalizedLayout);
-        if (!slots) return false;
-        set({ layout: normalizedLayout, slots });
+        if (get().slots.filter(Boolean).length > normalizedLayout) return false;
+        set({ layout: normalizedLayout });
         return true;
       },
       setFourLayout: (layout) => set({ fourLayout: normalizeMultiRoomFourLayout(layout) }),
@@ -349,13 +217,13 @@ export const useMultiRoomStore = create<MultiRoomState>()(
     }),
     {
       name: "rlive-multi-room",
-      version: 3,
+      version: 4,
       migrate: (persistedState) => {
         const state = persistedState as Partial<
           Pick<MultiRoomState, "slots" | "layout" | "fourLayout">
         >;
         return {
-          slots: state.slots ?? [],
+          slots: (state.slots ?? []).map((room) => (room ? stripLegacySecondarySlot(room) : null)),
           layout: normalizeMultiRoomLayout(state.layout),
           fourLayout: normalizeMultiRoomFourLayout(state.fourLayout),
         };
@@ -369,13 +237,19 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         const persistedState = persisted as Partial<MultiRoomState>;
         const requestedLayout = normalizeMultiRoomLayout(persistedState?.layout);
         const fourLayout = normalizeMultiRoomFourLayout(persistedState?.fourLayout);
-        const slots = normalizeMultiRoomSlots(persistedState?.slots ?? []);
-        const restoredSlots = restoreMultiRoomSlotsForLayout(slots, requestedLayout);
+        const slots = normalizeMultiRoomSlots(
+          (persistedState?.slots ?? []).map((room) =>
+            room ? stripLegacySecondarySlot(room) : null,
+          ),
+        );
         return {
           ...current,
-          layout: restoredSlots ? requestedLayout : DEFAULT_MULTI_ROOM_LAYOUT,
+          layout:
+            slots.filter(Boolean).length <= requestedLayout
+              ? requestedLayout
+              : DEFAULT_MULTI_ROOM_LAYOUT,
           fourLayout,
-          slots: restoredSlots ?? slots,
+          slots,
         };
       },
     },
