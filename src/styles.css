@@ -350,17 +350,22 @@ body {
   transition-property: transform, opacity;
   transition-duration: 160ms;
   transition-timing-function: var(--motion-ease-out);
-  will-change: transform, opacity;
 }
 
 .motion-tooltip {
   transition-duration: 140ms;
 }
 
+/* Layer promotion lives only on the starting/ending styles, never at rest: a
+   persistent will-change keeps the popup composited for its whole lifetime,
+   which rasterizes text on the GPU and blurs it at fractional device pixel
+   ratios (e.g. Windows 125%/150% scaling). The state is applied one frame
+   before the transition runs, so the layer is still promoted in time. */
 :is(.motion-popup, .motion-tooltip)[data-starting-style],
 :is(.motion-popup, .motion-tooltip)[data-ending-style] {
   opacity: 0;
   transform: translate3d(0, 0, 0) scale(0.97);
+  will-change: transform, opacity;
 }
 
 :is(.motion-popup, .motion-tooltip)[data-side="bottom"][data-starting-style],
@@ -426,12 +431,13 @@ body {
   transition:
     scale 200ms var(--motion-ease-out),
     opacity 180ms var(--motion-ease-out);
-  will-change: scale, opacity;
 }
 
 .motion-dialog:is([data-starting-style], [data-ending-style]) {
   scale: 0.96;
   opacity: 0;
+  /* Same at-rest-promotion hazard as the popup classes above. */
+  will-change: scale, opacity;
 }
 
 .motion-dialog[data-ending-style] {
@@ -441,6 +447,10 @@ body {
 .motion-drawer {
   transform: translate3d(0, 0, 0);
   transition: transform 240ms var(--motion-ease-drawer);
+}
+
+/* Same at-rest-promotion hazard as the popup classes above. */
+.motion-drawer:is([data-starting-style], [data-ending-style]) {
   will-change: transform;
 }
 
