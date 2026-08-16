@@ -14,6 +14,7 @@ import {
   withDanmakuContentSuffix,
 } from "../danmaku/content";
 import { DANMAKU_MAX_FRAME_SECONDS } from "./framePacing";
+import { superChatDurationMs } from "../superChat";
 
 export type TrackItem = {
   id: string;
@@ -123,8 +124,10 @@ export type DanmakuEngine = {
   setPaused: (hoverKey: string | null) => void;
   /** The currently frozen comment, or null once it expired or was released. */
   pausedItem: () => TrackItem | null;
+  /** Remove all fixed Super Chat items and release any hover reference. */
+  clearFixed: () => void;
   setOpts: (opts: DanmakuEngineOptions) => void;
-  opacity: () => number;
+  opacity: (fixed?: boolean) => number;
   fontWeight: () => number;
   /**
    * Lightweight scheduling counters for deterministic pressure tests. They
@@ -156,6 +159,8 @@ export type DanmakuEngineOptions = {
   lineCount?: number;
   /** CSS-compatible canvas font weight. */
   fontWeight?: number;
+  /** Opacity for fixed Super Chat items. */
+  fixedOpacity?: number;
   /** Combine matching normal-chat content into one floating item. */
   aggregateRepeats?: boolean;
   /** Sliding window for `aggregateRepeats`, in milliseconds. */
@@ -208,8 +213,9 @@ type LaneLayout = {
 
 const MAX_ITEMS = 80;
 const MAX_PENDING_ITEMS = 80;
+const MAX_FIXED_ITEMS = 3;
 const MAX_QUEUE_AGE_MS = 5000;
-const TOP_DURATION_MS = 3000;
+const FIXED_BOTTOM_INSET = 8;
 const DEFAULT_SCROLL_AREA_RATIO = 0.25;
 const SPAWN_PADDING = 12;
 export const DANMAKU_SELF_BORDER_PADDING_X = 4;
@@ -474,6 +480,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   let fontSize = clampFontSize(opts.fontSize);
   let logicalSpeed = opts.speed;
   let currentOpacity = clampOpacity(opts.opacity);
+  let currentFixedOpacity = clampOpacity(opts.fixedOpacity ?? opts.opacity);
   let scrollArea = clampArea(opts.area);
   let maxLineCount = clampLineCount(opts.lineCount);
   let currentFontWeight = clampFontWeight(opts.fontWeight);
@@ -665,13 +672,52 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
   function refreshLargestScrollFontSize(): number {
     let largest = fontSize;
     for (const item of items) {
-      if (item.kind === "scroll" && item.fontSize > largest) {
-        largest = item.fontSize;
-      }
+      if (item.kind === "scroll" && item.fontSize > largest) largest = item.fontSize;
     }
     largestScrollFontSize = largest;
     largestScrollFontSizeNeedsRefresh = false;
     return largestScrollFontSize;
+  }
+
+  function layoutFixedItems(): void {
+    if (viewportHeight <= 0) return;
+    const bottom = layout
+      ? layout.top + layout.count * layout.laneHeight
+      : Math.floor(viewportHeight * scrollArea);
+    let slot = 0;
+    for (const item of items) {
+      if (item.kind !== "top") continue;
+      const lineHeight = Math.max(16, Math.round(item.fontSize * 1.4));
+      item.y = Math.max(0, bottom - FIXED_BOTTOM_INSET - lineHeight * (slot + 1));
+      slot += 1;
+    }
+  }
+
+  function clearFixed(): void {
+    let nextLength = 0;
+    for (const item of items) {
+      if (item.kind === "top") {
+        item.active = false;
+        forgetAggregationTarget(item);
+        noteRemovedItem(item);
+        continue;
+      }
+      items[nextLength] = item;
+      item.itemIndex = nextLength;
+      nextLength += 1;
+    }
+    items.length = nextLength;
+    if (pausedHoverKey !== null && !findByHoverKey(pausedHoverKey)) pausedHoverKey = null;
+    layoutFixedItems();
+  }
+
+  function removeOldestFixed(): void {
+    for (let index = 0; index < items.length; index += 1) {
+      if (items[index].kind === "top") {
+        removeItemAt(index);
+        return;
+      }
+    }
   }
 
   function noteRemovedItem(item: TrackItem | undefined): void {
@@ -979,6 +1025,9 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     const richRasterKey = `${rasterKey}:r`;
 
     if (isTop) {
+      while (items.filter((item) => item.kind === "top").length >= MAX_FIXED_ITEMS) {
+        removeOldestFixed();
+      }
       makeRoomForItem();
       appendItem({
         id,
@@ -995,15 +1044,15 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         width,
         speed,
         fontSize: itemFontSize,
-        // A fixed-top card sits on the same optical inset as the first scroll
-        // lane rather than half a line lower.
-        y: Math.min(TOP_INSET_MAX, Math.max(TOP_INSET_MIN, Math.round(itemFontSize * 0.35))),
+        // Fixed Super Chats stack upward from the bottom of the danmaku band.
+        y: 0,
         x: 0, // centered by the canvas renderer
         kind: "top",
-        expireAt: Date.now() + TOP_DURATION_MS,
+        expireAt: Date.now() + superChatDurationMs(ev.super_chat),
         itemIndex: -1,
         active: true,
       });
+      layoutFixedItems();
       return true;
     }
 
@@ -1070,7 +1119,10 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       layoutDirty = true;
       viewportChanged = true;
     }
-    if (viewportChanged) resetPendingScheduling();
+    if (viewportChanged) {
+      resetPendingScheduling();
+      layoutFixedItems();
+    }
 
     refreshLayout();
     const now = Date.now();
@@ -1118,6 +1170,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     }
     items.length = nextLength;
     if (scrollItems.length > MAX_ITEMS * 3) compactScrollItems(true);
+    layoutFixedItems();
     if (removedScrollItem) resetPendingScheduling();
     trySchedulePending(true);
   }
@@ -1170,6 +1223,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
     hitTest,
     setPaused,
     pausedItem: () => (pausedHoverKey === null ? null : findByHoverKey(pausedHoverKey)),
+    clearFixed,
     setOpts: (nextOpts) => {
       const nextFontSize = clampFontSize(nextOpts.fontSize);
       const nextScrollArea = clampArea(nextOpts.area);
@@ -1194,6 +1248,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
       fontSize = nextFontSize;
       logicalSpeed = nextOpts.speed;
       currentOpacity = clampOpacity(nextOpts.opacity);
+      currentFixedOpacity = clampOpacity(nextOpts.fixedOpacity ?? nextOpts.opacity);
       scrollArea = nextScrollArea;
       maxLineCount = nextLineCount;
       currentFontWeight = clampFontWeight(nextOpts.fontWeight);
@@ -1207,7 +1262,7 @@ export function createEngine(opts: DanmakuEngineOptions): DanmakuEngine {
         aggregationTargets.clear();
       }
     },
-    opacity: () => currentOpacity,
+    opacity: (fixed = false) => (fixed ? currentFixedOpacity : currentOpacity),
     fontWeight: () => currentFontWeight,
     debugStats: () => ({
       schedulePasses,

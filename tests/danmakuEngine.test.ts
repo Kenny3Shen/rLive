@@ -4,6 +4,7 @@ import {
   DANMAKU_MAX_BACKING_PIXELS,
   DANMAKU_MAX_FRAME_SECONDS,
   DANMAKU_MAX_PIXEL_RATIO,
+  danmakuCanvasBandHeight,
   danmakuCanvasPixelRatio,
   danmakuOutline,
   snapStaticAxis,
@@ -65,6 +66,31 @@ describe("canvas backing store scale", () => {
     // A degenerate measurement must not collapse the store either.
     expect(danmakuCanvasPixelRatio(2, 0, 0)).toBe(2);
     expect(danmakuCanvasPixelRatio(2, Number.NaN, 100)).toBe(2);
+  });
+});
+
+describe("canvas backing-store band", () => {
+  test("covers every configured scrolling lane without using the empty player area", () => {
+    // Mobile default: 14px → 20px lanes, top inset 5px, two automatic lanes
+    // in a 221px player. The 7px tail covers the remaining leading, outline,
+    // shadow and self-border below the final lane.
+    expect(danmakuCanvasBandHeight(221, 14, 0.25, 0)).toBe(52);
+    // Desktop default: 18px → 25px lanes, inset 6px, seven lanes in 720px.
+    expect(danmakuCanvasBandHeight(720, 18, 0.25, 0)).toBe(190);
+  });
+
+  test("is bounded and honours explicit line-count and area settings", () => {
+    for (const stageHeight of [0, 1, 40, 221, 720, 1080]) {
+      const band = danmakuCanvasBandHeight(stageHeight, 18, 0.25, 0);
+      expect(band).toBeGreaterThanOrEqual(1);
+      expect(band).toBeLessThanOrEqual(Math.max(1, Math.floor(stageHeight)));
+    }
+
+    // A line limit cannot make a taller backing store than automatic layout.
+    expect(danmakuCanvasBandHeight(720, 18, 0.25, 2)).toBe(65);
+    // Full-area mode covers every lane and leaves only the stage's unavoidable
+    // bottom slack outside the backing store.
+    expect(danmakuCanvasBandHeight(720, 18, 1, 0)).toBe(715);
   });
 });
 
@@ -875,27 +901,53 @@ describe("danmaku pointer hover", () => {
     expect(engine.pausedItem()).toBeNull();
   });
 
-  test("drops the freeze when a frozen fixed-top card expires", () => {
+  test("keeps Super Chats fixed at the bottom and honours their duration", () => {
     const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
     engine.tick(0, 1280, 720);
-    engine.push({ kind: "super_chat", user: "船长", content: "置顶也能悬停", color: null, ts: 1 });
-
-    const held = engine.visibleItems()[0]!;
-    expect(held.kind).toBe("top");
-    engine.setPaused(held.hoverKey);
-    expect(engine.pausedItem()?.hoverKey).toBe(held.hoverKey);
-
-    // A fixed-top card leaves on its own timer rather than by scrolling off, so
-    // it reaches `noteRemovedItem` through a different branch than eviction.
     const realNow = Date.now;
     try {
-      Date.now = () => realNow() + 10_000;
-      engine.tick(1 / 60, 1280, 720);
+      Date.now = () => 1_000;
+      engine.push({
+        kind: "super_chat",
+        user: "船长",
+        content: "底部固定",
+        color: null,
+        ts: 1,
+        super_chat: { duration: 10 },
+      });
+      const item = engine.visibleItems()[0]!;
+      expect(item.kind).toBe("top");
+      expect(item.y).toBeGreaterThan(0);
+      expect(item.y).toBeLessThan(720);
+
+      Date.now = () => 10_999;
+      engine.tick(0, 1280, 720);
+      expect(engine.visibleItems()).toHaveLength(1);
+      Date.now = () => 11_000;
+      engine.tick(0, 1280, 720);
+      expect(engine.visibleItems()).toHaveLength(0);
     } finally {
       Date.now = realNow;
     }
+  });
 
-    expect(engine.visibleItems()).toHaveLength(0);
-    expect(engine.pausedItem()).toBeNull();
+  test("stacks at most three fixed Super Chats from the bottom", () => {
+    const engine = createEngine({ fontSize: 18, speed: 8, opacity: 1 });
+    engine.tick(0, 1280, 720);
+    for (let index = 0; index < 4; index += 1) {
+      engine.push({
+        kind: "super_chat",
+        user: `船长${index}`,
+        content: `留言${index}`,
+        color: null,
+        ts: index + 1,
+        super_chat: { duration: 60 },
+      });
+    }
+    const fixed = engine.visibleItems().filter((item) => item.kind === "top");
+    expect(fixed).toHaveLength(3);
+    expect(new Set(fixed.map((item) => item.y)).size).toBe(3);
+    expect(fixed[0]!.y).toBeGreaterThan(fixed[1]!.y);
+    expect(fixed[1]!.y).toBeGreaterThan(fixed[2]!.y);
   });
 });
