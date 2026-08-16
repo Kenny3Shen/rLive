@@ -3,6 +3,7 @@ import {
   Captions,
   CaptionsOff,
   Check,
+  CircleDot,
   Headphones,
   Maximize2,
   MessageSquareOff,
@@ -15,6 +16,7 @@ import {
   Play,
   RefreshCw,
   Settings,
+  Square,
   VideoOff,
   Volume2,
   VolumeX,
@@ -46,6 +48,7 @@ import {
   glassOptionSelectedClass,
   glassPanelClass,
   glassSeparatorClass,
+  glassTitleClass,
 } from "./glassSurface";
 import {
   TRANSLATION_LANGUAGE_OPTIONS,
@@ -199,6 +202,12 @@ export type PlayerControlsProps = {
   onOverlayInteractionChange?: (open: boolean) => void;
   refreshDisabled?: boolean;
   loadError?: string | null;
+  /** Desktop-only recorder control. */
+  recordingVisible?: boolean;
+  recordingActive?: boolean;
+  recordingDisabled?: boolean;
+  recordingBusy?: boolean;
+  onToggleRecording?: () => void;
   onRefresh?: () => void;
   onTogglePause: () => void;
   onVolume: (v: number) => void;
@@ -314,6 +323,11 @@ export function PlayerControls({
   onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
+  recordingVisible = false,
+  recordingActive = false,
+  recordingDisabled = false,
+  recordingBusy = false,
+  onToggleRecording,
   onRefresh,
   onTogglePause,
   onVolume,
@@ -677,6 +691,26 @@ export function PlayerControls({
             <RefreshCw />
           </ControlButton>
         )}
+        {recordingVisible && onToggleRecording && (
+          <ControlButton
+            label={recordingActive ? "停止录制" : "开始录制"}
+            variant={recordingActive ? "destructive" : "ghost"}
+            className={cn(overlayButtonClass, recordingActive && overlay && "bg-destructive/85")}
+            disabled={recordingDisabled || recordingBusy}
+            aria-pressed={recordingActive}
+            data-slot="recording-toggle"
+            onClick={onToggleRecording}
+            tooltip={!compact}
+          >
+            {recordingBusy ? (
+              <Spinner aria-hidden />
+            ) : recordingActive ? (
+              <Square aria-hidden />
+            ) : (
+              <CircleDot aria-hidden />
+            )}
+          </ControlButton>
+        )}
         <ControlButton
           label={paused ? pauseLabel : pauseActiveLabel}
           className={overlayButtonClass}
@@ -802,12 +836,7 @@ export function PlayerControls({
                     glassPanelClass({ overlay }),
                   )}
                 >
-                  <DrawerTitle
-                    className={cn(
-                      "px-1 pb-1 text-xs font-medium text-muted-foreground",
-                      glassMutedTextClass({ overlay }),
-                    )}
-                  >
+                  <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay }))}>
                     播放设置
                   </DrawerTitle>
                   {streamSettingsBody}
@@ -847,10 +876,7 @@ export function PlayerControls({
                 )}
               >
                 <PopoverTitle
-                  className={cn(
-                    "px-2 py-1 text-xs font-medium text-muted-foreground max-md:py-0.5",
-                    glassMutedTextClass({ overlay }),
-                  )}
+                  className={cn("px-2 py-1 max-md:py-0.5", glassTitleClass({ overlay }))}
                 >
                   播放设置
                 </PopoverTitle>
@@ -918,8 +944,8 @@ export function PlayerControls({
               glass
               className={cn("w-72", glassPanelClass({ overlay }))}
             >
-              <div className="flex items-center justify-between gap-2">
-                <PopoverTitle>字幕设置</PopoverTitle>
+              <div className="flex items-center justify-between gap-2 px-0.5">
+                <PopoverTitle className={glassTitleClass({ overlay })}>字幕设置</PopoverTitle>
                 {(asrSettingsPending || asrTranslationBusy) && (
                   <Spinner aria-label="正在更新字幕设置" />
                 )}

@@ -22,6 +22,7 @@ import {
 import {
   glassOptionClass,
   glassOptionSelectedClass,
+  glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 
 export type RoomToolMenuVariant = "default" | "overlay";
@@ -68,9 +69,14 @@ function MenuHeader({
   const style = menuStyle(variant);
   return (
     <div className="flex min-w-0 items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-2">
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2",
+          glassTitleClass({ overlay: variant === "overlay" }),
+        )}
+      >
         <Icon className="size-4 shrink-0" aria-hidden />
-        <span className="min-w-0 truncate text-sm font-semibold">{label}</span>
+        <span className="min-w-0 truncate">{label}</span>
       </div>
       {badge && (
         <Badge variant="outline" className={cn("shrink-0", style.badge)}>
