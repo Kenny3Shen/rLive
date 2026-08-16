@@ -129,6 +129,13 @@ export function safeDanmuColor(value: unknown, fallback = "#ffffff"): string {
   return fallback;
 }
 
+function superChatAmountColor(event: DanmakuEvent): string {
+  return safeDanmuColor(
+    event.super_chat?.background_bottom_color,
+    safeDanmuColor(event.super_chat?.background_color, "#2A60B2"),
+  );
+}
+
 function aggregateSuffix(count: number): string {
   const safeCount = Math.max(1, Math.floor(count));
   if (safeCount <= 1) return "";
@@ -157,7 +164,7 @@ export function danmuStyleForEvent(
   const opacity = clampDanmuOpacity(options.opacity);
   const style: DanmuJsStyle = {
     boxSizing: "border-box",
-    color: safeDanmuColor(event.color, isSuperChat ? "#ffdc73" : "#ffffff"),
+    color: isSuperChat ? superChatAmountColor(event) : safeDanmuColor(event.color),
     opacity: String(opacity),
     display: "inline-flex",
     alignItems: "center",
@@ -175,10 +182,7 @@ export function danmuStyleForEvent(
   if (isSuperChat) {
     style.padding = "4px 10px";
     style.borderRadius = "999px";
-    style.backgroundColor = safeDanmuColor(
-      event.super_chat?.background_color,
-      "rgba(103,67,12,.82)",
-    );
+    style.backgroundColor = "transparent";
     style.border = "1px solid rgba(255,220,115,.72)";
     style.boxShadow = "0 2px 8px rgba(0,0,0,.35)";
   }
