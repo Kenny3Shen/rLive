@@ -43,7 +43,6 @@ const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
   danmakuFontSize: defaultDanmakuFontSize(),
   danmakuArea: DANMAKU_AREA_DEFAULT,
-  danmakuLineCount: 0,
   danmakuFontWeight: 600,
   danmakuFilterGifts: true,
   danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
@@ -402,36 +401,21 @@ export function DanmakuTrackSettingsFields({
   layout: PlaybackSettingsFieldLayout;
 }) {
   const area = useSettingsStore((state) => state.danmakuArea);
-  const lineCount = useSettingsStore((state) => state.danmakuLineCount);
 
   return (
-    <>
-      <PreferenceSliderField
-        id={`${idPrefix}-danmaku-area`}
-        title="显示区域"
-        description={layout === "page" ? "限制滚动弹幕占用的播放器高度。" : undefined}
-        value={Math.round(area * 100)}
-        min={10}
-        max={100}
-        step={5}
-        displayValue={`${Math.round(area * 100)}%`}
-        layout={layout}
-        onPreview={(value) => useSettingsStore.setState({ danmakuArea: value / 100 })}
-        onCommit={(value) => persist({ danmaku_area: value / 100 })}
-      />
-      <PreferenceSliderField
-        id={`${idPrefix}-danmaku-lines`}
-        title="显示行数"
-        description={layout === "page" ? "自动按播放器高度计算。" : undefined}
-        value={lineCount}
-        min={0}
-        max={20}
-        displayValue={lineCount === 0 ? "自动" : `${lineCount} 行`}
-        layout={layout}
-        onPreview={(value) => useSettingsStore.setState({ danmakuLineCount: value })}
-        onCommit={(value) => persist({ danmaku_line_count: value })}
-      />
-    </>
+    <PreferenceSliderField
+      id={`${idPrefix}-danmaku-area`}
+      title="显示区域"
+      description={layout === "page" ? "限制滚动弹幕占用的播放器高度。" : undefined}
+      value={Math.round(area * 100)}
+      min={10}
+      max={100}
+      step={5}
+      displayValue={`${Math.round(area * 100)}%`}
+      layout={layout}
+      onPreview={(value) => useSettingsStore.setState({ danmakuArea: value / 100 })}
+      onCommit={(value) => persist({ danmaku_area: value / 100 })}
+    />
   );
 }
 
@@ -507,7 +491,6 @@ export function resetDanmakuAppearanceSettings() {
     danmaku_opacity: DANMAKU_APPEARANCE_DEFAULTS.danmakuOpacity,
     danmaku_font_size: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontSize,
     danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
-    danmaku_line_count: DANMAKU_APPEARANCE_DEFAULTS.danmakuLineCount,
     danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,

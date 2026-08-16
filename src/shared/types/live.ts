@@ -195,7 +195,6 @@ export type AppSettings = {
   danmaku_opacity: number;
   danmaku_font_size: number;
   danmaku_area: number;
-  danmaku_line_count: number;
   danmaku_font_weight: number;
   danmaku_filter_gifts: boolean;
   /** Merge window for duplicate chat in seconds, 0..=30; 0 disables merging. */

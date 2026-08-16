@@ -15,15 +15,16 @@ function asRecord(value: unknown): ModuleRecord | null {
  */
 export function resolveDanmuJsConstructor(moduleValue: unknown): DanmuJsConstructor | null {
   const root = asRecord(moduleValue);
-  if (!root) return null;
-
-  const nestedDefault = asRecord(root.default);
+  const globalRoot = typeof globalThis === "undefined" ? null : asRecord(globalThis);
+  const nestedDefault = root ? asRecord(root.default) : null;
   const candidates = [
     moduleValue,
-    root.DanmuJs,
-    root.default,
+    root?.DanmuJs,
+    root?.default,
     nestedDefault?.DanmuJs,
     nestedDefault?.default,
+    globalRoot?.DanmuJs,
+    globalRoot?.default,
   ];
   const constructor = candidates.find((candidate) => typeof candidate === "function");
   return (constructor as DanmuJsConstructor | undefined) ?? null;

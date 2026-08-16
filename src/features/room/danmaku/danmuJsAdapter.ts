@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import type { DanmuJsComment, DanmuJsStyle } from "danmu.js";
 import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 import {
@@ -30,7 +29,9 @@ export function enqueueDanmuJsPending(
   capacity = DANMU_JS_MAX_PENDING_COMMENTS,
 ): void {
   for (const event of events) queue.push({ event, queuedAt });
-  const safeCapacity = Math.max(0, Math.floor(capacity));
+  const safeCapacity = Number.isFinite(capacity)
+    ? Math.max(0, Math.floor(capacity))
+    : DANMU_JS_MAX_PENDING_COMMENTS;
   const overflow = queue.length - safeCapacity;
   if (overflow > 0) queue.splice(0, overflow);
 }
@@ -56,7 +57,9 @@ export type DanmuJsBulletMeta = {
   aggregationKey?: string;
   aggregationCount: number;
   element?: HTMLElement;
+  contentElement?: HTMLElement;
   countElement?: HTMLElement;
+  countSlotElement?: HTMLElement;
 };
 
 export type DanmuJsMappingOptions = {
@@ -68,11 +71,7 @@ export type DanmuJsMappingOptions = {
   aggregationCount?: number;
 };
 
-export type DanmuJsBandLayout = {
-  height: number;
-  laneHeight: number;
-  laneCount: number;
-};
+export type DanmuJsRenderLayer = "scroll" | "bottom";
 
 export function clampDanmuFontSize(value: number, fallback = 18): number {
   const next = Number.isFinite(value) ? value : fallback;
@@ -92,33 +91,32 @@ export function clampDanmuOpacity(value: number, fallback = 1): number {
   return Math.max(0, Math.min(1, next));
 }
 
-/** Preserve the former renderer's area + line-count semantics in a DOM band. */
-export function danmuBandLayout(
-  stageHeight: number,
-  fontSize: number,
-  area: number,
-  lineCount: number,
-): DanmuJsBandLayout {
-  if (!Number.isFinite(stageHeight) || stageHeight <= 0) {
-    return { height: 0, laneHeight: 0, laneCount: 0 };
-  }
+export function clampDanmuArea(value: number, fallback = 0.25): number {
+  const safeFallback = Number.isFinite(fallback) ? fallback : 0.25;
+  const next = Number.isFinite(value) ? value : safeFallback;
+  return Math.max(0.1, Math.min(1, next));
+}
 
-  const safeStageHeight = Math.max(1, Math.floor(stageHeight));
-  const safeFontSize = clampDanmuFontSize(fontSize);
-  const safeArea = Number.isFinite(area) ? Math.max(0.1, Math.min(1, area)) : 0.25;
-  const safeLineCount =
-    Number.isFinite(lineCount) && lineCount > 0 ? Math.min(20, Math.round(lineCount)) : 0;
-  const laneHeight = Math.max(16, Math.round(safeFontSize * 1.4));
-  const inset = Math.min(8, Math.max(4, Math.round(safeFontSize * 0.35)));
-  const top = Math.min(inset, Math.max(0, safeStageHeight - safeFontSize));
-  const usableHeight = Math.max(1, safeStageHeight - top);
-  const preferredArea = Math.max(laneHeight, Math.floor(usableHeight * safeArea));
-  const automaticLaneCount = Math.max(1, Math.floor(preferredArea / laneHeight));
-  const laneCount =
-    safeLineCount > 0 ? Math.min(safeLineCount, automaticLaneCount) : automaticLaneCount;
-  const bottomPadding = Math.ceil(safeFontSize * 0.45);
-  const height = Math.min(safeStageHeight, top + laneCount * laneHeight + bottomPadding);
-  return { height: Math.max(1, height), laneHeight, laneCount };
+/** Keep danmu.js' virtual channel height aligned with the rendered line box. */
+export function danmuLaneHeight(fontSize: number): number {
+  return Math.max(16, Math.round(clampDanmuFontSize(fontSize) * 1.4));
+}
+
+/** Use danmu.js' native proportional area without overriding it with `lines`. */
+export function danmuAreaConfig(area: number): { start: number; end: number } {
+  return { start: 0, end: clampDanmuArea(area) };
+}
+
+/** Keep fixed comments independent from the configured scrolling area. */
+export function danmuRenderLayer(comment: Pick<DanmuJsComment, "mode">): DanmuJsRenderLayer {
+  return comment.mode === "bottom" ? "bottom" : "scroll";
+}
+
+export function danmuLayerAreaConfig(
+  layer: DanmuJsRenderLayer,
+  scrollArea: number,
+): { start: number; end: number } {
+  return layer === "bottom" ? { start: 0, end: 1 } : danmuAreaConfig(scrollArea);
 }
 
 /** Accept only compact color values before native payloads reach inline CSS. */
@@ -161,18 +159,18 @@ export function danmuStyleForEvent(
     boxSizing: "border-box",
     color: safeDanmuColor(event.color, isSuperChat ? "#ffdc73" : "#ffffff"),
     opacity: String(opacity),
+    display: "inline-flex",
+    alignItems: "center",
+    flexWrap: "nowrap",
+    whiteSpace: "nowrap",
+    width: "max-content",
+    maxWidth: "none",
     fontSize: `${clampDanmuFontSize(options.fontSize)}px`,
     fontWeight: clampDanmuFontWeight(options.fontWeight),
     lineHeight: "1.35",
     textShadow: "0 1px 2px rgba(0,0,0,.92), 0 0 3px rgba(0,0,0,.72)",
-    pointerEvents: "auto",
+    pointerEvents: isSuperChat ? "auto" : "none",
   };
-
-  if (event.is_self === true) {
-    style.border = "1px solid rgba(255,255,255,.86)";
-    style.borderRadius = "4px";
-    style.padding = "2px 4px";
-  }
 
   if (isSuperChat) {
     style.padding = "4px 10px";
@@ -183,10 +181,6 @@ export function danmuStyleForEvent(
     );
     style.border = "1px solid rgba(255,220,115,.72)";
     style.boxShadow = "0 2px 8px rgba(0,0,0,.35)";
-    if (event.is_self === true) {
-      style.boxShadow =
-        "0 0 0 1px rgba(255,255,255,.86) inset, 0 2px 8px rgba(0,0,0,.35)";
-    }
   }
   return style;
 }
@@ -201,6 +195,7 @@ export function danmuCommentFromEvent(
 
   const aggregationCount = Math.max(1, Math.floor(options.aggregationCount ?? 1));
   const isSuperChat = event.kind === "super_chat";
+  const isPinned = isSuperChat || event.is_self === true;
   const meta: DanmuJsBulletMeta = {
     id: options.id,
     event,
@@ -212,9 +207,9 @@ export function danmuCommentFromEvent(
   return {
     id: options.id,
     duration: isSuperChat ? superChatDurationMs(event.super_chat) : DANMU_JS_DEFAULT_DURATION_MS,
-    mode: isSuperChat ? "bottom" : "scroll",
+    mode: isPinned ? "bottom" : "scroll",
     realTime: true,
-    prior: isSuperChat,
+    prior: isPinned,
     color: Boolean(event.color),
     txt: `${baseText}${aggregateSuffix(aggregationCount)}`,
     elLazyInit: true,
@@ -270,24 +265,51 @@ export function createDanmuBulletElement(
   root.dataset.rliveDanmakuId = comment.id;
   root.dataset.rliveDanmakuKind = meta?.event.kind ?? "chat";
   root.setAttribute("aria-hidden", "true");
-  root.style.pointerEvents = "auto";
+  root.style.pointerEvents = meta?.event.kind === "super_chat" ? "auto" : "none";
   root.style.display = "inline-flex";
   root.style.alignItems = "center";
+  root.style.flexWrap = "nowrap";
+  root.style.whiteSpace = "nowrap";
 
-  if (meta?.spans?.length) appendRichSpans(root, meta.spans);
-  else appendText(root, meta?.baseText ?? comment.txt ?? "");
+  const content = document.createElement("span");
+  content.className = "rlive-danmu-content";
+  content.dataset.rliveDanmakuContent = "";
+  content.style.display = "inline-flex";
+  content.style.alignItems = "center";
+  content.style.flexWrap = "nowrap";
+  content.style.whiteSpace = "nowrap";
+  content.style.flex = "0 0 auto";
+  content.style.pointerEvents = "auto";
+
+  if (meta?.spans?.length) appendRichSpans(content, meta.spans);
+  else appendText(content, meta?.baseText ?? comment.txt ?? "");
+  root.appendChild(content);
+  if (meta) meta.contentElement = content;
 
   if (meta?.aggregationKey) {
+    const countSlot = document.createElement("span");
+    countSlot.className = "rlive-danmu-count-slot";
+    countSlot.dataset.rliveDanmakuCountSlot = "";
+    countSlot.style.display = "inline-block";
+    countSlot.style.width = "5.25ch";
+    countSlot.style.minWidth = "5.25ch";
+    countSlot.style.flex = "0 0 5.25ch";
+    countSlot.style.whiteSpace = "nowrap";
+    countSlot.style.pointerEvents = "none";
+
     const count = document.createElement("span");
     count.className = "rlive-danmu-count";
     count.dataset.rliveDanmakuCount = "";
     count.style.display = "inline-block";
-    count.style.minWidth = "5.25ch";
+    count.style.whiteSpace = "nowrap";
     count.style.textAlign = "left";
     count.style.visibility = meta.aggregationCount > 1 ? "visible" : "hidden";
+    count.style.pointerEvents = meta.aggregationCount > 1 ? "auto" : "none";
     count.textContent = aggregateSuffix(meta.aggregationCount);
-    root.appendChild(count);
+    countSlot.appendChild(count);
+    root.appendChild(countSlot);
     meta.countElement = count;
+    meta.countSlotElement = countSlot;
   }
   if (meta) meta.element = root;
   return root;
@@ -305,6 +327,7 @@ export function updateDanmuAggregation(
   if (meta.countElement) {
     meta.countElement.textContent = suffix;
     meta.countElement.style.visibility = meta.aggregationCount > 1 ? "visible" : "hidden";
+    meta.countElement.style.pointerEvents = meta.aggregationCount > 1 ? "auto" : "none";
   }
 }
 
@@ -321,8 +344,4 @@ export function updateDanmuAppearance(
   element.style.fontSize = String(style.fontSize ?? "");
   element.style.fontWeight = String(style.fontWeight ?? "");
   element.style.opacity = String(style.opacity ?? "1");
-}
-
-export function danmuBandStyle(layout: DanmuJsBandLayout): CSSProperties {
-  return { height: layout.height > 0 ? `${layout.height}px` : 0 };
 }

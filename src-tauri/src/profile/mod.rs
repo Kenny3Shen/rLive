@@ -235,7 +235,6 @@ pub fn merge_into_db(
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_size = package.settings.danmaku_font_size;
     settings.danmaku_area = package.settings.danmaku_area;
-    settings.danmaku_line_count = package.settings.danmaku_line_count;
     settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.danmaku_merge_window_seconds = package.settings.danmaku_merge_window_seconds;
@@ -348,6 +347,7 @@ mod tests {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
         value["settings"]["danmaku_speed"] = serde_json::json!(8);
         value["settings"]["super_chat_opacity"] = serde_json::json!(0.6);
+        value["settings"]["danmaku_line_count"] = serde_json::json!(8);
         let legacy = serde_json::to_string(&value).unwrap();
 
         let package = decode_package(&legacy).unwrap();
@@ -355,6 +355,7 @@ mod tests {
 
         assert!(!encoded.contains("danmaku_speed"));
         assert!(!encoded.contains("super_chat_opacity"));
+        assert!(!encoded.contains("danmaku_line_count"));
     }
 
     #[test]

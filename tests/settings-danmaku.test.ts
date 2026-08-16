@@ -50,6 +50,7 @@ describe("danmaku appearance defaults", () => {
   test("does not retain removed danmaku preferences in frontend state", () => {
     const state = useSettingsStore.getState();
     expect("danmakuSpeed" in state).toBe(false);
+    expect("danmakuLineCount" in state).toBe(false);
     expect("superChatOpacity" in state).toBe(false);
     expect("setSuperChatOpacity" in state).toBe(false);
     expect("danmakuFilterRepeats" in state).toBe(false);

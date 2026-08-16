@@ -23,9 +23,6 @@ pub struct AppSettings {
     /// Portion of the video height used by scrolling danmaku, 0.1 ..= 1.0.
     #[serde(default = "default_danmaku_area")]
     pub danmaku_area: f32,
-    /// Maximum scrolling lanes. `0` chooses a suitable count automatically.
-    #[serde(default)]
-    pub danmaku_line_count: u32,
     /// Danmaku font weight (400 / 500 / 600 / 700).
     #[serde(default = "default_danmaku_font_weight")]
     pub danmaku_font_weight: u16,
@@ -210,7 +207,6 @@ impl Default for AppSettings {
             danmaku_opacity: 0.8,
             danmaku_font_size: 18,
             danmaku_area: default_danmaku_area(),
-            danmaku_line_count: 0,
             danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_gifts: default_danmaku_filter_gifts(),
             danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
@@ -263,6 +259,7 @@ mod tests {
           "proxy": null,
           "danmaku_opacity": 0.8,
           "danmaku_font_size": 18,
+          "danmaku_line_count": 8,
           "danmaku_speed": 8,
           "super_chat_opacity": 0.6,
           "danmaku_shield_words": [],
@@ -274,10 +271,10 @@ mod tests {
 
         assert!(serialized.get("danmaku_speed").is_none());
         assert!(serialized.get("super_chat_opacity").is_none());
+        assert!(serialized.get("danmaku_line_count").is_none());
         assert!(serialized.get("danmaku_filter_repeats").is_none());
         assert_eq!(settings.danmaku_area, 0.25);
         assert_eq!(settings.motion_mode, "full");
-        assert_eq!(settings.danmaku_line_count, 0);
         assert_eq!(settings.danmaku_font_weight, 600);
         assert!(settings.danmaku_filter_gifts);
         assert_eq!(settings.danmaku_merge_window_seconds, 10);

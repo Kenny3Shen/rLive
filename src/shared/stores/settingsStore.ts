@@ -107,7 +107,6 @@ type SettingsState = {
   danmakuOpacity: number;
   danmakuFontSize: number;
   danmakuArea: number;
-  danmakuLineCount: number;
   danmakuFontWeight: number;
   danmakuFilterGifts: boolean;
   danmakuMergeWindowSeconds: number;
@@ -179,7 +178,6 @@ const defaultSettings: AppSettings = {
   danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
   danmaku_font_size: defaultDanmakuFontSize(),
   danmaku_area: DANMAKU_AREA_DEFAULT,
-  danmaku_line_count: 0,
   danmaku_font_weight: 600,
   danmaku_filter_gifts: true,
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
@@ -213,7 +211,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_size: state.danmakuFontSize,
     danmaku_area: state.danmakuArea,
-    danmaku_line_count: state.danmakuLineCount,
     danmaku_font_weight: state.danmakuFontWeight,
     danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
@@ -248,7 +245,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
       danmakuFontSize: defaultDanmakuFontSize(),
       danmakuArea: DANMAKU_AREA_DEFAULT,
-      danmakuLineCount: 0,
       danmakuFontWeight: 600,
       danmakuFilterGifts: true,
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
@@ -511,7 +507,6 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontSize: settings.danmaku_font_size,
           danmakuArea: settings.danmaku_area,
-          danmakuLineCount: settings.danmaku_line_count,
           danmakuFontWeight: settings.danmaku_font_weight,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
           danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(
