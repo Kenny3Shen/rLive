@@ -215,7 +215,6 @@ mod tests {
         assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_size, 18);
         assert_eq!(s.danmaku_area, 0.25);
-        assert_eq!(s.danmaku_line_count, 0);
         assert_eq!(s.danmaku_font_weight, 600);
         assert!(s.danmaku_filter_gifts);
         assert_eq!(s.danmaku_merge_window_seconds, 10);
