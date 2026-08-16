@@ -11,6 +11,8 @@ pub mod image_proxy;
 pub mod iptv;
 pub mod lan_sync;
 pub mod profile;
+#[cfg(not(target_os = "android"))]
+pub mod recording;
 pub mod settings;
 pub mod site;
 pub mod stream_proxy;

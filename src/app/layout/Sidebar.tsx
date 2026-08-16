@@ -9,6 +9,7 @@ import {
   History,
   Home,
   LayoutGrid,
+  Videotape,
   Moon,
   PanelsTopLeft,
   Settings,
@@ -38,6 +39,7 @@ const navItems: {
   { to: "/category", label: "分类", icon: LayoutGrid },
   { to: "/iptv", label: "IPTV", icon: Tv },
   { to: "/multi-room", label: "多画面", icon: PanelsTopLeft, className: "max-md:hidden" },
+  { to: "/recordings", label: "录制", icon: Videotape, className: "max-md:hidden" },
 ];
 
 function SidebarLink({

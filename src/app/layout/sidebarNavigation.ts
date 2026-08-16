@@ -8,6 +8,7 @@ const SIDEBAR_DESTINATIONS = [
   "/category",
   "/iptv",
   "/multi-room",
+  "/recordings",
   "/history",
   "/settings",
 ];

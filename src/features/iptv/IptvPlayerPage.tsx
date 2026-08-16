@@ -11,12 +11,16 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { resolveIptvChannel, useIptvFavoriteMutation, useIptvFavorites } from "./favorites";
-import { IptvPlayer, type IptvPlaybackStatus } from "./IptvPlayer";
+import { iptvChannelPlayUrl, IptvPlayer, type IptvPlaybackStatus } from "./IptvPlayer";
+import { RecordingControl } from "@/features/recording/RecordingControl";
+import { RecordingLeaveGuard } from "@/features/recording/RecordingLeaveGuard";
+import type { RecordingContext } from "@/features/recording/recording";
 import { iptvHomePath, iptvReturnPathFromState } from "./iptvRoute";
 import {
   builtInSources,
   iptvFavoriteSourceId,
   iptvFavoriteSourceIdFromRoute,
+  iptvUrlFingerprint,
   isHttpUrl,
   playlistSourceForFavorite,
   playlistSourceFromRoute,
@@ -37,6 +41,7 @@ type IptvPlayerTopBarProps = {
   onBack: () => void;
   onReconnect: () => void;
   onToggleFavorite: () => void;
+  recordingContext: RecordingContext | null;
 };
 
 function IptvPlayerTopBar({
@@ -53,6 +58,7 @@ function IptvPlayerTopBar({
   onBack,
   onReconnect,
   onToggleFavorite,
+  recordingContext,
 }: IptvPlayerTopBarProps) {
   return (
     <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
@@ -88,6 +94,7 @@ function IptvPlayerTopBar({
       </div>
 
       <div className="absolute right-3 flex items-center gap-1.5">
+        <RecordingControl context={recordingContext} disabled={!recordingContext} />
         {favoriteEnabled && (
           <Tooltip>
             <TooltipTrigger
@@ -253,6 +260,21 @@ export function IptvPlayerPage() {
   }, [channelUrl, favoritesQuery.data, isDirectPlayback, playlistQuery.data]);
 
   const title = channel?.name ?? "IPTV 播放器";
+  const recordingContext = useMemo<RecordingContext | null>(
+    () =>
+      channel
+        ? {
+            source: iptvChannelPlayUrl(channel),
+            sourceKey: isDirectPlayback
+              ? `iptv:direct:${iptvUrlFingerprint(channel.url)}`
+              : `iptv:${favoriteSourceId}:${channel.id}`,
+            sourceKind: "iptv",
+            title: channel.name,
+            cover: channel.logo ?? "",
+          }
+        : null,
+    [channel, favoriteSourceId, isDirectPlayback],
+  );
   const channelGroup = channel?.group || group;
   const isFavorite = Boolean(
     channel && favoritesQuery.data?.some((favorite) => favorite.url === channel.url),
@@ -265,25 +287,29 @@ export function IptvPlayerPage() {
   }
 
   const topBar = (
-    <IptvPlayerTopBar
-      title={title}
-      sourceLabel={source.label}
-      group={channelGroup}
-      status={playbackStatus}
-      reconnecting={manualReconnect || playbackStatus === "connecting"}
-      reconnectEnabled={channel !== null && playbackStatus !== "connecting"}
-      isFavorite={isFavorite}
-      favoriteBusy={
-        favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel?.url
-      }
-      favoriteEnabled={!isDirectPlayback && channel !== null && !favoritesQuery.isLoading}
-      backLabel={directRequested ? "返回设置" : "返回频道列表"}
-      onBack={goBack}
-      onReconnect={handleReconnect}
-      onToggleFavorite={() => {
-        if (channel) favoriteMutation.mutate({ channel, isFavorite });
-      }}
-    />
+    <>
+      <IptvPlayerTopBar
+        title={title}
+        sourceLabel={source.label}
+        group={channelGroup}
+        status={playbackStatus}
+        reconnecting={manualReconnect || playbackStatus === "connecting"}
+        reconnectEnabled={channel !== null && playbackStatus !== "connecting"}
+        isFavorite={isFavorite}
+        favoriteBusy={
+          favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel?.url
+        }
+        favoriteEnabled={!isDirectPlayback && channel !== null && !favoritesQuery.isLoading}
+        backLabel={directRequested ? "返回设置" : "返回频道列表"}
+        onBack={goBack}
+        onReconnect={handleReconnect}
+        onToggleFavorite={() => {
+          if (channel) favoriteMutation.mutate({ channel, isFavorite });
+        }}
+        recordingContext={recordingContext}
+      />
+      <RecordingLeaveGuard context={recordingContext} />
+    </>
   );
 
   if (!channelUrl || !sourceIsValid) {

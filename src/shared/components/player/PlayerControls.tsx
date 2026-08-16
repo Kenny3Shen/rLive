@@ -3,7 +3,6 @@ import {
   Captions,
   CaptionsOff,
   Check,
-  CircleDot,
   Headphones,
   Maximize2,
   MessageSquareOff,
@@ -16,7 +15,6 @@ import {
   Play,
   RefreshCw,
   Settings,
-  Square,
   VideoOff,
   Volume2,
   VolumeX,
@@ -202,12 +200,6 @@ export type PlayerControlsProps = {
   onOverlayInteractionChange?: (open: boolean) => void;
   refreshDisabled?: boolean;
   loadError?: string | null;
-  /** Desktop-only recorder control. */
-  recordingVisible?: boolean;
-  recordingActive?: boolean;
-  recordingDisabled?: boolean;
-  recordingBusy?: boolean;
-  onToggleRecording?: () => void;
   onRefresh?: () => void;
   onTogglePause: () => void;
   onVolume: (v: number) => void;
@@ -323,11 +315,6 @@ export function PlayerControls({
   onOverlayInteractionChange,
   refreshDisabled = disabled,
   loadError,
-  recordingVisible = false,
-  recordingActive = false,
-  recordingDisabled = false,
-  recordingBusy = false,
-  onToggleRecording,
   onRefresh,
   onTogglePause,
   onVolume,
@@ -689,26 +676,6 @@ export function PlayerControls({
             tooltip={!compact}
           >
             <RefreshCw />
-          </ControlButton>
-        )}
-        {recordingVisible && onToggleRecording && (
-          <ControlButton
-            label={recordingActive ? "停止录制" : "开始录制"}
-            variant={recordingActive ? "destructive" : "ghost"}
-            className={cn(overlayButtonClass, recordingActive && overlay && "bg-destructive/85")}
-            disabled={recordingDisabled || recordingBusy}
-            aria-pressed={recordingActive}
-            data-slot="recording-toggle"
-            onClick={onToggleRecording}
-            tooltip={!compact}
-          >
-            {recordingBusy ? (
-              <Spinner aria-hidden />
-            ) : recordingActive ? (
-              <Square aria-hidden />
-            ) : (
-              <CircleDot aria-hidden />
-            )}
           </ControlButton>
         )}
         <ControlButton

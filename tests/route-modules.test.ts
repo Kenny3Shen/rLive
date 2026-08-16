@@ -9,6 +9,7 @@ import {
   loadIptvPage,
   loadIptvPlayerPage,
   loadMultiRoomPage,
+  loadRecordingsPage,
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
@@ -54,6 +55,7 @@ describe("route module loading", () => {
     expect(routeModuleLoaderForPath("/search?q=test")).toBe(loadSearchPage);
     expect(routeModuleLoaderForPath("/follow")).toBe(loadFollowPage);
     expect(routeModuleLoaderForPath("/history?platform=all")).toBe(loadHistoryPage);
+    expect(routeModuleLoaderForPath("/recordings")).toBe(loadRecordingsPage);
     expect(routeModuleLoaderForPath("/iptv")).toBe(loadIptvPage);
     expect(routeModuleLoaderForPath("/iptv/play?channel=https%3A%2F%2Fexample.test")).toBe(
       loadIptvPlayerPage,

@@ -1,5 +1,13 @@
 import { lazy } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import {
+  createBrowserRouter,
+  createRoutesFromElements,
+  Navigate,
+  Outlet,
+  Route,
+  RouterProvider,
+  useParams,
+} from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Shell } from "./layout/Shell";
@@ -13,6 +21,7 @@ import {
   loadIptvPage,
   loadIptvPlayerPage,
   loadMultiRoomPage,
+  loadRecordingsPage,
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
@@ -28,6 +37,7 @@ const CategoryRoomsPage = lazy(loadCategoryRoomsPage);
 const SearchPage = lazy(loadSearchPage);
 const FollowPage = lazy(loadFollowPage);
 const HistoryPage = lazy(loadHistoryPage);
+const RecordingsPage = lazy(loadRecordingsPage);
 const SettingsPage = lazy(loadSettingsPage);
 const IptvPage = lazy(loadIptvPage);
 const IptvPlayerPage = lazy(loadIptvPlayerPage);
@@ -51,28 +61,39 @@ function EnabledRoomRoute() {
   return <RoomPage />;
 }
 
-export function App() {
+function AppRuntime() {
   return (
-    <BrowserRouter>
+    <>
       <AndroidBackNavigator />
       <IptvStartupWarmup />
       <RouteModulePreloader />
-      <Routes>
-        <Route element={<Shell />}>
-          <Route index element={<HomePage />} />
-          <Route path="category" element={<CategoryPage />} />
-          <Route path="category/:parentId/:categoryId" element={<CategoryRoomsPage />} />
-          <Route path="search" element={<SearchPage />} />
-          <Route path="follow" element={<FollowPage />} />
-          <Route path="history" element={<HistoryPage />} />
-          <Route path="iptv/play" element={<IptvPlayerPage />} />
-          <Route path="iptv" element={<IptvPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="multi-room" element={<MultiRoomPage />} />
-          <Route path="room/:siteId/:roomId" element={<EnabledRoomRoute />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+      <Outlet />
+    </>
   );
+}
+
+const router = createBrowserRouter(
+  createRoutesFromElements(
+    <Route element={<AppRuntime />}>
+      <Route element={<Shell />}>
+        <Route index element={<HomePage />} />
+        <Route path="category" element={<CategoryPage />} />
+        <Route path="category/:parentId/:categoryId" element={<CategoryRoomsPage />} />
+        <Route path="search" element={<SearchPage />} />
+        <Route path="follow" element={<FollowPage />} />
+        <Route path="history" element={<HistoryPage />} />
+        <Route path="recordings" element={<RecordingsPage />} />
+        <Route path="iptv/play" element={<IptvPlayerPage />} />
+        <Route path="iptv" element={<IptvPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+        <Route path="multi-room" element={<MultiRoomPage />} />
+        <Route path="room/:siteId/:roomId" element={<EnabledRoomRoute />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Route>,
+  ),
+);
+
+export function App() {
+  return <RouterProvider router={router} />;
 }
