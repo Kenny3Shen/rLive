@@ -1141,6 +1141,11 @@ async fn finalize_direct_recording(
             }
         }
     }
+    // FLV normalization can discard a replayed GOP, so refresh the live byte
+    // counter from the normalized part before publishing the finished item.
+    if let Ok(metadata) = tokio::fs::metadata(part).await {
+        state.bytes.store(metadata.len(), Ordering::Relaxed);
+    }
     if let Err(error) = finalize_part(part, final_path).await {
         return TaskOutcome {
             status: RecordingStatus::Failed,
@@ -1152,6 +1157,33 @@ async fn finalize_direct_recording(
 
 const FLV_RESYNC_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 const FLV_ABSOLUTE_CLOCK_THRESHOLD_MS: u32 = 1_000_000;
+
+#[derive(Clone, Copy)]
+enum FlvReplayCutoff {
+    Inactive,
+    AbsoluteClock,
+    Timestamp(u32),
+}
+
+fn flv_media_track(tag_type: u8) -> Option<usize> {
+    match tag_type {
+        8 => Some(0),
+        9 => Some(1),
+        _ => None,
+    }
+}
+
+fn flv_payload_is_codec_sequence_header(tag_type: u8, payload: &[u8]) -> bool {
+    let Some(&media_header) = payload.first() else {
+        return false;
+    };
+    match tag_type {
+        8 if media_header >> 4 == 10 => payload.get(1) == Some(&0),
+        9 if media_header & 0x80 != 0 => media_header & 0x0f == 0,
+        9 if matches!(media_header & 0x0f, 7 | 12) => payload.get(1) == Some(&0),
+        _ => false,
+    }
+}
 
 fn flv_tag_length(bytes: &[u8], offset: usize) -> Option<usize> {
     if bytes.len().saturating_sub(offset) < 11 {
@@ -1292,12 +1324,13 @@ fn has_future_flv_media_timestamp(
     Ok(found)
 }
 
-/// Reconnectable FLV sources often restart their timestamp clock at zero for
-/// every HTTP response. Browsers then treat all later tags as overlapping the
-/// first second. Rebase every detected timestamp reset onto the previous tag
-/// timeline before publishing the file. A reconnect can also leave a partial
-/// tag before the next response's metadata; bounded resynchronization drops
-/// that fragment and continues with the next valid tag.
+/// Reconnectable FLV sources may replay a previously delivered GOP before the
+/// live edge, or restart their timestamp clock at zero for every response.
+/// Keep codec sequence headers at the boundary, drop ordinary media tags that
+/// are already covered on their track, and rebase true clock resets onto the
+/// previous timeline. A reconnect can also leave a partial tag before the next
+/// response's metadata; bounded resynchronization drops that fragment and
+/// continues with the next valid tag.
 fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
     let mut input = std::fs::File::open(path)?;
     let mut header = [0_u8; 9];
@@ -1315,12 +1348,13 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
     output.write_all(&header)?;
     output.write_all(&previous_tag_size)?;
 
-    let mut previous_input_timestamp = None;
+    let mut previous_input_timestamps = [None, None];
     let mut timestamp_offset = 0_i64;
     let mut first_output_timestamp = None;
     let mut last_output_timestamp = 0_u32;
     let mut changed = false;
-    let mut skipping_replayed_preamble = false;
+    let mut replay_cutoffs = [FlvReplayCutoff::Inactive; 2];
+    let mut shared_epoch_guard = false;
 
     let file_len = input.metadata()?.len();
     loop {
@@ -1357,6 +1391,9 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
             changed = true;
             break;
         }
+        let mut payload_prefix = [0_u8; 2];
+        let prefix_len = data_size.min(payload_prefix.len());
+        input.read_exact(&mut payload_prefix[..prefix_len])?;
         input.seek(SeekFrom::Start(previous_size_position))?;
         let mut actual_previous_size = [0_u8; 4];
         input.read_exact(&mut actual_previous_size)?;
@@ -1377,31 +1414,35 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
             | (u32::from(tag_header[5]) << 8)
             | u32::from(tag_header[6])
             | (u32::from(tag_header[7]) << 24);
-        let is_media_tag = matches!(tag_type, 8 | 9);
-        let mut replayed_preamble_tag = false;
-        if is_media_tag {
-            if skipping_replayed_preamble {
-                let still_replayed = previous_input_timestamp.map_or(
-                    input_timestamp < FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
-                    |previous| input_timestamp.saturating_add(500) < previous,
-                );
-                if still_replayed {
-                    changed = true;
-                    replayed_preamble_tag = true;
+        let media_track = flv_media_track(tag_type);
+        let is_media_tag = media_track.is_some();
+        let is_codec_sequence_header =
+            flv_payload_is_codec_sequence_header(tag_type, &payload_prefix[..prefix_len]);
+        let mut pinned_codec_header = false;
+        if let Some(track) = media_track {
+            let still_replayed = match replay_cutoffs[track] {
+                FlvReplayCutoff::Inactive => false,
+                FlvReplayCutoff::AbsoluteClock => input_timestamp < FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
+                FlvReplayCutoff::Timestamp(cutoff) => input_timestamp <= cutoff,
+            };
+            if still_replayed {
+                changed = true;
+                if is_codec_sequence_header {
+                    pinned_codec_header = true;
                 } else {
-                    skipping_replayed_preamble = false;
+                    continue;
                 }
+            } else if !matches!(replay_cutoffs[track], FlvReplayCutoff::Inactive) {
+                replay_cutoffs[track] = FlvReplayCutoff::Inactive;
             }
 
-            if replayed_preamble_tag {
-                // Codec sequence headers are commonly replayed before the
-                // response returns to its absolute media clock. They must stay
-                // in the file for AAC/H.264 initialization, but must not move
-                // the playback timeline or become its timestamp reference.
-            } else if let Some(previous) = previous_input_timestamp {
-                if input_timestamp.saturating_add(500) < previous {
+            if pinned_codec_header || is_codec_sequence_header {
+                // Codec setup stays at the current output boundary and never
+                // advances either media track's input clock.
+                pinned_codec_header = true;
+            } else if let Some(previous) = previous_input_timestamps[track] {
+                if input_timestamp <= previous {
                     let repeats_replayed_preamble = previous > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS
-                        && input_timestamp < 1_000
                         && has_future_flv_media_timestamp(
                             &mut input,
                             previous_size_position + 4,
@@ -1409,17 +1450,70 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
                             previous.saturating_sub(10_000),
                         )?;
                     if repeats_replayed_preamble {
-                        skipping_replayed_preamble = true;
+                        replay_cutoffs = previous_input_timestamps.map(|timestamp| {
+                            timestamp
+                                .map_or(FlvReplayCutoff::AbsoluteClock, FlvReplayCutoff::Timestamp)
+                        });
                         changed = true;
-                        replayed_preamble_tag = true;
+                        continue;
                     } else {
                         timestamp_offset = i64::from(last_output_timestamp)
                             .saturating_add(1)
                             .saturating_sub(i64::from(input_timestamp));
+                        previous_input_timestamps = [None, None];
+                        replay_cutoffs = [FlvReplayCutoff::Inactive; 2];
+                        shared_epoch_guard = true;
                         changed = true;
                     }
                 }
-            } else if input_timestamp < 1_000
+            } else if previous_input_timestamps[track].is_none()
+                && previous_input_timestamps.iter().any(Option::is_some)
+                && !shared_epoch_guard
+                && input_timestamp < 1_000
+                && previous_input_timestamps
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .max()
+                    .is_some_and(|known| {
+                        known > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS && input_timestamp < known
+                    })
+            {
+                // A response can introduce a previously absent track after
+                // the other track has already established the source epoch.
+                // If a later absolute-clock tag is present, this is only the
+                // replayed preamble for the late track. Keep the established
+                // epoch and discard the ordinary replay tag. A genuinely new
+                // epoch has no such future high-clock tag and needs one shared
+                // offset for both tracks.
+                let known_clock = previous_input_timestamps.iter().flatten().copied().max();
+                let replay_threshold = known_clock
+                    .filter(|timestamp| *timestamp > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS)
+                    .map_or(FLV_ABSOLUTE_CLOCK_THRESHOLD_MS, |timestamp| {
+                        timestamp.saturating_sub(10_000)
+                    });
+                let replayed_preamble = known_clock
+                    .is_some_and(|timestamp| timestamp > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS)
+                    && has_future_flv_media_timestamp(
+                        &mut input,
+                        previous_size_position + 4,
+                        file_len,
+                        replay_threshold,
+                    )?;
+                if replayed_preamble {
+                    replay_cutoffs[track] = FlvReplayCutoff::AbsoluteClock;
+                    changed = true;
+                    continue;
+                }
+                timestamp_offset = i64::from(last_output_timestamp)
+                    .saturating_add(1)
+                    .saturating_sub(i64::from(input_timestamp));
+                previous_input_timestamps = [None, None];
+                replay_cutoffs = [FlvReplayCutoff::Inactive; 2];
+                shared_epoch_guard = true;
+                changed = true;
+            } else if previous_input_timestamps.iter().all(Option::is_none)
+                && input_timestamp < 1_000
                 && has_future_flv_media_timestamp(
                     &mut input,
                     previous_size_position + 4,
@@ -1427,10 +1521,10 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
                     FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
                 )?
             {
-                skipping_replayed_preamble = true;
+                replay_cutoffs = [FlvReplayCutoff::AbsoluteClock; 2];
                 changed = true;
-                replayed_preamble_tag = true;
-            } else {
+                continue;
+            } else if first_output_timestamp.is_none() {
                 // FLV timestamps may start at the source's absolute clock
                 // (several hours into uptime). Normalize that base to zero so
                 // MediaSource duration and seek math remain bounded.
@@ -1442,7 +1536,7 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
         // even when audio/video keep their absolute source clock. Do not let
         // that script tag shift every subsequent media timestamp by an entire
         // source-clock epoch.
-        let output_timestamp = if replayed_preamble_tag
+        let output_timestamp = if pinned_codec_header
             || (!is_media_tag && input_timestamp == 0 && first_output_timestamp.is_some())
         {
             i64::from(last_output_timestamp)
@@ -1476,8 +1570,11 @@ fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
         }
         output.write_all(&((data_size as u32).saturating_add(11)).to_be_bytes())?;
 
-        if is_media_tag && !replayed_preamble_tag {
-            previous_input_timestamp = Some(input_timestamp);
+        if let Some(track) = media_track.filter(|_| !pinned_codec_header) {
+            previous_input_timestamps[track] = Some(input_timestamp);
+            if shared_epoch_guard && input_timestamp >= 1_000 {
+                shared_epoch_guard = false;
+            }
             first_output_timestamp.get_or_insert(output_timestamp);
             last_output_timestamp = last_output_timestamp.max(output_timestamp);
         }
@@ -3185,10 +3282,11 @@ mod tests {
     use super::{
         ArchiveEntry, HlsArchive, RecordingManager, RecordingStartInput, RecordingStatus,
         SessionState, StoredDanmakuBatch, StoredRecording, attribute_value,
-        decode_playback_relative_path, direct_source_candidates, hls_media_sequence_iv,
-        http_byte_range_bounds, local_playback_url, media_file_name, normalize_flv_timestamps,
-        parse_media_playlist, parse_range, recording_file_stem, run_direct_recording,
-        safe_relative_path, select_master_variant, write_metadata,
+        decode_playback_relative_path, direct_source_candidates,
+        flv_payload_is_codec_sequence_header, hls_media_sequence_iv, http_byte_range_bounds,
+        local_playback_url, media_file_name, normalize_flv_timestamps, parse_media_playlist,
+        parse_range, recording_file_stem, run_direct_recording, safe_relative_path,
+        select_master_variant, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use reqwest::Url;
@@ -3494,12 +3592,12 @@ mod tests {
 
     #[test]
     fn normalizes_absolute_flv_clock_after_replayed_preamble() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32) {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
             file.extend_from_slice(&[
                 tag_type,
                 0,
-                0,
-                1,
+                (payload.len() >> 8) as u8,
+                payload.len() as u8,
                 (timestamp >> 16) as u8,
                 (timestamp >> 8) as u8,
                 timestamp as u8,
@@ -3507,24 +3605,24 @@ mod tests {
                 0,
                 0,
                 0,
-                0,
             ]);
-            file.extend_from_slice(&[0, 0, 0, 12]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
         }
 
         let path =
             std::env::temp_dir().join(format!("rlive-flv-clock-{}.flv", Uuid::new_v4().simple()));
         let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 9, 12);
-        append_tag(&mut file, 8, 6_559);
-        append_tag(&mut file, 9, 2_000_000);
-        append_tag(&mut file, 8, 2_001_000);
+        append_tag(&mut file, 9, 12, &[0x17, 0]);
+        append_tag(&mut file, 8, 6_559, &[0xaf, 0]);
+        append_tag(&mut file, 9, 2_000_000, &[0x17, 1]);
+        append_tag(&mut file, 8, 2_001_000, &[0xaf, 1]);
         std::fs::write(&path, file).unwrap();
 
         assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(1000));
         let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(normalized.len(), 13 + (11 + 1 + 4) * 4);
-        for offset in [13, 29, 45] {
+        assert_eq!(normalized.len(), 13 + (11 + 2 + 4) * 4);
+        for offset in [13, 30, 47] {
             assert_eq!(
                 (u32::from(normalized[offset + 4]) << 16)
                     | (u32::from(normalized[offset + 5]) << 8)
@@ -3534,12 +3632,400 @@ mod tests {
             );
         }
         assert_eq!(
-            (u32::from(normalized[65]) << 16)
-                | (u32::from(normalized[66]) << 8)
-                | u32::from(normalized[67])
-                | (u32::from(normalized[68]) << 24),
+            (u32::from(normalized[68]) << 16)
+                | (u32::from(normalized[69]) << 8)
+                | u32::from(normalized[70])
+                | (u32::from(normalized[71]) << 24),
             1000
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn drops_replayed_douyu_media_until_each_track_passes_its_old_clock() {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
+            file.extend_from_slice(&[
+                tag_type,
+                (payload.len() >> 16) as u8,
+                (payload.len() >> 8) as u8,
+                payload.len() as u8,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+        }
+
+        fn tags(file: &[u8]) -> Vec<(u8, u32, Vec<u8>)> {
+            let mut result = Vec::new();
+            let mut offset = 13;
+            while offset + 15 <= file.len() {
+                let data_size = (usize::from(file[offset + 1]) << 16)
+                    | (usize::from(file[offset + 2]) << 8)
+                    | usize::from(file[offset + 3]);
+                let timestamp = (u32::from(file[offset + 4]) << 16)
+                    | (u32::from(file[offset + 5]) << 8)
+                    | u32::from(file[offset + 6])
+                    | (u32::from(file[offset + 7]) << 24);
+                result.push((
+                    file[offset] & 0x1f,
+                    timestamp,
+                    file[offset + 11..offset + 11 + data_size].to_vec(),
+                ));
+                offset += 11 + data_size + 4;
+            }
+            result
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rlive-flv-douyu-overlap-{}.flv",
+            Uuid::new_v4().simple()
+        ));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        append_tag(&mut file, 8, 33, &[0xaf, 0, 0xa0]);
+        append_tag(&mut file, 9, 8_370, &[0x17, 0, 0, 0, 0, 0xa1]);
+        append_tag(&mut file, 9, 2_000_000, &[0x17, 1, 0, 0, 0, 0x10]);
+        append_tag(&mut file, 8, 2_000_020, &[0xaf, 1, 0x11]);
+        append_tag(&mut file, 8, 2_004_980, &[0xaf, 1, 0x12]);
+        append_tag(&mut file, 9, 2_005_000, &[0x27, 1, 0, 0, 0, 0x13]);
+
+        append_tag(&mut file, 8, 33, &[0xaf, 0, 0xb0]);
+        append_tag(&mut file, 9, 8_370, &[0x17, 0, 0, 0, 0, 0xb1]);
+        // The reconnect starts only 200ms behind the previous edge. This is
+        // below the old 500ms tolerance and must still be treated as replay.
+        append_tag(&mut file, 9, 2_004_800, &[0x17, 1, 0, 0, 0, 0x20]);
+        append_tag(&mut file, 8, 2_004_820, &[0xaf, 1, 0x21]);
+        append_tag(&mut file, 8, 2_004_960, &[0xaf, 1, 0x22]);
+        append_tag(&mut file, 9, 2_004_980, &[0x27, 1, 0, 0, 0, 0x23]);
+        append_tag(&mut file, 8, 2_005_000, &[0xaf, 1, 0x30]);
+        append_tag(&mut file, 9, 2_005_020, &[0x27, 1, 0, 0, 0, 0x31]);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(5_020));
+        let normalized = std::fs::read(&path).unwrap();
+        let tags = tags(&normalized);
+        let sequence_timestamps = tags
+            .iter()
+            .filter(|(tag_type, _, payload)| {
+                flv_payload_is_codec_sequence_header(*tag_type, payload)
+            })
+            .map(|(_, timestamp, _)| *timestamp)
+            .collect::<Vec<_>>();
+        assert_eq!(sequence_timestamps, [0, 0, 5_000, 5_000]);
+
+        let audio_timestamps = tags
+            .iter()
+            .filter(|(tag_type, _, payload)| {
+                *tag_type == 8 && !flv_payload_is_codec_sequence_header(*tag_type, payload)
+            })
+            .map(|(_, timestamp, _)| *timestamp)
+            .collect::<Vec<_>>();
+        let video_timestamps = tags
+            .iter()
+            .filter(|(tag_type, _, payload)| {
+                *tag_type == 9 && !flv_payload_is_codec_sequence_header(*tag_type, payload)
+            })
+            .map(|(_, timestamp, _)| *timestamp)
+            .collect::<Vec<_>>();
+        assert_eq!(audio_timestamps, [20, 4_980, 5_000]);
+        assert_eq!(video_timestamps, [0, 5_000, 5_020]);
+        assert!(audio_timestamps.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(video_timestamps.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(
+            tags.iter()
+                .all(|(_, _, payload)| !matches!(payload.last(), Some(0x20 | 0x21 | 0x22 | 0x23)))
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn starts_one_shared_epoch_when_both_tracks_restart_from_zero() {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
+            file.extend_from_slice(&[
+                tag_type,
+                (payload.len() >> 16) as u8,
+                (payload.len() >> 8) as u8,
+                payload.len() as u8,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+        }
+
+        fn media_timestamps(file: &[u8], wanted_type: u8) -> Vec<u32> {
+            let mut result = Vec::new();
+            let mut offset = 13;
+            while offset + 15 <= file.len() {
+                let tag_type = file[offset] & 0x1f;
+                let data_size = (usize::from(file[offset + 1]) << 16)
+                    | (usize::from(file[offset + 2]) << 8)
+                    | usize::from(file[offset + 3]);
+                let payload = &file[offset + 11..offset + 11 + data_size];
+                if tag_type == wanted_type
+                    && !flv_payload_is_codec_sequence_header(tag_type, payload)
+                {
+                    result.push(
+                        (u32::from(file[offset + 4]) << 16)
+                            | (u32::from(file[offset + 5]) << 8)
+                            | u32::from(file[offset + 6])
+                            | (u32::from(file[offset + 7]) << 24),
+                    );
+                }
+                offset += 11 + data_size + 4;
+            }
+            result
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rlive-flv-shared-reset-{}.flv",
+            Uuid::new_v4().simple()
+        ));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        append_tag(&mut file, 8, 33, &[0xaf, 0]);
+        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
+        append_tag(&mut file, 9, 2_000_000, &[0x17, 1]);
+        append_tag(&mut file, 8, 2_000_018, &[0xaf, 1]);
+        append_tag(&mut file, 9, 2_001_000, &[0x27, 1]);
+        append_tag(&mut file, 8, 2_001_018, &[0xaf, 1]);
+
+        append_tag(&mut file, 18, 0, &[0]);
+        append_tag(&mut file, 8, 33, &[0xaf, 0]);
+        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
+        append_tag(&mut file, 9, 0, &[0x17, 1]);
+        append_tag(&mut file, 8, 18, &[0xaf, 1]);
+        append_tag(&mut file, 9, 1_000, &[0x27, 1]);
+        append_tag(&mut file, 8, 1_018, &[0xaf, 1]);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2_037));
+        let normalized = std::fs::read(&path).unwrap();
+        assert_eq!(media_timestamps(&normalized, 9), [0, 1_000, 1_019, 2_019]);
+        assert_eq!(media_timestamps(&normalized, 8), [18, 1_018, 1_037, 2_037]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn keeps_normal_late_track_start_in_the_same_epoch() {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
+            file.extend_from_slice(&[
+                tag_type,
+                0,
+                0,
+                payload.len() as u8,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+        }
+
+        fn timestamps(file: &[u8]) -> Vec<(u8, u32)> {
+            let mut result = Vec::new();
+            let mut offset = 13;
+            while offset + 15 <= file.len() {
+                let data_size = (usize::from(file[offset + 1]) << 16)
+                    | (usize::from(file[offset + 2]) << 8)
+                    | usize::from(file[offset + 3]);
+                result.push((
+                    file[offset] & 0x1f,
+                    (u32::from(file[offset + 4]) << 16)
+                        | (u32::from(file[offset + 5]) << 8)
+                        | u32::from(file[offset + 6])
+                        | (u32::from(file[offset + 7]) << 24),
+                ));
+                offset += 11 + data_size + 4;
+            }
+            result
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rlive-flv-normal-start-{}.flv",
+            Uuid::new_v4().simple()
+        ));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        append_tag(&mut file, 8, 0, &[0xaf, 1]);
+        append_tag(&mut file, 9, 33, &[0x27, 1]);
+        append_tag(&mut file, 8, 23, &[0xaf, 1]);
+        append_tag(&mut file, 9, 50, &[0x27, 1]);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(50));
+        let normalized = std::fs::read(&path).unwrap();
+        assert_eq!(timestamps(&normalized), [(8, 0), (9, 33), (8, 23), (9, 50)]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn aligns_a_late_track_before_the_other_track_restarts() {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
+            file.extend_from_slice(&[
+                tag_type,
+                (payload.len() >> 16) as u8,
+                (payload.len() >> 8) as u8,
+                payload.len() as u8,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+        }
+
+        fn media_timestamps(file: &[u8], wanted_type: u8) -> Vec<u32> {
+            let mut result = Vec::new();
+            let mut offset = 13;
+            while offset + 15 <= file.len() {
+                let tag_type = file[offset] & 0x1f;
+                let data_size = (usize::from(file[offset + 1]) << 16)
+                    | (usize::from(file[offset + 2]) << 8)
+                    | usize::from(file[offset + 3]);
+                let payload = &file[offset + 11..offset + 11 + data_size];
+                if tag_type == wanted_type
+                    && !flv_payload_is_codec_sequence_header(tag_type, payload)
+                {
+                    result.push(
+                        (u32::from(file[offset + 4]) << 16)
+                            | (u32::from(file[offset + 5]) << 8)
+                            | u32::from(file[offset + 6])
+                            | (u32::from(file[offset + 7]) << 24),
+                    );
+                }
+                offset += 11 + data_size + 4;
+            }
+            result
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rlive-flv-late-track-{}.flv",
+            Uuid::new_v4().simple()
+        ));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        // The first response has video only and establishes an absolute epoch.
+        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
+        append_tag(&mut file, 9, 2_000_000, &[0x27, 1, 0x10]);
+        append_tag(&mut file, 9, 2_001_000, &[0x27, 1, 0x11]);
+
+        // On reconnect audio arrives first at the reset clock. Both tracks
+        // must then use the one new shared offset, not rebase independently.
+        append_tag(&mut file, 18, 0, &[0]);
+        append_tag(&mut file, 8, 33, &[0xaf, 0]);
+        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
+        append_tag(&mut file, 8, 0, &[0xaf, 1, 0x21]);
+        append_tag(&mut file, 9, 0, &[0x27, 1, 0x22]);
+        append_tag(&mut file, 8, 18, &[0xaf, 1, 0x23]);
+        append_tag(&mut file, 9, 1_000, &[0x27, 1, 0x24]);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2_001));
+        let normalized = std::fs::read(&path).unwrap();
+        assert_eq!(media_timestamps(&normalized, 8), [1_001, 1_019]);
+        assert_eq!(media_timestamps(&normalized, 9), [0, 1_000, 1_001, 2_001]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn drops_late_track_replay_before_absolute_clock_returns() {
+        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
+            file.extend_from_slice(&[
+                tag_type,
+                (payload.len() >> 16) as u8,
+                (payload.len() >> 8) as u8,
+                payload.len() as u8,
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            file.extend_from_slice(payload);
+            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+        }
+
+        fn media_payloads(file: &[u8], wanted_type: u8) -> Vec<Vec<u8>> {
+            let mut result = Vec::new();
+            let mut offset = 13;
+            while offset + 15 <= file.len() {
+                let tag_type = file[offset] & 0x1f;
+                let data_size = (usize::from(file[offset + 1]) << 16)
+                    | (usize::from(file[offset + 2]) << 8)
+                    | usize::from(file[offset + 3]);
+                if offset + 11 + data_size + 4 > file.len() {
+                    break;
+                }
+                if tag_type == wanted_type {
+                    result.push(file[offset + 11..offset + 11 + data_size].to_vec());
+                }
+                offset += 11 + data_size + 4;
+            }
+            result
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rlive-flv-late-track-replay-{}.flv",
+            Uuid::new_v4().simple()
+        ));
+        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+
+        // The first response has video only at the source's absolute clock.
+        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
+        append_tag(&mut file, 9, 2_000_000, &[0x27, 1, 0x10]);
+        append_tag(&mut file, 9, 2_001_000, &[0x27, 1, 0x11]);
+
+        // Reconnect preamble: audio appears for the first time and replays a
+        // low-clock packet before the stream returns to its absolute clock.
+        append_tag(&mut file, 18, 0, &[0]);
+        append_tag(&mut file, 8, 33, &[0xaf, 0]);
+        append_tag(&mut file, 8, 50, &[0xaf, 1, 0xa1]);
+        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
+        append_tag(&mut file, 9, 0, &[0x27, 1, 0xb1]);
+        append_tag(&mut file, 8, 80, &[0xaf, 1, 0xa2]);
+
+        // The high-clock media proves the low audio/video tags above were a
+        // replayed preamble. Only these packets should survive the boundary.
+        append_tag(&mut file, 9, 2_002_000, &[0x27, 1, 0xc1]);
+        append_tag(&mut file, 8, 2_002_018, &[0xaf, 1, 0xc2]);
+        std::fs::write(&path, file).unwrap();
+
+        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2_018));
+        let normalized = std::fs::read(&path).unwrap();
+        let audio = media_payloads(&normalized, 8);
+        let video = media_payloads(&normalized, 9);
+        assert_eq!(audio, [vec![0xaf, 0], vec![0xaf, 1, 0xc2]]);
+        assert_eq!(
+            video,
+            [
+                vec![0x17, 0],
+                vec![0x27, 1, 0x10],
+                vec![0x27, 1, 0x11],
+                vec![0x17, 0],
+                vec![0x27, 1, 0xc1],
+            ]
+        );
+        assert!(audio.iter().all(|payload| payload.last() != Some(&0xa1)));
+        assert!(audio.iter().all(|payload| payload.last() != Some(&0xa2)));
+        assert!(video.iter().all(|payload| payload.last() != Some(&0xb1)));
         let _ = std::fs::remove_file(path);
     }
 

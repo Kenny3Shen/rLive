@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   activeRecordingForContext,
+  clampRecordingPlaybackTime,
   formatRecordingDuration,
   formatRecordingSize,
   recordingProtocolLabel,
@@ -56,6 +57,13 @@ describe("recording presentation helpers", () => {
     expect(formatRecordingDuration(0)).toBe("0:00");
     expect(formatRecordingDuration(65_000)).toBe("1:05");
     expect(formatRecordingDuration(3_661_000)).toBe("1:01:01");
+  });
+
+  test("bounds playback progress when a media backend reports time past EOF", () => {
+    expect(clampRecordingPlaybackTime(37, 32)).toBe(32);
+    expect(clampRecordingPlaybackTime(-1, 32)).toBe(0);
+    expect(clampRecordingPlaybackTime(Number.NaN, 32)).toBe(0);
+    expect(clampRecordingPlaybackTime(37, 0)).toBe(37);
   });
 
   test("formats local storage sizes with stable units", () => {

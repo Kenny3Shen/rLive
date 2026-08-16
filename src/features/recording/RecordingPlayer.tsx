@@ -13,7 +13,12 @@ import {
   type XgPlaybackKind,
   type XgPlayerInstance,
 } from "@/features/room/player/xgPlayer";
-import { formatRecordingDuration, recordingDanmakuUrl, type RecordingItem } from "./recording";
+import {
+  clampRecordingPlaybackTime,
+  formatRecordingDuration,
+  recordingDanmakuUrl,
+  type RecordingItem,
+} from "./recording";
 import { RecordedDanmakuCanvas } from "./RecordedDanmakuCanvas";
 import { parseRecordedDanmakuSidecar, type RecordedDanmakuEntry } from "./recordedDanmaku";
 
@@ -60,6 +65,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
   const [playerRevision, setPlayerRevision] = useState(0);
   const sliderTargetRef = useRef<number | null>(null);
   const seekTargetRef = useRef<number | null>(null);
+  const endedRef = useRef(false);
   const recoverySeekRef = useRef<number | null>(null);
   const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seekRequestRef = useRef(0);
@@ -118,6 +124,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
         Math.min(requestedTarget, availableDuration > 0 ? availableDuration : requestedTarget),
       );
       const request = ++seekRequestRef.current;
+      endedRef.current = false;
       sliderTargetRef.current = null;
       seekTargetRef.current = target;
       clearSeekTimer();
@@ -175,6 +182,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
     setPaused(true);
     setCurrentTime(0);
     setDuration(recordedDuration);
+    endedRef.current = false;
     const kind = playbackKind;
 
     function syncTime() {
@@ -183,18 +191,31 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       // Recorder metadata is authoritative. An FLV MediaSource can expose a
       // transient duration of 0 or 1 second while its buffer is being rebuilt.
       const nextDuration = recordedDuration > 0 ? recordedDuration : finiteDuration(media);
-      if (sliderTargetRef.current === null) setCurrentTime(actualTime);
-      setDuration(nextDuration);
+      setCurrentTime((previousTime) =>
+        clampRecordingPlaybackTime(
+          sliderTargetRef.current !== null || endedRef.current ? previousTime : actualTime,
+          nextDuration,
+        ),
+      );
+      setDuration((previousDuration) =>
+        endedRef.current && nextDuration <= 0 ? previousDuration : nextDuration,
+      );
       const target = seekTargetRef.current;
+      const targetIsEnd =
+        target !== null &&
+        nextDuration > 0 &&
+        Math.abs(target - nextDuration) <= RECORDING_SEEK_TOLERANCE_SECONDS;
       if (
         target !== null &&
-        (Math.abs(actualTime - target) <= RECORDING_SEEK_TOLERANCE_SECONDS || media.ended)
+        (Math.abs(actualTime - target) <= RECORDING_SEEK_TOLERANCE_SECONDS ||
+          (media.ended && targetIsEnd))
       ) {
         completeSeek();
       }
     }
     function onPlay() {
       if (cancelled) return;
+      endedRef.current = false;
       setPaused(false);
       setWaiting(false);
       setLoading(false);
@@ -217,17 +238,34 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       }
     }
     function onWaiting() {
-      if (cancelled) return;
+      if (cancelled || endedRef.current || media.ended) return;
       setWaiting(true);
     }
     function onEnded() {
-      if (cancelled) return;
+      // A queued `ended` event can arrive after replay or seek has already
+      // cleared the media's terminal state. Ignore that stale event.
+      if (cancelled || !media.ended) return;
+      const endDuration =
+        recordedDuration > 0
+          ? recordedDuration
+          : finiteDuration(media) || clampRecordingPlaybackTime(media.currentTime, 0);
+      const target = seekTargetRef.current;
+      if (
+        target !== null &&
+        (endDuration <= 0 || Math.abs(target - endDuration) > RECORDING_SEEK_TOLERANCE_SECONDS)
+      ) {
+        return;
+      }
+      endedRef.current = true;
+      setDuration(endDuration);
+      setCurrentTime(endDuration);
       setPaused(true);
       if (seekTargetRef.current === null) setWaiting(false);
       else completeSeek();
     }
     function onSeeking() {
-      if (!cancelled && seekTargetRef.current !== null) setWaiting(true);
+      if (cancelled) return;
+      if (seekTargetRef.current !== null) setWaiting(true);
     }
     function onSeeked() {
       if (!cancelled && seekTargetRef.current !== null) syncTime();
@@ -331,6 +369,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       clearSeekTimer();
       seekTargetRef.current = null;
       sliderTargetRef.current = null;
+      endedRef.current = false;
       const player = playerRef.current;
       playerRef.current = null;
       try {

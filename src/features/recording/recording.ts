@@ -79,6 +79,13 @@ export function formatRecordingDuration(durationMs: number): string {
   return minutes + ":" + String(remainder).padStart(2, "0");
 }
 
+/** Keep media progress inside the duration exposed by the recording metadata. */
+export function clampRecordingPlaybackTime(currentTime: number, duration: number): number {
+  const time = Number.isFinite(currentTime) ? Math.max(0, currentTime) : 0;
+  if (!Number.isFinite(duration) || duration <= 0) return time;
+  return Math.min(time, duration);
+}
+
 export function formatRecordingSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
