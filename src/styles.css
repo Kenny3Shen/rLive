@@ -28,6 +28,9 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--ring);
   --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* light (rarely used — app defaults to dark) */
@@ -320,6 +323,35 @@ body {
 :root[data-motion="reduced"] .settings-category-button,
 :root[data-motion="reduced"] .settings-search {
   transition-property: background-color, border-color, color, box-shadow;
+}
+
+/* Keyboard focus is intentionally one app-wide treatment. Components may
+   still use focus-visible utilities for their interaction logic, but the
+   visible ring itself must not vary between controls. */
+:where(
+  a[href],
+  area[href],
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [contenteditable="true"],
+  [tabindex]:not([tabindex="-1"]),
+  [role="button"],
+  [role="checkbox"],
+  [role="combobox"],
+  [role="link"],
+  [role="menuitem"],
+  [role="option"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  [role="treeitem"]
+):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  box-shadow: none;
 }
 
 /* Full motion is the product default. OS-level reduced motion is an implicit
