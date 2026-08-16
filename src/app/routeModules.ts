@@ -42,6 +42,12 @@ export const loadHistoryPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadRecordingsPage = createCachedRouteLoader(() =>
+  import("../features/recording/RecordingsPage").then(({ RecordingsPage }) => ({
+    default: RecordingsPage,
+  })),
+);
+
 export const loadSettingsPage = createCachedRouteLoader(() =>
   import("../features/settings/SettingsPage").then(({ SettingsPage }) => ({
     default: SettingsPage,
@@ -76,6 +82,7 @@ export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadSearchPage,
   loadFollowPage,
   loadHistoryPage,
+  loadRecordingsPage,
   loadIptvPlayerPage,
   loadSettingsPage,
   loadMultiRoomPage,
@@ -99,6 +106,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/search") return loadSearchPage;
   if (pathname === "/follow") return loadFollowPage;
   if (pathname === "/history") return loadHistoryPage;
+  if (pathname === "/recordings") return loadRecordingsPage;
   if (pathname === "/iptv/play") return loadIptvPlayerPage;
   if (pathname === "/iptv") return loadIptvPage;
   if (pathname === "/settings") return loadSettingsPage;

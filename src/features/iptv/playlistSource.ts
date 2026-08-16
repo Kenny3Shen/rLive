@@ -37,6 +37,20 @@ export const builtInSources: readonly PlaylistSource[] = [
 
 export const DEFAULT_PLAYLIST_SOURCE = builtInSources[0];
 
+/**
+ * Compact, deterministic identity for device-local IPTV state. The raw URL
+ * can contain private hostnames or signed query parameters, so callers store
+ * only this opaque fingerprint alongside favorites and recordings.
+ */
+export function iptvUrlFingerprint(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
 /** Build the source options shared by the IPTV discovery and follow pages. */
 export function playlistSourcesForSettings(customUrl: string | null | undefined): PlaylistSource[] {
   const customSource = playlistSourceFromRoute("custom", customUrl);
@@ -50,12 +64,7 @@ export function playlistSourcesForSettings(customUrl: string | null | undefined)
  */
 export function iptvFavoriteSourceId(source: PlaylistSource): string {
   if (source.id !== "custom") return source.id;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.url.length; index += 1) {
-    hash ^= source.url.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `custom:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `custom:${iptvUrlFingerprint(source.url)}`;
 }
 
 export function iptvFavoriteSourceIdFromRoute(value: string | null): string | null {

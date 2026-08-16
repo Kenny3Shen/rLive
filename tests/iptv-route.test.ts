@@ -8,6 +8,7 @@ import {
 import {
   iptvFavoriteSourceId,
   iptvFavoriteSourceIdFromRoute,
+  iptvUrlFingerprint,
   playlistSourceForFavorite,
   playlistSourceFromRoute,
   playlistSourcesForSettings,
@@ -79,6 +80,15 @@ describe("IPTV routes", () => {
     expect(iptvFavoriteSourceId(first)).not.toContain(first.url);
     expect(iptvFavoriteSourceId(first)).not.toBe(iptvFavoriteSourceId(second));
     expect(iptvFavoriteSourceId(playlistSourceFromRoute("mainland", null))).toBe("mainland");
+  });
+
+  test("fingerprints channel URLs without persisting their private value", () => {
+    const first = "https://private.example/live.m3u8?token=secret-a";
+    const second = "https://private.example/live.m3u8?token=secret-b";
+
+    expect(iptvUrlFingerprint(first)).toMatch(/^[0-9a-f]{8}$/);
+    expect(iptvUrlFingerprint(first)).not.toContain("private.example");
+    expect(iptvUrlFingerprint(first)).not.toBe(iptvUrlFingerprint(second));
   });
 
   test("opens a stored custom favorite snapshot without exposing its playlist", () => {

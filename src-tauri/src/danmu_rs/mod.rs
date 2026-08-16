@@ -12,6 +12,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
+#[cfg(not(target_os = "android"))]
+use tauri::Manager;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -295,11 +297,13 @@ impl DanmakuManager {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_loop<F, Fut>(
     app: AppHandle,
     manager: &DanmakuManager,
     generation: u64,
     site: &'static str,
+    source_key: String,
     identity: SelfDanmakuIdentity,
     notice: Option<String>,
     fut: F,
@@ -308,8 +312,12 @@ fn spawn_loop<F, Fut>(
     Fut: std::future::Future<Output = AppResult<()>> + Send + 'static,
 {
     let (event_tx, event_rx) = mpsc::channel(DANMAKU_EVENT_CHANNEL_CAPACITY);
-    let batch_task =
-        tauri::async_runtime::spawn(dispatch_batches(app.clone(), generation, event_rx));
+    let batch_task = tauri::async_runtime::spawn(dispatch_batches(
+        app.clone(),
+        generation,
+        source_key,
+        event_rx,
+    ));
     // Do not let the task run until its generation is installed. Without this
     // gate a route switch in the tiny window between `spawn` and manager
     // registration could still emit a stale room's first event.
@@ -364,6 +372,7 @@ fn spawn_loop<F, Fut>(
 async fn dispatch_batches(
     app: AppHandle,
     generation: u64,
+    source_key: String,
     mut receiver: mpsc::Receiver<DanmakuEvent>,
 ) {
     let mut ticker = time::interval(DANMAKU_BATCH_INTERVAL);
@@ -386,18 +395,22 @@ async fn dispatch_batches(
                     }
                 }
                 None => {
-                    emit_batch(&app, generation, &mut batch);
+                    emit_batch(&app, generation, &source_key, &mut batch);
                     return;
                 }
             },
-            _ = ticker.tick() => emit_batch(&app, generation, &mut batch),
+            _ = ticker.tick() => emit_batch(&app, generation, &source_key, &mut batch),
         }
     }
 }
 
-fn emit_batch(app: &AppHandle, generation: u64, batch: &mut Vec<DanmakuEvent>) {
+fn emit_batch(app: &AppHandle, generation: u64, source_key: &str, batch: &mut Vec<DanmakuEvent>) {
     if batch.is_empty() {
         return;
+    }
+    #[cfg(not(target_os = "android"))]
+    if let Some(state) = app.try_state::<crate::state::AppState>() {
+        state.recording.capture_danmaku(source_key, batch);
     }
     // The frontend owns retention and rendering policy. The tiny envelope
     // retains the connection fence while carrying all events for this tick,
@@ -444,6 +457,7 @@ pub async fn connect(
     }
 
     let identity = SelfDanmakuIdentity::from_cookie(&site_id, identity_cookie);
+    let source_key = format!("live:{}:{}", site_id.as_str(), room_id.trim());
 
     match site_id {
         SiteId::Bilibili => {
@@ -459,6 +473,7 @@ pub async fn connect(
                 manager,
                 generation,
                 "bilibili",
+                source_key.clone(),
                 identity,
                 notice,
                 move |events| bilibili::run_loop(events, args),
@@ -472,6 +487,7 @@ pub async fn connect(
                 manager,
                 generation,
                 "douyu",
+                source_key.clone(),
                 identity,
                 notice,
                 move |events| douyu::run_loop(events, args),
@@ -485,6 +501,7 @@ pub async fn connect(
                 manager,
                 generation,
                 "huya",
+                source_key.clone(),
                 identity,
                 notice,
                 move |events| huya::run_loop(events, args),
@@ -499,6 +516,7 @@ pub async fn connect(
                 manager,
                 generation,
                 "twitch",
+                source_key.clone(),
                 identity,
                 notice,
                 move |events| twitch::run_loop(events, args, proxy),
@@ -517,6 +535,7 @@ pub async fn connect(
                 manager,
                 generation,
                 "douyin",
+                source_key,
                 identity,
                 notice,
                 move |events| douyin::run_loop(events, args),
