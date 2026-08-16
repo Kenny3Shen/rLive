@@ -20,8 +20,6 @@ import { usePlaybackController } from "@/features/room/playback/usePlaybackContr
 import type { PlaybackController } from "@/features/room/playback/usePlaybackController";
 import { useWebPlayer } from "@/features/room/player/useWebPlayer";
 import type { WebPlayerApi } from "@/features/room/player/useWebPlayer";
-import { siteSupportsSuperChat } from "@/features/room/superChat";
-import { SuperChatOverlay } from "@/features/room/SuperChatOverlay";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { useMultiRoomStore, type MultiRoomEntry } from "./multiRoomStore";
 
@@ -95,7 +93,6 @@ function MainMultiRoomControls({
   onToggleMute,
 }: MainMultiRoomControlsProps) {
   const [osdOn, setOsdOn] = useState(false);
-  const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
@@ -158,13 +155,6 @@ function MainMultiRoomControls({
         />
       )}
       {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
-      {showHost && !audioOnly && superChatEnabled && siteSupportsSuperChat(room.siteId) && (
-        <SuperChatOverlay
-          key={`sc:${sessionKey}`}
-          active={danmaku.active}
-          className="absolute bottom-[4.5rem] left-3 z-20 max-h-[calc(100%_-_5.75rem)] w-[min(240px,calc(100%-1.5rem))]"
-        />
-      )}
       {showHost &&
         !audioOnly &&
         (asr.captionsOn || asr.notice) &&
