@@ -94,7 +94,7 @@ function DesktopAppTitleBar() {
               <button
                 type="button"
                 data-tauri-drag-region="false"
-                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
                 aria-label="最小化"
                 onMouseDown={(event) => event.stopPropagation()}
                 onDoubleClick={(event) => event.stopPropagation()}
@@ -112,7 +112,7 @@ function DesktopAppTitleBar() {
               <button
                 type="button"
                 data-tauri-drag-region="false"
-                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
                 aria-label={maximized ? "还原窗口" : "最大化"}
                 onMouseDown={(event) => event.stopPropagation()}
                 onDoubleClick={(event) => event.stopPropagation()}
@@ -134,7 +134,7 @@ function DesktopAppTitleBar() {
               <button
                 type="button"
                 data-tauri-drag-region="false"
-                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="flex h-9 w-11 items-center justify-center text-muted-foreground transition-colors duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:z-10 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
                 aria-label="关闭"
                 onMouseDown={(event) => event.stopPropagation()}
                 onDoubleClick={(event) => event.stopPropagation()}
