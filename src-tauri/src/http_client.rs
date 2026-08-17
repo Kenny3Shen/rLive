@@ -67,6 +67,7 @@ pub fn client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
 /// so this client deliberately has no total request timeout. Automatic content
 /// decoding is disabled as well: media bytes must be written exactly as the CDN
 /// sends them, even when a CDN incorrectly attaches a Content-Encoding header.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub fn recording_stream_client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
     with_proxy(
         Client::builder()

@@ -28,6 +28,7 @@ use crate::models::live::{DanmakuEvent, DanmakuKind, SiteId};
 const DANMAKU_EVENT_CHANNEL_CAPACITY: usize = 2_048;
 const DANMAKU_BATCH_MAX_EVENTS: usize = 512;
 const DANMAKU_BATCH_INTERVAL: Duration = Duration::from_millis(50);
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const DANMAKU_FINAL_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ACCOUNT_ID_CHARS: usize = 128;
 const MAX_ACCOUNT_NAME_CHARS: usize = 128;
@@ -200,6 +201,13 @@ pub struct DanmakuManager {
 struct DanmakuTasks {
     connection_handle: Option<JoinHandle<()>>,
     batch_handle: Option<JoinHandle<()>>,
+    // Only the desktop flush path reads this sender back, but every platform
+    // must keep it alive: dropping it closes the control channel, which makes
+    // `dispatch_batches` observe `None` and stop delivering danmaku at once.
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
+        expect(dead_code)
+    )]
     batch_control: Option<mpsc::UnboundedSender<DanmakuBatchControl>>,
 }
 
@@ -213,6 +221,9 @@ impl DanmakuTasks {
         }
     }
 
+    /// Flushes the batch task before teardown so a recording sidecar keeps the
+    /// final queued events. Only the desktop recording path needs this.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     async fn stop_and_flush(mut self) {
         if let Some(handle) = self.connection_handle.take() {
             handle.abort();
@@ -232,6 +243,13 @@ impl DanmakuTasks {
     }
 }
 
+// `dispatch_batches` matches both variants on every platform; only the desktop
+// recording path constructs them, so mobile builds keep the shape without the
+// dead-code warning.
+#[cfg_attr(
+    not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
+    expect(dead_code)
+)]
 enum DanmakuBatchControl {
     Flush(oneshot::Sender<()>),
     StopAndFlush,
@@ -326,6 +344,7 @@ impl DanmakuManager {
         true
     }
 
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub fn active_source_key(&self) -> Option<String> {
         self.inner
             .lock()
@@ -335,6 +354,7 @@ impl DanmakuManager {
 
     /// Returns the active source only when this cleanup is new enough to
     /// affect it. The caller can then decide whether to stop or retain it.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub fn source_key_for_generation(&self, generation: u64) -> Option<String> {
         self.inner.lock().ok().and_then(|state| {
             (generation >= state.generation)
@@ -366,6 +386,12 @@ impl DanmakuManager {
 
     /// Detaches the current page without stopping its websocket. The tasks
     /// remain keyed by their recording source until that recording finishes.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos",
+        test
+    ))]
     pub fn detach_for_generation(&self, generation: u64) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             return false;
@@ -394,6 +420,12 @@ impl DanmakuManager {
 
     /// Stops a retained connection only. An identical room that is currently
     /// open owns the active connection and must survive a recording stop.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos",
+        test
+    ))]
     pub fn disconnect_background_for_source(&self, source_key: &str) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             return false;
@@ -408,6 +440,7 @@ impl DanmakuManager {
     /// Stops a recording-owned connection after its receiver has emitted the
     /// final queued batch. Pending connection slots are removed as well, so an
     /// in-flight metadata request cannot install itself after recording ended.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) async fn finish_recording_source(&self, source_key: &str) -> bool {
         let background = self
             .inner
@@ -491,6 +524,7 @@ impl DanmakuManager {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 async fn request_batch_flush(control: mpsc::UnboundedSender<DanmakuBatchControl>) -> bool {
     let (ack_tx, ack_rx) = oneshot::channel();
     if control.send(DanmakuBatchControl::Flush(ack_tx)).is_err() {
@@ -631,6 +665,12 @@ fn drain_ready_events(receiver: &mut mpsc::Receiver<DanmakuEvent>, batch: &mut V
     }
 }
 
+// `source_key` only feeds the desktop recording capture path, so mobile builds
+// compile it out instead of dropping the parameter from the shared signature.
+#[cfg_attr(
+    not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
+    expect(unused_variables)
+)]
 fn emit_batch(app: &AppHandle, generation: u64, source_key: &str, batch: &mut Vec<DanmakuEvent>) {
     if batch.is_empty() {
         return;
