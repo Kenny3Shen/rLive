@@ -72,7 +72,7 @@ export type DanmuJsMappingOptions = {
   aggregationCount?: number;
 };
 
-export type DanmuJsRenderLayer = "scroll" | "bottom";
+export type DanmuJsRenderLayer = "scroll" | "top";
 
 export function clampDanmuFontSize(value: number, fallback = 18): number {
   const next = Number.isFinite(value) ? value : fallback;
@@ -116,14 +116,14 @@ export function danmuAreaConfig(area: number): { start: number; end: number } {
 
 /** Keep fixed comments independent from the configured scrolling area. */
 export function danmuRenderLayer(comment: Pick<DanmuJsComment, "mode">): DanmuJsRenderLayer {
-  return comment.mode === "bottom" ? "bottom" : "scroll";
+  return comment.mode === "top" ? "top" : "scroll";
 }
 
 export function danmuLayerAreaConfig(
   layer: DanmuJsRenderLayer,
   scrollArea: number,
 ): { start: number; end: number } {
-  return layer === "bottom" ? { start: 0, end: 1 } : danmuAreaConfig(scrollArea);
+  return layer === "top" ? { start: 0, end: 1 } : danmuAreaConfig(scrollArea);
 }
 
 /** Accept only compact color values before native payloads reach inline CSS. */
@@ -217,7 +217,7 @@ export function danmuCommentFromEvent(
             : DANMU_JS_DEFAULT_DURATION_MS,
         }
       : { moveV: DANMU_JS_DEFAULT_MOVE_V }),
-    mode: isPinned ? "bottom" : "scroll",
+    mode: isPinned ? "top" : "scroll",
     realTime: true,
     prior: isPinned,
     color: Boolean(event.color),
