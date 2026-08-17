@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  settingsCategoryValuesForClient,
   settingsPageMotion,
   showExplicitThemeSettings,
 } from "../src/features/settings/SettingsPage";
@@ -21,6 +22,21 @@ describe("settings platform presentation", () => {
       category: "playback",
       key: "settings:playback",
       direction: 1,
+    });
+    expect(settingsPageMotion("recording")).toEqual({
+      category: "recording",
+      key: "settings:recording",
+      direction: 1,
+    });
+  });
+
+  test("keeps desktop-only recording settings out of the mobile page", () => {
+    expect(settingsCategoryValuesForClient(false)).toContain("recording");
+    expect(settingsCategoryValuesForClient(true)).not.toContain("recording");
+    expect(settingsPageMotion("recording", true)).toEqual({
+      category: null,
+      key: "settings:overview",
+      direction: -1,
     });
   });
 

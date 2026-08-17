@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { useRecordingController, type RecordingContext } from "./recording";
 
 type RecordingControlProps = {
@@ -28,9 +29,11 @@ type RecordingControlProps = {
  */
 export function RecordingControl({ context, className, disabled = false }: RecordingControlProps) {
   const controller = useRecordingController(context);
+  const defaultIncludeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
+  const defaultContinueOnLeave = useSettingsStore((state) => state.recordingContinueAfterLeave);
   const [open, setOpen] = useState(false);
-  const [includeDanmaku, setIncludeDanmaku] = useState(false);
-  const [continueOnLeave, setContinueOnLeave] = useState(false);
+  const [includeDanmaku, setIncludeDanmaku] = useState(defaultIncludeDanmaku);
+  const [continueOnLeave, setContinueOnLeave] = useState(defaultContinueOnLeave);
   const danmakuSwitchId = useId();
   const continueSwitchId = useId();
   const canIncludeDanmaku = context?.sourceKind === "live";
@@ -53,8 +56,8 @@ export function RecordingControl({ context, className, disabled = false }: Recor
       includeDanmaku: canIncludeDanmaku && includeDanmaku,
       continueOnLeave,
     });
-    setIncludeDanmaku(false);
-    setContinueOnLeave(false);
+    setIncludeDanmaku(defaultIncludeDanmaku);
+    setContinueOnLeave(defaultContinueOnLeave);
     setOpen(false);
   }
 
@@ -64,8 +67,8 @@ export function RecordingControl({ context, className, disabled = false }: Recor
       onOpenChange={(nextOpen) => {
         if (busy || active) return;
         if (nextOpen) {
-          setIncludeDanmaku(false);
-          setContinueOnLeave(false);
+          setIncludeDanmaku(defaultIncludeDanmaku);
+          setContinueOnLeave(defaultContinueOnLeave);
         }
         setOpen(nextOpen);
       }}
@@ -107,15 +110,12 @@ export function RecordingControl({ context, className, disabled = false }: Recor
         )}
       >
         <PopoverTitle className={cn("px-0.5", glassTitleClass())}>开始录制</PopoverTitle>
-        <p className="-mt-1.5 px-0.5 text-xs text-muted-foreground">
-          {context?.title || "当前直播"}会保存到本机。
-        </p>
         <FieldGroup>
           <Field orientation="horizontal">
             <FieldContent>
               <FieldLabel htmlFor={danmakuSwitchId}>包含弹幕</FieldLabel>
               <FieldDescription>
-                另存为可开关的同步弹幕轨，不会永久烧录进视频；弹幕连接结束后将停止收集。
+                另存为可开关的同步弹幕轨，不会永久烧录进视频；后台录制时会持续收集到录制结束。
               </FieldDescription>
             </FieldContent>
             <Switch
@@ -134,9 +134,6 @@ export function RecordingControl({ context, className, disabled = false }: Recor
           <Field orientation="horizontal">
             <FieldContent>
               <FieldLabel htmlFor={continueSwitchId}>离开页面后继续录制</FieldLabel>
-              <FieldDescription>
-                开启后切换页面时媒体录制仍在后台运行；关闭时离开前会询问。
-              </FieldDescription>
             </FieldContent>
             <Switch
               id={continueSwitchId}

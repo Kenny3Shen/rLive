@@ -20,6 +20,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
   ChevronRight,
+  CircleDot,
   Database,
   Download,
   ExternalLink,
@@ -68,6 +69,14 @@ import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { LanSyncField } from "@/features/settings/LanSyncField";
+import {
+  FfmpegSettingsFields,
+  RecordingDefaultsFields,
+} from "@/features/settings/RecordingSettingsFields";
+import {
+  AppDataStoragePathField,
+  RecordingStoragePathField,
+} from "@/features/settings/StoragePathSettings";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -120,7 +129,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-type SettingsCategory = "playback" | "platform" | "network" | "account" | "data" | "about";
+type SettingsCategory =
+  | "playback"
+  | "platform"
+  | "network"
+  | "recording"
+  | "account"
+  | "data"
+  | "about";
 
 export const SETTINGS_SECTION_PARAM = "section";
 const SETTINGS_OVERVIEW_NAVIGATION_STATE = "settingsOverviewNavigation";
@@ -168,6 +184,12 @@ const settingsCategories: {
     tone: "text-settings-network bg-settings-network/12",
   },
   {
+    value: "recording",
+    label: "录制设置",
+    icon: CircleDot,
+    tone: "text-settings-recording bg-settings-recording/12",
+  },
+  {
     value: "account",
     label: "账号与权限",
     icon: UserRound,
@@ -195,9 +217,10 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
     "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 字重 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
+  recording: "录制 设置 默认 弹幕 后台 离开 保存 路径 目录 FFmpeg 超时 重连 HLS 分片 重试",
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
-  data: "数据 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
+  data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
   about: "关于 rLive 当前版本 version 项目主页 github 免责声明",
 };
 
@@ -1503,12 +1526,16 @@ function settingsCategoryFromSearch(value: string | null): SettingsCategory | nu
     : null;
 }
 
-export function settingsPageMotion(section: string | null): {
+export function settingsPageMotion(
+  section: string | null,
+  mobileClient = false,
+): {
   category: SettingsCategory | null;
   key: string;
   direction: 1 | -1;
 } {
-  const category = settingsCategoryFromSearch(section);
+  const requestedCategory = settingsCategoryFromSearch(section);
+  const category = mobileClient && requestedCategory === "recording" ? null : requestedCategory;
   return {
     category,
     key: category ? `settings:${category}` : "settings:overview",
@@ -1521,9 +1548,15 @@ const settingsCategoryGroups: {
   values: SettingsCategory[];
 }[] = [
   { label: "观看体验", values: ["playback", "platform", "network"] },
-  { label: "账号与数据", values: ["account", "data"] },
+  { label: "账号与数据", values: ["account", "recording", "data"] },
   { label: "应用信息", values: ["about"] },
 ];
+
+export function settingsCategoryValuesForClient(mobileClient: boolean): SettingsCategory[] {
+  return settingsCategories
+    .map((category) => category.value)
+    .filter((value) => !mobileClient || value !== "recording");
+}
 
 function SettingsCategoryButton({
   category,
@@ -1564,11 +1597,14 @@ function SettingsCategoryOverview({
   query,
   onQueryChange,
   onOpen,
+  mobileClient,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
   onOpen: (value: SettingsCategory) => void;
+  mobileClient: boolean;
 }) {
+  const visibleCategoryValues = settingsCategoryValuesForClient(mobileClient);
   const visibleGroups = settingsCategoryGroups
     .map((group) => ({
       ...group,
@@ -1577,6 +1613,7 @@ function SettingsCategoryOverview({
         .filter(
           (category): category is (typeof settingsCategories)[number] =>
             category !== undefined &&
+            visibleCategoryValues.includes(category.value) &&
             matchesSearch(`${category.label} ${settingsCategorySearchText[category.value]}`, query),
         ),
     }))
@@ -1748,7 +1785,7 @@ export function SettingsPage() {
     category,
     key: settingsMotionKey,
     direction: settingsMotionDirection,
-  } = settingsPageMotion(searchParams.get(SETTINGS_SECTION_PARAM));
+  } = settingsPageMotion(searchParams.get(SETTINGS_SECTION_PARAM), mobileClient);
 
   function setCategory(next: SettingsCategory | null, replace = false) {
     const nextParams = new URLSearchParams(searchParams);
@@ -1934,8 +1971,24 @@ export function SettingsPage() {
         </Section>
       </SettingsContent>
     ),
+    recording: (
+      <SettingsContent title="录制">
+        <Section title="录制设置" keywords="录制 默认 弹幕 后台 离开">
+          <RecordingDefaultsFields />
+        </Section>
+        <Section title="保存位置" keywords="录制 保存 路径 目录">
+          <RecordingStoragePathField />
+        </Section>
+        <Section title="FFmpeg" keywords="FFmpeg 超时 重连 HLS 分片 重试">
+          <FfmpegSettingsFields />
+        </Section>
+      </SettingsContent>
+    ),
     data: (
       <SettingsContent title="数据">
+        <Section title="应用数据" keywords="数据 保存 路径 位置 目录 应用">
+          <AppDataStoragePathField />
+        </Section>
         <Section title="局域网同步" keywords="局域网 同步 Wi-Fi 配对 发送 接收">
           <LanSyncField />
         </Section>
@@ -2128,6 +2181,7 @@ export function SettingsPage() {
             <SettingsCategoryOverview
               query={searchQuery}
               onQueryChange={setSearchQuery}
+              mobileClient={mobileClient}
               onOpen={(value) => {
                 setSearchQuery("");
                 setCategory(value);
@@ -2175,6 +2229,8 @@ function titleToCategory(title: string): SettingsCategory {
       return "network";
     case "账号":
       return "account";
+    case "录制":
+      return "recording";
     case "数据":
       return "data";
     default:

@@ -81,6 +81,76 @@ const ASR_WINDOW_SECONDS_MIN = 0.2;
 const ASR_WINDOW_SECONDS_MAX = 1;
 export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
+export const RECORDING_INCLUDE_DANMAKU_DEFAULT = false;
+export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = false;
+export const FFMPEG_RW_TIMEOUT_SECONDS_MIN = 3;
+export const FFMPEG_RW_TIMEOUT_SECONDS_MAX = 60;
+export const FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT = 10;
+export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN = 1;
+export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX = 60;
+export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT = 8;
+export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MIN = 0;
+export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX = 20;
+export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT = 5;
+
+function parseBoundedInteger(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+export function parseFfmpegRwTimeoutSeconds(value: unknown): number {
+  return parseBoundedInteger(
+    value,
+    FFMPEG_RW_TIMEOUT_SECONDS_MIN,
+    FFMPEG_RW_TIMEOUT_SECONDS_MAX,
+    FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
+  );
+}
+
+export function parseFfmpegReconnectDelayMaxSeconds(value: unknown): number {
+  return parseBoundedInteger(
+    value,
+    FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN,
+    FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX,
+    FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
+  );
+}
+
+export function parseFfmpegHlsSegmentRetryCount(value: unknown): number {
+  return parseBoundedInteger(
+    value,
+    FFMPEG_HLS_SEGMENT_RETRY_COUNT_MIN,
+    FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX,
+    FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
+  );
+}
+
+export function recordingPreferencesFromAppSettings(
+  settings: Pick<
+    AppSettings,
+    | "recording_include_danmaku"
+    | "recording_continue_after_leave"
+    | "ffmpeg_rw_timeout_seconds"
+    | "ffmpeg_reconnect_delay_max_seconds"
+    | "ffmpeg_hls_segment_retry_count"
+  >,
+) {
+  return {
+    recordingIncludeDanmaku:
+      settings.recording_include_danmaku ?? RECORDING_INCLUDE_DANMAKU_DEFAULT,
+    recordingContinueAfterLeave:
+      settings.recording_continue_after_leave ?? RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+    ffmpegRwTimeoutSeconds: parseFfmpegRwTimeoutSeconds(settings.ffmpeg_rw_timeout_seconds),
+    ffmpegReconnectDelayMaxSeconds: parseFfmpegReconnectDelayMaxSeconds(
+      settings.ffmpeg_reconnect_delay_max_seconds,
+    ),
+    ffmpegHlsSegmentRetryCount: parseFfmpegHlsSegmentRetryCount(
+      settings.ffmpeg_hls_segment_retry_count,
+    ),
+  };
+}
+
 function parseAsrFontSize(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric)) return ASR_FONT_SIZE_DEFAULT;
@@ -150,6 +220,11 @@ type SettingsState = {
   danmakuCookieRevision: number;
   /** Device-local custom IPTV M3U address; never included in profile packages. */
   iptvCustomM3uUrl: string | null;
+  recordingIncludeDanmaku: boolean;
+  recordingContinueAfterLeave: boolean;
+  ffmpegRwTimeoutSeconds: number;
+  ffmpegReconnectDelayMaxSeconds: number;
+  ffmpegHlsSegmentRetryCount: number;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -173,6 +248,11 @@ type SettingsState = {
   setAsrTranslationTo: (to: CaptionTranslationLanguage) => void;
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
+  setRecordingIncludeDanmaku: (enabled: boolean) => void;
+  setRecordingContinueAfterLeave: (enabled: boolean) => void;
+  setFfmpegRwTimeoutSeconds: (seconds: number) => void;
+  setFfmpegReconnectDelayMaxSeconds: (seconds: number) => void;
+  setFfmpegHlsSegmentRetryCount: (count: number) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -211,6 +291,11 @@ const defaultSettings: AppSettings = {
   asr_translation_from: "auto",
   asr_translation_to: "zh-CN",
   iptv_custom_m3u_url: null,
+  recording_include_danmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
+  recording_continue_after_leave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+  ffmpeg_rw_timeout_seconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
+  ffmpeg_reconnect_delay_max_seconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
+  ffmpeg_hls_segment_retry_count: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
@@ -245,6 +330,11 @@ function toAppSettings(state: SettingsState): AppSettings {
     asr_translation_from: state.asrTranslationFrom,
     asr_translation_to: state.asrTranslationTo,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
+    recording_include_danmaku: state.recordingIncludeDanmaku,
+    recording_continue_after_leave: state.recordingContinueAfterLeave,
+    ffmpeg_rw_timeout_seconds: state.ffmpegRwTimeoutSeconds,
+    ffmpeg_reconnect_delay_max_seconds: state.ffmpegReconnectDelayMaxSeconds,
+    ffmpeg_hls_segment_retry_count: state.ffmpegHlsSegmentRetryCount,
   };
 }
 
@@ -283,6 +373,11 @@ export const useSettingsStore = create<SettingsState>()(
       asrPending: false,
       danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
+      recordingIncludeDanmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
+      recordingContinueAfterLeave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+      ffmpegRwTimeoutSeconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
+      ffmpegReconnectDelayMaxSeconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
+      ffmpegHlsSegmentRetryCount: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
@@ -510,6 +605,35 @@ export const useSettingsStore = create<SettingsState>()(
         set({ iptvCustomM3uUrl: next });
         void get().persistToBackend({ iptv_custom_m3u_url: next });
       },
+      setRecordingIncludeDanmaku: (recordingIncludeDanmaku) => {
+        set({ recordingIncludeDanmaku });
+        void get().persistToBackend({ recording_include_danmaku: recordingIncludeDanmaku });
+      },
+      setRecordingContinueAfterLeave: (recordingContinueAfterLeave) => {
+        set({ recordingContinueAfterLeave });
+        void get().persistToBackend({
+          recording_continue_after_leave: recordingContinueAfterLeave,
+        });
+      },
+      setFfmpegRwTimeoutSeconds: (seconds) => {
+        const ffmpegRwTimeoutSeconds = parseFfmpegRwTimeoutSeconds(seconds);
+        set({ ffmpegRwTimeoutSeconds });
+        void get().persistToBackend({ ffmpeg_rw_timeout_seconds: ffmpegRwTimeoutSeconds });
+      },
+      setFfmpegReconnectDelayMaxSeconds: (seconds) => {
+        const ffmpegReconnectDelayMaxSeconds = parseFfmpegReconnectDelayMaxSeconds(seconds);
+        set({ ffmpegReconnectDelayMaxSeconds });
+        void get().persistToBackend({
+          ffmpeg_reconnect_delay_max_seconds: ffmpegReconnectDelayMaxSeconds,
+        });
+      },
+      setFfmpegHlsSegmentRetryCount: (count) => {
+        const ffmpegHlsSegmentRetryCount = parseFfmpegHlsSegmentRetryCount(count);
+        set({ ffmpegHlsSegmentRetryCount });
+        void get().persistToBackend({
+          ffmpeg_hls_segment_retry_count: ffmpegHlsSegmentRetryCount,
+        });
+      },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
@@ -547,6 +671,7 @@ export const useSettingsStore = create<SettingsState>()(
           asrTranslationTo: normalizeCaptionTranslationTo(settings.asr_translation_to),
           asrPending: false,
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
+          ...recordingPreferencesFromAppSettings(settings),
           hydratedFromBackend: true,
         });
       },

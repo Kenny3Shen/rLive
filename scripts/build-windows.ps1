@@ -5,6 +5,8 @@
 #   - VS Build Tools: D:\VS\BuildTools (vcvars64.bat)
 #   - Rust: D:\dev\rust\{cargo,rustup}  (or CARGO_HOME / RUSTUP_HOME)
 #   - bun and/or Node.js
+#   - LLVM/libclang (auto-detected, or set LIBCLANG_PATH)
+#   - Network access on the first build (downloads the pinned shared FFmpeg SDK)
 #   - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x runtime and a compatible NVIDIA driver
 #
 # Usage:
@@ -121,13 +123,37 @@ $projectProcesses = @(Get-Process -Name "rlive" -ErrorAction SilentlyContinue | 
 })
 if ($projectProcesses.Count -gt 0) {
     Write-Host "Stopping $($projectProcesses.Count) project rLive process(es) before build..."
-    $projectProcesses | Stop-Process -Force
-    $projectProcesses | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-    $stillRunning = @($projectProcesses | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue })
+    $stopDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        $stillRunning = @(
+            $projectProcesses |
+                Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue }
+        )
+        if ($stillRunning.Count -eq 0) {
+            break
+        }
+        $stillRunning | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $stopDeadline)
+
+    $stillRunning = @(
+        $projectProcesses |
+            Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue }
+    )
     if ($stillRunning.Count -gt 0) {
-        throw "Could not stop the existing project rLive process before build."
+        $processIds = ($stillRunning | ForEach-Object { $_.Id }) -join ", "
+        throw "Could not stop project rLive process(es) before build: $processIds"
     }
 }
+
+Write-Step "prepare FFmpeg SDK"
+$ffmpegPrepare = Join-Path $ProjectRoot "scripts\prepare-windows-ffmpeg.ps1"
+if (-not (Test-Path $ffmpegPrepare)) {
+    throw "FFmpeg preparation script not found: $ffmpegPrepare"
+}
+& $ffmpegPrepare `
+    -ProjectRoot $ProjectRoot `
+    -StageDestination (Join-Path $ProjectRoot "src-tauri\target\release")
 
 $env:SHERPA_ONNX_GPU = if ($env:SHERPA_ONNX_GPU) { $env:SHERPA_ONNX_GPU } else { "1" }
 if ($env:SHERPA_ONNX_GPU -eq "0") {
@@ -188,6 +214,20 @@ if ($buildCode -ne 0) { throw "tauri build failed: $buildCode" }
 $exe = Join-Path $ProjectRoot "src-tauri\target\release\rlive.exe"
 if (-not (Test-Path $exe)) {
     throw "Build reported success but EXE missing: $exe"
+}
+
+$releaseDirectory = Split-Path $exe -Parent
+foreach ($library in @("avutil", "swresample", "avcodec", "avformat")) {
+    $runtimeDlls = @(Get-ChildItem $releaseDirectory -Filter "$library-*.dll" -File)
+    if ($runtimeDlls.Count -ne 1) {
+        throw "Build requires one staged $library runtime DLL, found $($runtimeDlls.Count)."
+    }
+}
+if (-not (Test-Path (Join-Path $releaseDirectory "FFmpeg-LICENSE.txt"))) {
+    throw "FFmpeg license file was not staged beside rlive.exe."
+}
+if (-not (Test-Path (Join-Path $releaseDirectory "FFmpeg-README.txt"))) {
+    throw "FFmpeg build information was not staged beside rlive.exe."
 }
 
 

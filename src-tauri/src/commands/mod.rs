@@ -1,5 +1,7 @@
 pub mod account;
 pub mod android_player_controls;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+pub mod app_data;
 #[cfg(not(target_os = "android"))]
 pub mod asr;
 pub mod danmaku;
@@ -11,7 +13,7 @@ pub mod image_proxy;
 pub mod iptv;
 pub mod lan_sync;
 pub mod profile;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod recording;
 pub mod settings;
 pub mod site;
