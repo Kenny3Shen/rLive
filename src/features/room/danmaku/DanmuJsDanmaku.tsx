@@ -226,7 +226,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 }: DanmuJsDanmakuProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const bottomContainerRef = useRef<HTMLDivElement>(null);
+  const topContainerRef = useRef<HTMLDivElement>(null);
   const instancesRef = useRef<DanmuJsInstances | null>(null);
   const recordsRef = useRef(new Map<string, RuntimeBullet>());
   const recordOrderRef = useRef<string[]>([]);
@@ -543,7 +543,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
-    const bottomContainer = bottomContainerRef.current;
+    const topContainer = topContainerRef.current;
     const records = recordsRef.current;
     const recordOrder = recordOrderRef.current;
     const aggregationTargets = aggregationTargetsRef.current;
@@ -573,14 +573,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       if (listenersAttached) {
         current.scroll.off("bullet_remove", onBulletRemove);
         current.scroll.off("bullet_hover", onBulletHover);
-        current.bottom.off("bullet_remove", onBulletRemove);
-        current.bottom.off("bullet_hover", onBulletHover);
+        current.top.off("bullet_remove", onBulletRemove);
+        current.top.off("bullet_hover", onBulletHover);
         listenersAttached = false;
       }
       restoreFixedPriorCompat();
       restoreFixedPriorCompat = () => {};
       current.scroll.destroy();
-      current.bottom.destroy();
+      current.top.destroy();
       if (instancesRef.current === current) instancesRef.current = null;
       instances = null;
     };
@@ -606,10 +606,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       sequenceRef.current = 0;
       destroyInstances();
       scrollContainer?.replaceChildren();
-      bottomContainer?.replaceChildren();
+      topContainer?.replaceChildren();
     };
 
-    if (!active || reducedMotion || !pageVisible || !scrollContainer || !bottomContainer) {
+    if (!active || reducedMotion || !pageVisible || !scrollContainer || !topContainer) {
       clearRenderedState(false);
       return;
     }
@@ -673,8 +673,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         let scrollInstance: DanmuJsInstance | null = null;
         try {
           scrollInstance = createInstance(scrollContainer, "scroll");
-          const bottomInstance = createInstance(bottomContainer, "bottom");
-          instances = { scroll: scrollInstance, bottom: bottomInstance };
+          const topInstance = createInstance(topContainer, "top");
+          instances = { scroll: scrollInstance, top: topInstance };
         } catch (error) {
           scrollInstance?.destroy();
           throw error;
@@ -683,16 +683,16 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           destroyInstances();
           return;
         }
-        restoreFixedPriorCompat = installDanmuJsFixedPriorCompat(instances.bottom);
+        restoreFixedPriorCompat = installDanmuJsFixedPriorCompat(instances.top);
         instances.scroll.setPlayRate("scroll", danmuMoveVPlayRate(configRef.current.danmakuSpeed));
         instancesRef.current = instances;
         instances.scroll.on("bullet_remove", onBulletRemove);
         instances.scroll.on("bullet_hover", onBulletHover);
-        instances.bottom.on("bullet_remove", onBulletRemove);
-        instances.bottom.on("bullet_hover", onBulletHover);
+        instances.top.on("bullet_remove", onBulletRemove);
+        instances.top.on("bullet_hover", onBulletHover);
         listenersAttached = true;
         instances.scroll.resize();
-        instances.bottom.resize();
+        instances.top.resize();
         flushPendingRef.current();
       })
       .catch((error: unknown) => {
@@ -718,7 +718,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     const instances = instancesRef.current;
     if (!instances) return;
     instances.scroll.setFontSize(fontSize, laneHeight);
-    instances.bottom.setFontSize(fontSize, laneHeight);
+    instances.top.setFontSize(fontSize, laneHeight);
     instances.scroll.setArea({ ...danmuLayerAreaConfig("scroll", normalizedArea), reflow: true });
     for (const { comment } of recordsRef.current.values()) {
       updateDanmuAppearance(comment, {
@@ -806,9 +806,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         onPointerOut={handlePointerOut}
       />
       <div
-        ref={bottomContainerRef}
+        ref={topContainerRef}
         aria-hidden="true"
-        data-rlive-danmaku-layer="bottom"
+        data-rlive-danmaku-layer="top"
         className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
         style={{ opacity: 1 }}
         onPointerOut={handlePointerOut}
