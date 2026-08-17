@@ -835,16 +835,8 @@ html.overlay-window #root {
 
 /* Keep the compact player chrome from changing height when its action row
    briefly overflows while a state button receives focus. Touch and wheel
-   scrolling remain available; only the layout-affecting scrollbar is hidden.
-   The same scroll container clips the app-wide 2px offset outline, so reserve
-   a focus-safe gutter on the clipped edges. The matching negative margins
-   preserve the control bar's original geometry and leave the existing 0.25rem
-   start gap in PlayerControls intact. */
+   scrolling remain available; only the layout-affecting scrollbar is hidden. */
 .player-controls-actions {
-  padding-block: var(--focus-ring-offset);
-  padding-inline-end: var(--focus-ring-offset);
-  margin-block: calc(var(--focus-ring-offset) * -1);
-  margin-inline-end: calc(var(--focus-ring-offset) * -1);
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
