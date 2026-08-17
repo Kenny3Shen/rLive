@@ -243,6 +243,7 @@ pub fn run() {
             recording_delete,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_playback_url,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_storage_info,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_set_storage_path,
