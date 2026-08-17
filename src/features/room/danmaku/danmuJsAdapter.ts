@@ -186,13 +186,6 @@ export function danmuStyleForEvent(
     pointerEvents: isSuperChat ? "auto" : "none",
   };
 
-  if (isSuperChat) {
-    style.padding = "4px 10px";
-    style.borderRadius = "999px";
-    style.backgroundColor = "transparent";
-    style.border = "1px solid rgba(255,220,115,.72)";
-    style.boxShadow = "0 2px 8px rgba(0,0,0,.35)";
-  }
   return style;
 }
 
