@@ -239,7 +239,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 - 设置页完成后通过 `clearProps` 归还 transform、opacity、visibility 和 `will-change`。
 - IPTV 之前对首批 18 张频道卡片的 GSAP stagger 入场已移除，频道网格与其他卡片页面（首页、分类、搜索、关注）保持一致，路由导航层面的位移由 `PagePan` 统一承担。
 - 频道卡片复用 `.room-card`，共享其 `content-visibility: auto` 长列表优化和移动端按压 `max-md:active:scale-[0.97]` 反馈。
-- 录制库 `RecordingsPage` 使用保存位置卡、左侧已保存列表、右侧 `RecordingPlayer` 回放和活动任务卡；标题栏右侧的 `RecordingControl` 与「定时关闭」并列，开始时用玻璃 `Popover + FieldGroup + Switch` 选择是否写入弹幕 sidecar，以及是否允许无提示离页继续。该离页选项按任务保存且默认关闭；`RecordingLeaveGuard` 在录制中使用 `AlertDialog` 提供留在页面、继续录制并离开、停止录制并离开三种明确动作。录制中的圆点与时间码是唯一持续状态提示。停止、删除、目录切换和文件定位使用现有 `Button` / `AlertDialog` / `Dialog` / `Empty` / `Skeleton` 组合，不新增平行基础组件。`RecordedDanmakuCanvas` 只在回放阶段按媒体时间绘制可开关弹幕，尊重 `prefers-reduced-motion`；页面只在桌面客户端提供完整内容，移动端以明确的 Empty 状态说明能力边界。
+- 录制库 `RecordingsPage` 使用保存位置卡、左侧已保存列表、右侧 `RecordingPlayer` 回放和活动任务卡；标题栏右侧的 `RecordingControl` 与「定时关闭」并列，开始时用玻璃 `Popover + FieldGroup + Switch` 选择是否写入弹幕 sidecar，以及是否允许无提示离页继续。两项初始值来自桌面设置页，仍可按任务覆盖；`RecordingLeaveGuard` 在录制中使用 `AlertDialog` 提供留在页面、继续录制并离开、停止录制并离开三种明确动作。录制中的圆点与时间码是唯一持续状态提示。停止、删除、目录切换和文件定位使用现有 `Button` / `AlertDialog` / `Dialog` / `Empty` / `Skeleton` 组合，不新增平行基础组件。`RecordedDanmakuCanvas` 只在回放阶段按媒体时间绘制可开关弹幕，尊重 `prefers-reduced-motion`；页面只在桌面客户端提供完整内容，移动端以明确的 Empty 状态说明能力边界。
 
 长列表不得为所有项目同时创建 tween。优先只动画首屏或有界数量；无限滚动追加内容默认直接出现，避免动画持续争用播放器和画面弹幕的主线程预算。
 

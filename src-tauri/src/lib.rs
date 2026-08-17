@@ -12,7 +12,7 @@ mod iptv;
 mod lan_sync;
 mod models;
 mod profile;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod recording;
 mod settings;
 mod sites;
@@ -35,6 +35,8 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_immersive,
     android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+use commands::app_data::{app_data_set_storage_path, app_data_storage_info};
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
 use commands::danmaku::{
@@ -61,11 +63,10 @@ use commands::iptv::{
 };
 use commands::lan_sync::{lan_sync_receive, lan_sync_start, lan_sync_status, lan_sync_stop};
 use commands::profile::{profile_export, profile_import};
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::recording::{
     recording_danmaku_url, recording_delete, recording_list, recording_playback_url,
     recording_set_storage_path, recording_start, recording_stop, recording_storage_info,
-    recording_storage_path,
 };
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -208,7 +209,9 @@ pub fn run() {
             let directories = AppDirectories::resolve(None)?;
 
             init_logging(&directories.logs);
-            let state = AppState::init(&directories.root)?;
+            let state = AppState::init(&directories)?;
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            state.recording.attach_app_handle(app.handle().clone());
             app.manage(state);
 
             Ok(())
@@ -216,6 +219,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings_get,
             settings_set,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            app_data_storage_info,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            app_data_set_storage_path,
             #[cfg(not(target_os = "android"))]
             asr_get_status,
             #[cfg(not(target_os = "android"))]
@@ -226,23 +233,20 @@ pub fn run() {
             asr_reset_stream,
             #[cfg(not(target_os = "android"))]
             asr_transcribe,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_list,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_start,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_stop,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_delete,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_playback_url,
-            #[cfg(not(target_os = "android"))]
-            recording_storage_path,
-            #[cfg(not(target_os = "android"))]
             recording_storage_info,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_set_storage_path,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_danmaku_url,
             account_get_cookie,
             account_get_profile,
@@ -324,7 +328,7 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
                     state.stream_proxy.stop();
-                    #[cfg(not(target_os = "android"))]
+                    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
                     state.recording.stop_all();
                     state.image_proxy.stop();
                     state.lan_sync.stop();
@@ -339,7 +343,7 @@ pub fn run() {
             } if label == "main" => {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     state.inner().stream_proxy.stop();
-                    #[cfg(not(target_os = "android"))]
+                    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
                     state.inner().recording.stop_all();
                     state.inner().image_proxy.stop();
                     state.inner().lan_sync.stop();
@@ -349,7 +353,7 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
                     state.stream_proxy.stop();
-                    #[cfg(not(target_os = "android"))]
+                    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
                     state.recording.stop_all();
                     state.image_proxy.stop();
                     state.lan_sync.stop();
