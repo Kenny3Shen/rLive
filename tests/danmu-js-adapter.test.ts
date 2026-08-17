@@ -146,10 +146,14 @@ describe("danmu.js event mapping", () => {
     expect(comment?.txt).toBe("【SC】加油");
     expect(comment?.__rliveMeta.baseText).toBe("【SC】加油");
     expect(comment?.style?.color).toBe("#2a60b2");
-    expect(comment?.style?.backgroundColor).toBe("transparent");
+    expect(comment?.style?.padding).toBeUndefined();
+    expect(comment?.style?.borderRadius).toBeUndefined();
+    expect(comment?.style?.backgroundColor).toBeUndefined();
+    expect(comment?.style?.border).toBeUndefined();
+    expect(comment?.style?.boxShadow).toBeUndefined();
   });
 
-  test("uses each SC amount-tier color while keeping the card background transparent", () => {
+  test("uses each SC amount-tier color without an outer card", () => {
     const comment = danmuCommentFromEvent(
       chat({
         kind: "super_chat",
@@ -164,7 +168,7 @@ describe("danmu.js event mapping", () => {
     );
 
     expect(comment?.style?.color).toBe("#b81830");
-    expect(comment?.style?.backgroundColor).toBe("transparent");
+    expect(comment?.style?.border).toBeUndefined();
   });
 
   test("keeps the SC marker when rich spans replace the text node", () => {
