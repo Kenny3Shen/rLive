@@ -209,7 +209,7 @@ function IptvFavoriteCard({
           <button
             ref={setActivatorNodeRef}
             type="button"
-            className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
             aria-label={`播放 ${favorite.name}，可拖动卡片或通过菜单移动分组`}
             onPointerEnter={() => preloadRouteModule("/iptv/play")}
             onFocus={() => preloadRouteModule("/iptv/play")}

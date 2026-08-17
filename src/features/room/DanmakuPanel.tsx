@@ -177,7 +177,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
         type="button"
         aria-label={`选择 ${user} 的弹幕`}
         className={cn(
-          "block w-full cursor-pointer appearance-none rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+          "block w-full cursor-pointer appearance-none rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted",
           event.is_self === true && "border-primary/60",
         )}
       >
