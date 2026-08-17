@@ -266,7 +266,7 @@ function FollowCard({
           <button
             ref={setActivatorNodeRef}
             type="button"
-            className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
             aria-label={`打开${user.user_name}的直播间，可拖动卡片或通过菜单移动分组`}
             onPointerEnter={() => preloadRouteModule(roomPath)}
             onFocus={() => preloadRouteModule(roomPath)}

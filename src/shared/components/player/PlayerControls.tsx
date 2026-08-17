@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useState,
-  type ComponentProps,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import {
   Captions,
   CaptionsOff,
@@ -577,7 +571,7 @@ export function PlayerControls({
           <SelectTrigger
             id="player-caption-translation-from"
             size="sm"
-            className={cn("w-32", overlay && "hover:bg-white/12 focus-visible:ring-white/70")}
+            className={cn("w-32", overlay && "hover:bg-white/12 focus-ring-overlay")}
           >
             <SelectValue />
           </SelectTrigger>
@@ -616,7 +610,7 @@ export function PlayerControls({
           <SelectTrigger
             id="player-caption-translation-to"
             size="sm"
-            className={cn("w-32", overlay && "hover:bg-white/12 focus-visible:ring-white/70")}
+            className={cn("w-32", overlay && "hover:bg-white/12 focus-ring-overlay")}
           >
             <SelectValue />
           </SelectTrigger>
