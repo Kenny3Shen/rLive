@@ -136,7 +136,22 @@ export function safeDanmuColor(value: unknown, fallback = "#ffffff"): string {
   return fallback;
 }
 
+const SUPER_CHAT_AMOUNT_TIERS = [
+  { minimumPrice: 2_000, color: "#B81830" },
+  { minimumPrice: 1_000, color: "#E54D4D" },
+  { minimumPrice: 500, color: "#E09443" },
+  { minimumPrice: 100, color: "#E2B52B" },
+  { minimumPrice: 50, color: "#427D9E" },
+  { minimumPrice: 30, color: "#2A60B2" },
+] as const;
+
 function superChatAmountColor(event: DanmakuEvent): string {
+  const price = event.super_chat?.price;
+  if (typeof price === "number" && Number.isFinite(price)) {
+    const tier = SUPER_CHAT_AMOUNT_TIERS.find(({ minimumPrice }) => price >= minimumPrice);
+    if (tier) return tier.color;
+  }
+
   return safeDanmuColor(
     event.super_chat?.background_bottom_color,
     safeDanmuColor(event.super_chat?.background_color, "#2A60B2"),
