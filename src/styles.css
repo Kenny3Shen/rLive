@@ -30,7 +30,11 @@
   --radius: 0.75rem;
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
-  --focus-ring-color: var(--ring);
+  /* Keyboard focus is drawn as a neutral outline rather than in the blue accent.
+     The ring has to stay legible on primary, destructive and platform-tinted
+     surfaces alike, and an accent-colored one reads as a selected/active state
+     on exactly those controls that are already blue. */
+  --focus-ring-color: color-mix(in oklab, var(--foreground) 72%, transparent);
   --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* light (rarely used — app defaults to dark) */
@@ -313,11 +317,11 @@ body {
   transition-timing-function: var(--motion-ease-out);
 }
 
+/* Focus no longer adds an accent border or shadow: keyboard focus is expressed
+   by the one app-wide outline, while pointer focus needs no separate glow. */
 .settings-search:focus-within {
-  border-color: color-mix(in oklab, var(--ring) 60%, var(--border));
-  box-shadow:
-    0 0 0 3px color-mix(in oklab, var(--ring) 16%, transparent),
-    0 8px 20px oklch(0 0 0 / 0.12);
+  border-color: var(--border);
+  box-shadow: none;
 }
 
 :root[data-motion="reduced"] .settings-category-button,
@@ -327,14 +331,21 @@ body {
 
 /* Keyboard focus is intentionally one app-wide treatment. Components may
    still use focus-visible utilities for their interaction logic, but the
-   visible ring itself must not vary between controls. */
+   visible indicator itself must not vary between controls.
+
+   The shadcn-derived primitives previously added accent-colored border/ring
+   utilities individually. Those declarations are kept out of the primitives
+   now, leaving this rule as the single source of the keyboard outline. The
+   zero-specificity `:where()` selector also lets a deliberately specialized
+   control opt into a different geometry without changing the app-wide color
+   token. */
 :where(
   a[href],
   area[href],
   button,
-  input,
+  input:not([data-slot="input-group-control"]),
   select,
-  textarea,
+  textarea:not([data-slot="input-group-control"]),
   summary,
   [contenteditable="true"],
   [tabindex]:not([tabindex="-1"]),
@@ -345,6 +356,7 @@ body {
   [role="menuitem"],
   [role="option"],
   [role="radio"],
+  [role="slider"],
   [role="switch"],
   [role="tab"],
   [role="treeitem"]
@@ -352,6 +364,17 @@ body {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
   box-shadow: none;
+}
+
+/* Composite controls paint their focus treatment on a wrapper while the real
+   focus target is a nested input, so `:focus-visible` never matches the painted
+   element and the rule above cannot reach them. Give the wrapper the same
+   outline instead, so addons and inline buttons stay inside the ring. Only the
+   outline is set here: the wrapper's own resting box-shadow (elevation) has to
+   survive, and the accent glow is removed at its source in the components. */
+[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* Full motion is the product default. OS-level reduced motion is an implicit
@@ -743,9 +766,7 @@ html[data-fullscreen-transition="true"] .app-shell {
    `data-portrait-stack` is derived without `player.mode`, so it is already true
    at that moment and restores the ratio in the same frame. The `:not()` guard
    hands control back to the rule above while fullscreen actually applies. */
-[data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not(
-    [data-fullscreen="true"]
-  )
+[data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"])
   > [data-player-video-surface] {
   flex: none;
   aspect-ratio: 16 / 9;
@@ -756,10 +777,8 @@ html[data-fullscreen-transition="true"] .app-shell {
    so the ratio above has a parent that hugs it instead of one still filling the
    column. */
 [data-room-player-frame]:has(
-    > [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not(
-        [data-fullscreen="true"]
-      )
-  ),
+  > [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"])
+),
 [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"]) {
   flex: none;
   width: 100%;
@@ -865,8 +884,30 @@ html.overlay-window #root {
   height: 1rem;
 }
 
+/* Kept as an explicit opt-in for elements that are not in the app-wide focus
+   selector list (custom roles, wrappers). It now draws the same neutral outline
+   as that rule instead of an accent-colored ring, so the two cannot diverge. */
 @utility focus-ring {
-  @apply outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  outline: none;
+
+  &:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+}
+
+/* Player chrome sits directly on video, where the app's foreground-derived ring
+   has no reliable contrast: the backdrop is whatever frame is on screen. These
+   controls keep a white outline, and the geometry is shared with the app-wide
+   ring so only the color differs. Inset, because an outward ring on a control
+   flush against the video edge would be clipped. */
+@utility focus-ring-overlay {
+  outline: none;
+
+  &:focus-visible {
+    outline: var(--focus-ring-width) solid oklch(1 0 0 / 0.75);
+    outline-offset: calc(var(--focus-ring-offset) * -1);
+  }
 }
 
 /* Glassmorphism control surface.
