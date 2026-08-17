@@ -833,18 +833,6 @@ html.overlay-window #root {
   scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent) transparent;
 }
 
-/* Keep the compact player chrome from changing height when its action row
-   briefly overflows while a state button receives focus. Touch and wheel
-   scrolling remain available; only the layout-affecting scrollbar is hidden. */
-.player-controls-actions {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.player-controls-actions::-webkit-scrollbar {
-  display: none;
-}
-
 /* Compact player chrome is intentionally denser than the app-wide 44px touch
    floor. It sits on a video edge and contains only familiar media actions;
    limiting this override to the marked player bar keeps regular mobile forms
