@@ -102,15 +102,15 @@ describe("danmu.js event mapping", () => {
     });
   });
 
-  test("pins a self-sent chat at the bottom without a self border", () => {
+  test("pins a self-sent chat at the top without a self border", () => {
     const comment = danmuCommentFromEvent(
       chat({ is_self: true, color: "#00ffcc" }),
       mappingOptions({ id: "self-bullet" }),
     );
 
     expect(comment).not.toBeNull();
-    expect(comment?.mode).toBe("bottom");
-    expect(danmuRenderLayer(comment!)).toBe("bottom");
+    expect(comment?.mode).toBe("top");
+    expect(danmuRenderLayer(comment!)).toBe("top");
     expect(comment?.prior).toBe(true);
     expect(comment?.realTime).toBe(true);
     expect(comment?.duration).toBe(DANMU_JS_DEFAULT_DURATION_MS);
@@ -119,7 +119,7 @@ describe("danmu.js event mapping", () => {
     expect(comment?.style?.padding).toBeUndefined();
   });
 
-  test("maps SC to a bottom comment using the platform duration and one marker", () => {
+  test("maps SC to a top comment using the platform duration and one marker", () => {
     const comment = danmuCommentFromEvent(
       chat({
         kind: "super_chat",
@@ -139,8 +139,8 @@ describe("danmu.js event mapping", () => {
     expect(comment).not.toBeNull();
     expect(comment?.duration).toBe(60_000);
     expect(Object.hasOwn(comment ?? {}, "moveV")).toBe(false);
-    expect(comment?.mode).toBe("bottom");
-    expect(danmuRenderLayer(comment!)).toBe("bottom");
+    expect(comment?.mode).toBe("top");
+    expect(danmuRenderLayer(comment!)).toBe("top");
     expect(comment?.realTime).toBe(true);
     expect(comment?.prior).toBe(true);
     expect(comment?.txt).toBe("【SC】加油");
@@ -201,9 +201,9 @@ describe("danmu.js 1.2.1 fixed-priority compatibility", () => {
     const instance = { main: { channel } } as unknown as DanmuJsInstance;
     const restore = installDanmuJsFixedPriorCompat(instance);
 
-    const bottom = {
-      id: "self-bottom",
-      mode: "bottom",
+    const top = {
+      id: "self-top",
+      mode: "top",
       prior: true,
       options: { realTime: true },
     } as DanmuJsBullet;
@@ -214,8 +214,8 @@ describe("danmu.js 1.2.1 fixed-priority compatibility", () => {
       options: { realTime: true },
     } as DanmuJsBullet;
 
-    expect(channel.addBullet(bottom)).toEqual({ result: true });
-    expect(bottom.prior).toBe(true);
+    expect(channel.addBullet(top)).toEqual({ result: true });
+    expect(top.prior).toBe(true);
     expect(channel.addBullet(scroll)).toEqual({ result: true });
     expect(prioritiesSeenByTrackSelection).toEqual([false, true]);
 
@@ -270,9 +270,9 @@ describe("danmu.js appearance helpers", () => {
     expect(danmuAreaConfig(Number.POSITIVE_INFINITY)).toEqual({ start: 0, end: 0.25 });
   });
 
-  test("keeps bottom comments on a full-height layer regardless of scrolling area", () => {
+  test("keeps top comments on a full-height layer regardless of scrolling area", () => {
     expect(danmuLayerAreaConfig("scroll", 0.25)).toEqual({ start: 0, end: 0.25 });
-    expect([0.1, 0.25, 0.75, 1].map((area) => danmuLayerAreaConfig("bottom", area))).toEqual([
+    expect([0.1, 0.25, 0.75, 1].map((area) => danmuLayerAreaConfig("top", area))).toEqual([
       { start: 0, end: 1 },
       { start: 0, end: 1 },
       { start: 0, end: 1 },
