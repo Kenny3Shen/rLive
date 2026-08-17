@@ -246,6 +246,7 @@ export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
   "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-ring-overlay drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]";
 const CONTROL_ICON_CLASS = PLAYER_CONTROL_ICON_CLASS;
 const CONTROL_BUTTON_CLASS = PLAYER_CONTROL_BUTTON_CLASS;
+const CONTROL_GROUP_CLASS = "flex shrink-0 items-center gap-0.5";
 
 function ControlButton({
   label,
@@ -668,7 +669,7 @@ export function PlayerControls({
           : "border-t border-border bg-card px-1.5 py-1",
       )}
     >
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className={CONTROL_GROUP_CLASS}>
         {onRefresh && (
           <ControlButton
             label="刷新播放"
@@ -785,7 +786,7 @@ export function PlayerControls({
         <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
       )}
 
-      <div className="player-controls-actions ml-auto flex min-w-0 items-center gap-1 overflow-x-auto pl-1 max-md:overflow-visible">
+      <div className={cn(CONTROL_GROUP_CLASS, "ml-auto pl-1")}>
         {hasStreamSettings &&
           (compact ? (
             <>
