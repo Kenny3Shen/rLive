@@ -6,7 +6,7 @@
 //! xgplayer protocol plugins — no mpv HWND.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,6 +17,7 @@ use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
@@ -24,6 +25,9 @@ use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_SOURCES: usize = 12;
 const MAX_PROBE_SAMPLE_BYTES: usize = 64 * 1024;
+// FFmpeg gives each localhost read 10 seconds. Leave enough time to deliver a
+// gap playlist before the demuxer treats the local proxy as unresponsive.
+const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StreamProxyProbe {
@@ -270,6 +274,7 @@ struct TwitchAdRecoverySession {
     config: TwitchAdRecovery,
     client: Client,
     state: AsyncMutex<TwitchAdRecoveryState>,
+    recovery_in_flight: AtomicBool,
 }
 
 struct TwitchAdRecoveryState {
@@ -278,6 +283,30 @@ struct TwitchAdRecoveryState {
     fallback_urls: [Option<String>; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
     active_profile: Option<usize>,
     last_clean_manifest: Option<(String, Url)>,
+    current_manifest_url: Option<String>,
+    revision: u64,
+}
+
+#[derive(Clone)]
+struct TwitchAdRecoverySnapshot {
+    fallback_urls: [Option<String>; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
+    active_profile: Option<usize>,
+    revision: u64,
+}
+
+struct TwitchAdRecoveryAttempt {
+    fallback_urls: [Option<String>; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
+    replacement: Option<(usize, TwitchManifestReplacement)>,
+}
+
+struct TwitchRecoveryLease<'a> {
+    in_flight: &'a AtomicBool,
+}
+
+impl Drop for TwitchRecoveryLease<'_> {
+    fn drop(&mut self) {
+        self.in_flight.store(false, Ordering::Release);
+    }
 }
 
 struct TwitchManifestReplacement {
@@ -307,7 +336,10 @@ impl TwitchAdRecoverySession {
                     crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
                 active_profile: None,
                 last_clean_manifest: None,
+                current_manifest_url: None,
+                revision: 0,
             }),
+            recovery_in_flight: AtomicBool::new(false),
         }
     }
 
@@ -317,27 +349,74 @@ impl TwitchAdRecoverySession {
         upstream_url: &Url,
         headers: &HashMap<String, String>,
     ) -> Option<TwitchManifestReplacement> {
-        let mut state = self.state.lock().await;
         if !is_twitch_ad_manifest(manifest) {
+            let mut state = self.state.lock().await;
             state.active_profile = None;
             if looks_like_hls_manifest(manifest.as_bytes()) {
                 state.last_clean_manifest = Some((manifest.to_string(), upstream_url.clone()));
+                state.current_manifest_url = Some(upstream_url.to_string());
+                state.revision = state.revision.wrapping_add(1);
             }
             return None;
         }
 
+        let Some(_lease) = self.try_start_recovery() else {
+            return Some(self.ad_fallback_manifest(manifest, upstream_url).await);
+        };
+        let snapshot = self.snapshot().await;
+        let attempt = tokio::time::timeout(
+            TWITCH_MANIFEST_RECOVERY_BUDGET,
+            self.find_ad_replacement(snapshot.clone(), headers),
+        )
+        .await;
+        match attempt {
+            Ok(attempt) => {
+                let mut state = self.state.lock().await;
+                state.fallback_urls = attempt.fallback_urls;
+                if let Some((profile_index, replacement)) = attempt.replacement {
+                    if state.revision == snapshot.revision {
+                        state.active_profile = Some(profile_index);
+                        state.last_clean_manifest =
+                            Some((replacement.body.clone(), replacement.upstream_url.clone()));
+                        state.current_manifest_url = Some(replacement.upstream_url.to_string());
+                        state.revision = state.revision.wrapping_add(1);
+                    }
+                    tracing::debug!(
+                        player_type =
+                            crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES[profile_index].0,
+                        "Twitch ad playlist replaced"
+                    );
+                    return Some(replacement);
+                }
+                state.active_profile = None;
+            }
+            Err(_) => tracing::debug!(
+                budget_ms = TWITCH_MANIFEST_RECOVERY_BUDGET.as_millis(),
+                "Twitch ad playlist recovery exceeded its response budget"
+            ),
+        }
+
+        Some(self.ad_fallback_manifest(manifest, upstream_url).await)
+    }
+
+    async fn find_ad_replacement(
+        &self,
+        snapshot: TwitchAdRecoverySnapshot,
+        headers: &HashMap<String, String>,
+    ) -> TwitchAdRecoveryAttempt {
         let mut profile_order =
             (0..crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()).collect::<Vec<_>>();
-        if let Some(active) = state.active_profile {
+        if let Some(active) = snapshot.active_profile {
             profile_order.retain(|index| *index != active);
             profile_order.insert(0, active);
         }
+        let mut fallback_urls = snapshot.fallback_urls;
 
         for profile_index in profile_order {
             let (player_type, platform) =
                 crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES[profile_index];
             for attempt in 0..2 {
-                let candidate_url = match state.fallback_urls[profile_index].clone() {
+                let candidate_url = match fallback_urls[profile_index].clone() {
                     Some(url) => url,
                     None => match crate::sites::twitch::twitch_ad_fallback_url(
                         self.client.clone(),
@@ -348,7 +427,7 @@ impl TwitchAdRecoverySession {
                     .await
                     {
                         Ok(url) => {
-                            state.fallback_urls[profile_index] = Some(url.clone());
+                            fallback_urls[profile_index] = Some(url.clone());
                             url
                         }
                         Err(error) => {
@@ -366,18 +445,21 @@ impl TwitchAdRecoverySession {
                     Ok((body, effective_url)) => {
                         if looks_like_hls_manifest(body.as_bytes()) && !is_twitch_ad_manifest(&body)
                         {
-                            state.active_profile = Some(profile_index);
-                            state.last_clean_manifest = Some((body.clone(), effective_url.clone()));
-                            tracing::debug!(player_type, "Twitch ad playlist replaced");
-                            return Some(TwitchManifestReplacement {
-                                body,
-                                upstream_url: effective_url,
-                            });
+                            return TwitchAdRecoveryAttempt {
+                                fallback_urls,
+                                replacement: Some((
+                                    profile_index,
+                                    TwitchManifestReplacement {
+                                        body,
+                                        upstream_url: effective_url,
+                                    },
+                                )),
+                            };
                         }
                         break;
                     }
                     Err(error) => {
-                        state.fallback_urls[profile_index] = None;
+                        fallback_urls[profile_index] = None;
                         if attempt == 0 {
                             continue;
                         }
@@ -387,7 +469,18 @@ impl TwitchAdRecoverySession {
             }
         }
 
-        state.active_profile = None;
+        TwitchAdRecoveryAttempt {
+            fallback_urls,
+            replacement: None,
+        }
+    }
+
+    async fn ad_fallback_manifest(
+        &self,
+        manifest: &str,
+        upstream_url: &Url,
+    ) -> TwitchManifestReplacement {
+        let state = self.state.lock().await;
         let (body, effective_url) = if looks_like_hls_manifest(manifest.as_bytes()) {
             (
                 mark_twitch_ad_segments_as_gaps(manifest),
@@ -398,10 +491,132 @@ impl TwitchAdRecoverySession {
         } else {
             (twitch_wait_manifest(), upstream_url.clone())
         };
-        Some(TwitchManifestReplacement {
+        TwitchManifestReplacement {
             body,
             upstream_url: effective_url,
-        })
+        }
+    }
+
+    async fn current_manifest_url(&self) -> Option<String> {
+        self.state.lock().await.current_manifest_url.clone()
+    }
+
+    async fn refresh_manifest(
+        &self,
+        headers: &HashMap<String, String>,
+    ) -> TwitchManifestReplacement {
+        let Some(_lease) = self.try_start_recovery() else {
+            return self.waiting_manifest().await;
+        };
+        let snapshot = self.snapshot().await;
+        let replacement = tokio::time::timeout(
+            TWITCH_MANIFEST_RECOVERY_BUDGET,
+            self.find_refreshed_manifest(headers),
+        )
+        .await;
+        match replacement {
+            Ok(Some((active_profile, replacement))) => {
+                let mut state = self.state.lock().await;
+                if state.revision == snapshot.revision {
+                    state.active_profile = active_profile;
+                    state.current_manifest_url = Some(replacement.upstream_url.to_string());
+                    state.last_clean_manifest =
+                        Some((replacement.body.clone(), replacement.upstream_url.clone()));
+                    state.revision = state.revision.wrapping_add(1);
+                }
+                tracing::debug!("Twitch manifest URL renewed");
+                return replacement;
+            }
+            Ok(None) => {}
+            Err(_) => tracing::debug!(
+                budget_ms = TWITCH_MANIFEST_RECOVERY_BUDGET.as_millis(),
+                "Twitch manifest renewal exceeded its response budget"
+            ),
+        }
+
+        self.waiting_manifest().await
+    }
+
+    async fn find_refreshed_manifest(
+        &self,
+        headers: &HashMap<String, String>,
+    ) -> Option<(Option<usize>, TwitchManifestReplacement)> {
+        let profiles = std::iter::once(crate::sites::twitch::TWITCH_PRIMARY_PLAYER_TYPE)
+            .chain(crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES);
+        for (profile_index, (player_type, platform)) in profiles.enumerate() {
+            let candidate_url = match crate::sites::twitch::twitch_ad_fallback_url(
+                self.client.clone(),
+                &self.config,
+                player_type,
+                platform,
+            )
+            .await
+            {
+                Ok(url) => url,
+                Err(error) => {
+                    tracing::debug!(
+                        player_type,
+                        code = %error.code,
+                        "Twitch manifest renewal token request failed"
+                    );
+                    continue;
+                }
+            };
+            let Ok((body, effective_url)) =
+                fetch_twitch_playlist(&self.client, &candidate_url, headers).await
+            else {
+                continue;
+            };
+            if looks_like_hls_manifest(body.as_bytes())
+                && !is_twitch_ad_manifest(&body)
+                && !body.contains("#EXT-X-ENDLIST")
+            {
+                return Some((
+                    profile_index.checked_sub(1),
+                    TwitchManifestReplacement {
+                        body,
+                        upstream_url: effective_url,
+                    },
+                ));
+            }
+        }
+
+        None
+    }
+
+    async fn waiting_manifest(&self) -> TwitchManifestReplacement {
+        let state = self.state.lock().await;
+        let (body, upstream_url) = state
+            .last_clean_manifest
+            .as_ref()
+            .map(|(manifest, url)| (mark_all_hls_segments_as_gaps(manifest), url.clone()))
+            .unwrap_or_else(|| {
+                let url = state
+                    .current_manifest_url
+                    .as_deref()
+                    .and_then(|value| Url::parse(value).ok())
+                    .unwrap_or_else(|| Url::parse("https://usher.ttvnw.net/").unwrap());
+                (twitch_wait_manifest(), url)
+            });
+        TwitchManifestReplacement { body, upstream_url }
+    }
+
+    async fn snapshot(&self) -> TwitchAdRecoverySnapshot {
+        let state = self.state.lock().await;
+        TwitchAdRecoverySnapshot {
+            fallback_urls: state.fallback_urls.clone(),
+            active_profile: state.active_profile,
+            revision: state.revision,
+        }
+    }
+
+    fn try_start_recovery(&self) -> Option<TwitchRecoveryLease<'_>> {
+        self.recovery_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| TwitchRecoveryLease {
+                in_flight: &self.recovery_in_flight,
+            })
     }
 }
 
@@ -476,6 +691,12 @@ impl Default for StreamProxy {
         Self {
             state: Mutex::new(ProxyState::default()),
         }
+    }
+}
+
+impl Drop for StreamProxy {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -655,8 +876,12 @@ impl StreamProxy {
     }
 
     fn stop_inner(inner: ProxyInner) {
-        let _ = inner.shutdown.send(true);
-        inner.task.abort();
+        // The accept loop owns every handler in a JoinSet. A successful send
+        // lets it cancel and drain those handlers; if its receiver is already
+        // gone, abort the remaining top-level task as a final fallback.
+        if inner.shutdown.send(true).is_err() {
+            inner.task.abort();
+        }
     }
 }
 
@@ -667,6 +892,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     use reqwest::Url;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -678,7 +904,7 @@ mod tests {
         validate_probe_sample,
     };
     use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
-    use tokio::sync::watch;
+    use tokio::sync::{oneshot, watch};
 
     #[test]
     fn independent_active_sessions_stop_separately() {
@@ -1022,6 +1248,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn concurrent_twitch_refresh_returns_wait_manifest_while_owner_is_blocked() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let proxy_server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let length = stream.read(&mut request).await.unwrap();
+            assert!(length > 0);
+            let _ = request_seen_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(format!("http://{address}")).unwrap())
+            .build()
+            .unwrap();
+        let recovery = Arc::new(TwitchAdRecoverySession::new(
+            TwitchAdRecovery {
+                login: "channel".into(),
+                selector: "video-group:chunked".into(),
+                target_width: 1920,
+                target_height: 1080,
+                target_frame_rate_milli: 60_000,
+            },
+            client,
+        ));
+        let owner_recovery = recovery.clone();
+        let owner =
+            tokio::spawn(async move { owner_recovery.refresh_manifest(&HashMap::new()).await });
+        tokio::time::timeout(std::time::Duration::from_secs(1), request_seen_rx)
+            .await
+            .expect("owner refresh should reach the mock proxy")
+            .unwrap();
+
+        let follower = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            recovery.refresh_manifest(&HashMap::new()),
+        )
+        .await
+        .expect("follower must not wait for the in-flight network request");
+        assert!(looks_like_hls_manifest(follower.body.as_bytes()));
+        assert!(follower.body.contains("#EXT-X-GAP"));
+
+        owner.abort();
+        let _ = owner.await;
+        assert!(!recovery.recovery_in_flight.load(Ordering::Acquire));
+        proxy_server.abort();
+    }
+
     #[test]
     fn probe_validation_rejects_login_pages_and_wrong_containers() {
         assert_eq!(
@@ -1099,6 +1375,72 @@ mod tests {
         relay.stop_for_session(session_id);
         server.join().unwrap();
         assert!(String::from_utf8_lossy(&response).ends_with("\r\n\r\nTS!"));
+    }
+
+    #[tokio::test]
+    async fn stopping_proxy_cancels_an_accepted_streaming_handler() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = listener.local_addr().unwrap();
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let (connection_closed_tx, connection_closed_rx) = oneshot::channel();
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let length = stream.read(&mut request).await.unwrap();
+            assert!(length > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            let _ = request_seen_tx.send(());
+            let mut byte = [0_u8; 1];
+            let closed = matches!(stream.read(&mut byte).await, Ok(0));
+            let _ = connection_closed_tx.send(closed);
+        });
+
+        let relay = StreamProxy::new();
+        let session_id = "shutdown-test:1";
+        let local_url = relay
+            .start(
+                format!("http://{upstream_address}/live.ts"),
+                HashMap::new(),
+                session_id.into(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let local = Url::parse(&local_url).unwrap();
+        let local_address = format!("{}:{}", local.host_str().unwrap(), local.port().unwrap());
+        let mut local_stream = tokio::net::TcpStream::connect(local_address).await.unwrap();
+        local_stream
+            .write_all(b"GET /live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), request_seen_rx)
+            .await
+            .expect("accepted handler should reach upstream")
+            .unwrap();
+
+        assert!(relay.stop_for_session(session_id));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), connection_closed_rx)
+                .await
+                .expect("stop should cancel the accepted upstream request")
+                .unwrap()
+        );
+        let mut downstream = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            local_stream.read_to_end(&mut downstream),
+        )
+        .await
+        .expect("stop should close the downstream socket")
+        .unwrap();
+        upstream.await.unwrap();
     }
 
     #[tokio::test]
@@ -1190,10 +1532,11 @@ async fn run_proxy_loop(
     context: ProxyLoopContext,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let mut handlers = JoinSet::new();
     loop {
         tokio::select! {
-            _ = shutdown.changed() => {
-                if *shutdown.borrow() {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
                     break;
                 }
             }
@@ -1202,10 +1545,16 @@ async fn run_proxy_loop(
                     Ok((mut socket, _)) => {
                         let context = context.clone();
                         let telemetry = context.telemetry.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) = handle_client(&mut socket, context).await {
-                                telemetry.upstream_failures.fetch_add(1, Ordering::Relaxed);
-                                tracing::debug!(%e, "stream proxy client ended");
+                        let mut handler_shutdown = shutdown.clone();
+                        handlers.spawn(async move {
+                            tokio::select! {
+                                _ = wait_for_proxy_shutdown(&mut handler_shutdown) => {}
+                                result = handle_client(&mut socket, context) => {
+                                    if let Err(e) = result {
+                                        telemetry.upstream_failures.fetch_add(1, Ordering::Relaxed);
+                                        tracing::debug!(%e, "stream proxy client ended");
+                                    }
+                                }
                             }
                         });
                     }
@@ -1215,6 +1564,27 @@ async fn run_proxy_loop(
                     }
                 }
             }
+            completed = handlers.join_next(), if !handlers.is_empty() => {
+                if let Some(Err(error)) = completed
+                    && !error.is_cancelled()
+                {
+                    tracing::debug!(%error, "stream proxy handler task failed");
+                }
+            }
+        }
+    }
+
+    handlers.abort_all();
+    while handlers.join_next().await.is_some() {}
+}
+
+async fn wait_for_proxy_shutdown(shutdown: &mut watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
         }
     }
 }
@@ -1273,12 +1643,24 @@ async fn handle_client(
         return Ok(());
     }
 
-    let target = match resolve_upstream_target(request_target, url.as_ref(), hls_resources.as_ref())
-    {
-        Ok(target) => target,
-        Err(message) => {
-            write_text_response(socket, 404, "Not Found", message).await?;
-            return Ok(());
+    let renewed_primary = if is_primary_request {
+        match twitch_ad_recovery.as_deref() {
+            Some(recovery) => recovery.current_manifest_url().await,
+            None => None,
+        }
+    } else {
+        None
+    };
+    let target = match renewed_primary {
+        Some(target) => target,
+        None => {
+            match resolve_upstream_target(request_target, url.as_ref(), hls_resources.as_ref()) {
+                Ok(target) => target,
+                Err(message) => {
+                    write_text_response(socket, 404, "Not Found", message).await?;
+                    return Ok(());
+                }
+            }
         }
     };
 
@@ -1352,6 +1734,20 @@ async fn handle_client(
             .await?;
             return Ok(());
         }
+        if is_primary_request && let Some(recovery) = twitch_ad_recovery.as_deref() {
+            let replacement = recovery.refresh_manifest(headers.as_ref()).await;
+            write_hls_manifest(
+                socket,
+                200,
+                "OK",
+                &replacement.body,
+                &replacement.upstream_url,
+                local_origin.as_ref(),
+                hls_resources.as_ref(),
+            )
+            .await?;
+            return Ok(());
+        }
         let resp = format!(
             "HTTP/1.1 {status} Error\r\n\
              Content-Type: text/plain; charset=utf-8\r\n\
@@ -1377,6 +1773,15 @@ async fn handle_client(
                 .replace_ad_manifest(&manifest, &manifest_url, headers.as_ref())
                 .await
         {
+            manifest = replacement.body;
+            manifest_url = replacement.upstream_url;
+        }
+        if is_primary_request
+            && (manifest.contains("#EXT-X-ENDLIST")
+                || !looks_like_hls_manifest(manifest.as_bytes()))
+            && let Some(recovery) = twitch_ad_recovery.as_deref()
+        {
+            let replacement = recovery.refresh_manifest(headers.as_ref()).await;
             manifest = replacement.body;
             manifest_url = replacement.upstream_url;
         }

@@ -1,18 +1,18 @@
 //! Desktop live-stream recorder and local playback service.
 //!
 //! Recordings deliberately live outside the SQLite database. A recording is a
-//! small self-contained bundle (metadata plus media, or an HLS playlist and
-//! its segments), so it remains recoverable when the application is killed and
+//! small self-contained bundle (metadata plus media), so it remains recoverable
+//! when the application is killed and
 //! can be inspected or copied by the user without a database export.
 
-#![cfg(not(target_os = "android"))]
+#![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 
 use std::collections::{HashMap, HashSet};
-use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{Local, TimeZone};
@@ -21,6 +21,7 @@ use percent_encoding::percent_decode_str;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime::JoinHandle;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
@@ -28,22 +29,19 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::http_client;
-use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol, TwitchAdRecovery};
+use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol};
+
+#[path = "recording_ffmpeg.rs"]
+mod ffmpeg_backend;
 
 const RECORDINGS_DIRECTORY: &str = "recordings";
 const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage.json";
+const RECORDING_MANAGER_LOCK_FILE: &str = ".recording-manager.lock";
 const MAX_ACTIVE_RECORDINGS: usize = 4;
-const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
-const MAX_SEGMENT_BYTES: usize = 256 * 1024 * 1024;
-const MAX_KEY_BYTES: usize = 64 * 1024;
-const HLS_ERROR_LIMIT: u32 = 10;
-const HLS_RETRY_DELAY: Duration = Duration::from_secs(2);
-const TWITCH_HLS_REFRESH_RETRY_DELAY: Duration = Duration::from_secs(8);
-const TWITCH_EMPTY_PLAYLIST_REFRESH_LIMIT: u32 = 3;
-const DIRECT_ERROR_LIMIT: u32 = 10;
-const DIRECT_RETRY_DELAY: Duration = Duration::from_secs(1);
-const DIRECT_MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
-const FLV_HEADER_BYTES: usize = 13;
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+const TASK_ABORT_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+const RECORDING_CHANGED_EVENT: &str = "recording-changed";
+static METADATA_IO_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -79,8 +77,8 @@ pub struct RecordingItem {
     pub danmaku_count: u64,
     /// Relative sidecar path inside the recording bundle, when enabled.
     pub danmaku_file: Option<String>,
-    /// Absolute path of the playable entry (or the HLS index) for the native
-    /// file reveal action. The playback URL itself is intentionally separate.
+    /// Absolute path of the playable media for the native file reveal action.
+    /// The playback URL itself is intentionally separate.
     pub file_path: String,
     pub error: Option<String>,
 }
@@ -104,7 +102,8 @@ pub struct RecordingStartInput {
     /// Save the active danmaku connection as a synchronized sidecar track.
     #[serde(default)]
     pub include_danmaku: bool,
-    /// Keep the media task alive when the current player page is left.
+    /// Keep the media task and any requested danmaku sidecar capture alive
+    /// when the current player page is left.
     #[serde(default)]
     pub continue_on_leave: bool,
 }
@@ -114,6 +113,90 @@ pub struct RecordingStorageInfo {
     pub path: String,
     pub default_path: String,
     pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FfmpegRecordingOptions {
+    pub rw_timeout_seconds: u32,
+    pub reconnect_delay_max_seconds: u32,
+    pub hls_segment_retry_count: u32,
+}
+
+impl Default for FfmpegRecordingOptions {
+    fn default() -> Self {
+        Self {
+            rw_timeout_seconds: 10,
+            reconnect_delay_max_seconds: 8,
+            hls_segment_retry_count: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingChangedEvent {
+    recording_id: String,
+    status: RecordingStatus,
+}
+
+#[derive(Default)]
+struct RecordingEventSink {
+    app: Mutex<Option<AppHandle>>,
+}
+
+impl RecordingEventSink {
+    fn attach(&self, app: AppHandle) {
+        *self
+            .app
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(app);
+    }
+
+    fn emit(&self, recording_id: &str, status: RecordingStatus) {
+        let app = self
+            .app
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(app) = app else { return };
+        if let Err(error) = app.emit(
+            RECORDING_CHANGED_EVENT,
+            RecordingChangedEvent {
+                recording_id: recording_id.to_string(),
+                status,
+            },
+        ) {
+            tracing::warn!(error = %error, "发送录制状态事件失败");
+        }
+    }
+
+    fn release_background_danmaku(&self, source_key: &str) {
+        let app = self
+            .app
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(app) = app else { return };
+        let Some(state) = app.try_state::<crate::state::AppState>() else {
+            return;
+        };
+        if !state.recording.has_background_danmaku_recording(source_key) {
+            state.danmaku.disconnect_background_for_source(source_key);
+        }
+    }
+
+    async fn prepare_danmaku_finish(&self, source_key: &str) {
+        let app = self
+            .app
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(app) = app else { return };
+        let Some(state) = app.try_state::<crate::state::AppState>() else {
+            return;
+        };
+        state.danmaku.finish_recording_source(source_key).await;
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -138,8 +221,8 @@ struct RecordingStorageState {
 impl RecordingStorageState {
     fn info(&self) -> RecordingStorageInfo {
         RecordingStorageInfo {
-            path: self.current_root.display().to_string(),
-            default_path: self.default_root.display().to_string(),
+            path: crate::app_paths::path_to_string(&self.current_root),
+            default_path: crate::app_paths::path_to_string(&self.default_root),
             is_default: self.current_root == self.default_root,
         }
     }
@@ -206,7 +289,7 @@ impl StoredRecording {
             continue_on_leave: self.continue_on_leave,
             danmaku_count: self.danmaku_count,
             danmaku_file: self.danmaku_file.clone(),
-            file_path: reveal_path.display().to_string(),
+            file_path: crate::app_paths::path_to_string(&reveal_path),
             error: self.error.clone(),
         }
     }
@@ -222,6 +305,8 @@ struct SessionState {
     danmaku_writer: Mutex<Option<std::fs::File>>,
     danmaku_closed: AtomicBool,
     finished: AtomicBool,
+    finish_lock: Mutex<()>,
+    events: Arc<RecordingEventSink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,16 +378,82 @@ struct Session {
     task: JoinHandle<()>,
 }
 
+struct FinalizingSession {
+    state: Arc<SessionState>,
+}
+
+struct BundleGuard {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl BundleGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for BundleGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 /// A process-wide manager. It owns recording tasks and lazily starts the
 /// loopback file server used by the in-app recording player.
 pub struct RecordingManager {
+    _instance_lock: File,
     storage: Arc<Mutex<RecordingStorageState>>,
     sessions: Mutex<HashMap<String, Session>>,
+    finalizing: Mutex<HashMap<String, FinalizingSession>>,
+    pending_background_danmaku: Mutex<HashMap<String, usize>>,
+    start_gate: Mutex<()>,
+    shutting_down: AtomicBool,
+    events: Arc<RecordingEventSink>,
     playback: PlaybackServer,
+}
+
+pub(crate) struct PendingBackgroundDanmakuStart<'a> {
+    pending: &'a Mutex<HashMap<String, usize>>,
+    events: &'a RecordingEventSink,
+    source_key: Option<String>,
+}
+
+impl Drop for PendingBackgroundDanmakuStart<'_> {
+    fn drop(&mut self) {
+        let Some(source_key) = self.source_key.take() else {
+            return;
+        };
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = pending.get_mut(&source_key) {
+            if *count <= 1 {
+                pending.remove(&source_key);
+            } else {
+                *count -= 1;
+            }
+        }
+        drop(pending);
+        // A failed start may have caused route cleanup to park the connection
+        // for this reservation. Release it once no committed recording owns it.
+        self.events.release_background_danmaku(&source_key);
+    }
 }
 
 impl RecordingManager {
     pub fn new(app_directory: &Path) -> AppResult<Self> {
+        let instance_lock = acquire_recording_manager_lock(app_directory)?;
         let state = load_storage_state(app_directory)?;
         for root in &state.roots {
             if let Err(error) = recover_stale_recordings(root) {
@@ -313,15 +464,43 @@ impl RecordingManager {
             }
         }
         let storage = Arc::new(Mutex::new(state));
+        let events = Arc::new(RecordingEventSink::default());
         Ok(Self {
+            _instance_lock: instance_lock,
             playback: PlaybackServer::new(storage.clone()),
             storage,
             sessions: Mutex::new(HashMap::new()),
+            finalizing: Mutex::new(HashMap::new()),
+            pending_background_danmaku: Mutex::new(HashMap::new()),
+            start_gate: Mutex::new(()),
+            shutting_down: AtomicBool::new(false),
+            events,
         })
     }
 
-    pub fn storage_path(&self) -> String {
-        self.storage_info().path
+    pub fn attach_app_handle(&self, app: AppHandle) {
+        self.events.attach(app);
+    }
+
+    pub(crate) fn reserve_background_danmaku_start(
+        &self,
+        source_key: &str,
+        enabled: bool,
+    ) -> PendingBackgroundDanmakuStart<'_> {
+        let source_key = (enabled && !source_key.is_empty()).then(|| source_key.to_string());
+        if let Some(source_key) = source_key.as_deref() {
+            *self
+                .pending_background_danmaku
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .entry(source_key.to_string())
+                .or_insert(0) += 1;
+        }
+        PendingBackgroundDanmakuStart {
+            pending: &self.pending_background_danmaku,
+            events: &self.events,
+            source_key,
+        }
     }
 
     pub fn storage_info(&self) -> RecordingStorageInfo {
@@ -333,7 +512,15 @@ impl RecordingManager {
 
     pub fn set_storage_path(&self, requested: Option<String>) -> AppResult<RecordingStorageInfo> {
         let next_root = match requested {
-            Some(path) => prepare_storage_root(Path::new(path.trim()))?,
+            Some(path) => {
+                if path.trim().is_empty() {
+                    return Err(AppError::new(
+                        "recording_storage_path_invalid",
+                        "录制保存位置不能为空",
+                    ));
+                }
+                prepare_storage_root(Path::new(&path))?
+            }
             None => self
                 .storage
                 .lock()
@@ -360,7 +547,23 @@ impl RecordingManager {
     }
 
     pub fn list(&self) -> AppResult<Vec<RecordingItem>> {
-        self.reap_finished();
+        let tracked_states: Vec<_> = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.reap_finished_locked(&mut sessions);
+            let mut finalizing = self
+                .finalizing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self::reap_finalizing_locked(&mut finalizing);
+            sessions
+                .values()
+                .map(|session| session.state.clone())
+                .chain(finalizing.values().map(|session| session.state.clone()))
+                .collect()
+        };
         let roots = self.storage_roots();
         let mut by_id = HashMap::<String, RecordingItem>::new();
         for root in roots {
@@ -374,7 +577,7 @@ impl RecordingManager {
                     continue;
                 }
                 let metadata_path = path.join("metadata.json");
-                let Ok(bytes) = std::fs::read(&metadata_path) else {
+                let Ok(bytes) = read_metadata_bytes(&metadata_path) else {
                     continue;
                 };
                 let Ok(stored) = serde_json::from_slice::<StoredRecording>(&bytes) else {
@@ -389,12 +592,8 @@ impl RecordingManager {
             }
         }
         let mut items: Vec<_> = by_id.into_values().collect();
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for session in sessions.values() {
-            let item = session.state.snapshot();
+        for state in tracked_states {
+            let item = state.snapshot();
             if let Some(existing) = items.iter_mut().find(|entry| entry.id == item.id) {
                 *existing = item;
             } else {
@@ -410,77 +609,118 @@ impl RecordingManager {
         Ok(items)
     }
 
+    #[cfg(test)]
     pub async fn start(
         &self,
         input: RecordingStartInput,
         proxy: Option<&str>,
     ) -> AppResult<RecordingItem> {
+        self.start_with_ffmpeg_options(input, proxy, FfmpegRecordingOptions::default())
+            .await
+    }
+
+    pub async fn start_with_ffmpeg_options(
+        &self,
+        input: RecordingStartInput,
+        proxy: Option<&str>,
+        ffmpeg_options: FfmpegRecordingOptions,
+    ) -> AppResult<RecordingItem> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(AppError::new(
+                "recording_shutting_down",
+                "应用正在退出，无法开始新的录制",
+            ));
+        }
         validate_start_input(&input)?;
         let source_key = input.source_key.trim().to_string();
+        let _danmaku_start_reservation = self.reserve_background_danmaku_start(
+            &source_key,
+            input.include_danmaku && input.continue_on_leave,
+        );
+        let source_protocol = if input.source.protocol == PlaybackProtocol::Unknown {
+            PlaybackProtocol::infer_from_url(&input.source.url)
+        } else {
+            input.source.protocol
+        };
+        validate_recording_source(source_protocol, &input.source, proxy)?;
+        // Serialize the start lifecycle so duplicate checks stay atomic. The
+        // session mutex itself is released before proxy construction and
+        // filesystem I/O, so a slow disk or proxy cannot block stop/list/
+        // capture_danmaku.
+        let _start_gate = self
+            .start_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut sessions = self
             .sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(AppError::new(
+                "recording_shutting_down",
+                "应用正在退出，无法开始新的录制",
+            ));
+        }
         self.reap_finished_locked(&mut sessions);
-        if sessions.len() >= MAX_ACTIVE_RECORDINGS {
+        let mut finalizing = self
+            .finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::reap_finalizing_locked(&mut finalizing);
+        if sessions.len() + finalizing.len() >= MAX_ACTIVE_RECORDINGS {
             return Err(AppError::new(
                 "recording_limit_reached",
                 format!("最多同时录制 {MAX_ACTIVE_RECORDINGS} 路直播"),
             ));
         }
-        if sessions.values().any(|session| {
-            let item = session.state.snapshot();
-            item.status == RecordingStatus::Recording
-                && (item.source_key == source_key
-                    || (input.source_kind.trim() == "live"
-                        && item.source_kind == "live"
-                        && input.site_id.is_some()
-                        && input.room_id.is_some()
-                        && item.site_id.as_deref() == input.site_id.as_deref()
-                        && item.room_id.as_deref() == input.room_id.as_deref()))
-        }) {
+        if sessions
+            .values()
+            .map(|session| &session.state)
+            .chain(finalizing.values().map(|session| &session.state))
+            .any(|state| {
+                let item = state.snapshot();
+                item.status == RecordingStatus::Recording
+                    && (item.source_key == source_key
+                        || (input.source_kind.trim() == "live"
+                            && item.source_kind == "live"
+                            && input.site_id.is_some()
+                            && input.room_id.is_some()
+                            && item.site_id.as_deref() == input.site_id.as_deref()
+                            && item.room_id.as_deref() == input.room_id.as_deref()))
+            })
+        {
             return Err(AppError::new(
                 "recording_already_active",
                 "该直播已经在录制中",
             ));
         }
+        drop(finalizing);
+        drop(sessions);
 
         // Validate the proxy before creating a bundle. A malformed proxy must
         // not leave behind metadata that looks like an active recording but
         // has no task attached to it.
-        let client = http_client::client_for_proxy(proxy)?;
         let stream_client = http_client::recording_stream_client_for_proxy(proxy)?;
 
         let id = Uuid::new_v4().to_string();
-        let protocol = if input.source.protocol == PlaybackProtocol::Unknown {
-            PlaybackProtocol::infer_from_url(&input.source.url)
-        } else {
-            input.source.protocol
-        };
         let root = self.current_root();
         let started_at = unix_ms();
         let title = normalize_text(&input.title, "未命名直播");
         let user_name = normalize_text(&input.user_name, "");
         let file_stem = recording_file_stem(&user_name, &title, started_at);
-        let media_file = media_file_name(protocol, &input.source.url, &file_stem);
+        let output_protocol = match source_protocol {
+            PlaybackProtocol::Hls => PlaybackProtocol::MpegTs,
+            protocol => protocol,
+        };
+        let media_file = media_file_name(output_protocol, &input.source.url, &file_stem);
         let bundle = root.join(&id);
+        let bundle_guard = BundleGuard::new(bundle.clone());
         std::fs::create_dir_all(&bundle).map_err(|error| {
             AppError::new(
                 "recording_storage_error",
                 format!("创建录制空间失败: {error}"),
             )
         })?;
-        if protocol == PlaybackProtocol::Hls {
-            for directory in ["segments", "keys", "maps"] {
-                std::fs::create_dir_all(bundle.join(directory)).map_err(|error| {
-                    AppError::new(
-                        "recording_storage_error",
-                        format!("创建 HLS 目录失败: {error}"),
-                    )
-                })?;
-            }
-        }
-
         let danmaku_file = input.include_danmaku.then(|| "danmaku.jsonl".to_string());
         let danmaku_writer = if danmaku_file.is_some() {
             Some(
@@ -500,14 +740,14 @@ impl RecordingManager {
         };
         let stored = StoredRecording {
             id: id.clone(),
-            source_key,
+            source_key: source_key.clone(),
             source_kind: normalize_text(&input.source_kind, "live"),
             site_id: optional_text(input.site_id),
             room_id: optional_text(input.room_id),
             title,
             user_name,
             cover: normalize_text(&input.cover, ""),
-            protocol,
+            protocol: output_protocol,
             status: RecordingStatus::Recording,
             started_at,
             ended_at: None,
@@ -531,17 +771,54 @@ impl RecordingManager {
             danmaku_writer: Mutex::new(danmaku_writer),
             danmaku_closed: AtomicBool::new(false),
             finished: AtomicBool::new(false),
+            finish_lock: Mutex::new(()),
+            events: self.events.clone(),
         });
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(AppError::new(
+                "recording_shutting_down",
+                "应用正在退出，无法开始新的录制",
+            ));
+        }
         let (cancel, cancel_rx) = watch::channel(false);
         let task_state = state.clone();
-        let source = input.source;
+        let danmaku_finish_source = input.include_danmaku.then(|| source_key.clone());
+        let proxy = proxy.map(str::to_string);
+        let mut source = input.source;
+        source.protocol = source_protocol;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Shutdown may stop waiting for a slow start lifecycle once its shared
+        // deadline expires. Commit under the session lock only after checking
+        // the fence again, so that drain and spawn cannot cross each other.
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(AppError::new(
+                "recording_shutting_down",
+                "应用正在退出，无法开始新的录制",
+            ));
+        }
         let task = tauri::async_runtime::spawn(async move {
-            let outcome =
-                run_recording_task(client, stream_client, source, task_state.clone(), cancel_rx)
-                    .await;
+            let outcome = run_recording_task(
+                stream_client,
+                source,
+                proxy,
+                ffmpeg_options,
+                task_state.clone(),
+                cancel_rx,
+            )
+            .await;
+            if let Some(source_key) = danmaku_finish_source {
+                task_state.events.prepare_danmaku_finish(&source_key).await;
+            }
             finish_session(&task_state, outcome);
         });
         let item = state.snapshot();
+        // No other start can pass the gate while this task is being built, so
+        // the reservation checked above remains valid. Shutdown sets its fence
+        // before waiting on the gate; a start past the pre-spawn check commits
+        // here and is then drained with the other sessions.
         sessions.insert(
             id,
             Session {
@@ -550,6 +827,10 @@ impl RecordingManager {
                 task,
             },
         );
+        bundle_guard.commit();
+        drop(sessions);
+        drop(_start_gate);
+        self.events.emit(&item.id, RecordingStatus::Recording);
         Ok(item)
     }
 
@@ -559,22 +840,41 @@ impl RecordingManager {
                 .sessions
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut finalizing = self
+                .finalizing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if finalizing.contains_key(id) {
+                return Err(AppError::new("recording_stopping", "录制正在停止，请稍候"));
+            }
             let session = sessions
                 .remove(id)
                 .ok_or_else(|| AppError::new("recording_not_found", "录制不存在"))?;
+            finalizing.insert(
+                id.to_string(),
+                FinalizingSession {
+                    state: session.state.clone(),
+                },
+            );
             (session.state, session.cancel, session.task)
         };
         let _ = cancel.send(true);
-        if task.await.is_err() && !state.finished.load(Ordering::Acquire) {
-            finish_session(
-                &state,
-                TaskOutcome {
-                    status: RecordingStatus::Interrupted,
-                    error: Some("录制任务意外终止".into()),
-                },
-            );
+        if let Err(error) = task.await {
+            if self.shutting_down.load(Ordering::Acquire) || task_join_was_cancelled(&error) {
+                tracing::warn!(
+                    recording_id = %id,
+                    "应用退出已中止录制任务，将在下次启动时恢复临时文件"
+                );
+            } else {
+                finish_interrupted_session(&state, "录制任务意外终止".into());
+            }
         }
-        Ok(state.snapshot())
+        let item = state.snapshot();
+        self.finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(id);
+        Ok(item)
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
@@ -582,11 +882,17 @@ impl RecordingManager {
             return Err(AppError::new("recording_invalid_id", "录制标识无效"));
         }
         {
-            let sessions = self
+            let mut sessions = self
                 .sessions
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if sessions.contains_key(id) {
+            self.reap_finished_locked(&mut sessions);
+            let mut finalizing = self
+                .finalizing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self::reap_finalizing_locked(&mut finalizing);
+            if sessions.contains_key(id) || finalizing.contains_key(id) {
                 return Err(AppError::new(
                     "recording_still_active",
                     "请先停止录制再删除",
@@ -622,28 +928,6 @@ impl RecordingManager {
         let file = root.join(id).join(media_file);
         if !file.exists() {
             return Err(AppError::new("recording_media_missing", "录制文件不存在"));
-        }
-        if stored.protocol == PlaybackProtocol::Flv {
-            let normalize_path = file.clone();
-            match tokio::task::spawn_blocking(move || normalize_flv_timestamps(&normalize_path))
-                .await
-            {
-                Ok(Ok(Some(duration_ms))) if duration_ms > 0 => {
-                    if stored.duration_ms != duration_ms {
-                        let mut updated = stored.clone();
-                        updated.duration_ms = duration_ms;
-                        updated.size_bytes = bundle_size(&root.join(id));
-                        let _ = write_metadata(&root.join(id), &updated);
-                    }
-                }
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(error = %error, "无法修复历史 FLV 时间戳，继续使用原始录制文件");
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, "历史 FLV 修复任务未完成，继续使用原始录制文件");
-                }
-            }
         }
         self.playback.url(id, &stored.media_file).await
     }
@@ -684,47 +968,148 @@ impl RecordingManager {
             .sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let finalizing = self
+            .finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let matching_states: Vec<_> = sessions
             .values()
+            .map(|session| &session.state)
+            .chain(finalizing.values().map(|session| &session.state))
             .filter_map(|session| {
                 let matches = session
-                    .state
                     .stored
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .source_key
                     == source_key;
-                matches.then(|| session.state.clone())
+                matches.then(|| session.clone())
             })
             .collect();
+        drop(finalizing);
         drop(sessions);
         for state in matching_states {
             state.append_danmaku(events);
         }
     }
 
-    pub fn stop_all(&self) {
+    /// Whether leaving this source must retain its danmaku websocket. Only
+    /// sessions explicitly configured for both sidecar capture and background
+    /// recording own a connection after their player page closes.
+    pub fn has_background_danmaku_recording(&self, source_key: &str) -> bool {
+        if self
+            .pending_background_danmaku
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(source_key)
+        {
+            return true;
+        }
         let sessions = self
             .sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for session in sessions.values() {
-            let _ = session.cancel.send(true);
-            session.task.abort();
+        let finalizing = self
+            .finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions
+            .values()
+            .map(|session| &session.state)
+            .chain(finalizing.values().map(|session| &session.state))
+            .any(|state| {
+                !state.finished.load(Ordering::Acquire)
+                    && stored_keeps_background_danmaku(
+                        &state
+                            .stored
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                        source_key,
+                    )
+            })
+    }
+
+    pub async fn stop_all_graceful(&self) {
+        // Fence new starts immediately. Taking the gate afterwards is a barrier:
+        // a start already past its pre-spawn check commits its task before the
+        // manager drains sessions, while every later start fails.
+        if self.shutting_down.swap(true, Ordering::AcqRel) {
+            return;
         }
+        let deadline = tokio::time::Instant::now() + GRACEFUL_SHUTDOWN_TIMEOUT;
+        if !wait_for_start_gate_until(&self.start_gate, deadline).await {
+            tracing::warn!("录制开始流程未在退出期限内结束，未提交的任务将由退出栅栏拒绝");
+        }
+        let (sessions, already_finalizing): (Vec<_>, Vec<_>) = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.reap_finished_locked(&mut sessions);
+            let mut finalizing = self
+                .finalizing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self::reap_finalizing_locked(&mut finalizing);
+            let already_finalizing = finalizing
+                .iter()
+                .map(|(id, session)| (id.clone(), session.state.clone()))
+                .collect();
+            let drained: Vec<_> = sessions.drain().collect();
+            for (id, session) in &drained {
+                finalizing.insert(
+                    id.clone(),
+                    FinalizingSession {
+                        state: session.state.clone(),
+                    },
+                );
+            }
+            (drained, already_finalizing)
+        };
+        tokio::join!(
+            stop_sessions_until_deadline(sessions, deadline),
+            wait_for_finalizing_sessions(already_finalizing, deadline),
+        );
+        let mut finalizing = self
+            .finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::reap_finalizing_locked(&mut finalizing);
+        drop(finalizing);
         self.playback.stop();
     }
 
-    fn reap_finished(&self) {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.reap_finished_locked(&mut sessions);
+    /// Synchronous compatibility wrapper for non-async shutdown hooks.
+    pub fn stop_all(&self) {
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| tauri::async_runtime::block_on(self.stop_all_graceful()))
+                .join()
+        });
+        if result.is_err() {
+            tracing::error!("录制任务优雅退出线程异常，正在强制停止剩余任务");
+            self.shutting_down.store(true, Ordering::Release);
+            let sessions: Vec<_> = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .drain()
+                .map(|(_, session)| session)
+                .collect();
+            for session in sessions {
+                let _ = session.cancel.send(true);
+                session.task.abort();
+            }
+            self.playback.stop();
+        }
     }
 
     fn reap_finished_locked(&self, sessions: &mut HashMap<String, Session>) {
         sessions.retain(|_, session| !session.state.finished.load(Ordering::Acquire));
+    }
+
+    fn reap_finalizing_locked(finalizing: &mut HashMap<String, FinalizingSession>) {
+        finalizing.retain(|_, session| !session.state.finished.load(Ordering::Acquire));
     }
 
     fn storage_roots(&self) -> Vec<PathBuf> {
@@ -744,6 +1129,186 @@ impl RecordingManager {
     }
 }
 
+async fn wait_for_start_gate_until(start_gate: &Mutex<()>, deadline: tokio::time::Instant) -> bool {
+    loop {
+        match start_gate.try_lock() {
+            Ok(guard) => {
+                drop(guard);
+                return true;
+            }
+            Err(TryLockError::Poisoned(poisoned)) => {
+                drop(poisoned.into_inner());
+                return true;
+            }
+            Err(TryLockError::WouldBlock) => {}
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        tokio::time::sleep_until(std::cmp::min(deadline, now + Duration::from_millis(25))).await;
+    }
+}
+
+async fn stop_sessions_until_deadline(
+    sessions: Vec<(String, Session)>,
+    deadline: tokio::time::Instant,
+) {
+    for (_, session) in &sessions {
+        let _ = session.cancel.send(true);
+    }
+
+    loop {
+        if sessions
+            .iter()
+            .all(|(_, session)| session.task.inner().is_finished())
+        {
+            break;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        tokio::time::sleep_until(std::cmp::min(deadline, now + Duration::from_millis(25))).await;
+    }
+
+    let mut timed_out = HashSet::new();
+    for (id, session) in &sessions {
+        if !session.task.inner().is_finished() {
+            tracing::warn!(recording_id = %id, "录制任务收尾超时，正在强制停止");
+            timed_out.insert(id.clone());
+            session.task.abort();
+        }
+    }
+
+    if !timed_out.is_empty() {
+        let abort_deadline = tokio::time::Instant::now() + TASK_ABORT_SETTLE_TIMEOUT;
+        loop {
+            if sessions
+                .iter()
+                .all(|(_, session)| session.task.inner().is_finished())
+            {
+                break;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= abort_deadline {
+                break;
+            }
+            tokio::time::sleep_until(std::cmp::min(
+                abort_deadline,
+                now + Duration::from_millis(10),
+            ))
+            .await;
+        }
+    }
+
+    for (id, session) in sessions {
+        if !session.task.inner().is_finished() {
+            tracing::error!(
+                recording_id = %id,
+                "强制停止录制任务仍未结束，将在下次启动时恢复临时文件"
+            );
+            continue;
+        }
+        if let Err(error) = session.task.await {
+            if timed_out.contains(&id) || task_join_was_cancelled(&error) {
+                tracing::warn!(
+                    recording_id = %id,
+                    "应用退出已中止超时录制任务，将在下次启动时恢复临时文件"
+                );
+            } else {
+                tracing::warn!(recording_id = %id, error = %error, "录制任务在应用退出时异常终止");
+                finish_interrupted_session(
+                    &session.state,
+                    format!("录制任务在应用退出时异常终止: {error}"),
+                );
+            }
+        } else if !session.state.finished.load(Ordering::Acquire) {
+            finish_interrupted_session(&session.state, "录制任务未保存结束状态".into());
+        }
+    }
+}
+
+fn task_join_was_cancelled(error: &tauri::Error) -> bool {
+    matches!(error, tauri::Error::JoinError(error) if error.is_cancelled())
+}
+
+async fn wait_for_finalizing_sessions(
+    sessions: Vec<(String, Arc<SessionState>)>,
+    deadline: tokio::time::Instant,
+) {
+    loop {
+        let unfinished: Vec<_> = sessions
+            .iter()
+            .filter(|(_, state)| !state.finished.load(Ordering::Acquire))
+            .map(|(id, _)| id)
+            .collect();
+        if unfinished.is_empty() {
+            return;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            for (id, _state) in sessions
+                .iter()
+                .filter(|(_, state)| !state.finished.load(Ordering::Acquire))
+            {
+                tracing::warn!(
+                    recording_id = %id,
+                    "由其他停止请求持有的录制任务收尾超时，将由进程退出并在下次启动时恢复"
+                );
+            }
+            return;
+        }
+        tokio::time::sleep_until(std::cmp::min(deadline, now + Duration::from_millis(25))).await;
+    }
+}
+
+fn finish_interrupted_session(state: &Arc<SessionState>, error: String) {
+    finish_session_inner(
+        state,
+        TaskOutcome {
+            status: RecordingStatus::Interrupted,
+            error: Some(error),
+        },
+        true,
+    );
+}
+
+/// Promotes a media part left behind by a worker that terminated before the
+/// normal task finalizer could publish it. Revalidate the metadata path here
+/// because this helper is also called from asynchronous error paths.
+fn salvage_temporary_media_after_worker_failure(state: &Arc<SessionState>) {
+    let (recording_id, media_file) = {
+        let stored = state
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (stored.id.clone(), stored.media_file.clone())
+    };
+    let relative = Path::new(&media_file);
+    if !safe_relative_path(relative) {
+        tracing::warn!(
+            recording_id = %recording_id,
+            media_file = %media_file,
+            "异常终止录制的媒体路径无效，保留临时文件供启动恢复"
+        );
+        return;
+    }
+    let part = state.bundle.join(format!("{media_file}.part"));
+    let final_path = state.bundle.join(relative);
+    if !part.is_file() || final_path.exists() {
+        return;
+    }
+    if let Err(error) = std::fs::rename(&part, &final_path) {
+        tracing::warn!(
+            recording_id = %recording_id,
+            path = %part.display(),
+            error = %error,
+            "无法保存异常终止录制的临时文件"
+        );
+    }
+}
+
 #[derive(Debug)]
 struct TaskOutcome {
     status: RecordingStatus,
@@ -751,21 +1316,73 @@ struct TaskOutcome {
 }
 
 async fn run_recording_task(
-    client: Client,
     stream_client: Client,
     source: PlayUrl,
+    proxy: Option<String>,
+    ffmpeg_options: FfmpegRecordingOptions,
     state: Arc<SessionState>,
     cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
-    let protocol = state
+    match source.protocol {
+        PlaybackProtocol::Flv | PlaybackProtocol::Hls | PlaybackProtocol::MpegTs => {
+            run_ffmpeg_recording(source, proxy, ffmpeg_options, state, cancel).await
+        }
+        PlaybackProtocol::Native => {
+            run_direct_recording(stream_client, source, state, cancel).await
+        }
+        PlaybackProtocol::Unknown => TaskOutcome {
+            status: RecordingStatus::Failed,
+            error: Some("无法识别录制源协议".into()),
+        },
+    }
+}
+
+async fn run_ffmpeg_recording(
+    mut source: PlayUrl,
+    proxy: Option<String>,
+    ffmpeg_options: FfmpegRecordingOptions,
+    state: Arc<SessionState>,
+    cancel: watch::Receiver<bool>,
+) -> TaskOutcome {
+    let twitch_recovery = source.twitch_ad_recovery.clone();
+    if source.protocol != PlaybackProtocol::Hls || twitch_recovery.is_none() {
+        return ffmpeg_backend::run(source, proxy, ffmpeg_options, state, cancel).await;
+    }
+
+    let recording_id = state
         .stored
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .protocol;
-    match protocol {
-        PlaybackProtocol::Hls => run_hls_recording(client, source, state, cancel).await,
-        _ => run_direct_recording(stream_client, source, state, cancel).await,
-    }
+        .id
+        .clone();
+    let proxy_session_id = format!("recording:{recording_id}");
+    let recording_proxy = crate::stream_proxy::StreamProxy::new();
+    let local_url = match recording_proxy
+        .start(
+            source.url.clone(),
+            source.headers.clone(),
+            proxy_session_id.clone(),
+            true,
+            proxy.as_deref(),
+            twitch_recovery,
+        )
+        .await
+    {
+        Ok(url) => url,
+        Err(error) => {
+            return TaskOutcome {
+                status: RecordingStatus::Failed,
+                error: Some(format!("启动 Twitch 录制清单代理失败: {}", error.message)),
+            };
+        }
+    };
+
+    source.url = local_url;
+    source.headers.clear();
+    source.twitch_ad_recovery = None;
+    let outcome = ffmpeg_backend::run(source, None, ffmpeg_options, state, cancel).await;
+    recording_proxy.stop_for_session(&proxy_session_id);
+    outcome
 }
 
 async fn run_direct_recording(
@@ -774,22 +1391,18 @@ async fn run_direct_recording(
     state: Arc<SessionState>,
     mut cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
-    let (media_file_name, protocol, site_id) = {
-        let stored = state
-            .stored
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        (
-            stored.media_file.clone(),
-            stored.protocol,
-            stored.site_id.clone(),
-        )
-    };
-    let part = state.bundle.join(format!("{media_file_name}.part"));
-    let final_path = state.bundle.join(media_file_name);
+    let media_file = state
+        .stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .media_file
+        .clone();
+    let part = state.bundle.join(format!("{media_file}.part"));
+    let final_path = state.bundle.join(media_file);
     let mut file = match tokio::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .truncate(true)
+        .write(true)
         .open(&part)
         .await
     {
@@ -801,873 +1414,6 @@ async fn run_direct_recording(
             };
         }
     };
-    let started = Instant::now();
-    let candidates = direct_source_candidates(&source, site_id.as_deref());
-    let mut preferred_candidate = 0_usize;
-    let mut errors = 0_u32;
-    let mut last_error = "直播流连接已关闭".to_string();
-
-    loop {
-        if *cancel.borrow() {
-            return finalize_direct_recording(
-                file,
-                &part,
-                &final_path,
-                &state,
-                TaskOutcome {
-                    status: RecordingStatus::Completed,
-                    error: None,
-                },
-            )
-            .await;
-        }
-
-        let mut round_error = None;
-        let mut round_retryable = false;
-        let mut opened_stream = false;
-
-        for offset in 0..candidates.len() {
-            let candidate_index = (preferred_candidate + offset) % candidates.len();
-            let candidate = &candidates[candidate_index];
-            let response = tokio::select! {
-                response = build_request(&client, candidate).send() => response,
-                changed = cancel.changed() => {
-                    if changed.is_err() || *cancel.borrow() {
-                        return finalize_direct_recording(
-                            file,
-                            &part,
-                            &final_path,
-                            &state,
-                            TaskOutcome {
-                                status: RecordingStatus::Completed,
-                                error: None,
-                            },
-                        ).await;
-                    }
-                    continue;
-                }
-            };
-
-            let response = match response {
-                Ok(response) if response.status().is_success() => response,
-                Ok(response) => {
-                    let status = response.status();
-                    round_retryable |= retryable_direct_status(status);
-                    round_error
-                        .get_or_insert_with(|| format!("直播源返回 HTTP {}", status.as_u16()));
-                    continue;
-                }
-                Err(error) => {
-                    round_retryable = true;
-                    round_error
-                        .get_or_insert_with(|| format!("连接直播源失败: {}", error.without_url()));
-                    continue;
-                }
-            };
-
-            opened_stream = true;
-            preferred_candidate = candidate_index;
-            let mut stream = response.bytes_stream();
-            let mut flv_stream = (protocol == PlaybackProtocol::Flv)
-                .then(|| FlvResponseBuffer::new(state.bytes.load(Ordering::Relaxed) == 0));
-            let mut received_media = false;
-            let mut cancelled = false;
-            let stream_error = loop {
-                let next = tokio::select! {
-                    value = stream.next() => value,
-                    changed = cancel.changed() => {
-                        if changed.is_err() || *cancel.borrow() {
-                            cancelled = true;
-                        }
-                        None
-                    }
-                };
-                let Some(next) = next else {
-                    break "直播流连接已关闭".to_string();
-                };
-                let chunk = match next {
-                    Ok(chunk) => chunk,
-                    Err(error) => {
-                        break format!("读取直播流中断: {}", error.without_url());
-                    }
-                };
-                if chunk.is_empty() {
-                    continue;
-                }
-                match write_direct_chunk(&mut file, &chunk, &mut flv_stream).await {
-                    Ok(written) => {
-                        if written > 0 {
-                            received_media = true;
-                            errors = 0;
-                            state.bytes.fetch_add(written as u64, Ordering::Relaxed);
-                            state.duration_ms.store(
-                                started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                                Ordering::Relaxed,
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        return finalize_direct_recording(
-                            file,
-                            &part,
-                            &final_path,
-                            &state,
-                            TaskOutcome {
-                                status: RecordingStatus::Failed,
-                                error: Some(format!("写入录制文件失败: {error}")),
-                            },
-                        )
-                        .await;
-                    }
-                }
-            };
-
-            if let Some(stream) = flv_stream.as_ref()
-                && !stream.pending.is_empty()
-            {
-                tracing::debug!(
-                    discarded_bytes = stream.pending.len(),
-                    "丢弃连接末尾不完整的 FLV tag"
-                );
-            }
-
-            if cancelled {
-                return finalize_direct_recording(
-                    file,
-                    &part,
-                    &final_path,
-                    &state,
-                    TaskOutcome {
-                        status: RecordingStatus::Completed,
-                        error: None,
-                    },
-                )
-                .await;
-            }
-
-            round_retryable = true;
-            round_error = Some(stream_error);
-            if received_media {
-                // Data from this connection proves the URL is still valid. On
-                // the next reconnect, retry this candidate before fallbacks.
-                errors = 0;
-            }
-            break;
-        }
-
-        if let Some(error) = round_error {
-            last_error = error;
-        }
-
-        if !round_retryable {
-            let status = direct_failure_status(&state);
-            return finalize_direct_recording(
-                file,
-                &part,
-                &final_path,
-                &state,
-                TaskOutcome {
-                    status,
-                    error: Some(last_error),
-                },
-            )
-            .await;
-        }
-
-        errors = errors.saturating_add(1);
-        if errors >= DIRECT_ERROR_LIMIT {
-            let status = direct_failure_status(&state);
-            return finalize_direct_recording(
-                file,
-                &part,
-                &final_path,
-                &state,
-                TaskOutcome {
-                    status,
-                    error: Some(last_error),
-                },
-            )
-            .await;
-        }
-
-        tracing::warn!(
-            attempt = errors,
-            opened_stream,
-            error = %last_error,
-            "直播录制连接中断，准备重连"
-        );
-        if wait_or_cancel(&mut cancel, direct_retry_delay(errors)).await {
-            return finalize_direct_recording(
-                file,
-                &part,
-                &final_path,
-                &state,
-                TaskOutcome {
-                    status: RecordingStatus::Completed,
-                    error: None,
-                },
-            )
-            .await;
-        }
-    }
-}
-
-struct FlvResponseBuffer {
-    pending: Vec<u8>,
-    header_processed: bool,
-    keep_header: bool,
-}
-
-impl FlvResponseBuffer {
-    fn new(keep_header: bool) -> Self {
-        Self {
-            pending: Vec::new(),
-            header_processed: false,
-            keep_header,
-        }
-    }
-}
-
-async fn write_direct_chunk(
-    file: &mut tokio::fs::File,
-    chunk: &[u8],
-    flv_stream: &mut Option<FlvResponseBuffer>,
-) -> std::io::Result<usize> {
-    let Some(stream) = flv_stream.as_mut() else {
-        file.write_all(chunk).await?;
-        return Ok(chunk.len());
-    };
-    stream.pending.extend_from_slice(chunk);
-
-    if !stream.header_processed {
-        if stream.pending.len() < FLV_HEADER_BYTES {
-            return Ok(0);
-        }
-        if !stream.pending.starts_with(b"FLV") {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "FLV 响应缺少文件头",
-            ));
-        }
-        stream.header_processed = true;
-        if !stream.keep_header {
-            stream.pending.drain(..FLV_HEADER_BYTES);
-        }
-    }
-
-    let mut offset = if stream.keep_header {
-        FLV_HEADER_BYTES
-    } else {
-        0
-    };
-    let first_tag_offset = offset;
-    loop {
-        if stream.pending.len().saturating_sub(offset) < 11 {
-            break;
-        }
-        let tag_type = stream.pending[offset] & 0x1f;
-        if !matches!(tag_type, 8 | 9 | 18) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "FLV tag 类型无效",
-            ));
-        }
-        let data_size = (usize::from(stream.pending[offset + 1]) << 16)
-            | (usize::from(stream.pending[offset + 2]) << 8)
-            | usize::from(stream.pending[offset + 3]);
-        let tag_size = 11_usize
-            .checked_add(data_size)
-            .and_then(|size| size.checked_add(4))
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "FLV tag 长度溢出")
-            })?;
-        if tag_size > MAX_SEGMENT_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "FLV tag 超过大小限制",
-            ));
-        }
-        if stream.pending.len().saturating_sub(offset) < tag_size {
-            break;
-        }
-        offset += tag_size;
-    }
-    if offset == first_tag_offset {
-        return Ok(0);
-    }
-
-    file.write_all(&stream.pending[..offset]).await?;
-    stream.pending.drain(..offset);
-    stream.keep_header = false;
-    Ok(offset)
-}
-
-async fn finalize_direct_recording(
-    mut file: tokio::fs::File,
-    part: &Path,
-    final_path: &Path,
-    state: &SessionState,
-    outcome: TaskOutcome,
-) -> TaskOutcome {
-    let flush_error = file.flush().await.err().or(file.sync_data().await.err());
-    drop(file);
-
-    if state.bytes.load(Ordering::Relaxed) == 0 && outcome.status != RecordingStatus::Completed {
-        let _ = tokio::fs::remove_file(part).await;
-        return outcome;
-    }
-    if let Some(error) = flush_error {
-        return TaskOutcome {
-            status: RecordingStatus::Failed,
-            error: Some(format!("完成录制文件失败: {error}")),
-        };
-    }
-    let is_flv = state
-        .stored
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .protocol
-        == PlaybackProtocol::Flv;
-    if is_flv {
-        let normalize_path = part.to_path_buf();
-        match tokio::task::spawn_blocking(move || normalize_flv_timestamps(&normalize_path)).await {
-            Ok(Ok(Some(duration_ms))) if duration_ms > 0 => {
-                state.duration_ms.store(duration_ms, Ordering::Relaxed);
-            }
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(error = %error, "无法连续化 FLV 时间戳，保留原始录制文件");
-            }
-            Err(error) => {
-                tracing::warn!(error = %error, "FLV 时间戳处理任务未完成，保留原始录制文件");
-            }
-        }
-    }
-    // FLV normalization can discard a replayed GOP, so refresh the live byte
-    // counter from the normalized part before publishing the finished item.
-    if let Ok(metadata) = tokio::fs::metadata(part).await {
-        state.bytes.store(metadata.len(), Ordering::Relaxed);
-    }
-    if let Err(error) = finalize_part(part, final_path).await {
-        return TaskOutcome {
-            status: RecordingStatus::Failed,
-            error: Some(format!("完成录制文件失败: {error}")),
-        };
-    }
-    outcome
-}
-
-const FLV_RESYNC_SCAN_BYTES: u64 = 16 * 1024 * 1024;
-const FLV_ABSOLUTE_CLOCK_THRESHOLD_MS: u32 = 1_000_000;
-
-#[derive(Clone, Copy)]
-enum FlvReplayCutoff {
-    Inactive,
-    AbsoluteClock,
-    Timestamp(u32),
-}
-
-fn flv_media_track(tag_type: u8) -> Option<usize> {
-    match tag_type {
-        8 => Some(0),
-        9 => Some(1),
-        _ => None,
-    }
-}
-
-fn flv_payload_is_codec_sequence_header(tag_type: u8, payload: &[u8]) -> bool {
-    let Some(&media_header) = payload.first() else {
-        return false;
-    };
-    match tag_type {
-        8 if media_header >> 4 == 10 => payload.get(1) == Some(&0),
-        9 if media_header & 0x80 != 0 => media_header & 0x0f == 0,
-        9 if matches!(media_header & 0x0f, 7 | 12) => payload.get(1) == Some(&0),
-        _ => false,
-    }
-}
-
-fn flv_tag_length(bytes: &[u8], offset: usize) -> Option<usize> {
-    if bytes.len().saturating_sub(offset) < 11 {
-        return None;
-    }
-    let tag_type = bytes[offset] & 0x1f;
-    if !matches!(tag_type, 8 | 9 | 18) {
-        return None;
-    }
-    let data_size = (usize::from(bytes[offset + 1]) << 16)
-        | (usize::from(bytes[offset + 2]) << 8)
-        | usize::from(bytes[offset + 3]);
-    let total = 11_usize.checked_add(data_size)?.checked_add(4)?;
-    (total <= MAX_SEGMENT_BYTES && bytes.len().saturating_sub(offset) >= total).then_some(total)
-}
-
-fn flv_tag_timestamp(bytes: &[u8], offset: usize) -> Option<u32> {
-    (bytes.len().saturating_sub(offset) >= 8).then(|| {
-        (u32::from(bytes[offset + 4]) << 16)
-            | (u32::from(bytes[offset + 5]) << 8)
-            | u32::from(bytes[offset + 6])
-            | (u32::from(bytes[offset + 7]) << 24)
-    })
-}
-
-fn find_flv_resync(
-    input: &mut std::fs::File,
-    start: u64,
-    file_len: u64,
-) -> std::io::Result<Option<u64>> {
-    if start >= file_len {
-        return Ok(None);
-    }
-    let scan_len = (file_len - start).min(FLV_RESYNC_SCAN_BYTES) as usize;
-    input.seek(SeekFrom::Start(start))?;
-    let mut scan = vec![0_u8; scan_len];
-    input.read_exact(&mut scan)?;
-    for offset in 0..=scan.len().saturating_sub(15) {
-        let Some(tag_len) = flv_tag_length(&scan, offset) else {
-            continue;
-        };
-        let previous_size = u32::from_be_bytes(
-            scan[offset + tag_len - 4..offset + tag_len]
-                .try_into()
-                .expect("FLV previous tag size is four bytes"),
-        );
-        if previous_size != (tag_len - 4) as u32 {
-            continue;
-        }
-        let absolute = start + offset as u64;
-        // Require a second tag when there is enough data. This rejects almost
-        // all byte patterns inside H.264 payloads without scanning unboundedly.
-        let mut cursor = offset + tag_len;
-        let mut previous_timestamp = flv_tag_timestamp(&scan, offset);
-        let mut sequence_tags = 1;
-        while sequence_tags < 3 {
-            let Some(next_len) = flv_tag_length(&scan, cursor) else {
-                break;
-            };
-            let Some(next_timestamp) = flv_tag_timestamp(&scan, cursor) else {
-                break;
-            };
-            if previous_timestamp
-                .is_some_and(|previous| previous.abs_diff(next_timestamp) > 120_000)
-            {
-                sequence_tags = 0;
-                break;
-            }
-            previous_timestamp = Some(next_timestamp);
-            cursor += next_len;
-            sequence_tags += 1;
-        }
-        if sequence_tags < 2 && offset + tag_len != scan.len() {
-            continue;
-        }
-        return Ok(Some(absolute));
-    }
-    Ok(None)
-}
-
-fn has_future_flv_media_timestamp(
-    input: &mut std::fs::File,
-    start: u64,
-    file_len: u64,
-    threshold: u32,
-) -> std::io::Result<bool> {
-    if start >= file_len {
-        return Ok(false);
-    }
-    let original_position = input.stream_position()?;
-    let scan_len = (file_len - start).min(FLV_RESYNC_SCAN_BYTES) as usize;
-    input.seek(SeekFrom::Start(start))?;
-    let mut scan = vec![0_u8; scan_len];
-    input.read_exact(&mut scan)?;
-    let mut offset = 0;
-    let mut found = false;
-    while offset + 11 <= scan.len() {
-        let tag_type = scan[offset] & 0x1f;
-        let data_size = (usize::from(scan[offset + 1]) << 16)
-            | (usize::from(scan[offset + 2]) << 8)
-            | usize::from(scan[offset + 3]);
-        let Some(total) = 11_usize
-            .checked_add(data_size)
-            .and_then(|size| size.checked_add(4))
-        else {
-            offset += 1;
-            continue;
-        };
-        if !matches!(tag_type, 8 | 9 | 18)
-            || total > MAX_SEGMENT_BYTES
-            || offset + total > scan.len()
-        {
-            offset += 1;
-            continue;
-        }
-        let previous_size = u32::from_be_bytes(
-            scan[offset + total - 4..offset + total]
-                .try_into()
-                .expect("FLV previous tag size is four bytes"),
-        );
-        if previous_size != (total - 4) as u32 {
-            offset += 1;
-            continue;
-        }
-        if matches!(tag_type, 8 | 9) {
-            let timestamp = (u32::from(scan[offset + 4]) << 16)
-                | (u32::from(scan[offset + 5]) << 8)
-                | u32::from(scan[offset + 6])
-                | (u32::from(scan[offset + 7]) << 24);
-            if timestamp > threshold {
-                found = true;
-                break;
-            }
-        }
-        offset += total;
-    }
-    input.seek(SeekFrom::Start(original_position))?;
-    Ok(found)
-}
-
-/// Reconnectable FLV sources may replay a previously delivered GOP before the
-/// live edge, or restart their timestamp clock at zero for every response.
-/// Keep codec sequence headers at the boundary, drop ordinary media tags that
-/// are already covered on their track, and rebase true clock resets onto the
-/// previous timeline. A reconnect can also leave a partial tag before the next
-/// response's metadata; bounded resynchronization drops that fragment and
-/// continues with the next valid tag.
-fn normalize_flv_timestamps(path: &Path) -> std::io::Result<Option<u64>> {
-    let mut input = std::fs::File::open(path)?;
-    let mut header = [0_u8; 9];
-    input.read_exact(&mut header)?;
-    if &header[..3] != b"FLV" {
-        return Ok(None);
-    }
-    let mut previous_tag_size = [0_u8; 4];
-    input.read_exact(&mut previous_tag_size)?;
-
-    let mut temporary_name = path.file_name().unwrap_or_default().to_os_string();
-    temporary_name.push(format!(".normalized-{}", Uuid::new_v4().simple()));
-    let temporary = path.with_file_name(temporary_name);
-    let mut output = std::fs::File::create(&temporary)?;
-    output.write_all(&header)?;
-    output.write_all(&previous_tag_size)?;
-
-    let mut previous_input_timestamps = [None, None];
-    let mut timestamp_offset = 0_i64;
-    let mut first_output_timestamp = None;
-    let mut last_output_timestamp = 0_u32;
-    let mut changed = false;
-    let mut replay_cutoffs = [FlvReplayCutoff::Inactive; 2];
-    let mut shared_epoch_guard = false;
-
-    let file_len = input.metadata()?.len();
-    loop {
-        let tag_start = input.stream_position()?;
-        let mut tag_header = [0_u8; 11];
-        let read = input.read(&mut tag_header)?;
-        if read == 0 {
-            break;
-        }
-        if read != tag_header.len() {
-            changed = true;
-            break;
-        }
-
-        let tag_type = tag_header[0] & 0x1f;
-        let data_size = (usize::from(tag_header[1]) << 16)
-            | (usize::from(tag_header[2]) << 8)
-            | usize::from(tag_header[3]);
-        if !matches!(tag_type, 8 | 9 | 18) || data_size > MAX_SEGMENT_BYTES {
-            changed = true;
-            let Some(resync) = find_flv_resync(&mut input, tag_start + 1, file_len)? else {
-                if file_len.saturating_sub(tag_start + 1) > FLV_RESYNC_SCAN_BYTES {
-                    let _ = std::fs::remove_file(&temporary);
-                    return Ok(None);
-                }
-                break;
-            };
-            input.seek(SeekFrom::Start(resync))?;
-            continue;
-        }
-        let data_start = tag_start + 11;
-        let previous_size_position = data_start + data_size as u64;
-        if previous_size_position + 4 > file_len {
-            changed = true;
-            break;
-        }
-        let mut payload_prefix = [0_u8; 2];
-        let prefix_len = data_size.min(payload_prefix.len());
-        input.read_exact(&mut payload_prefix[..prefix_len])?;
-        input.seek(SeekFrom::Start(previous_size_position))?;
-        let mut actual_previous_size = [0_u8; 4];
-        input.read_exact(&mut actual_previous_size)?;
-        if u32::from_be_bytes(actual_previous_size) != (data_size as u32).saturating_add(11) {
-            changed = true;
-            let Some(resync) = find_flv_resync(&mut input, tag_start + 1, file_len)? else {
-                if file_len.saturating_sub(tag_start + 1) > FLV_RESYNC_SCAN_BYTES {
-                    let _ = std::fs::remove_file(&temporary);
-                    return Ok(None);
-                }
-                break;
-            };
-            input.seek(SeekFrom::Start(resync))?;
-            continue;
-        }
-
-        let input_timestamp = (u32::from(tag_header[4]) << 16)
-            | (u32::from(tag_header[5]) << 8)
-            | u32::from(tag_header[6])
-            | (u32::from(tag_header[7]) << 24);
-        let media_track = flv_media_track(tag_type);
-        let is_media_tag = media_track.is_some();
-        let is_codec_sequence_header =
-            flv_payload_is_codec_sequence_header(tag_type, &payload_prefix[..prefix_len]);
-        let mut pinned_codec_header = false;
-        if let Some(track) = media_track {
-            let still_replayed = match replay_cutoffs[track] {
-                FlvReplayCutoff::Inactive => false,
-                FlvReplayCutoff::AbsoluteClock => input_timestamp < FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
-                FlvReplayCutoff::Timestamp(cutoff) => input_timestamp <= cutoff,
-            };
-            if still_replayed {
-                changed = true;
-                if is_codec_sequence_header {
-                    pinned_codec_header = true;
-                } else {
-                    continue;
-                }
-            } else if !matches!(replay_cutoffs[track], FlvReplayCutoff::Inactive) {
-                replay_cutoffs[track] = FlvReplayCutoff::Inactive;
-            }
-
-            if pinned_codec_header || is_codec_sequence_header {
-                // Codec setup stays at the current output boundary and never
-                // advances either media track's input clock.
-                pinned_codec_header = true;
-            } else if let Some(previous) = previous_input_timestamps[track] {
-                if input_timestamp <= previous {
-                    let repeats_replayed_preamble = previous > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS
-                        && has_future_flv_media_timestamp(
-                            &mut input,
-                            previous_size_position + 4,
-                            file_len,
-                            previous.saturating_sub(10_000),
-                        )?;
-                    if repeats_replayed_preamble {
-                        replay_cutoffs = previous_input_timestamps.map(|timestamp| {
-                            timestamp
-                                .map_or(FlvReplayCutoff::AbsoluteClock, FlvReplayCutoff::Timestamp)
-                        });
-                        changed = true;
-                        continue;
-                    } else {
-                        timestamp_offset = i64::from(last_output_timestamp)
-                            .saturating_add(1)
-                            .saturating_sub(i64::from(input_timestamp));
-                        previous_input_timestamps = [None, None];
-                        replay_cutoffs = [FlvReplayCutoff::Inactive; 2];
-                        shared_epoch_guard = true;
-                        changed = true;
-                    }
-                }
-            } else if previous_input_timestamps[track].is_none()
-                && previous_input_timestamps.iter().any(Option::is_some)
-                && !shared_epoch_guard
-                && input_timestamp < 1_000
-                && previous_input_timestamps
-                    .iter()
-                    .flatten()
-                    .copied()
-                    .max()
-                    .is_some_and(|known| {
-                        known > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS && input_timestamp < known
-                    })
-            {
-                // A response can introduce a previously absent track after
-                // the other track has already established the source epoch.
-                // If a later absolute-clock tag is present, this is only the
-                // replayed preamble for the late track. Keep the established
-                // epoch and discard the ordinary replay tag. A genuinely new
-                // epoch has no such future high-clock tag and needs one shared
-                // offset for both tracks.
-                let known_clock = previous_input_timestamps.iter().flatten().copied().max();
-                let replay_threshold = known_clock
-                    .filter(|timestamp| *timestamp > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS)
-                    .map_or(FLV_ABSOLUTE_CLOCK_THRESHOLD_MS, |timestamp| {
-                        timestamp.saturating_sub(10_000)
-                    });
-                let replayed_preamble = known_clock
-                    .is_some_and(|timestamp| timestamp > FLV_ABSOLUTE_CLOCK_THRESHOLD_MS)
-                    && has_future_flv_media_timestamp(
-                        &mut input,
-                        previous_size_position + 4,
-                        file_len,
-                        replay_threshold,
-                    )?;
-                if replayed_preamble {
-                    replay_cutoffs[track] = FlvReplayCutoff::AbsoluteClock;
-                    changed = true;
-                    continue;
-                }
-                timestamp_offset = i64::from(last_output_timestamp)
-                    .saturating_add(1)
-                    .saturating_sub(i64::from(input_timestamp));
-                previous_input_timestamps = [None, None];
-                replay_cutoffs = [FlvReplayCutoff::Inactive; 2];
-                shared_epoch_guard = true;
-                changed = true;
-            } else if previous_input_timestamps.iter().all(Option::is_none)
-                && input_timestamp < 1_000
-                && has_future_flv_media_timestamp(
-                    &mut input,
-                    previous_size_position + 4,
-                    file_len,
-                    FLV_ABSOLUTE_CLOCK_THRESHOLD_MS,
-                )?
-            {
-                replay_cutoffs = [FlvReplayCutoff::AbsoluteClock; 2];
-                changed = true;
-                continue;
-            } else if first_output_timestamp.is_none() {
-                // FLV timestamps may start at the source's absolute clock
-                // (several hours into uptime). Normalize that base to zero so
-                // MediaSource duration and seek math remain bounded.
-                timestamp_offset = -i64::from(input_timestamp);
-                changed |= input_timestamp != 0;
-            }
-        }
-        // Reconnected FLV responses commonly insert an onMetaData tag at zero
-        // even when audio/video keep their absolute source clock. Do not let
-        // that script tag shift every subsequent media timestamp by an entire
-        // source-clock epoch.
-        let output_timestamp = if pinned_codec_header
-            || (!is_media_tag && input_timestamp == 0 && first_output_timestamp.is_some())
-        {
-            i64::from(last_output_timestamp)
-        } else {
-            i64::from(input_timestamp).saturating_add(timestamp_offset)
-        };
-        if !(0..=i64::from(u32::MAX)).contains(&output_timestamp) {
-            let _ = std::fs::remove_file(&temporary);
-            return Ok(None);
-        }
-        let output_timestamp = output_timestamp as u32;
-        changed |= output_timestamp != input_timestamp;
-        tag_header[4] = (output_timestamp >> 16) as u8;
-        tag_header[5] = (output_timestamp >> 8) as u8;
-        tag_header[6] = output_timestamp as u8;
-        tag_header[7] = (output_timestamp >> 24) as u8;
-        output.write_all(&tag_header)?;
-        input.seek(SeekFrom::Start(data_start))?;
-        let copied = std::io::copy(
-            &mut std::io::Read::by_ref(&mut input).take(data_size as u64),
-            &mut output,
-        )?;
-        if copied != data_size as u64 {
-            changed = true;
-            break;
-        }
-        let read = input.read(&mut previous_tag_size)?;
-        if read != previous_tag_size.len() {
-            changed = true;
-            break;
-        }
-        output.write_all(&((data_size as u32).saturating_add(11)).to_be_bytes())?;
-
-        if let Some(track) = media_track.filter(|_| !pinned_codec_header) {
-            previous_input_timestamps[track] = Some(input_timestamp);
-            if shared_epoch_guard && input_timestamp >= 1_000 {
-                shared_epoch_guard = false;
-            }
-            first_output_timestamp.get_or_insert(output_timestamp);
-            last_output_timestamp = last_output_timestamp.max(output_timestamp);
-        }
-    }
-
-    let duration_ms = first_output_timestamp.map(|first| u64::from(last_output_timestamp - first));
-    drop(input);
-    output.flush()?;
-    output.sync_data()?;
-    drop(output);
-    if changed {
-        let mut backup_name = path.file_name().unwrap_or_default().to_os_string();
-        backup_name.push(format!(".original-{}", Uuid::new_v4().simple()));
-        let backup = path.with_file_name(backup_name);
-        std::fs::rename(path, &backup)?;
-        if let Err(error) = std::fs::rename(&temporary, path) {
-            let _ = std::fs::rename(&backup, path);
-            let _ = std::fs::remove_file(&temporary);
-            return Err(error);
-        }
-        let _ = std::fs::remove_file(backup);
-    } else {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    Ok(duration_ms)
-}
-
-fn direct_failure_status(state: &SessionState) -> RecordingStatus {
-    if state.bytes.load(Ordering::Relaxed) == 0 {
-        RecordingStatus::Failed
-    } else {
-        RecordingStatus::Interrupted
-    }
-}
-
-fn retryable_direct_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::FORBIDDEN
-        || status == reqwest::StatusCode::NOT_FOUND
-        || status == reqwest::StatusCode::REQUEST_TIMEOUT
-        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status.is_server_error()
-}
-
-fn direct_retry_delay(errors: u32) -> Duration {
-    let multiplier = 1_u64 << errors.saturating_sub(1).min(3);
-    Duration::from_secs(
-        DIRECT_RETRY_DELAY
-            .as_secs()
-            .saturating_mul(multiplier)
-            .min(DIRECT_MAX_RETRY_DELAY.as_secs()),
-    )
-}
-
-fn direct_source_candidates(source: &PlayUrl, site_id: Option<&str>) -> Vec<PlayUrl> {
-    let mut candidates = vec![source.clone()];
-    if site_id != Some("huya") {
-        return candidates;
-    }
-    let Ok(mut alternate_url) = Url::parse(&source.url) else {
-        return candidates;
-    };
-    let Some(host) = alternate_url.host_str() else {
-        return candidates;
-    };
-    if host != "huya.com" && !host.ends_with(".huya.com") {
-        return candidates;
-    }
-    let alternate_scheme = match alternate_url.scheme() {
-        "http" => "https",
-        "https" => "http",
-        _ => return candidates,
-    };
-    if alternate_url.set_scheme(alternate_scheme).is_ok() {
-        let mut alternate = source.clone();
-        alternate.url = alternate_url.to_string();
-        candidates.push(alternate);
-    }
-    candidates
-}
-
-async fn finalize_part(part: &Path, final_path: &Path) -> std::io::Result<()> {
-    if !part.exists() {
-        return Ok(());
-    }
-    if final_path.exists() {
-        tokio::fs::remove_file(final_path).await?;
-    }
-    tokio::fs::rename(part, final_path).await
-}
-
-fn build_request(client: &Client, source: &PlayUrl) -> reqwest::RequestBuilder {
     let mut request = client
         .get(&source.url)
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
@@ -1675,10 +1421,124 @@ fn build_request(client: &Client, source: &PlayUrl) -> reqwest::RequestBuilder {
     for (name, value) in &source.headers {
         request = request.header(name.as_str(), value.as_str());
     }
-    request
+    let response = tokio::select! {
+        response = request.send() => response,
+        _ = cancel.changed() => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return TaskOutcome {
+                status: RecordingStatus::Completed,
+                error: None,
+            };
+        }
+    };
+    let mut response = match response {
+        Ok(response) if response.status().is_success() => response.bytes_stream(),
+        Ok(response) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return TaskOutcome {
+                status: RecordingStatus::Failed,
+                error: Some(format!("录制源返回 HTTP {}", response.status().as_u16())),
+            };
+        }
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return TaskOutcome {
+                status: RecordingStatus::Failed,
+                error: Some(format!("连接录制源失败: {}", error.without_url())),
+            };
+        }
+    };
+    let started = Instant::now();
+    let mut outcome = TaskOutcome {
+        status: RecordingStatus::Completed,
+        error: None,
+    };
+    loop {
+        let next = tokio::select! {
+            next = response.next() => next,
+            _ = cancel.changed() => break,
+        };
+        let Some(next) = next else { break };
+        let chunk = match next {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                outcome.status = if state.bytes.load(Ordering::Relaxed) == 0 {
+                    RecordingStatus::Failed
+                } else {
+                    RecordingStatus::Interrupted
+                };
+                outcome.error = Some(format!("读取录制源中断: {}", error.without_url()));
+                break;
+            }
+        };
+        if chunk.is_empty() {
+            continue;
+        }
+        if let Err(error) = file.write_all(&chunk).await {
+            outcome.status = if state.bytes.load(Ordering::Relaxed) == 0 {
+                RecordingStatus::Failed
+            } else {
+                RecordingStatus::Interrupted
+            };
+            outcome.error = Some(format!("写入录制文件失败: {error}"));
+            break;
+        }
+        state.bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        state.duration_ms.store(
+            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+    }
+    let flush_result = match file.flush().await {
+        Ok(()) => file.sync_data().await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = flush_result {
+        outcome.status = if state.bytes.load(Ordering::Relaxed) == 0 {
+            RecordingStatus::Failed
+        } else {
+            RecordingStatus::Interrupted
+        };
+        outcome.error = Some(format!("完成录制文件失败: {error}"));
+    }
+    drop(file);
+    if state.bytes.load(Ordering::Relaxed) == 0 && outcome.status != RecordingStatus::Completed {
+        let _ = tokio::fs::remove_file(&part).await;
+        return outcome;
+    }
+    if final_path.exists() {
+        if let Err(error) = tokio::fs::remove_file(&final_path).await {
+            outcome.status = RecordingStatus::Interrupted;
+            outcome.error = Some(format!("替换录制文件失败: {error}"));
+            return outcome;
+        }
+    }
+    if let Err(error) = tokio::fs::rename(&part, &final_path).await {
+        outcome.status = RecordingStatus::Interrupted;
+        outcome.error = Some(format!("保存录制文件失败: {error}"));
+    }
+    outcome
 }
 
 fn finish_session(state: &Arc<SessionState>, outcome: TaskOutcome) {
+    finish_session_inner(state, outcome, false);
+}
+
+fn finish_session_inner(
+    state: &Arc<SessionState>,
+    outcome: TaskOutcome,
+    salvage_temporary_media: bool,
+) {
+    let _finish_guard = state
+        .finish_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.finished.load(Ordering::Acquire) {
+        return;
+    }
+    if salvage_temporary_media {
+        salvage_temporary_media_after_worker_failure(state);
+    }
     // Close the sidecar before publishing the finished flag. A dispatcher
     // callback that was already in flight either completes before this lock
     // or observes the close flag and skips, so the final metadata count is
@@ -1703,8 +1563,45 @@ fn finish_session(state: &Arc<SessionState>, outcome: TaskOutcome) {
     stored.size_bytes = bundle_size(&state.bundle).max(state.bytes.load(Ordering::Relaxed));
     stored.duration_ms = state.duration_ms.load(Ordering::Relaxed);
     stored.danmaku_count = state.danmaku_count.load(Ordering::Relaxed);
-    let _ = write_metadata(&state.bundle, &stored);
+    if let Err(error) = write_metadata(&state.bundle, &stored) {
+        tracing::error!(
+            recording_id = %stored.id,
+            error = %error,
+            "无法保存录制结束状态"
+        );
+        stored.status = RecordingStatus::Failed;
+        stored.error = Some(match stored.error.take() {
+            Some(previous) => format!("{previous}; 保存录制结束状态失败: {}", error.message),
+            None => format!("保存录制结束状态失败: {}", error.message),
+        });
+        // A rename can fail transiently after the previous metadata file was
+        // removed. Persist the failed state once more so a restart does not
+        // mistake this session for an active recording.
+        if let Err(retry_error) = write_metadata(&state.bundle, &stored) {
+            tracing::error!(
+                recording_id = %stored.id,
+                error = %retry_error,
+                "重试保存录制失败状态仍未成功"
+            );
+        }
+    }
+    let recording_id = stored.id.clone();
+    let status = stored.status.clone();
+    let background_danmaku_source =
+        (stored.include_danmaku && stored.continue_on_leave).then(|| stored.source_key.clone());
+    drop(stored);
     state.finished.store(true, Ordering::Release);
+    state.events.emit(&recording_id, status);
+    if let Some(source_key) = background_danmaku_source {
+        state.events.release_background_danmaku(&source_key);
+    }
+}
+
+fn stored_keeps_background_danmaku(stored: &StoredRecording, source_key: &str) -> bool {
+    stored.status == RecordingStatus::Recording
+        && stored.include_danmaku
+        && stored.continue_on_leave
+        && stored.source_key == source_key
 }
 
 fn validate_start_input(input: &RecordingStartInput) -> AppResult<()> {
@@ -1722,9 +1619,49 @@ fn validate_start_input(input: &RecordingStartInput) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_recording_source(
+    protocol: PlaybackProtocol,
+    source: &PlayUrl,
+    proxy: Option<&str>,
+) -> AppResult<()> {
+    if !matches!(
+        protocol,
+        PlaybackProtocol::Flv
+            | PlaybackProtocol::Hls
+            | PlaybackProtocol::MpegTs
+            | PlaybackProtocol::Native
+    ) {
+        return Err(AppError::new(
+            "recording_protocol_unsupported",
+            "无法识别录制源协议",
+        ));
+    }
+    for (name, value) in &source.headers {
+        if name.trim().is_empty()
+            || name.contains(['\0', '\r', '\n', ':'])
+            || value.contains(['\0', '\r', '\n'])
+        {
+            return Err(AppError::new(
+                "recording_headers_invalid",
+                "直播源请求头无法传递给 Rust FFmpeg 后端",
+            ));
+        }
+    }
+    if let Some(proxy) = proxy.map(str::trim).filter(|value| !value.is_empty()) {
+        let proxy_url =
+            Url::parse(proxy).map_err(|_| AppError::new("proxy_invalid", "代理地址无效"))?;
+        if !matches!(proxy_url.scheme(), "http" | "https") || proxy.contains(['\0', '\r', '\n']) {
+            return Err(AppError::new(
+                "recording_proxy_unsupported",
+                "Rust FFmpeg 实验后端仅支持 HTTP(S) 代理",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn media_file_name(protocol: PlaybackProtocol, source_url: &str, file_stem: &str) -> String {
     match protocol {
-        PlaybackProtocol::Hls => format!("{file_stem}.m3u8"),
         PlaybackProtocol::MpegTs => format!("{file_stem}.ts"),
         PlaybackProtocol::Native => {
             let path = Url::parse(source_url)
@@ -1807,13 +1744,90 @@ fn is_safe_recording_id(id: &str) -> bool {
     Uuid::parse_str(id).is_ok() && !id.contains('/') && !id.contains('\\')
 }
 
+fn acquire_recording_manager_lock(app_directory: &Path) -> AppResult<File> {
+    std::fs::create_dir_all(app_directory).map_err(|error| {
+        AppError::new(
+            "recording_storage_error",
+            format!("创建应用数据目录失败: {error}"),
+        )
+    })?;
+    let path = app_directory.join(RECORDING_MANAGER_LOCK_FILE);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| {
+            AppError::new(
+                "recording_storage_error",
+                format!("打开录制管理锁失败: {error}"),
+            )
+        })?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(AppError::new(
+                "recording_already_running",
+                "另一个 rLive 实例正在管理录制任务",
+            ));
+        }
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(AppError::new(
+                "recording_storage_error",
+                format!("锁定录制管理器失败: {error}"),
+            ));
+        }
+    }
+    file.set_len(0).map_err(|error| {
+        AppError::new(
+            "recording_storage_error",
+            format!("更新录制管理锁失败: {error}"),
+        )
+    })?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        AppError::new(
+            "recording_storage_error",
+            format!("更新录制管理锁失败: {error}"),
+        )
+    })?;
+    file.write_all(std::process::id().to_string().as_bytes())
+        .and_then(|_| file.flush())
+        .map_err(|error| {
+            AppError::new(
+                "recording_storage_error",
+                format!("更新录制管理锁失败: {error}"),
+            )
+        })?;
+    Ok(file)
+}
+
 fn load_storage_state(app_directory: &Path) -> AppResult<RecordingStorageState> {
     let default_root = prepare_storage_root(&app_directory.join(RECORDINGS_DIRECTORY))?;
     let config_path = app_directory.join(RECORDING_STORAGE_CONFIG_FILE);
-    let config = std::fs::read(&config_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<RecordingStorageConfig>(&bytes).ok())
-        .unwrap_or_default();
+    crate::app_paths::recover_recoverable_file(&config_path, valid_recording_storage_config)
+        .map_err(|error| {
+            AppError::new(
+                "recording_storage_error",
+                format!("恢复录制目录设置失败: {error}"),
+            )
+        })?;
+    let config = match std::fs::read(&config_path) {
+        Ok(bytes) => serde_json::from_slice::<RecordingStorageConfig>(&bytes).map_err(|error| {
+            AppError::new(
+                "recording_storage_error",
+                format!("录制目录设置已损坏: {error}"),
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            RecordingStorageConfig::default()
+        }
+        Err(error) => {
+            return Err(AppError::new(
+                "recording_storage_error",
+                format!("读取录制目录设置失败: {error}"),
+            ));
+        }
+    };
 
     let mut history = Vec::new();
     for path in config.known_paths {
@@ -1852,6 +1866,10 @@ fn load_storage_state(app_directory: &Path) -> AppResult<RecordingStorageState> 
     })
 }
 
+fn valid_recording_storage_config(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<RecordingStorageConfig>(bytes).is_ok()
+}
+
 fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
     if path.as_os_str().is_empty() || !path.is_absolute() {
         return Err(AppError::new(
@@ -1879,6 +1897,12 @@ fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
             format!("解析录制目录失败: {error}"),
         )
     })?;
+    if root.parent().is_none() {
+        return Err(AppError::new(
+            "recording_storage_path_invalid",
+            "不能将文件系统根目录作为录制保存位置",
+        ));
+    }
     if !root.is_dir() {
         return Err(AppError::new(
             "recording_storage_path_invalid",
@@ -1926,27 +1950,22 @@ fn ordered_roots(current: &Path, default_root: &Path, history: &[PathBuf]) -> Ve
 fn write_storage_config(storage: &RecordingStorageState) -> AppResult<()> {
     let config = RecordingStorageConfig {
         current_path: (storage.current_root != storage.default_root)
-            .then(|| storage.current_root.display().to_string()),
+            .then(|| crate::app_paths::path_to_string(&storage.current_root)),
         known_paths: storage
             .history
             .iter()
             .filter(|path| **path != storage.default_root)
-            .map(|path| path.display().to_string())
+            .map(|path| crate::app_paths::path_to_string(path))
             .collect(),
     };
     let bytes = serde_json::to_vec_pretty(&config)
         .map_err(|error| AppError::new("recording_storage_error", error.to_string()))?;
-    let temporary = storage.config_path.with_extension("json.tmp");
-    std::fs::write(&temporary, bytes).map_err(|error| {
-        AppError::new(
-            "recording_storage_error",
-            format!("保存录制目录设置失败: {error}"),
-        )
-    })?;
-    if storage.config_path.exists() {
-        let _ = std::fs::remove_file(&storage.config_path);
-    }
-    std::fs::rename(&temporary, &storage.config_path).map_err(|error| {
+    crate::app_paths::write_recoverable_file(
+        &storage.config_path,
+        &bytes,
+        valid_recording_storage_config,
+    )
+    .map_err(|error| {
         AppError::new(
             "recording_storage_error",
             format!("保存录制目录设置失败: {error}"),
@@ -1961,7 +1980,7 @@ fn find_bundle(roots: &[PathBuf], id: &str) -> Option<PathBuf> {
     roots.iter().find_map(|root| {
         let bundle = root.join(id);
         let metadata = bundle.join("metadata.json");
-        let bytes = std::fs::read(metadata).ok()?;
+        let bytes = read_metadata_bytes(&metadata).ok()?;
         let stored = serde_json::from_slice::<StoredRecording>(&bytes).ok()?;
         (stored.id == id && bundle.is_dir()).then_some(bundle)
     })
@@ -1979,20 +1998,13 @@ fn find_stored(roots: &[PathBuf], id: &str) -> AppResult<(PathBuf, StoredRecordi
 }
 
 fn write_metadata(bundle: &Path, stored: &StoredRecording) -> AppResult<()> {
+    let _write_guard = METADATA_IO_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = bundle.join("metadata.json");
-    let temporary = bundle.join("metadata.json.tmp");
     let bytes = serde_json::to_vec_pretty(stored)
         .map_err(|error| AppError::new("recording_metadata_error", error.to_string()))?;
-    std::fs::write(&temporary, bytes).map_err(|error| {
-        AppError::new(
-            "recording_metadata_error",
-            format!("写入录制信息失败: {error}"),
-        )
-    })?;
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-    }
-    std::fs::rename(&temporary, &path).map_err(|error| {
+    write_bundle_file_sync(&path, &bytes).map_err(|error| {
         AppError::new(
             "recording_metadata_error",
             format!("保存录制信息失败: {error}"),
@@ -2000,12 +2012,185 @@ fn write_metadata(bundle: &Path, stored: &StoredRecording) -> AppResult<()> {
     })
 }
 
+fn read_metadata_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    let _read_guard = METADATA_IO_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::fs::read(path)
+}
+
+fn write_bundle_file_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "录制文件名无效",
+        ));
+    };
+    let temporary = path.with_file_name(format!("{file_name}.tmp"));
+    let backup = path.with_file_name(format!("{file_name}.bak"));
+    let _ = std::fs::remove_file(&temporary);
+    if backup.exists() {
+        if path.exists() {
+            std::fs::remove_file(&backup)?;
+        } else {
+            std::fs::rename(&backup, path)?;
+        }
+    }
+
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)?;
+    if let Err(error) = file.write_all(bytes) {
+        drop(file);
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = file.flush().and_then(|_| file.sync_data()) {
+        drop(file);
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+
+    let had_target = path.exists();
+    if had_target && let Err(error) = std::fs::rename(path, &backup) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    match std::fs::rename(&temporary, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(error) => {
+            if had_target {
+                if let Err(rollback_error) = std::fs::rename(&backup, path) {
+                    return Err(std::io::Error::new(
+                        error.kind(),
+                        format!("发布录制文件失败: {error}; 恢复原文件失败: {rollback_error}"),
+                    ));
+                }
+            }
+            Err(error)
+        }
+    }
+}
+
+fn transaction_sidecars(path: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "录制文件名无效",
+        ));
+    };
+    Ok((
+        path.with_file_name(format!("{file_name}.tmp")),
+        path.with_file_name(format!("{file_name}.bak")),
+    ))
+}
+
+fn recover_transaction_sidecars(
+    target: &Path,
+    validate_temporary: impl FnOnce(&[u8]) -> bool,
+) -> std::io::Result<()> {
+    let (temporary, backup) = transaction_sidecars(target)?;
+    let temporary_bytes = match std::fs::read(&temporary) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let temporary_is_valid = temporary_bytes.as_deref().is_some_and(validate_temporary);
+
+    if temporary_is_valid {
+        if target.exists() {
+            if backup.exists() {
+                std::fs::remove_file(&backup)?;
+            }
+            std::fs::rename(target, &backup)?;
+        }
+        match std::fs::rename(&temporary, target) {
+            Ok(()) => {
+                if backup.exists() {
+                    std::fs::remove_file(backup)?;
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                if !target.exists()
+                    && backup.exists()
+                    && let Err(rollback_error) = std::fs::rename(&backup, target)
+                {
+                    return Err(std::io::Error::new(
+                        error.kind(),
+                        format!("恢复录制临时文件失败: {error}; 回滚备份失败: {rollback_error}"),
+                    ));
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    if target.exists() {
+        if backup.exists() {
+            std::fs::remove_file(&backup)?;
+        }
+    } else if backup.exists() {
+        std::fs::rename(&backup, target)?;
+    }
+    if temporary_bytes.is_some() {
+        std::fs::remove_file(temporary)?;
+    }
+    Ok(())
+}
+
+fn valid_metadata_replacement(bytes: &[u8], bundle: &Path) -> bool {
+    let Ok(stored) = serde_json::from_slice::<StoredRecording>(bytes) else {
+        return false;
+    };
+    bundle
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|id| stored.id == id && is_safe_recording_id(id))
+}
+
+fn recover_bundle_sidecars(bundle: &Path) -> std::io::Result<()> {
+    let metadata = bundle.join("metadata.json");
+    {
+        let _metadata_guard = METADATA_IO_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        recover_transaction_sidecars(&metadata, |bytes| valid_metadata_replacement(bytes, bundle))?;
+    }
+
+    let stored = std::fs::read(&metadata)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StoredRecording>(&bytes).ok());
+    if let Some(stored) = stored.as_ref()
+        && !safe_relative_path(Path::new(&stored.media_file))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "录制媒体路径无效",
+        ));
+    }
+    Ok(())
+}
+
 fn read_stored(root: &Path, id: &str) -> AppResult<StoredRecording> {
     let path = root.join(id).join("metadata.json");
-    let bytes =
-        std::fs::read(path).map_err(|_| AppError::new("recording_not_found", "录制不存在"))?;
+    let bytes = read_metadata_bytes(&path)
+        .map_err(|_| AppError::new("recording_not_found", "录制不存在"))?;
     serde_json::from_slice(&bytes)
         .map_err(|_| AppError::new("recording_metadata_error", "录制信息损坏"))
+}
+
+fn append_recovery_error(stored: &mut StoredRecording, message: impl Into<String>) {
+    let message = message.into();
+    stored.error = Some(match stored.error.take() {
+        Some(previous) if !previous.is_empty() => format!("{previous}; {message}"),
+        _ => message,
+    });
 }
 
 fn recover_stale_recordings(root: &Path) -> AppResult<()> {
@@ -2021,24 +2206,86 @@ fn recover_stale_recordings(root: &Path) -> AppResult<()> {
         if !is_safe_recording_id(&id) {
             continue;
         }
-        let Ok(mut stored) = read_stored(root, &id) else {
-            continue;
+        let sidecar_error = recover_bundle_sidecars(&path).err();
+        let mut stored = match read_stored(root, &id) {
+            Ok(stored) => stored,
+            Err(error) => {
+                if let Some(sidecar_error) = sidecar_error {
+                    return Err(AppError::new(
+                        "recording_recovery_error",
+                        format!(
+                            "恢复录制 {id} 的替换文件失败: {sidecar_error}; 无法读取 metadata: {}",
+                            error.message
+                        ),
+                    ));
+                }
+                tracing::warn!(recording_id = %id, error = %error, "跳过无法读取的录制目录");
+                continue;
+            }
         };
-        if stored.status != RecordingStatus::Recording {
+        if stored.id != id {
+            tracing::warn!(
+                recording_id = %id,
+                metadata_id = %stored.id,
+                "跳过 metadata 标识与目录不一致的录制"
+            );
             continue;
         }
-        let part = path.join(format!("{}.part", stored.media_file));
-        let final_path = path.join(&stored.media_file);
-        if part.exists() && !final_path.exists() {
-            let _ = std::fs::rename(&part, &final_path);
+        let was_recording = stored.status == RecordingStatus::Recording;
+        let media_relative = Path::new(&stored.media_file);
+        if !safe_relative_path(media_relative) {
+            append_recovery_error(&mut stored, "录制媒体路径无效");
+            if was_recording {
+                stored.status = RecordingStatus::Interrupted;
+                stored.ended_at = Some(unix_ms());
+            }
+            stored.size_bytes = bundle_size(&path);
+            write_metadata(&path, &stored).map_err(|error| {
+                AppError::new(
+                    "recording_recovery_error",
+                    format!("保存录制 {id} 的恢复状态失败: {}", error.message),
+                )
+            })?;
+            continue;
         }
-        if stored.protocol == PlaybackProtocol::Hls {
-            finalize_hls_manifest(&path.join(&stored.media_file));
+        let part = path.join(format!("{}.part", media_relative.display()));
+        let final_path = path.join(media_relative);
+        let has_orphan_part = part.is_file() && !final_path.is_file();
+        if !was_recording && !has_orphan_part {
+            if let Some(error) = sidecar_error {
+                tracing::warn!(recording_id = %id, error = %error, "历史录制的临时替换文件恢复失败");
+            }
+            continue;
         }
-        stored.status = RecordingStatus::Interrupted;
-        stored.ended_at = Some(unix_ms());
+        if let Some(error) = sidecar_error {
+            append_recovery_error(&mut stored, format!("恢复临时替换文件失败: {error}"));
+        }
+        if has_orphan_part {
+            if let Err(error) = std::fs::rename(&part, &final_path) {
+                append_recovery_error(&mut stored, format!("恢复临时媒体失败: {error}"));
+            }
+        }
+        if !final_path.is_file() {
+            append_recovery_error(&mut stored, "录制媒体文件缺失");
+        }
+        if was_recording {
+            stored.status = RecordingStatus::Interrupted;
+            if stored.ended_at.is_none() {
+                stored.ended_at = Some(unix_ms());
+            }
+        } else if has_orphan_part && final_path.is_file() {
+            stored.status = RecordingStatus::Interrupted;
+            if stored.ended_at.is_none() {
+                stored.ended_at = Some(unix_ms());
+            }
+        }
         stored.size_bytes = bundle_size(&path);
-        let _ = write_metadata(&path, &stored);
+        write_metadata(&path, &stored).map_err(|error| {
+            AppError::new(
+                "recording_recovery_error",
+                format!("保存录制 {id} 的恢复状态失败: {}", error.message),
+            )
+        })?;
     }
     Ok(())
 }
@@ -2069,1280 +2316,6 @@ fn walkdir(path: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
     visit(path, &mut out)?;
     Ok(out)
 }
-
-fn finalize_hls_manifest(path: &Path) {
-    let Ok(mut text) = std::fs::read_to_string(path) else {
-        return;
-    };
-    if text.contains("#EXT-X-ENDLIST") {
-        return;
-    }
-    text = text.replace("#EXT-X-PLAYLIST-TYPE:EVENT", "#EXT-X-PLAYLIST-TYPE:VOD");
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.push_str("#EXT-X-ENDLIST\n");
-    let _ = std::fs::write(path, text);
-}
-
-// -------------------------------------------------------------------------
-// HLS archive
-
-#[derive(Debug, Clone)]
-struct HlsKey {
-    method: String,
-    uri: String,
-    iv: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct HlsMap {
-    uri: String,
-    range: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct HlsSegment {
-    uri: Url,
-    sequence: u64,
-    duration: f64,
-    identity: String,
-    key: Option<HlsKey>,
-    map: Option<HlsMap>,
-    range: Option<String>,
-    /// Absolute epoch when the playlist declares DISCONTINUITY-SEQUENCE.
-    /// Without that tag this stays None; the explicit marker below is the
-    /// only boundary that can be carried safely across rolling windows.
-    discontinuity_sequence: Option<u64>,
-    discontinuity: bool,
-    gap: bool,
-}
-
-#[derive(Debug, Default)]
-struct ParsedPlaylist {
-    media_sequence: u64,
-    discontinuity_sequence: Option<u64>,
-    target_duration: f64,
-    end_list: bool,
-    segments: Vec<HlsSegment>,
-}
-
-#[derive(Debug, Clone)]
-struct ArchiveEntry {
-    file: String,
-    duration: f64,
-    key: Option<String>,
-    key_iv: Option<String>,
-    map: Option<String>,
-    discontinuity: bool,
-}
-
-struct HlsArchive {
-    bundle: PathBuf,
-    playlist_file: String,
-    entries: Vec<ArchiveEntry>,
-    seen: HashSet<String>,
-    keys: HashMap<String, String>,
-    maps: HashMap<String, String>,
-    target_duration: f64,
-    next_segment: u64,
-    last_discontinuity_sequence: Option<u64>,
-    pending_discontinuity: bool,
-}
-
-#[derive(Debug, Default)]
-struct TwitchHlsRefreshState {
-    last_attempt: Option<Instant>,
-    /// Profile zero is the normal `site/web` token; subsequent attempts walk
-    /// the same fallback profiles used by the playback proxy so an ad-bound
-    /// token does not get renewed forever with the same player type.
-    next_profile: usize,
-}
-
-#[derive(Debug)]
-enum TwitchHlsRefreshResult {
-    /// A newly signed child playlist URL is ready to probe.
-    Refreshed(Url),
-    /// Twitch explicitly says the channel is no longer live.
-    NotLive,
-    /// No Twitch recovery context exists (ordinary HLS recording).
-    Unavailable,
-    /// The refresh request is still inside its backoff window.
-    Throttled,
-}
-
-impl HlsArchive {
-    fn new(bundle: PathBuf, playlist_file: String) -> Self {
-        Self {
-            bundle,
-            playlist_file,
-            entries: Vec::new(),
-            seen: HashSet::new(),
-            keys: HashMap::new(),
-            maps: HashMap::new(),
-            target_duration: 6.0,
-            next_segment: 0,
-            last_discontinuity_sequence: None,
-            pending_discontinuity: false,
-        }
-    }
-
-    /// The first playlist is a rolling live window. Recording starts at its
-    /// newest segment, so older entries in that same window must be treated as
-    /// consumed or the next poll would append them behind the live edge.
-    fn skip_before_live_edge(&mut self, segments: &[HlsSegment]) {
-        // Keep the previous source epoch as the archive cursor. If the live
-        // edge follows a discontinuity (including a GAP segment), the first
-        // segment we actually save must carry that boundary into the local
-        // playlist even though the earlier segment is intentionally skipped.
-        if let Some(previous) = segments.get(segments.len().saturating_sub(2))
-            && let Some(sequence) = previous.discontinuity_sequence
-        {
-            self.last_discontinuity_sequence = Some(sequence);
-        }
-        for segment in segments.iter().take(segments.len().saturating_sub(1)) {
-            self.skip_segment(segment);
-        }
-    }
-
-    fn skip_segment(&mut self, segment: &HlsSegment) {
-        // A boundary attached to a GAP has no bytes to archive, but it still
-        // applies to the next real segment in the source timeline.
-        self.pending_discontinuity |= segment.discontinuity;
-        self.seen.insert(segment.identity.clone());
-    }
-
-    fn advance_discontinuity_sequence(&mut self, sequence: Option<u64>) -> bool {
-        let Some(sequence) = sequence else {
-            return false;
-        };
-        let discontinuity = self
-            .last_discontinuity_sequence
-            .is_some_and(|previous| previous != sequence);
-        self.last_discontinuity_sequence = Some(sequence);
-        discontinuity
-    }
-
-    fn take_segment_discontinuity(&mut self, segment: &HlsSegment) -> bool {
-        let epoch_changed = self.advance_discontinuity_sequence(segment.discontinuity_sequence);
-        std::mem::take(&mut self.pending_discontinuity) || segment.discontinuity || epoch_changed
-    }
-
-    async fn append_segments(
-        &mut self,
-        client: &Client,
-        playlist: &ParsedPlaylist,
-        headers: &HashMap<String, String>,
-        state: &SessionState,
-    ) -> Result<usize, String> {
-        self.target_duration = self.target_duration.max(playlist.target_duration);
-        let mut appended = 0;
-        for segment in &playlist.segments {
-            if self.seen.contains(&segment.identity) {
-                continue;
-            }
-            if segment.gap {
-                self.skip_segment(segment);
-                continue;
-            }
-            let key_file = if let Some(key) = &segment.key {
-                Some(self.ensure_key(client, key, headers, state).await?)
-            } else {
-                None
-            };
-            let map_file = if let Some(map) = &segment.map {
-                Some(self.ensure_map(client, map, headers, state).await?)
-            } else {
-                None
-            };
-            let bytes = fetch_bytes(
-                client,
-                &segment.uri,
-                headers,
-                segment.range.as_deref(),
-                MAX_SEGMENT_BYTES,
-            )
-            .await?;
-            if bytes.is_empty() {
-                continue;
-            }
-            let extension = segment_extension(&segment.uri, &bytes);
-            let file = format!("segments/{:08}.{}", self.next_segment, extension);
-            self.next_segment = self.next_segment.saturating_add(1);
-            let path = self.bundle.join(&file);
-            tokio::fs::write(&path, &bytes)
-                .await
-                .map_err(|error| format!("写入 HLS 分片失败: {error}"))?;
-            state.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            let duration = if segment.duration.is_finite() {
-                segment.duration.max(0.0)
-            } else {
-                0.0
-            };
-            state
-                .duration_ms
-                .fetch_add((duration * 1000.0).round() as u64, Ordering::Relaxed);
-            let discontinuity = self.take_segment_discontinuity(segment);
-            self.entries.push(ArchiveEntry {
-                file,
-                duration,
-                key: key_file,
-                key_iv: segment.key.as_ref().map(|key| {
-                    key.iv
-                        .clone()
-                        .unwrap_or_else(|| hls_media_sequence_iv(segment.sequence))
-                }),
-                map: map_file,
-                discontinuity,
-            });
-            self.seen.insert(segment.identity.clone());
-            appended += 1;
-        }
-        self.write_manifest(false)
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(appended)
-    }
-
-    async fn ensure_key(
-        &mut self,
-        client: &Client,
-        key: &HlsKey,
-        headers: &HashMap<String, String>,
-        state: &SessionState,
-    ) -> Result<String, String> {
-        if key.method.eq_ignore_ascii_case("NONE") {
-            return Ok(String::new());
-        }
-        if let Some(file) = self.keys.get(&key.uri) {
-            return Ok(file.clone());
-        }
-        let url = Url::parse(&key.uri).map_err(|error| format!("HLS 密钥地址无效: {error}"))?;
-        let bytes = fetch_bytes(client, &url, headers, None, MAX_KEY_BYTES).await?;
-        let file = format!("keys/{:016x}.key", stable_hash(&key.uri));
-        tokio::fs::write(self.bundle.join(&file), &bytes)
-            .await
-            .map_err(|error| format!("保存 HLS 密钥失败: {error}"))?;
-        state.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        self.keys.insert(key.uri.clone(), file.clone());
-        Ok(file)
-    }
-
-    async fn ensure_map(
-        &mut self,
-        client: &Client,
-        map: &HlsMap,
-        headers: &HashMap<String, String>,
-        state: &SessionState,
-    ) -> Result<String, String> {
-        let identity = format!("{}|{}", map.uri, map.range.as_deref().unwrap_or(""));
-        if let Some(file) = self.maps.get(&identity) {
-            return Ok(file.clone());
-        }
-        let url =
-            Url::parse(&map.uri).map_err(|error| format!("HLS 初始化片段地址无效: {error}"))?;
-        let bytes = fetch_bytes(
-            client,
-            &url,
-            headers,
-            map.range.as_deref(),
-            MAX_SEGMENT_BYTES,
-        )
-        .await?;
-        let file = format!("maps/{:016x}.map", stable_hash(&identity));
-        tokio::fs::write(self.bundle.join(&file), &bytes)
-            .await
-            .map_err(|error| format!("保存 HLS 初始化片段失败: {error}"))?;
-        state.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        self.maps.insert(identity, file.clone());
-        Ok(file)
-    }
-
-    fn render_manifest(&self, end_list: bool) -> String {
-        let mut text = String::from("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:");
-        text.push_str(if end_list { "VOD\n" } else { "EVENT\n" });
-        text.push_str(&format!(
-            "#EXT-X-TARGETDURATION:{}\n",
-            self.target_duration.ceil().max(1.0) as u64
-        ));
-        text.push_str("#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-INDEPENDENT-SEGMENTS\n");
-        let mut previous_key: Option<(&str, Option<&str>)> = None;
-        let mut previous_map: Option<&str> = None;
-        for entry in &self.entries {
-            if entry.discontinuity {
-                text.push_str("#EXT-X-DISCONTINUITY\n");
-            }
-            let key = entry
-                .key
-                .as_deref()
-                .map(|value| (value, entry.key_iv.as_deref()));
-            if key != previous_key {
-                if let Some((key, iv)) = key {
-                    text.push_str(&format!("#EXT-X-KEY:METHOD=AES-128,URI=\"{key}\""));
-                    if let Some(iv) = iv {
-                        text.push_str(&format!(",IV={iv}"));
-                    }
-                    text.push('\n');
-                } else if previous_key.is_some() {
-                    text.push_str("#EXT-X-KEY:METHOD=NONE\n");
-                }
-                previous_key = key;
-            }
-            if entry.map.as_deref() != previous_map {
-                if let Some(map) = entry.map.as_deref() {
-                    text.push_str(&format!("#EXT-X-MAP:URI=\"{map}\"\n"));
-                }
-                previous_map = entry.map.as_deref();
-            }
-            text.push_str(&format!("#EXTINF:{:.3},\n{}\n", entry.duration, entry.file));
-        }
-        if end_list {
-            text.push_str("#EXT-X-ENDLIST\n");
-        }
-        text
-    }
-
-    async fn write_manifest(&self, end_list: bool) -> std::io::Result<()> {
-        tokio::fs::write(
-            self.bundle.join(&self.playlist_file),
-            self.render_manifest(end_list),
-        )
-        .await
-    }
-}
-
-async fn refresh_twitch_hls_url(
-    client: &Client,
-    recovery: Option<&TwitchAdRecovery>,
-    refresh_state: &mut TwitchHlsRefreshState,
-) -> Result<TwitchHlsRefreshResult, String> {
-    let Some(recovery) = recovery else {
-        return Ok(TwitchHlsRefreshResult::Unavailable);
-    };
-    if refresh_state
-        .last_attempt
-        .is_some_and(|attempt| attempt.elapsed() < TWITCH_HLS_REFRESH_RETRY_DELAY)
-    {
-        return Ok(TwitchHlsRefreshResult::Throttled);
-    }
-    refresh_state.last_attempt = Some(Instant::now());
-    let fallback_profiles = crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES;
-    let profile_count = fallback_profiles.len() + 1;
-    let profile_index = refresh_state.next_profile % profile_count;
-    refresh_state.next_profile = (profile_index + 1) % profile_count;
-    let (player_type, platform) = if profile_index == 0 {
-        crate::sites::twitch::TWITCH_PRIMARY_PLAYER_TYPE
-    } else {
-        fallback_profiles[profile_index - 1]
-    };
-    let url = match crate::sites::twitch::twitch_ad_fallback_url(
-        client.clone(),
-        recovery,
-        player_type,
-        platform,
-    )
-    .await
-    {
-        Ok(url) => url,
-        Err(error) if error.code == "twitch_not_live" && profile_index == 0 => {
-            return Ok(TwitchHlsRefreshResult::NotLive);
-        }
-        Err(error) => {
-            return Err(format!(
-                "刷新 Twitch 录制地址失败 [{}]: {}",
-                error.code, error.message
-            ));
-        }
-    };
-    Url::parse(&url)
-        .map(TwitchHlsRefreshResult::Refreshed)
-        .map_err(|error| format!("刷新后的 Twitch 录制地址无效: {error}"))
-}
-
-enum TwitchEndlistDecision {
-    Continue,
-    Complete,
-    Interrupted(String),
-}
-
-/// A live Twitch child playlist should not be trusted just because one poll
-/// contains `#EXT-X-ENDLIST`: an expired token and a stitched ad response can
-/// briefly look like a finished VOD. Probe a freshly signed URL first and only
-/// accept the terminal state when Twitch explicitly reports the channel offline.
-async fn handle_twitch_endlist(
-    client: &Client,
-    recovery: Option<&TwitchAdRecovery>,
-    refresh_state: &mut TwitchHlsRefreshState,
-    archive: &mut HlsArchive,
-    manifest_url: &mut Url,
-    cancel: &mut watch::Receiver<bool>,
-    refreshes: &mut u32,
-    refresh_errors: &mut u32,
-) -> TwitchEndlistDecision {
-    let Some(recovery) = recovery else {
-        return TwitchEndlistDecision::Complete;
-    };
-    match refresh_twitch_hls_url(client, Some(recovery), refresh_state).await {
-        Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
-            *refreshes = (*refreshes).saturating_add(1);
-            *refresh_errors = 0;
-            *manifest_url = refreshed_url;
-            archive.pending_discontinuity = true;
-            tracing::info!(
-                attempt = *refreshes,
-                "Twitch 清单意外包含 ENDLIST，已刷新地址确认直播状态"
-            );
-            TwitchEndlistDecision::Continue
-        }
-        Ok(TwitchHlsRefreshResult::NotLive) => TwitchEndlistDecision::Complete,
-        Ok(TwitchHlsRefreshResult::Throttled) => {
-            if wait_or_cancel(cancel, HLS_RETRY_DELAY).await {
-                TwitchEndlistDecision::Complete
-            } else {
-                TwitchEndlistDecision::Continue
-            }
-        }
-        Ok(TwitchHlsRefreshResult::Unavailable) => TwitchEndlistDecision::Complete,
-        Err(error) => {
-            *refresh_errors = (*refresh_errors).saturating_add(1);
-            tracing::warn!(
-                attempt = *refresh_errors,
-                error = %error,
-                "Twitch ENDLIST 状态确认失败，准备重试"
-            );
-            if *refresh_errors >= HLS_ERROR_LIMIT {
-                TwitchEndlistDecision::Interrupted(error)
-            } else if wait_or_cancel(cancel, HLS_RETRY_DELAY).await {
-                TwitchEndlistDecision::Complete
-            } else {
-                TwitchEndlistDecision::Continue
-            }
-        }
-    }
-}
-
-async fn run_hls_recording(
-    client: Client,
-    source: PlayUrl,
-    state: Arc<SessionState>,
-    mut cancel: watch::Receiver<bool>,
-) -> TaskOutcome {
-    let mut manifest_url = match Url::parse(&source.url) {
-        Ok(url) => url,
-        Err(error) => {
-            return TaskOutcome {
-                status: RecordingStatus::Failed,
-                error: Some(error.to_string()),
-            };
-        }
-    };
-    let twitch_recovery = source.twitch_ad_recovery.clone();
-    let playlist_file = state
-        .stored
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .media_file
-        .clone();
-    let mut archive = HlsArchive::new(state.bundle.clone(), playlist_file);
-    let mut initialized = false;
-    let mut errors = 0;
-    let mut twitch_refresh = TwitchHlsRefreshState::default();
-    let mut empty_playlists = 0_u32;
-    let mut twitch_endlist_refreshes = 0_u32;
-    let mut twitch_endlist_errors = 0_u32;
-    loop {
-        if *cancel.borrow() {
-            let _ = archive.write_manifest(true).await;
-            return TaskOutcome {
-                status: RecordingStatus::Completed,
-                error: None,
-            };
-        }
-        let (body, effective_url) = match fetch_text(&client, &manifest_url, &source.headers).await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                errors += 1;
-                if errors >= HLS_ERROR_LIMIT {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Interrupted,
-                        error: Some(error),
-                    };
-                }
-                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
-                    .await
-                {
-                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
-                        manifest_url = refreshed_url;
-                        archive.pending_discontinuity = true;
-                        tracing::info!("Twitch 录制地址已刷新");
-                        continue;
-                    }
-                    Ok(TwitchHlsRefreshResult::NotLive) => {
-                        let _ = archive.write_manifest(true).await;
-                        return TaskOutcome {
-                            status: RecordingStatus::Completed,
-                            error: None,
-                        };
-                    }
-                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
-                    }
-                    Err(refresh_error) => {
-                        tracing::warn!(error = %refresh_error, "无法刷新 Twitch 录制地址");
-                    }
-                }
-                tracing::warn!(attempt = errors, error = %error, "HLS 录制清单读取失败，准备重试");
-                if wait_or_cancel(&mut cancel, HLS_RETRY_DELAY).await {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Completed,
-                        error: None,
-                    };
-                }
-                continue;
-            }
-        };
-        manifest_url = effective_url.clone();
-        let twitch_ad_manifest =
-            twitch_recovery.is_some() && crate::stream_proxy::is_twitch_ad_manifest(&body);
-        if twitch_ad_manifest {
-            match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
-                .await
-            {
-                Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
-                    manifest_url = refreshed_url;
-                    archive.pending_discontinuity = true;
-                    tracing::info!("Twitch 广告时段已切换到新的录制地址");
-                    continue;
-                }
-                Ok(TwitchHlsRefreshResult::NotLive) => {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Completed,
-                        error: None,
-                    };
-                }
-                Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {}
-                Err(refresh_error) => {
-                    tracing::warn!(error = %refresh_error, "Twitch 广告时段刷新录制地址失败");
-                }
-            }
-            // Twitch can return a 200 text response or a stitched ad playlist
-            // for longer than the ordinary retry budget. This is temporary
-            // platform content, not an ended live stream; keep the EVENT open
-            // and resume from the next clean child playlist.
-            if wait_or_cancel(&mut cancel, HLS_RETRY_DELAY).await {
-                let _ = archive.write_manifest(true).await;
-                return TaskOutcome {
-                    status: RecordingStatus::Completed,
-                    error: None,
-                };
-            }
-            continue;
-        }
-        if let Some(master) = select_master_variant(&body, &effective_url) {
-            manifest_url = master;
-            continue;
-        }
-        let parsed = match parse_media_playlist_with_identity(
-            &body,
-            &effective_url,
-            twitch_recovery.is_some(),
-        ) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                if !retryable_hls_playlist_error(&error) {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: if archive.entries.is_empty() {
-                            RecordingStatus::Failed
-                        } else {
-                            RecordingStatus::Interrupted
-                        },
-                        error: Some(error),
-                    };
-                }
-                errors += 1;
-                if errors >= HLS_ERROR_LIMIT {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: if archive.entries.is_empty() {
-                            RecordingStatus::Failed
-                        } else {
-                            RecordingStatus::Interrupted
-                        },
-                        error: Some(error),
-                    };
-                }
-                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
-                    .await
-                {
-                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
-                        manifest_url = refreshed_url;
-                        archive.pending_discontinuity = true;
-                        tracing::info!("Twitch 录制清单异常后已刷新地址");
-                        continue;
-                    }
-                    Ok(TwitchHlsRefreshResult::NotLive) => {
-                        let _ = archive.write_manifest(true).await;
-                        return TaskOutcome {
-                            status: RecordingStatus::Completed,
-                            error: None,
-                        };
-                    }
-                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
-                    }
-                    Err(refresh_error) => {
-                        tracing::warn!(error = %refresh_error, "Twitch 录制清单异常且刷新失败");
-                    }
-                }
-                tracing::warn!(attempt = errors, error = %error, "HLS 录制清单暂时不可解析，准备重试");
-                if wait_or_cancel(&mut cancel, HLS_RETRY_DELAY).await {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Completed,
-                        error: None,
-                    };
-                }
-                continue;
-            }
-        };
-        if parsed.segments.is_empty() {
-            if !parsed.end_list {
-                errors = 0;
-            }
-            empty_playlists = empty_playlists.saturating_add(1);
-            if parsed.end_list {
-                match handle_twitch_endlist(
-                    &client,
-                    twitch_recovery.as_ref(),
-                    &mut twitch_refresh,
-                    &mut archive,
-                    &mut manifest_url,
-                    &mut cancel,
-                    &mut twitch_endlist_refreshes,
-                    &mut twitch_endlist_errors,
-                )
-                .await
-                {
-                    TwitchEndlistDecision::Continue => continue,
-                    TwitchEndlistDecision::Complete => {
-                        let _ = archive.write_manifest(true).await;
-                        return TaskOutcome {
-                            status: RecordingStatus::Completed,
-                            error: None,
-                        };
-                    }
-                    TwitchEndlistDecision::Interrupted(error) => {
-                        let _ = archive.write_manifest(true).await;
-                        return TaskOutcome {
-                            status: RecordingStatus::Interrupted,
-                            error: Some(error),
-                        };
-                    }
-                }
-            }
-            if twitch_recovery.is_some() && empty_playlists >= TWITCH_EMPTY_PLAYLIST_REFRESH_LIMIT {
-                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
-                    .await
-                {
-                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
-                        manifest_url = refreshed_url;
-                        archive.pending_discontinuity = true;
-                        empty_playlists = 0;
-                        tracing::info!("Twitch 空清单持续出现，已刷新录制地址");
-                        continue;
-                    }
-                    Ok(TwitchHlsRefreshResult::NotLive) => {
-                        let _ = archive.write_manifest(true).await;
-                        return TaskOutcome {
-                            status: RecordingStatus::Completed,
-                            error: None,
-                        };
-                    }
-                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
-                    }
-                    Err(refresh_error) => {
-                        tracing::warn!(error = %refresh_error, "Twitch 空清单且刷新地址失败");
-                    }
-                }
-                empty_playlists = 0;
-            }
-            if wait_or_cancel(&mut cancel, target_delay(parsed.target_duration)).await {
-                let _ = archive.write_manifest(true).await;
-                return TaskOutcome {
-                    status: RecordingStatus::Completed,
-                    error: None,
-                };
-            }
-            continue;
-        }
-        empty_playlists = 0;
-        if !initialized {
-            archive.skip_before_live_edge(&parsed.segments);
-        }
-        let candidates: Vec<HlsSegment> = if initialized {
-            parsed.segments.clone()
-        } else {
-            parsed.segments.last().cloned().into_iter().collect()
-        };
-        initialized = true;
-        let candidate_playlist = ParsedPlaylist {
-            media_sequence: parsed.media_sequence,
-            discontinuity_sequence: parsed.discontinuity_sequence,
-            target_duration: parsed.target_duration,
-            end_list: parsed.end_list,
-            segments: candidates,
-        };
-        match archive
-            .append_segments(&client, &candidate_playlist, &source.headers, &state)
-            .await
-        {
-            Ok(appended) => {
-                if appended > 0 {
-                    errors = 0;
-                    if !parsed.end_list {
-                        // A refreshed URL is only considered healthy after a
-                        // complete new segment has been archived.
-                        twitch_refresh.last_attempt = None;
-                        twitch_refresh.next_profile = 0;
-                        twitch_endlist_refreshes = 0;
-                        twitch_endlist_errors = 0;
-                    }
-                }
-            }
-            Err(error) => {
-                errors += 1;
-                if errors >= HLS_ERROR_LIMIT {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Interrupted,
-                        error: Some(error),
-                    };
-                }
-                match refresh_twitch_hls_url(&client, twitch_recovery.as_ref(), &mut twitch_refresh)
-                    .await
-                {
-                    Ok(TwitchHlsRefreshResult::Refreshed(refreshed_url)) => {
-                        manifest_url = refreshed_url;
-                        archive.pending_discontinuity = true;
-                        // Keep the retry budget until a refreshed playlist
-                        // actually contributes a complete segment.
-                        tracing::info!("Twitch 分片读取失败后已刷新录制地址");
-                        continue;
-                    }
-                    Ok(TwitchHlsRefreshResult::NotLive) => {
-                        let _ = archive.write_manifest(true).await;
-                        return TaskOutcome {
-                            status: RecordingStatus::Completed,
-                            error: None,
-                        };
-                    }
-                    Ok(TwitchHlsRefreshResult::Unavailable | TwitchHlsRefreshResult::Throttled) => {
-                    }
-                    Err(refresh_error) => {
-                        tracing::warn!(error = %refresh_error, "Twitch 分片读取失败且刷新地址失败");
-                    }
-                }
-                if wait_or_cancel(&mut cancel, target_delay(parsed.target_duration)).await {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Completed,
-                        error: None,
-                    };
-                }
-                continue;
-            }
-        }
-        if parsed.end_list {
-            match handle_twitch_endlist(
-                &client,
-                twitch_recovery.as_ref(),
-                &mut twitch_refresh,
-                &mut archive,
-                &mut manifest_url,
-                &mut cancel,
-                &mut twitch_endlist_refreshes,
-                &mut twitch_endlist_errors,
-            )
-            .await
-            {
-                TwitchEndlistDecision::Continue => continue,
-                TwitchEndlistDecision::Complete => {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Completed,
-                        error: None,
-                    };
-                }
-                TwitchEndlistDecision::Interrupted(error) => {
-                    let _ = archive.write_manifest(true).await;
-                    return TaskOutcome {
-                        status: RecordingStatus::Interrupted,
-                        error: Some(error),
-                    };
-                }
-            }
-        }
-        if wait_or_cancel(&mut cancel, target_delay(parsed.target_duration)).await {
-            let _ = archive.write_manifest(true).await;
-            return TaskOutcome {
-                status: RecordingStatus::Completed,
-                error: None,
-            };
-        }
-    }
-}
-
-async fn fetch_text(
-    client: &Client,
-    url: &Url,
-    headers: &HashMap<String, String>,
-) -> Result<(String, Url), String> {
-    let source = PlayUrl {
-        source_id: String::new(),
-        label: String::new(),
-        protocol: PlaybackProtocol::Hls,
-        priority: 0,
-        url: url.to_string(),
-        headers: headers.clone(),
-        twitch_ad_recovery: None,
-    };
-    let response = build_request(client, &source)
-        .send()
-        .await
-        .map_err(|error| format!("读取 HLS 清单失败: {}", error.without_url()))?;
-    if !response.status().is_success() {
-        return Err(format!("HLS 清单返回 HTTP {}", response.status().as_u16()));
-    }
-    let effective = response.url().clone();
-    let mut stream = response.bytes_stream();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("读取 HLS 清单失败: {}", error.without_url()))?;
-        if bytes.len().saturating_add(chunk.len()) > MAX_MANIFEST_BYTES {
-            return Err("HLS 清单过大".into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let body = String::from_utf8(bytes).map_err(|_| "HLS 清单不是 UTF-8 文本".to_string())?;
-    Ok((body, effective))
-}
-
-async fn fetch_bytes(
-    client: &Client,
-    url: &Url,
-    headers: &HashMap<String, String>,
-    range: Option<&str>,
-    max_bytes: usize,
-) -> Result<Vec<u8>, String> {
-    let requested_range = range.map(http_byte_range_bounds).transpose()?;
-    let source = PlayUrl {
-        source_id: String::new(),
-        label: String::new(),
-        protocol: PlaybackProtocol::Unknown,
-        priority: 0,
-        url: url.to_string(),
-        headers: headers.clone(),
-        twitch_ad_recovery: None,
-    };
-    let mut request = build_request(client, &source);
-    if let Some(range) = range {
-        request = request.header(reqwest::header::RANGE, format!("bytes={range}"));
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("读取 HLS 资源失败: {}", error.without_url()))?;
-    if !response.status().is_success() {
-        return Err(format!("HLS 资源返回 HTTP {}", response.status().as_u16()));
-    }
-    let response_status = response.status();
-    let mut stream = response.bytes_stream();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("读取 HLS 资源失败: {}", error.without_url()))?;
-        if bytes.len().saturating_add(chunk.len()) > max_bytes {
-            return Err("HLS 资源过大".into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    if let Some((start, end)) = requested_range {
-        let expected = end
-            .checked_sub(start)
-            .and_then(|length| length.checked_add(1))
-            .ok_or_else(|| "HLS BYTERANGE 超出支持范围".to_string())?;
-        let received = bytes.len() as u64;
-        if response_status == reqwest::StatusCode::PARTIAL_CONTENT {
-            if received != expected {
-                return Err("HLS BYTERANGE 返回长度不匹配".into());
-            }
-        } else if received != expected {
-            if received <= end {
-                return Err("HLS 资源未返回完整的 BYTERANGE 内容".into());
-            }
-            let start =
-                usize::try_from(start).map_err(|_| "HLS BYTERANGE 超出支持范围".to_string())?;
-            let end = usize::try_from(end).map_err(|_| "HLS BYTERANGE 超出支持范围".to_string())?;
-            bytes = bytes[start..=end].to_vec();
-        }
-    }
-    Ok(bytes)
-}
-
-fn http_byte_range_bounds(value: &str) -> Result<(u64, u64), String> {
-    let (start, end) = value
-        .split_once('-')
-        .ok_or_else(|| "HLS BYTERANGE 格式无效".to_string())?;
-    let start = start
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| "HLS BYTERANGE 起点无效".to_string())?;
-    let end = end
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| "HLS BYTERANGE 终点无效".to_string())?;
-    if start > end {
-        return Err("HLS BYTERANGE 起点不能大于终点".into());
-    }
-    Ok((start, end))
-}
-
-async fn wait_or_cancel(cancel: &mut watch::Receiver<bool>, duration: Duration) -> bool {
-    tokio::select! {
-        _ = tokio::time::sleep(duration) => false,
-        changed = cancel.changed() => changed.is_ok() && *cancel.borrow(),
-    }
-}
-
-fn target_delay(target: f64) -> Duration {
-    Duration::from_secs_f64(target.clamp(1.0, 10.0) / 2.0)
-}
-
-fn select_master_variant(body: &str, base: &Url) -> Option<Url> {
-    if !body
-        .lines()
-        .any(|line| line.trim_start().starts_with("#EXT-X-STREAM-INF"))
-    {
-        return None;
-    }
-    let mut best: Option<(u64, Url)> = None;
-    let mut bandwidth = 0_u64;
-    let mut waiting = false;
-    for line in body.lines() {
-        let line = line.trim();
-        if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
-            bandwidth = attribute_value(attrs, "BANDWIDTH")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(0);
-            waiting = true;
-            continue;
-        }
-        if waiting && !line.is_empty() && !line.starts_with('#') {
-            if let Ok(url) = base.join(line)
-                && best
-                    .as_ref()
-                    .is_none_or(|(current, _)| bandwidth >= *current)
-            {
-                best = Some((bandwidth, url));
-            }
-            waiting = false;
-        }
-    }
-    best.map(|(_, url)| url)
-}
-
-fn retryable_hls_playlist_error(error: &str) -> bool {
-    // A CDN or ad server can briefly answer a child-playlist request with
-    // plain text or HTML. Structural errors inside an actual manifest (for
-    // example unsupported encryption or an invalid BYTERANGE) are permanent
-    // for that source and should still fail immediately.
-    error == "HLS 清单缺少 #EXTM3U 头"
-}
-
-#[cfg(test)]
-fn parse_media_playlist(body: &str, base: &Url) -> Result<ParsedPlaylist, String> {
-    parse_media_playlist_with_identity(body, base, false)
-}
-
-fn parse_media_playlist_with_identity(
-    body: &str,
-    base: &Url,
-    stable_sequence_identity: bool,
-) -> Result<ParsedPlaylist, String> {
-    let header = body
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.trim_start_matches('\u{feff}'));
-    if header != Some("#EXTM3U") {
-        return Err("HLS 清单缺少 #EXTM3U 头".into());
-    }
-    let mut playlist = ParsedPlaylist::default();
-    let mut current_key: Option<HlsKey> = None;
-    let mut current_map: Option<HlsMap> = None;
-    let mut next_duration: Option<f64> = None;
-    let mut next_range: Option<String> = None;
-    let mut next_program_date_time: Option<String> = None;
-    let mut discontinuity_sequence: Option<u64> = None;
-    let mut next_discontinuity = false;
-    let mut gap = false;
-    let mut sequence = 0_u64;
-    let mut media_sequence_declared = false;
-    let mut previous_segment_range: Option<(String, u64)> = None;
-    let mut previous_map_range: Option<(String, u64)> = None;
-    for line in body.lines().map(str::trim) {
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
-            playlist.media_sequence = value.parse().unwrap_or(0);
-            sequence = playlist.media_sequence;
-            media_sequence_declared = true;
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
-            playlist.target_duration = value.parse().unwrap_or(0.0);
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-DISCONTINUITY-SEQUENCE:") {
-            let sequence = value.parse().unwrap_or(0);
-            playlist.discontinuity_sequence = Some(sequence);
-            discontinuity_sequence = Some(sequence);
-            continue;
-        }
-        if line == "#EXT-X-ENDLIST" {
-            playlist.end_list = true;
-            continue;
-        }
-        if line == "#EXT-X-DISCONTINUITY" {
-            next_discontinuity = true;
-            if let Some(sequence) = discontinuity_sequence.as_mut() {
-                *sequence = sequence.saturating_add(1);
-            }
-            continue;
-        }
-        if line == "#EXT-X-GAP" {
-            gap = true;
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXTINF:") {
-            next_duration = value.split(',').next().and_then(|value| value.parse().ok());
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-PROGRAM-DATE-TIME:") {
-            next_program_date_time = Some(value.trim().to_string());
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-BYTERANGE:") {
-            next_range = Some(value.trim().to_string());
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
-            let method = attribute_value(value, "METHOD")
-                .unwrap_or_else(|| "NONE".into())
-                .to_ascii_uppercase();
-            if method == "NONE" {
-                current_key = None;
-                continue;
-            }
-            if method != "AES-128" {
-                return Err(format!("暂不支持 HLS 加密方式 {method}"));
-            }
-            let key_format =
-                attribute_value(value, "KEYFORMAT").unwrap_or_else(|| "identity".into());
-            if !key_format.eq_ignore_ascii_case("identity") {
-                return Err(format!("暂不支持 HLS 密钥格式 {key_format}"));
-            }
-            let uri = attribute_value(value, "URI")
-                .ok_or_else(|| "HLS AES-128 密钥缺少 URI".to_string())?;
-            current_key = Some(HlsKey {
-                method,
-                uri: base.join(&uri).map(|url| url.to_string()).unwrap_or(uri),
-                iv: attribute_value(value, "IV"),
-            });
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
-            let raw_uri = attribute_value(value, "URI")
-                .ok_or_else(|| "HLS 初始化片段缺少 URI".to_string())?;
-            let uri = base
-                .join(&raw_uri)
-                .map(|url| url.to_string())
-                .unwrap_or(raw_uri);
-            let range = if let Some(value) = attribute_value(value, "BYTERANGE") {
-                let implicit_start = previous_map_range
-                    .as_ref()
-                    .filter(|(previous_uri, _)| previous_uri == &uri)
-                    .map(|(_, end)| *end);
-                let (range, end) = hls_http_byte_range(&value, implicit_start)?;
-                previous_map_range = Some((uri.clone(), end));
-                Some(range)
-            } else {
-                previous_map_range = None;
-                None
-            };
-            current_map = Some(HlsMap { uri, range });
-            continue;
-        }
-        if line.starts_with('#') {
-            continue;
-        }
-        let Ok(uri) = base.join(line) else { continue };
-        let range = if let Some(value) = next_range.take() {
-            let uri_text = uri.to_string();
-            let implicit_start = previous_segment_range
-                .as_ref()
-                .filter(|(previous_uri, _)| previous_uri == &uri_text)
-                .map(|(_, end)| *end);
-            let (range, end) = hls_http_byte_range(&value, implicit_start)?;
-            previous_segment_range = Some((uri_text, end));
-            Some(range)
-        } else {
-            previous_segment_range = None;
-            None
-        };
-        let identity = if stable_sequence_identity && media_sequence_declared {
-            // Signed Twitch URLs change when their short-lived playback token
-            // is renewed. RFC media and absolute discontinuity sequence
-            // numbers remain stable even if PROGRAM-DATE-TIME is sparse or
-            // changes textual precision between overlapping windows.
-            format!(
-                "sequence|{}|{}|{}",
-                discontinuity_sequence
-                    .map_or_else(|| "relative".to_string(), |sequence| sequence.to_string()),
-                sequence,
-                range.as_deref().unwrap_or("")
-            )
-        } else if stable_sequence_identity
-            && let Some(program_date_time) = next_program_date_time.as_deref()
-        {
-            // A nonstandard Twitch playlist without MEDIA-SEQUENCE can still
-            // use its wall-clock timestamp as a stable fallback identity.
-            format!(
-                "program-date-time|{}|{}|{}",
-                discontinuity_sequence
-                    .map_or_else(|| "relative".to_string(), |sequence| sequence.to_string()),
-                program_date_time,
-                range.as_deref().unwrap_or("")
-            )
-        } else {
-            format!("{}|{}|{}", sequence, uri, range.as_deref().unwrap_or(""))
-        };
-        next_program_date_time = None;
-        playlist.segments.push(HlsSegment {
-            uri,
-            sequence,
-            duration: next_duration.unwrap_or(0.0),
-            identity,
-            key: current_key.clone(),
-            map: current_map.clone(),
-            range,
-            discontinuity_sequence,
-            discontinuity: next_discontinuity,
-            gap,
-        });
-        sequence = sequence.saturating_add(1);
-        next_duration = None;
-        next_discontinuity = false;
-        gap = false;
-    }
-    Ok(playlist)
-}
-
-/// HLS uses `length@offset`; HTTP uses an inclusive `start-end` range.
-/// An omitted offset continues immediately after the previous range for the
-/// same resource, as required by RFC 8216.
-fn hls_http_byte_range(value: &str, implicit_start: Option<u64>) -> Result<(String, u64), String> {
-    let value = value.trim().trim_matches('"');
-    let (length, explicit_start) = value
-        .split_once('@')
-        .map_or((value, None), |(length, start)| (length, Some(start)));
-    let length = length
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| format!("HLS BYTERANGE 长度无效: {value}"))?;
-    if length == 0 {
-        return Err("HLS BYTERANGE 长度不能为 0".into());
-    }
-    let start = match explicit_start {
-        Some(start) => start
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| format!("HLS BYTERANGE 偏移无效: {value}"))?,
-        None => implicit_start.ok_or_else(|| "HLS BYTERANGE 缺少可推导的偏移".to_string())?,
-    };
-    let end_exclusive = start
-        .checked_add(length)
-        .ok_or_else(|| "HLS BYTERANGE 超出支持范围".to_string())?;
-    Ok((format!("{start}-{}", end_exclusive - 1), end_exclusive))
-}
-
-fn hls_media_sequence_iv(sequence: u64) -> String {
-    format!("0x{sequence:032x}")
-}
-
-fn parse_attribute_list(value: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut quoted = false;
-    for (index, character) in value.char_indices() {
-        match character {
-            '"' => quoted = !quoted,
-            ',' if !quoted => {
-                push_attribute(&mut out, &value[start..index]);
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    push_attribute(&mut out, &value[start..]);
-    out
-}
-
-fn push_attribute(out: &mut Vec<(String, String)>, value: &str) {
-    if let Some((key, value)) = value.split_once('=') {
-        out.push((
-            key.trim().to_ascii_uppercase(),
-            value.trim().trim_matches('"').to_string(),
-        ));
-    }
-}
-
-fn attribute_value(value: &str, key: &str) -> Option<String> {
-    parse_attribute_list(value)
-        .into_iter()
-        .find(|(name, _)| name == &key.to_ascii_uppercase())
-        .map(|(_, value)| value)
-}
-
-fn segment_extension(url: &Url, bytes: &[u8]) -> &'static str {
-    let path = url.path().to_ascii_lowercase();
-    if path.ends_with(".m4s") {
-        "m4s"
-    } else if path.ends_with(".mp4") {
-        "mp4"
-    } else if path.ends_with(".aac") {
-        "aac"
-    } else if bytes.first() == Some(&0x47) {
-        "ts"
-    } else {
-        "bin"
-    }
-}
-
-fn stable_hash(value: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-// -------------------------------------------------------------------------
-// Local playback server
 
 struct PlaybackServer {
     storage: Arc<Mutex<RecordingStorageState>>,
@@ -3769,32 +2742,25 @@ async fn write_simple_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveEntry, HlsArchive, RecordingManager, RecordingStartInput, RecordingStatus,
-        SessionState, StoredDanmakuBatch, StoredRecording, attribute_value,
-        decode_playback_relative_path, direct_source_candidates,
-        flv_payload_is_codec_sequence_header, hls_media_sequence_iv, http_byte_range_bounds,
-        local_playback_url, media_file_name, normalize_flv_timestamps, parse_media_playlist,
-        parse_media_playlist_with_identity, parse_range, recording_file_stem,
-        retryable_hls_playlist_error, run_direct_recording, run_hls_recording, safe_relative_path,
-        select_master_variant, write_metadata,
+        FinalizingSession, RecordingEventSink, RecordingManager, RecordingStartInput,
+        RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
+        StoredRecording, TaskOutcome, decode_playback_relative_path, finish_session,
+        load_storage_state, local_playback_url, media_file_name, parse_range, prepare_storage_root,
+        read_stored, recording_file_stem, recover_bundle_sidecars, recover_stale_recordings,
+        safe_relative_path, salvage_temporary_media_after_worker_failure,
+        stop_sessions_until_deadline, stored_keeps_background_danmaku,
+        wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use reqwest::Url;
     use std::collections::HashSet;
+    use std::fs::OpenOptions;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Barrier, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::sync::watch;
+    use tokio::sync::{oneshot, watch};
     use uuid::Uuid;
-
-    #[test]
-    fn parses_hls_attributes_with_quoted_commas() {
-        assert_eq!(
-            attribute_value("METHOD=AES-128,URI=\"keys/a,b\",IV=0x01", "URI").as_deref(),
-            Some("keys/a,b")
-        );
-    }
 
     #[test]
     fn names_recording_media_from_user_title_and_start_time() {
@@ -3813,441 +2779,82 @@ mod tests {
         );
         assert_eq!(
             media_file_name(
-                PlaybackProtocol::Hls,
+                PlaybackProtocol::MpegTs,
                 "https://example.test/live.m3u8",
                 &stem
             ),
-            format!("{stem}.m3u8")
+            format!("{stem}.ts")
         );
     }
 
     #[test]
-    fn selects_the_highest_bandwidth_master_variant() {
-        let base = Url::parse("https://example.test/master.m3u8").unwrap();
-        let url = select_master_variant(
-            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=500\nhigh.m3u8\n",
-            &base,
-        )
-        .unwrap();
-        assert_eq!(url.as_str(), "https://example.test/high.m3u8");
-    }
-
-    #[test]
-    fn parses_media_sequence_and_relative_segments() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXT-X-TARGETDURATION:4\n#EXTINF:3.5,\nseg.ts\n#EXTINF:4,\nnext.ts\n",
-            &base,
-        )
-        .unwrap();
-        assert_eq!(playlist.media_sequence, 12);
-        assert_eq!(playlist.segments.len(), 2);
-        assert_eq!(
-            playlist.segments[0].identity,
-            "12|https://example.test/live/seg.ts|"
-        );
-    }
-
-    #[test]
-    fn keeps_hls_identity_stable_when_twitch_renews_signed_urls() {
-        let first_base = Url::parse("https://video-a.example.test/token-one/index.m3u8").unwrap();
-        let second_base = Url::parse("https://video-b.example.test/token-two/index.m3u8").unwrap();
-        let first = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2,live\nfirst.m4s\n",
-            &first_base,
-            true,
-        )
-        .unwrap();
-        let renewed = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2,live\nrenewed.m4s\n",
-            &second_base,
-            true,
-        )
-        .unwrap();
-        let restarted = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,live\nrestart.m4s\n",
-            &second_base,
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(first.segments[0].identity, renewed.segments[0].identity);
-        assert_ne!(first.segments[0].identity, restarted.segments[0].identity);
-    }
-
-    #[test]
-    fn includes_the_discontinuity_epoch_in_program_date_time_identity() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let first = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:2\n#EXT-X-PROGRAM-DATE-TIME:2026-08-17T00:00:00Z\n#EXTINF:2,live\nfirst.m4s\n",
-            &base,
-            true,
-        )
-        .unwrap();
-        let next_epoch = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:3\n#EXT-X-PROGRAM-DATE-TIME:2026-08-17T00:00:00Z\n#EXTINF:2,live\nnext.m4s\n",
-            &base,
-            true,
-        )
-        .unwrap();
-
-        assert_ne!(first.segments[0].identity, next_epoch.segments[0].identity);
-    }
-
-    #[test]
-    fn tracks_hls_discontinuity_epoch_across_gaps_and_rolling_windows() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:100\n#EXT-X-DISCONTINUITY-SEQUENCE:7\n#EXTINF:2,live\nfirst.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2,ad\n#EXT-X-GAP\ngap.ts\n#EXTINF:2,live\nsecond.ts\n",
-            &base,
-        )
-        .unwrap();
-        let rolled = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:103\n#EXT-X-DISCONTINUITY-SEQUENCE:8\n#EXTINF:2,live\nthird.ts\n",
-            &base,
-        )
-        .unwrap();
-
-        assert_eq!(playlist.discontinuity_sequence, Some(7));
-        assert_eq!(
-            playlist
-                .segments
-                .iter()
-                .map(|segment| segment.discontinuity_sequence)
-                .collect::<Vec<_>>(),
-            [Some(7), Some(8), Some(8)]
-        );
-        assert!(playlist.segments[1].gap);
-        assert_eq!(rolled.segments[0].discontinuity_sequence, Some(8));
-    }
-
-    #[test]
-    fn archive_marks_the_first_saved_segment_after_a_skipped_hls_epoch() {
-        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
-
-        assert!(!archive.advance_discontinuity_sequence(Some(7)));
-        // A GAP segment in epoch 8 is not written and therefore must not move
-        // the archive cursor. The next real segment crosses the boundary.
-        assert!(archive.advance_discontinuity_sequence(Some(8)));
-        assert!(!archive.advance_discontinuity_sequence(Some(8)));
-    }
-
-    #[test]
-    fn marks_the_initial_hls_window_before_the_live_edge_as_consumed() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2,\nold-a.ts\n#EXTINF:2,\nold-b.ts\n#EXTINF:2,\nedge.ts\n",
-            &base,
-        )
-        .unwrap();
-        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
-
-        archive.skip_before_live_edge(&playlist.segments);
-
-        assert!(archive.seen.contains(&playlist.segments[0].identity));
-        assert!(archive.seen.contains(&playlist.segments[1].identity));
-        assert!(!archive.seen.contains(&playlist.segments[2].identity));
-    }
-
-    #[test]
-    fn carries_an_initial_discontinuity_to_the_first_saved_live_edge() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-DISCONTINUITY-SEQUENCE:4\n#EXTINF:2,old\nold.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2,edge\nedge.ts\n",
-            &base,
-        )
-        .unwrap();
-        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
-
-        archive.skip_before_live_edge(&playlist.segments);
-
-        assert_eq!(archive.last_discontinuity_sequence, Some(4));
-        assert!(archive.advance_discontinuity_sequence(Some(5)));
-    }
-
-    #[test]
-    fn does_not_compare_relative_discontinuity_counts_across_windows() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let first = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2,old\nold.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2,edge\nedge.ts\n",
-            &base,
-        )
-        .unwrap();
-        let next = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:11\n#EXTINF:2,new\nnew.ts\n",
-            &base,
-        )
-        .unwrap();
-        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
-
-        archive.skip_before_live_edge(&first.segments);
-
-        assert!(first.segments[1].discontinuity);
-        assert!(!archive.advance_discontinuity_sequence(next.segments[0].discontinuity_sequence));
-    }
-
-    #[test]
-    fn carries_an_explicit_gap_boundary_without_an_absolute_sequence() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-DISCONTINUITY\n#EXTINF:2,gap\n#EXT-X-GAP\ngap.ts\n#EXTINF:2,live\nlive.ts\n",
-            &base,
-        )
-        .unwrap();
-        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
-
-        archive.skip_before_live_edge(&playlist.segments);
-
-        assert!(playlist.segments[0].gap);
-        assert!(!playlist.segments[1].discontinuity);
-        assert!(archive.take_segment_discontinuity(&playlist.segments[1]));
-        assert!(!archive.pending_discontinuity);
-    }
-
-    #[tokio::test]
-    async fn hls_recording_recovers_after_a_temporary_non_manifest_response() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let playlist_requests = Arc::new(AtomicUsize::new(0));
-        let requested_paths = Arc::new(Mutex::new(Vec::<String>::new()));
-        let server_playlist_requests = playlist_requests.clone();
-        let server_requested_paths = requested_paths.clone();
-        let server = tokio::spawn(async move {
-            loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0_u8; 4096];
-                let length = socket.read(&mut request).await.unwrap();
-                let request = String::from_utf8_lossy(&request[..length]);
-                let path = request
-                    .lines()
-                    .next()
-                    .and_then(|line| line.split_whitespace().nth(1))
-                    .unwrap_or("/")
-                    .to_string();
-                server_requested_paths.lock().unwrap().push(path.clone());
-                let (content_type, body): (&str, Vec<u8>) = match path.as_str() {
-                    "/live.m3u8" => {
-                        let attempt = server_playlist_requests.fetch_add(1, Ordering::Relaxed);
-                        let text = match attempt {
-                            0 => {
-                                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-TARGETDURATION:1\n#EXTINF:2,\nold.ts\n#EXTINF:2,\nedge.ts\n"
-                            }
-                            1 => "Commercial break in progress. Please wait.",
-                            _ => {
-                                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:11\n#EXT-X-TARGETDURATION:1\n#EXTINF:2,\nedge.ts\n#EXTINF:2,\nnew.ts\n"
-                            }
-                        };
-                        ("application/vnd.apple.mpegurl", text.as_bytes().to_vec())
-                    }
-                    "/old.ts" => ("video/mp2t", b"\x47old".to_vec()),
-                    "/edge.ts" => ("video/mp2t", b"\x47edge".to_vec()),
-                    "/new.ts" => ("video/mp2t", b"\x47new".to_vec()),
-                    _ => ("text/plain", b"missing".to_vec()),
-                };
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                socket.write_all(response.as_bytes()).await.unwrap();
-                socket.write_all(&body).await.unwrap();
-            }
-        });
-
-        let root = std::env::temp_dir().join(format!("rlive-hls-retry-{}", Uuid::new_v4()));
+    fn concurrent_metadata_replacements_leave_a_valid_bundle() {
+        let root = std::env::temp_dir().join(format!("rlive-metadata-write-{}", Uuid::new_v4()));
         let bundle = root.join(Uuid::new_v4().to_string());
-        std::fs::create_dir_all(bundle.join("segments")).unwrap();
-        for directory in ["keys", "maps"] {
-            std::fs::create_dir_all(bundle.join(directory)).unwrap();
-        }
+        std::fs::create_dir_all(&bundle).unwrap();
         let stored = completed_recording(
             bundle.file_name().unwrap().to_string_lossy().into_owned(),
-            "hls-retry",
+            "metadata",
         );
-        let state = Arc::new(SessionState {
-            root: root.clone(),
-            bundle: bundle.clone(),
-            stored: Mutex::new(StoredRecording {
-                protocol: PlaybackProtocol::Hls,
-                status: RecordingStatus::Recording,
-                media_file: "index.m3u8".into(),
-                ..stored
-            }),
-            bytes: AtomicU64::new(0),
-            duration_ms: AtomicU64::new(0),
-            danmaku_count: AtomicU64::new(0),
-            danmaku_writer: Mutex::new(None),
-            danmaku_closed: AtomicBool::new(false),
-            finished: AtomicBool::new(false),
-        });
-        let source = crate::models::live::PlayUrl::inferred(
-            "test:hls",
-            "测试 HLS",
-            0,
-            format!("http://{address}/live.m3u8"),
-            Default::default(),
-        );
-        let client = crate::http_client::client_for_proxy(None).unwrap();
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let task_state = state.clone();
-        let task =
-            tokio::spawn(
-                async move { run_hls_recording(client, source, task_state, cancel_rx).await },
-            );
+        write_metadata(&bundle, &stored).unwrap();
 
-        tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            while state.duration_ms.load(Ordering::Relaxed) < 4_000 {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .unwrap();
-        cancel_tx.send(true).unwrap();
-        let outcome = task.await.unwrap();
-        server.abort();
-        let _ = server.await;
+        let barrier = Arc::new(Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|index| {
+                let barrier = barrier.clone();
+                let bundle = bundle.clone();
+                let mut stored = stored.clone();
+                stored.title = format!("metadata-{index}");
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    write_metadata(&bundle, &stored).unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
 
-        assert_eq!(outcome.status, RecordingStatus::Completed);
-        assert_eq!(outcome.error, None);
-        let manifest = std::fs::read_to_string(bundle.join("index.m3u8")).unwrap();
-        assert_eq!(manifest.matches("#EXTINF:").count(), 2);
-        assert_eq!(
-            std::fs::read(bundle.join("segments/00000000.ts")).unwrap(),
-            b"\x47edge"
-        );
-        assert_eq!(
-            std::fs::read(bundle.join("segments/00000001.ts")).unwrap(),
-            b"\x47new"
-        );
-        assert!(
-            !requested_paths
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|path| path == "/old.ts")
-        );
+        let persisted: StoredRecording =
+            serde_json::from_slice(&std::fs::read(bundle.join("metadata.json")).unwrap()).unwrap();
+        assert!(persisted.title.starts_with("metadata-"));
+        assert!(!bundle.join("metadata.json.tmp").exists());
+        assert!(!bundle.join("metadata.json.bak").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn rejects_a_non_hls_response_before_polling_it_forever() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let error = parse_media_playlist("<html>sign in</html>", &base).unwrap_err();
-
-        assert!(error.contains("#EXTM3U"));
-        assert!(retryable_hls_playlist_error(&error));
-    }
-
-    #[test]
-    fn converts_explicit_and_implicit_hls_byte_ranges() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXT-X-MAP:URI=\"media.mp4\",BYTERANGE=\"8@0\"\n#EXTINF:2,\n#EXT-X-BYTERANGE:4@8\nmedia.mp4\n#EXTINF:2,\n#EXT-X-BYTERANGE:3\nmedia.mp4\n",
-            &base,
-        )
-        .unwrap();
-
-        assert_eq!(
-            playlist.segments[0].map.as_ref().unwrap().range.as_deref(),
-            Some("0-7")
+    fn startup_recovery_prefers_valid_metadata_tmp_over_old_backup() {
+        let root = std::env::temp_dir().join(format!("rlive-metadata-recovery-{}", Uuid::new_v4()));
+        let bundle = root.join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&bundle).unwrap();
+        let mut old = completed_recording(
+            bundle.file_name().unwrap().to_string_lossy().into_owned(),
+            "old",
         );
-        assert_eq!(playlist.segments[0].range.as_deref(), Some("8-11"));
-        assert_eq!(playlist.segments[1].range.as_deref(), Some("12-14"));
-        assert_eq!(http_byte_range_bounds("12-14").unwrap(), (12, 14));
-        assert!(http_byte_range_bounds("14-12").is_err());
-    }
-
-    #[test]
-    fn derives_aes_iv_from_the_original_media_sequence() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let playlist = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:4,\nsegment.ts\n",
-            &base,
+        old.status = RecordingStatus::Recording;
+        let mut next = old.clone();
+        next.status = RecordingStatus::Completed;
+        next.title = "new".into();
+        std::fs::write(
+            bundle.join("metadata.json.bak"),
+            serde_json::to_vec_pretty(&old).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("metadata.json.tmp"),
+            serde_json::to_vec_pretty(&next).unwrap(),
         )
         .unwrap();
 
-        assert_eq!(playlist.segments[0].sequence, 12);
-        assert_eq!(playlist.segments[0].key.as_ref().unwrap().iv, None);
-        assert_eq!(
-            hls_media_sequence_iv(12),
-            "0x0000000000000000000000000000000c"
-        );
-    }
+        recover_bundle_sidecars(&bundle).unwrap();
 
-    #[test]
-    fn keeps_twitch_identity_stable_when_program_date_time_is_sparse() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let with_timestamp = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXT-X-PROGRAM-DATE-TIME:2026-08-17T00:00:00.000Z\n#EXTINF:2,live\nfirst.m4s\n",
-            &base,
-            true,
-        )
-        .unwrap();
-        let without_timestamp = parse_media_playlist_with_identity(
-            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2,live\nrenewed.m4s\n",
-            &base,
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(
-            with_timestamp.segments[0].identity,
-            without_timestamp.segments[0].identity
-        );
-    }
-
-    #[test]
-    fn rejects_unsupported_hls_encryption_methods() {
-        let base = Url::parse("https://example.test/live/index.m3u8").unwrap();
-        let error = parse_media_playlist(
-            "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key.bin\"\n#EXTINF:4,\nsegment.ts\n",
-            &base,
-        )
-        .unwrap_err();
-
-        assert!(error.contains("SAMPLE-AES"));
-        assert!(!retryable_hls_playlist_error(&error));
-    }
-
-    #[test]
-    fn renders_hls_manifest_with_key_map_and_endlist_in_order() {
-        let mut archive = HlsArchive::new(PathBuf::new(), "index.m3u8".into());
-        archive.target_duration = 4.0;
-        archive.entries = vec![
-            ArchiveEntry {
-                file: "segments/00000000.ts".into(),
-                duration: 2.5,
-                key: Some("keys/0000000000000001.key".into()),
-                key_iv: Some("0x0000000000000000000000000000000c".into()),
-                map: Some("maps/0000000000000002.map".into()),
-                discontinuity: false,
-            },
-            ArchiveEntry {
-                file: "segments/00000001.ts".into(),
-                duration: 3.0,
-                key: Some("keys/0000000000000001.key".into()),
-                key_iv: Some("0x0000000000000000000000000000000c".into()),
-                map: Some("maps/0000000000000002.map".into()),
-                discontinuity: false,
-            },
-            ArchiveEntry {
-                file: "segments/00000002.ts".into(),
-                duration: 1.0,
-                key: None,
-                key_iv: None,
-                map: None,
-                discontinuity: true,
-            },
-        ];
-
-        let manifest = archive.render_manifest(true);
-        let key_at = manifest.find("#EXT-X-KEY:METHOD=AES-128").unwrap();
-        let map_at = manifest.find("#EXT-X-MAP:").unwrap();
-        let segment_at = manifest.find("#EXTINF:2.500").unwrap();
-        assert!(key_at < map_at && map_at < segment_at);
-        assert!(manifest.contains("IV=0x0000000000000000000000000000000c"));
-        assert!(manifest.contains("#EXT-X-DISCONTINUITY\n"));
-        assert!(manifest.contains("#EXT-X-KEY:METHOD=NONE\n"));
-        assert!(manifest.ends_with("#EXT-X-ENDLIST\n"));
+        let recovered: StoredRecording =
+            serde_json::from_slice(&std::fs::read(bundle.join("metadata.json")).unwrap()).unwrap();
+        assert_eq!(recovered.title, "new");
+        assert!(!bundle.join("metadata.json.bak").exists());
+        assert!(!bundle.join("metadata.json.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4304,525 +2911,6 @@ mod tests {
         assert!(decode_playback_relative_path(["segments%5Csecret.ts"]).is_none());
     }
 
-    #[test]
-    fn rebases_flv_timestamps_after_a_stream_reconnect() {
-        fn append_tag(file: &mut Vec<u8>, timestamp: u32) {
-            file.push(9);
-            file.extend_from_slice(&[0, 0, 1]);
-            file.push((timestamp >> 16) as u8);
-            file.push((timestamp >> 8) as u8);
-            file.push(timestamp as u8);
-            file.push((timestamp >> 24) as u8);
-            file.extend_from_slice(&[0, 0, 0]);
-            file.push(0);
-            file.extend_from_slice(&[0, 0, 0, 12]);
-        }
-
-        fn timestamp_at(file: &[u8], offset: usize) -> u32 {
-            (u32::from(file[offset + 4]) << 16)
-                | (u32::from(file[offset + 5]) << 8)
-                | u32::from(file[offset + 6])
-                | (u32::from(file[offset + 7]) << 24)
-        }
-
-        let path = std::env::temp_dir().join(format!(
-            "rlive-flv-normalize-{}.flv",
-            Uuid::new_v4().simple()
-        ));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 0);
-        append_tag(&mut file, 1000);
-        append_tag(&mut file, 0);
-        append_tag(&mut file, 1000);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2001));
-        let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(timestamp_at(&normalized, 13), 0);
-        assert_eq!(timestamp_at(&normalized, 29), 1000);
-        assert_eq!(timestamp_at(&normalized, 45), 1001);
-        assert_eq!(timestamp_at(&normalized, 61), 2001);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn drops_a_partial_tag_before_a_reconnect_tag() {
-        fn append_tag(file: &mut Vec<u8>, timestamp: u32, payload: &[u8]) {
-            file.push(9);
-            file.extend_from_slice(&[
-                0,
-                0,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        let path =
-            std::env::temp_dir().join(format!("rlive-flv-resync-{}.flv", Uuid::new_v4().simple()));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 0, b"first");
-        // The reconnect cuts this tag after three payload bytes. The next
-        // response starts with a complete tag at a new timestamp.
-        file.extend_from_slice(&[9, 0, 0, 10, 0, 0, 1, 0, 0, 0, 0]);
-        file.extend_from_slice(b"bad");
-        append_tag(&mut file, 1000, b"second");
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(1000));
-        let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(normalized.len(), 13 + (11 + 5 + 4) + (11 + 6 + 4));
-        assert_eq!(normalized[13], 9);
-        assert_eq!(normalized[33], 9);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn normalizes_absolute_flv_clock_after_replayed_preamble() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
-            file.extend_from_slice(&[
-                tag_type,
-                0,
-                (payload.len() >> 8) as u8,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        let path =
-            std::env::temp_dir().join(format!("rlive-flv-clock-{}.flv", Uuid::new_v4().simple()));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 9, 12, &[0x17, 0]);
-        append_tag(&mut file, 8, 6_559, &[0xaf, 0]);
-        append_tag(&mut file, 9, 2_000_000, &[0x17, 1]);
-        append_tag(&mut file, 8, 2_001_000, &[0xaf, 1]);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(1000));
-        let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(normalized.len(), 13 + (11 + 2 + 4) * 4);
-        for offset in [13, 30, 47] {
-            assert_eq!(
-                (u32::from(normalized[offset + 4]) << 16)
-                    | (u32::from(normalized[offset + 5]) << 8)
-                    | u32::from(normalized[offset + 6])
-                    | (u32::from(normalized[offset + 7]) << 24),
-                0
-            );
-        }
-        assert_eq!(
-            (u32::from(normalized[68]) << 16)
-                | (u32::from(normalized[69]) << 8)
-                | u32::from(normalized[70])
-                | (u32::from(normalized[71]) << 24),
-            1000
-        );
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn drops_replayed_douyu_media_until_each_track_passes_its_old_clock() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
-            file.extend_from_slice(&[
-                tag_type,
-                (payload.len() >> 16) as u8,
-                (payload.len() >> 8) as u8,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        fn tags(file: &[u8]) -> Vec<(u8, u32, Vec<u8>)> {
-            let mut result = Vec::new();
-            let mut offset = 13;
-            while offset + 15 <= file.len() {
-                let data_size = (usize::from(file[offset + 1]) << 16)
-                    | (usize::from(file[offset + 2]) << 8)
-                    | usize::from(file[offset + 3]);
-                let timestamp = (u32::from(file[offset + 4]) << 16)
-                    | (u32::from(file[offset + 5]) << 8)
-                    | u32::from(file[offset + 6])
-                    | (u32::from(file[offset + 7]) << 24);
-                result.push((
-                    file[offset] & 0x1f,
-                    timestamp,
-                    file[offset + 11..offset + 11 + data_size].to_vec(),
-                ));
-                offset += 11 + data_size + 4;
-            }
-            result
-        }
-
-        let path = std::env::temp_dir().join(format!(
-            "rlive-flv-douyu-overlap-{}.flv",
-            Uuid::new_v4().simple()
-        ));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 8, 33, &[0xaf, 0, 0xa0]);
-        append_tag(&mut file, 9, 8_370, &[0x17, 0, 0, 0, 0, 0xa1]);
-        append_tag(&mut file, 9, 2_000_000, &[0x17, 1, 0, 0, 0, 0x10]);
-        append_tag(&mut file, 8, 2_000_020, &[0xaf, 1, 0x11]);
-        append_tag(&mut file, 8, 2_004_980, &[0xaf, 1, 0x12]);
-        append_tag(&mut file, 9, 2_005_000, &[0x27, 1, 0, 0, 0, 0x13]);
-
-        append_tag(&mut file, 8, 33, &[0xaf, 0, 0xb0]);
-        append_tag(&mut file, 9, 8_370, &[0x17, 0, 0, 0, 0, 0xb1]);
-        // The reconnect starts only 200ms behind the previous edge. This is
-        // below the old 500ms tolerance and must still be treated as replay.
-        append_tag(&mut file, 9, 2_004_800, &[0x17, 1, 0, 0, 0, 0x20]);
-        append_tag(&mut file, 8, 2_004_820, &[0xaf, 1, 0x21]);
-        append_tag(&mut file, 8, 2_004_960, &[0xaf, 1, 0x22]);
-        append_tag(&mut file, 9, 2_004_980, &[0x27, 1, 0, 0, 0, 0x23]);
-        append_tag(&mut file, 8, 2_005_000, &[0xaf, 1, 0x30]);
-        append_tag(&mut file, 9, 2_005_020, &[0x27, 1, 0, 0, 0, 0x31]);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(5_020));
-        let normalized = std::fs::read(&path).unwrap();
-        let tags = tags(&normalized);
-        let sequence_timestamps = tags
-            .iter()
-            .filter(|(tag_type, _, payload)| {
-                flv_payload_is_codec_sequence_header(*tag_type, payload)
-            })
-            .map(|(_, timestamp, _)| *timestamp)
-            .collect::<Vec<_>>();
-        assert_eq!(sequence_timestamps, [0, 0, 5_000, 5_000]);
-
-        let audio_timestamps = tags
-            .iter()
-            .filter(|(tag_type, _, payload)| {
-                *tag_type == 8 && !flv_payload_is_codec_sequence_header(*tag_type, payload)
-            })
-            .map(|(_, timestamp, _)| *timestamp)
-            .collect::<Vec<_>>();
-        let video_timestamps = tags
-            .iter()
-            .filter(|(tag_type, _, payload)| {
-                *tag_type == 9 && !flv_payload_is_codec_sequence_header(*tag_type, payload)
-            })
-            .map(|(_, timestamp, _)| *timestamp)
-            .collect::<Vec<_>>();
-        assert_eq!(audio_timestamps, [20, 4_980, 5_000]);
-        assert_eq!(video_timestamps, [0, 5_000, 5_020]);
-        assert!(audio_timestamps.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(video_timestamps.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(
-            tags.iter()
-                .all(|(_, _, payload)| !matches!(payload.last(), Some(0x20 | 0x21 | 0x22 | 0x23)))
-        );
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn starts_one_shared_epoch_when_both_tracks_restart_from_zero() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
-            file.extend_from_slice(&[
-                tag_type,
-                (payload.len() >> 16) as u8,
-                (payload.len() >> 8) as u8,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        fn media_timestamps(file: &[u8], wanted_type: u8) -> Vec<u32> {
-            let mut result = Vec::new();
-            let mut offset = 13;
-            while offset + 15 <= file.len() {
-                let tag_type = file[offset] & 0x1f;
-                let data_size = (usize::from(file[offset + 1]) << 16)
-                    | (usize::from(file[offset + 2]) << 8)
-                    | usize::from(file[offset + 3]);
-                let payload = &file[offset + 11..offset + 11 + data_size];
-                if tag_type == wanted_type
-                    && !flv_payload_is_codec_sequence_header(tag_type, payload)
-                {
-                    result.push(
-                        (u32::from(file[offset + 4]) << 16)
-                            | (u32::from(file[offset + 5]) << 8)
-                            | u32::from(file[offset + 6])
-                            | (u32::from(file[offset + 7]) << 24),
-                    );
-                }
-                offset += 11 + data_size + 4;
-            }
-            result
-        }
-
-        let path = std::env::temp_dir().join(format!(
-            "rlive-flv-shared-reset-{}.flv",
-            Uuid::new_v4().simple()
-        ));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 8, 33, &[0xaf, 0]);
-        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
-        append_tag(&mut file, 9, 2_000_000, &[0x17, 1]);
-        append_tag(&mut file, 8, 2_000_018, &[0xaf, 1]);
-        append_tag(&mut file, 9, 2_001_000, &[0x27, 1]);
-        append_tag(&mut file, 8, 2_001_018, &[0xaf, 1]);
-
-        append_tag(&mut file, 18, 0, &[0]);
-        append_tag(&mut file, 8, 33, &[0xaf, 0]);
-        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
-        append_tag(&mut file, 9, 0, &[0x17, 1]);
-        append_tag(&mut file, 8, 18, &[0xaf, 1]);
-        append_tag(&mut file, 9, 1_000, &[0x27, 1]);
-        append_tag(&mut file, 8, 1_018, &[0xaf, 1]);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2_037));
-        let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(media_timestamps(&normalized, 9), [0, 1_000, 1_019, 2_019]);
-        assert_eq!(media_timestamps(&normalized, 8), [18, 1_018, 1_037, 2_037]);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn keeps_normal_late_track_start_in_the_same_epoch() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
-            file.extend_from_slice(&[
-                tag_type,
-                0,
-                0,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        fn timestamps(file: &[u8]) -> Vec<(u8, u32)> {
-            let mut result = Vec::new();
-            let mut offset = 13;
-            while offset + 15 <= file.len() {
-                let data_size = (usize::from(file[offset + 1]) << 16)
-                    | (usize::from(file[offset + 2]) << 8)
-                    | usize::from(file[offset + 3]);
-                result.push((
-                    file[offset] & 0x1f,
-                    (u32::from(file[offset + 4]) << 16)
-                        | (u32::from(file[offset + 5]) << 8)
-                        | u32::from(file[offset + 6])
-                        | (u32::from(file[offset + 7]) << 24),
-                ));
-                offset += 11 + data_size + 4;
-            }
-            result
-        }
-
-        let path = std::env::temp_dir().join(format!(
-            "rlive-flv-normal-start-{}.flv",
-            Uuid::new_v4().simple()
-        ));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        append_tag(&mut file, 8, 0, &[0xaf, 1]);
-        append_tag(&mut file, 9, 33, &[0x27, 1]);
-        append_tag(&mut file, 8, 23, &[0xaf, 1]);
-        append_tag(&mut file, 9, 50, &[0x27, 1]);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(50));
-        let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(timestamps(&normalized), [(8, 0), (9, 33), (8, 23), (9, 50)]);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn aligns_a_late_track_before_the_other_track_restarts() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
-            file.extend_from_slice(&[
-                tag_type,
-                (payload.len() >> 16) as u8,
-                (payload.len() >> 8) as u8,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        fn media_timestamps(file: &[u8], wanted_type: u8) -> Vec<u32> {
-            let mut result = Vec::new();
-            let mut offset = 13;
-            while offset + 15 <= file.len() {
-                let tag_type = file[offset] & 0x1f;
-                let data_size = (usize::from(file[offset + 1]) << 16)
-                    | (usize::from(file[offset + 2]) << 8)
-                    | usize::from(file[offset + 3]);
-                let payload = &file[offset + 11..offset + 11 + data_size];
-                if tag_type == wanted_type
-                    && !flv_payload_is_codec_sequence_header(tag_type, payload)
-                {
-                    result.push(
-                        (u32::from(file[offset + 4]) << 16)
-                            | (u32::from(file[offset + 5]) << 8)
-                            | u32::from(file[offset + 6])
-                            | (u32::from(file[offset + 7]) << 24),
-                    );
-                }
-                offset += 11 + data_size + 4;
-            }
-            result
-        }
-
-        let path = std::env::temp_dir().join(format!(
-            "rlive-flv-late-track-{}.flv",
-            Uuid::new_v4().simple()
-        ));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        // The first response has video only and establishes an absolute epoch.
-        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
-        append_tag(&mut file, 9, 2_000_000, &[0x27, 1, 0x10]);
-        append_tag(&mut file, 9, 2_001_000, &[0x27, 1, 0x11]);
-
-        // On reconnect audio arrives first at the reset clock. Both tracks
-        // must then use the one new shared offset, not rebase independently.
-        append_tag(&mut file, 18, 0, &[0]);
-        append_tag(&mut file, 8, 33, &[0xaf, 0]);
-        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
-        append_tag(&mut file, 8, 0, &[0xaf, 1, 0x21]);
-        append_tag(&mut file, 9, 0, &[0x27, 1, 0x22]);
-        append_tag(&mut file, 8, 18, &[0xaf, 1, 0x23]);
-        append_tag(&mut file, 9, 1_000, &[0x27, 1, 0x24]);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2_001));
-        let normalized = std::fs::read(&path).unwrap();
-        assert_eq!(media_timestamps(&normalized, 8), [1_001, 1_019]);
-        assert_eq!(media_timestamps(&normalized, 9), [0, 1_000, 1_001, 2_001]);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn drops_late_track_replay_before_absolute_clock_returns() {
-        fn append_tag(file: &mut Vec<u8>, tag_type: u8, timestamp: u32, payload: &[u8]) {
-            file.extend_from_slice(&[
-                tag_type,
-                (payload.len() >> 16) as u8,
-                (payload.len() >> 8) as u8,
-                payload.len() as u8,
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            file.extend_from_slice(payload);
-            file.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-        }
-
-        fn media_payloads(file: &[u8], wanted_type: u8) -> Vec<Vec<u8>> {
-            let mut result = Vec::new();
-            let mut offset = 13;
-            while offset + 15 <= file.len() {
-                let tag_type = file[offset] & 0x1f;
-                let data_size = (usize::from(file[offset + 1]) << 16)
-                    | (usize::from(file[offset + 2]) << 8)
-                    | usize::from(file[offset + 3]);
-                if offset + 11 + data_size + 4 > file.len() {
-                    break;
-                }
-                if tag_type == wanted_type {
-                    result.push(file[offset + 11..offset + 11 + data_size].to_vec());
-                }
-                offset += 11 + data_size + 4;
-            }
-            result
-        }
-
-        let path = std::env::temp_dir().join(format!(
-            "rlive-flv-late-track-replay-{}.flv",
-            Uuid::new_v4().simple()
-        ));
-        let mut file = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-
-        // The first response has video only at the source's absolute clock.
-        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
-        append_tag(&mut file, 9, 2_000_000, &[0x27, 1, 0x10]);
-        append_tag(&mut file, 9, 2_001_000, &[0x27, 1, 0x11]);
-
-        // Reconnect preamble: audio appears for the first time and replays a
-        // low-clock packet before the stream returns to its absolute clock.
-        append_tag(&mut file, 18, 0, &[0]);
-        append_tag(&mut file, 8, 33, &[0xaf, 0]);
-        append_tag(&mut file, 8, 50, &[0xaf, 1, 0xa1]);
-        append_tag(&mut file, 9, 8_370, &[0x17, 0]);
-        append_tag(&mut file, 9, 0, &[0x27, 1, 0xb1]);
-        append_tag(&mut file, 8, 80, &[0xaf, 1, 0xa2]);
-
-        // The high-clock media proves the low audio/video tags above were a
-        // replayed preamble. Only these packets should survive the boundary.
-        append_tag(&mut file, 9, 2_002_000, &[0x27, 1, 0xc1]);
-        append_tag(&mut file, 8, 2_002_018, &[0xaf, 1, 0xc2]);
-        std::fs::write(&path, file).unwrap();
-
-        assert_eq!(normalize_flv_timestamps(&path).unwrap(), Some(2_018));
-        let normalized = std::fs::read(&path).unwrap();
-        let audio = media_payloads(&normalized, 8);
-        let video = media_payloads(&normalized, 9);
-        assert_eq!(audio, [vec![0xaf, 0], vec![0xaf, 1, 0xc2]]);
-        assert_eq!(
-            video,
-            [
-                vec![0x17, 0],
-                vec![0x27, 1, 0x10],
-                vec![0x27, 1, 0x11],
-                vec![0x17, 0],
-                vec![0x27, 1, 0xc1],
-            ]
-        );
-        assert!(audio.iter().all(|payload| payload.last() != Some(&0xa1)));
-        assert!(audio.iter().all(|payload| payload.last() != Some(&0xa2)));
-        assert!(video.iter().all(|payload| payload.last() != Some(&0xb1)));
-        let _ = std::fs::remove_file(path);
-    }
-
     fn completed_recording(id: String, title: &str) -> StoredRecording {
         StoredRecording {
             id,
@@ -4849,6 +2937,493 @@ mod tests {
     }
 
     #[test]
+    fn only_background_sidecar_recordings_retain_danmaku_connections() {
+        let mut stored = completed_recording("recording".into(), "room");
+        stored.status = RecordingStatus::Recording;
+        stored.include_danmaku = true;
+        stored.continue_on_leave = true;
+        assert!(stored_keeps_background_danmaku(
+            &stored,
+            "live:bilibili:room"
+        ));
+
+        stored.continue_on_leave = false;
+        assert!(!stored_keeps_background_danmaku(
+            &stored,
+            "live:bilibili:room"
+        ));
+        stored.continue_on_leave = true;
+        stored.include_danmaku = false;
+        assert!(!stored_keeps_background_danmaku(
+            &stored,
+            "live:bilibili:room"
+        ));
+        stored.include_danmaku = true;
+        assert!(!stored_keeps_background_danmaku(
+            &stored,
+            "live:bilibili:other"
+        ));
+    }
+
+    #[test]
+    fn pending_background_start_retains_danmaku_before_session_commit() {
+        let app_directory = std::env::temp_dir().join(format!(
+            "rlive-recording-pending-danmaku-{}",
+            Uuid::new_v4()
+        ));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let danmaku = crate::danmu_rs::DanmakuManager::new();
+        let source = "live:bilibili:pending-start";
+
+        assert!(danmaku.begin_connect(100, source.into(), false));
+        {
+            let _reservation = manager.reserve_background_danmaku_start(source, true);
+            assert!(manager.has_background_danmaku_recording(source));
+            // This is the same decision made by danmaku_disconnect while the
+            // recording start path is still doing filesystem/backend setup.
+            assert!(danmaku.detach_for_generation(101));
+        }
+        assert!(!manager.has_background_danmaku_recording(source));
+        assert!(danmaku.disconnect_background_for_source(source));
+
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    fn active_session_state(root: PathBuf, bundle: PathBuf, id: String) -> Arc<SessionState> {
+        let stored = StoredRecording {
+            status: RecordingStatus::Recording,
+            ended_at: None,
+            duration_ms: 0,
+            size_bytes: 0,
+            media_file: "stream.flv".into(),
+            ..completed_recording(id, "shutdown")
+        };
+        write_metadata(&bundle, &stored).unwrap();
+        Arc::new(SessionState {
+            root,
+            bundle,
+            stored: Mutex::new(stored),
+            bytes: AtomicU64::new(0),
+            duration_ms: AtomicU64::new(0),
+            danmaku_count: AtomicU64::new(0),
+            danmaku_writer: Mutex::new(None),
+            danmaku_closed: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            finish_lock: Mutex::new(()),
+            events: Arc::new(RecordingEventSink::default()),
+        })
+    }
+
+    #[test]
+    fn finalizing_session_accepts_the_last_danmaku_batch() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-final-danmaku-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root, bundle.clone(), id.clone());
+        let source = "live:bilibili:final-batch";
+        {
+            let mut stored = state.stored.lock().unwrap();
+            stored.source_key = source.into();
+            stored.include_danmaku = true;
+            stored.continue_on_leave = true;
+            stored.danmaku_file = Some("danmaku.jsonl".into());
+        }
+        *state.danmaku_writer.lock().unwrap() = Some(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(bundle.join("danmaku.jsonl"))
+                .unwrap(),
+        );
+        manager.finalizing.lock().unwrap().insert(
+            id,
+            FinalizingSession {
+                state: state.clone(),
+            },
+        );
+
+        manager.capture_danmaku(
+            source,
+            &[DanmakuEvent {
+                kind: DanmakuKind::Chat,
+                user: "viewer".into(),
+                is_self: false,
+                user_id: None,
+                content: "final".into(),
+                color: None,
+                spans: None,
+                super_chat: None,
+                ts: 1,
+            }],
+        );
+
+        assert_eq!(state.danmaku_count.load(Ordering::Acquire), 1);
+        assert!(
+            !std::fs::read(bundle.join("danmaku.jsonl"))
+                .unwrap()
+                .is_empty()
+        );
+
+        drop(manager);
+        *state.danmaku_writer.lock().unwrap() = None;
+        drop(state);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    struct TaskDropFlag(Arc<AtomicBool>);
+
+    impl Drop for TaskDropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_waits_for_recording_finalization() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-shutdown-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root, bundle.clone(), id.clone());
+        let (cancel, mut cancel_rx) = watch::channel(false);
+        let task_state = state.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            if !*cancel_rx.borrow() {
+                let _ = cancel_rx.changed().await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            finish_session(
+                &task_state,
+                TaskOutcome {
+                    status: RecordingStatus::Completed,
+                    error: None,
+                },
+            );
+        });
+        manager.sessions.lock().unwrap().insert(
+            id.clone(),
+            Session {
+                state: state.clone(),
+                cancel,
+                task,
+            },
+        );
+
+        manager.stop_all_graceful().await;
+        manager.stop_all_graceful().await;
+
+        assert!(manager.sessions.lock().unwrap().is_empty());
+        assert!(state.finished.load(Ordering::Acquire));
+        let stored = super::read_stored(&PathBuf::from(manager.storage_info().path), &id).unwrap();
+        assert_eq!(stored.status, RecordingStatus::Completed);
+        assert!(stored.ended_at.is_some());
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_defers_hard_abort_recovery_until_restart() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-timeout-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root.clone(), bundle.clone(), id.clone());
+        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
+        state.bytes.store(13, Ordering::Relaxed);
+        let (cancel, cancel_rx) = watch::channel(false);
+        let task_dropped = Arc::new(AtomicBool::new(false));
+        let task_drop_flag = task_dropped.clone();
+        let (task_started, task_started_rx) = oneshot::channel();
+        let task = tauri::async_runtime::spawn(async move {
+            let _drop_flag = TaskDropFlag(task_drop_flag);
+            let _cancel_rx = cancel_rx;
+            let _ = task_started.send(());
+            std::future::pending::<()>().await;
+        });
+        task_started_rx.await.unwrap();
+
+        stop_sessions_until_deadline(
+            vec![(
+                id.clone(),
+                Session {
+                    state: state.clone(),
+                    cancel,
+                    task,
+                },
+            )],
+            tokio::time::Instant::now(),
+        )
+        .await;
+
+        assert!(task_dropped.load(Ordering::Acquire));
+        assert!(!state.finished.load(Ordering::Acquire));
+        assert!(bundle.join("stream.flv.part").exists());
+        assert!(!bundle.join("stream.flv").exists());
+        assert_eq!(
+            super::read_stored(&root, &id).unwrap().status,
+            RecordingStatus::Recording
+        );
+
+        recover_stale_recordings(&root).unwrap();
+
+        assert!(!bundle.join("stream.flv.part").exists());
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv")).unwrap(),
+            b"partial-media"
+        );
+        let stored = super::read_stored(&root, &id).unwrap();
+        assert_eq!(stored.status, RecordingStatus::Interrupted);
+        assert!(stored.ended_at.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_adopts_a_media_part_left_by_a_failed_recording_task() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-orphan-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let stored = StoredRecording {
+            id: id.clone(),
+            status: RecordingStatus::Failed,
+            media_file: "stream.flv".into(),
+            error: Some("发布录制文件失败".into()),
+            ..completed_recording(id.clone(), "orphan")
+        };
+        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
+        write_metadata(&bundle, &stored).unwrap();
+
+        recover_stale_recordings(&root).unwrap();
+
+        assert!(!bundle.join("stream.flv.part").exists());
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv")).unwrap(),
+            b"partial-media"
+        );
+        let recovered = read_stored(&root, &id).unwrap();
+        assert_eq!(recovered.status, RecordingStatus::Interrupted);
+        assert!(recovered.ended_at.is_some());
+        assert!(recovered.error.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_failure_salvages_a_safe_media_part_without_overwriting_final_media() {
+        let root =
+            std::env::temp_dir().join(format!("rlive-recording-worker-failure-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root.clone(), bundle.clone(), id);
+        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
+
+        salvage_temporary_media_after_worker_failure(&state);
+
+        assert!(!bundle.join("stream.flv.part").exists());
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv")).unwrap(),
+            b"partial-media"
+        );
+        std::fs::write(bundle.join("stream.flv.part"), b"new-partial").unwrap();
+        salvage_temporary_media_after_worker_failure(&state);
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv")).unwrap(),
+            b"partial-media"
+        );
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv.part")).unwrap(),
+            b"new-partial"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_marks_missing_active_media_as_interrupted() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-missing-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let stored = StoredRecording {
+            id: id.clone(),
+            status: RecordingStatus::Recording,
+            media_file: "stream.flv".into(),
+            ..completed_recording(id.clone(), "missing")
+        };
+        write_metadata(&bundle, &stored).unwrap();
+
+        recover_stale_recordings(&root).unwrap();
+
+        let recovered = read_stored(&root, &id).unwrap();
+        assert_eq!(recovered.status, RecordingStatus::Interrupted);
+        assert!(recovered.ended_at.is_some());
+        assert!(
+            recovered
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("媒体文件缺失"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_rejects_a_media_path_that_escapes_the_bundle() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-path-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let stored = StoredRecording {
+            id: id.clone(),
+            status: RecordingStatus::Recording,
+            media_file: "../outside.flv".into(),
+            ..completed_recording(id.clone(), "invalid path")
+        };
+        write_metadata(&bundle, &stored).unwrap();
+
+        recover_stale_recordings(&root).unwrap();
+
+        let recovered = read_stored(&root, &id).unwrap();
+        assert_eq!(recovered.status, RecordingStatus::Interrupted);
+        assert!(
+            recovered
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("媒体路径无效"))
+        );
+        assert!(!root.join("outside.flv").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_leaves_another_stop_request_for_process_exit() {
+        let root = std::env::temp_dir().join(format!(
+            "rlive-recording-finalize-timeout-{}",
+            Uuid::new_v4()
+        ));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root.clone(), bundle.clone(), id.clone());
+        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
+        state.bytes.store(13, Ordering::Relaxed);
+        let task_dropped = Arc::new(AtomicBool::new(false));
+        let task_drop_flag = task_dropped.clone();
+        let (task_started_tx, task_started_rx) = oneshot::channel();
+        let task = tauri::async_runtime::spawn(async move {
+            let _drop_flag = TaskDropFlag(task_drop_flag);
+            let _ = task_started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        task_started_rx.await.unwrap();
+        wait_for_finalizing_sessions(
+            vec![(id.clone(), state.clone())],
+            tokio::time::Instant::now(),
+        )
+        .await;
+        assert!(!task_dropped.load(Ordering::Acquire));
+        assert!(!state.finished.load(Ordering::Acquire));
+        assert!(bundle.join("stream.flv.part").exists());
+        assert_eq!(
+            super::read_stored(&root, &id).unwrap().status,
+            RecordingStatus::Recording
+        );
+
+        task.abort();
+        let _ = task.await;
+        assert!(
+            task_dropped.load(Ordering::Acquire),
+            "测试应模拟进程退出释放停止请求持有的任务"
+        );
+        recover_stale_recordings(&root).unwrap();
+
+        assert_eq!(
+            super::read_stored(&root, &id).unwrap().status,
+            RecordingStatus::Interrupted
+        );
+        assert_eq!(
+            std::fs::read(bundle.join("stream.flv")).unwrap(),
+            b"partial-media"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn finalizing_session_remains_visible_and_fences_mutations() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-finalizing-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root, bundle, id.clone());
+        let (_cancel, cancel_rx) = watch::channel(false);
+        let task = tauri::async_runtime::spawn(async move {
+            let _cancel_rx = cancel_rx;
+            std::future::pending::<()>().await;
+        });
+        manager
+            .finalizing
+            .lock()
+            .unwrap()
+            .insert(id.clone(), FinalizingSession { state });
+
+        let listed = manager
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(listed.status, RecordingStatus::Recording);
+        assert_eq!(
+            manager.delete(&id).unwrap_err().code,
+            "recording_still_active"
+        );
+        assert_eq!(
+            manager.stop(&id).await.unwrap_err().code,
+            "recording_stopping"
+        );
+        task.abort();
+
+        let duplicate = manager
+            .start(
+                RecordingStartInput {
+                    source: crate::models::live::PlayUrl::inferred(
+                        "test:shutdown",
+                        "测试线路",
+                        0,
+                        "https://example.test/live.flv".into(),
+                        Default::default(),
+                    ),
+                    source_key: "live:bilibili:shutdown".into(),
+                    source_kind: "live".into(),
+                    site_id: Some("bilibili".into()),
+                    room_id: Some("shutdown".into()),
+                    title: "停止中录制".into(),
+                    user_name: "主播".into(),
+                    cover: String::new(),
+                    include_danmaku: false,
+                    continue_on_leave: false,
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(duplicate.code, "recording_already_active");
+
+        manager.finalizing.lock().unwrap().remove(&id);
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
     fn background_continuation_defaults_to_disabled() {
         let input: RecordingStartInput = serde_json::from_value(serde_json::json!({
             "source": {
@@ -4863,132 +3438,10 @@ mod tests {
 
         let mut legacy_metadata =
             serde_json::to_value(completed_recording("legacy".into(), "legacy")).unwrap();
-        legacy_metadata
-            .as_object_mut()
-            .unwrap()
-            .remove("continue_on_leave");
+        let metadata = legacy_metadata.as_object_mut().unwrap();
+        metadata.remove("continue_on_leave");
         let stored: StoredRecording = serde_json::from_value(legacy_metadata).unwrap();
         assert!(!stored.continue_on_leave);
-    }
-
-    #[test]
-    fn huya_direct_recording_can_fall_back_between_http_schemes() {
-        let source = crate::models::live::PlayUrl::inferred(
-            "huya:AL",
-            "线路1",
-            0,
-            "https://al.flv.huya.com/src/live.flv?token=secret".into(),
-            Default::default(),
-        );
-        let candidates = direct_source_candidates(&source, Some("huya"));
-
-        assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].url, source.url);
-        assert!(candidates[1].url.starts_with("http://al.flv.huya.com/"));
-        assert_eq!(candidates[1].headers, source.headers);
-        assert_eq!(direct_source_candidates(&source, Some("douyu")).len(), 1);
-    }
-
-    #[tokio::test]
-    async fn direct_recording_reconnects_after_eof_until_cancelled() {
-        fn tag(timestamp: u32, payload: &[u8]) -> Vec<u8> {
-            let mut value = vec![9, 0, 0, payload.len() as u8];
-            value.extend_from_slice(&[
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            value.extend_from_slice(payload);
-            value.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-            value
-        }
-
-        let header = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00";
-        let first_tag = tag(0, b"first");
-        let mut incomplete_tag = tag(500, b"discard-me");
-        incomplete_tag.truncate(incomplete_tag.len() - 4);
-        let mut first_response = header.to_vec();
-        first_response.extend_from_slice(&first_tag);
-        first_response.extend_from_slice(&incomplete_tag);
-        let mut second_response = header.to_vec();
-        let second_tag = tag(1000, b"second");
-        second_response.extend_from_slice(&second_tag);
-        let expected_size = header.len() + first_tag.len() + second_tag.len();
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            for body in [first_response, second_response] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0_u8; 2048];
-                let _ = socket.read(&mut request).await.unwrap();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                socket.write_all(response.as_bytes()).await.unwrap();
-                socket.write_all(&body).await.unwrap();
-            }
-        });
-
-        let root = std::env::temp_dir().join(format!("rlive-direct-retry-{}", Uuid::new_v4()));
-        let bundle = root.join(Uuid::new_v4().to_string());
-        std::fs::create_dir_all(&bundle).unwrap();
-        let stored = completed_recording(
-            bundle.file_name().unwrap().to_string_lossy().into_owned(),
-            "retry",
-        );
-        let state = Arc::new(SessionState {
-            root: root.clone(),
-            bundle: bundle.clone(),
-            stored: Mutex::new(StoredRecording {
-                status: RecordingStatus::Recording,
-                media_file: "stream.flv".into(),
-                ..stored
-            }),
-            bytes: AtomicU64::new(0),
-            duration_ms: AtomicU64::new(0),
-            danmaku_count: AtomicU64::new(0),
-            danmaku_writer: Mutex::new(None),
-            danmaku_closed: AtomicBool::new(false),
-            finished: AtomicBool::new(false),
-        });
-        let source = crate::models::live::PlayUrl::inferred(
-            "test:1",
-            "测试线路",
-            0,
-            format!("http://{address}/live.flv"),
-            Default::default(),
-        );
-        let client = crate::http_client::recording_stream_client_for_proxy(None).unwrap();
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let task_state = state.clone();
-        let task = tokio::spawn(async move {
-            run_direct_recording(client, source, task_state, cancel_rx).await
-        });
-
-        tokio::time::timeout(std::time::Duration::from_secs(4), async {
-            while state.bytes.load(std::sync::atomic::Ordering::Relaxed) < expected_size as u64 {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .unwrap();
-        cancel_tx.send(true).unwrap();
-        let outcome = task.await.unwrap();
-        server.await.unwrap();
-
-        assert_eq!(outcome.status, RecordingStatus::Completed);
-        assert_eq!(outcome.error, None);
-        let mut expected = header.to_vec();
-        expected.extend_from_slice(&first_tag);
-        expected.extend_from_slice(&second_tag);
-        assert_eq!(std::fs::read(bundle.join("stream.flv")).unwrap(), expected);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4996,18 +3449,23 @@ mod tests {
         let app_directory =
             std::env::temp_dir().join(format!("rlive-recording-storage-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
-        let default_root = PathBuf::from(manager.storage_path());
+        let default_root = PathBuf::from(manager.storage_info().path);
         let first = completed_recording(Uuid::new_v4().to_string(), "default");
         let first_bundle = default_root.join(&first.id);
         std::fs::create_dir_all(&first_bundle).unwrap();
         std::fs::write(first_bundle.join("stream.flv"), b"a").unwrap();
         write_metadata(&first_bundle, &first).unwrap();
 
-        let custom_root = app_directory.join("custom-recordings");
+        let custom_root = app_directory.join("custom-recordings ");
+        std::fs::create_dir_all(&custom_root).unwrap();
         let custom_info = manager
             .set_storage_path(Some(custom_root.display().to_string()))
             .unwrap();
         assert!(!custom_info.is_default);
+        assert_eq!(
+            custom_info.path,
+            crate::app_paths::path_to_string(&std::fs::canonicalize(&custom_root).unwrap())
+        );
         let second = completed_recording(Uuid::new_v4().to_string(), "custom");
         let second_bundle = PathBuf::from(&custom_info.path).join(&second.id);
         std::fs::create_dir_all(&second_bundle).unwrap();
@@ -5039,6 +3497,102 @@ mod tests {
     }
 
     #[test]
+    fn storage_config_recovers_the_committed_backup_after_an_interrupted_write() {
+        let app_directory = std::env::temp_dir().join(format!(
+            "rlive-recording-storage-recovery-{}",
+            Uuid::new_v4()
+        ));
+        let committed_root = app_directory.join("committed");
+        let uncommitted_root = app_directory.join("uncommitted");
+        std::fs::create_dir_all(&committed_root).unwrap();
+        std::fs::create_dir_all(&uncommitted_root).unwrap();
+        let config_path = app_directory.join(super::RECORDING_STORAGE_CONFIG_FILE);
+        let temporary = config_path.with_file_name("recording-storage.json.tmp");
+        let backup = config_path.with_file_name("recording-storage.json.bak");
+        std::fs::write(
+            &backup,
+            serde_json::to_vec_pretty(&RecordingStorageConfig {
+                current_path: Some(crate::app_paths::path_to_string(&committed_root)),
+                known_paths: Vec::new(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &temporary,
+            serde_json::to_vec_pretty(&RecordingStorageConfig {
+                current_path: Some(crate::app_paths::path_to_string(&uncommitted_root)),
+                known_paths: Vec::new(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let storage = load_storage_state(&app_directory).unwrap();
+        assert_eq!(
+            storage.current_root,
+            std::fs::canonicalize(&committed_root).unwrap()
+        );
+        assert!(config_path.exists());
+        assert!(!temporary.exists());
+        assert!(!backup.exists());
+
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn corrupt_storage_config_is_reported_instead_of_silently_reset() {
+        let app_directory = std::env::temp_dir().join(format!(
+            "rlive-recording-storage-corrupt-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&app_directory).unwrap();
+        std::fs::write(
+            app_directory.join(super::RECORDING_STORAGE_CONFIG_FILE),
+            b"not-json",
+        )
+        .unwrap();
+
+        let error = load_storage_state(&app_directory).unwrap_err();
+        assert_eq!(error.code, "recording_storage_error");
+        assert!(error.message.contains("恢复录制目录设置失败"));
+
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recording_storage_rejects_a_symlink_to_the_filesystem_root() {
+        use std::os::unix::fs::symlink;
+
+        let base =
+            std::env::temp_dir().join(format!("rlive-recording-root-symlink-{}", Uuid::new_v4()));
+        let selected = base.join("selected");
+        std::fs::create_dir_all(&base).unwrap();
+        symlink("/", &selected).unwrap();
+
+        let error = prepare_storage_root(&selected).unwrap_err();
+        assert_eq!(error.code, "recording_storage_path_invalid");
+
+        std::fs::remove_file(selected).unwrap();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn recording_manager_rejects_a_second_instance_for_the_same_app_data() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-instance-lock-{}", Uuid::new_v4()));
+        let first = RecordingManager::new(&app_directory).unwrap();
+        let second = RecordingManager::new(&app_directory);
+        assert_eq!(
+            second.err().map(|error| error.code),
+            Some("recording_already_running".to_string())
+        );
+        drop(first);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
     fn recorded_danmaku_sidecar_never_serializes_backend_account_ids() {
         let events = [DanmakuEvent {
             kind: DanmakuKind::Chat,
@@ -5061,5 +3615,487 @@ mod tests {
         assert!(json.contains("\"is_self\":true"));
         assert!(!json.contains("private-account-id"));
         assert!(!json.contains("user_id"));
+    }
+
+    fn manager_test_flv_body() -> Vec<u8> {
+        fn tag(timestamp: u32, payload: &[u8]) -> Vec<u8> {
+            let mut value = vec![9, 0, 0, payload.len() as u8];
+            value.extend_from_slice(&[
+                (timestamp >> 16) as u8,
+                (timestamp >> 8) as u8,
+                timestamp as u8,
+                (timestamp >> 24) as u8,
+                0,
+                0,
+                0,
+            ]);
+            value.extend_from_slice(payload);
+            value.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
+            value
+        }
+
+        let mut body = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        body.extend_from_slice(&tag(0, b"first"));
+        body.extend_from_slice(&tag(1_000, b"second"));
+        body
+    }
+
+    async fn spawn_manager_test_flv_server(body: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = [0_u8; 2048];
+                let Ok(length) = socket.read(&mut request).await else {
+                    continue;
+                };
+                if length == 0 {
+                    continue;
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+                );
+                if socket.write_all(response.as_bytes()).await.is_err() {
+                    continue;
+                }
+                if socket
+                    .write_all(format!("{:x}\r\n", body.len()).as_bytes())
+                    .await
+                    .is_err()
+                {
+                    continue;
+                }
+                if socket.write_all(&body).await.is_err()
+                    || socket.write_all(b"\r\n").await.is_err()
+                {
+                    continue;
+                }
+                let mut closed = [0_u8; 1];
+                let _ = socket.read(&mut closed).await;
+            }
+        });
+        (format!("http://{address}/live.flv"), server)
+    }
+
+    fn manager_test_input(url: &str, source_key: &str, room_id: &str) -> RecordingStartInput {
+        RecordingStartInput {
+            source: crate::models::live::PlayUrl::inferred(
+                format!("test:{room_id}"),
+                "测试线路",
+                0,
+                url.to_string(),
+                Default::default(),
+            ),
+            source_key: source_key.into(),
+            source_kind: "live".into(),
+            site_id: Some("bilibili".into()),
+            room_id: Some(room_id.into()),
+            title: "录制契约测试".into(),
+            user_name: "测试主播".into(),
+            cover: String::new(),
+            include_danmaku: false,
+            continue_on_leave: false,
+        }
+    }
+
+    fn manager_lifecycle_test_input(
+        url: &str,
+        source_key: &str,
+        room_id: &str,
+    ) -> RecordingStartInput {
+        let mut input = manager_test_input(url, source_key, room_id);
+        // Manager lifecycle tests exercise session ownership and finalization.
+        // Valid FLV remuxing has a dedicated integration fixture below.
+        input.source.protocol = PlaybackProtocol::Native;
+        input
+    }
+
+    async fn wait_for_manager_recording_bytes(manager: &RecordingManager, id: &str, minimum: u64) {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                let bytes = manager
+                    .list()
+                    .unwrap()
+                    .into_iter()
+                    .find(|item| item.id == id)
+                    .map(|item| item.size_bytes)
+                    .unwrap_or(0);
+                if bytes >= minimum {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        if result.is_err() {
+            let item = manager
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|item| item.id == id);
+            panic!("录制任务应在超时前写入测试媒体: {item:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_manager_remuxes_headers_and_finishes_a_live_flv() {
+        use base64::Engine as _;
+
+        const FLV_FIXTURE: &str = "RkxWAQEAAAAJAAAAABIAALgAAAAAAAAAAgAKb25NZXRhRGF0YQgAAAAIAAhkdXJhdGlvbgBAIAAAAAAAAAAFd2lkdGgAQDAAAAAAAAAABmhlaWdodABAMAAAAAAAAAANdmlkZW9kYXRhcmF0ZQBAaGoAAAAAAAAJZnJhbWVyYXRlAEAAAAAAAAAAAAx2aWRlb2NvZGVjaWQAQAAAAAAAAAAAB2VuY29kZXICAA1MYXZmNjAuMTYuMTAwAAhmaWxlc2l6ZQBAgwAAAAAAAAAACQAAAMMJAAAPAAAAAAAAABIAAIQACAgRJiAgICH//gAAABoJAAAJAAH0AAAAACIAAIQ8CAgxIAAAABQJAAAJAAPoAAAAACIAAIR4CAgxIAAAABQJAAAJAAXcAAAAACIAAIS0CAgxIAAAABQJAAAJAAfQAAAAACIAAITwCAgxIAAAABQJAAAJAAnEAAAAACIAAIUsCAgxIAAAABQJAAAJAAu4AAAAACIAAIVoCAgxIAAAABQJAAAJAA2sAAAAACIAAIWkCAgxIAAAABQJAAAJAA+gAAAAACIAAIXgCAgxIAAAABQJAAAJABGUAAAAACIAAIYcCAgxIAAAABQJAAAJABOIAAAAACIAAIZYCAgxIAAAABQJAAAJABV8AAAAACIAAIaUCAgxIAAAABQJAAAPABdwAAAAABIAAIbQCAgRJiAgICH//gAAABoJAAAJABlkAAAAACIAAIcMCAgxIAAAABQJAAAJABtYAAAAACIAAIdICAgxIAAAABQJAAAJAB1MAAAAACIAAIeECAgxIAAAABQ=";
+        let mut body = base64::engine::general_purpose::STANDARD
+            .decode(FLV_FIXTURE)
+            .unwrap();
+        let mut offset = 13;
+        let mut final_video_tag = None;
+        while body.len().saturating_sub(offset) >= 15 {
+            let data_size = (usize::from(body[offset + 1]) << 16)
+                | (usize::from(body[offset + 2]) << 8)
+                | usize::from(body[offset + 3]);
+            let tag_size = 11 + data_size + 4;
+            if body.len().saturating_sub(offset) < tag_size {
+                break;
+            }
+            if body[offset] & 0x1f == 9 {
+                final_video_tag = Some(body[offset..offset + tag_size].to_vec());
+            }
+            offset += tag_size;
+        }
+        let mut video_tag = final_video_tag.unwrap();
+        let mut timestamp = 8_000_u32;
+        while body.len() < 64 * 1024 {
+            timestamp += 500;
+            video_tag[4] = (timestamp >> 16) as u8;
+            video_tag[5] = (timestamp >> 8) as u8;
+            video_tag[6] = timestamp as u8;
+            video_tag[7] = (timestamp >> 24) as u8;
+            body.extend_from_slice(&video_tag);
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let length = socket.read(&mut request).await.unwrap();
+            let _ = request_tx.send(String::from_utf8_lossy(&request[..length]).into_owned());
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            socket
+                .write_all(format!("{:x}\r\n", body.len()).as_bytes())
+                .await
+                .unwrap();
+            socket.write_all(&body).await.unwrap();
+            socket.write_all(b"\r\n").await.unwrap();
+            let mut closed = [0_u8; 1];
+            let _ = socket.read(&mut closed).await;
+        });
+
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-ffmpeg-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let mut input = manager_test_input(
+            &format!("http://{address}/live.flv"),
+            "live:bilibili:ffmpeg-manager",
+            "ffmpeg",
+        );
+        input
+            .source
+            .headers
+            .insert("X-Recording-Test".into(), "ffmpeg".into());
+        let active = manager.start(input, None).await.unwrap();
+        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
+
+        let stopped = manager.stop(&active.id).await.unwrap();
+        assert_eq!(stopped.status, RecordingStatus::Completed);
+        assert!(stopped.error.is_none());
+        let request = request_rx.await.unwrap();
+        assert!(request.contains("X-Recording-Test: ffmpeg\r\n"));
+
+        let root = PathBuf::from(manager.storage_info().path);
+        let stored = super::read_stored(&root, &active.id).unwrap();
+        let final_path = root.join(&active.id).join(stored.media_file);
+        assert!(final_path.is_file());
+        let output = ffmpeg_next::format::input(&final_path).unwrap();
+        assert!(
+            output
+                .streams()
+                .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Video })
+        );
+
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_manager_remuxes_hls_master_without_following_unused_variant() {
+        use base64::Engine as _;
+        use std::io::Read as _;
+
+        // Twelve one-second H.264/AAC HLS segments, concatenated and compressed.
+        const TS_FIXTURE_GZIP: &str = "H4sIAAAAAAACA9Xbf2wTVRwA8Hf7PRBZ143uh8JNIDhh7V27dW23Yx1jdBhJRjSGGGN9vV7Xc9fe7e6gmxKsxj8IMUQCIRETf0UTNJoM/0H/UId/KFGj0fgHGGMgMUT8A7fEP0gk1O+rJAy7Jkf/sO9tyfXdvffuvvfu3qcve2+xqKsF7VjcjLhzCBW4AuJu5NsmWrmGXbsyhjLV/KhiHlBlRRBzB8e+LtD1E4uiFoTm1xRjR9wieuhM3UcFNn5ikxB7zbynGPtltIi6yWbtZbgL385PXqM79lEkNE4idOzlQ6TdLyGUz9f3oGY/JrvNi2Q7tWNh1c/PcfB8alFxM7H0wDMkI/3dcB4+GuoLhSd+Gb/66ZWLE2dPbrvAX9x47c9Zf7Cf7+Nl3VR4EZJmQBRCfEBUxHAqDBkTXijg2zM5Huvr50cfH4OSSUWGjDHdmNOUlM37BSHQ5xf8ATiYtm0j4vPlcjnvATWp6BrOevUYh1zmlI9cyZu2MxqU0w1b1bNWhJdxAsuSwJtKShL5pJLQdHlaEiLwy+Ms1uYshezxGUVKqpi39icgJfCGNQfFYRs3k5LoFaAIbPiMOqsk4+RcpEbcxNkpRRKDvJw29QyOQ1WRt01F01QLSoRmQ0nZhoQ8k4FtUsHJZ/WsIvnFbaLIp7Blxw2IvdWaVg2oeOskM0ZcT6UshVS00yZUsiBT0/VpnIad+O1jlga9+PYBgc+axcvIagbbJBQ1ayumhqEQHE9o+008F5f1jIGLQUH72CZWs3AKKGhiUiZl4oxCTpVT1Km0bUBqWpmDbMl/KxHPqFnYsWQlC7EH/OiuXzVF3k+uX7wmaUtTsdLkCckSTph8JgENSB5BQoV8uA14ZeDD1jXyHPgZEr8keIOQNEgoxU88KwXDkLBsxYAKqgGPBl4AqNEPj3lGElCevKfK4ZcaTh9fhWr/vh4b5YRctDp9DSJZQJFi/2q8gAtLWrT2jRu/1qBH8AE5KHgDolcU/KhGiN5L8rjnb3AdfOOyJPTV/lPQAa8ahxCFlCzjY/Wxpdt8jJ7iu96FdhcPR+mJdAH1/gvdFbxyY9/R7pyfxthX/+Ug9qjLxfCYwMXwmMDF8JhgwJqEjvvY/+vMMkDWLL3gePxBfH+Re3/TF3l08yb01QCNfXVtjRNnUBB8514N0e67a6+r1Pd+Gtvd1eLI94HjUSobfAGtL96Gez0u63srw763Mux7K8O+DxLfl+6rmu/u+bfuyvfl4/cgjc64f3Tkewh8r9mNaPfd0yKW+j5IY7u3X3Lke4hy3z3XyvvuZth3N8O+uxn2PQy+17z5W9V879TPVTx+D9PoTOfbjnyPEN+vn6fd9+7v95b6HqGx3bvnHfk+RLnv939W3vc2hn1vY9j3NoZ9HwLfayc/qJrvG7yXKx6/D9PozAbTke/D4Hvt6Vdo973n6Eyp7xKN7d6Td+T7dsp933i0vO/tDPvezrDv7Qz7LoHvdciumu8br3GVjt/RdjCybt8+2o3csudYqZEjNBq5eYcjIwUaY98y6Sh28fUo1V2yeEfu4h31PoXv9H0dw76vY9j3dQz7PkJ8nx+umu+9H/ZUPH6nci1E78eOxu8CfDfVN/G0fzf13XOm9LuJynntrV868r2f8vF730/lx+8ehn33MOy7h2HfRfC9/um6qvnu00Yr/vv7AI3O+A478t1PfD/7O+2+i9/8UOo7lfPa4klHvg9S7nvgnfK+dzDsewfDvncw7HsAfG9Y+23VfB/Yiisev4dodGZgnyPfyfr3hql52n0fPLLC+ncq57UHU458j1Due9gu73snw753Mux7J+Pr3xs+P1E138N/VL7+fYhGZ4YedLz+vdEzS7vv0sMrrH+ncl5bCjryXaLc95Gd5X3vYtj3LoZ972J8/Xuj/mTVfB95r/L179tpdGbkuuP1741fRWn3faxZZGRueKzB2dwwO/Or423/mV/tZtj3boZ972Z8/XvThk1V8308Xfn6dyr/T34863j9e1OuiXbfY+dXWP9O5bx27KAj3wOUj993HylzG/8ACyylLrRIAAA=";
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(TS_FIXTURE_GZIP)
+            .unwrap();
+        let mut ts_stream = Vec::new();
+        flate2::read::GzDecoder::new(compressed.as_slice())
+            .read_to_end(&mut ts_stream)
+            .unwrap();
+        const TS_PACKET_SIZE: usize = 188;
+        const FIRST_SEGMENT_SIZE: usize = 11 * TS_PACKET_SIZE;
+        const FOLLOWING_SEGMENT_SIZE: usize = 8 * TS_PACKET_SIZE;
+        assert_eq!(
+            (ts_stream.len() - FIRST_SEGMENT_SIZE) % FOLLOWING_SEGMENT_SIZE,
+            0
+        );
+        let mut segments = vec![ts_stream[..FIRST_SEGMENT_SIZE].to_vec()];
+        segments.extend(
+            ts_stream[FIRST_SEGMENT_SIZE..]
+                .chunks_exact(FOLLOWING_SEGMENT_SIZE)
+                .map(<[u8]>::to_vec),
+        );
+        let segments = Arc::new(segments);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let high_revision = Arc::new(AtomicU64::new(0));
+        let low_revision = Arc::new(AtomicU64::new(0));
+        let high_segment_requests = Arc::new(AtomicU64::new(0));
+        let low_segment_requests = Arc::new(AtomicU64::new(0));
+        let server_high_requests = high_segment_requests.clone();
+        let server_low_requests = low_segment_requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let segments = segments.clone();
+                let high_revision = high_revision.clone();
+                let low_revision = low_revision.clone();
+                let high_segment_requests = server_high_requests.clone();
+                let low_segment_requests = server_low_requests.clone();
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 4096];
+                    let Ok(length) = socket.read(&mut request).await else {
+                        return;
+                    };
+                    let head = String::from_utf8_lossy(&request[..length]);
+                    let path = head
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("");
+                    let (content_type, body) = if path == "/master.m3u8" {
+                        (
+                            "application/vnd.apple.mpegurl",
+                            b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\nhigh.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=320x180\nlow.m3u8\n"
+                                .to_vec(),
+                        )
+                    } else if matches!(path, "/high.m3u8" | "/low.m3u8") {
+                        let final_sequence = segments.len().saturating_sub(3) as u64;
+                        let (variant, revision) = if path == "/high.m3u8" {
+                            ("high", &high_revision)
+                        } else {
+                            ("low", &low_revision)
+                        };
+                        let sequence = revision
+                            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sequence| {
+                                Some((sequence + 1).min(final_sequence))
+                            })
+                            .unwrap();
+                        (
+                            "application/vnd.apple.mpegurl",
+                            format!(
+                                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n#EXTINF:1.000,\n{variant}-segment-{sequence}.ts\n#EXTINF:1.000,\n{variant}-segment-{}.ts\n#EXTINF:1.000,\n{variant}-segment-{}.ts\n",
+                                sequence + 1,
+                                sequence + 2
+                            )
+                            .into_bytes(),
+                        )
+                    } else {
+                        let requested_segment = [
+                            ("/high-segment-", &high_segment_requests),
+                            ("/low-segment-", &low_segment_requests),
+                        ]
+                        .into_iter()
+                        .find_map(|(prefix, requests)| {
+                            path.strip_prefix(prefix)
+                                .and_then(|path| path.strip_suffix(".ts"))
+                                .and_then(|index| index.parse::<usize>().ok())
+                                .and_then(|index| segments.get(index))
+                                .map(|segment| (requests, segment))
+                        });
+                        let Some((requests, segment)) = requested_segment else {
+                            let _ = socket
+                                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                .await;
+                            return;
+                        };
+                        requests.fetch_add(1, Ordering::Relaxed);
+                        ("video/mp2t", segment.clone())
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    if socket.write_all(response.as_bytes()).await.is_ok() {
+                        let _ = socket.write_all(&body).await;
+                    }
+                });
+            }
+        });
+
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-hls-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let active = manager
+            .start(
+                manager_test_input(
+                    &format!("http://{address}/master.m3u8"),
+                    "live:bilibili:hls-manager",
+                    "hls",
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(active.protocol, PlaybackProtocol::MpegTs);
+        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
+        let low_after_probe = low_segment_requests.load(Ordering::Relaxed);
+        let high_after_probe = high_segment_requests.load(Ordering::Relaxed);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while high_segment_requests.load(Ordering::Relaxed) < high_after_probe + 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("选中的 HLS variant 应继续下载媒体分片");
+        assert!(
+            low_segment_requests.load(Ordering::Relaxed) <= low_after_probe + 1,
+            "未选择的 HLS variant 不应在探测结束后持续下载"
+        );
+
+        let stopped = manager.stop(&active.id).await.unwrap();
+        assert_eq!(stopped.status, RecordingStatus::Completed);
+        assert!(stopped.error.is_none());
+        let root = PathBuf::from(manager.storage_info().path);
+        let stored = super::read_stored(&root, &active.id).unwrap();
+        assert_eq!(stored.protocol, PlaybackProtocol::MpegTs);
+        assert!(stored.media_file.ends_with(".ts"));
+        let final_path = root.join(&active.id).join(stored.media_file);
+        assert!(final_path.is_file());
+        let output = ffmpeg_next::format::input(&final_path).unwrap();
+        assert!(
+            output
+                .streams()
+                .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Video })
+        );
+        assert!(
+            output
+                .streams()
+                .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Audio })
+        );
+
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_start_stop_persists_completed_recording() {
+        let body = manager_test_flv_body();
+        let (url, server) = spawn_manager_test_flv_server(body.clone()).await;
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-manager-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+
+        let active = manager
+            .start(
+                manager_lifecycle_test_input(&url, "live:bilibili:manager-start-stop", "100"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(active.status, RecordingStatus::Recording);
+        assert!(active.ended_at.is_none());
+
+        let root = PathBuf::from(manager.storage_info().path);
+        let bundle = root.join(&active.id);
+        let active_metadata = super::read_stored(&root, &active.id).unwrap();
+        assert_eq!(active_metadata.status, RecordingStatus::Recording);
+        assert!(active_metadata.ended_at.is_none());
+        let final_path = bundle.join(&active_metadata.media_file);
+        let part_path = bundle.join(format!("{}.part", active_metadata.media_file));
+        assert!(!final_path.exists());
+
+        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
+        assert!(part_path.is_file());
+
+        let stopped = manager.stop(&active.id).await.unwrap();
+        assert_eq!(stopped.status, RecordingStatus::Completed);
+        assert!(stopped.ended_at.is_some());
+        assert!(stopped.error.is_none());
+        assert!(!part_path.exists());
+        assert!(final_path.is_file());
+        assert!(std::fs::read(&final_path).unwrap().starts_with(b"FLV"));
+
+        let completed_metadata = super::read_stored(&root, &active.id).unwrap();
+        assert_eq!(completed_metadata.status, RecordingStatus::Completed);
+        assert_eq!(completed_metadata.ended_at, stopped.ended_at);
+        assert_eq!(completed_metadata.size_bytes, stopped.size_bytes);
+        assert_eq!(stopped.file_path, final_path.display().to_string());
+
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_rejects_duplicate_source_key() {
+        let body = manager_test_flv_body();
+        let (url, server) = spawn_manager_test_flv_server(body.clone()).await;
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-duplicate-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let source_key = "live:stable:duplicate";
+
+        let first = manager
+            .start(manager_lifecycle_test_input(&url, source_key, "100"), None)
+            .await
+            .unwrap();
+        let duplicate = manager
+            .start(
+                manager_lifecycle_test_input(&url, source_key, "different-room"),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(duplicate.code, "recording_already_active");
+        assert_eq!(
+            manager
+                .list()
+                .unwrap()
+                .into_iter()
+                .filter(|item| item.status == RecordingStatus::Recording)
+                .count(),
+            1
+        );
+
+        wait_for_manager_recording_bytes(&manager, &first.id, 1).await;
+        manager.stop(&first.id).await.unwrap();
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
     }
 }

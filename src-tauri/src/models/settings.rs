@@ -113,6 +113,18 @@ pub struct AppSettings {
     /// user and stops the session, saving what was captured so far.
     #[serde(default)]
     pub recording_continue_after_leave: bool,
+    /// Include the synchronized danmaku sidecar by default for live recordings.
+    #[serde(default)]
+    pub recording_include_danmaku: bool,
+    /// FFmpeg/libavformat blocking read timeout in seconds.
+    #[serde(default = "default_ffmpeg_rw_timeout_seconds")]
+    pub ffmpeg_rw_timeout_seconds: u32,
+    /// Maximum delay between FFmpeg network reconnect attempts in seconds.
+    #[serde(default = "default_ffmpeg_reconnect_delay_max_seconds")]
+    pub ffmpeg_reconnect_delay_max_seconds: u32,
+    /// Number of retries for a failed HLS media segment.
+    #[serde(default = "default_ffmpeg_hls_segment_retry_count")]
+    pub ffmpeg_hls_segment_retry_count: u32,
     /// Legacy compatibility field. The client now performs one startup probe
     /// and no longer schedules periodic checks, but old profiles still carry
     /// this value and must remain deserializable.
@@ -203,6 +215,18 @@ fn default_super_chat_enabled() -> bool {
     true
 }
 
+fn default_ffmpeg_rw_timeout_seconds() -> u32 {
+    10
+}
+
+fn default_ffmpeg_reconnect_delay_max_seconds() -> u32 {
+    8
+}
+
+fn default_ffmpeg_hls_segment_retry_count() -> u32 {
+    5
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -238,6 +262,10 @@ impl Default for AppSettings {
             asr_translation_to: default_asr_translation_to(),
             iptv_custom_m3u_url: None,
             recording_continue_after_leave: false,
+            recording_include_danmaku: false,
+            ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
+            ffmpeg_reconnect_delay_max_seconds: default_ffmpeg_reconnect_delay_max_seconds(),
+            ffmpeg_hls_segment_retry_count: default_ffmpeg_hls_segment_retry_count(),
             iptv_availability_auto_check: true,
             iptv_availability_auto_check_interval_hours: 1,
         }
@@ -255,6 +283,9 @@ mod tests {
         let back: AppSettings = serde_json::from_str(&v).unwrap();
         assert_eq!(back.default_site, "bilibili");
         assert_eq!(back.motion_mode, "full");
+        assert_eq!(back.ffmpeg_rw_timeout_seconds, 10);
+        assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
+        assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
     }
 
     #[test]

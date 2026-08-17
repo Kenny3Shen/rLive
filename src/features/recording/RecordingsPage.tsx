@@ -66,6 +66,7 @@ import {
   formatRecordingDuration,
   formatRecordingSize,
   RECORDINGS_QUERY_KEY,
+  RECORDING_STORAGE_QUERY_KEY,
   recordingErrorMessage,
   recordingPlaybackUrl,
   recordingProtocolLabel,
@@ -79,8 +80,6 @@ import {
 } from "./recording";
 
 const RECORDING_PLAYBACK_QUERY_KEY = "recording-playback";
-const RECORDING_STORAGE_QUERY_KEY = ["recording-storage"] as const;
-
 function recordingStatusLabel(status: RecordingStatus): string {
   switch (status) {
     case "recording":
@@ -494,9 +493,7 @@ export function RecordingsPage() {
                   已保存
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {savedItems.length > 0
-                    ? `${savedItems.length} 段本地录制`
-                    : "等待第一段录制完成"}
+                  {savedItems.length > 0 ? `${savedItems.length} 段本地录制` : "等待第一段录制完成"}
                 </p>
               </div>
               {savedItems.length > 0 ? (
@@ -622,19 +619,12 @@ export function RecordingsPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>录制保存位置</DialogTitle>
-            <DialogDescription>
-              新录制写入当前目录，已有录制仍保留在原位置。
-            </DialogDescription>
+            <DialogDescription>新录制写入当前目录，已有录制仍保留在原位置。</DialogDescription>
           </DialogHeader>
           <div className="flex min-w-0 items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2.5">
             <HardDrive className="shrink-0 text-muted-foreground" aria-hidden />
-            <span
-              className="min-w-0 flex-1 truncate font-mono text-xs"
-              title={storage.data?.path}
-            >
-              {storage.isPending
-                ? "正在读取录制目录…"
-                : storage.data?.path || "录制目录不可用"}
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={storage.data?.path}>
+              {storage.isPending ? "正在读取录制目录…" : storage.data?.path || "录制目录不可用"}
             </span>
           </div>
           <p className="text-xs text-muted-foreground">

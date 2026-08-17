@@ -73,6 +73,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          & ./scripts/prepare-windows-ffmpeg.ps1 `
+            -ProjectRoot $PWD `
+            -StageDestination "$PWD/src-tauri/target/release"
           bun run tauri -- build --ci --no-bundle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -97,15 +100,50 @@ jobs:
           if ($imports -notmatch "Delay Load Import" -or $imports -notmatch "sherpa-onnx-c-api.dll") {
             throw "sherpa-onnx-c-api.dll is not configured as a delay-loaded dependency."
           }
+          foreach ($library in @("avutil", "avcodec", "avformat")) {
+            if ($imports -notmatch "$library-[0-9]+\.dll") {
+              throw "Windows executable does not import the expected $library runtime DLL."
+            }
+          }
+
+          $avcodecDlls = @(Get-ChildItem "src-tauri/target/release" -Filter "avcodec-*.dll" -File)
+          if ($avcodecDlls.Count -ne 1) {
+            throw "Expected one staged avcodec DLL, found $($avcodecDlls.Count)."
+          }
+          & $dumpbin /imports $avcodecDlls[0].FullName |
+            Out-File "$env:RUNNER_TEMP/avcodec-imports.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-Content "$env:RUNNER_TEMP/avcodec-imports.txt" -Raw) -notmatch "swresample-[0-9]+\.dll") {
+            throw "The staged avcodec DLL does not import the expected swresample runtime DLL."
+          }
 
       - name: Create Windows portable ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Remove-Item "src-tauri/target/release/*.dll" -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "release-assets/windows" | Out-Null
 
-          $binary = (Resolve-Path "src-tauri/target/release/rlive.exe").Path
+          $releaseDirectory = (Resolve-Path "src-tauri/target/release").Path
+          $binary = (Resolve-Path (Join-Path $releaseDirectory "rlive.exe")).Path
+          $ffmpegDlls = @(
+            Get-ChildItem $releaseDirectory -File |
+              Where-Object { $_.Name -match '^(avutil|avcodec|avformat|swresample)-[0-9]+\.dll$' }
+          )
+          if ($ffmpegDlls.Count -ne 4) {
+            throw "Expected four FFmpeg runtime DLLs, found $($ffmpegDlls.Count)."
+          }
+          Get-ChildItem $releaseDirectory -Filter "*.dll" -File |
+            Where-Object { $ffmpegDlls.FullName -notcontains $_.FullName } |
+            Remove-Item -Force
+
+          $ffmpegLicense = Join-Path $releaseDirectory "FFmpeg-LICENSE.txt"
+          if (-not (Test-Path $ffmpegLicense)) {
+            throw "FFmpeg license file is missing from the release directory."
+          }
+          $ffmpegReadme = Join-Path $releaseDirectory "FFmpeg-README.txt"
+          if (-not (Test-Path $ffmpegReadme)) {
+            throw "FFmpeg build information is missing from the release directory."
+          }
           $process = Start-Process -FilePath $binary -PassThru
           Start-Sleep -Seconds 5
           if ($process.HasExited) {
@@ -116,20 +154,49 @@ jobs:
           $portable = Join-Path $env:RUNNER_TEMP "rlive-portable"
           New-Item -ItemType Directory -Force $portable | Out-Null
           Copy-Item $binary (Join-Path $portable "rlive.exe")
+          Copy-Item $ffmpegDlls.FullName $portable
+          Copy-Item $ffmpegLicense $portable
+          Copy-Item $ffmpegReadme $portable
           $zip = "release-assets/windows/rLive_$($env:RELEASE_VERSION)_windows-x64-portable.zip"
           Compress-Archive -Path "$portable/*" -DestinationPath $zip -CompressionLevel Optimal
 
-          $zipEntries = @(tar -tf $zip)
+          $zipEntries = @(tar -tf $zip | Where-Object { $_ -and -not $_.EndsWith('/') } | Sort-Object)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($zipEntries.Count -ne 1 -or $zipEntries[0] -ne "rlive.exe") {
-            throw "Portable ZIP must contain only rlive.exe."
+          $expectedEntries = @(
+            "rlive.exe"
+            "FFmpeg-LICENSE.txt"
+            "FFmpeg-README.txt"
+            $ffmpegDlls.Name
+          ) | Sort-Object
+          if (Compare-Object $expectedEntries $zipEntries) {
+            throw "Portable ZIP does not contain the expected executable and FFmpeg runtime files."
           }
 
       - name: Bundle Windows installers (NSIS setup and MSI)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          bun run tauri -- bundle --ci --bundles nsis,msi
+          $releaseDirectory = (Resolve-Path "src-tauri/target/release").Path
+          $runtimeFiles = @(
+            Get-ChildItem $releaseDirectory -File |
+              Where-Object { $_.Name -match '^(avutil|avcodec|avformat|swresample)-[0-9]+\.dll$' }
+          )
+          $runtimeFiles += Get-Item (Join-Path $releaseDirectory "FFmpeg-LICENSE.txt")
+          $runtimeFiles += Get-Item (Join-Path $releaseDirectory "FFmpeg-README.txt")
+          if ($runtimeFiles.Count -ne 6) {
+            throw "Expected four FFmpeg DLLs and two notice files for installer bundling."
+          }
+
+          $resources = @{}
+          foreach ($runtimeFile in $runtimeFiles) {
+            $resources[$runtimeFile.FullName] = $runtimeFile.Name
+          }
+          $runtimeConfig = Join-Path $env:RUNNER_TEMP "tauri-release-windows.json"
+          @{ bundle = @{ resources = $resources } } |
+            ConvertTo-Json -Depth 4 |
+            Set-Content $runtimeConfig -Encoding utf8
+
+          bun run tauri -- bundle --ci --bundles nsis,msi --config $runtimeConfig
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $setup = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)

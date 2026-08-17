@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, PlaybackProtocol } from "@/shared/types/live";
@@ -49,6 +50,8 @@ export type RecordingContext = {
 };
 
 export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
+export const RECORDING_STORAGE_QUERY_KEY = ["recording-storage"] as const;
+const RECORDING_CHANGED_EVENT = "recording-changed";
 
 export type RecordingStartOptions = {
   includeDanmaku?: boolean;
@@ -150,8 +153,103 @@ export function recordingProtocolLabel(protocol: PlaybackProtocol): string {
   }
 }
 
+type NativeRecordingChangeRegistration = (onChange: () => void) => Promise<() => void>;
+
+export function createSharedRecordingChangeSubscription<T>(
+  registerNative: NativeRecordingChangeRegistration,
+  notifySubscriber: (subscriber: T) => void,
+): (subscriber: T) => () => void {
+  const subscriberCounts = new Map<T, number>();
+  let nativeUnlisten: (() => void) | null = null;
+  let listenerPromise: Promise<void> | null = null;
+  let listenerGeneration = 0;
+
+  function unlistenSafely(unlisten: (() => void) | null) {
+    if (!unlisten) return;
+    try {
+      unlisten();
+    } catch {
+      // Polling remains available even if native listener cleanup fails.
+    }
+  }
+
+  function ensureNativeListener() {
+    if (nativeUnlisten || listenerPromise || subscriberCounts.size === 0) return;
+    const generation = ++listenerGeneration;
+    listenerPromise = Promise.resolve()
+      .then(() =>
+        registerNative(() => {
+          if (generation !== listenerGeneration) return;
+          for (const subscriber of subscriberCounts.keys()) {
+            try {
+              notifySubscriber(subscriber);
+            } catch {
+              // One query client must not prevent the others from refreshing.
+            }
+          }
+        }),
+      )
+      .then(
+        (cleanup) => {
+          listenerPromise = null;
+          if (subscriberCounts.size === 0 || generation !== listenerGeneration) {
+            unlistenSafely(cleanup);
+            ensureNativeListener();
+            return;
+          }
+          nativeUnlisten = cleanup;
+        },
+        () => {
+          listenerPromise = null;
+          // A remount while the stale registration was pending needs a fresh
+          // attempt. Otherwise the active-recording poll remains the fallback.
+          if (subscriberCounts.size > 0 && generation !== listenerGeneration) {
+            ensureNativeListener();
+          }
+        },
+      );
+  }
+
+  function stopNativeListenerIfUnused() {
+    if (subscriberCounts.size > 0) return;
+    listenerGeneration += 1;
+    const cleanup = nativeUnlisten;
+    nativeUnlisten = null;
+    unlistenSafely(cleanup);
+  }
+
+  return (subscriber: T) => {
+    subscriberCounts.set(subscriber, (subscriberCounts.get(subscriber) ?? 0) + 1);
+    ensureNativeListener();
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      const count = subscriberCounts.get(subscriber) ?? 0;
+      if (count <= 1) {
+        subscriberCounts.delete(subscriber);
+      } else {
+        subscriberCounts.set(subscriber, count - 1);
+      }
+      stopNativeListenerIfUnused();
+    };
+  };
+}
+
+const subscribeToRecordingChanges = createSharedRecordingChangeSubscription<QueryClient>(
+  (onChange) => listen(RECORDING_CHANGED_EVENT, onChange),
+  (queryClient) => {
+    void queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
+  },
+);
+
 export function useRecordings() {
   const supported = recordingSupported();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!supported) return;
+    return subscribeToRecordingChanges(queryClient);
+  }, [queryClient, supported]);
   return useQuery({
     queryKey: RECORDINGS_QUERY_KEY,
     enabled: supported,
@@ -159,6 +257,8 @@ export function useRecordings() {
     staleTime: 500,
     refetchInterval: (query) =>
       query.state.data?.some((item) => item.status === "recording") ? 1000 : false,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -207,10 +307,10 @@ export function useRecordingController(context: RecordingContext | null) {
 
   const start = useCallback(
     (options: RecordingStartOptions = {}) => {
-      if (!context || active || startMutation.isPending) return;
+      if (!context || active || query.isPending || startMutation.isPending) return;
       startMutation.mutate(options);
     },
-    [active, context, startMutation],
+    [active, context, query.isPending, startMutation],
   );
   const stop = useCallback(() => {
     if (active && !stopMutation.isPending) stopMutation.mutate(active.id);
@@ -226,7 +326,7 @@ export function useRecordingController(context: RecordingContext | null) {
   return {
     ...query,
     active,
-    busy: startMutation.isPending || stopMutation.isPending,
+    busy: query.isPending || startMutation.isPending || stopMutation.isPending,
     start,
     stop,
     toggle,
@@ -240,15 +340,20 @@ export function activeRecordingForContext(
   context: RecordingContext | null,
 ): RecordingItem | null {
   if (!context) return null;
+  const sourceKey = context.sourceKey.trim();
+  const liveSiteId = context.siteId?.trim() || null;
+  const liveRoomId = context.roomId?.trim() || null;
+  const hasLiveIdentity =
+    context.sourceKind === "live" && liveSiteId !== null && liveRoomId !== null;
   return (
     items?.find(
       (item) =>
         item.status === "recording" &&
-        (item.source_key === context.sourceKey ||
-          (context.sourceKind === "live" &&
+        ((sourceKey.length > 0 && item.source_key.trim() === sourceKey) ||
+          (hasLiveIdentity &&
             item.source_kind === "live" &&
-            item.site_id === (context.siteId ?? null) &&
-            item.room_id === (context.roomId ?? null))),
+            item.site_id === liveSiteId &&
+            item.room_id === liveRoomId)),
     ) ?? null
   );
 }
@@ -263,10 +368,6 @@ export async function stopRecording(id: string): Promise<RecordingItem> {
 
 export async function deleteRecording(id: string): Promise<void> {
   await invokeCmd<void>("recording_delete", { id });
-}
-
-export async function recordingStoragePath(): Promise<string> {
-  return invokeCmd<string>("recording_storage_path");
 }
 
 export async function recordingStorageInfo(): Promise<RecordingStorageInfo> {

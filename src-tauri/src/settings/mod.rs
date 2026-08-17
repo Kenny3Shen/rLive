@@ -10,6 +10,11 @@ const DANMAKU_SPEED_MIN: u32 = 50;
 const DANMAKU_SPEED_MAX: u32 = 200;
 const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 0;
 const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
+const FFMPEG_RW_TIMEOUT_SECONDS_MIN: u32 = 3;
+const FFMPEG_RW_TIMEOUT_SECONDS_MAX: u32 = 60;
+const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN: u32 = 1;
+const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX: u32 = 60;
+const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX: u32 = 20;
 
 fn normalize_motion_preference(settings: &mut AppSettings) {
     settings.motion_mode = "full".to_owned();
@@ -148,6 +153,20 @@ fn normalize_danmaku_preferences(settings: &mut AppSettings) {
     );
 }
 
+fn normalize_recording_preferences(settings: &mut AppSettings) {
+    settings.ffmpeg_rw_timeout_seconds = settings
+        .ffmpeg_rw_timeout_seconds
+        .clamp(FFMPEG_RW_TIMEOUT_SECONDS_MIN, FFMPEG_RW_TIMEOUT_SECONDS_MAX);
+    settings.ffmpeg_reconnect_delay_max_seconds =
+        settings.ffmpeg_reconnect_delay_max_seconds.clamp(
+            FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN,
+            FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX,
+        );
+    settings.ffmpeg_hls_segment_retry_count = settings
+        .ffmpeg_hls_segment_retry_count
+        .min(FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX);
+}
+
 /// Load app settings from `settings_kv`, or return defaults if missing/invalid.
 pub fn get(conn: &Connection) -> AppResult<AppSettings> {
     Ok(get_with_status(conn)?.0)
@@ -174,6 +193,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
                 normalize_site_preferences(&mut settings);
                 normalize_danmaku_preferences(&mut settings);
                 normalize_asr_preferences(&mut settings);
+                normalize_recording_preferences(&mut settings);
                 Ok((settings, true))
             }
             // Corrupt JSON: fall back to defaults so the app remains usable.
@@ -189,6 +209,7 @@ pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     normalize_site_preferences(&mut normalized);
     normalize_danmaku_preferences(&mut normalized);
     normalize_asr_preferences(&mut normalized);
+    normalize_recording_preferences(&mut normalized);
     let json = serde_json::to_string(&normalized).map_err(|e| {
         AppError::new(
             "settings_encode_error",
@@ -292,6 +313,23 @@ mod tests {
         settings.danmaku_speed = 500;
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_speed, DANMAKU_SPEED_MAX);
+    }
+
+    #[test]
+    fn set_clamps_ffmpeg_recording_options() {
+        let conn = open_in_memory().unwrap();
+        let settings = AppSettings {
+            ffmpeg_rw_timeout_seconds: 1,
+            ffmpeg_reconnect_delay_max_seconds: 100,
+            ffmpeg_hls_segment_retry_count: 99,
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        let stored = get(&conn).unwrap();
+        assert_eq!(stored.ffmpeg_rw_timeout_seconds, 3);
+        assert_eq!(stored.ffmpeg_reconnect_delay_max_seconds, 60);
+        assert_eq!(stored.ffmpeg_hls_segment_retry_count, 20);
     }
 
     #[test]

@@ -1,19 +1,31 @@
 //! Tauri commands for desktop recording and the local recording library.
 
-#![cfg(not(target_os = "android"))]
+#![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::recording::{RecordingItem, RecordingStartInput, RecordingStorageInfo};
+use crate::recording::{
+    FfmpegRecordingOptions, RecordingItem, RecordingStartInput, RecordingStorageInfo,
+};
 use crate::state::AppState;
 
-fn configured_proxy(state: &AppState) -> AppResult<Option<String>> {
+fn configured_recording_options(
+    state: &AppState,
+) -> AppResult<(Option<String>, FfmpegRecordingOptions)> {
     let conn = state
         .db
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
-    Ok(crate::settings::get(&conn)?.proxy)
+    let settings = crate::settings::get(&conn)?;
+    Ok((
+        settings.proxy,
+        FfmpegRecordingOptions {
+            rw_timeout_seconds: settings.ffmpeg_rw_timeout_seconds,
+            reconnect_delay_max_seconds: settings.ffmpeg_reconnect_delay_max_seconds,
+            hls_segment_retry_count: settings.ffmpeg_hls_segment_retry_count,
+        },
+    ))
 }
 
 #[tauri::command]
@@ -26,8 +38,18 @@ pub async fn recording_start(
     state: State<'_, AppState>,
     input: RecordingStartInput,
 ) -> AppResult<RecordingItem> {
-    let proxy = configured_proxy(state.inner())?;
-    state.recording.start(input, proxy.as_deref()).await
+    // Register background danmaku ownership before settings lookup and storage
+    // setup, so a concurrent route cleanup cannot tear down the room connection
+    // while this start request is still preparing its session.
+    let _danmaku_start_reservation = state.recording.reserve_background_danmaku_start(
+        input.source_key.trim(),
+        input.include_danmaku && input.continue_on_leave,
+    );
+    let (proxy, ffmpeg_options) = configured_recording_options(state.inner())?;
+    state
+        .recording
+        .start_with_ffmpeg_options(input, proxy.as_deref(), ffmpeg_options)
+        .await
 }
 
 #[tauri::command(async)]
@@ -43,11 +65,6 @@ pub fn recording_delete(state: State<'_, AppState>, id: String) -> AppResult<()>
 #[tauri::command(async)]
 pub async fn recording_playback_url(state: State<'_, AppState>, id: String) -> AppResult<String> {
     state.recording.playback_url(id.trim()).await
-}
-
-#[tauri::command]
-pub fn recording_storage_path(state: State<'_, AppState>) -> AppResult<String> {
-    Ok(state.recording.storage_path())
 }
 
 #[tauri::command]

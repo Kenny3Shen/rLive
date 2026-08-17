@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   activeRecordingForContext,
   clampRecordingPlaybackTime,
+  createSharedRecordingChangeSubscription,
   formatRecordingDuration,
   formatRecordingSize,
   recordingEndedPlaybackTime,
@@ -53,6 +54,101 @@ function recordingItem(overrides: Partial<RecordingItem> = {}): RecordingItem {
     ...overrides,
   };
 }
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("recording change subscription", () => {
+  test("shares one native listener and reference-counts duplicate subscribers", async () => {
+    let registrations = 0;
+    let cleanups = 0;
+    let nativeHandler: (() => void) | null = null;
+    const subscribe = createSharedRecordingChangeSubscription(
+      async (handler) => {
+        registrations += 1;
+        nativeHandler = handler;
+        return () => {
+          cleanups += 1;
+        };
+      },
+      (subscriber: { invalidations: number }) => {
+        subscriber.invalidations += 1;
+      },
+    );
+    const sharedClient = { invalidations: 0 };
+    const otherClient = { invalidations: 0 };
+
+    const unsubscribeFirst = subscribe(sharedClient);
+    const unsubscribeSecond = subscribe(sharedClient);
+    const unsubscribeOther = subscribe(otherClient);
+    await flushMicrotasks();
+
+    expect(registrations).toBe(1);
+    nativeHandler?.();
+    expect(sharedClient.invalidations).toBe(1);
+    expect(otherClient.invalidations).toBe(1);
+
+    unsubscribeFirst();
+    nativeHandler?.();
+    expect(sharedClient.invalidations).toBe(2);
+    unsubscribeSecond();
+    nativeHandler?.();
+    expect(sharedClient.invalidations).toBe(2);
+    expect(otherClient.invalidations).toBe(3);
+
+    unsubscribeOther();
+    unsubscribeOther();
+    await flushMicrotasks();
+    expect(cleanups).toBe(1);
+  });
+
+  test("replaces a stale async listener after a StrictMode-style remount", async () => {
+    const handlers: Array<() => void> = [];
+    const resolvers: Array<(cleanup: () => void) => void> = [];
+    let registrations = 0;
+    let firstCleanup = 0;
+    let secondCleanup = 0;
+    const subscriber = { invalidations: 0 };
+    const subscribe = createSharedRecordingChangeSubscription(
+      (handler) => {
+        registrations += 1;
+        handlers.push(handler);
+        return new Promise((resolve) => resolvers.push(resolve));
+      },
+      (client: { invalidations: number }) => {
+        client.invalidations += 1;
+      },
+    );
+
+    const unsubscribeFirst = subscribe(subscriber);
+    await flushMicrotasks();
+    unsubscribeFirst();
+    const unsubscribeSecond = subscribe(subscriber);
+    await flushMicrotasks();
+    expect(registrations).toBe(1);
+
+    resolvers[0]!(() => {
+      firstCleanup += 1;
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(firstCleanup).toBe(1);
+    expect(registrations).toBe(2);
+
+    resolvers[1]!(() => {
+      secondCleanup += 1;
+    });
+    await flushMicrotasks();
+    handlers[0]!();
+    handlers[1]!();
+    expect(subscriber.invalidations).toBe(1);
+
+    unsubscribeSecond();
+    expect(secondCleanup).toBe(1);
+  });
+});
 
 describe("recording presentation helpers", () => {
   test("formats short and long durations as timecodes", () => {
@@ -136,6 +232,54 @@ describe("active recording context matching", () => {
     const active = recordingItem({ source_key: "legacy-live-key" });
 
     expect(activeRecordingForContext([active], liveContext)).toBe(active);
+  });
+
+  test("does not match an unrelated live session when the context identity is missing", () => {
+    const active = recordingItem({
+      source_key: "live:unknown:other",
+      site_id: null,
+      room_id: null,
+    });
+    const context: RecordingContext = {
+      ...liveContext,
+      sourceKey: "live:unknown:current",
+      siteId: undefined,
+      roomId: undefined,
+    };
+
+    expect(activeRecordingForContext([active], context)).toBeNull();
+  });
+
+  test("still matches a stable source key when the live identity is missing", () => {
+    const active = recordingItem({ site_id: null, room_id: null });
+    const context: RecordingContext = {
+      ...liveContext,
+      siteId: undefined,
+      roomId: undefined,
+    };
+
+    expect(activeRecordingForContext([active], context)).toBe(active);
+  });
+
+  test("does not treat empty or whitespace-only source keys as stable identities", () => {
+    const active = recordingItem({ source_key: "   ", site_id: null, room_id: null });
+    const emptyContext: RecordingContext = {
+      ...liveContext,
+      sourceKey: "",
+      siteId: undefined,
+      roomId: undefined,
+    };
+    const whitespaceContext = { ...emptyContext, sourceKey: "  " };
+
+    expect(activeRecordingForContext([active], emptyContext)).toBeNull();
+    expect(activeRecordingForContext([active], whitespaceContext)).toBeNull();
+  });
+
+  test("normalizes a non-empty source key before matching", () => {
+    const active = recordingItem({ source_key: `  ${liveContext.sourceKey}  ` });
+    const context = { ...liveContext, sourceKey: ` ${liveContext.sourceKey} ` };
+
+    expect(activeRecordingForContext([active], context)).toBe(active);
   });
 
   test("ignores completed sessions and unrelated active sessions", () => {

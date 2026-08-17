@@ -71,6 +71,7 @@
   --settings-playback: oklch(0.59 0.19 255);
   --settings-platform: oklch(0.64 0.19 12);
   --settings-network: oklch(0.58 0.16 150);
+  --settings-recording: oklch(0.62 0.18 28);
   --settings-account: oklch(0.65 0.16 55);
   --settings-data: oklch(0.58 0.16 205);
   --settings-about: oklch(0.6 0.15 305);
@@ -117,6 +118,7 @@
   --settings-playback: oklch(0.72 0.16 255);
   --settings-platform: oklch(0.74 0.17 12);
   --settings-network: oklch(0.72 0.15 150);
+  --settings-recording: oklch(0.75 0.16 28);
   --settings-account: oklch(0.77 0.14 75);
   --settings-data: oklch(0.72 0.15 205);
   --settings-about: oklch(0.74 0.14 305);
@@ -183,6 +185,7 @@
   --color-settings-playback: var(--settings-playback);
   --color-settings-platform: var(--settings-platform);
   --color-settings-network: var(--settings-network);
+  --color-settings-recording: var(--settings-recording);
   --color-settings-account: var(--settings-account);
   --color-settings-data: var(--settings-data);
   --color-settings-about: var(--settings-about);

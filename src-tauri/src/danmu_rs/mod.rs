@@ -7,7 +7,7 @@ pub mod reconnect;
 pub mod tars;
 pub mod twitch;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::Manager;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::error::{AppError, AppResult};
@@ -28,6 +28,7 @@ use crate::models::live::{DanmakuEvent, DanmakuKind, SiteId};
 const DANMAKU_EVENT_CHANNEL_CAPACITY: usize = 2_048;
 const DANMAKU_BATCH_MAX_EVENTS: usize = 512;
 const DANMAKU_BATCH_INTERVAL: Duration = Duration::from_millis(50);
+const DANMAKU_FINAL_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ACCOUNT_ID_CHARS: usize = 128;
 const MAX_ACCOUNT_NAME_CHARS: usize = 128;
 
@@ -187,16 +188,66 @@ impl DanmakuEventSender {
     }
 }
 
-/// Manages a single active danmaku connection for the app.
+/// Manages the room page's active danmaku connection plus connections retained
+/// by background recordings. Background batches still carry their original
+/// generation, so the frontend ignores them while the recording sidecar keeps
+/// receiving events by `source_key`.
 pub struct DanmakuManager {
     inner: Mutex<DanmakuConnectionState>,
+}
+
+#[derive(Default)]
+struct DanmakuTasks {
+    connection_handle: Option<JoinHandle<()>>,
+    batch_handle: Option<JoinHandle<()>>,
+    batch_control: Option<mpsc::UnboundedSender<DanmakuBatchControl>>,
+}
+
+impl DanmakuTasks {
+    fn abort(mut self) {
+        if let Some(handle) = self.connection_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.batch_handle.take() {
+            handle.abort();
+        }
+    }
+
+    async fn stop_and_flush(mut self) {
+        if let Some(handle) = self.connection_handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+        if let Some(control) = self.batch_control.take() {
+            let _ = control.send(DanmakuBatchControl::StopAndFlush);
+        }
+        if let Some(mut handle) = self.batch_handle.take()
+            && time::timeout(DANMAKU_FINAL_FLUSH_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+        {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+}
+
+enum DanmakuBatchControl {
+    Flush(oneshot::Sender<()>),
+    StopAndFlush,
+}
+
+struct BackgroundDanmakuConnection {
+    generation: u64,
+    tasks: DanmakuTasks,
 }
 
 struct DanmakuConnectionState {
     /// The newest route-level connection request accepted by the backend.
     generation: u64,
-    connection_handle: Option<JoinHandle<()>>,
-    batch_handle: Option<JoinHandle<()>>,
+    active_source_key: Option<String>,
+    active_tasks: DanmakuTasks,
+    background_tasks: HashMap<String, BackgroundDanmakuConnection>,
 }
 
 impl Default for DanmakuManager {
@@ -204,8 +255,9 @@ impl Default for DanmakuManager {
         Self {
             inner: Mutex::new(DanmakuConnectionState {
                 generation: 0,
-                connection_handle: None,
-                batch_handle: None,
+                active_source_key: None,
+                active_tasks: DanmakuTasks::default(),
+                background_tasks: HashMap::new(),
             }),
         }
     }
@@ -216,13 +268,29 @@ impl DanmakuManager {
         Self::default()
     }
 
-    fn abort_active(state: &mut DanmakuConnectionState) {
-        if let Some(handle) = state.connection_handle.take() {
-            handle.abort();
+    fn abort_active_tasks(state: &mut DanmakuConnectionState) {
+        std::mem::take(&mut state.active_tasks).abort();
+    }
+
+    fn clear_active(state: &mut DanmakuConnectionState) {
+        Self::abort_active_tasks(state);
+        state.active_source_key = None;
+    }
+
+    fn move_active_to_background(state: &mut DanmakuConnectionState) -> Option<String> {
+        let source_key = state.active_source_key.take()?;
+        let tasks = std::mem::take(&mut state.active_tasks);
+        let connection = BackgroundDanmakuConnection {
+            generation: state.generation,
+            tasks,
+        };
+        if let Some(previous) = state
+            .background_tasks
+            .insert(source_key.clone(), connection)
+        {
+            previous.tasks.abort();
         }
-        if let Some(handle) = state.batch_handle.take() {
-            handle.abort();
-        }
+        Some(source_key)
     }
 
     /// Marks a route request as the only connection allowed to install a task.
@@ -231,23 +299,83 @@ impl DanmakuManager {
     /// websocket. A slow request from a room that was already left must not
     /// install itself after a newer route is active, hence the caller-provided
     /// monotonically increasing generation.
-    pub fn begin_connect(&self, generation: u64) -> bool {
+    pub fn begin_connect(
+        &self,
+        generation: u64,
+        source_key: String,
+        preserve_active: bool,
+    ) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             return false;
         };
         if generation < state.generation {
             return false;
         }
+        if preserve_active {
+            Self::move_active_to_background(&mut state);
+        } else {
+            Self::clear_active(&mut state);
+        }
         state.generation = generation;
-        Self::abort_active(&mut state);
+        // Revisiting a room replaces its retained connection instead of
+        // delivering duplicate websocket batches to the same sidecar.
+        if let Some(previous) = state.background_tasks.remove(&source_key) {
+            previous.tasks.abort();
+        }
+        state.active_source_key = Some(source_key);
         true
     }
 
+    pub fn active_source_key(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|state| state.active_source_key.clone())
+    }
+
+    /// Returns the active source only when this cleanup is new enough to
+    /// affect it. The caller can then decide whether to stop or retain it.
+    pub fn source_key_for_generation(&self, generation: u64) -> Option<String> {
+        self.inner.lock().ok().and_then(|state| {
+            (generation >= state.generation)
+                .then(|| state.active_source_key.clone())
+                .flatten()
+        })
+    }
+
+    #[cfg(test)]
     pub fn is_current(&self, generation: u64) -> bool {
         self.inner
             .lock()
             .map(|state| state.generation == generation)
             .unwrap_or(false)
+    }
+
+    fn accepts_connection_generation(&self, generation: u64) -> bool {
+        self.inner
+            .lock()
+            .map(|state| {
+                (state.generation == generation && state.active_source_key.is_some())
+                    || state
+                        .background_tasks
+                        .values()
+                        .any(|connection| connection.generation == generation)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Detaches the current page without stopping its websocket. The tasks
+    /// remain keyed by their recording source until that recording finishes.
+    pub fn detach_for_generation(&self, generation: u64) -> bool {
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
+        };
+        if generation < state.generation {
+            return false;
+        }
+        let detached = Self::move_active_to_background(&mut state).is_some();
+        state.generation = generation;
+        detached
     }
 
     /// Stops only requests at or before `generation`; an older frontend
@@ -260,41 +388,117 @@ impl DanmakuManager {
             return false;
         }
         state.generation = generation;
-        Self::abort_active(&mut state);
+        Self::clear_active(&mut state);
         true
+    }
+
+    /// Stops a retained connection only. An identical room that is currently
+    /// open owns the active connection and must survive a recording stop.
+    pub fn disconnect_background_for_source(&self, source_key: &str) -> bool {
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
+        };
+        let Some(connection) = state.background_tasks.remove(source_key) else {
+            return false;
+        };
+        connection.tasks.abort();
+        true
+    }
+
+    /// Stops a recording-owned connection after its receiver has emitted the
+    /// final queued batch. Pending connection slots are removed as well, so an
+    /// in-flight metadata request cannot install itself after recording ended.
+    pub(crate) async fn finish_recording_source(&self, source_key: &str) -> bool {
+        let background = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut state| state.background_tasks.remove(source_key));
+        if let Some(connection) = background {
+            connection.tasks.stop_and_flush().await;
+            return true;
+        }
+
+        let control = self.inner.lock().ok().and_then(|state| {
+            (state.active_source_key.as_deref() == Some(source_key))
+                .then(|| state.active_tasks.batch_control.clone())
+                .flatten()
+        });
+        let flushed = if let Some(control) = control {
+            request_batch_flush(control).await
+        } else {
+            false
+        };
+
+        // The page may have detached while the active flush was in flight.
+        let background = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut state| state.background_tasks.remove(source_key));
+        if let Some(connection) = background {
+            connection.tasks.stop_and_flush().await;
+            return true;
+        }
+        flushed
     }
 
     pub fn disconnect(&self) {
         if let Ok(mut state) = self.inner.lock() {
             state.generation = state.generation.saturating_add(1);
-            Self::abort_active(&mut state);
+            Self::clear_active(&mut state);
+            for (_, connection) in state.background_tasks.drain() {
+                connection.tasks.abort();
+            }
         }
     }
 
     /// Installs the task only when the request is still current. Returns false
     /// and aborts the task if another room superseded it while its metadata was
     /// loading.
-    pub fn set_tasks_if_current(
+    fn set_tasks_if_current(
         &self,
         generation: u64,
         connection_task: JoinHandle<()>,
         batch_task: JoinHandle<()>,
+        batch_control: mpsc::UnboundedSender<DanmakuBatchControl>,
     ) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             connection_task.abort();
             batch_task.abort();
             return false;
         };
-        if state.generation != generation {
-            connection_task.abort();
-            batch_task.abort();
-            return false;
+        let tasks = DanmakuTasks {
+            connection_handle: Some(connection_task),
+            batch_handle: Some(batch_task),
+            batch_control: Some(batch_control),
+        };
+        if state.generation == generation && state.active_source_key.is_some() {
+            Self::abort_active_tasks(&mut state);
+            state.active_tasks = tasks;
+            return true;
         }
-        Self::abort_active(&mut state);
-        state.connection_handle = Some(connection_task);
-        state.batch_handle = Some(batch_task);
-        true
+        if let Some(connection) = state
+            .background_tasks
+            .values_mut()
+            .find(|connection| connection.generation == generation)
+        {
+            std::mem::replace(&mut connection.tasks, tasks).abort();
+            return true;
+        }
+        tasks.abort();
+        false
     }
+}
+
+async fn request_batch_flush(control: mpsc::UnboundedSender<DanmakuBatchControl>) -> bool {
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if control.send(DanmakuBatchControl::Flush(ack_tx)).is_err() {
+        return false;
+    }
+    time::timeout(DANMAKU_FINAL_FLUSH_TIMEOUT, ack_rx)
+        .await
+        .is_ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -312,11 +516,13 @@ fn spawn_loop<F, Fut>(
     Fut: std::future::Future<Output = AppResult<()>> + Send + 'static,
 {
     let (event_tx, event_rx) = mpsc::channel(DANMAKU_EVENT_CHANNEL_CAPACITY);
+    let (batch_control_tx, batch_control_rx) = mpsc::unbounded_channel();
     let batch_task = tauri::async_runtime::spawn(dispatch_batches(
         app.clone(),
         generation,
         source_key,
         event_rx,
+        batch_control_rx,
     ));
     // Do not let the task run until its generation is installed. Without this
     // gate a route switch in the tiny window between `spawn` and manager
@@ -364,7 +570,7 @@ fn spawn_loop<F, Fut>(
             );
         }
     });
-    if manager.set_tasks_if_current(generation, connection_task, batch_task) {
+    if manager.set_tasks_if_current(generation, connection_task, batch_task, batch_control_tx) {
         let _ = start_tx.send(());
     }
 }
@@ -374,6 +580,7 @@ async fn dispatch_batches(
     generation: u64,
     source_key: String,
     mut receiver: mpsc::Receiver<DanmakuEvent>,
+    mut control: mpsc::UnboundedReceiver<DanmakuBatchControl>,
 ) {
     let mut ticker = time::interval(DANMAKU_BATCH_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -400,6 +607,26 @@ async fn dispatch_batches(
                 }
             },
             _ = ticker.tick() => emit_batch(&app, generation, &source_key, &mut batch),
+            command = control.recv() => match command {
+                Some(DanmakuBatchControl::Flush(ack)) => {
+                    drain_ready_events(&mut receiver, &mut batch);
+                    emit_batch(&app, generation, &source_key, &mut batch);
+                    let _ = ack.send(());
+                }
+                Some(DanmakuBatchControl::StopAndFlush) | None => {
+                    drain_ready_events(&mut receiver, &mut batch);
+                    emit_batch(&app, generation, &source_key, &mut batch);
+                    return;
+                }
+            },
+        }
+    }
+}
+
+fn drain_ready_events(receiver: &mut mpsc::Receiver<DanmakuEvent>, batch: &mut Vec<DanmakuEvent>) {
+    while let Ok(event) = receiver.try_recv() {
+        if batch.len() < DANMAKU_BATCH_MAX_EVENTS {
+            batch.push(event);
         }
     }
 }
@@ -408,7 +635,7 @@ fn emit_batch(app: &AppHandle, generation: u64, source_key: &str, batch: &mut Ve
     if batch.is_empty() {
         return;
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     if let Some(state) = app.try_state::<crate::state::AppState>() {
         state.recording.capture_danmaku(source_key, batch);
     }
@@ -452,7 +679,7 @@ pub async fn connect(
         proxy,
         notice,
     } = request;
-    if !manager.is_current(generation) {
+    if !manager.accepts_connection_generation(generation) {
         return Ok(());
     }
 
@@ -527,7 +754,7 @@ pub async fn connect(
             // Local MSSDK signing is CPU-bound JS eval; keep it off the hot
             // path relative to room transitions by checking generation after.
             let args = douyin::build_connection(room_id, detail_raw, cookie)?;
-            if !manager.is_current(generation) {
+            if !manager.accepts_connection_generation(generation) {
                 return Ok(());
             }
             spawn_loop(
@@ -551,16 +778,21 @@ pub fn emit_event(sender: &DanmakuEventSender, event: DanmakuEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{DanmakuBatch, DanmakuManager, SelfDanmakuIdentity};
+    use super::{
+        DanmakuBatch, DanmakuBatchControl, DanmakuManager, DanmakuTasks, SelfDanmakuIdentity,
+    };
     use crate::models::live::{DanmakuEvent, DanmakuKind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::mpsc;
 
     #[test]
     fn newer_connection_epochs_fence_stale_connects_and_cleanups() {
         let manager = DanmakuManager::new();
 
-        assert!(manager.begin_connect(100));
-        assert!(manager.begin_connect(101));
-        assert!(!manager.begin_connect(100));
+        assert!(manager.begin_connect(100, "live:bilibili:100".into(), false));
+        assert!(manager.begin_connect(101, "live:bilibili:101".into(), false));
+        assert!(!manager.begin_connect(100, "live:bilibili:100".into(), false));
         assert!(manager.is_current(101));
 
         // A delayed cleanup from the old room must leave the newer room alive.
@@ -573,9 +805,111 @@ mod tests {
         // The frontend uses a lower stop fence followed by a higher connect
         // epoch. If the stop IPC arrives late, it must not tear down the
         // newer connection that has already claimed the manager.
-        assert!(manager.begin_connect(103));
+        assert!(manager.begin_connect(103, "live:bilibili:103".into(), false));
         assert!(!manager.disconnect_for_generation(102));
         assert!(manager.is_current(103));
+    }
+
+    #[tokio::test]
+    async fn detached_recording_connection_survives_a_new_room_until_released() {
+        let manager = DanmakuManager::new();
+        let source = "live:bilibili:100";
+
+        assert!(manager.begin_connect(100, source.into(), false));
+        let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let (control, _receiver) = mpsc::unbounded_channel();
+        assert!(manager.set_tasks_if_current(100, connection, batch, control));
+        assert!(manager.detach_for_generation(101));
+        assert!(manager.begin_connect(102, "live:huya:200".into(), false));
+        assert!(
+            manager
+                .inner
+                .lock()
+                .unwrap()
+                .background_tasks
+                .contains_key(source)
+        );
+
+        assert!(manager.disconnect_background_for_source(source));
+        assert!(!manager.disconnect_background_for_source(source));
+        assert!(manager.is_current(102));
+
+        // A replacement connect can arrive before the old page's cleanup IPC.
+        // It must retain the old room atomically when recording still owns it.
+        let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let (control, _receiver) = mpsc::unbounded_channel();
+        assert!(manager.set_tasks_if_current(102, connection, batch, control));
+        assert!(manager.begin_connect(103, "live:douyu:300".into(), true));
+        assert!(
+            manager
+                .inner
+                .lock()
+                .unwrap()
+                .background_tasks
+                .contains_key("live:huya:200")
+        );
+        assert!(manager.disconnect_background_for_source("live:huya:200"));
+        manager.disconnect();
+    }
+
+    #[tokio::test]
+    async fn pending_connect_installs_into_background_after_route_detaches() {
+        let manager = DanmakuManager::new();
+        let source = "live:bilibili:pending";
+
+        assert!(manager.begin_connect(200, source.into(), false));
+        assert!(manager.detach_for_generation(201));
+        assert!(manager.accepts_connection_generation(200));
+        {
+            let state = manager.inner.lock().unwrap();
+            let pending = state.background_tasks.get(source).unwrap();
+            assert_eq!(pending.generation, 200);
+            assert!(pending.tasks.connection_handle.is_none());
+        }
+
+        let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let (control, _receiver) = mpsc::unbounded_channel();
+        assert!(manager.set_tasks_if_current(200, connection, batch, control));
+        assert!(
+            manager
+                .inner
+                .lock()
+                .unwrap()
+                .background_tasks
+                .get(source)
+                .unwrap()
+                .tasks
+                .connection_handle
+                .is_some()
+        );
+        assert!(manager.disconnect_background_for_source(source));
+    }
+
+    #[tokio::test]
+    async fn graceful_background_stop_requests_final_batch_flush() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let batch_flushed = flushed.clone();
+        let (control, mut commands) = mpsc::unbounded_channel();
+        let batch = tauri::async_runtime::spawn(async move {
+            if matches!(
+                commands.recv().await,
+                Some(DanmakuBatchControl::StopAndFlush)
+            ) {
+                batch_flushed.store(true, Ordering::Release);
+            }
+        });
+        let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let tasks = DanmakuTasks {
+            connection_handle: Some(connection),
+            batch_handle: Some(batch),
+            batch_control: Some(control),
+        };
+
+        tasks.stop_and_flush().await;
+        assert!(flushed.load(Ordering::Acquire));
     }
 
     #[test]

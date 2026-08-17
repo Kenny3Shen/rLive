@@ -82,10 +82,12 @@ rLive 是面向桌面端与 Android 的跨平台直播客户端。它把不同�
 
 ### 把正在看的直播留下来
 
-- 桌面端直播间和 IPTV 播放页的顶部标题栏提供实时录制入口，最多同时录制 4 路；开始前可选择是否保存可开关的同步弹幕轨，并可按次开启「离开页面后继续录制」。
+- 桌面端直播间和 IPTV 播放页的顶部标题栏提供实时录制入口，最多同时录制 4 路；开始前可选择是否保存可开关的同步弹幕轨，并可按次开启「离开页面后继续录制」。两项默认值及 FFmpeg 超时、重连和 HLS 分片重试可在设置页调整。
 - 后台继续默认关闭；录制中离开播放器时会询问留在页面、继续录制并离开，或停止保存后离开。选择继续后任务由 Rust 后台持有，录制库可查看增长中的时长与体积。
-- FLV、MPEG-TS、原生媒体直接保存；HLS 保存为包含清单、分片、密钥和初始化片段的本地回放包，不依赖外部 `ffmpeg`。
-- 录制库可选择新的本地保存目录或恢复默认目录；切换后只影响新任务，历史目录仍会被读取。媒体、目录设置与弹幕轨都不会上传或进入配置同步。
+- FLV、HLS 和 MPEG-TS 直播流统一由进程内 `ffmpeg-next` / libavformat 读取，不启动外部 `ffmpeg` 进程，也不解码或转码；FLV/MPEG-TS 保持同容器，HLS 统一保存为单个 MPEG-TS 文件。原生 MP4/WebM 地址仅做原样保存。
+- 停止录制会先打断网络读取、写完容器 trailer，再把同步落盘的 `.part` 原子发布；关闭应用时会在所有任务共享的 15 秒期限内收尾。Twitch HLS 使用录制任务独立持有的 localhost 清单代理刷新短时 URL，页面离开不会销毁它。
+- 同时启用弹幕和后台录制时，离开房间后弹幕连接也会由后台任务持续保存，直到录制结束；进入其他房间不会串写旧录制。
+- 录制库和设置页都可选择新的本地保存目录或恢复默认目录；设置页还可选择下次启动使用的应用数据位置。新安装优先使用可写安装目录，不可写时回退系统数据目录；位置切换不会自动迁移旧数据。媒体、目录设置与弹幕轨都不会上传。
 
 > [!NOTE]
 > 语音识别始终在本机完成。字幕翻译默认关闭；开启后，已定稿的字幕文本会发送至 Google 翻译。Cookie、弹幕发送授权、ASR 本机配置和私有 M3U 地址不会进入配置包或局域网同步。
@@ -110,6 +112,7 @@ Windows 安装包与便携 ZIP 都不内置约 `212 MiB` 的 ASR Runtime。首�
 - [Rust](https://www.rust-lang.org/tools/install)
 - [Bun](https://bun.sh/)
 - [Tauri 2](https://v2.tauri.app/start/prerequisites/)
+- 桌面端构建需要与 `ffmpeg-next 9.0.0` 兼容的 `libavformat`、`libavcodec`、`libavutil` 开发文件（当前 Linux 验证环境为 FFmpeg 6.x / libavformat 60），以及 `pkg-config`（或 `FFMPEG_DIR`）和 libclang；运行时还需提供 ABI 匹配的动态库。Windows 构建脚本会下载固定版本和 SHA-256 的 Gyan `full_build-shared` SDK，并将 `avformat`、`avcodec`、`avutil`、传递依赖 `swresample` 及 GPLv3 许可说明放到 `rlive.exe` 同目录。Android 不引入该依赖。
 
 ### 启动客户端
 
@@ -132,7 +135,7 @@ bun run build
 bun run tauri build
 ```
 
-Windows 推荐在 WSL 中维护源码。首次使用前复制 `scripts/windows-sync.conf.example` 为 `scripts/windows-sync.conf`，在 `WINDOWS_SYNC_PATH` 中填写 Windows 项目目录，然后运行 `./scripts/build-windows-from-wsl.sh` 同步并构建。Android SDK、NDK、真机运行和签名配置见 [Android 开发文档](docs/zh/Android开发-Windows.md)。
+Windows 推荐在 WSL 中维护源码。首次使用前复制 `scripts/windows-sync.conf.example` 为 `scripts/windows-sync.conf`，在 `WINDOWS_SYNC_PATH` 中填写 Windows 项目目录，然后运行 `./scripts/build-windows-from-wsl.sh` 同步并构建。脚本优先读取进程级或用户级 `FFMPEG_DIR` 与 `LIBCLANG_PATH`；未设置 `FFMPEG_DIR` 时，才会在 `%LOCALAPPDATA%\rLive\build` 缓存固定的 FFmpeg 9.0.1 shared SDK。需要将依赖保存在开发盘时，可把完整 SDK 放在 `D:\dev\FFmpeg`、把 MSVC 版 `libclang.dll` 放在 `D:\dev\LLVM\bin`，并将这两个变量设置为相应目录。直接运行 Cargo/Tauri 命令前，也可在同一个 PowerShell 会话执行 `./scripts/prepare-windows-ffmpeg.ps1 -ProjectRoot $PWD -StageDestination "$PWD/src-tauri/target/release"`。Android SDK、NDK、真机运行和签名配置见 [Android 开发文档](docs/zh/Android开发-Windows.md)。
 
 Linux x86_64 构建默认包含 CUDA-capable 的 sherpa-onnx shared runtime。使用 CUDA 字幕需要兼容的 NVIDIA 驱动、CUDA 11.x 和 x86-64 cuDNN 8.x；运行时检测不到 GPU 或依赖时会自动回退 CPU。Linux CUDA 路径尚未完成完整硬件和发行版测试，发布前请在目标发行版和 NVIDIA / 非 NVIDIA 设备上自行验证。构建 CPU-only 版本可设置 `SHERPA_ONNX_GPU=0`。
 

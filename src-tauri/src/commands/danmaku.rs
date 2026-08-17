@@ -176,8 +176,30 @@ pub async fn danmaku_connect(
     room_id: String,
     connection_epoch: u64,
 ) -> AppResult<()> {
-    if !state.danmaku.begin_connect(connection_epoch) {
+    let source_key = format!("live:{}:{}", site_id.as_str(), room_id.trim());
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+    let retained_source = state
+        .danmaku
+        .active_source_key()
+        .filter(|source_key| state.recording.has_background_danmaku_recording(source_key));
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    let retained_source: Option<String> = None;
+    if !state
+        .danmaku
+        .begin_connect(connection_epoch, source_key, retained_source.is_some())
+    {
         return Ok(());
+    }
+    // Close the finish-vs-route race: if the recording completed after the
+    // first check but before the connection was detached, its finish callback
+    // could not see a background task yet.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+    if let Some(source_key) = retained_source
+        && !state
+            .recording
+            .has_background_danmaku_recording(&source_key)
+    {
+        state.danmaku.disconnect_background_for_source(&source_key);
     }
     // Read account state and settings in one short DB lock.  A site instance
     // owns its own transient web session afterwards, so no lock spans HTTP or
@@ -269,6 +291,24 @@ pub fn danmaku_disconnect(
     connection_epoch: Option<u64>,
 ) -> AppResult<()> {
     if let Some(epoch) = connection_epoch {
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        if let Some(source_key) = state.danmaku.source_key_for_generation(epoch)
+            && state
+                .recording
+                .has_background_danmaku_recording(&source_key)
+        {
+            let detached = state.danmaku.detach_for_generation(epoch);
+            // Recheck after detaching for the same reason as `danmaku_connect`:
+            // recording finalization and route cleanup run concurrently.
+            if detached
+                && !state
+                    .recording
+                    .has_background_danmaku_recording(&source_key)
+            {
+                state.danmaku.disconnect_background_for_source(&source_key);
+            }
+            return Ok(());
+        }
         state.danmaku.disconnect_for_generation(epoch);
     } else {
         state.danmaku.disconnect();

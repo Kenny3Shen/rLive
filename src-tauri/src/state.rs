@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
+use crate::app_paths::AppDirectories;
 #[cfg(not(target_os = "android"))]
 use crate::asr::AsrManager;
 use crate::danmu_rs::DanmakuManager;
@@ -12,7 +13,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::image_proxy::ImageProxy;
 use crate::lan_sync::LanSyncManager;
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use crate::recording::RecordingManager;
 use crate::stream_proxy::StreamProxy;
 
@@ -25,10 +26,12 @@ pub struct AppState {
     pub douyu_send_limiter: DouyuDanmakuSendLimiter,
     pub huya_send_limiter: HuyaDanmakuSendLimiter,
     pub stream_proxy: StreamProxy,
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub recording: RecordingManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+    pub app_data_storage: crate::app_paths::AppDataStorage,
 }
 
 /// Conservative per-room write gate for the Bilibili sender.
@@ -158,7 +161,8 @@ impl HuyaDanmakuSendLimiter {
 }
 
 impl AppState {
-    pub fn init(app_directory: &Path) -> AppResult<Self> {
+    pub fn init(directories: &AppDirectories) -> AppResult<Self> {
+        let app_directory = &directories.root;
         let path = create_db_path(app_directory.to_path_buf())?;
         let conn = Db::open(&path)?;
         Ok(Self {
@@ -170,10 +174,12 @@ impl AppState {
             douyu_send_limiter: DouyuDanmakuSendLimiter::new(),
             huya_send_limiter: HuyaDanmakuSendLimiter::new(),
             stream_proxy: StreamProxy::new(),
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording: RecordingManager::new(app_directory)?,
             image_proxy: ImageProxy::new(),
             lan_sync: LanSyncManager::new(),
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            app_data_storage: directories.storage.clone(),
         })
     }
 }

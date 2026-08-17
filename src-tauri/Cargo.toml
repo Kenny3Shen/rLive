@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.45.16"
+version = "0.46.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -8,9 +8,6 @@ edition = "2024"
 [lib]
 name = "rlive_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
-
-[features]
-default = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -68,6 +65,12 @@ sherpa-onnx = { version = "1.13.4", default-features = false, features = ["share
 dirs = "6"
 tar = "0.4"
 bzip2 = "0.4"
+
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+# `ffmpeg-next` is an in-process binding to the platform's FFmpeg libraries.
+# Desktop build environments must provide matching headers/import libraries
+# and package the corresponding runtime libraries.
+ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["format"] }
 
 [target.'cfg(windows)'.dependencies]
 # Windows builds use the shared CUDA-capable runtime. The native build script

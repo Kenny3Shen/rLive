@@ -238,6 +238,16 @@ export type AppSettings = {
   asr_translation_to?: CaptionTranslationLanguage;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
   iptv_custom_m3u_url?: string | null;
+  /** Include the live-room danmaku sidecar by default when opening recording options. */
+  recording_include_danmaku?: boolean;
+  /** Keep a recording running after leaving its player page by default. */
+  recording_continue_after_leave?: boolean;
+  /** FFmpeg network read/write timeout in seconds, 3..=60. */
+  ffmpeg_rw_timeout_seconds?: number;
+  /** Maximum FFmpeg reconnect delay in seconds, 1..=60. */
+  ffmpeg_reconnect_delay_max_seconds?: number;
+  /** Number of retries for a failed HLS segment, 0..=20. */
+  ffmpeg_hls_segment_retry_count?: number;
   /** Legacy settings field kept only for backwards-compatible deserialization. */
   iptv_availability_auto_check?: boolean;
   /** Legacy interval field; the client no longer schedules periodic checks. */
