@@ -243,7 +243,7 @@ export const PLAYER_CONTROL_BUTTON_CLASS =
   "size-9 [@media(pointer:coarse)]:size-9! [@media(pointer:coarse)]:min-h-9! [@media(pointer:coarse)]:min-w-9! [@media(pointer:coarse)]:touch-manipulation";
 /** Trim for a chrome button drawn over video: white glyph on a scrim. */
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
-  "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]";
+  "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-ring-overlay drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]";
 const CONTROL_ICON_CLASS = PLAYER_CONTROL_ICON_CLASS;
 const CONTROL_BUTTON_CLASS = PLAYER_CONTROL_BUTTON_CLASS;
 
