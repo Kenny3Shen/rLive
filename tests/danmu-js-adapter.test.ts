@@ -145,7 +145,7 @@ describe("danmu.js event mapping", () => {
     expect(comment?.prior).toBe(true);
     expect(comment?.txt).toBe("【SC】加油");
     expect(comment?.__rliveMeta.baseText).toBe("【SC】加油");
-    expect(comment?.style?.color).toBe("#2a60b2");
+    expect(comment?.style?.color).toBe("#2A60B2");
     expect(comment?.style?.padding).toBeUndefined();
     expect(comment?.style?.borderRadius).toBeUndefined();
     expect(comment?.style?.backgroundColor).toBeUndefined();
@@ -153,22 +153,58 @@ describe("danmu.js event mapping", () => {
     expect(comment?.style?.boxShadow).toBeUndefined();
   });
 
-  test("uses each SC amount-tier color without an outer card", () => {
-    const comment = danmuCommentFromEvent(
-      chat({
-        kind: "super_chat",
-        content: "支持",
-        super_chat: {
-          price: 2_000,
-          background_color: "#ffcccc",
-          background_bottom_color: "#b81830",
-        },
-      }),
-      mappingOptions({ id: "sc-high-tier" }),
-    );
+  test("maps each SC amount tier to its fixed font color", () => {
+    const tiers = [
+      { price: 30, color: "#2A60B2" },
+      { price: 50, color: "#427D9E" },
+      { price: 100, color: "#E2B52B" },
+      { price: 500, color: "#E09443" },
+      { price: 1_000, color: "#E54D4D" },
+      { price: 2_000, color: "#B81830" },
+    ] as const;
 
-    expect(comment?.style?.color).toBe("#b81830");
-    expect(comment?.style?.border).toBeUndefined();
+    for (const { price, color } of tiers) {
+      const comment = danmuCommentFromEvent(
+        chat({
+          kind: "super_chat",
+          content: "支持",
+          super_chat: {
+            price,
+            background_color: "#ffffff",
+            background_bottom_color: "#000000",
+          },
+        }),
+        mappingOptions({ id: `sc-tier-${price}` }),
+      );
+
+      expect(comment?.style?.color).toBe(color);
+      expect(comment?.style?.border).toBeUndefined();
+    }
+  });
+
+  test("uses SC tier thresholds and falls back to platform colors without a valid tier", () => {
+    const colorFor = (price: number | null | undefined) =>
+      danmuCommentFromEvent(
+        chat({
+          kind: "super_chat",
+          content: "支持",
+          super_chat: {
+            price,
+            background_color: "#abcdef",
+            background_bottom_color: "#123456",
+          },
+        }),
+        mappingOptions({ id: `sc-boundary-${price}` }),
+      )?.style?.color;
+
+    expect(colorFor(49.99)).toBe("#2A60B2");
+    expect(colorFor(99.99)).toBe("#427D9E");
+    expect(colorFor(499.99)).toBe("#E2B52B");
+    expect(colorFor(999.99)).toBe("#E09443");
+    expect(colorFor(1_999.99)).toBe("#E54D4D");
+    expect(colorFor(10_000)).toBe("#B81830");
+    expect(colorFor(29.99)).toBe("#123456");
+    expect(colorFor(null)).toBe("#123456");
   });
 
   test("keeps the SC marker when rich spans replace the text node", () => {
