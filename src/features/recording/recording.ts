@@ -42,6 +42,13 @@ export type RecordingStorageInfo = {
   minimum_free_bytes: number;
 };
 
+export type RecordingProgress = {
+  recordingId: string;
+  durationMs: number;
+  sizeBytes: number;
+  danmakuCount: number;
+};
+
 export type RecordingContext = {
   source: PlayUrl;
   sourceKey: string;
@@ -58,6 +65,7 @@ export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
 export const RECORDING_STORAGE_QUERY_KEY = ["recording-storage"] as const;
 export const RECORDING_PLAYBACK_QUERY_KEY = "recording-playback";
 const RECORDING_CHANGED_EVENT = "recording-changed";
+const RECORDING_PROGRESS_EVENT = "recording-progress";
 
 export type RecordingPlatformFilter = "all" | SiteId;
 
@@ -179,11 +187,59 @@ export function recordingProtocolLabel(protocol: PlaybackProtocol): string {
   }
 }
 
-type NativeRecordingChangeRegistration = (onChange: () => void) => Promise<() => void>;
+type NativeRecordingChangeRegistration = (
+  onChange: (progress?: RecordingProgress) => void,
+) => Promise<() => void>;
+
+function validatedRecordingProgress(payload: unknown): RecordingProgress | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const progress = payload as Partial<RecordingProgress>;
+  const validCounter = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  if (
+    typeof progress.recordingId !== "string" ||
+    progress.recordingId.length === 0 ||
+    !validCounter(progress.durationMs) ||
+    !validCounter(progress.sizeBytes) ||
+    !validCounter(progress.danmakuCount)
+  ) {
+    return null;
+  }
+  return progress as RecordingProgress;
+}
+
+export function applyRecordingProgress(
+  items: RecordingItem[] | undefined,
+  progress: RecordingProgress,
+): RecordingItem[] | undefined {
+  if (!items) return items;
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.id !== progress.recordingId || item.status !== "recording") return item;
+    const durationMs = Math.max(item.duration_ms, progress.durationMs);
+    const sizeBytes = Math.max(item.size_bytes, progress.sizeBytes);
+    const danmakuCount = Math.max(item.danmaku_count, progress.danmakuCount);
+    if (
+      durationMs === item.duration_ms &&
+      sizeBytes === item.size_bytes &&
+      danmakuCount === item.danmaku_count
+    ) {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      duration_ms: durationMs,
+      size_bytes: sizeBytes,
+      danmaku_count: danmakuCount,
+    };
+  });
+  return changed ? next : items;
+}
 
 export function createSharedRecordingChangeSubscription<T>(
   registerNative: NativeRecordingChangeRegistration,
-  notifySubscriber: (subscriber: T) => void,
+  notifySubscriber: (subscriber: T, progress?: RecordingProgress) => void,
 ): (subscriber: T) => () => void {
   const subscriberCounts = new Map<T, number>();
   let nativeUnlisten: (() => void) | null = null;
@@ -204,11 +260,11 @@ export function createSharedRecordingChangeSubscription<T>(
     const generation = ++listenerGeneration;
     listenerPromise = Promise.resolve()
       .then(() =>
-        registerNative(() => {
+        registerNative((progress) => {
           if (generation !== listenerGeneration) return;
           for (const subscriber of subscriberCounts.keys()) {
             try {
-              notifySubscriber(subscriber);
+              notifySubscriber(subscriber, progress);
             } catch {
               // One query client must not prevent the others from refreshing.
             }
@@ -263,8 +319,32 @@ export function createSharedRecordingChangeSubscription<T>(
 }
 
 const subscribeToRecordingChanges = createSharedRecordingChangeSubscription<QueryClient>(
-  (onChange) => listen(RECORDING_CHANGED_EVENT, onChange),
-  (queryClient) => {
+  async (onChange) => {
+    const unlistenChanged = await listen(RECORDING_CHANGED_EVENT, () => onChange());
+    try {
+      const unlistenProgress = await listen<RecordingProgress>(
+        RECORDING_PROGRESS_EVENT,
+        (event) => {
+          const progress = validatedRecordingProgress(event.payload);
+          if (progress) onChange(progress);
+        },
+      );
+      return () => {
+        unlistenProgress();
+        unlistenChanged();
+      };
+    } catch (error) {
+      unlistenChanged();
+      throw error;
+    }
+  },
+  (queryClient, progress) => {
+    if (progress) {
+      queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (items) =>
+        applyRecordingProgress(items, progress),
+      );
+      return;
+    }
     void queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
   },
 );
@@ -282,7 +362,7 @@ export function useRecordings() {
     queryFn: () => invokeCmd<RecordingItem[]>("recording_list"),
     staleTime: 500,
     refetchInterval: (query) =>
-      query.state.data?.some((item) => item.status === "recording") ? 1000 : false,
+      query.state.data?.some((item) => item.status === "recording") ? 15_000 : false,
     refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
   });
