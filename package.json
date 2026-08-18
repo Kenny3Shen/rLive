@@ -1,6 +1,6 @@
 {
   "name": "rlive",
-  "version": "0.46.1",
+  "version": "0.46.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,8 @@
     "test:danmaku": "bun test tests/danmu-js-adapter.test.ts tests/danmaku-actions.test.ts tests/playback-failover.test.ts",
     "test:unit": "bun test tests/",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bundle:linux": "bash scripts/build-linux-bundle.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
