@@ -489,14 +489,16 @@ export function RecordingsPage() {
   const queryClient = useQueryClient();
   const recordings = useRecordings();
   const supported = recordingSupported();
+  const [deleteTarget, setDeleteTarget] = useState<RecordingItem | null>(null);
+  const [storageOpen, setStorageOpen] = useState(false);
   const storage = useQuery({
     queryKey: RECORDING_STORAGE_QUERY_KEY,
     enabled: supported,
     queryFn: recordingStorageInfo,
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 5_000,
+    refetchInterval: storageOpen ? 5_000 : false,
+    refetchOnWindowFocus: true,
   });
-  const [deleteTarget, setDeleteTarget] = useState<RecordingItem | null>(null);
-  const [storageOpen, setStorageOpen] = useState(false);
 
   const items = useMemo(() => recordings.data ?? [], [recordings.data]);
   const requestedPlatform = searchParams.get("platform");
@@ -732,6 +734,21 @@ export function RecordingsPage() {
                   ? "正在使用应用默认目录"
                   : "正在使用自定义目录"}
           </p>
+          {storage.data?.available_bytes != null && (
+            <p
+              role="status"
+              aria-live="polite"
+              className={cn(
+                "text-xs",
+                storage.data.available_bytes < storage.data.minimum_free_bytes
+                  ? "text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              剩余空间：{formatRecordingSize(storage.data.available_bytes)}
+              {storage.data.available_bytes < storage.data.minimum_free_bytes && "，不足以开始录制"}
+            </p>
+          )}
           <DialogFooter className="flex-wrap">
             {!storage.data?.is_default && (
               <Button

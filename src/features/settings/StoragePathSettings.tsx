@@ -16,6 +16,7 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   RECORDINGS_QUERY_KEY,
   RECORDING_STORAGE_QUERY_KEY,
+  formatRecordingSize,
   recordingErrorMessage,
   recordingStorageInfo,
   recordingSupported,
@@ -141,7 +142,8 @@ export function RecordingStoragePathField() {
     queryKey: RECORDING_STORAGE_QUERY_KEY,
     enabled: supported,
     queryFn: recordingStorageInfo,
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
   });
   const update = useMutation({
     mutationFn: setRecordingStoragePath,
@@ -209,6 +211,13 @@ export function RecordingStoragePathField() {
       unavailable={!supported}
       action={action}
       error={error}
+      status={
+        info?.available_bytes == null
+          ? null
+          : `磁盘剩余 ${formatRecordingSize(info.available_bytes)}${
+              info.available_bytes < info.minimum_free_bytes ? "，不足以开始录制" : ""
+            }`
+      }
       onChoose={() => void choose()}
       onReset={() => void reset()}
       onReveal={() => void reveal()}

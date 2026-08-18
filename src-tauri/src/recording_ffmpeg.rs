@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use super::{FfmpegRecordingOptions, PlayUrl, RecordingStatus, SessionState, TaskOutcome};
+use super::{
+    FfmpegRecordingOptions, PlayUrl, RecordingStatus, STORAGE_SPACE_CHECK_INTERVAL, SessionState,
+    TaskOutcome, available_storage_space, format_storage_space_error, storage_space_is_low,
+};
 
 use std::fs;
 use std::io::Read;
@@ -245,10 +248,23 @@ fn remux(
     let mut wrote_packet = false;
     let mut invalid_packets = 0_u32;
     let mut last_progress = Instant::now();
+    let mut last_space_check = Instant::now() - STORAGE_SPACE_CHECK_INTERVAL;
     let mut timeline = PacketTimeline::new(input.nb_streams() as usize);
     let stop_reason = loop {
         if *cancel.borrow() {
             break StopReason::Cancelled;
+        }
+        if last_space_check.elapsed() >= STORAGE_SPACE_CHECK_INTERVAL {
+            last_space_check = Instant::now();
+            match available_storage_space(&state.bundle) {
+                Ok(available) if storage_space_is_low(available) => {
+                    break StopReason::StorageLow(available);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(path = %state.bundle.display(), error = %error, "无法检查录制剩余空间");
+                }
+            }
         }
         let mut packet = Packet::empty();
         match packet.read(&mut input) {
@@ -305,6 +321,10 @@ fn remux(
         remove_part(&part);
         return match stop_reason {
             StopReason::Cancelled => interrupted("停止前尚未收到媒体数据".into()),
+            StopReason::StorageLow(available) => failed(join_errors(
+                format_storage_space_error(available),
+                trailer_error,
+            )),
             StopReason::Failed(error) => failed(join_errors(error, trailer_error)),
         };
     }
@@ -314,6 +334,10 @@ fn remux(
             status: RecordingStatus::Completed,
             error: None,
         },
+        StopReason::StorageLow(available) => interrupted(join_errors(
+            format_storage_space_error(available),
+            trailer_error,
+        )),
         StopReason::Cancelled => interrupted(trailer_error.unwrap()),
         StopReason::Failed(error) => interrupted(join_errors(error, trailer_error)),
     };
@@ -457,7 +481,28 @@ fn flv_contains_keyframe_index(path: &Path) -> Result<bool, String> {
 
 enum StopReason {
     Cancelled,
+    StorageLow(u64),
     Failed(String),
+}
+
+pub(super) fn probe_media_duration(path: &Path) -> Result<u64, String> {
+    initialize()?;
+    let input = format::input(path).map_err(|error| format!("读取录制媒体时长失败: {error}"))?;
+    let mut duration_us = input.duration();
+    if duration_us <= 0 {
+        duration_us = input
+            .streams()
+            .filter_map(|stream| {
+                let duration = stream.duration();
+                (duration > 0).then(|| duration.rescale(stream.time_base(), TIMESTAMP_TIME_BASE))
+            })
+            .max()
+            .unwrap_or_default();
+    }
+    if duration_us <= 0 {
+        return Err("录制媒体没有可用时长".into());
+    }
+    Ok((duration_us as u128 / 1_000).min(u64::MAX as u128) as u64)
 }
 
 /// Keep one output epoch for every selected stream. DTS is the decode clock and

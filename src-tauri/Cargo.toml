@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.47.7"
+version = "0.47.8"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -71,6 +71,7 @@ bzip2 = "0.4"
 # Desktop build environments must provide matching headers/import libraries
 # and package the corresponding runtime libraries.
 ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["format"] }
+fs2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # Windows builds use the shared CUDA-capable runtime. The native build script

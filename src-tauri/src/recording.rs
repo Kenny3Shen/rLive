@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -40,6 +40,8 @@ const RECORDING_MANAGER_LOCK_FILE: &str = ".recording-manager.lock";
 const MAX_ACTIVE_RECORDINGS: usize = 4;
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const TASK_ABORT_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+const MINIMUM_FREE_SPACE_BYTES: u64 = 512 * 1024 * 1024;
+const STORAGE_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const RECORDING_CHANGED_EVENT: &str = "recording-changed";
 static METADATA_IO_LOCK: Mutex<()> = Mutex::new(());
 
@@ -116,6 +118,8 @@ pub struct RecordingStorageInfo {
     pub path: String,
     pub default_path: String,
     pub is_default: bool,
+    pub available_bytes: Option<u64>,
+    pub minimum_free_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,6 +231,8 @@ impl RecordingStorageState {
             path: crate::app_paths::path_to_string(&self.current_root),
             default_path: crate::app_paths::path_to_string(&self.default_root),
             is_default: self.current_root == self.default_root,
+            available_bytes: available_storage_space(&self.current_root).ok(),
+            minimum_free_bytes: MINIMUM_FREE_SPACE_BYTES,
         }
     }
 }
@@ -710,6 +716,7 @@ impl RecordingManager {
 
         let id = Uuid::new_v4().to_string();
         let root = self.current_root();
+        ensure_sufficient_storage_space(&root)?;
         let started_at = unix_ms();
         let title = normalize_text(&input.title, "未命名直播");
         let user_name = normalize_text(&input.user_name, "");
@@ -1488,7 +1495,22 @@ async fn run_direct_recording(
         status: RecordingStatus::Completed,
         error: None,
     };
+    let mut last_space_check = Instant::now() - STORAGE_SPACE_CHECK_INTERVAL;
     loop {
+        if last_space_check.elapsed() >= STORAGE_SPACE_CHECK_INTERVAL {
+            last_space_check = Instant::now();
+            match available_storage_space(&state.bundle) {
+                Ok(available) if storage_space_is_low(available) => {
+                    outcome.status = RecordingStatus::Interrupted;
+                    outcome.error = Some(format_storage_space_error(available));
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(path = %state.bundle.display(), error = %error, "无法检查录制剩余空间");
+                }
+            }
+        }
         let next = tokio::select! {
             next = response.next() => next,
             _ = cancel.changed() => break,
@@ -1598,6 +1620,7 @@ fn finish_session_inner(
     stored.size_bytes = bundle_size(&state.bundle).max(state.bytes.load(Ordering::Relaxed));
     stored.duration_ms = state.duration_ms.load(Ordering::Relaxed);
     stored.danmaku_count = state.danmaku_count.load(Ordering::Relaxed);
+    refresh_recording_metadata(&state.bundle, &mut stored);
     if let Err(error) = write_metadata(&state.bundle, &stored) {
         tracing::error!(
             recording_id = %stored.id,
@@ -2274,7 +2297,7 @@ fn recover_stale_recordings(root: &Path) -> AppResult<()> {
                 stored.status = RecordingStatus::Interrupted;
                 stored.ended_at = Some(unix_ms());
             }
-            stored.size_bytes = bundle_size(&path);
+            refresh_recording_metadata(&path, &mut stored);
             write_metadata(&path, &stored).map_err(|error| {
                 AppError::new(
                     "recording_recovery_error",
@@ -2314,7 +2337,7 @@ fn recover_stale_recordings(root: &Path) -> AppResult<()> {
                 stored.ended_at = Some(unix_ms());
             }
         }
-        stored.size_bytes = bundle_size(&path);
+        refresh_recording_metadata(&path, &mut stored);
         write_metadata(&path, &stored).map_err(|error| {
             AppError::new(
                 "recording_recovery_error",
@@ -2323,6 +2346,85 @@ fn recover_stale_recordings(root: &Path) -> AppResult<()> {
         })?;
     }
     Ok(())
+}
+
+fn refresh_recording_metadata(bundle: &Path, stored: &mut StoredRecording) {
+    stored.size_bytes = bundle_size(bundle);
+    let media_relative = Path::new(&stored.media_file);
+    if safe_relative_path(media_relative) {
+        let media = bundle.join(media_relative);
+        if media.is_file() {
+            if let Ok(duration_ms) = ffmpeg_backend::probe_media_duration(&media) {
+                stored.duration_ms = duration_ms;
+            }
+        }
+    }
+    if let Some(count) = count_recorded_danmaku(bundle, stored) {
+        stored.danmaku_count = count;
+    }
+}
+
+fn count_recorded_danmaku(bundle: &Path, stored: &StoredRecording) -> Option<u64> {
+    let relative = stored.danmaku_file.as_deref().map(Path::new)?;
+    if !safe_relative_path(relative) {
+        return None;
+    }
+    let file = File::open(bundle.join(relative)).ok()?;
+    let mut count = 0_u64;
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { break };
+        if let Ok(batch) = serde_json::from_str::<StoredDanmakuBatchOwned>(&line) {
+            count = count.saturating_add(batch.events.len() as u64);
+        }
+    }
+    Some(count)
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredDanmakuBatchOwned {
+    events: Vec<DanmakuEvent>,
+}
+
+fn available_storage_space(path: &Path) -> std::io::Result<u64> {
+    fs2::available_space(path)
+}
+
+fn ensure_sufficient_storage_space(root: &Path) -> AppResult<()> {
+    let available = available_storage_space(root).map_err(|error| {
+        AppError::new(
+            "recording_storage_space_unavailable",
+            format!("无法读取录制磁盘剩余空间: {error}"),
+        )
+    })?;
+    if storage_space_is_low(available) {
+        return Err(AppError::new(
+            "recording_storage_low",
+            format_storage_space_error(available),
+        ));
+    }
+    Ok(())
+}
+
+fn storage_space_is_low(available: u64) -> bool {
+    available < MINIMUM_FREE_SPACE_BYTES
+}
+
+fn format_storage_space_error(available: u64) -> String {
+    format!(
+        "录制磁盘剩余空间不足（当前 {}，至少需要保留 {}）",
+        format_storage_bytes(available),
+        format_storage_bytes(MINIMUM_FREE_SPACE_BYTES)
+    )
+}
+
+fn format_storage_bytes(bytes: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    if bytes as f64 >= GIB {
+        format!("{:.1} GB", bytes as f64 / GIB)
+    } else {
+        format!("{:.1} MB", bytes as f64 / MIB)
+    }
 }
 
 fn bundle_size(path: &Path) -> u64 {
@@ -2777,13 +2879,13 @@ async fn write_simple_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        FinalizingSession, RecordingEventSink, RecordingManager, RecordingStartInput,
-        RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
-        StoredRecording, TaskOutcome, decode_playback_relative_path, finish_session,
-        load_storage_state, local_playback_url, media_file_name, parse_range, prepare_storage_root,
-        read_stored, recording_file_stem, recover_bundle_sidecars, recover_stale_recordings,
-        safe_relative_path, salvage_temporary_media_after_worker_failure,
-        stop_sessions_until_deadline, stored_keeps_background_danmaku,
+        FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingManager,
+        RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session, SessionState,
+        StoredDanmakuBatch, StoredRecording, TaskOutcome, decode_playback_relative_path,
+        finish_session, load_storage_state, local_playback_url, media_file_name, parse_range,
+        prepare_storage_root, read_stored, recording_file_stem, recover_bundle_sidecars,
+        recover_stale_recordings, safe_relative_path, salvage_temporary_media_after_worker_failure,
+        stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
         wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
@@ -2820,6 +2922,62 @@ mod tests {
             ),
             format!("{stem}.ts")
         );
+    }
+
+    #[test]
+    fn recording_space_guard_keeps_its_reserve_boundary() {
+        assert!(storage_space_is_low(MINIMUM_FREE_SPACE_BYTES - 1));
+        assert!(!storage_space_is_low(MINIMUM_FREE_SPACE_BYTES));
+        assert!(!storage_space_is_low(MINIMUM_FREE_SPACE_BYTES + 1));
+    }
+
+    #[test]
+    fn recovery_counts_valid_danmaku_before_an_incomplete_tail() {
+        let root = std::env::temp_dir().join(format!("rlive-danmaku-count-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4().to_string();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let mut stored = completed_recording(id, "danmaku-count");
+        stored.include_danmaku = true;
+        stored.danmaku_file = Some("danmaku.jsonl".into());
+        let events = vec![
+            DanmakuEvent {
+                kind: DanmakuKind::Chat,
+                user: "viewer-1".into(),
+                is_self: false,
+                user_id: None,
+                content: "first".into(),
+                color: None,
+                spans: None,
+                super_chat: None,
+                ts: 1,
+            },
+            DanmakuEvent {
+                kind: DanmakuKind::Chat,
+                user: "viewer-2".into(),
+                is_self: false,
+                user_id: None,
+                content: "second".into(),
+                color: None,
+                spans: None,
+                super_chat: None,
+                ts: 2,
+            },
+        ];
+        let batch = serde_json::to_string(&StoredDanmakuBatch {
+            offset_ms: 10,
+            events: &events,
+        })
+        .unwrap();
+        std::fs::write(
+            bundle.join("danmaku.jsonl"),
+            format!("{batch}\n{{\"offset_ms\":"),
+        )
+        .unwrap();
+
+        assert_eq!(super::count_recorded_danmaku(&bundle, &stored), Some(2));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3854,6 +4012,7 @@ mod tests {
         let stopped = manager.stop(&active.id).await.unwrap();
         assert_eq!(stopped.status, RecordingStatus::Completed);
         assert!(stopped.error.is_none());
+        assert!(stopped.duration_ms > 0);
         let request = request_rx.await.unwrap();
         assert!(request.contains("X-Recording-Test: ffmpeg\r\n"));
 
