@@ -460,12 +460,14 @@ export function DanmakuAppearanceSettingsFields({
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-font-stroke`}
         title="字体描边"
-        description={layout === "page" ? "调整播放器弹幕的文字轮廓宽度。" : undefined}
+        description={
+          layout === "page" ? "调整播放器弹幕的文字轮廓宽度，设为 0 可关闭。" : undefined
+        }
         value={fontStroke}
         min={DANMAKU_FONT_STROKE_MIN}
         max={DANMAKU_FONT_STROKE_MAX}
         step={DANMAKU_FONT_STROKE_STEP}
-        displayValue={`${fontStroke.toFixed(1)}px`}
+        displayValue={fontStroke === 0 ? "关闭" : `${fontStroke.toFixed(1)}px`}
         layout={layout}
         onPreview={(value) =>
           useSettingsStore.setState({ danmakuFontStroke: parseDanmakuFontStroke(value) })

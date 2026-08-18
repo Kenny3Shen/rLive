@@ -55,9 +55,12 @@ describe("danmaku appearance defaults", () => {
     expect(DANMAKU_AREA_DEFAULT).toBe(0.25);
   });
 
-  test("uses a 2.5px outline and normalizes it to half-pixel steps", () => {
-    expect(DANMAKU_FONT_STROKE_DEFAULT).toBe(2.5);
+  test("disables outlines by default and normalizes optional strokes to half-pixel steps", () => {
+    expect(DANMAKU_FONT_STROKE_MIN).toBe(0);
+    expect(DANMAKU_FONT_STROKE_MAX).toBe(1.5);
+    expect(DANMAKU_FONT_STROKE_DEFAULT).toBe(0);
     expect(parseDanmakuFontStroke(DANMAKU_FONT_STROKE_MIN - 1)).toBe(DANMAKU_FONT_STROKE_MIN);
+    expect(parseDanmakuFontStroke(0)).toBe(0);
     expect(parseDanmakuFontStroke(1.24)).toBe(1);
     expect(parseDanmakuFontStroke(1.26)).toBe(1.5);
     expect(parseDanmakuFontStroke(DANMAKU_FONT_STROKE_MAX + 1)).toBe(DANMAKU_FONT_STROKE_MAX);
