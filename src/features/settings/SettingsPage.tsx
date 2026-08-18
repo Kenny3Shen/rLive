@@ -217,7 +217,8 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
     "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
-  recording: "录制 设置 默认 弹幕 后台 离开 保存 路径 目录 FFmpeg 超时 重连 HLS 分片 重试",
+  recording:
+    "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 FFmpeg 超时 重连 HLS 分片 重试",
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
@@ -1973,7 +1974,7 @@ export function SettingsPage() {
     ),
     recording: (
       <SettingsContent title="录制">
-        <Section title="录制设置" keywords="录制 默认 弹幕 后台 离开">
+        <Section title="录制设置" keywords="录制 默认 弹幕 后台 离开 自动 分割 时长">
           <RecordingDefaultsFields />
         </Section>
         <Section title="保存位置" keywords="录制 保存 路径 目录">

@@ -3,21 +3,6 @@ import type { IptvChannel } from "./types";
 export const IPTV_AVAILABILITY_CHECK_LIMIT = 120;
 export const IPTV_AVAILABILITY_BATCH_SIZE = 24;
 
-/** Legacy settings normalization kept for old configuration compatibility. */
-export const IPTV_AVAILABILITY_AUTO_CHECK_DEFAULT_HOURS = 1;
-export const IPTV_AVAILABILITY_AUTO_CHECK_MIN_HOURS = 1;
-export const IPTV_AVAILABILITY_AUTO_CHECK_MAX_HOURS = 24;
-export const IPTV_AVAILABILITY_AUTO_CHECK_OPTIONS = [1, 2, 6, 12, 24] as const;
-
-export function normalizeIptvAutoCheckHours(value: unknown): number {
-  const hours = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(hours)) return IPTV_AVAILABILITY_AUTO_CHECK_DEFAULT_HOURS;
-  return Math.min(
-    IPTV_AVAILABILITY_AUTO_CHECK_MAX_HOURS,
-    Math.max(IPTV_AVAILABILITY_AUTO_CHECK_MIN_HOURS, Math.round(hours)),
-  );
-}
-
 export type IptvAvailabilityFilter = "all" | "available" | "unavailable" | "unchecked";
 
 export type IptvChannelCheck = Pick<IptvChannel, "url" | "headers">;

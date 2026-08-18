@@ -13,13 +13,10 @@ pub struct IptvFavoriteRecord {
     pub id: String,
     pub name: String,
     pub group: String,
-    #[serde(default)]
     pub favorite_group_id: Option<String>,
     pub logo: Option<String>,
     pub url: String,
-    #[serde(default)]
     pub protocol: Option<PlaybackProtocol>,
-    #[serde(default)]
     pub headers: HashMap<String, String>,
     pub updated_at: i64,
 }

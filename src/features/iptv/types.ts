@@ -7,7 +7,7 @@ export type IptvChannel = {
   group: string;
   logo: string | null;
   url: string;
-  /** Explicit native parser result; optional for cached data from older builds. */
-  protocol?: PlaybackProtocol;
+  /** Explicit native parser result; `unknown` means the source metadata is opaque. */
+  protocol: PlaybackProtocol;
   headers: Record<string, string>;
 };

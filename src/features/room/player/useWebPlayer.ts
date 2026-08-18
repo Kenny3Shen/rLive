@@ -406,10 +406,10 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
   // reconstructed into an immutable playback snapshot below.
   return JSON.stringify([
     playUrl.url,
-    Object.entries(playUrl.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    Object.entries(playUrl.headers).sort(([a], [b]) => a.localeCompare(b)),
     playUrl.source_id ?? null,
     playUrl.label ?? null,
-    playUrl.protocol ?? null,
+    playUrl.protocol,
     playUrl.priority ?? null,
   ]);
 }
@@ -526,19 +526,22 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
       (entry): entry is [string, string] =>
         Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string",
     );
+    const protocol = parsed[4];
+    if (
+      protocol !== "flv" &&
+      protocol !== "hls" &&
+      protocol !== "mpeg_ts" &&
+      protocol !== "native" &&
+      protocol !== "unknown"
+    ) {
+      return null;
+    }
     return {
       url: parsed[0],
       headers: Object.fromEntries(entries),
       source_id: typeof parsed[2] === "string" ? parsed[2] : undefined,
       label: typeof parsed[3] === "string" ? parsed[3] : undefined,
-      protocol:
-        parsed[4] === "flv" ||
-        parsed[4] === "hls" ||
-        parsed[4] === "mpeg_ts" ||
-        parsed[4] === "native" ||
-        parsed[4] === "unknown"
-          ? parsed[4]
-          : undefined,
+      protocol,
       priority: typeof parsed[5] === "number" && Number.isFinite(parsed[5]) ? parsed[5] : undefined,
     };
   } catch {

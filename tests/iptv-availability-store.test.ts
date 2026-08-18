@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  IPTV_AVAILABILITY_AUTO_CHECK_DEFAULT_HOURS,
-  IPTV_AVAILABILITY_AUTO_CHECK_MAX_HOURS,
-  IPTV_AVAILABILITY_AUTO_CHECK_MIN_HOURS,
-  normalizeIptvAutoCheckHours,
   type IptvAvailabilityState,
 } from "../src/features/iptv/availability";
 import { useIptvAvailabilityStore } from "../src/features/iptv/availabilityStore";
@@ -11,22 +7,6 @@ import { useIptvAvailabilityStore } from "../src/features/iptv/availabilityStore
 function available(): IptvAvailabilityState {
   return { status: "available", latencyMs: 80, httpStatus: 200, message: null };
 }
-
-describe("IPTV availability auto check settings", () => {
-  test("keeps whole hours within the allowed range", () => {
-    expect(normalizeIptvAutoCheckHours(1)).toBe(1);
-    expect(normalizeIptvAutoCheckHours(1.6)).toBe(2);
-    expect(normalizeIptvAutoCheckHours(0)).toBe(IPTV_AVAILABILITY_AUTO_CHECK_MIN_HOURS);
-    expect(normalizeIptvAutoCheckHours(999)).toBe(IPTV_AVAILABILITY_AUTO_CHECK_MAX_HOURS);
-  });
-
-  test("falls back to the default for invalid or missing values", () => {
-    expect(normalizeIptvAutoCheckHours(null)).toBe(IPTV_AVAILABILITY_AUTO_CHECK_DEFAULT_HOURS);
-    expect(normalizeIptvAutoCheckHours(undefined)).toBe(IPTV_AVAILABILITY_AUTO_CHECK_DEFAULT_HOURS);
-    expect(normalizeIptvAutoCheckHours("abc")).toBe(IPTV_AVAILABILITY_AUTO_CHECK_DEFAULT_HOURS);
-    expect(normalizeIptvAutoCheckHours("6")).toBe(6);
-  });
-});
 
 describe("IPTV availability session store", () => {
   test("keeps results for a source and discards them on a source switch", () => {

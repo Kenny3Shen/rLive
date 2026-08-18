@@ -462,7 +462,7 @@ fn encode_send_message(
     let trace_seed = Uuid::new_v4().simple().to_string();
     let trace_seed = &trace_seed[..16];
     let trace_id = format!("{trace_seed}:{trace_seed}:0:0");
-    let checksum = format!("{:x}", Md5::digest(&wup));
+    let checksum = hex::encode(Md5::digest(&wup));
     // The WUP request id lives inside `wup`; the outer WebSocketCommand's id
     // remains zero just like the official `sendWupNew` transport.
     encode_websocket_command_with_metadata(WS_CMD_WUP_REQUEST, &wup, 0, &trace_id, &checksum)

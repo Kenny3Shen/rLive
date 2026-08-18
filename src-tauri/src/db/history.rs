@@ -10,9 +10,8 @@ pub struct HistoryRecord {
     pub room_id: String,
     pub title: String,
     pub user_name: String,
-    /// Room cover captured when the room was opened. Empty for records written
-    /// by releases that predate the column, and for platforms without a cover.
-    #[serde(default)]
+    /// Room cover captured when the room was opened. Empty for platforms
+    /// without a cover.
     pub cover: String,
     pub watched_at: i64,
 }

@@ -31,8 +31,6 @@ export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "
 export const IPTV_AUTO_RECONNECT_MAX_ATTEMPTS = 2;
 export const IPTV_AUTO_RECONNECT_DELAYS_MS = [1_000, 2_500] as const;
 const CONTROLS_HIDE_DELAY_MS = 2_600;
-const EMPTY_HEADERS: Record<string, string> = {};
-
 export type IptvReconnectAction =
   | { type: "retry"; attempt: number; delayMs: number }
   | { type: "fail" };
@@ -97,7 +95,7 @@ export function iptvChannelPlayUrl(channel: IptvChannel): PlayUrl {
     label: channel.name,
     protocol: playbackKind === "mpegts" ? "mpeg_ts" : playbackKind,
     url: channel.url,
-    headers: channel.headers ?? EMPTY_HEADERS,
+    headers: channel.headers,
   };
 }
 

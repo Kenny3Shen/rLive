@@ -1,16 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { prefersReducedMotion, resolveMotionMode } from "../src/shared/motion/preference";
+import { prefersReducedMotion } from "../src/shared/motion/preference";
 
 describe("motion preference", () => {
-  test("legacy modes always resolve to the complete profile", () => {
-    expect(resolveMotionMode("system", false)).toBe("full");
-    expect(resolveMotionMode("system", true)).toBe("full");
-    expect(resolveMotionMode("full", true)).toBe("full");
-    expect(resolveMotionMode("reduced", true)).toBe("full");
-    expect(resolveMotionMode("unexpected", true)).toBe("full");
-  });
+  test("defaults to full motion during SSR and honors the system preference in browsers", () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 
-  test("runtime never reports reduced motion", () => {
-    expect(prefersReducedMotion()).toBe(false);
+    try {
+      Reflect.deleteProperty(globalThis, "window");
+      expect(prefersReducedMotion()).toBe(false);
+
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: {
+          matchMedia: (query: string) => ({
+            matches: query === "(prefers-reduced-motion: reduce)",
+          }),
+        },
+      });
+      expect(prefersReducedMotion()).toBe(true);
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
   });
 });

@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "0.47.13"
+version = "1.0.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -23,15 +23,15 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream", "query", "form"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
-base64 = "0.22"
-md-5 = "0.10"
+base64 = "0.23"
+md-5 = "0.11"
 hex = "0.4"
 percent-encoding = "2"
 # Single TLS backend everywhere: native-tls (SChannel on Windows / OpenSSL
@@ -44,27 +44,29 @@ tokio-native-tls = "0.3"
 native-tls = "0.2"
 futures-util = "0.3"
 flate2 = "1"
-brotli = "7"
+brotli = "8"
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
-boa_engine = "0.20"
+boa_engine = "0.21"
 
 tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["native-tls", "charset"] }
 
+# Keep the Rust wrapper, vendored FFI crate, verified runtime archives and
+# download checksums on the same Sherpa release; upgrade them as one unit.
 [target.'cfg(target_os = "macos")'.dependencies]
-sherpa-onnx = "1.13.4"
+sherpa-onnx = "=1.13.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Linux uses the shared runtime so the CUDA-capable provider can be selected at
 # runtime while machines without NVIDIA dependencies continue on CPU.
-sherpa-onnx = { version = "1.13.4", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Local ASR is a desktop-only feature. Keep its model archive and data-path
 # dependencies out of the Android Rust graph as well as out of the UI.
 dirs = "6"
 tar = "0.4"
-bzip2 = "0.4"
+bzip2 = "0.6"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 # `ffmpeg-next` is an in-process binding to the platform's FFmpeg libraries.
@@ -77,11 +79,11 @@ fs2 = "0.4"
 # Windows builds use the shared CUDA-capable runtime. The native build script
 # still permits SHERPA_ONNX_GPU=0 for a CPU-only build without changing Rust
 # code or the model/provider settings.
-sherpa-onnx = { version = "1.13.4", default-features = false, features = ["shared"] }
-sha2 = "0.10"
+sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
+sha2 = "0.11"
 
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-libloading = "0.8"
+libloading = "0.9"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Douyu's danmaku ports need native-tls, and Android has no

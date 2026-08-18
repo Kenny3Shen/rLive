@@ -1,6 +1,6 @@
 {
   "name": "rlive",
-  "version": "0.47.13",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,7 +24,7 @@
     "@gsap/react": "2.1.2",
     "@tanstack/react-query": "^5.101.4",
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "class-variance-authority": "^0.7.1",
@@ -32,7 +32,7 @@
     "danmu.js": "1.2.1",
     "google-translate-api-x": "10.7.3",
     "gsap": "3.15.0",
-    "lucide-react": "^1.31.0",
+    "lucide-react": "^1.32.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -42,7 +42,7 @@
     "xgplayer": "^3.0.26",
     "xgplayer-hls.js": "3.0.26",
     "xgplayer-mpegts.js": "^1.0.1",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -51,13 +51,19 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
-    "oxfmt": "^0.63.0",
-    "oxlint": "^1.78.0",
-    "shadcn": "4.16.2",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
+    "shadcn": "4.18.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~7.0.2",
     "typescript-language-server": "^5.3.0",
     "vite": "^8.2.1"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "fast-uri": "3.1.5",
+    "hono": "4.13.3",
+    "js-yaml": "4.3.1"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

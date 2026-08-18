@@ -1840,7 +1840,7 @@ fn sha256_file(path: &Path) -> AppResult<String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 #[cfg(windows)]

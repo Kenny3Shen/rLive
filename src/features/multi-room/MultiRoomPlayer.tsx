@@ -117,9 +117,7 @@ type MainMultiRoomAsrContextValue = {
   asrTranslationTo: Parameters<typeof useAsrCaptions>[0]["translationTo"];
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => void | Promise<void>;
   setAsrTranslationEnabled: (enabled: boolean) => void;
-  setAsrTranslationFrom: (
-    from: Parameters<typeof useAsrCaptions>[0]["translationFrom"],
-  ) => void;
+  setAsrTranslationFrom: (from: Parameters<typeof useAsrCaptions>[0]["translationFrom"]) => void;
   setAsrTranslationTo: (to: Parameters<typeof useAsrCaptions>[0]["translationTo"]) => void;
 };
 

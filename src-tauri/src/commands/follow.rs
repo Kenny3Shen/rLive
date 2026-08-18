@@ -54,7 +54,6 @@ pub struct FollowUserDto {
     pub face: String,
     pub tag_ids: Vec<String>,
     pub live_status: Option<bool>,
-    #[serde(default)]
     pub live_started_at: Option<i64>,
     pub updated_at: i64,
 }

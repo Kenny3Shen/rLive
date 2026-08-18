@@ -94,7 +94,7 @@ export function normalizeMultiRoomSlots(
     const room = slots[index];
     if (!room || seen.has(room.key)) continue;
     seen.add(room.key);
-    occupied.push(stripLegacySecondarySlot(room));
+    occupied.push(room);
   }
 
   const next = Array.from<MultiRoomEntry | null>({ length: MULTI_ROOM_MAX_SLOTS }).fill(null);
@@ -102,13 +102,6 @@ export function normalizeMultiRoomSlots(
     next[index] = room;
   });
   return next;
-}
-
-type LegacyMultiRoomEntry = MultiRoomEntry & { secondarySlot?: number | null };
-
-function stripLegacySecondarySlot(room: MultiRoomEntry): MultiRoomEntry {
-  const { secondarySlot: _secondarySlot, ...entry } = room as LegacyMultiRoomEntry;
-  return entry;
 }
 
 function copyMultiRoomSlotsPreservingPositions(
@@ -119,7 +112,7 @@ function copyMultiRoomSlotsPreservingPositions(
     const room = slots[index];
     if (!room || seen.has(room.key)) return null;
     seen.add(room.key);
-    return stripLegacySecondarySlot(room);
+    return room;
   });
 }
 
@@ -262,18 +255,7 @@ export const useMultiRoomStore = create<MultiRoomState>()(
       clear: () => set({ slots: [...EMPTY_MULTI_ROOM_SLOTS] }),
     }),
     {
-      name: "rlive-multi-room",
-      version: 4,
-      migrate: (persistedState) => {
-        const state = persistedState as Partial<
-          Pick<MultiRoomState, "slots" | "layout" | "fourLayout">
-        >;
-        return {
-          slots: (state.slots ?? []).map((room) => (room ? stripLegacySecondarySlot(room) : null)),
-          layout: normalizeMultiRoomLayout(state.layout),
-          fourLayout: normalizeMultiRoomFourLayout(state.fourLayout),
-        };
-      },
+      name: "rlive-multi-room-v1",
       partialize: (state) => ({
         slots: state.slots,
         layout: state.layout,
@@ -283,11 +265,7 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         const persistedState = persisted as Partial<MultiRoomState>;
         const requestedLayout = normalizeMultiRoomLayout(persistedState?.layout);
         const fourLayout = normalizeMultiRoomFourLayout(persistedState?.fourLayout);
-        const slots = normalizeMultiRoomSlots(
-          (persistedState?.slots ?? []).map((room) =>
-            room ? stripLegacySecondarySlot(room) : null,
-          ),
-        );
+        const slots = normalizeMultiRoomSlots(persistedState?.slots ?? []);
         return {
           ...current,
           layout:
