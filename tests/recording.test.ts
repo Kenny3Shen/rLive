@@ -6,8 +6,11 @@ import {
   formatRecordingDuration,
   formatRecordingSize,
   recordingEndedPlaybackTime,
+  recordingPlatformFromSearch,
   recordingSeekReached,
   recordingProtocolLabel,
+  recordingUserGroupKey,
+  recordingsForPlatform,
   type RecordingContext,
   type RecordingItem,
 } from "../src/features/recording/recording";
@@ -153,6 +156,19 @@ describe("recording change subscription", () => {
 });
 
 describe("recording presentation helpers", () => {
+  test("filters local recordings by a validated live platform", () => {
+    const bilibili = recordingItem({ id: "bilibili", site_id: "bilibili" });
+    const twitch = recordingItem({ id: "twitch", site_id: "twitch" });
+    const iptv = recordingItem({ id: "iptv", source_kind: "iptv", site_id: null });
+    const items = [bilibili, twitch, iptv];
+
+    expect(recordingPlatformFromSearch("twitch")).toBe("twitch");
+    expect(recordingPlatformFromSearch("unknown")).toBe("all");
+    expect(recordingsForPlatform(items, "twitch")).toEqual([twitch]);
+    expect(recordingsForPlatform(items, "all")).toBe(items);
+    expect(recordingUserGroupKey(bilibili)).not.toBe(recordingUserGroupKey(twitch));
+  });
+
   test("formats short and long durations as timecodes", () => {
     expect(formatRecordingDuration(0)).toBe("0:00");
     expect(formatRecordingDuration(65_000)).toBe("1:05");
