@@ -2,59 +2,38 @@ use serde::{Deserialize, Serialize};
 
 /// Persisted application preferences (JSON in `settings_kv` key `app_settings`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AppSettings {
     /// `system` | `light` | `dark`
     pub theme: String,
-    /// Legacy compatibility field; normalized to `full` at the settings boundary.
-    #[serde(default = "default_motion_mode")]
-    pub motion_mode: String,
     pub default_site: String,
     /// Platform ids hidden from discovery and room navigation.
-    ///
-    /// Legacy settings omit this field, which intentionally means every
-    /// bundled platform remains enabled.
-    #[serde(default)]
     pub disabled_site_ids: Vec<String>,
     /// e.g. `http://127.0.0.1:7890`
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
     pub danmaku_opacity: f32,
     /// Player danmaku text outline width in CSS pixels, 0.0 ..= 1.5.
-    #[serde(default = "default_danmaku_font_stroke")]
     pub danmaku_font_stroke: f32,
     pub danmaku_font_size: u32,
     /// Scrolling danmaku speed in CSS pixels per second, 50 ..= 200.
-    #[serde(default = "default_danmaku_speed")]
     pub danmaku_speed: u32,
     /// Portion of the video height used by scrolling danmaku, 0.1 ..= 1.0.
-    #[serde(default = "default_danmaku_area")]
     pub danmaku_area: f32,
     /// Sliding window used to merge duplicate chat messages, in seconds.
     /// Zero disables merging; normalized to 0 ..= 30 at the settings
     /// persistence boundary.
-    #[serde(default = "default_danmaku_merge_window_seconds")]
     pub danmaku_merge_window_seconds: u32,
     /// Whether gift-related messages should be hidden from the danmaku stream.
-    #[serde(default = "default_danmaku_filter_gifts")]
     pub danmaku_filter_gifts: bool,
     /// Whether Super Chat cards are enabled for the current site.
-    #[serde(default = "default_super_chat_enabled")]
     pub super_chat_enabled: bool,
     pub danmaku_shield_words: Vec<String>,
     /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
-    #[serde(default = "default_quality_level")]
     pub quality_level: String,
-    /// Probe playback candidates through the configured proxy and rank healthy
-    /// sources before automatic failover.
-    #[serde(default = "default_playback_smart_line_selection")]
-    pub playback_smart_line_selection: bool,
     /// Same-protocol `switchURL` path. The frontend retains its hard-reload
     /// fallback for incompatible protocols and failed switches.
-    #[serde(default = "default_playback_soft_switch_enabled")]
     pub playback_soft_switch_enabled: bool,
-    /// Switch to another ranked source after sustained playback stalling.
-    #[serde(default = "default_playback_stall_auto_switch_enabled")]
-    pub playback_stall_auto_switch_enabled: bool,
     /// Device-local permission for the user-operated single-message senders.
     /// It remains disabled until the user explicitly enables it in Settings and
     /// is not profile-imported. A Cookie and each platform's own validation
@@ -84,12 +63,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub asr_hotwords: Vec<String>,
     /// Device-local streaming PCM chunk interval in seconds, clamped to
-    /// 0.2..=1.0 with one decimal place. The persisted field name is retained
-    /// for compatibility with existing settings records.
+    /// 0.2..=1.0 with one decimal place.
     #[serde(default = "default_asr_window_seconds")]
     pub asr_window_seconds: f32,
     /// Player subtitle font size in CSS pixels.
-    #[serde(default = "default_asr_font_size")]
     pub asr_font_size: u32,
     /// Device-local consent for sending committed ASR captions to Google
     /// Translate. Disabled by default because subtitle text leaves the device.
@@ -111,56 +88,26 @@ pub struct AppSettings {
     ///
     /// Disabled by default: leaving a room or player while recording asks the
     /// user and stops the session, saving what was captured so far.
-    #[serde(default)]
     pub recording_continue_after_leave: bool,
     /// Include the synchronized danmaku sidecar by default for live recordings.
-    #[serde(default)]
     pub recording_include_danmaku: bool,
+    /// Maximum duration of one FFmpeg recording bundle in minutes.
+    /// Zero keeps one bundle until the task stops.
+    pub recording_auto_split_minutes: u32,
     /// FFmpeg/libavformat blocking read timeout in seconds.
-    #[serde(default = "default_ffmpeg_rw_timeout_seconds")]
     pub ffmpeg_rw_timeout_seconds: u32,
     /// Maximum delay between FFmpeg network reconnect attempts in seconds.
-    #[serde(default = "default_ffmpeg_reconnect_delay_max_seconds")]
     pub ffmpeg_reconnect_delay_max_seconds: u32,
     /// Number of retries for a failed HLS media segment.
-    #[serde(default = "default_ffmpeg_hls_segment_retry_count")]
     pub ffmpeg_hls_segment_retry_count: u32,
-    /// Legacy compatibility field. The client now performs one startup probe
-    /// and no longer schedules periodic checks, but old profiles still carry
-    /// this value and must remain deserializable.
-    #[serde(default = "default_iptv_availability_auto_check")]
-    pub iptv_availability_auto_check: bool,
-    /// Legacy compatibility field retained for old settings records.
-    #[serde(default = "default_iptv_availability_auto_check_interval_hours")]
-    pub iptv_availability_auto_check_interval_hours: u32,
 }
 
 fn default_quality_level() -> String {
     "high".into()
 }
 
-fn default_motion_mode() -> String {
-    "full".into()
-}
-
-fn default_playback_smart_line_selection() -> bool {
-    true
-}
-
 fn default_playback_soft_switch_enabled() -> bool {
     true
-}
-
-fn default_playback_stall_auto_switch_enabled() -> bool {
-    true
-}
-
-fn default_iptv_availability_auto_check() -> bool {
-    true
-}
-
-fn default_iptv_availability_auto_check_interval_hours() -> u32 {
-    1
 }
 
 fn default_danmaku_area() -> f32 {
@@ -231,7 +178,6 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "system".into(),
-            motion_mode: default_motion_mode(),
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
             proxy: None,
@@ -245,9 +191,7 @@ impl Default for AppSettings {
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
-            playback_smart_line_selection: default_playback_smart_line_selection(),
             playback_soft_switch_enabled: default_playback_soft_switch_enabled(),
-            playback_stall_auto_switch_enabled: default_playback_stall_auto_switch_enabled(),
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: default_asr_provider(),
@@ -263,11 +207,10 @@ impl Default for AppSettings {
             iptv_custom_m3u_url: None,
             recording_continue_after_leave: false,
             recording_include_danmaku: false,
+            recording_auto_split_minutes: 0,
             ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
             ffmpeg_reconnect_delay_max_seconds: default_ffmpeg_reconnect_delay_max_seconds(),
             ffmpeg_hls_segment_retry_count: default_ffmpeg_hls_segment_retry_count(),
-            iptv_availability_auto_check: true,
-            iptv_availability_auto_check_interval_hours: 1,
         }
     }
 }
@@ -282,58 +225,31 @@ mod tests {
         let v = serde_json::to_string(&s).unwrap();
         let back: AppSettings = serde_json::from_str(&v).unwrap();
         assert_eq!(back.default_site, "bilibili");
-        assert_eq!(back.motion_mode, "full");
         assert_eq!(back.ffmpeg_rw_timeout_seconds, 10);
         assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
+        assert_eq!(back.recording_auto_split_minutes, 0);
     }
 
     #[test]
-    fn legacy_settings_ignore_removed_fields_and_receive_new_danmaku_defaults() {
-        // A former Bilibili-only consent must not become the new shared
-        // Bilibili/Douyu/Huya write permission during deserialization.
-        let legacy = r#"{
-          "theme": "system",
-          "default_site": "bilibili",
-          "proxy": null,
-          "danmaku_opacity": 0.8,
-          "danmaku_font_size": 18,
-          "danmaku_font_weight": 400,
-          "danmaku_line_count": 8,
-          "super_chat_opacity": 0.6,
-          "danmaku_shield_words": [],
-          "mpv_path": "/legacy/mpv",
-          "bilibili_danmaku_send_enabled": true
-        }"#;
-        let settings: AppSettings = serde_json::from_str(legacy).unwrap();
-        let serialized = serde_json::to_value(&settings).unwrap();
+    fn settings_reject_unknown_and_missing_fields() {
+        let base = serde_json::to_value(AppSettings::default()).unwrap();
+        let mut unknown_field = base.clone();
+        unknown_field["motion_mode"] = serde_json::json!("full");
+        let mut missing_field = base;
+        missing_field
+            .as_object_mut()
+            .unwrap()
+            .remove("danmaku_speed");
 
-        assert_eq!(serialized.get("danmaku_speed").unwrap(), 100);
-        assert!(serialized.get("super_chat_opacity").is_none());
-        assert!(serialized.get("danmaku_line_count").is_none());
-        assert!(serialized.get("danmaku_filter_repeats").is_none());
-        assert!(serialized.get("danmaku_font_weight").is_none());
-        assert_eq!(settings.danmaku_area, 0.25);
-        assert_eq!(settings.danmaku_speed, 100);
-        assert_eq!(settings.motion_mode, "full");
-        assert_eq!(settings.danmaku_font_stroke, 0.0);
-        assert!(settings.danmaku_filter_gifts);
-        assert_eq!(settings.danmaku_merge_window_seconds, 10);
-        assert!(settings.super_chat_enabled);
-        assert!(!settings.danmaku_send_enabled);
-        assert!(settings.playback_smart_line_selection);
-        assert!(settings.playback_soft_switch_enabled);
-        assert!(settings.playback_stall_auto_switch_enabled);
-        assert!(!settings.asr_enabled);
-        assert_eq!(settings.asr_provider, "auto");
-        assert!(settings.asr_vad_enabled);
-        assert!(settings.asr_punctuation_enabled);
-        assert!(!settings.asr_speaker_diarization_enabled);
-        assert!(settings.asr_hotwords.is_empty());
-        assert_eq!(settings.asr_window_seconds, 0.2);
-        assert!(settings.iptv_custom_m3u_url.is_none());
-        assert!(settings.iptv_availability_auto_check);
-        assert_eq!(settings.iptv_availability_auto_check_interval_hours, 1);
-        assert!(settings.disabled_site_ids.is_empty());
+        for (case, value) in [
+            ("unknown field", unknown_field),
+            ("missing field", missing_field),
+        ] {
+            assert!(
+                serde_json::from_value::<AppSettings>(value).is_err(),
+                "accepted settings with {case}"
+            );
+        }
     }
 }

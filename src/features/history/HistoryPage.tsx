@@ -194,7 +194,7 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   );
 }
 
-/** The room a message was sent to, or a plain platform label for old records. */
+/** The room a message was sent to, or a plain platform label when unavailable. */
 function danmakuRoomLabel(item: DanmakuSendHistoryItem): string {
   const title = item.room_title?.trim();
   if (title) return title;

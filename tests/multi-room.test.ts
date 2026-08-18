@@ -117,14 +117,11 @@ describe("multi-room audio defaults", () => {
 });
 
 describe("multi-room fullscreen ownership", () => {
-  test("gives fullscreen to the main feed alone", () => {
+  test("limits shared-window fullscreen to its owning player", () => {
     // All six feeds share one window, so its fullscreen state would otherwise
     // mark every secondary fullscreen and grow the grid instead of the picture.
     expect(playerOwnsFullscreen(true)).toBe(true);
     expect(playerOwnsFullscreen(false)).toBe(false);
-  });
-
-  test("keeps a single room player owning fullscreen by default", () => {
     expect(playerOwnsFullscreen(undefined)).toBe(true);
   });
 });
@@ -205,15 +202,21 @@ describe("multi-room director layout", () => {
     expect(moved[4]?.key).toBe(other.key);
   });
 
-  test("swaps two occupied secondary feeds", () => {
+  test("moves or swaps occupied secondary feeds", () => {
     const main = room("main");
     const first = room("first");
     const second = room("second");
-    const moved = swapMultiRoomSlots([main, first, second], 1, 2);
+    const slots = [main, first, second, null];
+    const swapped = swapMultiRoomSlots(slots, 1, 2);
+    const moved = swapMultiRoomSlots(slots, 1, 3);
 
-    expect(moved[0]?.key).toBe(main.key);
-    expect(moved[1]?.key).toBe(second.key);
-    expect(moved[2]?.key).toBe(first.key);
+    expect(swapped.slice(0, 3).map((entry) => entry?.key)).toEqual([
+      main.key,
+      second.key,
+      first.key,
+    ]);
+    expect(moved[1]).toBeNull();
+    expect(moved[3]?.key).toBe(first.key);
   });
 
   test("swaps main and secondary feeds while normalizing audio roles", () => {
@@ -223,15 +226,6 @@ describe("multi-room director layout", () => {
 
     expect(moved[0]).toMatchObject({ key: secondary.key, volume: 80, muted: false });
     expect(moved[1]).toMatchObject({ key: main.key, muted: true });
-  });
-
-  test("moves an occupied secondary feed into an empty slot", () => {
-    const main = room("main");
-    const secondary = room("secondary");
-    const moved = swapMultiRoomSlots([main, secondary, null], 1, 2);
-
-    expect(moved[1]).toBeNull();
-    expect(moved[2]?.key).toBe(secondary.key);
   });
 
   test("keeps a main feed when it is moved into an empty slot", () => {
@@ -252,12 +246,5 @@ describe("multi-room director layout", () => {
     expect(normalized[0]?.key).toBe(main.key);
     expect(normalized[1]?.key).toBe(secondary.key);
     expect(normalized[2]).toBeNull();
-  });
-
-  test("drops legacy secondary position metadata during normalization", () => {
-    const legacy = { ...room("secondary"), secondarySlot: 5 };
-    const normalized = normalizeMultiRoomSlots([room("main"), legacy]);
-
-    expect(normalized[1]).not.toHaveProperty("secondarySlot");
   });
 });

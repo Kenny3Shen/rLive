@@ -11,6 +11,93 @@ use crate::models::settings::AppSettings;
 use crate::settings;
 use rusqlite::Connection;
 
+const PROFILE_VERSION: u32 = 1;
+const PROFILE_FIELDS: &[&str] = &[
+    "version",
+    "exported_at",
+    "settings",
+    "follows",
+    "iptv_favorites",
+    "iptv_favorite_groups",
+    "tags",
+    "history",
+    "danmaku_shield_words",
+];
+const PROFILE_SETTINGS_FIELDS: &[&str] = &[
+    "theme",
+    "default_site",
+    "disabled_site_ids",
+    "proxy",
+    "danmaku_opacity",
+    "danmaku_font_stroke",
+    "danmaku_font_size",
+    "danmaku_speed",
+    "danmaku_area",
+    "danmaku_merge_window_seconds",
+    "danmaku_filter_gifts",
+    "super_chat_enabled",
+    "danmaku_shield_words",
+    "quality_level",
+    "playback_soft_switch_enabled",
+    "danmaku_send_enabled",
+    "asr_enabled",
+    "asr_provider",
+    "asr_vad_enabled",
+    "asr_punctuation_enabled",
+    "asr_speaker_diarization_enabled",
+    "asr_hotwords",
+    "asr_window_seconds",
+    "asr_font_size",
+    "asr_translation_enabled",
+    "asr_translation_from",
+    "asr_translation_to",
+    "iptv_custom_m3u_url",
+    "recording_continue_after_leave",
+    "recording_include_danmaku",
+    "recording_auto_split_minutes",
+    "ffmpeg_rw_timeout_seconds",
+    "ffmpeg_reconnect_delay_max_seconds",
+    "ffmpeg_hls_segment_retry_count",
+];
+const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
+    "theme",
+    "default_site",
+    "disabled_site_ids",
+    "proxy",
+    "danmaku_opacity",
+    "danmaku_font_stroke",
+    "danmaku_font_size",
+    "danmaku_speed",
+    "danmaku_area",
+    "danmaku_merge_window_seconds",
+    "danmaku_filter_gifts",
+    "super_chat_enabled",
+    "danmaku_shield_words",
+    "quality_level",
+    "playback_soft_switch_enabled",
+    "asr_font_size",
+    "recording_continue_after_leave",
+    "recording_include_danmaku",
+    "recording_auto_split_minutes",
+    "ffmpeg_rw_timeout_seconds",
+    "ffmpeg_reconnect_delay_max_seconds",
+    "ffmpeg_hls_segment_retry_count",
+];
+const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
+    "danmaku_send_enabled",
+    "asr_enabled",
+    "asr_provider",
+    "asr_vad_enabled",
+    "asr_punctuation_enabled",
+    "asr_speaker_diarization_enabled",
+    "asr_hotwords",
+    "asr_window_seconds",
+    "asr_translation_enabled",
+    "asr_translation_from",
+    "asr_translation_to",
+    "iptv_custom_m3u_url",
+];
+
 /// Profile packages contain structured settings and history, but are never
 /// expected to carry media or model data. Bound the read before JSON parsing
 /// so a malformed Android content URI (or an accidental video selection)
@@ -23,9 +110,7 @@ pub struct ProfilePackage {
     pub exported_at: i64,
     pub settings: AppSettings,
     pub follows: Vec<FollowRecord>,
-    #[serde(default)]
     pub iptv_favorites: Vec<IptvFavoriteRecord>,
-    #[serde(default)]
     pub iptv_favorite_groups: Vec<IptvFavoriteGroupRecord>,
     pub tags: Vec<TagRecord>,
     pub history: Vec<HistoryRecord>,
@@ -36,7 +121,7 @@ impl ProfilePackage {
     #[cfg(test)]
     fn sample() -> Self {
         Self {
-            version: 1,
+            version: PROFILE_VERSION,
             exported_at: 0,
             settings: AppSettings::default(),
             follows: vec![],
@@ -89,18 +174,9 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
     {
         // Omit rather than serialize safe-looking defaults so future import
         // changes cannot mistake these device-local choices for portable data.
-        settings.remove("danmaku_send_enabled");
-        settings.remove("asr_enabled");
-        settings.remove("asr_provider");
-        settings.remove("asr_vad_enabled");
-        settings.remove("asr_punctuation_enabled");
-        settings.remove("asr_speaker_diarization_enabled");
-        settings.remove("asr_hotwords");
-        settings.remove("asr_window_seconds");
-        settings.remove("asr_translation_enabled");
-        settings.remove("asr_translation_from");
-        settings.remove("asr_translation_to");
-        settings.remove("iptv_custom_m3u_url");
+        for field in LOCAL_ONLY_PROFILE_SETTINGS_FIELDS {
+            settings.remove(*field);
+        }
     }
     Ok(value)
 }
@@ -114,7 +190,7 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
     clear_local_only_settings(&mut settings);
     let shield = settings.danmaku_shield_words.clone();
     Ok(ProfilePackage {
-        version: 1,
+        version: PROFILE_VERSION,
         exported_at: chrono::Utc::now().timestamp_millis(),
         settings,
         follows: follow::list(conn)?,
@@ -194,8 +270,78 @@ fn read_package_text<R: Read>(reader: R) -> AppResult<String> {
 }
 
 fn decode_package(text: &str) -> AppResult<ProfilePackage> {
-    serde_json::from_str(text)
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))?;
+    if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64)
+        && version != u64::from(PROFILE_VERSION)
+    {
+        return Err(AppError::new(
+            "profile_version_unsupported",
+            format!(
+                "unsupported profile version {}; expected {}",
+                version, PROFILE_VERSION
+            ),
+        ));
+    }
+    reject_unknown_fields(&value, "profile", PROFILE_FIELDS)?;
+    require_fields(&value, "profile", PROFILE_FIELDS)?;
+    let settings = value
+        .get("settings")
+        .ok_or_else(|| AppError::new("profile_schema_invalid", "profile.settings is required"))?;
+    reject_unknown_fields(settings, "profile.settings", PROFILE_SETTINGS_FIELDS)?;
+    require_fields(
+        settings,
+        "profile.settings",
+        PORTABLE_PROFILE_SETTINGS_FIELDS,
+    )?;
+    serde_json::from_value(value)
         .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))
+}
+
+fn reject_unknown_fields(
+    value: &serde_json::Value,
+    path: &str,
+    allowed_fields: &[&str],
+) -> AppResult<()> {
+    let object = value.as_object().ok_or_else(|| {
+        AppError::new(
+            "profile_schema_invalid",
+            format!("{path} must be a JSON object"),
+        )
+    })?;
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed_fields.contains(&field.as_str()))
+    {
+        return Err(AppError::new(
+            "profile_schema_invalid",
+            format!("unknown field {path}.{field}"),
+        ));
+    }
+    Ok(())
+}
+
+fn require_fields(
+    value: &serde_json::Value,
+    path: &str,
+    required_fields: &[&str],
+) -> AppResult<()> {
+    let object = value.as_object().ok_or_else(|| {
+        AppError::new(
+            "profile_schema_invalid",
+            format!("{path} must be a JSON object"),
+        )
+    })?;
+    if let Some(field) = required_fields
+        .iter()
+        .find(|field| !object.contains_key(**field))
+    {
+        return Err(AppError::new(
+            "profile_schema_invalid",
+            format!("missing field {path}.{field}"),
+        ));
+    }
+    Ok(())
 }
 
 pub fn merge_into_db(
@@ -241,10 +387,7 @@ pub fn merge_into_db(
     settings.danmaku_merge_window_seconds = package.settings.danmaku_merge_window_seconds;
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
-    settings.playback_smart_line_selection = package.settings.playback_smart_line_selection;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
-    settings.playback_stall_auto_switch_enabled =
-        package.settings.playback_stall_auto_switch_enabled;
     // Do not copy `danmaku_send_enabled`, `asr_enabled`, `asr_provider`,
     // `asr_vad_enabled`, `asr_punctuation_enabled`,
     // `asr_speaker_diarization_enabled`, `asr_hotwords`,
@@ -316,50 +459,39 @@ mod tests {
         package.settings.asr_translation_to = "ja".into();
         package.settings.iptv_custom_m3u_url = Some("https://example.invalid/private.m3u".into());
 
-        let v = portable_profile_value(&package).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&encode_package(&package).unwrap()).unwrap();
         assert!(v.get("cookies").is_none());
         let settings = v["settings"].as_object().unwrap();
-        assert!(!settings.contains_key("danmaku_send_enabled"));
-        assert!(!settings.contains_key("asr_enabled"));
-        assert!(!settings.contains_key("asr_vad_enabled"));
-        assert!(!settings.contains_key("asr_punctuation_enabled"));
-        assert!(!settings.contains_key("asr_speaker_diarization_enabled"));
-        assert!(!settings.contains_key("asr_hotwords"));
-        assert!(!settings.contains_key("asr_translation_enabled"));
-        assert!(!settings.contains_key("asr_translation_from"));
-        assert!(!settings.contains_key("asr_translation_to"));
-        assert!(!settings.contains_key("iptv_custom_m3u_url"));
-
-        let text = encode_package(&package).unwrap();
-        assert!(!text.contains("danmaku_send_enabled"));
-        assert!(!text.contains("asr_enabled"));
-        assert!(!text.contains("asr_vad_enabled"));
-        assert!(!text.contains("asr_punctuation_enabled"));
-        assert!(!text.contains("asr_speaker_diarization_enabled"));
-        assert!(!text.contains("asr_hotwords"));
-        assert!(!text.contains("asr_translation_enabled"));
-        assert!(!text.contains("asr_translation_from"));
-        assert!(!text.contains("asr_translation_to"));
-        assert!(!text.contains("iptv_custom_m3u_url"));
+        for field in LOCAL_ONLY_PROFILE_SETTINGS_FIELDS {
+            assert!(
+                !settings.contains_key(*field),
+                "exported local-only field {field}"
+            );
+        }
     }
 
     #[test]
-    fn profile_keeps_speed_and_ignores_removed_danmaku_fields() {
+    fn profile_rejects_removed_settings_fields() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]["danmaku_speed"] = serde_json::json!(150);
         value["settings"]["danmaku_font_weight"] = serde_json::json!(400);
-        value["settings"]["super_chat_opacity"] = serde_json::json!(0.6);
-        value["settings"]["danmaku_line_count"] = serde_json::json!(8);
         let text = serde_json::to_string(&value).unwrap();
 
-        let package = decode_package(&text).unwrap();
-        let encoded = encode_package(&package).unwrap();
-        let roundtrip: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        let error = decode_package(&text).unwrap_err();
 
-        assert_eq!(roundtrip["settings"]["danmaku_speed"], 150);
-        assert!(!encoded.contains("danmaku_font_weight"));
-        assert!(!encoded.contains("super_chat_opacity"));
-        assert!(!encoded.contains("danmaku_line_count"));
+        assert_eq!(error.code, "profile_schema_invalid");
+        assert!(error.message.contains("danmaku_font_weight"));
+    }
+
+    #[test]
+    fn profile_rejects_unknown_versions() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["version"] = serde_json::json!(PROFILE_VERSION + 1);
+        let text = serde_json::to_string(&value).unwrap();
+
+        let error = decode_package(&text).unwrap_err();
+
+        assert_eq!(error.code, "profile_version_unsupported");
     }
 
     #[test]
@@ -529,17 +661,6 @@ mod tests {
         assert_eq!(imported.danmaku_font_stroke, 1.5);
         assert!(imported.danmaku_filter_gifts);
         assert!(!imported.super_chat_enabled);
-    }
-
-    #[test]
-    fn merge_ignores_legacy_motion_preference() {
-        let mut conn = open_in_memory().unwrap();
-        let mut package = ProfilePackage::sample();
-        package.settings.motion_mode = "reduced".into();
-
-        merge_into_db(&mut conn, &package).unwrap();
-
-        assert_eq!(settings::get(&conn).unwrap().motion_mode, "full");
     }
 
     #[test]

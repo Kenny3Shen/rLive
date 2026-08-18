@@ -41,7 +41,7 @@
 | `src/shared/components/` | 跨功能业务组件，例如刷新按钮、站点切换器和房间卡片 |
 | `src/app/layout/` | 标题栏、侧栏、顶部导航、页面滚动容器和路由动效编排 |
 | `src/features/*/` | 功能页、功能内组件和局部状态；`features/recording/` 负责桌面录制库与本地回放 |
-| `src/shared/motion/` | 跨页面动画令牌、完整动效运行时、`PagePan` 和 `PageZoom` |
+| `src/shared/motion/` | 跨页面动画令牌、系统减少动效检测、`PagePan` 和 `PageZoom` |
 | `src/styles.css` | 主题变量、Tailwind 映射、全局响应式规则和 CSS 关键帧 |
 | `src/app/theme.ts` | 主题解析、应用和 Radial Reveal |
 
@@ -135,7 +135,7 @@ flowchart TD
 
 `src/shared/motion/tokens.ts` 负责注册 `useGSAP`、设置 GSAP 默认值并输出共享参数。
 
-`src/shared/motion/preference.ts` 只输出完整动效运行时：旧设置或配置档案中的 `motion_mode` 仍可被反序列化，但前端与 Rust 设置边界都会归一化为 `full`，系统 `prefers-reduced-motion` 不改变应用行为。`src/main.tsx` 在 React 首帧前固定根元素 `data-motion="full"`；保留的 `prefersReducedMotion()` 仅作为现有调用方的兼容 helper，始终返回 `false`。
+`src/shared/motion/preference.ts` 不再解析或持久化动效模式。`src/main.tsx` 在 React 首帧前设置根元素 `data-motion="full"`；需要避免非必要动画的调用方通过 `prefersReducedMotion()` 直接读取系统 `prefers-reduced-motion`，不依赖应用设置字段。
 
 | Token/配置 | 当前值 | 用途 |
 | --- | --- | --- |
@@ -370,7 +370,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 
 ## 7. 完整动态效果
 
-应用不再暴露动态效果选择项，桌面与 Android 使用同一套完整页面转场、Overlay、按压、Hover 和手势收尾。旧数据库、localStorage 或配置档案中的 `system` / `reduced` 值不参与运行时决策，并在下一次设置写入时归一化为 `full`。
+应用不暴露动态效果选择项，桌面与 Android 使用同一套页面转场、Overlay、按压、Hover 和手势收尾；系统要求减少动态效果时，各动画调用方跳过或缩短非必要动画。
 
 完整动态效果不等于增加持续装饰：高频键盘操作保持即时，列表轮询和弹幕新增直接更新；Hover、按压和 Overlay 保持短促可中断，页面动画只表达导航层级。焦点、滚动位置、选中状态和可点击区域仍须独立于动画正确工作。
 
@@ -443,7 +443,7 @@ bash scripts/sync-to-windows.sh
 | `src/app/layout/Shell.tsx` | 页面滚动、路由来源识别和动画编排 |
 | `src/app/layout/Sidebar.tsx` | 桌面/移动导航和主题按钮反馈 |
 | `src/app/theme.ts` | 主题应用与 Radial Reveal |
-| `src/shared/motion/preference.ts` | 固定完整动效、根元素状态和旧调用兼容 helper |
+| `src/shared/motion/preference.ts` | 系统减少动效偏好检测 |
 | `src/shared/motion/tokens.ts` | GSAP 注册、共享 easing 和 duration |
 | `src/shared/motion/PagePan.tsx` | 整页平移与 outgoing subtree 生命周期 |
 | `src/shared/motion/PageZoom.tsx` | 直播间 Zoom 进入和退出 |

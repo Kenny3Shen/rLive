@@ -366,10 +366,7 @@ function RecordingUserTarget({
       type="button"
       variant={selected ? "secondary" : "ghost"}
       size={surface === "desktop" ? "default" : "sm"}
-      className={cn(
-        "justify-start gap-2",
-        surface === "desktop" ? "w-full px-2" : "shrink-0",
-      )}
+      className={cn("justify-start gap-2", surface === "desktop" ? "w-full px-2" : "shrink-0")}
       aria-current={selected ? "page" : undefined}
       onClick={onSelect}
     >
@@ -670,11 +667,7 @@ export function RecordingsPage() {
                         key={item.id}
                         item={item}
                         stopping={stopMutation.isPending && stopMutation.variables === item.id}
-                        onOpen={
-                          item.status === "recording"
-                            ? undefined
-                            : () => openRecording(item)
-                        }
+                        onOpen={item.status === "recording" ? undefined : () => openRecording(item)}
                         onStop={() => stopMutation.mutate(item.id)}
                         revealing={
                           revealMutation.isPending && revealMutation.variables === item.file_path

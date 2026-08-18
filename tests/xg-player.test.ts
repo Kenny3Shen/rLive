@@ -32,13 +32,19 @@ describe("xgplayer transport selection", () => {
   });
 
   test("selects the protocol plugin from common IPTV URL forms", () => {
-    expect(iptvPlaybackKind("https://cdn.example/live.flv?token=one")).toBe("flv");
-    expect(iptvPlaybackKind("https://cdn.example/live?id=1&type=flv")).toBe("flv");
-    expect(iptvPlaybackKind("https://cdn.example/live.ts?token=one")).toBe("mpegts");
-    expect(iptvPlaybackKind("https://cdn.example/live?format=mpegts")).toBe("mpegts");
-    expect(iptvPlaybackKind("https://cdn.example/channel.m3u8")).toBe("hls");
-    expect(iptvPlaybackKind("https://cdn.example/channel?id=1")).toBe("hls");
-    expect(iptvPlaybackKind("https://cdn.example/archive.mp4")).toBe("native");
+    const cases = [
+      ["https://cdn.example/live.flv?token=one", "flv"],
+      ["https://cdn.example/live?id=1&type=flv", "flv"],
+      ["https://cdn.example/live.ts?token=one", "mpegts"],
+      ["https://cdn.example/live?format=mpegts", "mpegts"],
+      ["https://cdn.example/channel.m3u8", "hls"],
+      ["https://cdn.example/channel?id=1", "hls"],
+      ["https://cdn.example/archive.mp4", "native"],
+    ] as const;
+
+    for (const [url, expected] of cases) {
+      expect(iptvPlaybackKind(url)).toBe(expected);
+    }
     expect(
       iptvPlaybackKind({
         url: "https://cdn.example/opaque",
@@ -47,8 +53,15 @@ describe("xgplayer transport selection", () => {
     ).toBe("mpegts");
   });
 
-  test("translates legacy IPTV channels into explicit shared lifecycle sources", () => {
-    const base = { id: "one", name: "频道", group: "", logo: null, headers: {} };
+  test("translates opaque IPTV channels into explicit shared lifecycle sources", () => {
+    const base = {
+      id: "one",
+      name: "频道",
+      group: "",
+      logo: null,
+      protocol: "unknown" as const,
+      headers: {},
+    };
     expect(iptvChannelPlayUrl({ ...base, url: "https://cdn.example/live.m2ts" })).toMatchObject({
       source_id: "iptv:one",
       protocol: "mpeg_ts",

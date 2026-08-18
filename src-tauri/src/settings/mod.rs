@@ -18,10 +18,7 @@ const FFMPEG_RW_TIMEOUT_SECONDS_MAX: u32 = 60;
 const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN: u32 = 1;
 const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX: u32 = 60;
 const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX: u32 = 20;
-
-fn normalize_motion_preference(settings: &mut AppSettings) {
-    settings.motion_mode = "full".to_owned();
-}
+const RECORDING_AUTO_SPLIT_MINUTES_MAX: u32 = 24 * 60;
 
 /// Repairs platform visibility preferences from hand-edited or future settings
 /// records. The UI prevents this state already, but settings are imported and
@@ -165,6 +162,9 @@ fn normalize_danmaku_preferences(settings: &mut AppSettings) {
 }
 
 fn normalize_recording_preferences(settings: &mut AppSettings) {
+    settings.recording_auto_split_minutes = settings
+        .recording_auto_split_minutes
+        .min(RECORDING_AUTO_SPLIT_MINUTES_MAX);
     settings.ffmpeg_rw_timeout_seconds = settings
         .ffmpeg_rw_timeout_seconds
         .clamp(FFMPEG_RW_TIMEOUT_SECONDS_MIN, FFMPEG_RW_TIMEOUT_SECONDS_MAX);
@@ -185,8 +185,8 @@ pub fn get(conn: &Connection) -> AppResult<AppSettings> {
 
 /// Load settings along with whether a valid saved settings record exists.
 ///
-/// The distinction lets the frontend retain a legacy local platform choice
-/// when it is being run against a database that has not saved settings yet.
+/// The distinction lets the frontend choose device-specific first-run defaults
+/// without treating them as an already saved preference.
 pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     let mut stmt = conn
         .prepare("SELECT value FROM settings_kv WHERE key = ?1")
@@ -200,7 +200,6 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
         None => Ok((AppSettings::default(), false)),
         Some(json) => match serde_json::from_str(&json) {
             Ok(mut settings) => {
-                normalize_motion_preference(&mut settings);
                 normalize_site_preferences(&mut settings);
                 normalize_danmaku_preferences(&mut settings);
                 normalize_asr_preferences(&mut settings);
@@ -216,7 +215,6 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
 /// Persist full app settings under key `app_settings`.
 pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
-    normalize_motion_preference(&mut normalized);
     normalize_site_preferences(&mut normalized);
     normalize_danmaku_preferences(&mut normalized);
     normalize_asr_preferences(&mut normalized);
@@ -248,7 +246,6 @@ mod tests {
         assert!(!has_saved_settings);
         assert_eq!(s.default_site, "bilibili");
         assert_eq!(s.theme, "system");
-        assert_eq!(s.motion_mode, "full");
         assert_eq!(s.danmaku_opacity, 0.8);
         assert_eq!(s.danmaku_font_stroke, 0.0);
         assert_eq!(s.danmaku_font_size, 20);
@@ -370,6 +367,7 @@ mod tests {
             ffmpeg_rw_timeout_seconds: 1,
             ffmpeg_reconnect_delay_max_seconds: 100,
             ffmpeg_hls_segment_retry_count: 99,
+            recording_auto_split_minutes: 10_000,
             ..AppSettings::default()
         };
 
@@ -378,18 +376,7 @@ mod tests {
         assert_eq!(stored.ffmpeg_rw_timeout_seconds, 3);
         assert_eq!(stored.ffmpeg_reconnect_delay_max_seconds, 60);
         assert_eq!(stored.ffmpeg_hls_segment_retry_count, 20);
-    }
-
-    #[test]
-    fn set_normalizes_legacy_motion_mode_to_full() {
-        let conn = open_in_memory().unwrap();
-        let settings = AppSettings {
-            motion_mode: "reduced".into(),
-            ..AppSettings::default()
-        };
-
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().motion_mode, "full");
+        assert_eq!(stored.recording_auto_split_minutes, 24 * 60);
     }
 
     #[test]

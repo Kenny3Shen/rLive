@@ -44,7 +44,6 @@ pub struct IptvChannel {
 #[serde(rename_all = "camelCase")]
 pub struct IptvChannelCheck {
     pub url: String,
-    #[serde(default)]
     pub headers: HashMap<String, String>,
 }
 

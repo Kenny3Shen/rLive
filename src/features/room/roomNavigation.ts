@@ -24,8 +24,3 @@ export function roomBackTargetFromNavigationState(
   const target = (state as RoomNavigationState).roomBackTarget;
   return target === "home" || target === "follow" ? target : null;
 }
-
-/** Kept for persisted navigation entries created by older app versions. */
-export function roomNavigationReturnsHome(state: unknown): boolean {
-  return roomBackTargetFromNavigationState(state) === "home";
-}

@@ -842,6 +842,3 @@ function DanmakuEmojiGrid({
     </div>
   );
 }
-
-/** @deprecated Use {@link DanmakuComposer}. Kept for external room extensions. */
-export const BilibiliDanmakuComposer = DanmakuComposer;

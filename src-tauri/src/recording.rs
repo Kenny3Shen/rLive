@@ -94,24 +94,16 @@ pub struct RecordingStartInput {
     pub source: PlayUrl,
     pub source_key: String,
     pub source_kind: String,
-    #[serde(default)]
     pub site_id: Option<String>,
-    #[serde(default)]
     pub room_id: Option<String>,
-    #[serde(default)]
     pub title: String,
-    #[serde(default)]
     pub user_name: String,
-    #[serde(default)]
     pub cover: String,
-    #[serde(default)]
     pub user_avatar: String,
     /// Save the active danmaku connection as a synchronized sidecar track.
-    #[serde(default)]
     pub include_danmaku: bool,
     /// Keep the media task and any requested danmaku sidecar capture alive
     /// when the current player page is left.
-    #[serde(default)]
     pub continue_on_leave: bool,
 }
 
@@ -129,6 +121,7 @@ pub struct FfmpegRecordingOptions {
     pub rw_timeout_seconds: u32,
     pub reconnect_delay_max_seconds: u32,
     pub hls_segment_retry_count: u32,
+    pub split_duration: Option<Duration>,
 }
 
 impl Default for FfmpegRecordingOptions {
@@ -137,6 +130,7 @@ impl Default for FfmpegRecordingOptions {
             rw_timeout_seconds: 10,
             reconnect_delay_max_seconds: 8,
             hls_segment_retry_count: 5,
+            split_duration: None,
         }
     }
 }
@@ -517,9 +511,66 @@ impl SessionState {
 }
 
 struct Session {
-    state: Arc<SessionState>,
+    active: Arc<ActiveSessionState>,
     cancel: watch::Sender<bool>,
     task: JoinHandle<()>,
+}
+
+struct ActiveSessionState {
+    inner: Mutex<ActiveSessionInner>,
+}
+
+struct ActiveSessionInner {
+    current: Arc<SessionState>,
+    recording_ids: HashSet<String>,
+}
+
+impl ActiveSessionState {
+    fn new(state: Arc<SessionState>) -> Self {
+        let recording_id = state
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .id
+            .clone();
+        Self {
+            inner: Mutex::new(ActiveSessionInner {
+                current: state,
+                recording_ids: HashSet::from([recording_id]),
+            }),
+        }
+    }
+
+    fn current(&self) -> Arc<SessionState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .current
+            .clone()
+    }
+
+    fn replace(&self, state: Arc<SessionState>) {
+        let recording_id = state
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .id
+            .clone();
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.recording_ids.insert(recording_id);
+        inner.current = state;
+    }
+
+    fn owns_recording_id(&self, recording_id: &str) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recording_ids
+            .contains(recording_id)
+    }
 }
 
 struct FinalizingSession {
@@ -722,7 +773,7 @@ impl RecordingManager {
             Self::reap_finalizing_locked(&mut finalizing);
             sessions
                 .values()
-                .map(|session| session.state.clone())
+                .map(|session| session.active.current())
                 .chain(finalizing.values().map(|session| session.state.clone()))
                 .collect()
         };
@@ -817,8 +868,8 @@ impl RecordingManager {
         }
         if sessions
             .values()
-            .map(|session| &session.state)
-            .chain(finalizing.values().map(|session| &session.state))
+            .map(|session| session.active.current())
+            .chain(finalizing.values().map(|session| session.state.clone()))
             .any(|state| {
                 let item = state.snapshot();
                 item.status == RecordingStatus::Recording
@@ -932,6 +983,8 @@ impl RecordingManager {
         let proxy = proxy.map(str::to_string);
         let mut source = input.source;
         source.protocol = source_protocol;
+        let segment_bundle_base = bundle_base.clone();
+        let segment_storage_roots = self.storage_roots();
         let mut sessions = self
             .sessions
             .lock()
@@ -956,20 +1009,61 @@ impl RecordingManager {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .clone(),
             );
+        let active = Arc::new(ActiveSessionState::new(state.clone()));
+        let task_active = active.clone();
         let task = tauri::async_runtime::spawn(async move {
-            let outcome = run_recording_task(
-                stream_client,
-                source,
-                proxy,
-                ffmpeg_options,
-                task_state.clone(),
-                cancel_rx,
-            )
-            .await;
-            if let Some(source_key) = danmaku_finish_source {
-                task_state.events.prepare_danmaku_finish(&source_key).await;
+            let mut task_state = task_state;
+            loop {
+                let mut outcome = run_recording_task(
+                    stream_client.clone(),
+                    source.clone(),
+                    proxy.clone(),
+                    ffmpeg_options,
+                    task_state.clone(),
+                    cancel_rx.clone(),
+                )
+                .await;
+                if outcome.split && !*cancel_rx.borrow() {
+                    match create_split_segment(
+                        &task_state,
+                        &source.url,
+                        &segment_bundle_base,
+                        &segment_storage_roots,
+                    ) {
+                        Ok(next_state) => {
+                            if *cancel_rx.borrow() {
+                                discard_unstarted_split_segment(&next_state);
+                            } else {
+                                task_active.replace(next_state.clone());
+                                outcome.split = false;
+                                finish_split_segment(&task_state, outcome);
+                                let next_id = next_state
+                                    .stored
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .id
+                                    .clone();
+                                next_state.events.emit(&next_id, RecordingStatus::Recording);
+                                task_state = next_state;
+                                continue;
+                            }
+                        }
+                        Err(error) => {
+                            outcome.status = RecordingStatus::Interrupted;
+                            outcome.error = Some(format!(
+                                "当前分段已保存，但创建下一分段失败: {}",
+                                error.message
+                            ));
+                        }
+                    }
+                }
+                outcome.split = false;
+                if let Some(source_key) = danmaku_finish_source.as_deref() {
+                    task_state.events.prepare_danmaku_finish(source_key).await;
+                }
+                finish_session(&task_state, outcome);
+                break;
             }
-            finish_session(&task_state, outcome);
         });
         let item = state.snapshot();
         // No other start can pass the gate while this task is being built, so
@@ -977,9 +1071,9 @@ impl RecordingManager {
         // before waiting on the gate; a start past the pre-spawn check commits
         // here and is then drained with the other sessions.
         sessions.insert(
-            id,
+            Uuid::new_v4().to_string(),
             Session {
-                state,
+                active,
                 cancel,
                 task,
             },
@@ -1004,16 +1098,29 @@ impl RecordingManager {
             if finalizing.contains_key(id) {
                 return Err(AppError::new("recording_stopping", "录制正在停止，请稍候"));
             }
-            let session = sessions
-                .remove(id)
+            let session_key = sessions
+                .iter()
+                .find_map(|(key, session)| {
+                    session.active.owns_recording_id(id).then(|| key.clone())
+                })
                 .ok_or_else(|| AppError::new("recording_not_found", "录制不存在"))?;
+            let session = sessions
+                .remove(&session_key)
+                .expect("recording session exists after lookup");
+            let state = session.active.current();
+            let current_id = state
+                .stored
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .id
+                .clone();
             finalizing.insert(
-                id.to_string(),
+                current_id,
                 FinalizingSession {
-                    state: session.state.clone(),
+                    state: state.clone(),
                 },
             );
-            (session.state, session.cancel, session.task)
+            (state, session.cancel, session.task)
         };
         let _ = cancel.send(true);
         if let Err(error) = task.await {
@@ -1030,7 +1137,7 @@ impl RecordingManager {
         self.finalizing
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(id);
+            .retain(|_, session| !Arc::ptr_eq(&session.state, &state));
         Ok(item)
     }
 
@@ -1049,7 +1156,16 @@ impl RecordingManager {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             Self::reap_finalizing_locked(&mut finalizing);
-            if sessions.contains_key(id) || finalizing.contains_key(id) {
+            let active = sessions.values().any(|session| {
+                let state = session.active.current();
+                state
+                    .stored
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .id
+                    == id
+            });
+            if active || finalizing.contains_key(id) {
                 return Err(AppError::new(
                     "recording_still_active",
                     "请先停止录制再删除",
@@ -1170,8 +1286,8 @@ impl RecordingManager {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let matching_states: Vec<_> = sessions
             .values()
-            .map(|session| &session.state)
-            .chain(finalizing.values().map(|session| &session.state))
+            .map(|session| session.active.current())
+            .chain(finalizing.values().map(|session| session.state.clone()))
             .filter_map(|session| {
                 let matches = session
                     .stored
@@ -1211,8 +1327,8 @@ impl RecordingManager {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         sessions
             .values()
-            .map(|session| &session.state)
-            .chain(finalizing.values().map(|session| &session.state))
+            .map(|session| session.active.current())
+            .chain(finalizing.values().map(|session| session.state.clone()))
             .any(|state| {
                 !state.finished.load(Ordering::Acquire)
                     && stored_keeps_background_danmaku(
@@ -1253,12 +1369,8 @@ impl RecordingManager {
                 .collect();
             let drained: Vec<_> = sessions.drain().collect();
             for (id, session) in &drained {
-                finalizing.insert(
-                    id.clone(),
-                    FinalizingSession {
-                        state: session.state.clone(),
-                    },
-                );
+                let state = session.active.current();
+                finalizing.insert(id.clone(), FinalizingSession { state });
             }
             (drained, already_finalizing)
         };
@@ -1301,7 +1413,7 @@ impl RecordingManager {
     }
 
     fn reap_finished_locked(&self, sessions: &mut HashMap<String, Session>) {
-        sessions.retain(|_, session| !session.state.finished.load(Ordering::Acquire));
+        sessions.retain(|_, session| !session.active.current().finished.load(Ordering::Acquire));
     }
 
     fn reap_finalizing_locked(finalizing: &mut HashMap<String, FinalizingSession>) {
@@ -1415,12 +1527,12 @@ async fn stop_sessions_until_deadline(
             } else {
                 tracing::warn!(recording_id = %id, error = %error, "录制任务在应用退出时异常终止");
                 finish_interrupted_session(
-                    &session.state,
+                    &session.active.current(),
                     format!("录制任务在应用退出时异常终止: {error}"),
                 );
             }
-        } else if !session.state.finished.load(Ordering::Acquire) {
-            finish_interrupted_session(&session.state, "录制任务未保存结束状态".into());
+        } else if !session.active.current().finished.load(Ordering::Acquire) {
+            finish_interrupted_session(&session.active.current(), "录制任务未保存结束状态".into());
         }
     }
 }
@@ -1465,7 +1577,9 @@ fn finish_interrupted_session(state: &Arc<SessionState>, error: String) {
         TaskOutcome {
             status: RecordingStatus::Interrupted,
             error: Some(error),
+            split: false,
         },
+        true,
         true,
     );
 }
@@ -1505,10 +1619,109 @@ fn salvage_temporary_media_after_worker_failure(state: &Arc<SessionState>) {
     }
 }
 
+fn create_split_segment(
+    previous_state: &Arc<SessionState>,
+    source_url: &str,
+    bundle_base: &str,
+    storage_roots: &[PathBuf],
+) -> AppResult<Arc<SessionState>> {
+    ensure_sufficient_storage_space(&previous_state.root)?;
+    let started_at = unix_ms();
+    let bundle =
+        create_recording_bundle(&previous_state.root, storage_roots, bundle_base, started_at)?;
+    let bundle_guard = BundleGuard::new(bundle.clone());
+    let id = bundle
+        .file_name()
+        .and_then(|value| value.to_str())
+        .expect("recording bundle name is valid UTF-8")
+        .to_string();
+    let previous = previous_state
+        .stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let file_stem = recording_file_stem(&previous.user_name, &previous.title, started_at);
+    let media_file = media_file_name(previous.protocol, source_url, &file_stem);
+    let danmaku_writer = if previous.include_danmaku {
+        Some(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(bundle.join("danmaku.jsonl"))
+                .map_err(|error| {
+                    AppError::new(
+                        "recording_storage_error",
+                        format!("创建分段弹幕轨文件失败: {error}"),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    let stored = StoredRecording {
+        id,
+        status: RecordingStatus::Recording,
+        started_at,
+        ended_at: None,
+        duration_ms: 0,
+        size_bytes: 0,
+        danmaku_count: 0,
+        media_file,
+        error: None,
+        ..previous
+    };
+    write_metadata(&bundle, &stored)?;
+    let state = Arc::new(SessionState {
+        root: previous_state.root.clone(),
+        bundle,
+        stored: Mutex::new(stored.clone()),
+        bytes: AtomicU64::new(0),
+        duration_ms: AtomicU64::new(0),
+        danmaku_count: AtomicU64::new(0),
+        last_progress_event_ms: AtomicU64::new(0),
+        danmaku_writer: Mutex::new(danmaku_writer),
+        danmaku_closed: AtomicBool::new(false),
+        finished: AtomicBool::new(false),
+        finish_lock: Mutex::new(()),
+        library: previous_state.library.clone(),
+        events: previous_state.events.clone(),
+    });
+    state
+        .library
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .upsert(&state.root, stored);
+    bundle_guard.commit();
+    Ok(state)
+}
+
+fn discard_unstarted_split_segment(state: &Arc<SessionState>) {
+    let id = state
+        .stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .id
+        .clone();
+    state
+        .library
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&state.root, &id);
+    if let Err(error) = std::fs::remove_dir_all(&state.bundle) {
+        tracing::warn!(
+            recording_id = %id,
+            path = %state.bundle.display(),
+            error = %error,
+            "停止录制时无法清理尚未开始的自动分段"
+        );
+    }
+}
+
 #[derive(Debug)]
 struct TaskOutcome {
     status: RecordingStatus,
     error: Option<String>,
+    split: bool,
 }
 
 async fn run_recording_task(
@@ -1529,6 +1742,7 @@ async fn run_recording_task(
         PlaybackProtocol::Unknown => TaskOutcome {
             status: RecordingStatus::Failed,
             error: Some("无法识别录制源协议".into()),
+            split: false,
         },
     }
 }
@@ -1569,6 +1783,7 @@ async fn run_ffmpeg_recording(
             return TaskOutcome {
                 status: RecordingStatus::Failed,
                 error: Some(format!("启动 Twitch 录制清单代理失败: {}", error.message)),
+                split: false,
             };
         }
     };
@@ -1607,6 +1822,7 @@ async fn run_direct_recording(
             return TaskOutcome {
                 status: RecordingStatus::Failed,
                 error: Some(format!("创建录制文件失败: {error}")),
+                split: false,
             };
         }
     };
@@ -1624,6 +1840,7 @@ async fn run_direct_recording(
             return TaskOutcome {
                 status: RecordingStatus::Completed,
                 error: None,
+                split: false,
             };
         }
     };
@@ -1634,6 +1851,7 @@ async fn run_direct_recording(
             return TaskOutcome {
                 status: RecordingStatus::Failed,
                 error: Some(format!("录制源返回 HTTP {}", response.status().as_u16())),
+                split: false,
             };
         }
         Err(error) => {
@@ -1641,6 +1859,7 @@ async fn run_direct_recording(
             return TaskOutcome {
                 status: RecordingStatus::Failed,
                 error: Some(format!("连接录制源失败: {}", error.without_url())),
+                split: false,
             };
         }
     };
@@ -1648,6 +1867,7 @@ async fn run_direct_recording(
     let mut outcome = TaskOutcome {
         status: RecordingStatus::Completed,
         error: None,
+        split: false,
     };
     let mut last_space_check = Instant::now() - STORAGE_SPACE_CHECK_INTERVAL;
     loop {
@@ -1733,13 +1953,18 @@ async fn run_direct_recording(
 }
 
 fn finish_session(state: &Arc<SessionState>, outcome: TaskOutcome) {
-    finish_session_inner(state, outcome, false);
+    finish_session_inner(state, outcome, false, true);
+}
+
+fn finish_split_segment(state: &Arc<SessionState>, outcome: TaskOutcome) {
+    finish_session_inner(state, outcome, false, false);
 }
 
 fn finish_session_inner(
     state: &Arc<SessionState>,
     outcome: TaskOutcome,
     salvage_temporary_media: bool,
+    release_background_danmaku: bool,
 ) {
     let _finish_guard = state
         .finish_lock
@@ -1811,7 +2036,7 @@ fn finish_session_inner(
         .upsert(&state.root, indexed);
     state.finished.store(true, Ordering::Release);
     state.events.emit(&recording_id, status);
-    if let Some(source_key) = background_danmaku_source {
+    if release_background_danmaku && let Some(source_key) = background_danmaku_source {
         state.events.release_background_danmaku(&source_key);
     }
 }
@@ -3181,15 +3406,16 @@ async fn write_simple_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingLibraryIndex,
-        RecordingManager, RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session,
-        SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
-        decode_playback_relative_path, finish_session, is_safe_recording_id, load_storage_state,
-        local_playback_url, media_file_name, parse_range, prepare_storage_root, read_stored,
-        recording_bundle_base, recording_file_stem, recover_bundle_sidecars,
-        recover_stale_recordings, safe_relative_path, salvage_temporary_media_after_worker_failure,
-        scan_recording_root, stop_sessions_until_deadline, storage_space_is_low,
-        stored_keeps_background_danmaku, wait_for_finalizing_sessions, write_metadata,
+        ActiveSessionState, FfmpegRecordingOptions, FinalizingSession, MINIMUM_FREE_SPACE_BYTES,
+        RecordingEventSink, RecordingLibraryIndex, RecordingManager, RecordingStartInput,
+        RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
+        StoredRecording, TaskOutcome, create_recording_bundle, decode_playback_relative_path,
+        finish_session, is_safe_recording_id, load_storage_state, local_playback_url,
+        media_file_name, parse_range, prepare_storage_root, read_stored, recording_bundle_base,
+        recording_file_stem, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
+        salvage_temporary_media_after_worker_failure, scan_recording_root,
+        stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
+        wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use percent_encoding::percent_decode_str;
@@ -3718,13 +3944,14 @@ mod tests {
                 TaskOutcome {
                     status: RecordingStatus::Completed,
                     error: None,
+                    split: false,
                 },
             );
         });
         manager.sessions.lock().unwrap().insert(
             id.clone(),
             Session {
-                state: state.clone(),
+                active: Arc::new(ActiveSessionState::new(state.clone())),
                 cancel,
                 task,
             },
@@ -3767,7 +3994,7 @@ mod tests {
             vec![(
                 id.clone(),
                 Session {
-                    state: state.clone(),
+                    active: Arc::new(ActiveSessionState::new(state.clone())),
                     cancel,
                     task,
                 },
@@ -4038,19 +4265,7 @@ mod tests {
     }
 
     #[test]
-    fn background_continuation_defaults_to_disabled() {
-        let input: RecordingStartInput = serde_json::from_value(serde_json::json!({
-            "source": {
-                "url": "https://example.test/live.flv",
-                "headers": {}
-            },
-            "sourceKey": "live:bilibili:100",
-            "sourceKind": "live"
-        }))
-        .unwrap();
-        assert!(!input.continue_on_leave);
-        assert!(input.user_avatar.is_empty());
-
+    fn stored_recording_defaults_background_continuation_to_disabled() {
         let mut legacy_metadata =
             serde_json::to_value(completed_recording("legacy".into(), "legacy")).unwrap();
         let metadata = legacy_metadata.as_object_mut().unwrap();
@@ -4255,6 +4470,41 @@ mod tests {
         body
     }
 
+    fn manager_test_valid_flv_body() -> Vec<u8> {
+        use base64::Engine as _;
+
+        const FLV_FIXTURE: &str = "RkxWAQEAAAAJAAAAABIAALgAAAAAAAAAAgAKb25NZXRhRGF0YQgAAAAIAAhkdXJhdGlvbgBAIAAAAAAAAAAFd2lkdGgAQDAAAAAAAAAABmhlaWdodABAMAAAAAAAAAANdmlkZW9kYXRhcmF0ZQBAaGoAAAAAAAAJZnJhbWVyYXRlAEAAAAAAAAAAAAx2aWRlb2NvZGVjaWQAQAAAAAAAAAAAB2VuY29kZXICAA1MYXZmNjAuMTYuMTAwAAhmaWxlc2l6ZQBAgwAAAAAAAAAACQAAAMMJAAAPAAAAAAAAABIAAIQACAgRJiAgICH//gAAABoJAAAJAAH0AAAAACIAAIQ8CAgxIAAAABQJAAAJAAPoAAAAACIAAIR4CAgxIAAAABQJAAAJAAXcAAAAACIAAIS0CAgxIAAAABQJAAAJAAfQAAAAACIAAITwCAgxIAAAABQJAAAJAAnEAAAAACIAAIUsCAgxIAAAABQJAAAJAAu4AAAAACIAAIVoCAgxIAAAABQJAAAJAA2sAAAAACIAAIWkCAgxIAAAABQJAAAJAA+gAAAAACIAAIXgCAgxIAAAABQJAAAJABGUAAAAACIAAIYcCAgxIAAAABQJAAAJABOIAAAAACIAAIZYCAgxIAAAABQJAAAJABV8AAAAACIAAIaUCAgxIAAAABQJAAAPABdwAAAAABIAAIbQCAgRJiAgICH//gAAABoJAAAJABlkAAAAACIAAIcMCAgxIAAAABQJAAAJABtYAAAAACIAAIdICAgxIAAAABQJAAAJAB1MAAAAACIAAIeECAgxIAAAABQ=";
+        let mut body = base64::engine::general_purpose::STANDARD
+            .decode(FLV_FIXTURE)
+            .unwrap();
+        let mut offset = 13;
+        let mut final_video_tag = None;
+        while body.len().saturating_sub(offset) >= 15 {
+            let data_size = (usize::from(body[offset + 1]) << 16)
+                | (usize::from(body[offset + 2]) << 8)
+                | usize::from(body[offset + 3]);
+            let tag_size = 11 + data_size + 4;
+            if body.len().saturating_sub(offset) < tag_size {
+                break;
+            }
+            if body[offset] & 0x1f == 9 {
+                final_video_tag = Some(body[offset..offset + tag_size].to_vec());
+            }
+            offset += tag_size;
+        }
+        let mut video_tag = final_video_tag.unwrap();
+        let mut timestamp = 8_000_u32;
+        while body.len() < 64 * 1024 {
+            timestamp += 500;
+            video_tag[4] = (timestamp >> 16) as u8;
+            video_tag[5] = (timestamp >> 8) as u8;
+            video_tag[6] = timestamp as u8;
+            video_tag[7] = (timestamp >> 24) as u8;
+            body.extend_from_slice(&video_tag);
+        }
+        body
+    }
+
     async fn spawn_manager_test_flv_server(body: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -4284,6 +4534,45 @@ mod tests {
                     continue;
                 }
                 if socket.write_all(&body).await.is_err()
+                    || socket.write_all(b"\r\n").await.is_err()
+                {
+                    continue;
+                }
+                let mut closed = [0_u8; 1];
+                let _ = socket.read(&mut closed).await;
+            }
+        });
+        (format!("http://{address}/live.flv"), server)
+    }
+
+    async fn spawn_manager_test_valid_flv_server(
+        body: Vec<u8>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = [0_u8; 4096];
+                let Ok(length) = socket.read(&mut request).await else {
+                    continue;
+                };
+                if length == 0 {
+                    continue;
+                }
+                if socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
+                    )
+                    .await
+                    .is_err()
+                    || socket
+                        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
+                        .await
+                        .is_err()
+                    || socket.write_all(&body).await.is_err()
                     || socket.write_all(b"\r\n").await.is_err()
                 {
                     continue;
@@ -4358,37 +4647,7 @@ mod tests {
 
     #[tokio::test]
     async fn ffmpeg_manager_remuxes_headers_and_finishes_a_live_flv() {
-        use base64::Engine as _;
-
-        const FLV_FIXTURE: &str = "RkxWAQEAAAAJAAAAABIAALgAAAAAAAAAAgAKb25NZXRhRGF0YQgAAAAIAAhkdXJhdGlvbgBAIAAAAAAAAAAFd2lkdGgAQDAAAAAAAAAABmhlaWdodABAMAAAAAAAAAANdmlkZW9kYXRhcmF0ZQBAaGoAAAAAAAAJZnJhbWVyYXRlAEAAAAAAAAAAAAx2aWRlb2NvZGVjaWQAQAAAAAAAAAAAB2VuY29kZXICAA1MYXZmNjAuMTYuMTAwAAhmaWxlc2l6ZQBAgwAAAAAAAAAACQAAAMMJAAAPAAAAAAAAABIAAIQACAgRJiAgICH//gAAABoJAAAJAAH0AAAAACIAAIQ8CAgxIAAAABQJAAAJAAPoAAAAACIAAIR4CAgxIAAAABQJAAAJAAXcAAAAACIAAIS0CAgxIAAAABQJAAAJAAfQAAAAACIAAITwCAgxIAAAABQJAAAJAAnEAAAAACIAAIUsCAgxIAAAABQJAAAJAAu4AAAAACIAAIVoCAgxIAAAABQJAAAJAA2sAAAAACIAAIWkCAgxIAAAABQJAAAJAA+gAAAAACIAAIXgCAgxIAAAABQJAAAJABGUAAAAACIAAIYcCAgxIAAAABQJAAAJABOIAAAAACIAAIZYCAgxIAAAABQJAAAJABV8AAAAACIAAIaUCAgxIAAAABQJAAAPABdwAAAAABIAAIbQCAgRJiAgICH//gAAABoJAAAJABlkAAAAACIAAIcMCAgxIAAAABQJAAAJABtYAAAAACIAAIdICAgxIAAAABQJAAAJAB1MAAAAACIAAIeECAgxIAAAABQ=";
-        let mut body = base64::engine::general_purpose::STANDARD
-            .decode(FLV_FIXTURE)
-            .unwrap();
-        let mut offset = 13;
-        let mut final_video_tag = None;
-        while body.len().saturating_sub(offset) >= 15 {
-            let data_size = (usize::from(body[offset + 1]) << 16)
-                | (usize::from(body[offset + 2]) << 8)
-                | usize::from(body[offset + 3]);
-            let tag_size = 11 + data_size + 4;
-            if body.len().saturating_sub(offset) < tag_size {
-                break;
-            }
-            if body[offset] & 0x1f == 9 {
-                final_video_tag = Some(body[offset..offset + tag_size].to_vec());
-            }
-            offset += tag_size;
-        }
-        let mut video_tag = final_video_tag.unwrap();
-        let mut timestamp = 8_000_u32;
-        while body.len() < 64 * 1024 {
-            timestamp += 500;
-            video_tag[4] = (timestamp >> 16) as u8;
-            video_tag[5] = (timestamp >> 8) as u8;
-            video_tag[6] = timestamp as u8;
-            video_tag[7] = (timestamp >> 24) as u8;
-            body.extend_from_slice(&video_tag);
-        }
+        let body = manager_test_valid_flv_body();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (request_tx, request_rx) = tokio::sync::oneshot::channel();
@@ -4451,6 +4710,71 @@ mod tests {
             output
                 .streams()
                 .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Video })
+        );
+
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_manager_auto_split_continues_in_a_new_bundle() {
+        let (url, server) =
+            spawn_manager_test_valid_flv_server(manager_test_valid_flv_body()).await;
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-split-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let initial = manager
+            .start_with_ffmpeg_options(
+                manager_test_input(&url, "live:bilibili:auto-split", "auto-split"),
+                None,
+                FfmpegRecordingOptions {
+                    split_duration: Some(std::time::Duration::from_millis(500)),
+                    ..FfmpegRecordingOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                let items = manager.list().unwrap();
+                let has_completed_initial = items
+                    .iter()
+                    .any(|item| item.id == initial.id && item.status == RecordingStatus::Completed);
+                let has_next_active = items.iter().any(|item| {
+                    item.id != initial.id
+                        && item.status == RecordingStatus::Recording
+                        && item.size_bytes > 0
+                });
+                if has_completed_initial && has_next_active {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("自动分割应完成当前 bundle 并继续下一段");
+
+        let stopped = manager.stop(&initial.id).await.unwrap();
+        assert_ne!(stopped.id, initial.id);
+        assert_eq!(stopped.status, RecordingStatus::Completed);
+        let items = manager.list().unwrap();
+        assert!(
+            !items
+                .iter()
+                .any(|item| item.status == RecordingStatus::Recording)
+        );
+        let completed: Vec<_> = items
+            .iter()
+            .filter(|item| item.status == RecordingStatus::Completed)
+            .collect();
+        assert!(completed.len() >= 2);
+        assert!(
+            completed
+                .iter()
+                .all(|item| PathBuf::from(&item.file_path).is_file())
         );
 
         server.abort();

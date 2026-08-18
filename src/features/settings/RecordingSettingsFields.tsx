@@ -9,9 +9,12 @@ import {
   FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN,
   FFMPEG_RW_TIMEOUT_SECONDS_MAX,
   FFMPEG_RW_TIMEOUT_SECONDS_MIN,
+  RECORDING_AUTO_SPLIT_MINUTES_MAX,
+  RECORDING_AUTO_SPLIT_MINUTES_MIN,
   parseFfmpegHlsSegmentRetryCount,
   parseFfmpegReconnectDelayMaxSeconds,
   parseFfmpegRwTimeoutSeconds,
+  parseRecordingAutoSplitMinutes,
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
 
@@ -91,8 +94,10 @@ function NumberSettingField({
 export function RecordingDefaultsFields() {
   const includeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
   const continueAfterLeave = useSettingsStore((state) => state.recordingContinueAfterLeave);
+  const autoSplitMinutes = useSettingsStore((state) => state.recordingAutoSplitMinutes);
   const setIncludeDanmaku = useSettingsStore((state) => state.setRecordingIncludeDanmaku);
   const setContinueAfterLeave = useSettingsStore((state) => state.setRecordingContinueAfterLeave);
+  const setAutoSplitMinutes = useSettingsStore((state) => state.setRecordingAutoSplitMinutes);
 
   return (
     <>
@@ -118,6 +123,17 @@ export function RecordingDefaultsFields() {
           onCheckedChange={setContinueAfterLeave}
         />
       </Field>
+      <NumberSettingField
+        id="recording-auto-split-minutes"
+        title="自动分割时长"
+        description="达到设定时长后保存当前段并继续录制；设为 0 可关闭。仅适用于 FFmpeg 录制的新任务。"
+        value={autoSplitMinutes}
+        min={RECORDING_AUTO_SPLIT_MINUTES_MIN}
+        max={RECORDING_AUTO_SPLIT_MINUTES_MAX}
+        unit="分钟"
+        normalize={parseRecordingAutoSplitMinutes}
+        onCommit={setAutoSplitMinutes}
+      />
     </>
   );
 }

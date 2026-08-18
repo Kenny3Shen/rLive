@@ -35,7 +35,7 @@ fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::
 
 #[tauri::command]
 pub fn site_list() -> Vec<SiteInfo> {
-    sites::all()
+    sites::all_meta()
         .into_iter()
         .map(|s| SiteInfo {
             id: s.id.clone(),

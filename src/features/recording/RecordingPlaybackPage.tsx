@@ -112,7 +112,10 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
       className="flex min-h-0 w-full flex-1 flex-col overflow-hidden border-t border-border/80 bg-sidebar md:w-[300px] md:flex-none md:border-t-0 md:border-l lg:w-[320px]"
       aria-label="录制信息"
     >
-      <section className="shrink-0 border-b border-border px-2.5 py-2" aria-label={`主播：${userName}`}>
+      <section
+        className="shrink-0 border-b border-border px-2.5 py-2"
+        aria-label={`主播：${userName}`}
+      >
         <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
           <div className="flex min-w-0 items-center gap-2.5">
             <Avatar size="lg" className="size-11 ring-1 ring-border/80">
@@ -122,7 +125,10 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold leading-5 tracking-tight" title={userName}>
+              <p
+                className="truncate text-sm font-semibold leading-5 tracking-tight"
+                title={userName}
+              >
                 {userName}
               </p>
               <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">

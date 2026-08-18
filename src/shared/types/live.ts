@@ -63,8 +63,8 @@ export type PlayUrl = {
   source_id?: string;
   /** Safe user-facing name supplied by the site adapter. */
   label?: string;
-  /** Explicit protocol. Optional only for compatibility with older backends and tests. */
-  protocol?: PlaybackProtocol;
+  /** Explicit transport selected by the native site adapter. */
+  protocol: PlaybackProtocol;
   /** Lower values retain the platform's preferred ordering. */
   priority?: number;
   url: string;
@@ -126,7 +126,7 @@ export type FollowUser = {
   tag_ids: string[];
   live_status: boolean | null;
   /** Unix timestamp in milliseconds for the current live session, if known. */
-  live_started_at?: number | null;
+  live_started_at: number | null;
   updated_at: number;
 };
 
@@ -135,8 +135,8 @@ export type HistoryItem = {
   room_id: string;
   title: string;
   user_name: string;
-  /** Room cover captured when the room was opened; empty for older records. */
-  cover?: string;
+  /** Room cover captured when the room was opened; empty when unavailable. */
+  cover: string;
   watched_at: number;
 };
 
@@ -144,12 +144,12 @@ export type HistoryItem = {
 export type DanmakuSendHistoryItem = {
   site_id: SiteId;
   content: string;
-  /** Room the message was sent to; empty for records written before 0.15.2. */
-  room_id?: string;
+  /** Room the message was sent to; empty when unavailable. */
+  room_id: string;
   /** Room title captured at send time; empty when it could not be resolved. */
-  room_title?: string;
-  /** Streamer name captured at send time; empty for legacy records. */
-  room_user_name?: string;
+  room_title: string;
+  /** Streamer name captured at send time; empty when unavailable. */
+  room_user_name: string;
   sent_at: number;
 };
 
@@ -188,8 +188,6 @@ export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
 export type AppSettings = {
   theme: "system" | "light" | "dark";
-  /** Legacy compatibility field. Runtime and persistence normalize it to `full`. */
-  motion_mode?: string;
   default_site: string;
   proxy: string | null;
   danmaku_opacity: number;
@@ -201,60 +199,54 @@ export type AppSettings = {
   danmaku_area: number;
   danmaku_filter_gifts: boolean;
   /** Merge window for duplicate chat in seconds, 0..=30; 0 disables merging. */
-  danmaku_merge_window_seconds?: number;
+  danmaku_merge_window_seconds: number;
   /** Show supported-platform Super Chat cards over the player. */
-  super_chat_enabled?: boolean;
+  super_chat_enabled: boolean;
   danmaku_shield_words: string[];
   /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
-  quality_level?: "high" | "mid" | "low";
-  /** Probe multiple live sources locally and use their health for selection/failover. */
-  playback_smart_line_selection?: boolean;
+  quality_level: "high" | "mid" | "low";
   /** Same-protocol xgplayer switchURL path; hard reload remains the fallback. */
-  playback_soft_switch_enabled?: boolean;
-  /** Legacy compatibility field; sustained stalls no longer trigger automatic switching. */
-  playback_stall_auto_switch_enabled?: boolean;
+  playback_soft_switch_enabled: boolean;
   /** Device-local permission for user-operated single-message senders. */
-  danmaku_send_enabled?: boolean;
+  danmaku_send_enabled: boolean;
   /** Device-local consent for downloading and loading the optional ASR model. */
-  asr_enabled?: boolean;
+  asr_enabled: boolean;
   /** Device-local Zipformer provider: auto, cpu, or cuda (Windows CUDA build). */
-  asr_provider?: AsrProvider;
+  asr_provider: AsrProvider;
   /** Enable silence-based endpoint/VAD rules; defaults to true. */
-  asr_vad_enabled?: boolean;
+  asr_vad_enabled: boolean;
   /** Enable the optional local CT-Transformer punctuation model; defaults to true. */
-  asr_punctuation_enabled?: boolean;
+  asr_punctuation_enabled: boolean;
   /** Device-local endpoint-level anonymous speaker differentiation. */
-  asr_speaker_diarization_enabled?: boolean;
+  asr_speaker_diarization_enabled: boolean;
   /** Device-local domain phrases used by Zipformer hotword biasing. */
-  asr_hotwords?: string[];
-  /** Zipformer PCM chunk interval, persisted under the legacy field name. */
-  asr_window_seconds?: number;
+  asr_hotwords: string[];
+  /** Zipformer PCM chunk interval in seconds. */
+  asr_window_seconds: number;
   /** Player subtitle font size in CSS pixels. */
-  asr_font_size?: number;
+  asr_font_size: number;
   /** Device-local consent for sending committed ASR captions to Google Translate. */
-  asr_translation_enabled?: boolean;
+  asr_translation_enabled: boolean;
   /** Google Translate source language, or auto detection. */
-  asr_translation_from?: CaptionTranslationSourceLanguage;
+  asr_translation_from: CaptionTranslationSourceLanguage;
   /** Google Translate target language, or automatic selection. */
-  asr_translation_to?: CaptionTranslationLanguage;
+  asr_translation_to: CaptionTranslationLanguage;
   /** Device-local custom IPTV M3U address; excluded from profile import/export. */
-  iptv_custom_m3u_url?: string | null;
+  iptv_custom_m3u_url: string | null;
   /** Include the live-room danmaku sidecar by default when opening recording options. */
-  recording_include_danmaku?: boolean;
+  recording_include_danmaku: boolean;
   /** Keep a recording running after leaving its player page by default. */
-  recording_continue_after_leave?: boolean;
+  recording_continue_after_leave: boolean;
+  /** Automatically finish and continue FFmpeg recordings in minute-sized bundles; 0 disables. */
+  recording_auto_split_minutes: number;
   /** FFmpeg network read/write timeout in seconds, 3..=60. */
-  ffmpeg_rw_timeout_seconds?: number;
+  ffmpeg_rw_timeout_seconds: number;
   /** Maximum FFmpeg reconnect delay in seconds, 1..=60. */
-  ffmpeg_reconnect_delay_max_seconds?: number;
+  ffmpeg_reconnect_delay_max_seconds: number;
   /** Number of retries for a failed HLS segment, 0..=20. */
-  ffmpeg_hls_segment_retry_count?: number;
-  /** Legacy settings field kept only for backwards-compatible deserialization. */
-  iptv_availability_auto_check?: boolean;
-  /** Legacy interval field; the client no longer schedules periodic checks. */
-  iptv_availability_auto_check_interval_hours?: number;
-  /** Platforms hidden from discovery and room navigation; omitted by legacy settings. */
-  disabled_site_ids?: SiteId[];
+  ffmpeg_hls_segment_retry_count: number;
+  /** Platforms hidden from discovery and room navigation. */
+  disabled_site_ids: SiteId[];
 };
 
 export type AsrProvider = "auto" | "cpu" | "cuda";

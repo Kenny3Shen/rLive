@@ -172,8 +172,8 @@ pub enum PlaybackProtocol {
 }
 
 impl PlaybackProtocol {
-    /// Infer a transport only as a compatibility fallback. Site adapters should
-    /// prefer explicit metadata whenever the upstream response exposes it.
+    /// Infer a transport when the upstream response does not expose explicit
+    /// metadata. Site adapters should prefer explicit metadata when available.
     pub fn infer_from_url(url: &str) -> Self {
         let lower = url.to_ascii_lowercase();
         if lower.contains(".m3u8")
@@ -228,7 +228,6 @@ pub struct PlayUrl {
     pub source_id: String,
     #[serde(default)]
     pub label: String,
-    #[serde(default)]
     pub protocol: PlaybackProtocol,
     #[serde(default)]
     pub priority: u32,

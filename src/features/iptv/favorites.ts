@@ -60,7 +60,7 @@ function favoriteFromChannel(sourceId: string, channel: IptvChannel): IptvFavori
     ...channel,
     source_id: sourceId,
     favorite_group_id: null,
-    protocol: channel.protocol ?? "unknown",
+    protocol: channel.protocol,
     updated_at: Date.now(),
   };
 }

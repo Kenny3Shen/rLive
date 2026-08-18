@@ -253,6 +253,7 @@ export function IptvPlayerPage() {
         group: "",
         logo: null,
         url: channelUrl,
+        protocol: "unknown",
         headers: {},
       } satisfies IptvChannel;
     }
