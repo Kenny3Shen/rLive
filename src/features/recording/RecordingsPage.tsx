@@ -110,6 +110,10 @@ function recordingUserLabel(item: RecordingItem): string {
   return item.user_name.trim() || recordingSourceLabel(item);
 }
 
+function recordingUserAvatar(item: RecordingItem): string {
+  return item.user_avatar?.trim() || item.cover;
+}
+
 function RecordingArtwork({ item }: { item: RecordingItem }) {
   const cover = normalizeImageUrl(item.cover);
   const SourceIcon = item.source_kind === "iptv" ? Tv : Radio;
@@ -320,7 +324,7 @@ function RecordingUserAvatar({
   item: RecordingItem;
   compact?: boolean;
 }) {
-  const cover = normalizeImageUrl(item.cover);
+  const cover = normalizeImageUrl(recordingUserAvatar(item));
   return (
     <span
       className={cn(

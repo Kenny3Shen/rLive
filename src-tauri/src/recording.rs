@@ -63,6 +63,7 @@ pub struct RecordingItem {
     pub title: String,
     pub user_name: String,
     pub cover: String,
+    pub user_avatar: String,
     pub protocol: PlaybackProtocol,
     pub status: RecordingStatus,
     pub started_at: i64,
@@ -99,6 +100,8 @@ pub struct RecordingStartInput {
     pub user_name: String,
     #[serde(default)]
     pub cover: String,
+    #[serde(default)]
+    pub user_avatar: String,
     /// Save the active danmaku connection as a synchronized sidecar track.
     #[serde(default)]
     pub include_danmaku: bool,
@@ -238,6 +241,8 @@ struct StoredRecording {
     title: String,
     user_name: String,
     cover: String,
+    #[serde(default)]
+    user_avatar: String,
     protocol: PlaybackProtocol,
     status: RecordingStatus,
     started_at: i64,
@@ -279,6 +284,7 @@ impl StoredRecording {
             title: self.title.clone(),
             user_name: self.user_name.clone(),
             cover: self.cover.clone(),
+            user_avatar: self.user_avatar.clone(),
             protocol: self.protocol,
             status: self.status.clone(),
             started_at: self.started_at,
@@ -747,6 +753,7 @@ impl RecordingManager {
             title,
             user_name,
             cover: normalize_text(&input.cover, ""),
+            user_avatar: normalize_text(&input.user_avatar, ""),
             protocol: output_protocol,
             status: RecordingStatus::Recording,
             started_at,
@@ -911,7 +918,7 @@ impl RecordingManager {
         if !is_safe_recording_id(id) {
             return Err(AppError::new("recording_invalid_id", "录制标识无效"));
         }
-        let (root, stored) = find_stored(&self.storage_roots(), id)?;
+        let (root, mut stored) = find_stored(&self.storage_roots(), id)?;
         if stored.status == RecordingStatus::Recording {
             return Err(AppError::new(
                 "recording_still_active",
@@ -928,6 +935,34 @@ impl RecordingManager {
         let file = root.join(id).join(media_file);
         if !file.exists() {
             return Err(AppError::new("recording_media_missing", "录制文件不存在"));
+        }
+        let is_flv_file = file
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("flv"));
+        if stored.protocol == PlaybackProtocol::Flv && is_flv_file {
+            let file_for_index = file.clone();
+            match tokio::task::spawn_blocking(move || {
+                ffmpeg_backend::ensure_flv_keyframe_index(&file_for_index)
+            })
+            .await
+            {
+                Ok(Ok(true)) => {
+                    stored.size_bytes = std::fs::metadata(&file)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(stored.size_bytes);
+                    if let Err(error) = write_metadata(&root.join(id), &stored) {
+                        tracing::warn!(recording_id = %id, error = %error.message, "保存索引化录制大小失败");
+                    }
+                }
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(recording_id = %id, error = %error, "旧 FLV 关键帧索引迁移失败，继续使用原文件");
+                }
+                Err(error) => {
+                    tracing::warn!(recording_id = %id, error = %error, "旧 FLV 关键帧索引任务终止，继续使用原文件");
+                }
+            }
         }
         self.playback.url(id, &stored.media_file).await
     }
@@ -2921,6 +2956,7 @@ mod tests {
             title: title.into(),
             user_name: "主播".into(),
             cover: String::new(),
+            user_avatar: String::new(),
             protocol: PlaybackProtocol::Flv,
             status: RecordingStatus::Completed,
             started_at: 1,
@@ -3409,6 +3445,7 @@ mod tests {
                     title: "停止中录制".into(),
                     user_name: "主播".into(),
                     cover: String::new(),
+                    user_avatar: String::new(),
                     include_danmaku: false,
                     continue_on_leave: false,
                 },
@@ -3435,6 +3472,7 @@ mod tests {
         }))
         .unwrap();
         assert!(!input.continue_on_leave);
+        assert!(input.user_avatar.is_empty());
 
         let mut legacy_metadata =
             serde_json::to_value(completed_recording("legacy".into(), "legacy")).unwrap();
@@ -3696,6 +3734,7 @@ mod tests {
             title: "录制契约测试".into(),
             user_name: "测试主播".into(),
             cover: String::new(),
+            user_avatar: String::new(),
             include_danmaku: false,
             continue_on_leave: false,
         }
@@ -3822,6 +3861,13 @@ mod tests {
         let stored = super::read_stored(&root, &active.id).unwrap();
         let final_path = root.join(&active.id).join(stored.media_file);
         assert!(final_path.is_file());
+        let bytes = std::fs::read(&final_path).unwrap();
+        assert!(
+            bytes
+                .windows(b"keyframes".len())
+                .any(|window| window == b"keyframes"),
+            "FLV 回放需要关键帧索引支持 Range 跳转"
+        );
         let output = ffmpeg_next::format::input(&final_path).unwrap();
         assert!(
             output
