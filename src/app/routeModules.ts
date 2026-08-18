@@ -48,6 +48,12 @@ export const loadRecordingsPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadRecordingPlaybackPage = createCachedRouteLoader(() =>
+  import("../features/recording/RecordingPlaybackPage").then(({ RecordingPlaybackPage }) => ({
+    default: RecordingPlaybackPage,
+  })),
+);
+
 export const loadSettingsPage = createCachedRouteLoader(() =>
   import("../features/settings/SettingsPage").then(({ SettingsPage }) => ({
     default: SettingsPage,
@@ -106,6 +112,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/search") return loadSearchPage;
   if (pathname === "/follow") return loadFollowPage;
   if (pathname === "/history") return loadHistoryPage;
+  if (pathname.startsWith("/recordings/play/")) return loadRecordingPlaybackPage;
   if (pathname === "/recordings") return loadRecordingsPage;
   if (pathname === "/iptv/play") return loadIptvPlayerPage;
   if (pathname === "/iptv") return loadIptvPage;

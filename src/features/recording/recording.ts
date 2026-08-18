@@ -51,6 +51,7 @@ export type RecordingContext = {
 
 export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
 export const RECORDING_STORAGE_QUERY_KEY = ["recording-storage"] as const;
+export const RECORDING_PLAYBACK_QUERY_KEY = "recording-playback";
 const RECORDING_CHANGED_EVENT = "recording-changed";
 
 export type RecordingStartOptions = {
