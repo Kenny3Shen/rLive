@@ -233,10 +233,10 @@ pub fn merge_into_db(
     settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
     settings.proxy = package.settings.proxy.clone();
     settings.danmaku_opacity = package.settings.danmaku_opacity;
+    settings.danmaku_font_stroke = package.settings.danmaku_font_stroke;
     settings.danmaku_font_size = package.settings.danmaku_font_size;
     settings.danmaku_speed = package.settings.danmaku_speed;
     settings.danmaku_area = package.settings.danmaku_area;
-    settings.danmaku_font_weight = package.settings.danmaku_font_weight;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.danmaku_merge_window_seconds = package.settings.danmaku_merge_window_seconds;
     settings.super_chat_enabled = package.settings.super_chat_enabled;
@@ -347,6 +347,7 @@ mod tests {
     fn profile_keeps_speed_and_ignores_removed_danmaku_fields() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
         value["settings"]["danmaku_speed"] = serde_json::json!(150);
+        value["settings"]["danmaku_font_weight"] = serde_json::json!(400);
         value["settings"]["super_chat_opacity"] = serde_json::json!(0.6);
         value["settings"]["danmaku_line_count"] = serde_json::json!(8);
         let text = serde_json::to_string(&value).unwrap();
@@ -356,6 +357,7 @@ mod tests {
         let roundtrip: serde_json::Value = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(roundtrip["settings"]["danmaku_speed"], 150);
+        assert!(!encoded.contains("danmaku_font_weight"));
         assert!(!encoded.contains("super_chat_opacity"));
         assert!(!encoded.contains("danmaku_line_count"));
     }
@@ -516,6 +518,7 @@ mod tests {
         let mut conn = open_in_memory().unwrap();
         let mut package = ProfilePackage::sample();
         package.settings.danmaku_speed = 150;
+        package.settings.danmaku_font_stroke = 1.5;
         package.settings.danmaku_filter_gifts = true;
         package.settings.super_chat_enabled = false;
 
@@ -523,6 +526,7 @@ mod tests {
 
         let imported = settings::get(&conn).unwrap();
         assert_eq!(imported.danmaku_speed, 150);
+        assert_eq!(imported.danmaku_font_stroke, 1.5);
         assert!(imported.danmaku_filter_gifts);
         assert!(!imported.super_chat_enabled);
     }

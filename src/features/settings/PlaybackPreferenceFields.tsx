@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "@/shared/types/live";
 import {
   DANMAKU_AREA_DEFAULT,
+  DANMAKU_FONT_STROKE_DEFAULT,
+  DANMAKU_FONT_STROKE_MAX,
+  DANMAKU_FONT_STROKE_MIN,
+  DANMAKU_FONT_STROKE_STEP,
   DANMAKU_OPACITY_DEFAULT,
   DANMAKU_SPEED_DEFAULT,
   DANMAKU_SPEED_MAX,
@@ -10,6 +14,7 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   defaultDanmakuFontSize,
+  parseDanmakuFontStroke,
   parseDanmakuSpeed,
   parseDanmakuMergeWindowSeconds,
   useSettingsStore,
@@ -26,17 +31,9 @@ import { FieldTip } from "@/features/settings/FieldTip";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 
 export type PlaybackSettingsFieldLayout = "page" | "panel";
-
-const FONT_WEIGHTS = [
-  { value: 400, label: "常规" },
-  { value: 500, label: "中等" },
-  { value: 600, label: "加粗" },
-  { value: 700, label: "粗体" },
-] as const;
 
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
@@ -46,9 +43,9 @@ const ASR_CHUNK_SECONDS_MAX = 1;
 const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
   danmakuFontSize: defaultDanmakuFontSize(),
+  danmakuFontStroke: DANMAKU_FONT_STROKE_DEFAULT,
   danmakuSpeed: DANMAKU_SPEED_DEFAULT,
   danmakuArea: DANMAKU_AREA_DEFAULT,
-  danmakuFontWeight: 600,
   danmakuFilterGifts: true,
   danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
 };
@@ -433,9 +430,8 @@ export function DanmakuAppearanceSettingsFields({
 }) {
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
+  const fontStroke = useSettingsStore((state) => state.danmakuFontStroke);
   const speed = useSettingsStore((state) => state.danmakuSpeed);
-  const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
-  const weightLabelId = `${idPrefix}-danmaku-font-weight-label`;
 
   return (
     <>
@@ -462,6 +458,25 @@ export function DanmakuAppearanceSettingsFields({
         onCommit={(value) => persist({ danmaku_font_size: value })}
       />
       <PreferenceSliderField
+        id={`${idPrefix}-danmaku-font-stroke`}
+        title="字体描边"
+        description={layout === "page" ? "调整播放器弹幕的文字轮廓宽度。" : undefined}
+        value={fontStroke}
+        min={DANMAKU_FONT_STROKE_MIN}
+        max={DANMAKU_FONT_STROKE_MAX}
+        step={DANMAKU_FONT_STROKE_STEP}
+        displayValue={`${fontStroke.toFixed(1)}px`}
+        layout={layout}
+        onPreview={(value) =>
+          useSettingsStore.setState({ danmakuFontStroke: parseDanmakuFontStroke(value) })
+        }
+        onCommit={(value) => {
+          const next = parseDanmakuFontStroke(value);
+          useSettingsStore.setState({ danmakuFontStroke: next });
+          persist({ danmaku_font_stroke: next });
+        }}
+      />
+      <PreferenceSliderField
         id={`${idPrefix}-danmaku-speed`}
         title="滚动速度"
         description={layout === "page" ? "调整普通滚动弹幕的移动速度。" : undefined}
@@ -478,31 +493,6 @@ export function DanmakuAppearanceSettingsFields({
           persist({ danmaku_speed: next });
         }}
       />
-      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
-        <FieldContent className={layout === "panel" ? "flex-none" : undefined}>
-          <FieldTitle id={weightLabelId}>字重</FieldTitle>
-        </FieldContent>
-        <ToggleGroup
-          aria-labelledby={weightLabelId}
-          value={[String(fontWeight)]}
-          variant="outline"
-          size="sm"
-          spacing={layout === "panel" ? 0 : 1}
-          className="ml-auto max-w-full flex-wrap justify-end"
-          onValueChange={(values) => {
-            const next = Number(values[0]);
-            if (!FONT_WEIGHTS.some((option) => option.value === next)) return;
-            useSettingsStore.setState({ danmakuFontWeight: next });
-            persist({ danmaku_font_weight: next });
-          }}
-        >
-          {FONT_WEIGHTS.map((option) => (
-            <ToggleGroupItem key={option.value} value={String(option.value)}>
-              {option.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </Field>
     </>
   );
 }
@@ -513,9 +503,9 @@ export function resetDanmakuAppearanceSettings() {
   persist({
     danmaku_opacity: DANMAKU_APPEARANCE_DEFAULTS.danmakuOpacity,
     danmaku_font_size: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontSize,
+    danmaku_font_stroke: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontStroke,
     danmaku_speed: DANMAKU_APPEARANCE_DEFAULTS.danmakuSpeed,
     danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
-    danmaku_font_weight: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontWeight,
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
   });

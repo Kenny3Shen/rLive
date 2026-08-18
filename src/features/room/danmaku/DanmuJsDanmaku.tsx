@@ -93,7 +93,7 @@ type DanmuJsDanmakuProps = {
 
 type RuntimeConfig = {
   fontSize: number;
-  fontWeight: number;
+  fontStroke: number;
   opacity: number;
   danmakuSpeed: number;
   mergeWindowSeconds: number;
@@ -245,10 +245,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const [hoverTarget, setHoverTarget] = useState<DanmakuHoverTarget | null>(null);
 
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
+  const fontStroke = useSettingsStore((state) => state.danmakuFontStroke);
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
   const danmakuSpeed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));
   const area = useSettingsStore((state) => state.danmakuArea);
-  const fontWeight = useSettingsStore((state) => state.danmakuFontWeight);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
@@ -262,8 +262,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const laneHeightRef = useRef(laneHeight);
 
   const configRef = useRef<RuntimeConfig>({
-    fontSize: 18,
-    fontWeight: 600,
+    fontSize,
+    fontStroke: 2.5,
     opacity: 0.8,
     danmakuSpeed: DANMU_JS_DEFAULT_MOVE_V,
     mergeWindowSeconds: 10,
@@ -280,7 +280,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     sizeReadyRef.current = sizeReady;
     configRef.current = {
       fontSize,
-      fontWeight,
+      fontStroke,
       opacity,
       danmakuSpeed,
       mergeWindowSeconds,
@@ -293,7 +293,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     filterGifts,
     danmakuSpeed,
     fontSize,
-    fontWeight,
+    fontStroke,
     laneHeight,
     mergeWindowSeconds,
     normalizedArea,
@@ -455,7 +455,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         const comment = danmuCommentFromEvent(event, {
           id,
           fontSize: config.fontSize,
-          fontWeight: config.fontWeight,
+          fontStroke: config.fontStroke,
           opacity: config.opacity,
           aggregationKey: aggregation.key ?? undefined,
           aggregationCount: aggregation.count,
@@ -723,11 +723,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     for (const { comment } of recordsRef.current.values()) {
       updateDanmuAppearance(comment, {
         fontSize,
-        fontWeight,
+        fontStroke,
         opacity,
       });
     }
-  }, [fontSize, fontWeight, laneHeight, normalizedArea, opacity]);
+  }, [fontSize, fontStroke, laneHeight, normalizedArea, opacity]);
 
   useEffect(() => {
     if (superChatEnabled && siteSupportsSuperChat(siteId)) return;
@@ -740,6 +740,24 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   useEffect(() => {
     releaseSelectionRef.current(true);
   }, [active, reducedMotion, sessionKey]);
+
+  useEffect(() => {
+    const selectedId = hoverTarget?.hoverKey;
+    if (!selectedId) return;
+
+    const dismissOnOutsidePointerDown = (event: PointerEvent) => {
+      if (isMenuTarget(event.target)) return;
+      const targetBullet = bulletElementFromTarget(event.target);
+      if (targetBullet?.dataset.rliveDanmakuId === selectedId) return;
+      releaseSelection();
+    };
+
+    // A mouse naturally closes the menu through pointerout. Touch input has no
+    // persistent hover target, so listen above the player and explicitly close
+    // the frozen comment when the next press starts on blank space or chrome.
+    document.addEventListener("pointerdown", dismissOnOutsidePointerDown, true);
+    return () => document.removeEventListener("pointerdown", dismissOnOutsidePointerDown, true);
+  }, [hoverTarget?.hoverKey, releaseSelection]);
 
   useEffect(() => {
     const selectedId = hoverTarget?.hoverKey;

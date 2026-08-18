@@ -19,6 +19,9 @@ pub struct AppSettings {
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
     pub danmaku_opacity: f32,
+    /// Player danmaku text outline width in CSS pixels, 0.5 ..= 2.5.
+    #[serde(default = "default_danmaku_font_stroke")]
+    pub danmaku_font_stroke: f32,
     pub danmaku_font_size: u32,
     /// Scrolling danmaku speed in CSS pixels per second, 50 ..= 200.
     #[serde(default = "default_danmaku_speed")]
@@ -26,9 +29,6 @@ pub struct AppSettings {
     /// Portion of the video height used by scrolling danmaku, 0.1 ..= 1.0.
     #[serde(default = "default_danmaku_area")]
     pub danmaku_area: f32,
-    /// Danmaku font weight (400 / 500 / 600 / 700).
-    #[serde(default = "default_danmaku_font_weight")]
-    pub danmaku_font_weight: u16,
     /// Sliding window used to merge duplicate chat messages, in seconds.
     /// Zero disables merging; normalized to 0 ..= 30 at the settings
     /// persistence boundary.
@@ -171,8 +171,8 @@ fn default_danmaku_speed() -> u32 {
     100
 }
 
-fn default_danmaku_font_weight() -> u16 {
-    600
+fn default_danmaku_font_stroke() -> f32 {
+    2.5
 }
 
 fn default_danmaku_filter_gifts() -> bool {
@@ -236,10 +236,10 @@ impl Default for AppSettings {
             disabled_site_ids: Vec::new(),
             proxy: None,
             danmaku_opacity: 0.8,
-            danmaku_font_size: 18,
+            danmaku_font_stroke: default_danmaku_font_stroke(),
+            danmaku_font_size: 20,
             danmaku_speed: default_danmaku_speed(),
             danmaku_area: default_danmaku_area(),
-            danmaku_font_weight: default_danmaku_font_weight(),
             danmaku_filter_gifts: default_danmaku_filter_gifts(),
             danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
             super_chat_enabled: default_super_chat_enabled(),
@@ -298,6 +298,7 @@ mod tests {
           "proxy": null,
           "danmaku_opacity": 0.8,
           "danmaku_font_size": 18,
+          "danmaku_font_weight": 400,
           "danmaku_line_count": 8,
           "super_chat_opacity": 0.6,
           "danmaku_shield_words": [],
@@ -311,10 +312,11 @@ mod tests {
         assert!(serialized.get("super_chat_opacity").is_none());
         assert!(serialized.get("danmaku_line_count").is_none());
         assert!(serialized.get("danmaku_filter_repeats").is_none());
+        assert!(serialized.get("danmaku_font_weight").is_none());
         assert_eq!(settings.danmaku_area, 0.25);
         assert_eq!(settings.danmaku_speed, 100);
         assert_eq!(settings.motion_mode, "full");
-        assert_eq!(settings.danmaku_font_weight, 600);
+        assert_eq!(settings.danmaku_font_stroke, 2.5);
         assert!(settings.danmaku_filter_gifts);
         assert_eq!(settings.danmaku_merge_window_seconds, 10);
         assert!(settings.super_chat_enabled);
