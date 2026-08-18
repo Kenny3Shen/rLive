@@ -286,27 +286,36 @@ export function useRecordings() {
   });
 }
 
+export async function startRecording(
+  context: RecordingContext,
+  { includeDanmaku = false, continueOnLeave = false }: RecordingStartOptions = {},
+): Promise<RecordingItem> {
+  return invokeCmd<RecordingItem>("recording_start", {
+    input: {
+      source: context.source,
+      sourceKey: context.sourceKey,
+      sourceKind: context.sourceKind,
+      siteId: context.siteId ?? null,
+      roomId: context.roomId ?? null,
+      title: context.title,
+      userName: context.userName ?? "",
+      cover: context.cover ?? "",
+      userAvatar: context.userAvatar ?? "",
+      includeDanmaku,
+      continueOnLeave,
+    },
+  });
+}
+
 export function useRecordingController(context: RecordingContext | null) {
   const queryClient = useQueryClient();
   const supported = recordingSupported();
   const query = useRecordings();
   const startMutation = useMutation({
     mutationFn: ({ includeDanmaku = false, continueOnLeave = false }: RecordingStartOptions) =>
-      invokeCmd<RecordingItem>("recording_start", {
-        input: {
-          source: context?.source,
-          sourceKey: context?.sourceKey,
-          sourceKind: context?.sourceKind,
-          siteId: context?.siteId ?? null,
-          roomId: context?.roomId ?? null,
-          title: context?.title ?? "",
-          userName: context?.userName ?? "",
-          cover: context?.cover ?? "",
-          userAvatar: context?.userAvatar ?? "",
-          includeDanmaku,
-          continueOnLeave,
-        },
-      }),
+      context
+        ? startRecording(context, { includeDanmaku, continueOnLeave })
+        : Promise.reject(new Error("缺少录制上下文")),
     onSuccess: (item) => {
       queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) => [
         item,

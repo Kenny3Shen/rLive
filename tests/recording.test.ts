@@ -16,6 +16,11 @@ import {
 } from "../src/features/recording/recording";
 import { shouldPromptBeforeRecordingLeave } from "../src/features/recording/RecordingLeaveGuard";
 import {
+  activeRecordingForLiveRoom,
+  followRecordingContext,
+  liveRecordingSourceKey,
+} from "../src/features/recording/followRecording";
+import {
   filterRecordedDanmakuEntries,
   firstRecordedDanmakuAtOrAfter,
   parseRecordedDanmakuSidecar,
@@ -371,6 +376,64 @@ describe("active recording context matching", () => {
 
     expect(activeRecordingForContext([completed, otherRoom], liveContext)).toBeNull();
     expect(activeRecordingForContext([recordingItem()], null)).toBeNull();
+  });
+});
+
+describe("follow card recording", () => {
+  const target = { site_id: "douyin" as const, room_id: " 123456 " };
+
+  test("keeps the requested room identity in the stable source key", () => {
+    expect(liveRecordingSourceKey(target)).toBe("live:douyin:123456");
+
+    const source = { url: "https://example.test/live.flv", headers: {} };
+    const context = followRecordingContext(
+      target,
+      {
+        site_id: "douyin",
+        room_id: "987654",
+        title: "关注页录制",
+        cover: "",
+        user_name: "主播",
+        user_avatar: "https://example.test/avatar.jpg",
+        online: 1,
+        status: true,
+        notice: "",
+        url: "https://live.douyin.com/123456",
+        raw: {},
+      },
+      source,
+    );
+
+    expect(context).toMatchObject({
+      source,
+      sourceKey: "live:douyin:123456",
+      sourceKind: "live",
+      siteId: "douyin",
+      roomId: "987654",
+      title: "关注页录制",
+      userName: "主播",
+      cover: "https://example.test/avatar.jpg",
+      userAvatar: "https://example.test/avatar.jpg",
+    });
+  });
+
+  test("detects an active recording by requested key or canonical room identity", () => {
+    const byRequestedKey = recordingItem({
+      site_id: "douyin",
+      room_id: "987654",
+      source_key: "live:douyin:123456",
+    });
+    const byCanonicalRoom = recordingItem({
+      site_id: "douyin",
+      room_id: "123456",
+      source_key: "legacy-key",
+    });
+
+    expect(activeRecordingForLiveRoom([byRequestedKey], target)).toBe(byRequestedKey);
+    expect(activeRecordingForLiveRoom([byCanonicalRoom], target)).toBe(byCanonicalRoom);
+    expect(
+      activeRecordingForLiveRoom([byCanonicalRoom], { ...target, room_id: "other" }),
+    ).toBeNull();
   });
 });
 

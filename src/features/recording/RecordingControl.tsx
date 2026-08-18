@@ -2,13 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { CircleDot, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
