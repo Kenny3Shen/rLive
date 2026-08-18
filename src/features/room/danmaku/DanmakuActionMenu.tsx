@@ -31,11 +31,11 @@ export type DanmakuHoverTarget = {
  * Kept close to the real half-width: `clamp` stops centering once the anchor is
  * within this distance of an edge, so an inflated value visibly detaches the pill
  * from the comment it belongs to. Compact is three 36px buttons with 6px gaps
- * and padding (~72px, plus the coarse-pointer floor); large is three 44px
- * buttons with 8px gaps and padding (~88px).
+ * and padding (~72px); large is three 44px buttons with 8px gaps and padding
+ * (~88px).
  */
-const MENU_HALF_WIDTH_PX = 90;
-const MENU_HALF_WIDTH_LARGE_PX = 96;
+const MENU_HALF_WIDTH_PX = 72;
+const MENU_HALF_WIDTH_LARGE_PX = 88;
 /**
  * Marks the menu so the stage renderer can recognise it as a `pointerleave`
  * destination. Declared here, where the attribute is actually applied, so the
@@ -87,7 +87,12 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   const flipBelow = target.top < MENU_FLIP_THRESHOLD_PX;
   const anchorX = target.left + target.width / 2;
   const halfWidth = large ? MENU_HALF_WIDTH_LARGE_PX : MENU_HALF_WIDTH_PX;
-  const buttonClass = large ? "size-11" : undefined;
+  const buttonClass = large
+    ? "size-11"
+    : // The shared Button keeps 44px coarse-pointer targets by default. This
+      // transient three-action pill needs the regular 36px icon-button density
+      // on phones so it does not obscure a large part of the video.
+      "[@media(pointer:coarse)]:size-9 [@media(pointer:coarse)]:min-h-9 [@media(pointer:coarse)]:min-w-9";
   const iconClass = large ? "size-6" : "size-5";
 
   return (

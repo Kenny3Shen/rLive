@@ -28,6 +28,7 @@ import {
   playerEdgeGestureValue,
   PLAYER_STAGE_DOUBLE_TAP_MS,
   showDanmakuComposerInPlayerControls,
+  shouldUseLargeDanmakuActionMenu,
   shouldRetainRoomSidePanel,
   shouldRunFloatingDanmaku,
   shouldShowRoomDanmakuPanel,
@@ -110,6 +111,12 @@ describe("volume player control", () => {
 });
 
 describe("mobile player layout", () => {
+  test("keeps the floating danmaku action menu compact on mobile fullscreen", () => {
+    expect(shouldUseLargeDanmakuActionMenu(true, true)).toBe(false);
+    expect(shouldUseLargeDanmakuActionMenu(true, false)).toBe(true);
+    expect(shouldUseLargeDanmakuActionMenu(false, false)).toBe(false);
+  });
+
   test("seeds mobile density without losing the settled orientation", () => {
     expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, true, false)).toBe(true);
     expect(playerViewportFallbackMatches(COMPACT_LANDSCAPE_PLAYER_QUERY, true, false)).toBe(false);

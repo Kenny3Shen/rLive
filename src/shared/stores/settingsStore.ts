@@ -24,9 +24,13 @@ import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
 
-export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 18;
-export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 14;
+export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 20;
+export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 16;
 export const DANMAKU_OPACITY_DEFAULT = 0.8;
+export const DANMAKU_FONT_STROKE_MIN = 0.5;
+export const DANMAKU_FONT_STROKE_MAX = 2.5;
+export const DANMAKU_FONT_STROKE_STEP = 0.5;
+export const DANMAKU_FONT_STROKE_DEFAULT = 2.5;
 export const DANMAKU_AREA_DEFAULT = 0.25;
 export const DANMAKU_SPEED_MIN = 50;
 export const DANMAKU_SPEED_MAX = 200;
@@ -41,6 +45,14 @@ export function parseDanmakuSpeed(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return DANMAKU_SPEED_DEFAULT;
   return Math.min(DANMAKU_SPEED_MAX, Math.max(DANMAKU_SPEED_MIN, Math.round(numeric)));
+}
+
+/** Keep the player text outline on the supported half-pixel increments. */
+export function parseDanmakuFontStroke(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(numeric)) return DANMAKU_FONT_STROKE_DEFAULT;
+  const stepped = Math.round(numeric / DANMAKU_FONT_STROKE_STEP) * DANMAKU_FONT_STROKE_STEP;
+  return Math.min(DANMAKU_FONT_STROKE_MAX, Math.max(DANMAKU_FONT_STROKE_MIN, stepped));
 }
 
 // `settings_set` writes one complete object. Serialize writes so rapid room
@@ -185,10 +197,10 @@ type SettingsState = {
   disabledSiteIds: SiteId[];
   proxy: string | null;
   danmakuOpacity: number;
+  danmakuFontStroke: number;
   danmakuFontSize: number;
   danmakuSpeed: number;
   danmakuArea: number;
-  danmakuFontWeight: number;
   danmakuFilterGifts: boolean;
   danmakuMergeWindowSeconds: number;
   superChatEnabled: boolean;
@@ -267,10 +279,10 @@ const defaultSettings: AppSettings = {
   disabled_site_ids: [],
   proxy: null,
   danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
+  danmaku_font_stroke: DANMAKU_FONT_STROKE_DEFAULT,
   danmaku_font_size: defaultDanmakuFontSize(),
   danmaku_speed: DANMAKU_SPEED_DEFAULT,
   danmaku_area: DANMAKU_AREA_DEFAULT,
-  danmaku_font_weight: 600,
   danmaku_filter_gifts: true,
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
@@ -306,10 +318,10 @@ function toAppSettings(state: SettingsState): AppSettings {
     disabled_site_ids: state.disabledSiteIds,
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
+    danmaku_font_stroke: state.danmakuFontStroke,
     danmaku_font_size: state.danmakuFontSize,
     danmaku_speed: state.danmakuSpeed,
     danmaku_area: state.danmakuArea,
-    danmaku_font_weight: state.danmakuFontWeight,
     danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
     super_chat_enabled: state.superChatEnabled,
@@ -346,10 +358,10 @@ export const useSettingsStore = create<SettingsState>()(
       disabledSiteIds: [],
       proxy: null,
       danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
+      danmakuFontStroke: DANMAKU_FONT_STROKE_DEFAULT,
       danmakuFontSize: defaultDanmakuFontSize(),
       danmakuSpeed: DANMAKU_SPEED_DEFAULT,
       danmakuArea: DANMAKU_AREA_DEFAULT,
-      danmakuFontWeight: 600,
       danmakuFilterGifts: true,
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
@@ -643,10 +655,10 @@ export const useSettingsStore = create<SettingsState>()(
           disabledSiteIds,
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
+          danmakuFontStroke: parseDanmakuFontStroke(settings.danmaku_font_stroke),
           danmakuFontSize: settings.danmaku_font_size,
           danmakuSpeed: parseDanmakuSpeed(settings.danmaku_speed),
           danmakuArea: settings.danmaku_area,
-          danmakuFontWeight: settings.danmaku_font_weight,
           danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
           danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(
             settings.danmaku_merge_window_seconds,
