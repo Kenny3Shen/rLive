@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 1360" role="img" aria-labelledby="title description">
+  <title id="title">rLive 系统架构与数据流</title>
+  <desc id="description">展示 rLive 的外部内容源、Rust Tauri 运行时、Tauri IPC、React 前端、本机资源以及播放、弹幕、录制和本地字幕数据流。</desc>
+  <defs>
+    <marker id="arrow-structure" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-playback" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#60a5fa"/>
+    </marker>
+    <marker id="arrow-danmaku" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4ade80"/>
+    </marker>
+    <marker id="arrow-recording" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#fb923c"/>
+    </marker>
+    <marker id="arrow-subtitle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c084fc"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; letter-spacing: 0; }
+      .heading { fill: #f8fafc; font-size: 30px; font-weight: 700; }
+      .subtitle { fill: #a5b4c7; font-size: 14px; }
+      .section { fill: #cbd5e1; font-size: 13px; font-weight: 700; letter-spacing: 1.2px; }
+      .section-note { fill: #64748b; font-size: 12px; }
+      .card-title { fill: #f8fafc; font-size: 15px; font-weight: 650; }
+      .card-copy { fill: #94a3b8; font-size: 12px; }
+      .chip { fill: #dbeafe; font-size: 13px; font-weight: 600; }
+      .chip-muted { fill: #cbd5e1; font-size: 13px; font-weight: 600; }
+      .boundary { fill: #99f6e4; font-size: 13px; font-weight: 700; letter-spacing: 0.8px; }
+      .flow-label { fill: #e2e8f0; font-size: 12px; font-weight: 700; letter-spacing: 0.6px; }
+      .flow-copy { fill: #aab7c9; font-size: 12px; }
+      .flow-step-copy { fill: #94a3b8; font-size: 11px; }
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="1358" height="1358" rx="10" fill="#0b1020" stroke="#27324a" stroke-width="2"/>
+  <text x="48" y="50" class="heading">rLive 系统架构</text>
+  <text x="48" y="76" class="subtitle">Rust 统一平台差异和本机能力，React 负责交互、播放与可视化呈现</text>
+
+  <!-- External sources -->
+  <rect x="40" y="104" width="1280" height="146" rx="8" fill="#111827" stroke="#334155"/>
+  <text x="68" y="132" class="section">EXTERNAL SOURCES  /  外部内容源</text>
+  <text x="1290" y="132" text-anchor="end" class="section-note">平台协议与直播媒体入口</text>
+
+  <rect x="70" y="150" width="760" height="70" rx="7" fill="#151f32" stroke="#334155"/>
+  <text x="94" y="172" class="section-note">LIVE PLATFORMS</text>
+  <rect x="94" y="184" width="132" height="26" rx="5" fill="#1c2b42"/>
+  <rect x="238" y="184" width="100" height="26" rx="5" fill="#1c2b42"/>
+  <rect x="350" y="184" width="100" height="26" rx="5" fill="#1c2b42"/>
+  <rect x="462" y="184" width="100" height="26" rx="5" fill="#1c2b42"/>
+  <rect x="574" y="184" width="100" height="26" rx="5" fill="#1c2b42"/>
+  <text x="160" y="202" text-anchor="middle" class="chip">哔哩哔哩</text>
+  <text x="288" y="202" text-anchor="middle" class="chip">虎牙</text>
+  <text x="400" y="202" text-anchor="middle" class="chip">斗鱼</text>
+  <text x="512" y="202" text-anchor="middle" class="chip">抖音</text>
+  <text x="624" y="202" text-anchor="middle" class="chip">Twitch</text>
+
+  <rect x="850" y="150" width="440" height="70" rx="7" fill="#151f32" stroke="#334155"/>
+  <text x="874" y="172" class="section-note">GENERIC SOURCES</text>
+  <text x="874" y="201" class="chip-muted">IPTV  ·  M3U  ·  HLS  ·  HTTP  ·  Direct</text>
+
+  <path d="M680 250 V290" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow-structure)"/>
+  <text x="700" y="274" class="section-note">HTTP 元数据 · CDN · WS / TCP / IRC</text>
+
+  <!-- Runtime -->
+  <rect x="40" y="290" width="1280" height="350" rx="8" fill="#0f172a" stroke="#334155"/>
+  <text x="68" y="320" class="section">RUST / TAURI RUNTIME  /  运行时核心</text>
+  <text x="1290" y="320" text-anchor="end" class="section-note">src-tauri/</text>
+
+  <g>
+    <rect x="70" y="346" width="390" height="86" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="485" y="346" width="390" height="86" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="900" y="346" width="390" height="86" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="70" y="448" width="390" height="86" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="485" y="448" width="390" height="86" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="900" y="448" width="390" height="86" rx="7" fill="#151f32" stroke="#334155"/>
+  </g>
+
+  <text x="94" y="376" class="card-title">Platform adapters  /  sites</text>
+  <text x="94" y="399" class="card-copy">平台 API · 签名 · Cookie · RoomInfo / PlayUrl</text>
+  <text x="509" y="376" class="card-title">Stream proxy</text>
+  <text x="509" y="399" class="card-copy">请求头注入 · CORS · HLS 改写 · 同源访问</text>
+  <text x="924" y="376" class="card-title">Danmaku runtime</text>
+  <text x="924" y="399" class="card-copy">协议解析 · 50 ms 批处理 · UI 事件与录制轨</text>
+
+  <text x="94" y="478" class="card-title">Settings / Database</text>
+  <text x="94" y="501" class="card-copy">设置 · 账号 · 关注 · 历史 · 本机数据管理</text>
+  <text x="509" y="478" class="card-title">Recording manager</text>
+  <text x="509" y="501" class="card-copy">FFmpeg worker · 原子发布 · 崩溃恢复 · 回放服务</text>
+  <text x="924" y="478" class="card-title">ASR runtime</text>
+  <text x="924" y="501" class="card-copy">sherpa-onnx · 16 kHz PCM · 流式识别 · 标点</text>
+
+  <rect x="350" y="566" width="660" height="48" rx="7" fill="#172033" stroke="#475569"/>
+  <text x="680" y="596" text-anchor="middle" class="card-title">Runtime Core  ·  Commands / Events / Tasks</text>
+
+  <path d="M265 432 V548 H460 V566 M680 432 V566 M1095 432 V548 H900 V566" fill="none" stroke="#475569" stroke-width="1.5" opacity="0.85"/>
+  <path d="M265 534 V548 M680 534 V566 M1095 534 V548" fill="none" stroke="#475569" stroke-width="1.5" opacity="0.85"/>
+  <!-- IPC boundary -->
+  <rect x="40" y="674" width="1280" height="132" rx="8" fill="#111827" stroke="#2dd4bf" stroke-opacity="0.7"/>
+  <text x="68" y="704" class="section">TAURI IPC  /  WEBVIEW ↔ NATIVE 边界</text>
+  <text x="1290" y="704" text-anchor="end" class="section-note">JavaScript 与 Rust 的唯一业务桥</text>
+  <rect x="130" y="730" width="500" height="48" rx="7" fill="#102923" stroke="#2dd4bf" stroke-opacity="0.7"/>
+  <rect x="730" y="730" width="500" height="48" rx="7" fill="#12291c" stroke="#4ade80" stroke-opacity="0.65"/>
+  <text x="380" y="760" text-anchor="middle" class="boundary">COMMANDS  ·  invoke / response</text>
+  <text x="980" y="760" text-anchor="middle" class="boundary">EVENTS  ·  danmaku / recording / subtitle</text>
+
+  <path d="M680 614 V674" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow-structure)"/>
+  <path d="M380 778 V838" fill="none" stroke="#2dd4bf" stroke-width="2" marker-end="url(#arrow-structure)"/>
+  <path d="M980 838 V778" fill="none" stroke="#4ade80" stroke-width="2" marker-end="url(#arrow-structure)"/>
+
+  <!-- Frontend -->
+  <rect x="40" y="838" width="1280" height="162" rx="8" fill="#0f172a" stroke="#334155"/>
+  <text x="68" y="868" class="section">REACT 19 FRONTEND  /  前端交互层</text>
+  <text x="1290" y="868" text-anchor="end" class="section-note">src/</text>
+
+  <g>
+    <rect x="70" y="894" width="285" height="78" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="375" y="894" width="285" height="78" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="680" y="894" width="285" height="78" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="985" y="894" width="305" height="78" rx="7" fill="#151f32" stroke="#334155"/>
+  </g>
+  <text x="212" y="925" text-anchor="middle" class="card-title">React UI</text>
+  <text x="212" y="948" text-anchor="middle" class="card-copy">TanStack Query · Zustand · Router</text>
+  <text x="517" y="925" text-anchor="middle" class="card-title">xgplayer</text>
+  <text x="517" y="948" text-anchor="middle" class="card-copy">HLS · MPEG-TS · &lt;video&gt;</text>
+  <text x="822" y="925" text-anchor="middle" class="card-title">Danmaku &amp; recording UI</text>
+  <text x="822" y="948" text-anchor="middle" class="card-copy">danmu.js / Canvas · SC · 录制库</text>
+  <text x="1137" y="925" text-anchor="middle" class="card-title">Audio &amp; subtitle layer</text>
+  <text x="1137" y="948" text-anchor="middle" class="card-copy">Web Audio · PCM · 本地识别结果</text>
+
+  <path d="M517 806 V894" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrow-playback)"/>
+  <text x="532" y="850" class="flow-step-copy" fill="#60a5fa">localhost URL</text>
+  <path d="M1137 894 V806" fill="none" stroke="#c084fc" stroke-width="2" marker-end="url(#arrow-subtitle)"/>
+  <text x="1152" y="850" class="flow-step-copy" fill="#c084fc">PCM / result</text>
+
+  <!-- Local resources -->
+  <rect x="40" y="1032" width="1280" height="142" rx="8" fill="#111827" stroke="#334155"/>
+  <text x="68" y="1062" class="section">LOCAL RUNTIME RESOURCES  /  本机基础设施</text>
+  <text x="1290" y="1062" text-anchor="end" class="section-note">由 Rust 运行时管理，不依赖远程服务</text>
+  <g>
+    <rect x="70" y="1085" width="280" height="62" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="380" y="1085" width="280" height="62" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="690" y="1085" width="280" height="62" rx="7" fill="#151f32" stroke="#334155"/>
+    <rect x="1000" y="1085" width="290" height="62" rx="7" fill="#151f32" stroke="#334155"/>
+  </g>
+  <text x="210" y="1111" text-anchor="middle" class="card-title">SQLite / rlive.db</text>
+  <text x="210" y="1132" text-anchor="middle" class="card-copy">WAL · 设置 · 关注 · 历史</text>
+  <text x="520" y="1111" text-anchor="middle" class="card-title">FFmpeg</text>
+  <text x="520" y="1132" text-anchor="middle" class="card-copy">ffmpeg-next · libavformat</text>
+  <text x="830" y="1111" text-anchor="middle" class="card-title">Media files</text>
+  <text x="830" y="1132" text-anchor="middle" class="card-copy">媒体 · metadata · danmaku.jsonl</text>
+  <text x="1145" y="1111" text-anchor="middle" class="card-title">ASR models</text>
+  <text x="1145" y="1132" text-anchor="middle" class="card-copy">本机加载 · 音频不上传</text>
+
+  <!-- Data flows -->
+  <text x="48" y="1220" class="section">DATA FLOWS  /  关键数据路径</text>
+  <text x="1290" y="1220" text-anchor="end" class="section-note">颜色表示数据流，不表示模块类型</text>
+
+  <g>
+    <rect x="48" y="1240" width="610" height="50" rx="7" fill="#111827" stroke="#26364e"/>
+    <rect x="702" y="1240" width="610" height="50" rx="7" fill="#111827" stroke="#26364e"/>
+    <rect x="48" y="1300" width="610" height="50" rx="7" fill="#111827" stroke="#26364e"/>
+    <rect x="702" y="1300" width="610" height="50" rx="7" fill="#111827" stroke="#26364e"/>
+  </g>
+
+  <line x1="68" y1="1265" x2="96" y2="1265" stroke="#60a5fa" stroke-width="3" marker-end="url(#arrow-playback)"/>
+  <text x="110" y="1261" class="flow-label">PLAYBACK</text>
+  <text x="110" y="1278" class="flow-copy">CDN  →  Proxy  →  Local HTTP  →  Player</text>
+
+  <line x1="722" y1="1265" x2="750" y2="1265" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-recording)"/>
+  <text x="764" y="1261" class="flow-label">RECORDING</text>
+  <text x="764" y="1278" class="flow-copy">Stream  →  FFmpeg  →  Media File</text>
+
+  <line x1="68" y1="1325" x2="96" y2="1325" stroke="#4ade80" stroke-width="3" marker-end="url(#arrow-danmaku)"/>
+  <text x="110" y="1321" class="flow-label">DANMAKU</text>
+  <text x="110" y="1338" class="flow-copy">Platform  →  Parser  →  Events  →  UI / JSONL</text>
+
+  <line x1="722" y1="1325" x2="750" y2="1325" stroke="#c084fc" stroke-width="3" marker-end="url(#arrow-subtitle)"/>
+  <text x="764" y="1321" class="flow-label">SUBTITLE</text>
+  <text x="764" y="1338" class="flow-copy">Audio Capture  →  PCM 16 kHz  →  ASR  →  Subtitle</text>
+</svg>
