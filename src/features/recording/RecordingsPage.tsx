@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  ChevronRight,
   CircleDot,
   Clock3,
   FolderOpen,
@@ -17,7 +16,6 @@ import {
   Trash2,
   Tv,
   UserRound,
-  Users,
 } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import {
@@ -62,6 +60,12 @@ import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
+import {
+  PlatformFilterSelect,
+  type PlatformFilter,
+} from "@/shared/components/PlatformFilterSelect";
+import { Separator } from "@/components/ui/separator";
+import { LIVE_SITE_IDS } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
 import {
   deleteRecording,
@@ -72,8 +76,11 @@ import {
   RECORDING_PLAYBACK_QUERY_KEY,
   RECORDING_STORAGE_QUERY_KEY,
   recordingErrorMessage,
+  recordingPlatformFromSearch,
   recordingStorageInfo,
   recordingSupported,
+  recordingUserGroupKey,
+  recordingsForPlatform,
   setRecordingStoragePath,
   stopRecording,
   useRecordings,
@@ -286,14 +293,15 @@ function recordingUserGroups(items: readonly RecordingItem[]): RecordingUserGrou
   const groups = new Map<string, RecordingUserGroup>();
   for (const item of items) {
     const label = recordingUserLabel(item);
-    const current = groups.get(label);
+    const key = recordingUserGroupKey(item);
+    const current = groups.get(key);
     if (current) {
       current.items.push(item);
       current.latestAt = Math.max(current.latestAt, item.started_at);
       continue;
     }
-    groups.set(label, {
-      key: label,
+    groups.set(key, {
+      key,
       label,
       items: [item],
       latestAt: item.started_at,
@@ -305,10 +313,21 @@ function recordingUserGroups(items: readonly RecordingItem[]): RecordingUserGrou
   );
 }
 
-function RecordingUserAvatar({ item }: { item: RecordingItem }) {
+function RecordingUserAvatar({
+  item,
+  compact = false,
+}: {
+  item: RecordingItem;
+  compact?: boolean;
+}) {
   const cover = normalizeImageUrl(item.cover);
   return (
-    <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle">
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle",
+        compact ? "size-6" : "size-7",
+      )}
+    >
       {cover ? (
         <img
           src={cover}
@@ -319,102 +338,142 @@ function RecordingUserAvatar({ item }: { item: RecordingItem }) {
           className="size-full object-cover"
         />
       ) : (
-        <UserRound className="size-4" aria-hidden />
+        <UserRound className={compact ? "size-3.5" : "size-4"} aria-hidden />
       )}
     </span>
+  );
+}
+
+function RecordingUserTarget({
+  group,
+  selected,
+  surface,
+  onSelect,
+}: {
+  group: RecordingUserGroup;
+  selected: boolean;
+  surface: "desktop" | "mobile";
+  onSelect: () => void;
+}) {
+  const activeCount = group.items.filter((item) => item.status === "recording").length;
+
+  return (
+    <Button
+      type="button"
+      variant={selected ? "secondary" : "ghost"}
+      size={surface === "desktop" ? "default" : "sm"}
+      className={cn(
+        "justify-start gap-2",
+        surface === "desktop" ? "w-full px-2" : "shrink-0",
+      )}
+      aria-current={selected ? "page" : undefined}
+      onClick={onSelect}
+    >
+      <RecordingUserAvatar item={group.items[0]!} compact={surface === "mobile"} />
+      <span className="min-w-0 flex-1 truncate text-left">{group.label}</span>
+      {activeCount > 0 && (
+        <CircleDot
+          className="size-3 shrink-0 text-destructive"
+          aria-label={`${activeCount} 路录制中`}
+        />
+      )}
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+        {group.items.length}
+      </span>
+    </Button>
   );
 }
 
 function RecordingUserList({
   groups,
   selectedKey,
+  platformFilter,
   onSelect,
+  onPlatformChange,
 }: {
   groups: readonly RecordingUserGroup[];
   selectedKey: string | null;
+  platformFilter: PlatformFilter;
   onSelect: (key: string) => void;
+  onPlatformChange: (value: PlatformFilter) => void;
 }) {
   return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Users className="size-4 text-primary" aria-hidden />
-          用户
-        </CardTitle>
-        <CardDescription>{groups.length} 位用户的本地录播</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-1.5">
-        {groups.map((group) => {
-          const firstItem = group.items[0]!;
-          const activeCount = group.items.filter((item) => item.status === "recording").length;
-          return (
-            <Button
-              key={group.key}
-              type="button"
-              variant={selectedKey === group.key ? "secondary" : "ghost"}
-              className={cn(
-                "h-auto min-w-0 justify-start gap-2.5 rounded-lg px-2 py-2 text-left",
-                selectedKey === group.key && "ring-1 ring-primary/25",
-              )}
-              aria-pressed={selectedKey === group.key}
-              onClick={() => onSelect(group.key)}
-            >
-              <RecordingUserAvatar item={firstItem} />
-              <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-                <span className="w-full truncate font-medium">{group.label}</span>
-                <span className="flex w-full items-center gap-1.5 text-xs font-normal text-muted-foreground">
-                  <span>{group.items.length} 段录播</span>
-                  {activeCount > 0 && (
-                    <>
-                      <span aria-hidden>·</span>
-                      <span className="text-destructive">{activeCount} 路录制中</span>
-                    </>
-                  )}
-                </span>
-              </span>
-              <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            </Button>
-          );
-        })}
-      </CardContent>
-    </Card>
+    <nav
+      aria-label="录制用户"
+      className="sticky top-3 hidden max-h-[calc(100dvh-7rem)] min-w-0 flex-col gap-1 border-r border-border pr-3 md:flex"
+    >
+      <PlatformFilterSelect
+        value={platformFilter}
+        sites={LIVE_SITE_IDS}
+        compact={false}
+        onValueChange={onPlatformChange}
+      />
+      <Separator className="my-1" />
+      <div className="mb-1 flex items-center justify-between gap-2 px-2">
+        <span className="text-xs font-medium text-muted-foreground">用户</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{groups.length}</span>
+      </div>
+      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto py-0.5">
+        {groups.map((group) => (
+          <RecordingUserTarget
+            key={group.key}
+            group={group}
+            selected={selectedKey === group.key}
+            surface="desktop"
+            onSelect={() => onSelect(group.key)}
+          />
+        ))}
+      </div>
+    </nav>
   );
 }
 
 function RecordingsSkeleton() {
   return (
-    <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <Skeleton className="h-5 w-16" />
-          </CardTitle>
-          <CardDescription>
-            <Skeleton className="h-4 w-28" />
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
+    <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
+      <div className="hidden min-w-0 flex-col gap-2 border-r border-border pr-3 md:flex">
+        <Skeleton className="h-8 w-full rounded-lg" />
+        <Separator />
+        <Skeleton className="mx-2 h-3 w-12" />
+        <div className="flex flex-col gap-1">
           {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="flex items-center gap-3 rounded-lg px-2 py-2">
-              <Skeleton className="size-9 rounded-lg" />
-              <div className="flex flex-1 flex-col gap-2">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-3 w-1/2" />
-              </div>
+            <div key={index} className="flex h-9 items-center gap-2 rounded-lg px-2">
+              <Skeleton className="size-7 rounded-lg" />
+              <Skeleton className="h-3.5 flex-1" />
+              <Skeleton className="h-3 w-4" />
             </div>
           ))}
-        </CardContent>
-      </Card>
-      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <Card key={index} className="overflow-hidden py-0">
-            <Skeleton className="aspect-video w-full rounded-none" />
-            <CardContent className="flex flex-col gap-2 p-3">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-3 w-1/2" />
-            </CardContent>
-          </Card>
-        ))}
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-col gap-3">
+        <Skeleton className="h-8 w-full rounded-lg md:hidden" />
+        <div className="-mx-1 flex gap-1 overflow-hidden px-1 pb-1 md:hidden">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <Skeleton key={index} className="h-8 w-24 shrink-0 rounded-lg" />
+          ))}
+        </div>
+        <div className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <Card key={index} size="sm" className="gap-2">
+              <CardHeader className="items-center gap-x-2.5">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <Skeleton className="size-10 shrink-0 rounded-lg" />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                    <Skeleton className="h-3.5 w-3/5" />
+                    <Skeleton className="h-3 w-4/5" />
+                  </div>
+                </div>
+                <CardAction className="self-center">
+                  <Skeleton className="size-7 rounded-lg" />
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex min-h-5 items-center gap-1.5">
+                <Skeleton className="h-5 w-14 rounded-full" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -436,12 +495,16 @@ export function RecordingsPage() {
   const [storageOpen, setStorageOpen] = useState(false);
 
   const items = useMemo(() => recordings.data ?? [], [recordings.data]);
-  const activeItems = items.filter((item) => item.status === "recording");
-  const userGroups = useMemo(() => recordingUserGroups(items), [items]);
+  const requestedPlatform = searchParams.get("platform");
+  const platformFilter: PlatformFilter = recordingPlatformFromSearch(requestedPlatform);
+  const filteredItems = useMemo(
+    () => recordingsForPlatform(items, platformFilter),
+    [items, platformFilter],
+  );
+  const userGroups = useMemo(() => recordingUserGroups(filteredItems), [filteredItems]);
   const requestedUser = searchParams.get("user");
   const selectedGroup =
     userGroups.find((group) => group.key === requestedUser) ?? userGroups[0] ?? null;
-  const totalSize = items.reduce((total, item) => total + item.size_bytes, 0);
 
   const stopMutation = useMutation({
     mutationFn: stopRecording,
@@ -497,6 +560,34 @@ export function RecordingsPage() {
     }
   }
 
+  function selectUser(key: string) {
+    setSearchParams(
+      (current) => {
+        current.set("user", key);
+        return current;
+      },
+      { replace: true },
+    );
+  }
+
+  function selectPlatform(value: PlatformFilter) {
+    setSearchParams(
+      (current) => {
+        if (value === "all") current.delete("platform");
+        else current.set("platform", value);
+        current.delete("user");
+        return current;
+      },
+      { replace: true },
+    );
+  }
+
+  function openRecording(item: RecordingItem) {
+    const params = new URLSearchParams({ user: recordingUserGroupKey(item) });
+    if (platformFilter !== "all") params.set("platform", platformFilter);
+    navigate(`/recordings/play/${encodeURIComponent(item.id)}?${params.toString()}`);
+  }
+
   if (!supported) {
     return (
       <Empty className="min-h-[60vh] border">
@@ -512,25 +603,9 @@ export function RecordingsPage() {
   }
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-[1440px] flex-col gap-5">
+    <div className="mx-auto flex min-h-full w-full max-w-[1600px] flex-col gap-4">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <CircleDot
-                className={activeItems.length > 0 ? "text-destructive" : undefined}
-                aria-hidden
-              />
-              {activeItems.length > 0 ? `${activeItems.length} 路录制中` : "当前无录制任务"}
-            </span>
-            <span aria-hidden>·</span>
-            <span>{formatRecordingSize(totalSize)} 本地内容</span>
-          </div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">录制库</h1>
-          <p className="text-sm text-muted-foreground">
-            默认离页前确认；选择继续后任务在后台运行，结束后可随时本地回放。
-          </p>
-        </div>
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">录制库</h1>
         <Button
           type="button"
           variant="outline"
@@ -553,65 +628,67 @@ export function RecordingsPage() {
         />
       ) : (
         <>
-          {userGroups.length > 0 ? (
-            <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+          {items.length > 0 ? (
+            <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
               <RecordingUserList
                 groups={userGroups}
                 selectedKey={selectedGroup?.key ?? null}
-                onSelect={(key) => {
-                  setSearchParams(
-                    (current) => {
-                      current.set("user", key);
-                      return current;
-                    },
-                    { replace: true },
-                  );
-                }}
+                platformFilter={platformFilter}
+                onSelect={selectUser}
+                onPlatformChange={selectPlatform}
               />
 
-              <section
-                className="flex min-w-0 flex-col gap-3"
-                aria-labelledby="user-recordings-title"
-              >
-                <div className="flex min-w-0 flex-wrap items-end justify-between gap-2">
-                  <div className="min-w-0">
-                    <h2
-                      id="user-recordings-title"
-                      className="truncate font-heading text-base font-medium"
-                    >
-                      {selectedGroup?.label}
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      {selectedGroup?.items.length ?? 0} 段录播
-                    </p>
-                  </div>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    点击 Card 进入播放页
-                  </span>
-                </div>
-                <ul className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
-                  {selectedGroup?.items.map((item) => (
-                    <RecordingCard
-                      key={item.id}
-                      item={item}
-                      stopping={stopMutation.isPending && stopMutation.variables === item.id}
-                      onOpen={
-                        item.status === "recording"
-                          ? undefined
-                          : () =>
-                              navigate(
-                                `/recordings/play/${encodeURIComponent(item.id)}?user=${encodeURIComponent(recordingUserLabel(item))}`,
-                              )
-                      }
-                      onStop={() => stopMutation.mutate(item.id)}
-                      revealing={
-                        revealMutation.isPending && revealMutation.variables === item.file_path
-                      }
-                      onReveal={() => revealMutation.mutate(item.file_path)}
-                      onDelete={() => setDeleteTarget(item)}
+              <section className="flex min-w-0 flex-col gap-3" aria-label="录播列表">
+                <PlatformFilterSelect
+                  value={platformFilter}
+                  sites={LIVE_SITE_IDS}
+                  compact={false}
+                  className="md:hidden"
+                  onValueChange={selectPlatform}
+                />
+                <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden">
+                  {userGroups.map((group) => (
+                    <RecordingUserTarget
+                      key={group.key}
+                      group={group}
+                      selected={selectedGroup?.key === group.key}
+                      surface="mobile"
+                      onSelect={() => selectUser(group.key)}
                     />
                   ))}
-                </ul>
+                </div>
+                {selectedGroup ? (
+                  <ul className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+                    {selectedGroup.items.map((item) => (
+                      <RecordingCard
+                        key={item.id}
+                        item={item}
+                        stopping={stopMutation.isPending && stopMutation.variables === item.id}
+                        onOpen={
+                          item.status === "recording"
+                            ? undefined
+                            : () => openRecording(item)
+                        }
+                        onStop={() => stopMutation.mutate(item.id)}
+                        revealing={
+                          revealMutation.isPending && revealMutation.variables === item.file_path
+                        }
+                        onReveal={() => revealMutation.mutate(item.file_path)}
+                        onDelete={() => setDeleteTarget(item)}
+                      />
+                    ))}
+                  </ul>
+                ) : (
+                  <Empty className="min-h-56 border">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <Videotape aria-hidden />
+                      </EmptyMedia>
+                      <EmptyTitle>当前平台暂无录播</EmptyTitle>
+                      <EmptyDescription>请选择其他平台或查看全部平台。</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
               </section>
             </div>
           ) : (

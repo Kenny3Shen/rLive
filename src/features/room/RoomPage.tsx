@@ -174,7 +174,7 @@ export function RoomPage() {
             roomId: detail?.room_id ?? roomId,
             title: detail?.title ?? "直播间",
             userName: detail?.user_name ?? "",
-            cover: detail?.cover ?? "",
+            cover: detail?.user_avatar || detail?.cover || "",
           }
         : null,
     [detail, playback.playUrl, roomId, siteId],
