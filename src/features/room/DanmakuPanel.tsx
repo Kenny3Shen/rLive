@@ -65,7 +65,7 @@ function DanmakuSender({
   return (
     <>
       <span
-        className="mr-1.5 font-medium text-primary"
+        className="mr-1.5 text-primary"
         style={userColor ? { color: userColor } : undefined}
       >
         {user}：
@@ -553,7 +553,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
         <ScrollArea className="h-full min-h-0">
           <div
-            className="flex flex-col gap-0.5 px-2.5 py-2 text-sm"
+            className="flex flex-col gap-0.5 px-2.5 py-2 text-sm font-medium"
             // Keep the side list independent from the inherited floating-danmaku outline.
             style={{ WebkitTextStroke: "0px", paintOrder: "normal" }}
           >
