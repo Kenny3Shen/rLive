@@ -181,6 +181,13 @@ export type PlayerControlsProps = {
   stackedBelowPlayer?: boolean;
   /** Optional compact content centered between transport and room controls. */
   centerSlot?: ReactNode;
+  /** Optional full-width media timeline rendered above the transport row. */
+  timeline?: ReactNode;
+  /** Feature-specific controls appended to the shared playback settings menu. */
+  playbackSettings?: ReactNode;
+  playbackSettingsTitle?: string;
+  playbackSettingsLabel?: string;
+  playbackSettingsDisabled?: boolean;
   /**
    * Compact viewport (portrait phones + short landscape). Drops desktop-only
    * keyboard hints from labels so the chrome reads shorter on a small screen.
@@ -314,6 +321,11 @@ export function PlayerControls({
   stackedBelowPlayer = false,
   compact = false,
   centerSlot,
+  timeline,
+  playbackSettings,
+  playbackSettingsTitle = "播放设置",
+  playbackSettingsLabel,
+  playbackSettingsDisabled,
   portalContainer,
   onOverlayInteractionChange,
   refreshDisabled = disabled,
@@ -408,7 +420,11 @@ export function PlayerControls({
   };
 
   const hasStreamSettings = qualities.length > 0 || lines.length > 0;
-  const streamSettingsDisabled = disabled || (qualities.length <= 1 && lines.length <= 1);
+  const hasCustomPlaybackSettings = playbackSettings != null;
+  const hasPlaybackSettings = hasStreamSettings || hasCustomPlaybackSettings;
+  const streamSettingsDisabled =
+    playbackSettingsDisabled ??
+    (disabled || (!hasCustomPlaybackSettings && qualities.length <= 1 && lines.length <= 1));
   const streamSettingsLabel = [
     qualities.length > 0 ? `清晰度 ${qualityLabel(qualityIndex)}` : null,
     lines.length > 0 && lines[lineIndex] ? `线路 ${lineName(lines[lineIndex], lineIndex)}` : null,
@@ -425,7 +441,9 @@ export function PlayerControls({
     variant: "ghost",
     size: "icon-sm",
     disabled: streamSettingsDisabled,
-    "aria-label": streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : "播放设置",
+    "aria-label":
+      playbackSettingsLabel ??
+      (streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : playbackSettingsTitle),
     className: cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass),
   } as const;
   const danmakuControl = danmakuControlPresentation(osdOn);
@@ -516,6 +534,11 @@ export function PlayerControls({
           })}
         </div>
       )}
+
+      {hasStreamSettings && hasCustomPlaybackSettings && (
+        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay }))} />
+      )}
+      {playbackSettings}
     </>
   );
   const captionSettingsBody = (
@@ -644,8 +667,9 @@ export function PlayerControls({
       data-slot="player-controls-bar"
       data-compact={compact ? "true" : "false"}
       className={cn(
-        "flex min-w-0 shrink-0 items-center gap-1",
-        compact && "justify-between gap-0.5",
+        "flex min-w-0 shrink-0",
+        timeline ? "flex-col items-stretch gap-0" : "items-center gap-1",
+        compact && !timeline && "justify-between gap-0.5",
         overlay
           ? // A scrim that fades up into the picture, the way ordinary video
             // players draw their bottom chrome — no top border, no blur, no
@@ -669,162 +693,250 @@ export function PlayerControls({
           : "border-t border-border bg-card px-1.5 py-1",
       )}
     >
-      <div className={CONTROL_GROUP_CLASS}>
-        {onRefresh && (
-          <ControlButton
-            label="刷新播放"
-            className={cn(overlayButtonClass)}
-            tooltipContainer={portalContainer}
-            disabled={refreshDisabled}
-            onClick={onRefresh}
-            tooltip={!compact}
-          >
-            <RefreshCw />
-          </ControlButton>
+      {timeline && <div className="min-w-0 px-1 pt-1">{timeline}</div>}
+      <div
+        className={cn(
+          timeline ? "flex min-w-0 w-full items-center gap-1" : "contents",
+          timeline && compact && "justify-between gap-0.5",
         )}
-        <ControlButton
-          label={paused ? pauseLabel : pauseActiveLabel}
-          className={overlayButtonClass}
-          tooltipContainer={portalContainer}
-          disabled={disabled}
-          onClick={onTogglePause}
-          tooltip={!compact}
-        >
-          {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
-        </ControlButton>
-
-        {showVolumeControl && (
-          <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
-            <PopoverTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={disabled}
-                  aria-label={volumeControl.label}
-                  className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
-                />
-              }
+      >
+        <div className={CONTROL_GROUP_CLASS}>
+          {onRefresh && (
+            <ControlButton
+              label="刷新播放"
+              className={cn(overlayButtonClass)}
+              tooltipContainer={portalContainer}
+              disabled={refreshDisabled}
+              onClick={onRefresh}
+              tooltip={!compact}
             >
-              <VolumeControlIcon aria-hidden />
-            </PopoverTrigger>
-            <PopoverContent
-              container={portalContainer}
-              side="top"
-              align="start"
-              glass
-              className={cn(
-                "w-auto items-center gap-2 p-2.5",
-                // Same material as the settings popup beside it, so the two
-                // control-bar popups read as one family.
-                glassPanelClass({ overlay }),
-              )}
-            >
-              <PopoverTitle className="sr-only">音量</PopoverTitle>
-              <Slider
-                value={volume}
-                min={0}
-                max={100}
-                step={1}
-                orientation="vertical"
-                className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
-                aria-label="音量"
-                aria-valuetext={`${Math.round(volume)}%`}
-                onValueChange={(nextValue) => {
-                  onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
-                }}
-              />
-              <Separator className={cn("w-8", glassSeparatorClass({ overlay }))} />
-              <Button
-                type="button"
-                variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
-                size="icon-sm"
-                className={cn(
-                  "size-8",
-                  CONTROL_ICON_CLASS,
-                  overlay && "text-white/90 hover:bg-white/12 hover:text-white",
-                  isMuted && glassOptionSelectedClass({ overlay }),
-                )}
-                aria-label={muteLabel}
-                aria-pressed={isMuted}
-                onClick={onToggleMute}
-              >
-                <VolumeX aria-hidden />
-              </Button>
-            </PopoverContent>
-          </Popover>
-        )}
-
-        {showSecondaryControls && onToggleAudioOnly && (
-          <ControlButton
-            label={audioOnlyControl.label}
-            variant={overlay ? "ghost" : audioOnly ? "secondary" : "ghost"}
-            className={cn(overlayButtonClass, audioOnly && overlay && "bg-white/18 text-white")}
-            tooltipContainer={portalContainer}
-            disabled={disabled && !audioOnly}
-            aria-pressed={audioOnlyControl.enabled}
-            onClick={onToggleAudioOnly}
-            tooltip={!compact}
-          >
-            <AudioOnlyControlIcon aria-hidden />
-          </ControlButton>
-        )}
-      </div>
-
-      {loadError && (
-        <span
-          className={cn(
-            "min-w-0 max-w-28 truncate px-1 text-xs",
-            overlay ? "text-red-200" : "text-destructive",
+              <RefreshCw />
+            </ControlButton>
           )}
-        >
-          {loadError}
-        </span>
-      )}
+          <ControlButton
+            label={paused ? pauseLabel : pauseActiveLabel}
+            className={overlayButtonClass}
+            tooltipContainer={portalContainer}
+            disabled={disabled}
+            onClick={onTogglePause}
+            tooltip={!compact}
+          >
+            {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
+          </ControlButton>
 
-      {showPlayerControlsCenterSlot(compact, fullscreen) && (
-        <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
-      )}
-
-      <div className={cn(CONTROL_GROUP_CLASS, "ml-auto pl-1")}>
-        {hasStreamSettings &&
-          (compact ? (
-            <>
-              <Button
-                {...streamSettingsTriggerProps}
-                aria-expanded={streamSettingsOpen}
-                onClick={() => setStreamSettingsOpen((open) => !open)}
+          {showVolumeControl && (
+            <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
+              <PopoverTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={disabled}
+                    aria-label={volumeControl.label}
+                    className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
+                  />
+                }
               >
-                <Settings data-icon="inline-start" aria-hidden />
-              </Button>
-              <Drawer open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
-                <DrawerContent
-                  side={portrait ? "bottom" : "right"}
+                <VolumeControlIcon aria-hidden />
+              </PopoverTrigger>
+              <PopoverContent
+                container={portalContainer}
+                side="top"
+                align="start"
+                glass
+                className={cn(
+                  "w-auto items-center gap-2 p-2.5",
+                  // Same material as the settings popup beside it, so the two
+                  // control-bar popups read as one family.
+                  glassPanelClass({ overlay }),
+                )}
+              >
+                <PopoverTitle className="sr-only">音量</PopoverTitle>
+                <Slider
+                  value={volume}
+                  min={0}
+                  max={100}
+                  step={1}
+                  orientation="vertical"
+                  className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
+                  aria-label="音量"
+                  aria-valuetext={`${Math.round(volume)}%`}
+                  onValueChange={(nextValue) => {
+                    onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
+                  }}
+                />
+                <Separator className={cn("w-8", glassSeparatorClass({ overlay }))} />
+                <Button
+                  type="button"
+                  variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
+                  size="icon-sm"
+                  className={cn(
+                    "size-8",
+                    CONTROL_ICON_CLASS,
+                    overlay && "text-white/90 hover:bg-white/12 hover:text-white",
+                    isMuted && glassOptionSelectedClass({ overlay }),
+                  )}
+                  aria-label={muteLabel}
+                  aria-pressed={isMuted}
+                  onClick={onToggleMute}
+                >
+                  <VolumeX aria-hidden />
+                </Button>
+              </PopoverContent>
+            </Popover>
+          )}
+
+          {showSecondaryControls && onToggleAudioOnly && (
+            <ControlButton
+              label={audioOnlyControl.label}
+              variant={overlay ? "ghost" : audioOnly ? "secondary" : "ghost"}
+              className={cn(overlayButtonClass, audioOnly && overlay && "bg-white/18 text-white")}
+              tooltipContainer={portalContainer}
+              disabled={disabled && !audioOnly}
+              aria-pressed={audioOnlyControl.enabled}
+              onClick={onToggleAudioOnly}
+              tooltip={!compact}
+            >
+              <AudioOnlyControlIcon aria-hidden />
+            </ControlButton>
+          )}
+        </div>
+
+        {loadError && (
+          <span
+            className={cn(
+              "min-w-0 max-w-28 truncate px-1 text-xs",
+              overlay ? "text-red-200" : "text-destructive",
+            )}
+          >
+            {loadError}
+          </span>
+        )}
+
+        {showPlayerControlsCenterSlot(compact, fullscreen) && (
+          <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
+        )}
+
+        <div className={cn(CONTROL_GROUP_CLASS, "ml-auto pl-1")}>
+          {hasPlaybackSettings &&
+            (compact ? (
+              <>
+                <Button
+                  {...streamSettingsTriggerProps}
+                  aria-expanded={streamSettingsOpen}
+                  onClick={() => setStreamSettingsOpen((open) => !open)}
+                >
+                  <Settings data-icon="inline-start" aria-hidden />
+                </Button>
+                <Drawer open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
+                  <DrawerContent
+                    side={portrait ? "bottom" : "right"}
+                    container={portalContainer}
+                    glass
+                    className={cn(
+                      // Over video the drawer needs the darker tint; both
+                      // contexts now supply their material through the helper,
+                      // so `glass` is unconditional and only drops `bg-popover`.
+                      glassPanelClass({ overlay }),
+                    )}
+                  >
+                    <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay }))}>
+                      {playbackSettingsTitle}
+                    </DrawerTitle>
+                    {streamSettingsBody}
+                  </DrawerContent>
+                </Drawer>
+              </>
+            ) : (
+              <Popover open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
+                <PopoverTrigger
+                  openOnHover
+                  delay={120}
+                  closeDelay={180}
+                  render={
+                    <Button {...streamSettingsTriggerProps}>
+                      <Settings data-icon="inline-start" aria-hidden />
+                    </Button>
+                  }
+                />
+                <PopoverContent
                   container={portalContainer}
+                  side="top"
+                  align="end"
+                  collisionBoundary={
+                    typeof document !== "undefined" ? document.documentElement : undefined
+                  }
+                  collisionPadding={{
+                    top: 24,
+                    right: 12,
+                    bottom: 12,
+                    left: 12,
+                  }}
+                  sticky
                   glass
                   className={cn(
-                    // Over video the drawer needs the darker tint; both
-                    // contexts now supply their material through the helper,
-                    // so `glass` is unconditional and only drops `bg-popover`.
+                    "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] gap-0 overflow-y-auto p-1.5",
+                    hasCustomPlaybackSettings
+                      ? "w-[min(24rem,calc(100vw-1.5rem))]"
+                      : "w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))]",
                     glassPanelClass({ overlay }),
                   )}
                 >
-                  <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay }))}>
-                    播放设置
-                  </DrawerTitle>
+                  <PopoverTitle
+                    className={cn("px-2 py-1 max-md:py-0.5", glassTitleClass({ overlay }))}
+                  >
+                    {playbackSettingsTitle}
+                  </PopoverTitle>
                   {streamSettingsBody}
-                </DrawerContent>
-              </Drawer>
-            </>
-          ) : (
-            <Popover open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
+                </PopoverContent>
+              </Popover>
+            ))}
+
+          {showSecondaryControls && onToggleOsd && (
+            <ControlButton
+              label={danmakuControl.label}
+              variant="ghost"
+              className={overlayButtonClass}
+              tooltipContainer={portalContainer}
+              disabled={disabled}
+              data-slot="danmaku-toggle"
+              data-state={danmakuControl.enabled ? "on" : "off"}
+              aria-pressed={danmakuControl.enabled}
+              onClick={onToggleOsd}
+              tooltip={!compact}
+            >
+              <DanmakuControlIcon aria-hidden />
+            </ControlButton>
+          )}
+          {showSecondaryControls && asrVisible && onToggleAsr && (
+            <Popover open={asrSettingsOpen} onOpenChange={setAsrSettingsOpen}>
               <PopoverTrigger
                 openOnHover
                 delay={120}
                 closeDelay={180}
                 render={
-                  <Button {...streamSettingsTriggerProps}>
-                    <Settings data-icon="inline-start" aria-hidden />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className={cn(
+                      CONTROL_BUTTON_CLASS,
+                      CONTROL_ICON_CLASS,
+                      overlayButtonClass,
+                      asrDisabled && "pointer-events-auto opacity-50",
+                      asrOn && !overlay && "text-primary",
+                    )}
+                    aria-label={asrLabel}
+                    aria-disabled={asrDisabled}
+                    aria-pressed={asrOn}
+                    onClick={asrDisabled ? undefined : onToggleAsr}
+                  >
+                    {asrControl.icon === "spinner" ? (
+                      <Spinner aria-hidden />
+                    ) : asrControl.icon === "captions" ? (
+                      <Captions data-icon="inline-start" aria-hidden />
+                    ) : (
+                      <CaptionsOff data-icon="inline-start" aria-hidden />
+                    )}
                   </Button>
                 }
               />
@@ -835,143 +947,66 @@ export function PlayerControls({
                 collisionBoundary={
                   typeof document !== "undefined" ? document.documentElement : undefined
                 }
-                collisionPadding={{
-                  top: 24,
-                  right: 12,
-                  bottom: 12,
-                  left: 12,
-                }}
+                collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
                 sticky
                 glass
-                className={cn(
-                  "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))] gap-0 overflow-y-auto p-1.5",
-                  glassPanelClass({ overlay }),
-                )}
+                className={cn("w-72", glassPanelClass({ overlay }))}
               >
-                <PopoverTitle
-                  className={cn("px-2 py-1 max-md:py-0.5", glassTitleClass({ overlay }))}
-                >
-                  播放设置
-                </PopoverTitle>
-                {streamSettingsBody}
+                <div className="flex items-center justify-between gap-2 px-0.5">
+                  <PopoverTitle className={glassTitleClass({ overlay })}>字幕设置</PopoverTitle>
+                  {(asrSettingsPending || asrTranslationBusy) && (
+                    <Spinner aria-label="正在更新字幕设置" />
+                  )}
+                </div>
+                {captionSettingsBody}
               </PopoverContent>
             </Popover>
-          ))}
-
-        {showSecondaryControls && onToggleOsd && (
+          )}
+          {showSidePanelControl && onToggleSidePanel && (
+            <ControlButton
+              label={resolvedSidePanelLabel}
+              variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
+              className={overlayButtonClass}
+              tooltipContainer={portalContainer}
+              aria-pressed={sidePanelOpen}
+              onClick={onToggleSidePanel}
+              tooltip={!compact}
+            >
+              {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            </ControlButton>
+          )}
+          {showSecondaryControls && pictureInPictureSupported && onTogglePictureInPicture && (
+            <ControlButton
+              label={pictureInPictureActive ? "退出画中画" : "画中画"}
+              className={overlayButtonClass}
+              tooltipContainer={portalContainer}
+              disabled={disabled || pictureInPictureDisabled}
+              aria-pressed={pictureInPictureActive}
+              onClick={onTogglePictureInPicture}
+              tooltip={!compact}
+            >
+              <PictureInPicture2 />
+            </ControlButton>
+          )}
           <ControlButton
-            label={danmakuControl.label}
-            variant="ghost"
+            label={fullscreenLabel}
             className={overlayButtonClass}
             tooltipContainer={portalContainer}
             disabled={disabled}
-            data-slot="danmaku-toggle"
-            data-state={danmakuControl.enabled ? "on" : "off"}
-            aria-pressed={danmakuControl.enabled}
-            onClick={onToggleOsd}
+            aria-pressed={fullscreen}
+            onClick={(event) => {
+              if (event.detail > 0) event.currentTarget.blur();
+              onToggleFullscreen();
+            }}
             tooltip={!compact}
           >
-            <DanmakuControlIcon aria-hidden />
+            {fullscreen ? (
+              <Minimize2 data-icon="inline-start" aria-hidden />
+            ) : (
+              <Maximize2 data-icon="inline-start" aria-hidden />
+            )}
           </ControlButton>
-        )}
-        {showSecondaryControls && asrVisible && onToggleAsr && (
-          <Popover open={asrSettingsOpen} onOpenChange={setAsrSettingsOpen}>
-            <PopoverTrigger
-              openOnHover
-              delay={120}
-              closeDelay={180}
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className={cn(
-                    CONTROL_BUTTON_CLASS,
-                    CONTROL_ICON_CLASS,
-                    overlayButtonClass,
-                    asrDisabled && "pointer-events-auto opacity-50",
-                    asrOn && !overlay && "text-primary",
-                  )}
-                  aria-label={asrLabel}
-                  aria-disabled={asrDisabled}
-                  aria-pressed={asrOn}
-                  onClick={asrDisabled ? undefined : onToggleAsr}
-                >
-                  {asrControl.icon === "spinner" ? (
-                    <Spinner aria-hidden />
-                  ) : asrControl.icon === "captions" ? (
-                    <Captions data-icon="inline-start" aria-hidden />
-                  ) : (
-                    <CaptionsOff data-icon="inline-start" aria-hidden />
-                  )}
-                </Button>
-              }
-            />
-            <PopoverContent
-              container={portalContainer}
-              side="top"
-              align="end"
-              collisionBoundary={
-                typeof document !== "undefined" ? document.documentElement : undefined
-              }
-              collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
-              sticky
-              glass
-              className={cn("w-72", glassPanelClass({ overlay }))}
-            >
-              <div className="flex items-center justify-between gap-2 px-0.5">
-                <PopoverTitle className={glassTitleClass({ overlay })}>字幕设置</PopoverTitle>
-                {(asrSettingsPending || asrTranslationBusy) && (
-                  <Spinner aria-label="正在更新字幕设置" />
-                )}
-              </div>
-              {captionSettingsBody}
-            </PopoverContent>
-          </Popover>
-        )}
-        {showSidePanelControl && onToggleSidePanel && (
-          <ControlButton
-            label={resolvedSidePanelLabel}
-            variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
-            className={overlayButtonClass}
-            tooltipContainer={portalContainer}
-            aria-pressed={sidePanelOpen}
-            onClick={onToggleSidePanel}
-            tooltip={!compact}
-          >
-            {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-          </ControlButton>
-        )}
-        {showSecondaryControls && pictureInPictureSupported && onTogglePictureInPicture && (
-          <ControlButton
-            label={pictureInPictureActive ? "退出画中画" : "画中画"}
-            className={overlayButtonClass}
-            tooltipContainer={portalContainer}
-            disabled={disabled || pictureInPictureDisabled}
-            aria-pressed={pictureInPictureActive}
-            onClick={onTogglePictureInPicture}
-            tooltip={!compact}
-          >
-            <PictureInPicture2 />
-          </ControlButton>
-        )}
-        <ControlButton
-          label={fullscreenLabel}
-          className={overlayButtonClass}
-          tooltipContainer={portalContainer}
-          disabled={disabled}
-          aria-pressed={fullscreen}
-          onClick={(event) => {
-            if (event.detail > 0) event.currentTarget.blur();
-            onToggleFullscreen();
-          }}
-          tooltip={!compact}
-        >
-          {fullscreen ? (
-            <Minimize2 data-icon="inline-start" aria-hidden />
-          ) : (
-            <Maximize2 data-icon="inline-start" aria-hidden />
-          )}
-        </ControlButton>
+        </div>
       </div>
     </div>
   );
