@@ -13,8 +13,10 @@ import {
 } from "../src/features/recording/recording";
 import { shouldPromptBeforeRecordingLeave } from "../src/features/recording/RecordingLeaveGuard";
 import {
+  filterRecordedDanmakuEntries,
   firstRecordedDanmakuAtOrAfter,
   parseRecordedDanmakuSidecar,
+  recordedDanmakuFrame,
 } from "../src/features/recording/recordedDanmaku";
 
 const liveContext: RecordingContext = {
@@ -218,6 +220,66 @@ describe("recording presentation helpers", () => {
     expect(entries[0]?.text).toBe("晚上好");
     expect(firstRecordedDanmakuAtOrAfter(entries, 0)).toBe(0);
     expect(firstRecordedDanmakuAtOrAfter(entries, 1201)).toBe(1);
+  });
+
+  test("applies gift, super chat, and shield-word settings to recorded danmaku", () => {
+    const entries = parseRecordedDanmakuSidecar(
+      JSON.stringify({
+        offset_ms: 1200,
+        events: [
+          { kind: "chat", user: "甲", content: "普通消息", color: null, ts: 1 },
+          { kind: "chat", user: "乙", content: "包含剧透内容", color: null, ts: 2 },
+          { kind: "gift", user: "丙", content: "赠送礼物", color: null, ts: 3 },
+          { kind: "super_chat", user: "丁", content: "醒目留言", color: null, ts: 4 },
+        ],
+      }),
+    );
+
+    expect(
+      filterRecordedDanmakuEntries(entries, {
+        filterGifts: true,
+        showSuperChat: false,
+        shieldWords: [" 剧透 "],
+      }).map((entry) => entry.event.content),
+    ).toEqual(["普通消息"]);
+    expect(
+      filterRecordedDanmakuEntries(entries, {
+        filterGifts: false,
+        showSuperChat: true,
+        shieldWords: [],
+      }).map((entry) => entry.event.kind),
+    ).toEqual(["chat", "chat", "gift", "super_chat"]);
+  });
+
+  test("aggregates only visible history without reading future danmaku", () => {
+    const entries = parseRecordedDanmakuSidecar(
+      [
+        {
+          offset_ms: 1000,
+          events: [{ kind: "chat", user: "甲", content: "加油", color: null, ts: 1 }],
+        },
+        {
+          offset_ms: 2000,
+          events: [{ kind: "chat", user: "乙", content: "加油", color: null, ts: 2 }],
+        },
+        {
+          offset_ms: 4000,
+          events: [{ kind: "chat", user: "丙", content: "加油", color: null, ts: 3 }],
+        },
+      ]
+        .map((batch) => JSON.stringify(batch))
+        .join("\n"),
+    );
+
+    const beforeFuture = recordedDanmakuFrame(entries, 2500, 5000, 10);
+    expect(beforeFuture).toHaveLength(1);
+    expect(beforeFuture[0]?.text).toBe("加油 ×2");
+    expect(beforeFuture[0]?.aggregationCount).toBe(2);
+
+    const afterFuture = recordedDanmakuFrame(entries, 4000, 5000, 10);
+    expect(afterFuture).toHaveLength(1);
+    expect(afterFuture[0]?.text).toBe("加油 ×3");
+    expect(afterFuture[0]?.aggregationCount).toBe(3);
   });
 });
 
