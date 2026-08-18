@@ -114,9 +114,6 @@ export function RecordingControl({ context, className, disabled = false }: Recor
           <Field orientation="horizontal">
             <FieldContent>
               <FieldLabel htmlFor={danmakuSwitchId}>包含弹幕</FieldLabel>
-              <FieldDescription>
-                另存为可开关的同步弹幕轨，不会永久烧录进视频；后台录制时会持续收集到录制结束。
-              </FieldDescription>
             </FieldContent>
             <Switch
               id={danmakuSwitchId}
