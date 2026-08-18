@@ -22,6 +22,7 @@ import {
   loadIptvPlayerPage,
   loadMultiRoomPage,
   loadRecordingsPage,
+  loadRecordingPlaybackPage,
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
@@ -38,6 +39,7 @@ const SearchPage = lazy(loadSearchPage);
 const FollowPage = lazy(loadFollowPage);
 const HistoryPage = lazy(loadHistoryPage);
 const RecordingsPage = lazy(loadRecordingsPage);
+const RecordingPlaybackPage = lazy(loadRecordingPlaybackPage);
 const SettingsPage = lazy(loadSettingsPage);
 const IptvPage = lazy(loadIptvPage);
 const IptvPlayerPage = lazy(loadIptvPlayerPage);
@@ -83,6 +85,7 @@ const router = createBrowserRouter(
         <Route path="follow" element={<FollowPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="recordings" element={<RecordingsPage />} />
+        <Route path="recordings/play/:recordingId" element={<RecordingPlaybackPage />} />
         <Route path="iptv/play" element={<IptvPlayerPage />} />
         <Route path="iptv" element={<IptvPage />} />
         <Route path="settings" element={<SettingsPage />} />
