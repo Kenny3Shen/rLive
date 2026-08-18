@@ -15,6 +15,7 @@ import {
 import {
   Activity,
   Check,
+  CircleDot,
   CirclePlay,
   Clock3,
   Folder,
@@ -95,6 +96,7 @@ import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
+import { useFollowRecordingController } from "@/features/recording/followRecording";
 import {
   iptvFavoritesForSource,
   useAllIptvFavorites,
@@ -213,9 +215,14 @@ type FollowCardProps = {
   moving: boolean;
   removing: boolean;
   removeDisabled: boolean;
+  recordingSupported: boolean;
+  recordingActive: boolean;
+  recordingBusy: boolean;
+  recordingStarting: boolean;
   onNavigate: (path: string) => void;
   onMove: (user: FollowUser, groupId: string) => void;
   onRemove: (user: FollowUser) => void;
+  onStartRecording: (user: FollowUser) => void;
 };
 
 function FollowCard({
@@ -226,9 +233,14 @@ function FollowCard({
   moving,
   removing,
   removeDisabled,
+  recordingSupported,
+  recordingActive,
+  recordingBusy,
+  recordingStarting,
   onNavigate,
   onMove,
   onRemove,
+  onStartRecording,
 }: FollowCardProps) {
   const identity = followIdentity(user);
   const currentGroupId = followGroupId(user, groups);
@@ -345,6 +357,15 @@ function FollowCard({
               <CirclePlay aria-hidden />
               打开直播间
             </ContextMenuItem>
+            {recordingSupported && (
+              <ContextMenuItem
+                disabled={!live || recordingBusy || recordingActive}
+                onClick={() => onStartRecording(user)}
+              >
+                {recordingStarting ? <Spinner aria-hidden /> : <CircleDot aria-hidden />}
+                {recordingActive ? "正在录制" : recordingStarting ? "正在开启录制…" : "开启录制"}
+              </ContextMenuItem>
+            )}
             <ContextMenuSub>
               <ContextMenuSubTrigger>
                 <FolderInput aria-hidden />
@@ -428,6 +449,7 @@ export function FollowPage() {
   const [pendingRemove, setPendingRemove] = useState<FollowUser | null>(null);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
   const iptvCustomM3uUrl = useSettingsStore((state) => state.iptvCustomM3uUrl);
+  const recording = useFollowRecordingController();
   const sensors = useFollowDndSensors();
 
   useFollowStatusRefresh(activeView === "live");
@@ -1074,6 +1096,9 @@ export function FollowPage() {
                             <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
                               {items.map((user) => {
                                 const identity = followIdentity(user);
+                                const recordingStarting =
+                                  recording.pendingTarget != null &&
+                                  followIdentity(recording.pendingTarget) === identity;
                                 return (
                                   <FollowCard
                                     key={identity}
@@ -1090,9 +1115,14 @@ export function FollowPage() {
                                       followIdentity(removeMutation.variables) === identity
                                     }
                                     removeDisabled={removeMutation.isPending}
+                                    recordingSupported={recording.supported}
+                                    recordingActive={Boolean(recording.activeFor(user))}
+                                    recordingBusy={recording.busy}
+                                    recordingStarting={recordingStarting}
                                     onNavigate={(path) => navigate(path)}
                                     onMove={moveFollow}
                                     onRemove={setPendingRemove}
+                                    onStartRecording={recording.start}
                                   />
                                 );
                               })}
