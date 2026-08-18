@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   activeRecordingForContext,
+  applyRecordingProgress,
   clampRecordingPlaybackTime,
   createSharedRecordingChangeSubscription,
   formatRecordingDuration,
@@ -72,6 +73,41 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("recording change subscription", () => {
+  test("forwards activity progress to every shared subscriber", async () => {
+    let nativeHandler:
+      | ((progress?: {
+          recordingId: string;
+          durationMs: number;
+          sizeBytes: number;
+          danmakuCount: number;
+        }) => void)
+      | null = null;
+    const received: number[] = [];
+    const subscribe = createSharedRecordingChangeSubscription(
+      async (handler) => {
+        nativeHandler = handler;
+        return () => undefined;
+      },
+      (_subscriber: string, progress) => {
+        if (progress) received.push(progress.durationMs);
+      },
+    );
+    const unsubscribeFirst = subscribe("first");
+    const unsubscribeSecond = subscribe("second");
+    await flushMicrotasks();
+
+    nativeHandler?.({
+      recordingId: "recording-1",
+      durationMs: 1_500,
+      sizeBytes: 2_048,
+      danmakuCount: 3,
+    });
+
+    expect(received).toEqual([1_500, 1_500]);
+    unsubscribeFirst();
+    unsubscribeSecond();
+  });
+
   test("shares one native listener and reference-counts duplicate subscribers", async () => {
     let registrations = 0;
     let cleanups = 0;
@@ -158,6 +194,42 @@ describe("recording change subscription", () => {
 
     unsubscribeSecond();
     expect(secondCleanup).toBe(1);
+  });
+});
+
+describe("recording progress events", () => {
+  test("patches only the matching active recording with monotonic counters", () => {
+    const active = recordingItem({ duration_ms: 2_000, size_bytes: 1_024, danmaku_count: 3 });
+    const completed = recordingItem({ id: "completed", status: "completed", duration_ms: 5_000 });
+
+    const updated = applyRecordingProgress([active, completed], {
+      recordingId: active.id,
+      durationMs: 3_000,
+      sizeBytes: 512,
+      danmakuCount: 5,
+    });
+
+    expect(updated?.[0]).toEqual({
+      ...active,
+      duration_ms: 3_000,
+      size_bytes: 1_024,
+      danmaku_count: 5,
+    });
+    expect(updated?.[1]).toBe(completed);
+  });
+
+  test("ignores late progress after the recording has finished", () => {
+    const completed = recordingItem({ status: "completed", duration_ms: 5_000 });
+    const items = [completed];
+
+    expect(
+      applyRecordingProgress(items, {
+        recordingId: completed.id,
+        durationMs: 6_000,
+        sizeBytes: 2_048,
+        danmakuCount: 7,
+      }),
+    ).toBe(items);
   });
 });
 

@@ -42,7 +42,9 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const TASK_ABORT_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 const MINIMUM_FREE_SPACE_BYTES: u64 = 512 * 1024 * 1024;
 const STORAGE_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const RECORDING_PROGRESS_EVENT_INTERVAL_MS: u64 = 500;
 const RECORDING_CHANGED_EVENT: &str = "recording-changed";
+const RECORDING_PROGRESS_EVENT: &str = "recording-progress";
 static METADATA_IO_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,6 +148,15 @@ struct RecordingChangedEvent {
     status: RecordingStatus,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingProgressEvent {
+    recording_id: String,
+    duration_ms: u64,
+    size_bytes: u64,
+    danmaku_count: u64,
+}
+
 #[derive(Default)]
 struct RecordingEventSink {
     app: Mutex<Option<AppHandle>>,
@@ -174,6 +185,18 @@ impl RecordingEventSink {
             },
         ) {
             tracing::warn!(error = %error, "发送录制状态事件失败");
+        }
+    }
+
+    fn emit_progress(&self, progress: RecordingProgressEvent) {
+        let app = self
+            .app
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(app) = app else { return };
+        if let Err(error) = app.emit(RECORDING_PROGRESS_EVENT, progress) {
+            tracing::warn!(error = %error, "发送录制进度事件失败");
         }
     }
 
@@ -223,6 +246,81 @@ struct RecordingStorageState {
     roots: Vec<PathBuf>,
     history: Vec<PathBuf>,
     config_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct IndexedRecordingRoot {
+    recordings: HashMap<String, StoredRecording>,
+    modified_at: Option<SystemTime>,
+}
+
+#[derive(Debug, Default)]
+struct RecordingLibraryIndex {
+    roots: HashMap<PathBuf, IndexedRecordingRoot>,
+}
+
+impl RecordingLibraryIndex {
+    fn refresh_changed_roots(&mut self, roots: &[PathBuf]) {
+        for root in roots {
+            let modified_at = recording_root_modified_at(root);
+            let unchanged = self
+                .roots
+                .get(root)
+                .is_some_and(|indexed| indexed.modified_at == modified_at);
+            if unchanged {
+                continue;
+            }
+            self.replace_root(root.clone(), scan_recording_root(root));
+        }
+        self.roots.retain(|root, _| roots.contains(root));
+    }
+
+    fn replace_root(&mut self, root: PathBuf, recordings: HashMap<String, StoredRecording>) {
+        let modified_at = recording_root_modified_at(&root);
+        self.roots.insert(
+            root,
+            IndexedRecordingRoot {
+                recordings,
+                modified_at,
+            },
+        );
+    }
+
+    fn upsert(&mut self, root: &Path, stored: StoredRecording) {
+        let modified_at = recording_root_modified_at(root);
+        let indexed =
+            self.roots
+                .entry(root.to_path_buf())
+                .or_insert_with(|| IndexedRecordingRoot {
+                    recordings: HashMap::new(),
+                    modified_at,
+                });
+        indexed.recordings.insert(stored.id.clone(), stored);
+        indexed.modified_at = modified_at;
+    }
+
+    fn remove(&mut self, root: &Path, id: &str) {
+        let modified_at = recording_root_modified_at(root);
+        if let Some(indexed) = self.roots.get_mut(root) {
+            indexed.recordings.remove(id);
+            indexed.modified_at = modified_at;
+        }
+    }
+
+    fn items(&self, roots: &[PathBuf]) -> Vec<RecordingItem> {
+        let mut by_id = HashMap::<String, RecordingItem>::new();
+        for root in roots {
+            let Some(indexed) = self.roots.get(root) else {
+                continue;
+            };
+            for stored in indexed.recordings.values() {
+                by_id
+                    .entry(stored.id.clone())
+                    .or_insert_with(|| stored.item(root));
+            }
+        }
+        by_id.into_values().collect()
+    }
 }
 
 impl RecordingStorageState {
@@ -314,10 +412,12 @@ struct SessionState {
     bytes: AtomicU64,
     duration_ms: AtomicU64,
     danmaku_count: AtomicU64,
+    last_progress_event_ms: AtomicU64,
     danmaku_writer: Mutex<Option<std::fs::File>>,
     danmaku_closed: AtomicBool,
     finished: AtomicBool,
     finish_lock: Mutex<()>,
+    library: Arc<Mutex<RecordingLibraryIndex>>,
     events: Arc<RecordingEventSink>,
 }
 
@@ -381,6 +481,38 @@ impl SessionState {
         }
         self.danmaku_count
             .fetch_add(events.len() as u64, Ordering::Relaxed);
+        self.emit_progress();
+    }
+
+    fn emit_progress(&self) {
+        let now = unix_ms().max(0) as u64;
+        let mut previous = self.last_progress_event_ms.load(Ordering::Relaxed);
+        loop {
+            if now.saturating_sub(previous) < RECORDING_PROGRESS_EVENT_INTERVAL_MS {
+                return;
+            }
+            match self.last_progress_event_ms.compare_exchange_weak(
+                previous,
+                now,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => previous = current,
+            }
+        }
+        let recording_id = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .id
+            .clone();
+        self.events.emit_progress(RecordingProgressEvent {
+            recording_id,
+            duration_ms: self.duration_ms.load(Ordering::Relaxed),
+            size_bytes: self.bytes.load(Ordering::Relaxed),
+            danmaku_count: self.danmaku_count.load(Ordering::Relaxed),
+        });
     }
 }
 
@@ -425,6 +557,7 @@ impl Drop for BundleGuard {
 pub struct RecordingManager {
     _instance_lock: File,
     storage: Arc<Mutex<RecordingStorageState>>,
+    library: Arc<Mutex<RecordingLibraryIndex>>,
     sessions: Mutex<HashMap<String, Session>>,
     finalizing: Mutex<HashMap<String, FinalizingSession>>,
     pending_background_danmaku: Mutex<HashMap<String, usize>>,
@@ -467,6 +600,7 @@ impl RecordingManager {
     pub fn new(app_directory: &Path) -> AppResult<Self> {
         let instance_lock = acquire_recording_manager_lock(app_directory)?;
         let state = load_storage_state(app_directory)?;
+        let mut library = RecordingLibraryIndex::default();
         for root in &state.roots {
             if let Err(error) = recover_stale_recordings(root) {
                 if *root == state.default_root {
@@ -474,13 +608,16 @@ impl RecordingManager {
                 }
                 tracing::warn!(path = %root.display(), error = %error, "无法恢复历史录制目录");
             }
+            library.replace_root(root.clone(), scan_recording_root(root));
         }
         let storage = Arc::new(Mutex::new(state));
+        let library = Arc::new(Mutex::new(library));
         let events = Arc::new(RecordingEventSink::default());
         Ok(Self {
             _instance_lock: instance_lock,
             playback: PlaybackServer::new(storage.clone()),
             storage,
+            library,
             sessions: Mutex::new(HashMap::new()),
             finalizing: Mutex::new(HashMap::new()),
             pending_background_danmaku: Mutex::new(HashMap::new()),
@@ -540,6 +677,19 @@ impl RecordingManager {
                 .default_root
                 .clone(),
         };
+        let known_root = self
+            .storage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .roots
+            .contains(&next_root);
+        if !known_root {
+            recover_stale_recordings(&next_root)?;
+            self.library
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .replace_root(next_root.clone(), scan_recording_root(&next_root));
+        }
         let mut storage = self
             .storage
             .lock()
@@ -577,33 +727,13 @@ impl RecordingManager {
                 .collect()
         };
         let roots = self.storage_roots();
-        let mut by_id = HashMap::<String, RecordingItem>::new();
-        for root in roots {
-            let Ok(entries) = std::fs::read_dir(&root) else {
-                continue;
-            };
-            for entry in entries {
-                let Ok(entry) = entry else { continue };
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                let metadata_path = path.join("metadata.json");
-                let Ok(bytes) = read_metadata_bytes(&metadata_path) else {
-                    continue;
-                };
-                let Ok(stored) = serde_json::from_slice::<StoredRecording>(&bytes) else {
-                    continue;
-                };
-                if !is_safe_recording_id(&stored.id) || !path.ends_with(&stored.id) {
-                    continue;
-                }
-                by_id
-                    .entry(stored.id.clone())
-                    .or_insert_with(|| stored.item(&root));
-            }
-        }
-        let mut items: Vec<_> = by_id.into_values().collect();
+        let mut library = self
+            .library
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        library.refresh_changed_roots(&roots);
+        let mut items = library.items(&roots);
+        drop(library);
         for state in tracked_states {
             let item = state.snapshot();
             if let Some(existing) = items.iter_mut().find(|entry| entry.id == item.id) {
@@ -782,10 +912,12 @@ impl RecordingManager {
             bytes: AtomicU64::new(0),
             duration_ms: AtomicU64::new(0),
             danmaku_count: AtomicU64::new(0),
+            last_progress_event_ms: AtomicU64::new(0),
             danmaku_writer: Mutex::new(danmaku_writer),
             danmaku_closed: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             finish_lock: Mutex::new(()),
+            library: self.library.clone(),
             events: self.events.clone(),
         });
         if self.shutting_down.load(Ordering::Acquire) {
@@ -813,6 +945,17 @@ impl RecordingManager {
                 "应用正在退出，无法开始新的录制",
             ));
         }
+        self.library
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .upsert(
+                &root,
+                state
+                    .stored
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            );
         let task = tauri::async_runtime::spawn(async move {
             let outcome = run_recording_task(
                 stream_client,
@@ -918,7 +1061,14 @@ impl RecordingManager {
         };
         std::fs::remove_dir_all(&bundle).map_err(|error| {
             AppError::new("recording_delete_error", format!("删除录制失败: {error}"))
-        })
+        })?;
+        if let Some(root) = bundle.parent() {
+            self.library
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(root, id);
+        }
+        Ok(())
     }
 
     pub async fn playback_url(&self, id: &str) -> AppResult<String> {
@@ -961,6 +1111,10 @@ impl RecordingManager {
                     if let Err(error) = write_metadata(&root.join(id), &stored) {
                         tracing::warn!(recording_id = %id, error = %error.message, "保存索引化录制大小失败");
                     }
+                    self.library
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .upsert(&root, stored.clone());
                 }
                 Ok(Ok(false)) => {}
                 Ok(Err(error)) => {
@@ -1545,6 +1699,7 @@ async fn run_direct_recording(
             started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             Ordering::Relaxed,
         );
+        state.emit_progress();
     }
     let flush_result = match file.flush().await {
         Ok(()) => file.sync_data().await,
@@ -1645,9 +1800,15 @@ fn finish_session_inner(
     }
     let recording_id = stored.id.clone();
     let status = stored.status.clone();
+    let indexed = stored.clone();
     let background_danmaku_source =
         (stored.include_danmaku && stored.continue_on_leave).then(|| stored.source_key.clone());
     drop(stored);
+    state
+        .library
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .upsert(&state.root, indexed);
     state.finished.store(true, Ordering::Release);
     state.events.emit(&recording_id, status);
     if let Some(source_key) = background_danmaku_source {
@@ -2233,6 +2394,37 @@ fn recover_bundle_sidecars(bundle: &Path) -> std::io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn recording_root_modified_at(root: &Path) -> Option<SystemTime> {
+    std::fs::metadata(root)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+fn scan_recording_root(root: &Path) -> HashMap<String, StoredRecording> {
+    let mut recordings = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return recordings;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(bytes) = read_metadata_bytes(&path.join("metadata.json")) else {
+            continue;
+        };
+        let Ok(stored) = serde_json::from_slice::<StoredRecording>(&bytes) else {
+            continue;
+        };
+        if !is_safe_recording_id(&stored.id) || !path.ends_with(&stored.id) {
+            continue;
+        }
+        recordings.insert(stored.id.clone(), stored);
+    }
+    recordings
 }
 
 fn read_stored(root: &Path, id: &str) -> AppResult<StoredRecording> {
@@ -2879,18 +3071,19 @@ async fn write_simple_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingManager,
-        RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session, SessionState,
-        StoredDanmakuBatch, StoredRecording, TaskOutcome, decode_playback_relative_path,
-        finish_session, load_storage_state, local_playback_url, media_file_name, parse_range,
-        prepare_storage_root, read_stored, recording_file_stem, recover_bundle_sidecars,
-        recover_stale_recordings, safe_relative_path, salvage_temporary_media_after_worker_failure,
+        FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingLibraryIndex,
+        RecordingManager, RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session,
+        SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome,
+        decode_playback_relative_path, finish_session, load_storage_state, local_playback_url,
+        media_file_name, parse_range, prepare_storage_root, read_stored, recording_file_stem,
+        recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
+        salvage_temporary_media_after_worker_failure, scan_recording_root,
         stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
         wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use reqwest::Url;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::fs::OpenOptions;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -3131,6 +3324,63 @@ mod tests {
     }
 
     #[test]
+    fn recording_library_index_respects_root_priority_and_incremental_updates() {
+        let primary_root = PathBuf::from("primary");
+        let fallback_root = PathBuf::from("fallback");
+        let id = Uuid::new_v4().to_string();
+        let fallback = completed_recording(id.clone(), "fallback");
+        let primary = completed_recording(id.clone(), "primary");
+        let mut index = RecordingLibraryIndex::default();
+        index.replace_root(
+            fallback_root.clone(),
+            HashMap::from([(id.clone(), fallback)]),
+        );
+        index.replace_root(primary_root.clone(), HashMap::from([(id.clone(), primary)]));
+
+        let items = index.items(&[primary_root.clone(), fallback_root.clone()]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "primary");
+
+        let updated = completed_recording(id.clone(), "updated");
+        index.upsert(&primary_root, updated);
+        assert_eq!(
+            index.items(&[primary_root.clone(), fallback_root.clone()])[0].title,
+            "updated"
+        );
+
+        index.remove(&primary_root, &id);
+        assert_eq!(
+            index.items(&[primary_root, fallback_root])[0].title,
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn recording_library_index_rebuilds_after_external_bundle_addition() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-index-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut index = RecordingLibraryIndex::default();
+        index.replace_root(root.clone(), scan_recording_root(&root));
+        assert!(index.items(std::slice::from_ref(&root)).is_empty());
+
+        let stored = completed_recording(Uuid::new_v4().to_string(), "external");
+        let bundle = root.join(&stored.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("stream.flv"), b"media").unwrap();
+        write_metadata(&bundle, &stored).unwrap();
+        // Avoid relying on the filesystem's timestamp granularity in this unit
+        // test while exercising the same stale-root branch used in production.
+        index.roots.get_mut(&root).unwrap().modified_at = None;
+
+        index.refresh_changed_roots(std::slice::from_ref(&root));
+
+        let items = index.items(std::slice::from_ref(&root));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "external");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn only_background_sidecar_recordings_retain_danmaku_connections() {
         let mut stored = completed_recording("recording".into(), "room");
         stored.status = RecordingStatus::Recording;
@@ -3201,10 +3451,12 @@ mod tests {
             bytes: AtomicU64::new(0),
             duration_ms: AtomicU64::new(0),
             danmaku_count: AtomicU64::new(0),
+            last_progress_event_ms: AtomicU64::new(0),
             danmaku_writer: Mutex::new(None),
             danmaku_closed: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             finish_lock: Mutex::new(()),
+            library: Arc::new(Mutex::new(RecordingLibraryIndex::default())),
             events: Arc::new(RecordingEventSink::default()),
         })
     }
