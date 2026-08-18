@@ -260,82 +260,137 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            zip
+            zip \
+            rpm \
+            cpio \
+            xvfb
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build Linux binary and stage ASR runtime
+      - name: Build and verify Linux packages with ASR runtime
         shell: bash
         run: |
           set -euo pipefail
-          bun run tauri -- build --ci --no-bundle
+          bun run bundle:linux
 
-          test -f src-tauri/target/release/libsherpa-onnx-c-api.so
-          test -f src-tauri/target/release/libonnxruntime.so
-          patchelf --set-rpath '$ORIGIN/../lib/rlive' src-tauri/target/release/rlive
+          release_dir="$PWD/src-tauri/target/release"
+          runtime_manifest="$RUNNER_TEMP/rlive-linux-runtime.manifest"
+          find "$release_dir" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$runtime_manifest"
+          test -s "$runtime_manifest"
+          test -f "$release_dir/libsherpa-onnx-c-api.so"
+          test -f "$release_dir/libonnxruntime.so"
 
-      - name: Create Debian package with ASR runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          runtime_config="$RUNNER_TEMP/tauri-release-linux.json"
-          runtime_files="$RUNNER_TEMP/rlive-linux-runtime-files.json"
+          verify_runtime() {
+            local binary="$1"
+            local runtime_dir="$2"
+            local expected_rpath="$3"
+            local actual_manifest
+            actual_manifest="$(mktemp)"
+            find "$runtime_dir" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$actual_manifest"
+            diff -u "$runtime_manifest" "$actual_manifest"
+            test -x "$binary"
+            test -f "$runtime_dir/libsherpa-onnx-c-api.so"
+            test -f "$runtime_dir/libonnxruntime.so"
+            readelf -d "$binary" | grep -Fq '$ORIGIN'
+            readelf -d "$binary" | grep -Fq "$expected_rpath"
+            if readelf -d "$binary" | grep -Fq 'sherpa-onnx-prebuilt'; then
+              echo "ELF 不得保留构建缓存的 Sherpa RUNPATH: $binary" >&2
+              exit 1
+            fi
+            if ldd "$binary" | grep -q 'not found'; then
+              ldd "$binary"
+              exit 1
+            fi
+            ldd "$binary" | grep -Fq 'libsherpa-onnx-c-api.so'
+            ldd "$binary" | grep -Fq 'libonnxruntime.so'
+          }
 
-          find "$PWD/src-tauri/target/release" -maxdepth 1 -type f -name '*.so*' \
-            -printf '%p\t%f\n' | sort | \
-            jq -Rn '
-              [inputs | split("\t") | {
-                key: ("/usr/lib/rlive/" + .[1]),
-                value: .[0]
-              }] | from_entries
-            ' > "$runtime_files"
-          test "$(jq 'length' "$runtime_files")" -gt 0
-          jq -n --slurpfile files "$runtime_files" \
-            '{ bundle: { linux: { deb: { files: $files[0] } } } }' > "$runtime_config"
+          smoke_start() {
+            local binary="$1"
+            local state_dir="$2"
+            set +e
+            xvfb-run -a env \
+              XDG_DATA_HOME="$state_dir/data" \
+              XDG_CONFIG_HOME="$state_dir/config" \
+              XDG_CACHE_HOME="$state_dir/cache" \
+              timeout --signal=TERM 8s "$binary"
+            local status=$?
+            set -e
+            test "$status" -eq 124
+          }
 
-          bun run tauri -- bundle --ci --bundles deb --config "$runtime_config"
+          verify_runtime "$release_dir/rlive" "$release_dir" '$ORIGIN/../lib/rLive'
+          smoke_start "$release_dir/rlive" "$RUNNER_TEMP/rlive-release-smoke"
 
-          mapfile -t deb_files < <(
-            find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' | sort
-          )
+          mapfile -t deb_files < <(find "$release_dir/bundle/deb" -maxdepth 1 -type f -name '*.deb' | sort)
           test "${#deb_files[@]}" -eq 1
+          deb_dir="$RUNNER_TEMP/rlive-deb-contents"
+          dpkg-deb --extract "${deb_files[0]}" "$deb_dir"
+          verify_runtime "$deb_dir/usr/bin/rlive" "$deb_dir/usr/lib/rLive" '$ORIGIN/../lib/rLive'
+          smoke_start "$deb_dir/usr/bin/rlive" "$RUNNER_TEMP/rlive-deb-smoke"
 
-          verify_dir="$RUNNER_TEMP/rlive-deb-contents"
-          dpkg-deb --extract "${deb_files[0]}" "$verify_dir"
-          test -x "$verify_dir/usr/bin/rlive"
-          test -f "$verify_dir/usr/lib/rlive/libsherpa-onnx-c-api.so"
-          test -f "$verify_dir/usr/lib/rlive/libonnxruntime.so"
-          readelf -d "$verify_dir/usr/bin/rlive" | grep -Fq '$ORIGIN/../lib/rlive'
-          if LD_LIBRARY_PATH="$verify_dir/usr/lib/rlive" ldd "$verify_dir/usr/bin/rlive" | grep -q 'not found'; then
-            LD_LIBRARY_PATH="$verify_dir/usr/lib/rlive" ldd "$verify_dir/usr/bin/rlive"
-            exit 1
-          fi
+          mapfile -t rpm_files < <(find "$release_dir/bundle/rpm" -maxdepth 1 -type f -name '*.rpm' | sort)
+          test "${#rpm_files[@]}" -eq 1
+          rpm_dir="$RUNNER_TEMP/rlive-rpm-contents"
+          mkdir -p "$rpm_dir"
+          rpm2cpio "${rpm_files[0]}" | (cd "$rpm_dir" && cpio -idmu)
+          verify_runtime "$rpm_dir/usr/bin/rlive" "$rpm_dir/usr/lib/rLive" '$ORIGIN/../lib/rLive'
+          smoke_start "$rpm_dir/usr/bin/rlive" "$RUNNER_TEMP/rlive-rpm-smoke"
+
+          mapfile -t appimage_files < <(find "$release_dir/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' | sort)
+          test "${#appimage_files[@]}" -eq 1
+          appimage_file="$(realpath "${appimage_files[0]}")"
+          appimage_dir="$RUNNER_TEMP/rlive-appimage-contents"
+          mkdir -p "$appimage_dir"
+          (cd "$appimage_dir" && "$appimage_file" --appimage-extract >/dev/null)
+          verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib/rLive" '$ORIGIN/../lib/rLive'
+          set +e
+          APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a env \
+            XDG_DATA_HOME="$RUNNER_TEMP/rlive-appimage-smoke/data" \
+            XDG_CONFIG_HOME="$RUNNER_TEMP/rlive-appimage-smoke/config" \
+            XDG_CACHE_HOME="$RUNNER_TEMP/rlive-appimage-smoke/cache" \
+            timeout --signal=TERM 8s "$appimage_file"
+          appimage_status=$?
+          set -e
+          test "$appimage_status" -eq 124
 
           mkdir -p release-assets/linux
-          cp "${deb_files[0]}" \
-            "release-assets/linux/rLive_${RELEASE_VERSION}_linux-amd64.deb"
+          cp "${deb_files[0]}" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-amd64.deb"
+          cp "${rpm_files[0]}" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-x86_64.rpm"
+          cp "$appimage_file" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-x86_64.AppImage"
 
       - name: Create Linux portable ZIP with ASR runtime
         shell: bash
         run: |
           set -euo pipefail
+          release_dir="$PWD/src-tauri/target/release"
+          runtime_manifest="$RUNNER_TEMP/rlive-linux-runtime.manifest"
           portable_dir="$RUNNER_TEMP/rlive-linux-portable"
-          rm -rf "$portable_dir"
           mkdir -p "$portable_dir/lib"
 
-          cp src-tauri/target/release/rlive "$portable_dir/rlive"
-          find "$PWD/src-tauri/target/release" -maxdepth 1 -type f -name '*.so*' \
-            -exec cp {} "$portable_dir/lib/" \;
+          cp "$release_dir/rlive" "$portable_dir/rlive"
+          find "$release_dir" -maxdepth 1 -type f -name '*.so*' -exec cp {} "$portable_dir/lib/" \;
+          find "$portable_dir/lib" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$RUNNER_TEMP/rlive-portable-runtime.manifest"
+          diff -u "$runtime_manifest" "$RUNNER_TEMP/rlive-portable-runtime.manifest"
           test -f "$portable_dir/lib/libsherpa-onnx-c-api.so"
           test -f "$portable_dir/lib/libonnxruntime.so"
 
           patchelf --set-rpath '$ORIGIN/lib' "$portable_dir/rlive"
           readelf -d "$portable_dir/rlive" | grep -Fq '$ORIGIN/lib'
-          if LD_LIBRARY_PATH="$portable_dir/lib" ldd "$portable_dir/rlive" | grep -q 'not found'; then
-            LD_LIBRARY_PATH="$portable_dir/lib" ldd "$portable_dir/rlive"
+          if ldd "$portable_dir/rlive" | grep -q 'not found'; then
+            ldd "$portable_dir/rlive"
             exit 1
           fi
+          set +e
+          xvfb-run -a env \
+            XDG_DATA_HOME="$RUNNER_TEMP/rlive-portable-smoke/data" \
+            XDG_CONFIG_HOME="$RUNNER_TEMP/rlive-portable-smoke/config" \
+            XDG_CACHE_HOME="$RUNNER_TEMP/rlive-portable-smoke/cache" \
+            timeout --signal=TERM 8s "$portable_dir/rlive"
+          portable_status=$?
+          set -e
+          test "$portable_status" -eq 124
 
           zip_path="$PWD/release-assets/linux/rLive_${RELEASE_VERSION}_linux-x64-portable.zip"
           (cd "$portable_dir" && zip -r -X "$zip_path" .)
@@ -347,6 +402,8 @@ jobs:
           name: linux-release
           path: |
             release-assets/linux/*.deb
+            release-assets/linux/*.rpm
+            release-assets/linux/*.AppImage
             release-assets/linux/*.zip
           if-no-files-found: error
           retention-days: 14

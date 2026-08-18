@@ -72,8 +72,13 @@ fn try_main() -> Result<(), DynError> {
     }
 
     if link_mode == LinkMode::Shared && matches!(target_os.as_str(), "linux" | "macos") {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
-        emit_relative_rpath(&target_os);
+        // Linux runtime libraries are staged here, but the final application
+        // RPATH belongs to rLive's own build script because dependency build
+        // script linker arguments do not propagate to the application ELF.
+        if target_os == "macos" {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+            emit_macos_relative_rpath();
+        }
         copy_unix_runtime_libs(&lib_dir, &target_os)?;
     }
 
@@ -390,12 +395,8 @@ fn target_dir_from_out_dir(out_dir: &Path) -> Result<PathBuf, DynError> {
     Ok(out_dir.to_path_buf())
 }
 
-fn emit_relative_rpath(target_os: &str) {
-    match target_os {
-        "linux" => println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN"),
-        "macos" => println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path"),
-        _ => {}
-    }
+fn emit_macos_relative_rpath() {
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
 }
 
 fn profile_output_dirs() -> Result<[PathBuf; 2], DynError> {
