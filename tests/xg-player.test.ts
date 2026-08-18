@@ -275,6 +275,26 @@ describe("xgplayer transport selection", () => {
     expect(requestedPlugin).toBe("MpegtsPlugin");
   });
 
+  test("seeks recordings through the attached mpegts.js core", () => {
+    let currentTime = 0;
+    const core = {
+      on: () => {},
+      get currentTime() {
+        return currentTime;
+      },
+      set currentTime(value: number) {
+        currentTime = value;
+      },
+    };
+    const player = {
+      getPlugin: () => ({ mpegts: core }),
+      on: () => {},
+    } as unknown as XgPlayerInstance;
+
+    expect(getXgMpegtsCore(player)?.seek?.(95.5)).toBe(true);
+    expect(currentTime).toBe(95.5);
+  });
+
   test("keeps repeated FLV switches on the mpegts player without seamless timestamps", async () => {
     const calls: Array<{ url: string; options: unknown }> = [];
     const player = {
