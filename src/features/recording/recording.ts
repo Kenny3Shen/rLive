@@ -38,6 +38,8 @@ export type RecordingStorageInfo = {
   path: string;
   default_path: string;
   is_default: boolean;
+  available_bytes: number | null;
+  minimum_free_bytes: number;
 };
 
 export type RecordingContext = {
