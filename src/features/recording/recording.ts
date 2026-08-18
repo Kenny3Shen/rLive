@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { useCallback, useEffect, useMemo } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
-import type { PlayUrl, PlaybackProtocol } from "@/shared/types/live";
+import { isSiteId } from "@/shared/siteId";
+import type { PlayUrl, PlaybackProtocol, SiteId } from "@/shared/types/live";
 import { notify } from "@/components/ui/toast";
 
 export type RecordingStatus = "recording" | "completed" | "interrupted" | "failed";
@@ -53,6 +54,26 @@ export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
 export const RECORDING_STORAGE_QUERY_KEY = ["recording-storage"] as const;
 export const RECORDING_PLAYBACK_QUERY_KEY = "recording-playback";
 const RECORDING_CHANGED_EVENT = "recording-changed";
+
+export type RecordingPlatformFilter = "all" | SiteId;
+
+export function recordingPlatformFromSearch(value: string | null): RecordingPlatformFilter {
+  return isSiteId(value) ? value : "all";
+}
+
+export function recordingsForPlatform(
+  items: readonly RecordingItem[],
+  platform: RecordingPlatformFilter,
+): readonly RecordingItem[] {
+  return platform === "all" ? items : items.filter((item) => item.site_id === platform);
+}
+
+export function recordingUserGroupKey(
+  item: Pick<RecordingItem, "site_id" | "source_kind" | "user_name">,
+): string {
+  const source = item.site_id?.trim() || item.source_kind.trim() || "unknown";
+  return `${source}::${item.user_name.trim()}`;
+}
 
 export type RecordingStartOptions = {
   includeDanmaku?: boolean;

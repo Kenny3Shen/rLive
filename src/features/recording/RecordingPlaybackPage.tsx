@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, CircleDot, MessageSquareText, Videotape } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +25,7 @@ import {
   recordingPlaybackUrl,
   recordingProtocolLabel,
   recordingSupported,
+  recordingUserGroupKey,
   useRecordings,
   type RecordingItem,
   type RecordingStatus,
@@ -47,10 +48,6 @@ function recordingSourceLabel(item: RecordingItem): string {
   if (item.source_kind === "iptv") return "IPTV";
   if (item.site_id) return SITE_LABELS[item.site_id as SiteId] ?? item.site_id;
   return "直播";
-}
-
-function recordingUserLabel(item: RecordingItem): string {
-  return item.user_name.trim() || recordingSourceLabel(item);
 }
 
 function PlaybackPageHeader({ item, onBack }: { item: RecordingItem; onBack: () => void }) {
@@ -123,6 +120,7 @@ function PlaybackMetadata({ item }: { item: RecordingItem }) {
 
 export function RecordingPlaybackPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { recordingId } = useParams<{ recordingId: string }>();
   const queryClient = useQueryClient();
   const supported = recordingSupported();
@@ -142,9 +140,12 @@ export function RecordingPlaybackPage() {
   });
 
   function goBack() {
-    navigate(
-      item ? `/recordings?user=${encodeURIComponent(recordingUserLabel(item))}` : "/recordings",
-    );
+    const params = new URLSearchParams();
+    if (item) params.set("user", recordingUserGroupKey(item));
+    const platform = searchParams.get("platform");
+    if (platform) params.set("platform", platform);
+    const query = params.toString();
+    navigate(query ? `/recordings?${query}` : "/recordings");
   }
 
   if (!supported) {
