@@ -55,6 +55,7 @@ import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQu
 import type { SiteId } from "@/shared/types/live";
 import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
+import { isImmersivePlayerPath } from "./immersiveRoutes";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import {
@@ -129,11 +130,8 @@ export function Shell() {
   const queryClient = useQueryClient();
   const outlet = useOutlet();
   const [searchParams] = useSearchParams();
-  const isRoom = pathname.startsWith("/room/");
-  const isMultiRoom = pathname === "/multi-room";
   const isIptv = pathname === "/iptv";
-  const isIptvPlayer = pathname === "/iptv/play";
-  const isImmersivePlayer = isRoom || isIptvPlayer || isMultiRoom;
+  const isImmersivePlayer = isImmersivePlayerPath(pathname);
   const isSearch = pathname === "/search";
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";

@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
@@ -17,6 +18,7 @@ import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import type { SiteId } from "@/shared/types/live";
 import {
   createXgPlayer,
+  getXgMpegtsCore,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
@@ -47,13 +49,21 @@ function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
 }
 
-const RECORDING_SEEK_TIMEOUT_MS = 8_000;
+function bufferedRangeEnd(video: HTMLVideoElement): number {
+  let end = 0;
+  for (let index = 0; index < video.buffered.length; index += 1) {
+    end = Math.max(end, video.buffered.end(index));
+  }
+  return Number.isFinite(end) ? end : 0;
+}
+
+const RECORDING_SEEK_TIMEOUT_MS = 4_000;
 const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
 const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_600;
 const RECORDING_SINGLE_CLICK_DELAY_MS = 220;
 const RECORDING_MPEGTS_CONFIG = {
   enableWorker: false,
-  enableStashBuffer: true,
+  enableStashBuffer: false,
   lazyLoad: true,
   autoCleanupSourceBuffer: false,
   seekType: "range",
@@ -70,7 +80,15 @@ function isPlayerControlTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function RecordingPlayer({ item, url }: { item: RecordingItem; url: string }) {
+export function RecordingPlayer({
+  item,
+  url,
+  fill = false,
+}: {
+  item: RecordingItem;
+  url: string;
+  fill?: boolean;
+}) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -91,6 +109,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
   const [volume, setVolume] = useState(80);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [bufferedTime, setBufferedTime] = useState(0);
   const [danmakuEntries, setDanmakuEntries] = useState<RecordedDanmakuEntry[]>([]);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -183,7 +202,11 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       }
 
       try {
-        media.currentTime = target;
+        const protocolSeek =
+          playbackKind === "flv" || playbackKind === "mpegts"
+            ? getXgMpegtsCore(playerRef.current!)?.seek?.(target)
+            : false;
+        if (!protocolSeek) media.currentTime = target;
       } catch {
         seekTargetRef.current = null;
         setWaiting(false);
@@ -225,6 +248,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
     setPaused(true);
     setCurrentTime(0);
     setDuration(recordedDuration);
+    setBufferedTime(0);
     endedRef.current = false;
     const kind = playbackKind;
 
@@ -257,6 +281,15 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
         completeSeek();
       }
     }
+    function syncBufferedTime() {
+      if (cancelled) return;
+      setBufferedTime(
+        clampRecordingPlaybackTime(
+          bufferedRangeEnd(media),
+          recordedDuration || finiteDuration(media),
+        ),
+      );
+    }
     function onPlay() {
       if (cancelled) return;
       endedRef.current = false;
@@ -274,6 +307,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       setLoading(false);
       if (seekTargetRef.current === null) setWaiting(false);
       syncTime();
+      syncBufferedTime();
       const pendingTarget = recoverySeekRef.current;
       if (pendingTarget !== null) {
         recoverySeekRef.current = null;
@@ -343,6 +377,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
     video.playbackRate = playbackRateRef.current;
     video.addEventListener("timeupdate", syncTime);
     video.addEventListener("durationchange", syncTime);
+    video.addEventListener("progress", syncBufferedTime);
     video.addEventListener("loadedmetadata", onReady);
     video.addEventListener("canplay", onReady);
     video.addEventListener("play", onPlay);
@@ -378,6 +413,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
               isLive: false,
               hasAudio: true,
               hasVideo: true,
+              duration: item.duration_ms || undefined,
             },
             mpegtsConfig: {
               ...RECORDING_MPEGTS_CONFIG,
@@ -389,6 +425,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
               isLive: false,
               hasAudio: true,
               hasVideo: true,
+              duration: item.duration_ms || undefined,
             },
             mpegtsConfig: {
               ...RECORDING_MPEGTS_CONFIG,
@@ -415,6 +452,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       cancelled = true;
       video.removeEventListener("timeupdate", syncTime);
       video.removeEventListener("durationchange", syncTime);
+      video.removeEventListener("progress", syncBufferedTime);
       video.removeEventListener("loadedmetadata", onReady);
       video.removeEventListener("canplay", onReady);
       video.removeEventListener("play", onPlay);
@@ -438,7 +476,16 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
         // The protocol plugin may already have released its MediaSource.
       }
     };
-  }, [clearSeekTimer, completeSeek, item.id, playbackKind, playerRevision, recordedDuration, url]);
+  }, [
+    clearSeekTimer,
+    completeSeek,
+    item.duration_ms,
+    item.id,
+    playbackKind,
+    playerRevision,
+    recordedDuration,
+    url,
+  ]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -618,19 +665,18 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
   );
 
   const timeline = (
-    <div className="flex min-w-0 items-center gap-2 text-white/80">
-      <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">
-        {formatRecordingDuration(currentTime * 1_000)}
-      </span>
+    <div className="flex min-w-0 items-center gap-2 py-0.5 text-white/85">
       <Slider
         value={currentTime}
         min={0}
         max={duration || 1}
         step={0.1}
+        variant="player"
+        buffered={duration > 0 ? (bufferedTime / duration) * 100 : 0}
         disabled={!duration}
-        aria-label="回放进度"
+        aria-label="播放进度"
         aria-valuetext={`${formatRecordingDuration(currentTime * 1_000)} / ${formatRecordingDuration(duration * 1_000)}`}
-        className="!w-auto min-w-0 flex-1"
+        className="min-w-0 flex-1"
         onValueChange={(value) => {
           const next = Number(Array.isArray(value) ? value[0] : value);
           if (!Number.isFinite(next)) return;
@@ -642,7 +688,11 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
           if (Number.isFinite(next)) seekTo(next);
         }}
       />
-      <span className="w-16 shrink-0 font-mono text-xs tabular-nums">
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-white/80">
+        {formatRecordingDuration(currentTime * 1_000)}
+        <span className="px-1 text-white/45" aria-hidden>
+          /
+        </span>
         {formatRecordingDuration(duration * 1_000)}
       </span>
     </div>
@@ -660,7 +710,12 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
       data-player-stage
       data-recording-player
       data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
-      className="relative flex aspect-video min-w-0 flex-col overflow-hidden rounded-xl border border-border-subtle bg-black shadow-sm data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0"
+      className={cn(
+        "relative flex min-w-0 flex-col overflow-hidden bg-black data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
+        fill
+          ? "size-full min-h-0 rounded-none border-0 shadow-none"
+          : "aspect-video rounded-xl border border-border-subtle shadow-sm",
+      )}
       aria-label={`${item.title} 录制回放；按空格或 K 播放或暂停，左右方向键快退或快进，M 静音，F 全屏`}
       aria-keyshortcuts="Space K ArrowLeft ArrowRight M F"
       onPointerEnter={handleStagePointerActivity}
@@ -758,7 +813,7 @@ export function RecordingPlayer({ item, url }: { item: RecordingItem; url: strin
           refreshDisabled={loading}
           loadError={fullscreen.error}
           overlay
-          stackedBelowPlayer
+          stackedBelowPlayer={fill ? compact : true}
           compact={compact}
           portalContainer={stageRef}
           timeline={timeline}

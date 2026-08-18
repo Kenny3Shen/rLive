@@ -33,6 +33,9 @@ export type XgHlsCore = {
 export type XgMpegtsCore = {
   on: (event: string, handler: (...args: unknown[]) => void) => void;
   off?: (event: string, handler: (...args: unknown[]) => void) => void;
+  currentTime?: number;
+  /** Uses mpegts.js' seek path directly when its protocol core is attached. */
+  seek?: (seconds: number) => boolean;
 };
 
 let coreModulePromise: Promise<typeof import("xgplayer")> | null = null;
@@ -129,6 +132,12 @@ export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {
   // change. Keep subscriptions attached to that current instance even when
   // the first core was already present when this helper was called.
   return {
+    seek: (seconds) => {
+      const core = plugin.mpegts ?? null;
+      if (!core || !Number.isFinite(seconds)) return false;
+      core.currentTime = Math.max(0, seconds);
+      return true;
+    },
     on: (event, handler) => {
       let attachedCore: XgMpegtsCore | null = null;
       const attach = () => {

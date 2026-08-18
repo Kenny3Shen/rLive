@@ -19,6 +19,7 @@ export type RecordingItem = {
   title: string;
   user_name: string;
   cover: string;
+  user_avatar: string;
   protocol: PlaybackProtocol;
   status: RecordingStatus;
   started_at: number;
@@ -48,6 +49,7 @@ export type RecordingContext = {
   title: string;
   userName?: string;
   cover?: string;
+  userAvatar?: string;
 };
 
 export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
@@ -300,6 +302,7 @@ export function useRecordingController(context: RecordingContext | null) {
           title: context?.title ?? "",
           userName: context?.userName ?? "",
           cover: context?.cover ?? "",
+          userAvatar: context?.userAvatar ?? "",
           includeDanmaku,
           continueOnLeave,
         },

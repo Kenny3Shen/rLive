@@ -34,44 +34,41 @@ export function RecordingPlaybackSettings({
 }: RecordingPlaybackSettingsProps) {
   return (
     <FieldGroup className="gap-3">
-      <FieldSet className="gap-2">
-        <FieldLegend>回放</FieldLegend>
-        <Field>
-          <FieldContent>
-            <FieldTitle>播放速度</FieldTitle>
-            <FieldDescription>只影响当前录制，不会修改直播间默认速度。</FieldDescription>
-          </FieldContent>
-          <ToggleGroup
-            value={[String(playbackRate)]}
-            variant="outline"
-            size="sm"
-            spacing={1}
-            aria-label="播放速度"
-            className="w-full flex-wrap"
-            onValueChange={(value) => {
-              const selected = value.at(-1);
-              const next = Number(selected);
-              if (
-                Number.isFinite(next) &&
-                PLAYBACK_RATES.includes(next as (typeof PLAYBACK_RATES)[number])
-              ) {
-                onPlaybackRateChange(next);
-              }
-            }}
-          >
-            {PLAYBACK_RATES.map((rate) => (
-              <ToggleGroupItem
-                key={rate}
-                value={String(rate)}
-                aria-label={`${rate} 倍速`}
-                className="min-w-0 flex-1"
-              >
-                {rate}x
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </Field>
-      </FieldSet>
+      <Field className="gap-2">
+        <FieldContent>
+          <FieldTitle>播放速度</FieldTitle>
+          <FieldDescription>只影响当前录制，不会修改直播间默认速度。</FieldDescription>
+        </FieldContent>
+        <ToggleGroup
+          value={[String(playbackRate)]}
+          variant="outline"
+          size="sm"
+          spacing={1}
+          aria-label="播放速度"
+          className="w-full flex-wrap"
+          onValueChange={(value) => {
+            const selected = value.at(-1);
+            const next = Number(selected);
+            if (
+              Number.isFinite(next) &&
+              PLAYBACK_RATES.includes(next as (typeof PLAYBACK_RATES)[number])
+            ) {
+              onPlaybackRateChange(next);
+            }
+          }}
+        >
+          {PLAYBACK_RATES.map((rate) => (
+            <ToggleGroupItem
+              key={rate}
+              value={String(rate)}
+              aria-label={`${rate} 倍速`}
+              className="min-w-0 flex-1"
+            >
+              {rate}x
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </Field>
 
       {hasDanmaku && (
         <FieldSet className="gap-2">

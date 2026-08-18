@@ -44,6 +44,7 @@ function recordingItem(overrides: Partial<RecordingItem> = {}): RecordingItem {
     title: liveContext.title,
     user_name: "主播",
     cover: "",
+    user_avatar: "",
     protocol: "flv",
     status: "recording",
     started_at: 1,
