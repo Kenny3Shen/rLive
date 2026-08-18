@@ -1724,6 +1724,30 @@ fn cuda_runtime_available() -> bool {
     .all(|name| can_load(name, runtime_dir.as_deref()))
 }
 
+/// Returns the directories that can contain the Linux Sherpa/ONNX Runtime
+/// libraries for each supported executable layout. Keep these paths relative
+/// to the executable so normal installs, temporary package extraction, and
+/// AppImage all use the same contract.
+#[cfg(any(target_os = "linux", test))]
+fn linux_runtime_search_dirs(executable_dir: Option<&Path>) -> Vec<PathBuf> {
+    let Some(executable_dir) = executable_dir else {
+        return Vec::new();
+    };
+
+    let mut directories = vec![executable_dir.to_path_buf()];
+    if executable_dir.file_name().is_some_and(|name| name == "bin")
+        && let Some(usr_dir) = executable_dir.parent()
+    {
+        // DEB, RPM, and AppImage use `<prefix>/bin/rlive` together with
+        // `<prefix>/lib/rLive/*.so*`.
+        directories.push(usr_dir.join("lib").join("rLive"));
+    }
+    // The portable archive keeps its libraries beside the executable in a
+    // `lib` directory. This is also harmless for development layouts.
+    directories.push(executable_dir.join("lib"));
+    directories
+}
+
 #[cfg(target_os = "linux")]
 fn cuda_runtime_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -1738,7 +1762,8 @@ fn cuda_runtime_available() -> bool {
         let executable_dir = std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf));
-        let provider_is_staged = executable_dir.as_ref().is_some_and(|directory| {
+        let runtime_dirs = linux_runtime_search_dirs(executable_dir.as_deref());
+        let provider_is_staged = runtime_dirs.iter().any(|directory| {
             directory.join("libonnxruntime_providers_cuda.so").is_file()
                 && directory
                     .join("libonnxruntime_providers_shared.so")
@@ -1748,14 +1773,11 @@ fn cuda_runtime_available() -> bool {
             return false;
         }
 
-        fn can_load(name: &str, executable_dir: Option<&Path>) -> bool {
-            let mut candidates = Vec::new();
-            if let Some(directory) = executable_dir {
-                candidates.push(directory.join(name));
-            }
-            candidates.push(PathBuf::from(name));
-            candidates
-                .into_iter()
+        fn can_load(name: &str, runtime_dirs: &[PathBuf]) -> bool {
+            runtime_dirs
+                .iter()
+                .map(|directory| directory.join(name))
+                .chain(std::iter::once(PathBuf::from(name)))
                 .any(|candidate| unsafe { Library::new(candidate).is_ok() })
         }
 
@@ -1772,7 +1794,7 @@ fn cuda_runtime_available() -> bool {
             "libcudart.so.11.0",
         ]
         .into_iter()
-        .all(|name| can_load(name, executable_dir.as_deref()))
+        .all(|name| can_load(name, &runtime_dirs))
     })
 }
 
@@ -1904,9 +1926,10 @@ mod tests {
         AsrRuntimeOptions, MODEL_ARCHIVE_SIZE_BYTES, PUNCTUATION_ARCHIVE_SIZE_BYTES,
         SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters, asr_thread_count_for_available,
         configured_model_size, cuda_compute_capability_supported, decode_base64_pcm,
-        normalize_asr_provider, normalize_hotwords, samples_to_millis,
+        linux_runtime_search_dirs, normalize_asr_provider, normalize_hotwords, samples_to_millis,
     };
     use base64::Engine;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn decodes_little_endian_pcm() {
@@ -1953,6 +1976,50 @@ mod tests {
         assert!(!cuda_compute_capability_supported(5, 2));
         assert!(cuda_compute_capability_supported(7, 5));
         assert!(cuda_compute_capability_supported(8, 6));
+    }
+
+    #[test]
+    fn locates_linux_runtime_for_development_and_portable_layouts() {
+        let development =
+            linux_runtime_search_dirs(Some(Path::new("/work/src-tauri/target/release")));
+        assert_eq!(
+            development,
+            vec![
+                PathBuf::from("/work/src-tauri/target/release"),
+                PathBuf::from("/work/src-tauri/target/release/lib"),
+            ]
+        );
+
+        let portable = linux_runtime_search_dirs(Some(Path::new("/tmp/rlive-portable")));
+        assert_eq!(
+            portable,
+            vec![
+                PathBuf::from("/tmp/rlive-portable"),
+                PathBuf::from("/tmp/rlive-portable/lib"),
+            ]
+        );
+    }
+
+    #[test]
+    fn locates_linux_runtime_for_package_and_appimage_layouts() {
+        for executable_dir in [
+            Path::new("/tmp/deb-root/usr/bin"),
+            Path::new("/tmp/rpm-root/usr/bin"),
+            Path::new("/tmp/rLive.AppDir/usr/bin"),
+        ] {
+            let directories = linux_runtime_search_dirs(Some(executable_dir));
+            assert_eq!(directories[0], executable_dir);
+            assert_eq!(
+                directories[1],
+                executable_dir.parent().unwrap().join("lib/rLive")
+            );
+            assert_eq!(directories[2], executable_dir.join("lib"));
+        }
+    }
+
+    #[test]
+    fn has_no_linux_runtime_search_path_without_an_executable_directory() {
+        assert!(linux_runtime_search_dirs(None).is_empty());
     }
 
     #[test]
