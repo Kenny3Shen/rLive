@@ -57,7 +57,7 @@ rLive 是基于 Tauri 的跨平台直播客户端。它在 Rust 后端统一平�
 </p>
 
 - **播放路径**：平台 CDN → Rust `stream_proxy` → localhost URL → `xgplayer`。代理负责请求头、跨域访问和 HLS 清单改写；前端编排通用的有界恢复，Twitch 清单恢复由代理配合完成。
-- **录制路径**：平台 CDN → 进程内 `ffmpeg-next` / libavformat → 本地录制目录。FFmpeg 只负责桌面录制，不参与前端播放，也不会启动 `ffmpeg.exe` CLI；活动任务通过 Tauri Event 增量更新录制库，历史 bundle 由可重建的内存索引读取。
+- **录制路径**：平台 CDN → 进程内 `ffmpeg-next` / libavformat → 本地录制目录。FFmpeg 只负责桌面录制，不参与前端播放，也不会启动 `ffmpeg.exe` CLI；新录制目录以「平台_房间号」命名，重复录制追加开始时间和序号；活动任务通过 Tauri Event 增量更新录制库，历史 bundle 由可重建的内存索引读取。
 - **弹幕路径**：平台协议适配器在 Rust 侧解析并批处理消息，再通过 Tauri Events 推送到列表与画面；录制任务从同一批后端消息直接写入 `danmaku.jsonl`。
 - **字幕路径**：播放器音频经 Web Audio 转为 16 kHz PCM，通过 Tauri command 送入本机 sherpa-onnx 会话，识别结果返回字幕层。
 

@@ -844,10 +844,18 @@ impl RecordingManager {
         // has no task attached to it.
         let stream_client = http_client::recording_stream_client_for_proxy(proxy)?;
 
-        let id = Uuid::new_v4().to_string();
         let root = self.current_root();
         ensure_sufficient_storage_space(&root)?;
         let started_at = unix_ms();
+        let bundle_base = recording_bundle_base(&input);
+        let bundle =
+            create_recording_bundle(&root, &self.storage_roots(), &bundle_base, started_at)?;
+        let bundle_guard = BundleGuard::new(bundle.clone());
+        let id = bundle
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("recording bundle name is valid UTF-8")
+            .to_string();
         let title = normalize_text(&input.title, "未命名直播");
         let user_name = normalize_text(&input.user_name, "");
         let file_stem = recording_file_stem(&user_name, &title, started_at);
@@ -856,14 +864,6 @@ impl RecordingManager {
             protocol => protocol,
         };
         let media_file = media_file_name(output_protocol, &input.source.url, &file_stem);
-        let bundle = root.join(&id);
-        let bundle_guard = BundleGuard::new(bundle.clone());
-        std::fs::create_dir_all(&bundle).map_err(|error| {
-            AppError::new(
-                "recording_storage_error",
-                format!("创建录制空间失败: {error}"),
-            )
-        })?;
         let danmaku_file = input.include_danmaku.then(|| "danmaku.jsonl".to_string());
         let danmaku_writer = if danmaku_file.is_some() {
             Some(
@@ -1902,12 +1902,96 @@ fn media_file_name(protocol: PlaybackProtocol, source_url: &str, file_stem: &str
 fn recording_file_stem(user_name: &str, title: &str, started_at: i64) -> String {
     let user = sanitize_filename_component(user_name, "未知用户");
     let title = sanitize_filename_component(title, "未命名直播");
-    let timestamp = Local
-        .timestamp_millis_opt(started_at)
+    let timestamp = recording_timestamp(started_at);
+    format!("{user}_{title}_{timestamp}")
+}
+
+fn recording_bundle_base(input: &RecordingStartInput) -> String {
+    let platform = input
+        .site_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&input.source_kind);
+    let room = input
+        .room_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            input
+                .source_key
+                .rsplit(':')
+                .find(|value| !value.trim().is_empty())
+        })
+        .unwrap_or(&input.title);
+    format!(
+        "{}_{}",
+        sanitize_bundle_component(platform, "live", 48),
+        sanitize_bundle_component(room, "room", 160)
+    )
+}
+
+fn create_recording_bundle(
+    root: &Path,
+    known_roots: &[PathBuf],
+    base: &str,
+    started_at: i64,
+) -> AppResult<PathBuf> {
+    if !is_safe_recording_id(base) {
+        return Err(AppError::new("recording_storage_error", "录制目录名称无效"));
+    }
+    let timestamped = format!("{base}_{}", recording_timestamp(started_at));
+    for sequence in 0..10_000_u32 {
+        let name = match sequence {
+            0 => base.to_string(),
+            1 => timestamped.clone(),
+            _ => format!("{timestamped}_{sequence}"),
+        };
+        if known_roots
+            .iter()
+            .any(|known_root| known_root.join(&name).exists())
+        {
+            continue;
+        }
+        let bundle = root.join(name);
+        match std::fs::create_dir(&bundle) {
+            Ok(()) => return Ok(bundle),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(AppError::new(
+                    "recording_storage_error",
+                    format!("创建录制空间失败: {error}"),
+                ));
+            }
+        }
+    }
+    Err(AppError::new(
+        "recording_storage_error",
+        format!("无法为 {base} 分配不重复的录制目录"),
+    ))
+}
+
+fn sanitize_bundle_component(value: &str, fallback: &str, max_bytes: usize) -> String {
+    let sanitized = sanitize_filename_component(value, fallback);
+    let mut bounded = String::new();
+    for character in sanitized.chars() {
+        if bounded.len() + character.len_utf8() > max_bytes {
+            break;
+        }
+        bounded.push(character);
+    }
+    if bounded.is_empty() {
+        fallback.to_string()
+    } else {
+        bounded
+    }
+}
+
+fn recording_timestamp(timestamp_ms: i64) -> String {
+    Local
+        .timestamp_millis_opt(timestamp_ms)
         .single()
         .map(|value| value.format("%Y%m%d-%H%M%S").to_string())
-        .unwrap_or_else(|| started_at.to_string());
-    format!("{user}_{title}_{timestamp}")
+        .unwrap_or_else(|| timestamp_ms.to_string())
 }
 
 fn sanitize_filename_component(value: &str, fallback: &str) -> String {
@@ -1960,7 +2044,28 @@ fn unix_ms() -> i64 {
 }
 
 fn is_safe_recording_id(id: &str) -> bool {
-    Uuid::parse_str(id).is_ok() && !id.contains('/') && !id.contains('\\')
+    if id.is_empty()
+        || id.len() > 240
+        || id.trim() != id
+        || id.ends_with('.')
+        || id.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+        })
+    {
+        return false;
+    }
+    let Some((platform, room)) = id.split_once('_') else {
+        return false;
+    };
+    if platform.is_empty() || room.is_empty() {
+        return false;
+    }
+    let mut components = Path::new(id).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 fn acquire_recording_manager_lock(app_directory: &Path) -> AppResult<File> {
@@ -2829,10 +2934,15 @@ async fn handle_playback_client(
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
-    let Some(id) = components.next() else {
+    let Some(encoded_id) = components.next() else {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
+    let Ok(id) = percent_decode_str(encoded_id).decode_utf8() else {
+        write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    };
+    let id = id.as_ref();
     if !is_safe_recording_id(id) {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
@@ -3073,15 +3183,16 @@ mod tests {
     use super::{
         FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingLibraryIndex,
         RecordingManager, RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session,
-        SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome,
-        decode_playback_relative_path, finish_session, load_storage_state, local_playback_url,
-        media_file_name, parse_range, prepare_storage_root, read_stored, recording_file_stem,
-        recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
-        salvage_temporary_media_after_worker_failure, scan_recording_root,
-        stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
-        wait_for_finalizing_sessions, write_metadata,
+        SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
+        decode_playback_relative_path, finish_session, is_safe_recording_id, load_storage_state,
+        local_playback_url, media_file_name, parse_range, prepare_storage_root, read_stored,
+        recording_bundle_base, recording_file_stem, recover_bundle_sidecars,
+        recover_stale_recordings, safe_relative_path, salvage_temporary_media_after_worker_failure,
+        scan_recording_root, stop_sessions_until_deadline, storage_space_is_low,
+        stored_keeps_background_danmaku, wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
+    use percent_encoding::percent_decode_str;
     use reqwest::Url;
     use std::collections::{HashMap, HashSet};
     use std::fs::OpenOptions;
@@ -3091,6 +3202,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::{oneshot, watch};
     use uuid::Uuid;
+
+    fn test_recording_id() -> String {
+        format!("bilibili_{}", Uuid::new_v4())
+    }
 
     #[test]
     fn names_recording_media_from_user_title_and_start_time() {
@@ -3118,6 +3233,59 @@ mod tests {
     }
 
     #[test]
+    fn names_recording_bundles_from_platform_and_room_without_overwriting() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-name-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let input = manager_test_input("https://example.test/live.flv", "live:bilibili:100", "100");
+        let started_at = 1_700_000_000_000;
+
+        let base = recording_bundle_base(&input);
+        assert_eq!(base, "bilibili_100");
+        let roots = [root.clone()];
+        let first = create_recording_bundle(&root, &roots, &base, started_at).unwrap();
+        let second = create_recording_bundle(&root, &roots, &base, started_at).unwrap();
+        let third = create_recording_bundle(&root, &roots, &base, started_at).unwrap();
+
+        assert_eq!(first.file_name().unwrap(), "bilibili_100");
+        assert!(
+            second
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("bilibili_100_")
+        );
+        assert!(third.file_name().unwrap().to_string_lossy().ends_with("_2"));
+        assert!(is_safe_recording_id("bilibili_100"));
+        assert!(!is_safe_recording_id(&Uuid::new_v4().to_string()));
+        assert!(!is_safe_recording_id("../bilibili_100"));
+        assert!(!is_safe_recording_id("bilibili:100"));
+
+        let historical_root =
+            root.with_file_name(format!("rlive-recording-name-history-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&historical_root).unwrap();
+        let all_roots = [historical_root.clone(), root.clone()];
+        let historical =
+            create_recording_bundle(&historical_root, &all_roots, &base, started_at).unwrap();
+        assert!(
+            historical
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("_3")
+        );
+
+        let mut iptv = input;
+        iptv.site_id = None;
+        iptv.room_id = None;
+        iptv.source_kind = "iptv".into();
+        iptv.source_key = "iptv:source:cctv1".into();
+        assert_eq!(recording_bundle_base(&iptv), "iptv_cctv1");
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(historical_root).unwrap();
+    }
+
+    #[test]
     fn recording_space_guard_keeps_its_reserve_boundary() {
         assert!(storage_space_is_low(MINIMUM_FREE_SPACE_BYTES - 1));
         assert!(!storage_space_is_low(MINIMUM_FREE_SPACE_BYTES));
@@ -3127,7 +3295,7 @@ mod tests {
     #[test]
     fn recovery_counts_valid_danmaku_before_an_incomplete_tail() {
         let root = std::env::temp_dir().join(format!("rlive-danmaku-count-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let mut stored = completed_recording(id, "danmaku-count");
@@ -3176,7 +3344,7 @@ mod tests {
     #[test]
     fn concurrent_metadata_replacements_leave_a_valid_bundle() {
         let root = std::env::temp_dir().join(format!("rlive-metadata-write-{}", Uuid::new_v4()));
-        let bundle = root.join(Uuid::new_v4().to_string());
+        let bundle = root.join(test_recording_id());
         std::fs::create_dir_all(&bundle).unwrap();
         let stored = completed_recording(
             bundle.file_name().unwrap().to_string_lossy().into_owned(),
@@ -3212,7 +3380,7 @@ mod tests {
     #[test]
     fn startup_recovery_prefers_valid_metadata_tmp_over_old_backup() {
         let root = std::env::temp_dir().join(format!("rlive-metadata-recovery-{}", Uuid::new_v4()));
-        let bundle = root.join(Uuid::new_v4().to_string());
+        let bundle = root.join(test_recording_id());
         std::fs::create_dir_all(&bundle).unwrap();
         let mut old = completed_recording(
             bundle.file_name().unwrap().to_string_lossy().into_owned(),
@@ -3272,18 +3440,17 @@ mod tests {
 
     #[test]
     fn local_playback_urls_round_trip_unicode_and_spaces() {
+        let id = "斗鱼_房间 100";
         let file = "斗鱼主播_标题 测试_20260816-120000.flv";
-        let url = local_playback_url("http://127.0.0.1:1234", "token", "id", file).unwrap();
+        let url = local_playback_url("http://127.0.0.1:1234", "token", id, file).unwrap();
 
+        assert!(url.contains("%E6%96%97%E9%B1%BC_%E6%88%BF%E9%97%B4%20100"));
         assert!(url.contains("%E6%96%97%E9%B1%BC%E4%B8%BB%E6%92%AD"));
         assert!(url.contains("%20"));
-        let encoded = Url::parse(&url)
-            .unwrap()
-            .path_segments()
-            .unwrap()
-            .last()
-            .unwrap()
-            .to_string();
+        let parsed = Url::parse(&url).unwrap();
+        let segments = parsed.path_segments().unwrap().collect::<Vec<_>>();
+        assert_eq!(percent_decode_str(segments[1]).decode_utf8().unwrap(), id);
+        let encoded = segments.last().unwrap().to_string();
         assert_eq!(
             decode_playback_relative_path([encoded.as_str()]),
             Some(PathBuf::from(file))
@@ -3327,7 +3494,7 @@ mod tests {
     fn recording_library_index_respects_root_priority_and_incremental_updates() {
         let primary_root = PathBuf::from("primary");
         let fallback_root = PathBuf::from("fallback");
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let fallback = completed_recording(id.clone(), "fallback");
         let primary = completed_recording(id.clone(), "primary");
         let mut index = RecordingLibraryIndex::default();
@@ -3363,7 +3530,7 @@ mod tests {
         index.replace_root(root.clone(), scan_recording_root(&root));
         assert!(index.items(std::slice::from_ref(&root)).is_empty());
 
-        let stored = completed_recording(Uuid::new_v4().to_string(), "external");
+        let stored = completed_recording(test_recording_id(), "external");
         let bundle = root.join(&stored.id);
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("stream.flv"), b"media").unwrap();
@@ -3467,7 +3634,7 @@ mod tests {
             std::env::temp_dir().join(format!("rlive-recording-final-danmaku-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let root = PathBuf::from(manager.storage_info().path);
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let state = active_session_state(root, bundle.clone(), id.clone());
@@ -3535,7 +3702,7 @@ mod tests {
             std::env::temp_dir().join(format!("rlive-recording-shutdown-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let root = PathBuf::from(manager.storage_info().path);
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let state = active_session_state(root, bundle.clone(), id.clone());
@@ -3578,7 +3745,7 @@ mod tests {
     #[tokio::test]
     async fn graceful_shutdown_defers_hard_abort_recovery_until_restart() {
         let root = std::env::temp_dir().join(format!("rlive-recording-timeout-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let state = active_session_state(root.clone(), bundle.clone(), id.clone());
@@ -3634,7 +3801,7 @@ mod tests {
     #[test]
     fn recovery_adopts_a_media_part_left_by_a_failed_recording_task() {
         let root = std::env::temp_dir().join(format!("rlive-recording-orphan-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let stored = StoredRecording {
@@ -3665,7 +3832,7 @@ mod tests {
     fn worker_failure_salvages_a_safe_media_part_without_overwriting_final_media() {
         let root =
             std::env::temp_dir().join(format!("rlive-recording-worker-failure-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let state = active_session_state(root.clone(), bundle.clone(), id);
@@ -3694,7 +3861,7 @@ mod tests {
     #[test]
     fn recovery_marks_missing_active_media_as_interrupted() {
         let root = std::env::temp_dir().join(format!("rlive-recording-missing-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let stored = StoredRecording {
@@ -3722,7 +3889,7 @@ mod tests {
     #[test]
     fn recovery_rejects_a_media_path_that_escapes_the_bundle() {
         let root = std::env::temp_dir().join(format!("rlive-recording-path-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let stored = StoredRecording {
@@ -3753,7 +3920,7 @@ mod tests {
             "rlive-recording-finalize-timeout-{}",
             Uuid::new_v4()
         ));
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let state = active_session_state(root.clone(), bundle.clone(), id.clone());
@@ -3806,7 +3973,7 @@ mod tests {
             std::env::temp_dir().join(format!("rlive-recording-finalizing-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let root = PathBuf::from(manager.storage_info().path);
-        let id = Uuid::new_v4().to_string();
+        let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
         let state = active_session_state(root, bundle, id.clone());
@@ -3898,7 +4065,7 @@ mod tests {
             std::env::temp_dir().join(format!("rlive-recording-storage-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let default_root = PathBuf::from(manager.storage_info().path);
-        let first = completed_recording(Uuid::new_v4().to_string(), "default");
+        let first = completed_recording(test_recording_id(), "default");
         let first_bundle = default_root.join(&first.id);
         std::fs::create_dir_all(&first_bundle).unwrap();
         std::fs::write(first_bundle.join("stream.flv"), b"a").unwrap();
@@ -3914,7 +4081,7 @@ mod tests {
             custom_info.path,
             crate::app_paths::path_to_string(&std::fs::canonicalize(&custom_root).unwrap())
         );
-        let second = completed_recording(Uuid::new_v4().to_string(), "custom");
+        let second = completed_recording(test_recording_id(), "custom");
         let second_bundle = PathBuf::from(&custom_info.path).join(&second.id);
         std::fs::create_dir_all(&second_bundle).unwrap();
         std::fs::write(second_bundle.join("stream.flv"), b"b").unwrap();
