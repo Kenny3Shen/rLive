@@ -81,10 +81,10 @@ export function clampDanmuFontSize(value: number, fallback = 18): number {
   return Math.max(12, Math.min(48, Math.round(next)));
 }
 
-export function clampDanmuFontStroke(value: number, fallback = 2.5): number {
+export function clampDanmuFontStroke(value: number, fallback = 0): number {
   const next = Number.isFinite(value) ? value : fallback;
   const stepped = Math.round(next * 2) / 2;
-  return Math.max(0.5, Math.min(2.5, stepped));
+  return Math.max(0, Math.min(1.5, stepped));
 }
 
 export function clampDanmuOpacity(value: number, fallback = 1): number {
@@ -184,6 +184,7 @@ export function danmuStyleForEvent(
 ): DanmuJsStyle {
   const isSuperChat = event.kind === "super_chat";
   const opacity = clampDanmuOpacity(options.opacity);
+  const fontStroke = clampDanmuFontStroke(options.fontStroke);
   const style: DanmuJsStyle = {
     boxSizing: "border-box",
     color: isSuperChat ? superChatAmountColor(event) : safeDanmuColor(event.color),
@@ -197,16 +198,19 @@ export function danmuStyleForEvent(
     fontSize: `${clampDanmuFontSize(options.fontSize)}px`,
     fontWeight: DANMU_JS_FONT_WEIGHT,
     lineHeight: "1.35",
-    // danmu.js converts camelCase keys to CSS text itself. The capital W is
-    // required so this becomes `-webkit-text-stroke` instead of the invalid
-    // unprefixed `webkit-text-stroke`.
-    WebkitTextStroke: `${clampDanmuFontStroke(options.fontStroke)}px rgba(0,0,0,.92)`,
-    // Paint the glyph fill after the outline so small text keeps its full
-    // interior instead of losing thin strokes to the centered CSS outline.
-    paintOrder: "stroke fill",
     textShadow: "0 1px 2px rgba(0,0,0,.92), 0 0 3px rgba(0,0,0,.72)",
     pointerEvents: isSuperChat ? "auto" : "none",
   };
+
+  if (fontStroke > 0) {
+    // danmu.js converts camelCase keys to CSS text itself. The capital W is
+    // required so this becomes `-webkit-text-stroke` instead of the invalid
+    // unprefixed `webkit-text-stroke`.
+    style.WebkitTextStroke = `${fontStroke}px rgba(0,0,0,.92)`;
+    // Paint the glyph fill after the outline so small text keeps its full
+    // interior instead of losing thin strokes to the centered CSS outline.
+    style.paintOrder = "stroke fill";
+  }
 
   return style;
 }
@@ -376,6 +380,11 @@ export function updateDanmuAppearance(
   element.style.fontSize = String(style.fontSize ?? "");
   element.style.fontWeight = String(style.fontWeight ?? "");
   element.style.opacity = String(style.opacity ?? "1");
-  element.style.setProperty("-webkit-text-stroke", String(style.WebkitTextStroke ?? ""));
-  element.style.setProperty("paint-order", String(style.paintOrder ?? ""));
+  if (style.WebkitTextStroke === undefined) {
+    element.style.removeProperty("-webkit-text-stroke");
+    element.style.removeProperty("paint-order");
+  } else {
+    element.style.setProperty("-webkit-text-stroke", String(style.WebkitTextStroke));
+    element.style.setProperty("paint-order", String(style.paintOrder));
+  }
 }

@@ -552,7 +552,11 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
         <ScrollArea className="h-full min-h-0">
-          <div className="flex flex-col gap-0.5 px-2.5 py-2 text-sm">
+          <div
+            className="flex flex-col gap-0.5 px-2.5 py-2 text-sm"
+            // Keep the side list independent from the inherited floating-danmaku outline.
+            style={{ WebkitTextStroke: "0px", paintOrder: "normal" }}
+          >
             {statusText && (
               <p className="px-1.5 py-1 text-xs text-muted-foreground">{statusText}</p>
             )}

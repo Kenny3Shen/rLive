@@ -108,7 +108,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       context.font = `700 ${fontSize}px ${FONT_FAMILY}`;
       context.textBaseline = "middle";
       context.lineJoin = "round";
-      context.lineWidth = fontStroke * 2;
+      if (fontStroke > 0) context.lineWidth = fontStroke * 2;
 
       for (const entry of frame) {
         const age = currentMs - entry.offsetMs;
@@ -124,8 +124,10 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
         const y = HORIZONTAL_PADDING + fontSize / 2 + lane * lineHeight;
         const fade = Math.min(1, Math.max(0, (lifetime - age) / FADE_OUT_MS));
         context.globalAlpha = opacity * fade;
-        context.strokeStyle = "rgba(0, 0, 0, 0.92)";
-        context.strokeText(entry.text, x, y);
+        if (fontStroke > 0) {
+          context.strokeStyle = "rgba(0, 0, 0, 0.92)";
+          context.strokeText(entry.text, x, y);
+        }
         context.fillStyle = safeDanmuColor(
           entry.event.color,
           entry.event.kind === "super_chat" ? "#ffd76a" : "#ffffff",

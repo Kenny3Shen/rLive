@@ -18,6 +18,7 @@ import {
   flushDanmuJsPending,
   safeDanmuColor,
   updateDanmuAggregation,
+  updateDanmuAppearance,
 } from "../src/features/room/danmaku/danmuJsAdapter";
 import { installDanmuJsFixedPriorCompat } from "../src/features/room/danmaku/danmuJsCompat";
 import { resolveDanmuJsConstructor } from "../src/features/room/danmaku/danmuJsLoader";
@@ -37,7 +38,7 @@ function mappingOptions(overrides: Record<string, unknown> = {}) {
   return {
     id: "bullet-1",
     fontSize: 18,
-    fontStroke: 2.5,
+    fontStroke: 1.5,
     opacity: 0.8,
     ...overrides,
   };
@@ -102,7 +103,7 @@ describe("danmu.js event mapping", () => {
       whiteSpace: "nowrap",
       width: "max-content",
       fontWeight: DANMU_JS_FONT_WEIGHT,
-      WebkitTextStroke: "2.5px rgba(0,0,0,.92)",
+      WebkitTextStroke: "1.5px rgba(0,0,0,.92)",
       paintOrder: "stroke fill",
     });
   });
@@ -271,11 +272,37 @@ describe("danmu.js appearance helpers", () => {
   });
 
   test("normalizes font outlines to configurable half-pixel steps", () => {
-    expect(clampDanmuFontStroke(0)).toBe(0.5);
+    expect(clampDanmuFontStroke(-1)).toBe(0);
+    expect(clampDanmuFontStroke(0)).toBe(0);
     expect(clampDanmuFontStroke(1.24)).toBe(1);
     expect(clampDanmuFontStroke(1.26)).toBe(1.5);
-    expect(clampDanmuFontStroke(3)).toBe(2.5);
-    expect(clampDanmuFontStroke(Number.NaN)).toBe(2.5);
+    expect(clampDanmuFontStroke(3)).toBe(1.5);
+    expect(clampDanmuFontStroke(Number.NaN)).toBe(0);
+  });
+
+  test("omits and removes CSS outline properties when outlines are disabled", () => {
+    const comment = danmuCommentFromEvent(chat(), mappingOptions());
+    expect(comment).not.toBeNull();
+
+    const removed: string[] = [];
+    comment!.__rliveMeta.element = {
+      style: {
+        fontSize: "",
+        fontWeight: "",
+        opacity: "",
+        setProperty: () => {},
+        removeProperty: (property: string) => {
+          removed.push(property);
+          return "";
+        },
+      },
+    } as unknown as HTMLElement;
+
+    updateDanmuAppearance(comment!, { fontSize: 18, fontStroke: 0, opacity: 0.8 });
+
+    expect(comment?.style?.WebkitTextStroke).toBeUndefined();
+    expect(comment?.style?.paintOrder).toBeUndefined();
+    expect(removed).toEqual(["-webkit-text-stroke", "paint-order"]);
   });
 
   test("accepts compact CSS colors and rejects injectable values", () => {

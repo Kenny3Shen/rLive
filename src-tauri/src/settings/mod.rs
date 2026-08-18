@@ -8,9 +8,9 @@ use crate::models::AppSettings;
 const SETTINGS_KEY: &str = "app_settings";
 const DANMAKU_SPEED_MIN: u32 = 50;
 const DANMAKU_SPEED_MAX: u32 = 200;
-const DANMAKU_FONT_STROKE_MIN: f32 = 0.5;
-const DANMAKU_FONT_STROKE_MAX: f32 = 2.5;
-const DANMAKU_FONT_STROKE_DEFAULT: f32 = 2.5;
+const DANMAKU_FONT_STROKE_MIN: f32 = 0.0;
+const DANMAKU_FONT_STROKE_MAX: f32 = 1.5;
+const DANMAKU_FONT_STROKE_DEFAULT: f32 = 0.0;
 const DANMAKU_MERGE_WINDOW_SECONDS_MIN: u32 = 0;
 const DANMAKU_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 const FFMPEG_RW_TIMEOUT_SECONDS_MIN: u32 = 3;
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(s.theme, "system");
         assert_eq!(s.motion_mode, "full");
         assert_eq!(s.danmaku_opacity, 0.8);
-        assert_eq!(s.danmaku_font_stroke, 2.5);
+        assert_eq!(s.danmaku_font_stroke, 0.0);
         assert_eq!(s.danmaku_font_size, 20);
         assert_eq!(s.danmaku_speed, 100);
         assert_eq!(s.danmaku_area, 0.25);
@@ -336,6 +336,10 @@ mod tests {
 
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_font_stroke, 1.5);
+
+        settings.danmaku_font_stroke = 0.0;
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().danmaku_font_stroke, 0.0);
 
         settings.danmaku_font_stroke = 0.1;
         set(&conn, &settings).unwrap();
