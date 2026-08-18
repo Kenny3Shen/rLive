@@ -193,11 +193,12 @@ export type AppSettings = {
   default_site: string;
   proxy: string | null;
   danmaku_opacity: number;
+  /** Player danmaku text outline width in CSS pixels, 0.5..=2.5. */
+  danmaku_font_stroke: number;
   danmaku_font_size: number;
   /** Scrolling danmaku speed in CSS pixels per second, 50..=200. */
   danmaku_speed: number;
   danmaku_area: number;
-  danmaku_font_weight: number;
   danmaku_filter_gifts: boolean;
   /** Merge window for duplicate chat in seconds, 0..=30; 0 disables merging. */
   danmaku_merge_window_seconds?: number;

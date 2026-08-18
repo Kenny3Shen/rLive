@@ -101,6 +101,15 @@ export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
 export const PLAYER_STAGE_TAP_MAX_DURATION_MS = 320;
 export const PLAYER_STAGE_DOUBLE_TAP_MS = 280;
 
+/** Fullscreen desktop pictures need larger targets; mobile keeps the compact
+ * pill so three actions do not cover a disproportionate part of the video. */
+export function shouldUseLargeDanmakuActionMenu(
+  fullscreen: boolean,
+  mobileClient: boolean,
+): boolean {
+  return fullscreen && !mobileClient;
+}
+
 export type PlayerEdgeGesture = "brightness" | "volume";
 
 type PlayerEdgeGestureState = {
@@ -1617,9 +1626,10 @@ export function PlayerPane({
                   roomId={roomId}
                   roomTitle={roomTitle}
                   roomUserName={roomUserName}
-                  // Fullscreen puts the picture a whole display away, where the
-                  // compact pill is hard to aim at.
-                  large={player.mode === "fullscreen"}
+                  large={shouldUseLargeDanmakuActionMenu(
+                    player.mode === "fullscreen",
+                    mobileClient,
+                  )}
                   className="z-10"
                 />
               )}

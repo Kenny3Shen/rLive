@@ -4,8 +4,10 @@ import type { DanmakuEvent } from "../src/shared/types/live";
 import {
   DANMU_JS_DEFAULT_DURATION_MS,
   DANMU_JS_DEFAULT_MOVE_V,
+  DANMU_JS_FONT_WEIGHT,
   DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT,
   clampDanmuArea,
+  clampDanmuFontStroke,
   danmuAreaConfig,
   danmuCommentFromEvent,
   danmuLayerAreaConfig,
@@ -35,7 +37,7 @@ function mappingOptions(overrides: Record<string, unknown> = {}) {
   return {
     id: "bullet-1",
     fontSize: 18,
-    fontWeight: 600,
+    fontStroke: 2.5,
     opacity: 0.8,
     ...overrides,
   };
@@ -99,6 +101,9 @@ describe("danmu.js event mapping", () => {
       flexWrap: "nowrap",
       whiteSpace: "nowrap",
       width: "max-content",
+      fontWeight: DANMU_JS_FONT_WEIGHT,
+      WebkitTextStroke: "2.5px rgba(0,0,0,.92)",
+      paintOrder: "stroke fill",
     });
   });
 
@@ -261,6 +266,18 @@ describe("danmu.js 1.2.1 fixed-priority compatibility", () => {
 });
 
 describe("danmu.js appearance helpers", () => {
+  test("uses Bilibili live's default bold font weight", () => {
+    expect(DANMU_JS_FONT_WEIGHT).toBe(700);
+  });
+
+  test("normalizes font outlines to configurable half-pixel steps", () => {
+    expect(clampDanmuFontStroke(0)).toBe(0.5);
+    expect(clampDanmuFontStroke(1.24)).toBe(1);
+    expect(clampDanmuFontStroke(1.26)).toBe(1.5);
+    expect(clampDanmuFontStroke(3)).toBe(2.5);
+    expect(clampDanmuFontStroke(Number.NaN)).toBe(2.5);
+  });
+
   test("accepts compact CSS colors and rejects injectable values", () => {
     expect(safeDanmuColor("#Aa00ff")).toBe("#Aa00ff");
     expect(safeDanmuColor(" rgba(12, 34, 56, .7) ")).toBe("rgba(12, 34, 56, .7)");

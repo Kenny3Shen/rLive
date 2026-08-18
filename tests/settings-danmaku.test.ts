@@ -3,6 +3,9 @@ import {
   DANMAKU_AREA_DEFAULT,
   DANMAKU_FONT_SIZE_DESKTOP_DEFAULT,
   DANMAKU_FONT_SIZE_MOBILE_DEFAULT,
+  DANMAKU_FONT_STROKE_DEFAULT,
+  DANMAKU_FONT_STROKE_MAX,
+  DANMAKU_FONT_STROKE_MIN,
   DANMAKU_OPACITY_DEFAULT,
   DANMAKU_SPEED_DEFAULT,
   DANMAKU_SPEED_MAX,
@@ -11,6 +14,7 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   parseDanmakuMergeWindowSeconds,
+  parseDanmakuFontStroke,
   parseDanmakuSpeed,
   defaultDanmakuFontSize,
   useSettingsStore,
@@ -40,15 +44,25 @@ describe("danmaku merge window settings", () => {
 
 describe("danmaku appearance defaults", () => {
   test("uses compact mobile text while keeping shared desktop defaults explicit", () => {
-    expect(DANMAKU_FONT_SIZE_DESKTOP_DEFAULT).toBe(18);
-    expect(DANMAKU_FONT_SIZE_MOBILE_DEFAULT).toBe(14);
-    expect(defaultDanmakuFontSize(false)).toBe(18);
-    expect(defaultDanmakuFontSize(true)).toBe(14);
+    expect(DANMAKU_FONT_SIZE_DESKTOP_DEFAULT).toBe(20);
+    expect(DANMAKU_FONT_SIZE_MOBILE_DEFAULT).toBe(16);
+    expect(defaultDanmakuFontSize(false)).toBe(20);
+    expect(defaultDanmakuFontSize(true)).toBe(16);
   });
 
   test("uses 80 percent opacity and a 25 percent display area", () => {
     expect(DANMAKU_OPACITY_DEFAULT).toBe(0.8);
     expect(DANMAKU_AREA_DEFAULT).toBe(0.25);
+  });
+
+  test("uses a 2.5px outline and normalizes it to half-pixel steps", () => {
+    expect(DANMAKU_FONT_STROKE_DEFAULT).toBe(2.5);
+    expect(parseDanmakuFontStroke(DANMAKU_FONT_STROKE_MIN - 1)).toBe(DANMAKU_FONT_STROKE_MIN);
+    expect(parseDanmakuFontStroke(1.24)).toBe(1);
+    expect(parseDanmakuFontStroke(1.26)).toBe(1.5);
+    expect(parseDanmakuFontStroke(DANMAKU_FONT_STROKE_MAX + 1)).toBe(DANMAKU_FONT_STROKE_MAX);
+    expect(parseDanmakuFontStroke(undefined)).toBe(DANMAKU_FONT_STROKE_DEFAULT);
+    expect(useSettingsStore.getState().danmakuFontStroke).toBe(DANMAKU_FONT_STROKE_DEFAULT);
   });
 
   test("uses a 100 px/s scrolling speed and clamps it to the supported range", () => {
@@ -62,6 +76,7 @@ describe("danmaku appearance defaults", () => {
 
   test("does not retain other removed danmaku preferences in frontend state", () => {
     const state = useSettingsStore.getState();
+    expect("danmakuFontWeight" in state).toBe(false);
     expect("danmakuLineCount" in state).toBe(false);
     expect("superChatOpacity" in state).toBe(false);
     expect("setSuperChatOpacity" in state).toBe(false);

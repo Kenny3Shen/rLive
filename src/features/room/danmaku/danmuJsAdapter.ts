@@ -15,6 +15,8 @@ export const DANMU_JS_MAX_SUPER_CHATS = 3;
 export const DANMU_JS_PENDING_MAX_AGE_MS = 5_000;
 export const DANMU_JS_DEFAULT_DURATION_MS = 15_000;
 export const DANMU_JS_DEFAULT_MOVE_V = 100;
+/** Bilibili live player's default `bold: true` mapped to CSS numeric weight. */
+export const DANMU_JS_FONT_WEIGHT = 700;
 export const DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 
 export type DanmuJsPendingEvent = {
@@ -66,7 +68,7 @@ export type DanmuJsBulletMeta = {
 export type DanmuJsMappingOptions = {
   id: string;
   fontSize: number;
-  fontWeight: number;
+  fontStroke: number;
   opacity: number;
   aggregationKey?: string;
   aggregationCount?: number;
@@ -79,12 +81,10 @@ export function clampDanmuFontSize(value: number, fallback = 18): number {
   return Math.max(12, Math.min(48, Math.round(next)));
 }
 
-export function clampDanmuFontWeight(value: number, fallback = 600): number {
+export function clampDanmuFontStroke(value: number, fallback = 2.5): number {
   const next = Number.isFinite(value) ? value : fallback;
-  if (next < 450) return 400;
-  if (next < 550) return 500;
-  if (next < 650) return 600;
-  return 700;
+  const stepped = Math.round(next * 2) / 2;
+  return Math.max(0.5, Math.min(2.5, stepped));
 }
 
 export function clampDanmuOpacity(value: number, fallback = 1): number {
@@ -180,7 +180,7 @@ function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentSpan[] |
 
 export function danmuStyleForEvent(
   event: DanmakuEvent,
-  options: Pick<DanmuJsMappingOptions, "fontSize" | "fontWeight" | "opacity">,
+  options: Pick<DanmuJsMappingOptions, "fontSize" | "fontStroke" | "opacity">,
 ): DanmuJsStyle {
   const isSuperChat = event.kind === "super_chat";
   const opacity = clampDanmuOpacity(options.opacity);
@@ -195,8 +195,15 @@ export function danmuStyleForEvent(
     width: "max-content",
     maxWidth: "none",
     fontSize: `${clampDanmuFontSize(options.fontSize)}px`,
-    fontWeight: clampDanmuFontWeight(options.fontWeight),
+    fontWeight: DANMU_JS_FONT_WEIGHT,
     lineHeight: "1.35",
+    // danmu.js converts camelCase keys to CSS text itself. The capital W is
+    // required so this becomes `-webkit-text-stroke` instead of the invalid
+    // unprefixed `webkit-text-stroke`.
+    WebkitTextStroke: `${clampDanmuFontStroke(options.fontStroke)}px rgba(0,0,0,.92)`,
+    // Paint the glyph fill after the outline so small text keeps its full
+    // interior instead of losing thin strokes to the centered CSS outline.
+    paintOrder: "stroke fill",
     textShadow: "0 1px 2px rgba(0,0,0,.92), 0 0 3px rgba(0,0,0,.72)",
     pointerEvents: isSuperChat ? "auto" : "none",
   };
@@ -358,7 +365,7 @@ export function updateDanmuAggregation(
 
 export function updateDanmuAppearance(
   comment: DanmuJsComment & { __rliveMeta?: DanmuJsBulletMeta },
-  options: Pick<DanmuJsMappingOptions, "fontSize" | "fontWeight" | "opacity">,
+  options: Pick<DanmuJsMappingOptions, "fontSize" | "fontStroke" | "opacity">,
 ): void {
   const event = comment.__rliveMeta?.event;
   if (!event) return;
@@ -369,4 +376,6 @@ export function updateDanmuAppearance(
   element.style.fontSize = String(style.fontSize ?? "");
   element.style.fontWeight = String(style.fontWeight ?? "");
   element.style.opacity = String(style.opacity ?? "1");
+  element.style.setProperty("-webkit-text-stroke", String(style.WebkitTextStroke ?? ""));
+  element.style.setProperty("paint-order", String(style.paintOrder ?? ""));
 }
