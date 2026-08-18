@@ -19,7 +19,7 @@ pub struct AppSettings {
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
     pub danmaku_opacity: f32,
-    /// Player danmaku text outline width in CSS pixels, 0.5 ..= 2.5.
+    /// Player danmaku text outline width in CSS pixels, 0.0 ..= 1.5.
     #[serde(default = "default_danmaku_font_stroke")]
     pub danmaku_font_stroke: f32,
     pub danmaku_font_size: u32,
@@ -172,7 +172,7 @@ fn default_danmaku_speed() -> u32 {
 }
 
 fn default_danmaku_font_stroke() -> f32 {
-    2.5
+    0.0
 }
 
 fn default_danmaku_filter_gifts() -> bool {
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(settings.danmaku_area, 0.25);
         assert_eq!(settings.danmaku_speed, 100);
         assert_eq!(settings.motion_mode, "full");
-        assert_eq!(settings.danmaku_font_stroke, 2.5);
+        assert_eq!(settings.danmaku_font_stroke, 0.0);
         assert!(settings.danmaku_filter_gifts);
         assert_eq!(settings.danmaku_merge_window_seconds, 10);
         assert!(settings.super_chat_enabled);

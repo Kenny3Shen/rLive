@@ -11,7 +11,11 @@ import {
 import type { DanmuJsBullet, DanmuJsComment, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
-import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  DANMAKU_FONT_STROKE_DEFAULT,
+  parseDanmakuSpeed,
+  useSettingsStore,
+} from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import { subscribeDanmakuBatches } from "./eventBus";
 import {
@@ -263,7 +267,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const configRef = useRef<RuntimeConfig>({
     fontSize,
-    fontStroke: 2.5,
+    fontStroke: DANMAKU_FONT_STROKE_DEFAULT,
     opacity: 0.8,
     danmakuSpeed: DANMU_JS_DEFAULT_MOVE_V,
     mergeWindowSeconds: 10,

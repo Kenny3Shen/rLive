@@ -358,7 +358,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 - `DanmuJsDanmaku` 在播放器内叠放两个全尺寸兄弟容器，并分别创建 `scroll` / `bottom` danmu.js 实例；必须等两个容器有非零尺寸后才启动，零尺寸期间只保留有界、带过期时间的 pending。`active`、`sessionKey`、页面可见性、减少动态效果偏好或组件卸载变化时销毁两个旧实例和 listener，避免隐藏播放器继续分配 DOM。
 - danmu.js 数据池、本地 metadata、聚合目标和 SC 计时器都必须有界，并在 `bullet_remove` / `destroy` 时同步释放。普通聊天聚合只更新同一活动 bullet 的文本与计数槽，不为每次 `×N` 变化重新创建动画。
 - B 站图片表情使用预设尺寸的安全 DOM 节点，加载失败回退原文，避免图片就绪后改变轨道高度或让弹幕跳动。平台文本不得写入 `innerHTML`。
-- 两个弹幕容器都保持 `opacity: 1`；普通消息与 SC 从统一的 `danmaku_opacity` 读取值并写到各自元素，避免容器与子项透明度相乘。用户显示区域只控制 `scroll` 实例的普通滚动弹幕，使用 danmu.js 原生 `area.start = 0`、`area.end = danmaku_area`；承载 SC 和自己发送弹幕的 `bottom` 实例固定为 `area: { start: 0, end: 1 }`，使固定弹幕贴近整个播放器底部。窗口 resize、最大化或全屏后，两个实例应由各自的 ResizeObserver 分别重排；字号和描边变化更新两层的现有 DOM 与后续 comment，字重固定为 B 站直播默认粗体 `700`，区域变化只更新 `scroll` 层。
+- 两个弹幕容器都保持 `opacity: 1`；普通消息与 SC 从统一的 `danmaku_opacity` 读取值并写到各自元素，避免容器与子项透明度相乘。用户显示区域只控制 `scroll` 实例的普通滚动弹幕，使用 danmu.js 原生 `area.start = 0`、`area.end = danmaku_area`；承载 SC 和自己发送弹幕的 `bottom` 实例固定为 `area: { start: 0, end: 1 }`，使固定弹幕贴近整个播放器底部。窗口 resize、最大化或全屏后，两个实例应由各自的 ResizeObserver 分别重排；字号和可选描边变化更新两层的现有 DOM 与后续 comment，描边为 0 时必须移除 `-webkit-text-stroke` 与 `paint-order`，字重固定为 B 站直播默认粗体 `700`，区域变化只更新 `scroll` 层。
 - 连续手势输入不进 React state，React state 只承担刷新、选中项等离散状态，不保存每个输入事件的位移。下拉刷新的位移通过 RAF 合并；横向滑动的位移直接在 pointermove 中写 transform，因为跟手位置延后一帧即可被察觉。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，不渲染显式刷新浮动按钮；桌面端仍保留按钮入口。
 - 浏览器回退亮度使用覆盖视频与实时弹幕 DOM 容器的黑色 opacity 叠层，不对整幅动态画面应用 `filter: brightness()`；Android Tauri 则只覆盖当前 Activity 的窗口亮度，并在房间切换、离开或后台时恢复。手势提示通过局部 DOM 写入更新，避免每个步进重渲染 `PlayerPane`。
