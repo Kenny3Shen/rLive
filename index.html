@@ -17,7 +17,8 @@
         const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
         let theme = "system";
         try {
-          theme = JSON.parse(localStorage.getItem("rlive-settings") || "{}").state?.theme || theme;
+          theme =
+            JSON.parse(localStorage.getItem("rlive-settings-v1") || "{}").state?.theme || theme;
         } catch {
           // An invalid persisted value should never delay the first paint.
         }

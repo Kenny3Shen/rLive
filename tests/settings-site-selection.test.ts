@@ -6,42 +6,25 @@ import {
   LIVE_SITE_IDS,
   normalizeDisabledSiteIds,
   resolveEnabledSiteId,
-  resolveStartupSiteId,
   updateDisabledSiteIds,
 } from "../src/shared/siteId";
 
 describe("startup platform selection", () => {
-  test("opens Bilibili for a first run with no local or backend setting", () => {
-    expect(resolveStartupSiteId(undefined, false, undefined)).toBe("bilibili");
-  });
-
-  test("keeps a valid local platform choice when the backend has never saved settings", () => {
-    expect(resolveStartupSiteId("bilibili", false, "douyu")).toBe("douyu");
-  });
-
-  test("uses an existing backend setting instead of overwriting it from local cache", () => {
-    expect(resolveStartupSiteId("huya", true, "douyu")).toBe("huya");
-  });
-
-  test("falls back to Bilibili for malformed platform values", () => {
-    expect(resolveStartupSiteId("unknown", true, "douyu")).toBe("bilibili");
-    expect(resolveStartupSiteId("douyu", false, "unknown")).toBe("bilibili");
-  });
-
-  test("keeps every platform enabled when legacy settings omit visibility preferences", () => {
+  test("keeps every platform enabled when visibility preferences are absent", () => {
     expect(normalizeDisabledSiteIds(undefined)).toEqual([]);
     expect(enabledSiteIds(undefined)).toEqual(LIVE_SITE_IDS);
   });
 
   test("falls back when the selected platform has been disabled", () => {
     expect(resolveEnabledSiteId("douyin", ["douyin"])).toBe(DEFAULT_SITE_ID);
-    expect(resolveStartupSiteId("douyin", true, "douyu", ["douyin"])).toBe(DEFAULT_SITE_ID);
     expect(isSiteEnabled("douyin", ["douyin"])).toBe(false);
   });
 
-  test("treats removed platforms such as kuaishou as unknown", () => {
-    expect(resolveEnabledSiteId("kuaishou", [])).toBe(DEFAULT_SITE_ID);
-    expect(isSiteEnabled("kuaishou", [])).toBe(false);
+  test("rejects unknown and removed platform ids", () => {
+    for (const siteId of ["unknown", "kuaishou"]) {
+      expect(resolveEnabledSiteId(siteId, [])).toBe(DEFAULT_SITE_ID);
+      expect(isSiteEnabled(siteId, [])).toBe(false);
+    }
   });
 
   test("never allows every platform to be switched off", () => {

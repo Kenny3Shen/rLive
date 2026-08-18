@@ -358,7 +358,7 @@ fn current_send_timestamp() -> AppResult<DouyuSendTimestamp> {
 fn login_request_body(room_id: &str, credentials: &DouyuSendCredentials, now: u64) -> String {
     let now = now.to_string();
     let vk_input = format!("{now}{LOGIN_VK_SALT}{}", credentials.did);
-    let vk = format!("{:x}", Md5::digest(vk_input.as_bytes()));
+    let vk = hex::encode(Md5::digest(vk_input.as_bytes()));
     // Field order mirrors the current browser room client. The gateway is
     // tolerant of ordering in most cases, but preserving it keeps the
     // captured protocol contract reviewable and avoids relying on legacy
@@ -1007,7 +1007,7 @@ async fn fetch_send_encryption_key(
 }
 
 fn md5_hex(value: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Md5::digest(value.as_ref()))
+    hex::encode(Md5::digest(value.as_ref()))
 }
 
 fn gateway_signature(

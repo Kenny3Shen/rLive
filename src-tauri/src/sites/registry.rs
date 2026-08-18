@@ -40,11 +40,6 @@ pub fn all_meta() -> Vec<SiteMeta> {
     ]
 }
 
-/// Backward-compatible alias used by commands that only need id/name.
-pub fn all() -> Vec<SiteMeta> {
-    all_meta()
-}
-
 /// Build a site client using the currently selected HTTP(S) proxy when one is
 /// configured.  Each proxy policy owns a separate reqwest client, preventing
 /// a cached direct connection from bypassing a later settings change.
@@ -94,12 +89,12 @@ mod tests {
 
     #[test]
     fn registry_has_five_sites() {
-        assert_eq!(all().len(), 5);
+        assert_eq!(all_meta().len(), 5);
     }
 
     #[test]
     fn site_lookup_roundtrip() {
-        for m in all() {
+        for m in all_meta() {
             site_with_proxy(&m.id, None, None).expect("site must resolve");
         }
     }

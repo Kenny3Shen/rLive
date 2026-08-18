@@ -100,7 +100,7 @@ impl AppDataStorage {
         let system_root = system_data_root()?;
         let bootstrap_path = bootstrap_path(&system_root);
         let default_root = default_data_root(&system_root)?;
-        let selected_root = select_initial_root(&default_root, &system_root, &bootstrap_path)?;
+        let selected_root = select_initial_root(&default_root, &bootstrap_path)?;
         #[cfg(windows)]
         let _ = PROCESS_APP_DATA_ROOT.set(selected_root.clone());
         let state = AppDataStorageState {
@@ -313,11 +313,7 @@ fn valid_app_data_bootstrap(bytes: &[u8]) -> bool {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-fn select_initial_root(
-    default_root: &Path,
-    system_root: &Path,
-    bootstrap_path: &Path,
-) -> AppResult<PathBuf> {
+fn select_initial_root(default_root: &Path, bootstrap_path: &Path) -> AppResult<PathBuf> {
     match read_bootstrap(bootstrap_path)? {
         Some(AppDataBootstrap {
             custom_path: Some(path),
@@ -344,30 +340,8 @@ fn select_initial_root(
                 )
             })
         }
-        // An explicit empty selection is written by "restore default". It
-        // must suppress legacy discovery or an old database would take over
-        // again after every reset.
         Some(AppDataBootstrap { custom_path: None }) => Ok(default_root.to_path_buf()),
-        None => {
-            let legacy_database = system_root.join("rlive.db");
-            if system_root != default_root && legacy_database.is_file() {
-                match prepare_data_root(system_root) {
-                    Ok(root) => {
-                        if let Err(error) = write_bootstrap(bootstrap_path, Some(&root)) {
-                            eprintln!(
-                                "rLive could not persist the legacy app data selection: {error}"
-                            );
-                        }
-                        return Ok(root);
-                    }
-                    Err(error) => eprintln!(
-                        "rLive legacy app data directory unavailable ({}): {error}",
-                        system_root.display()
-                    ),
-                }
-            }
-            Ok(default_root.to_path_buf())
-        }
+        None => Ok(default_root.to_path_buf()),
     }
 }
 
@@ -623,37 +597,13 @@ mod tests {
     }
 
     #[test]
-    fn discovers_and_persists_the_legacy_system_data_directory() {
-        let base = temp_directory("legacy");
-        let default_root = base.join("install");
-        let system_root = base.join("system-data");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(&system_root).unwrap();
-        std::fs::write(system_root.join("rlive.db"), b"legacy").unwrap();
-
-        let selected = select_initial_root(&default_root, &system_root, &bootstrap).unwrap();
-        assert_eq!(selected, std::fs::canonicalize(&system_root).unwrap());
-        assert_eq!(
-            read_bootstrap(&bootstrap).unwrap().unwrap().custom_path,
-            Some(super::path_to_string(&selected))
-        );
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn explicit_default_selection_suppresses_legacy_discovery() {
+    fn missing_bootstrap_uses_default_directory() {
         let base = temp_directory("default");
         let default_root = base.join("install");
-        let system_root = base.join("system-data");
         let bootstrap = base.join("config").join("app-data-bootstrap.json");
         std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(&system_root).unwrap();
-        std::fs::write(system_root.join("rlive.db"), b"legacy").unwrap();
-        write_bootstrap(&bootstrap, None).unwrap();
 
-        let selected = select_initial_root(&default_root, &system_root, &bootstrap).unwrap();
+        let selected = select_initial_root(&default_root, &bootstrap).unwrap();
         assert_eq!(selected, default_root);
 
         std::fs::remove_dir_all(base).unwrap();
@@ -710,16 +660,14 @@ mod tests {
     fn configured_unavailable_directory_stops_startup_instead_of_falling_back() {
         let base = temp_directory("unavailable");
         let default_root = base.join("install");
-        let system_root = base.join("system-data");
         let bootstrap = base.join("config").join("app-data-bootstrap.json");
         let blocking_file = base.join("not-a-directory");
         let configured = blocking_file.join("custom");
         std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(&system_root).unwrap();
         std::fs::write(&blocking_file, b"file").unwrap();
         write_bootstrap(&bootstrap, Some(&configured)).unwrap();
 
-        let error = select_initial_root(&default_root, &system_root, &bootstrap).unwrap_err();
+        let error = select_initial_root(&default_root, &bootstrap).unwrap_err();
         assert_eq!(error.code, "app_data_path_unavailable");
         assert!(error.message.contains("为避免创建分叉数据"));
 
@@ -730,14 +678,12 @@ mod tests {
     fn corrupt_bootstrap_stops_startup_with_a_config_error() {
         let base = temp_directory("corrupt");
         let default_root = base.join("install");
-        let system_root = base.join("system-data");
         let bootstrap = base.join("config").join("app-data-bootstrap.json");
         std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(&system_root).unwrap();
         std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
         std::fs::write(&bootstrap, b"not-json").unwrap();
 
-        let error = select_initial_root(&default_root, &system_root, &bootstrap).unwrap_err();
+        let error = select_initial_root(&default_root, &bootstrap).unwrap_err();
         assert_eq!(error.code, "app_data_config_error");
         assert!(error.message.contains("恢复应用数据目录引导配置失败"));
 
@@ -748,13 +694,11 @@ mod tests {
     fn unreadable_bootstrap_stops_startup_with_a_config_error() {
         let base = temp_directory("unreadable");
         let default_root = base.join("install");
-        let system_root = base.join("system-data");
         let bootstrap = base.join("config").join("app-data-bootstrap.json");
         std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(&system_root).unwrap();
         std::fs::create_dir_all(&bootstrap).unwrap();
 
-        let error = select_initial_root(&default_root, &system_root, &bootstrap).unwrap_err();
+        let error = select_initial_root(&default_root, &bootstrap).unwrap_err();
         assert_eq!(error.code, "app_data_config_error");
         assert!(error.message.contains("恢复应用数据目录引导配置失败"));
 

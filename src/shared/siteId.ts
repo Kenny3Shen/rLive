@@ -6,8 +6,7 @@ export const DEFAULT_SITE_ID: SiteId = "bilibili";
  * Stable display and fallback order for the platforms bundled with the app.
  *
  * Keep this list alongside the `SiteId` union. Platform visibility is stored
- * as a disabled list so a newly shipped platform is enabled by default for
- * existing settings records.
+ * as a disabled list so a newly shipped platform is enabled by default.
  */
 export const LIVE_SITE_IDS = [
   "bilibili",
@@ -28,8 +27,8 @@ export function normalizeSiteId(value: unknown): SiteId {
 }
 
 /**
- * Sanitizes the persisted opt-out list. Old settings do not have this field,
- * so an absent or malformed value deliberately means every platform is on.
+ * Sanitizes the persisted opt-out list. An absent or malformed value means
+ * every platform is on.
  *
  * The final active platform is kept enabled as a local safety net. Rust
  * applies the same rule before it persists a settings object.
@@ -57,7 +56,7 @@ export function isSiteEnabled(siteId: unknown, disabledSiteIds: unknown): siteId
 
 /**
  * Resolves a requested platform to an enabled one. The stable first enabled
- * platform is used for stale links and legacy settings that name an opt-out.
+ * platform is used for stale links and settings that name an opt-out.
  */
 export function resolveEnabledSiteId(value: unknown, disabledSiteIds: unknown): SiteId {
   const enabled = enabledSiteIds(disabledSiteIds);
@@ -84,23 +83,4 @@ export function updateDisabledSiteIds(
   }
 
   return normalizeDisabledSiteIds([...disabled]);
-}
-
-/**
- * Picks the homepage platform after Tauri settings finish loading.
- *
- * A saved backend setting is authoritative. When the backend has no settings
- * row yet, preserve a valid platform restored from Zustand/localStorage so an
- * existing user's selection is not reset to the first-run default.
- */
-export function resolveStartupSiteId(
-  backendSiteId: unknown,
-  hasSavedBackendSettings: boolean,
-  localSiteId: unknown,
-  disabledSiteIds: unknown = [],
-): SiteId {
-  return resolveEnabledSiteId(
-    hasSavedBackendSettings ? backendSiteId : localSiteId,
-    disabledSiteIds,
-  );
 }

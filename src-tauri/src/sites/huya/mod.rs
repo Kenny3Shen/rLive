@@ -332,7 +332,7 @@ fn process_anticode(anticode: &str, uid: &str, stream_name: &str) -> String {
 fn md5_hex(s: &str) -> String {
     let mut h = Md5::new();
     h.update(s.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 fn percent_decode(s: &str) -> String {

@@ -12,14 +12,13 @@ pub const MAX_RECORDS_PER_SITE: i64 = 50;
 pub struct DanmakuSendHistoryRecord {
     pub site_id: String,
     pub content: String,
-    /// Room the message was sent to. Empty for records written by releases
-    /// that predate the column.
+    /// Room the message was sent to. Empty when unavailable.
     pub room_id: String,
     /// Room title captured at send time, so the history screen can name the
     /// room without a live lookup. Empty when unknown.
     pub room_title: String,
-    /// Streamer name captured with the room title. Empty for legacy records
-    /// and for platforms whose detail payload omitted it.
+    /// Streamer name captured with the room title. Empty when a platform's
+    /// detail payload omitted it.
     pub room_user_name: String,
     pub sent_at: i64,
 }

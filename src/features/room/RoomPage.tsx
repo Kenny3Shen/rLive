@@ -124,7 +124,7 @@ export function RoomPage() {
       room_id: detail.room_id,
       title: detail.title,
       user_name: detail.user_name,
-      cover: detail.cover || undefined,
+      cover: detail.cover,
       watched_at: Date.now(),
     };
     void invokeCmd<void>("history_add", { item })
@@ -359,14 +359,17 @@ export function RoomPage() {
         backTarget={backTarget}
         rightSlot={
           <div className="flex items-center gap-1">
-            <RecordingControl
-              context={recordingContext}
-            />
+            <RecordingControl context={recordingContext} />
             <div className="hidden md:flex md:items-center md:gap-1">
               <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
                 <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
               </RoomToolPopover>
-              <RoomToolPopover icon={Car} label="自动发送弹幕" wide active={autoDanmakuSend.enabled}>
+              <RoomToolPopover
+                icon={Car}
+                label="自动发送弹幕"
+                wide
+                active={autoDanmakuSend.enabled}
+              >
                 <AutoDanmakuSendMenu
                   autoSend={autoDanmakuSend}
                   idPrefix="title-auto-danmaku"

@@ -6,7 +6,6 @@ import {
   DEFAULT_SITE_ID,
   normalizeDisabledSiteIds,
   resolveEnabledSiteId,
-  resolveStartupSiteId,
   updateDisabledSiteIds,
 } from "../siteId";
 import {
@@ -67,12 +66,6 @@ type SettingsGetResponse = {
   has_saved_settings: boolean;
 };
 
-function isSettingsGetResponse(
-  value: AppSettings | SettingsGetResponse,
-): value is SettingsGetResponse {
-  return typeof value === "object" && value !== null && "settings" in value;
-}
-
 function isThemeMode(v: string): v is ThemeMode {
   return v === "system" || v === "light" || v === "dark";
 }
@@ -95,6 +88,9 @@ export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
 export const RECORDING_INCLUDE_DANMAKU_DEFAULT = false;
 export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = false;
+export const RECORDING_AUTO_SPLIT_MINUTES_MIN = 0;
+export const RECORDING_AUTO_SPLIT_MINUTES_MAX = 24 * 60;
+export const RECORDING_AUTO_SPLIT_MINUTES_DEFAULT = 0;
 export const FFMPEG_RW_TIMEOUT_SECONDS_MIN = 3;
 export const FFMPEG_RW_TIMEOUT_SECONDS_MAX = 60;
 export const FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT = 10;
@@ -138,21 +134,32 @@ export function parseFfmpegHlsSegmentRetryCount(value: unknown): number {
   );
 }
 
+export function parseRecordingAutoSplitMinutes(value: unknown): number {
+  return parseBoundedInteger(
+    value,
+    RECORDING_AUTO_SPLIT_MINUTES_MIN,
+    RECORDING_AUTO_SPLIT_MINUTES_MAX,
+    RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
+  );
+}
+
 export function recordingPreferencesFromAppSettings(
   settings: Pick<
     AppSettings,
     | "recording_include_danmaku"
     | "recording_continue_after_leave"
+    | "recording_auto_split_minutes"
     | "ffmpeg_rw_timeout_seconds"
     | "ffmpeg_reconnect_delay_max_seconds"
     | "ffmpeg_hls_segment_retry_count"
   >,
 ) {
   return {
-    recordingIncludeDanmaku:
-      settings.recording_include_danmaku ?? RECORDING_INCLUDE_DANMAKU_DEFAULT,
-    recordingContinueAfterLeave:
-      settings.recording_continue_after_leave ?? RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+    recordingIncludeDanmaku: settings.recording_include_danmaku,
+    recordingContinueAfterLeave: settings.recording_continue_after_leave,
+    recordingAutoSplitMinutes: parseRecordingAutoSplitMinutes(
+      settings.recording_auto_split_minutes,
+    ),
     ffmpegRwTimeoutSeconds: parseFfmpegRwTimeoutSeconds(settings.ffmpeg_rw_timeout_seconds),
     ffmpegReconnectDelayMaxSeconds: parseFfmpegReconnectDelayMaxSeconds(
       settings.ffmpeg_reconnect_delay_max_seconds,
@@ -193,7 +200,7 @@ function parseAsrWindowSeconds(value: unknown): number {
 type SettingsState = {
   theme: ThemeMode;
   siteId: string;
-  /** Platform opt-outs. An absent legacy setting means every platform is enabled. */
+  /** Platform opt-outs. */
   disabledSiteIds: SiteId[];
   proxy: string | null;
   danmakuOpacity: number;
@@ -206,7 +213,6 @@ type SettingsState = {
   superChatEnabled: boolean;
   danmakuShieldWords: string[];
   qualityLevel: QualityLevel;
-  playbackSmartLineSelection: boolean;
   playbackSoftSwitchEnabled: boolean;
   danmakuSendEnabled: boolean;
   /** True while the local multi-platform sending permission reaches the backend. */
@@ -234,6 +240,7 @@ type SettingsState = {
   iptvCustomM3uUrl: string | null;
   recordingIncludeDanmaku: boolean;
   recordingContinueAfterLeave: boolean;
+  recordingAutoSplitMinutes: number;
   ffmpegRwTimeoutSeconds: number;
   ffmpegReconnectDelayMaxSeconds: number;
   ffmpegHlsSegmentRetryCount: number;
@@ -244,7 +251,6 @@ type SettingsState = {
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setProxy: (proxy: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
-  setPlaybackSmartLineSelection: (enabled: boolean) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
@@ -262,6 +268,7 @@ type SettingsState = {
   setIptvCustomM3uUrl: (url: string | null) => void;
   setRecordingIncludeDanmaku: (enabled: boolean) => void;
   setRecordingContinueAfterLeave: (enabled: boolean) => void;
+  setRecordingAutoSplitMinutes: (minutes: number) => void;
   setFfmpegRwTimeoutSeconds: (seconds: number) => void;
   setFfmpegReconnectDelayMaxSeconds: (seconds: number) => void;
   setFfmpegHlsSegmentRetryCount: (count: number) => void;
@@ -274,7 +281,6 @@ type SettingsState = {
 
 const defaultSettings: AppSettings = {
   theme: "system",
-  motion_mode: "full",
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
   proxy: null,
@@ -288,7 +294,6 @@ const defaultSettings: AppSettings = {
   super_chat_enabled: true,
   danmaku_shield_words: [],
   quality_level: "high",
-  playback_smart_line_selection: true,
   playback_soft_switch_enabled: true,
   danmaku_send_enabled: false,
   asr_enabled: false,
@@ -305,6 +310,7 @@ const defaultSettings: AppSettings = {
   iptv_custom_m3u_url: null,
   recording_include_danmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
   recording_continue_after_leave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+  recording_auto_split_minutes: RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
   ffmpeg_rw_timeout_seconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
   ffmpeg_reconnect_delay_max_seconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
   ffmpeg_hls_segment_retry_count: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
@@ -313,7 +319,6 @@ const defaultSettings: AppSettings = {
 function toAppSettings(state: SettingsState): AppSettings {
   return {
     theme: state.theme,
-    motion_mode: "full",
     default_site: state.siteId,
     disabled_site_ids: state.disabledSiteIds,
     proxy: state.proxy,
@@ -327,7 +332,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     super_chat_enabled: state.superChatEnabled,
     danmaku_shield_words: state.danmakuShieldWords,
     quality_level: state.qualityLevel,
-    playback_smart_line_selection: state.playbackSmartLineSelection,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
@@ -344,6 +348,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
     recording_include_danmaku: state.recordingIncludeDanmaku,
     recording_continue_after_leave: state.recordingContinueAfterLeave,
+    recording_auto_split_minutes: state.recordingAutoSplitMinutes,
     ffmpeg_rw_timeout_seconds: state.ffmpegRwTimeoutSeconds,
     ffmpeg_reconnect_delay_max_seconds: state.ffmpegReconnectDelayMaxSeconds,
     ffmpeg_hls_segment_retry_count: state.ffmpegHlsSegmentRetryCount,
@@ -367,7 +372,6 @@ export const useSettingsStore = create<SettingsState>()(
       superChatEnabled: true,
       danmakuShieldWords: [],
       qualityLevel: "high",
-      playbackSmartLineSelection: true,
       playbackSoftSwitchEnabled: true,
       danmakuSendEnabled: false,
       danmakuSendPending: false,
@@ -387,6 +391,7 @@ export const useSettingsStore = create<SettingsState>()(
       iptvCustomM3uUrl: null,
       recordingIncludeDanmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
       recordingContinueAfterLeave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+      recordingAutoSplitMinutes: RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
       ffmpegRwTimeoutSeconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
       ffmpegReconnectDelayMaxSeconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
       ffmpegHlsSegmentRetryCount: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
@@ -416,12 +421,6 @@ export const useSettingsStore = create<SettingsState>()(
       setQualityLevel: (qualityLevel) => {
         set({ qualityLevel });
         void get().persistToBackend({ quality_level: qualityLevel });
-      },
-      setPlaybackSmartLineSelection: (playbackSmartLineSelection) => {
-        set({ playbackSmartLineSelection });
-        void get().persistToBackend({
-          playback_smart_line_selection: playbackSmartLineSelection,
-        });
       },
       setPlaybackSoftSwitchEnabled: (playbackSoftSwitchEnabled) => {
         set({ playbackSoftSwitchEnabled });
@@ -627,6 +626,13 @@ export const useSettingsStore = create<SettingsState>()(
           recording_continue_after_leave: recordingContinueAfterLeave,
         });
       },
+      setRecordingAutoSplitMinutes: (minutes) => {
+        const recordingAutoSplitMinutes = parseRecordingAutoSplitMinutes(minutes);
+        set({ recordingAutoSplitMinutes });
+        void get().persistToBackend({
+          recording_auto_split_minutes: recordingAutoSplitMinutes,
+        });
+      },
       setFfmpegRwTimeoutSeconds: (seconds) => {
         const ffmpegRwTimeoutSeconds = parseFfmpegRwTimeoutSeconds(seconds);
         set({ ffmpegRwTimeoutSeconds });
@@ -659,26 +665,25 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuFontSize: settings.danmaku_font_size,
           danmakuSpeed: parseDanmakuSpeed(settings.danmaku_speed),
           danmakuArea: settings.danmaku_area,
-          danmakuFilterGifts: settings.danmaku_filter_gifts ?? true,
+          danmakuFilterGifts: settings.danmaku_filter_gifts,
           danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(
             settings.danmaku_merge_window_seconds,
           ),
-          superChatEnabled: settings.super_chat_enabled ?? true,
-          danmakuShieldWords: settings.danmaku_shield_words ?? [],
+          superChatEnabled: settings.super_chat_enabled,
+          danmakuShieldWords: settings.danmaku_shield_words,
           qualityLevel: parseQualityLevel(settings.quality_level),
-          playbackSmartLineSelection: settings.playback_smart_line_selection ?? true,
-          playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled ?? true,
-          danmakuSendEnabled: settings.danmaku_send_enabled ?? false,
+          playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
+          danmakuSendEnabled: settings.danmaku_send_enabled,
           danmakuSendPending: false,
-          asrEnabled: settings.asr_enabled ?? false,
+          asrEnabled: settings.asr_enabled,
           asrProvider: parseAsrProvider(settings.asr_provider),
-          asrVadEnabled: settings.asr_vad_enabled ?? true,
-          asrPunctuationEnabled: settings.asr_punctuation_enabled ?? true,
-          asrSpeakerDiarizationEnabled: settings.asr_speaker_diarization_enabled ?? false,
-          asrHotwords: settings.asr_hotwords ?? [],
+          asrVadEnabled: settings.asr_vad_enabled,
+          asrPunctuationEnabled: settings.asr_punctuation_enabled,
+          asrSpeakerDiarizationEnabled: settings.asr_speaker_diarization_enabled,
+          asrHotwords: settings.asr_hotwords,
           asrWindowSeconds: parseAsrWindowSeconds(settings.asr_window_seconds),
           asrFontSize: parseAsrFontSize(settings.asr_font_size),
-          asrTranslationEnabled: settings.asr_translation_enabled ?? false,
+          asrTranslationEnabled: settings.asr_translation_enabled,
           asrTranslationFrom: normalizeCaptionTranslationFrom(settings.asr_translation_from),
           asrTranslationTo: normalizeCaptionTranslationTo(settings.asr_translation_to),
           asrPending: false,
@@ -689,43 +694,17 @@ export const useSettingsStore = create<SettingsState>()(
       },
       loadFromBackend: async () => {
         try {
-          const result = await invokeCmd<AppSettings | SettingsGetResponse>("settings_get");
-          // A legacy backend returns AppSettings directly. Treat it as saved
-          // rather than allowing a local cache to overwrite a real setting.
-          const { settings, hasSavedSettings } = isSettingsGetResponse(result)
-            ? {
-                settings: result.settings,
-                hasSavedSettings: result.has_saved_settings,
-              }
-            : { settings: result, hasSavedSettings: true };
-          const localSiteId = get().siteId;
-          const localDisabledSiteIds = get().disabledSiteIds;
-          const disabledSiteIds = normalizeDisabledSiteIds(
-            hasSavedSettings ? settings.disabled_site_ids : localDisabledSiteIds,
-          );
-          const siteId = resolveStartupSiteId(
-            settings.default_site,
-            hasSavedSettings,
-            localSiteId,
-            disabledSiteIds,
-          );
+          const result = await invokeCmd<SettingsGetResponse>("settings_get");
+          const { settings, has_saved_settings: hasSavedSettings } = result;
+          const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
+          const siteId = resolveEnabledSiteId(settings.default_site, disabledSiteIds);
 
           get().applyFromBackend({
             ...settings,
             ...(hasSavedSettings ? {} : { danmaku_font_size: defaultDanmakuFontSize() }),
-            motion_mode: "full",
             default_site: siteId,
             disabled_site_ids: disabledSiteIds,
           });
-
-          // Migrate a pre-backend local platform choice once. This makes the
-          // choice durable without changing the first-run Bilibili default.
-          if (!hasSavedSettings && (siteId !== DEFAULT_SITE_ID || disabledSiteIds.length > 0)) {
-            await get().persistToBackend({
-              default_site: siteId,
-              disabled_site_ids: disabledSiteIds,
-            });
-          }
         } catch {
           // Outside Tauri (vite-only) or backend unavailable: keep local defaults.
           set({ hydratedFromBackend: true });
@@ -738,7 +717,7 @@ export const useSettingsStore = create<SettingsState>()(
           return;
         }
         const current = toAppSettings(get());
-        const next: AppSettings = { ...defaultSettings, ...current, ...patch, motion_mode: "full" };
+        const next: AppSettings = { ...defaultSettings, ...current, ...patch };
         settingsWriteQueue = settingsWriteQueue
           .catch(() => {})
           .then(async () => {
@@ -752,7 +731,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
     }),
     {
-      name: "rlive-settings",
+      name: "rlive-settings-v1",
       // Dual-write localStorage for theme flash; backend overwrites after load.
       partialize: (s) => ({
         theme: s.theme,

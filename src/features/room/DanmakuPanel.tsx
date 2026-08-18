@@ -64,10 +64,7 @@ function DanmakuSender({
 
   return (
     <>
-      <span
-        className="mr-1.5 text-primary"
-        style={userColor ? { color: userColor } : undefined}
-      >
+      <span className="mr-1.5 text-primary" style={userColor ? { color: userColor } : undefined}>
         {user}：
       </span>
     </>

@@ -52,6 +52,7 @@ pub(super) async fn run(
             TaskOutcome {
                 status: RecordingStatus::Interrupted,
                 error: Some(message),
+                split: false,
             }
         }
     }
@@ -143,9 +144,14 @@ fn remux(
     }
 
     let callback_cancel = cancel.clone();
+    let callback_started = started;
+    let split_duration = recording_options.split_duration;
     let mut input = match format::input_with_interrupt_and_dictionary(
         &source.url,
-        move || *callback_cancel.borrow(),
+        move || {
+            *callback_cancel.borrow()
+                || split_duration.is_some_and(|limit| callback_started.elapsed() >= limit)
+        },
         options,
     ) {
         Ok(input) => input,
@@ -254,6 +260,12 @@ fn remux(
         if *cancel.borrow() {
             break StopReason::Cancelled;
         }
+        if recording_options
+            .split_duration
+            .is_some_and(|limit| started.elapsed() >= limit)
+        {
+            break StopReason::SplitLimit;
+        }
         if last_space_check.elapsed() >= STORAGE_SPACE_CHECK_INTERVAL {
             last_space_check = Instant::now();
             match available_storage_space(&state.bundle) {
@@ -274,6 +286,13 @@ fn remux(
                 continue;
             }
             Err(Error::Exit) if *cancel.borrow() => break StopReason::Cancelled,
+            Err(Error::Exit)
+                if recording_options
+                    .split_duration
+                    .is_some_and(|limit| started.elapsed() >= limit) =>
+            {
+                break StopReason::SplitLimit;
+            }
             Err(Error::Eof) => break StopReason::Failed("直播流已结束".into()),
             Err(error) => {
                 break StopReason::Failed(format!("Rust FFmpeg 读取直播流中断: {error}"));
@@ -321,6 +340,7 @@ fn remux(
         remove_part(&part);
         return match stop_reason {
             StopReason::Cancelled => interrupted("停止前尚未收到媒体数据".into()),
+            StopReason::SplitLimit => interrupted("自动分割前尚未收到媒体数据".into()),
             StopReason::StorageLow(available) => failed(join_errors(
                 format_storage_space_error(available),
                 trailer_error,
@@ -333,18 +353,26 @@ fn remux(
         StopReason::Cancelled if trailer_error.is_none() => TaskOutcome {
             status: RecordingStatus::Completed,
             error: None,
+            split: false,
+        },
+        StopReason::SplitLimit if trailer_error.is_none() => TaskOutcome {
+            status: RecordingStatus::Completed,
+            error: None,
+            split: true,
         },
         StopReason::StorageLow(available) => interrupted(join_errors(
             format_storage_space_error(available),
             trailer_error,
         )),
         StopReason::Cancelled => interrupted(trailer_error.unwrap()),
+        StopReason::SplitLimit => interrupted(trailer_error.unwrap()),
         StopReason::Failed(error) => interrupted(join_errors(error, trailer_error)),
     };
     match publish_part(&part, &final_path) {
         Ok(size) => state.bytes.store(size, Ordering::Relaxed),
         Err(error) => {
             outcome.status = RecordingStatus::Failed;
+            outcome.split = false;
             outcome.error = Some(join_errors(
                 outcome.error.unwrap_or_default(),
                 Some(format!("发布 Rust FFmpeg 录制文件失败: {error}")),
@@ -481,6 +509,7 @@ fn flv_contains_keyframe_index(path: &Path) -> Result<bool, String> {
 
 enum StopReason {
     Cancelled,
+    SplitLimit,
     StorageLow(u64),
     Failed(String),
 }
@@ -733,6 +762,7 @@ fn failed(error: String) -> TaskOutcome {
     TaskOutcome {
         status: RecordingStatus::Failed,
         error: Some(error),
+        split: false,
     }
 }
 
@@ -740,6 +770,7 @@ fn interrupted(error: String) -> TaskOutcome {
     TaskOutcome {
         status: RecordingStatus::Interrupted,
         error: Some(error),
+        split: false,
     }
 }
 

@@ -52,7 +52,7 @@ describe("IPTV routes", () => {
     expect(new URLSearchParams(route.split("?", 2)[1]).get("direct")).toBe(directUrl);
   });
 
-  test("resolves only supported built-in and legacy custom sources", () => {
+  test("resolves only supported built-in and configured custom sources", () => {
     expect(playlistSourceFromRoute("mainland", null).label).toBe("中国大陆");
     expect(playlistSourceFromRoute("custom", "https://example.test/custom.m3u").url).toBe(
       "https://example.test/custom.m3u",

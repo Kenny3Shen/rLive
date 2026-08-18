@@ -2,6 +2,7 @@
 
 #![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 
+use std::time::Duration;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
@@ -24,6 +25,9 @@ fn configured_recording_options(
             rw_timeout_seconds: settings.ffmpeg_rw_timeout_seconds,
             reconnect_delay_max_seconds: settings.ffmpeg_reconnect_delay_max_seconds,
             hls_segment_retry_count: settings.ffmpeg_hls_segment_retry_count,
+            split_duration: (settings.recording_auto_split_minutes > 0).then(|| {
+                Duration::from_secs(u64::from(settings.recording_auto_split_minutes) * 60)
+            }),
         },
     ))
 }
