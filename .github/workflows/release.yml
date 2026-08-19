@@ -117,65 +117,11 @@ jobs:
             throw "The staged avcodec DLL does not import the expected swresample runtime DLL."
           }
 
-      - name: Create Windows portable ZIP
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force "release-assets/windows" | Out-Null
-
-          $releaseDirectory = (Resolve-Path "src-tauri/target/release").Path
-          $binary = (Resolve-Path (Join-Path $releaseDirectory "rlive.exe")).Path
-          $ffmpegDlls = @(
-            Get-ChildItem $releaseDirectory -File |
-              Where-Object { $_.Name -match '^(avutil|avcodec|avformat|swresample)-[0-9]+\.dll$' }
-          )
-          if ($ffmpegDlls.Count -ne 4) {
-            throw "Expected four FFmpeg runtime DLLs, found $($ffmpegDlls.Count)."
-          }
-          Get-ChildItem $releaseDirectory -Filter "*.dll" -File |
-            Where-Object { $ffmpegDlls.FullName -notcontains $_.FullName } |
-            Remove-Item -Force
-
-          $ffmpegLicense = Join-Path $releaseDirectory "FFmpeg-LICENSE.txt"
-          if (-not (Test-Path $ffmpegLicense)) {
-            throw "FFmpeg license file is missing from the release directory."
-          }
-          $ffmpegReadme = Join-Path $releaseDirectory "FFmpeg-README.txt"
-          if (-not (Test-Path $ffmpegReadme)) {
-            throw "FFmpeg build information is missing from the release directory."
-          }
-          $process = Start-Process -FilePath $binary -PassThru
-          Start-Sleep -Seconds 5
-          if ($process.HasExited) {
-            throw "Windows executable exited before the smoke-test window without ASR runtime DLLs."
-          }
-          Stop-Process -Id $process.Id -Force
-
-          $portable = Join-Path $env:RUNNER_TEMP "rlive-portable"
-          New-Item -ItemType Directory -Force $portable | Out-Null
-          Copy-Item $binary (Join-Path $portable "rlive.exe")
-          Copy-Item $ffmpegDlls.FullName $portable
-          Copy-Item $ffmpegLicense $portable
-          Copy-Item $ffmpegReadme $portable
-          $zip = "release-assets/windows/rLive_$($env:RELEASE_VERSION)_windows-x64-portable.zip"
-          Compress-Archive -Path "$portable/*" -DestinationPath $zip -CompressionLevel Optimal
-
-          $zipEntries = @(tar -tf $zip | Where-Object { $_ -and -not $_.EndsWith('/') } | Sort-Object)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $expectedEntries = @(
-            "rlive.exe"
-            "FFmpeg-LICENSE.txt"
-            "FFmpeg-README.txt"
-            $ffmpegDlls.Name
-          ) | Sort-Object
-          if (Compare-Object $expectedEntries $zipEntries) {
-            throw "Portable ZIP does not contain the expected executable and FFmpeg runtime files."
-          }
-
       - name: Bundle Windows installers (NSIS setup and MSI)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force "release-assets/windows" | Out-Null
           $releaseDirectory = (Resolve-Path "src-tauri/target/release").Path
           $runtimeFiles = @(
             Get-ChildItem $releaseDirectory -File |
@@ -224,7 +170,6 @@ jobs:
           path: |
             release-assets/windows/*.exe
             release-assets/windows/*.msi
-            release-assets/windows/*.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -236,7 +181,6 @@ jobs:
       contents: read
     env:
       RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
-      SHERPA_ONNX_GPU: "1"
     steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -260,7 +204,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            zip \
             rpm \
             cpio \
             xvfb
@@ -280,6 +223,7 @@ jobs:
           test -s "$runtime_manifest"
           test -f "$release_dir/libsherpa-onnx-c-api.so"
           test -f "$release_dir/libonnxruntime.so"
+          test ! -e "$release_dir/libonnxruntime_providers_cuda.so"
 
           verify_runtime() {
             local binary="$1"
@@ -360,42 +304,6 @@ jobs:
           cp "${rpm_files[0]}" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-x86_64.rpm"
           cp "$appimage_file" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-x86_64.AppImage"
 
-      - name: Create Linux portable ZIP with ASR runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_dir="$PWD/src-tauri/target/release"
-          runtime_manifest="$RUNNER_TEMP/rlive-linux-runtime.manifest"
-          portable_dir="$RUNNER_TEMP/rlive-linux-portable"
-          mkdir -p "$portable_dir/lib"
-
-          cp "$release_dir/rlive" "$portable_dir/rlive"
-          find "$release_dir" -maxdepth 1 -type f -name '*.so*' -exec cp {} "$portable_dir/lib/" \;
-          find "$portable_dir/lib" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$RUNNER_TEMP/rlive-portable-runtime.manifest"
-          diff -u "$runtime_manifest" "$RUNNER_TEMP/rlive-portable-runtime.manifest"
-          test -f "$portable_dir/lib/libsherpa-onnx-c-api.so"
-          test -f "$portable_dir/lib/libonnxruntime.so"
-
-          patchelf --set-rpath '$ORIGIN/lib' "$portable_dir/rlive"
-          readelf -d "$portable_dir/rlive" | grep -Fq '$ORIGIN/lib'
-          if ldd "$portable_dir/rlive" | grep -q 'not found'; then
-            ldd "$portable_dir/rlive"
-            exit 1
-          fi
-          set +e
-          xvfb-run -a env \
-            XDG_DATA_HOME="$RUNNER_TEMP/rlive-portable-smoke/data" \
-            XDG_CONFIG_HOME="$RUNNER_TEMP/rlive-portable-smoke/config" \
-            XDG_CACHE_HOME="$RUNNER_TEMP/rlive-portable-smoke/cache" \
-            timeout --signal=TERM 8s "$portable_dir/rlive"
-          portable_status=$?
-          set -e
-          test "$portable_status" -eq 124
-
-          zip_path="$PWD/release-assets/linux/rLive_${RELEASE_VERSION}_linux-x64-portable.zip"
-          (cd "$portable_dir" && zip -r -X "$zip_path" .)
-          unzip -l "$zip_path"
-
       - name: Upload Linux packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -404,7 +312,6 @@ jobs:
             release-assets/linux/*.deb
             release-assets/linux/*.rpm
             release-assets/linux/*.AppImage
-            release-assets/linux/*.zip
           if-no-files-found: error
           retention-days: 14
 

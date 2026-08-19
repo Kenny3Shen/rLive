@@ -8,7 +8,7 @@
 | [未来路线图](zh/未来路线图.md) | 发布门槛、工程演进、跨平台交付与条件性产品方向 |
 | [1.0 兼容性清理](zh/1.0兼容性清理.md) | 数据断代范围、升级步骤、保留项与发布门槛 |
 | [UI 与动画技术说明](zh/UI与动画技术说明.md) | UI 组件、主题令牌、响应式布局、GSAP 与页面过渡规范 |
-| [本地语音字幕](zh/本地语音字幕.md) | sherpa-onnx Zipformer、标点恢复、CAMPPlus 说话人区分、Google 字幕翻译与 CPU / CUDA 参数（Linux CUDA 尚未完整测试） |
+| [本地语音字幕](zh/本地语音字幕.md) | sherpa-onnx Zipformer、标点恢复、CAMPPlus 说话人区分、Google 字幕翻译与 Windows CUDA / Linux CPU 运行方式 |
 | [B站平台 API 文档](zh/B站平台API文档.md) | B 站接口、签名与弹幕协议 |
 | [斗鱼平台 API 文档](zh/斗鱼平台API文档.md) | 斗鱼接口与弹幕收发 |
 | [虎牙平台 API 文档](zh/虎牙平台API文档.md) | 虎牙接口与弹幕收发 |
