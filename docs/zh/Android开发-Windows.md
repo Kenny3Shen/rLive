@@ -10,6 +10,12 @@ Android 构建使用 Tauri 2、JDK 17、Android SDK、NDK 29.0.13846066 和 Rust
 - Rust target `aarch64-linux-android`
 - Bun 和 JDK 17
 
+QuickJS 的 FFI 绑定需要 NDK clang。Tauri 的 Android 构建不经过 `cargo-ndk`，因此在手动执行构建前设置：
+
+```bash
+export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=aarch64-linux-android24"
+```
+
 `MainActivity` 在应用回到前台时会向 Android 请求同分辨率下不高于 120 Hz 的最高高刷模式。60/90 Hz 设备使用自身上限；只有 60/144 Hz 而没有 90/120 Hz 模式的面板使用 144 Hz，避免误退回 60 Hz。系统省电、温控、厂商策略与动态刷新率仍可降低实际刷新率，因此该请求不会强制所有设备固定运行在 120 FPS。Web 动画和 Canvas 仍以系统实际提供的 `requestAnimationFrame` 时间戳推进。
 
 设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT` 后安装工具链：

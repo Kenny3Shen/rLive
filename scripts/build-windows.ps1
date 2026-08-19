@@ -5,7 +5,7 @@
 #   - VS Build Tools: D:\VS\BuildTools (vcvars64.bat)
 #   - Rust: D:\dev\rust\{cargo,rustup}  (or CARGO_HOME / RUSTUP_HOME)
 #   - bun and/or Node.js
-#   - LLVM/libclang (auto-detected, or set LIBCLANG_PATH)
+#   - MSVC-compatible LLVM/Clang + libclang (auto-detected, or set LIBCLANG_PATH)
 #   - Network access on the first build (downloads the pinned shared FFmpeg SDK)
 #   - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x runtime and a compatible NVIDIA driver
 #

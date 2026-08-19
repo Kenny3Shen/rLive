@@ -1,101 +1,50 @@
 //! Douyu play-sign via embedded CryptoJS + room JS (simple_live DouyuSign).
-//!
-//! Boa is not a browser:
-//! - CryptoJS UMD must attach to `globalThis` (script `this` is unreliable)
-//! - room scripts call legacy `escape` / `unescape`
-//! - decrypted payload uses deprecated `String.prototype.substr`
 
-use boa_engine::{Context, Source};
+use quickjs_rusty::Context;
 
 use crate::error::{AppError, AppResult};
 
 const CRYPTO_JS: &str = include_str!("../../../assets/crypto-js.min.js");
 
-/// Browser-ish globals required by CryptoJS and Douyu's obfuscated room script.
-const BROWSER_POLYFILL: &str = r#"
+/// QuickJS provides the legacy browser helpers natively; these aliases keep
+/// dynamically delivered room scripts compatible with browser globals.
+const BROWSER_ALIASES: &str = r#"
 var global = globalThis;
 var window = globalThis;
 var self = globalThis;
 if (typeof console === 'undefined') {
   var console = { log: function () {}, error: function () {}, warn: function () {} };
 }
-function escape(str) {
-  str = String(str);
-  var out = "";
-  for (var i = 0; i < str.length; i++) {
-    var c = str.charCodeAt(i);
-    if (
-      (c >= 0x30 && c <= 0x39) ||
-      (c >= 0x41 && c <= 0x5a) ||
-      (c >= 0x61 && c <= 0x7a) ||
-      c === 0x40 || c === 0x2a || c === 0x5f ||
-      c === 0x2b || c === 0x2d || c === 0x2e || c === 0x2f
-    ) {
-      out += str.charAt(i);
-    } else if (c < 256) {
-      var h = c.toString(16).toUpperCase();
-      out += "%" + (h.length < 2 ? "0" + h : h);
-    } else {
-      var u = c.toString(16).toUpperCase();
-      while (u.length < 4) u = "0" + u;
-      out += "%u" + u;
-    }
-  }
-  return out;
-}
-function unescape(str) {
-  str = String(str);
-  return str.replace(/%u([0-9A-Fa-f]{4})/g, function (_, hex) {
-    return String.fromCharCode(parseInt(hex, 16));
-  }).replace(/%([0-9A-Fa-f]{2})/g, function (_, hex) {
-    return String.fromCharCode(parseInt(hex, 16));
-  });
-}
-// Boa has no String.prototype.substr; Douyu's eval'd payload calls it.
-if (typeof String.prototype.substr !== 'function') {
-  String.prototype.substr = function (start, length) {
-    start = Number(start) || 0;
-    var s = String(this);
-    if (start < 0) start = Math.max(s.length + start, 0);
-    if (length === undefined || length === null) return s.substring(start);
-    length = Number(length);
-    if (isNaN(length) || length <= 0) return '';
-    return s.substring(start, start + length);
-  };
-}
 "#;
 
-fn eval_js(ctx: &mut Context, src: &str, stage: &str) -> AppResult<()> {
-    ctx.eval(Source::from_bytes(src))
+fn eval_js(ctx: &Context, src: &str, stage: &str) -> AppResult<()> {
+    ctx.eval(src, false)
         .map_err(|e| AppError::new("douyu_sign", format!("{stage}: {e}")).with_site("douyu"))?;
     Ok(())
 }
 
 /// Run `ub98484234(rid, did, tt)` after evaluating the room encrypt script.
 pub fn get_sign(html_js: &str, rid: &str) -> AppResult<String> {
-    let mut ctx = Context::default();
+    let ctx = Context::builder().build().map_err(|e| {
+        AppError::new("douyu_sign", format!("JS 运行时创建失败: {e}")).with_site("douyu")
+    })?;
+    ctx.update_stack_top();
 
-    eval_js(&mut ctx, BROWSER_POLYFILL, "polyfill eval")?;
-
-    // CryptoJS UMD: `t.CryptoJS = e()` with `t` = first IIFE arg. Force globalThis.
-    let crypto_js = CRYPTO_JS.replacen("(this,", "(globalThis,", 1);
-    eval_js(&mut ctx, &crypto_js, "crypto-js eval")?;
-
-    eval_js(&mut ctx, html_js, "room js eval")?;
+    eval_js(&ctx, BROWSER_ALIASES, "aliases eval")?;
+    eval_js(&ctx, CRYPTO_JS, "crypto-js eval")?;
+    eval_js(&ctx, html_js, "room js eval")?;
 
     let did = "10000000000000000000000000001501";
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // rid/did/time are digits; keep as plain string literals.
-    let call = format!("ub98484234('{rid}','{did}','{time}')");
+        .unwrap_or(0)
+        .to_string();
     let value = ctx
-        .eval(Source::from_bytes(&call))
+        .call_function("ub98484234", vec![rid, did, time.as_str()])
         .map_err(|e| AppError::new("douyu_sign", format!("ub98484234: {e}")).with_site("douyu"))?;
     value
-        .to_string(&mut ctx)
-        .map(|js| js.to_std_string_escaped())
+        .js_to_string()
         .map_err(|e| AppError::new("douyu_sign", format!("to_string: {e}")).with_site("douyu"))
 }
 
@@ -104,25 +53,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn polyfill_escape_unescape_roundtrip() {
-        let mut ctx = Context::default();
-        ctx.eval(Source::from_bytes(BROWSER_POLYFILL)).unwrap();
-        let v = ctx
-            .eval(Source::from_bytes(r#"unescape(escape("ab/cd_ef"))"#))
-            .unwrap();
-        let s = v.to_string(&mut ctx).unwrap().to_std_string_escaped();
-        assert_eq!(s, "ab/cd_ef");
+    fn engine_provides_annex_b_escape_unescape() {
+        let ctx = Context::builder().build().unwrap();
+        ctx.update_stack_top();
+        let value = ctx.eval(r#"unescape(escape("ab/cd_ef"))"#, false).unwrap();
+        assert_eq!(value.js_to_string().unwrap(), "ab/cd_ef");
     }
 
     #[test]
-    fn polyfill_substr() {
-        let mut ctx = Context::default();
-        ctx.eval(Source::from_bytes(BROWSER_POLYFILL)).unwrap();
-        let v = ctx
-            .eval(Source::from_bytes(r#""0123456789abcdef".substr(8, 2)"#))
+    fn engine_provides_string_substr() {
+        let ctx = Context::builder().build().unwrap();
+        ctx.update_stack_top();
+        let value = ctx
+            .eval(r#""0123456789abcdef".substr(8, 2)"#, false)
             .unwrap();
-        let s = v.to_string(&mut ctx).unwrap().to_std_string_escaped();
-        assert_eq!(s, "89");
+        assert_eq!(value.js_to_string().unwrap(), "89");
     }
 
     #[test]
