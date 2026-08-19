@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "1.2.0"
+version = "1.2.1"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -58,8 +58,8 @@ tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["
 sherpa-onnx = "=1.13.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Linux uses the shared runtime so the CUDA-capable provider can be selected at
-# runtime while machines without NVIDIA dependencies continue on CPU.
+# Linux always uses the CPU-only shared runtime; CUDA provider libraries are not
+# part of the desktop build.
 sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -82,8 +82,6 @@ fs2 = "0.4"
 # code or the model/provider settings.
 sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
 sha2 = "0.11"
-
-[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 libloading = "0.9"
 
 [target.'cfg(target_os = "android")'.dependencies]

@@ -44,7 +44,6 @@ fn main() {
 fn try_main() -> Result<(), DynError> {
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_ARCHIVE_DIR");
-    println!("cargo:rerun-if-env-changed=SHERPA_ONNX_GPU");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
 
     if env::var_os("DOCS_RS").is_some() {
@@ -55,6 +54,9 @@ fn try_main() -> Result<(), DynError> {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH")?;
+    if target_os == "windows" {
+        println!("cargo:rerun-if-env-changed=SHERPA_ONNX_GPU");
+    }
     let link_mode = resolve_link_mode()?;
     let lib_dir = resolve_lib_dir(link_mode, &target_os, &target_arch)?;
 
@@ -240,11 +242,7 @@ fn archive_name(
             format!("sherpa-onnx-v{version}-win-x64-static-MT-Release-lib.tar.bz2")
         }
         (LinkMode::Shared, "linux", "x86_64") => {
-            if gpu_enabled(target_os, target_arch) {
-                format!("sherpa-onnx-v{version}-linux-x64-gpu.tar.bz2")
-            } else {
-                format!("sherpa-onnx-v{version}-linux-x64-shared-lib.tar.bz2")
-            }
+            format!("sherpa-onnx-v{version}-linux-x64-shared-lib.tar.bz2")
         }
         (LinkMode::Shared, "linux", "aarch64") => {
             format!("sherpa-onnx-v{version}-linux-aarch64-shared-cpu-lib.tar.bz2")
@@ -279,9 +277,7 @@ fn archive_name(
 }
 
 fn gpu_enabled(target_os: &str, target_arch: &str) -> bool {
-    if !((target_os == "windows" && target_arch == "x86_64")
-        || (target_os == "linux" && target_arch == "x86_64"))
-    {
+    if target_os != "windows" || target_arch != "x86_64" {
         return false;
     }
 

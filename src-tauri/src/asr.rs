@@ -15,11 +15,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(windows)]
 use libloading::Library;
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 use serde::Serialize;
@@ -67,9 +67,9 @@ const WINDOWS_RUNTIME_DLLS: &[&str] = &[
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
 const ASR_PROVIDER_CUDA: &str = "cuda";
-// The v1.13.4 CUDA archives used by this project support Pascal (sm_61) and
-// newer NVIDIA architectures.
-#[cfg(any(windows, target_os = "linux", test))]
+// The Windows v1.13.4 CUDA archive supports Pascal (sm_61) and newer NVIDIA
+// architectures.
+#[cfg(windows)]
 const CUDA_MIN_COMPUTE_CAPABILITY: (i32, i32) = (6, 1);
 
 const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
@@ -158,8 +158,8 @@ impl AsrModelStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRuntimeOptions {
-    /// `auto` selects CUDA on Windows/Linux when the staged runtime and NVIDIA
-    /// driver are loadable; otherwise it uses CPU.
+    /// `auto` selects CUDA on Windows when the staged runtime and NVIDIA driver
+    /// are loadable; Linux and macOS always use CPU.
     pub provider: String,
     pub vad_enabled: bool,
     pub punctuation_enabled: bool,
@@ -1594,23 +1594,40 @@ fn normalize_asr_provider(value: &str) -> &'static str {
 }
 
 fn effective_asr_provider(preference: &str) -> &'static str {
-    match normalize_asr_provider(preference) {
-        ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
-        ASR_PROVIDER_CUDA | ASR_PROVIDER_AUTO if cuda_runtime_available() => ASR_PROVIDER_CUDA,
-        _ => ASR_PROVIDER_CPU,
+    #[cfg(windows)]
+    {
+        match normalize_asr_provider(preference) {
+            ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
+            ASR_PROVIDER_CUDA | ASR_PROVIDER_AUTO if cuda_runtime_available() => ASR_PROVIDER_CUDA,
+            _ => ASR_PROVIDER_CPU,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = preference;
+        ASR_PROVIDER_CPU
     }
 }
 
 fn asr_provider_fallback_message(preference: &str) -> Option<String> {
-    let normalized = normalize_asr_provider(preference);
-    if normalized != ASR_PROVIDER_CPU && effective_asr_provider(normalized) == ASR_PROVIDER_CPU {
-        Some(cuda_provider_fallback_message())
-    } else {
+    #[cfg(windows)]
+    {
+        let normalized = normalize_asr_provider(preference);
+        if normalized != ASR_PROVIDER_CPU && effective_asr_provider(normalized) == ASR_PROVIDER_CPU
+        {
+            Some(cuda_provider_fallback_message())
+        } else {
+            None
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = preference;
         None
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(windows)]
 fn cuda_provider_fallback_message() -> String {
     if let Some((major, minor)) = cuda_compute_capability()
         && !cuda_compute_capability_supported(major, minor)
@@ -1622,17 +1639,12 @@ fn cuda_provider_fallback_message() -> String {
     "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
-fn cuda_provider_fallback_message() -> String {
-    "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
-}
-
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(windows)]
 fn cuda_compute_capability_supported(major: i32, minor: i32) -> bool {
     (major, minor) >= CUDA_MIN_COMPUTE_CAPABILITY
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(windows)]
 fn cuda_compute_capability() -> Option<(i32, i32)> {
     static CAPABILITY: OnceLock<Option<(i32, i32)>> = OnceLock::new();
 
@@ -1722,85 +1734,6 @@ fn cuda_runtime_available() -> bool {
     ]
     .into_iter()
     .all(|name| can_load(name, runtime_dir.as_deref()))
-}
-
-/// Returns the directories that can contain the Linux Sherpa/ONNX Runtime
-/// libraries for each supported executable layout. Keep these paths relative
-/// to the executable so normal installs, temporary package extraction, and
-/// AppImage all use the same contract.
-#[cfg(any(target_os = "linux", test))]
-fn linux_runtime_search_dirs(executable_dir: Option<&Path>) -> Vec<PathBuf> {
-    let Some(executable_dir) = executable_dir else {
-        return Vec::new();
-    };
-
-    let mut directories = vec![executable_dir.to_path_buf()];
-    if executable_dir.file_name().is_some_and(|name| name == "bin")
-        && let Some(usr_dir) = executable_dir.parent()
-    {
-        // DEB, RPM, and AppImage use `<prefix>/bin/rlive` together with
-        // `<prefix>/lib/rLive/*.so*`.
-        directories.push(usr_dir.join("lib").join("rLive"));
-    }
-    // The portable archive keeps its libraries beside the executable in a
-    // `lib` directory. This is also harmless for development layouts.
-    directories.push(executable_dir.join("lib"));
-    directories
-}
-
-#[cfg(target_os = "linux")]
-fn cuda_runtime_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-
-    *AVAILABLE.get_or_init(|| {
-        if !cuda_compute_capability()
-            .is_some_and(|(major, minor)| cuda_compute_capability_supported(major, minor))
-        {
-            return false;
-        }
-
-        let executable_dir = std::env::current_exe()
-            .ok()
-            .and_then(|executable| executable.parent().map(Path::to_path_buf));
-        let runtime_dirs = linux_runtime_search_dirs(executable_dir.as_deref());
-        let provider_is_staged = runtime_dirs.iter().any(|directory| {
-            directory.join("libonnxruntime_providers_cuda.so").is_file()
-                && directory
-                    .join("libonnxruntime_providers_shared.so")
-                    .is_file()
-        });
-        if !provider_is_staged {
-            return false;
-        }
-
-        fn can_load(name: &str, runtime_dirs: &[PathBuf]) -> bool {
-            runtime_dirs
-                .iter()
-                .map(|directory| directory.join(name))
-                .chain(std::iter::once(PathBuf::from(name)))
-                .any(|candidate| unsafe { Library::new(candidate).is_ok() })
-        }
-
-        // The official v1.13.4 Linux GPU archive is built for CUDA 11.x and
-        // cuDNN 8.x. Provider files are staged by the shared-runtime build; the
-        // NVIDIA driver/toolkit dependencies remain supplied by the host.
-        [
-            "libcuda.so.1",
-            "libcublasLt.so.11",
-            "libcublas.so.11",
-            "libcudnn.so.8",
-            "libcurand.so.10",
-            "libcufft.so.10",
-            "libcudart.so.11.0",
-        ]
-        .into_iter()
-        .all(|name| can_load(name, &runtime_dirs))
-    })
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
-fn cuda_runtime_available() -> bool {
-    false
 }
 
 fn asr_thread_count_for_available(available: usize) -> i32 {
@@ -1922,14 +1855,15 @@ async fn remove_dir_if_present(path: &Path) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::cuda_compute_capability_supported;
     use super::{
         AsrRuntimeOptions, MODEL_ARCHIVE_SIZE_BYTES, PUNCTUATION_ARCHIVE_SIZE_BYTES,
         SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters, asr_thread_count_for_available,
-        configured_model_size, cuda_compute_capability_supported, decode_base64_pcm,
-        linux_runtime_search_dirs, normalize_asr_provider, normalize_hotwords, samples_to_millis,
+        configured_model_size, decode_base64_pcm, effective_asr_provider, normalize_asr_provider,
+        normalize_hotwords, samples_to_millis,
     };
     use base64::Engine;
-    use std::path::{Path, PathBuf};
 
     #[test]
     fn decodes_little_endian_pcm() {
@@ -1969,6 +1903,14 @@ mod tests {
         assert_eq!(normalize_asr_provider("driver-dependent"), "auto");
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn always_uses_cpu_provider_on_linux() {
+        assert_eq!(effective_asr_provider("auto"), "cpu");
+        assert_eq!(effective_asr_provider("cuda"), "cpu");
+    }
+
+    #[cfg(windows)]
     #[test]
     fn rejects_cuda_devices_below_the_prebuilt_runtime_architecture() {
         assert!(!cuda_compute_capability_supported(6, 0));
@@ -1976,50 +1918,6 @@ mod tests {
         assert!(!cuda_compute_capability_supported(5, 2));
         assert!(cuda_compute_capability_supported(7, 5));
         assert!(cuda_compute_capability_supported(8, 6));
-    }
-
-    #[test]
-    fn locates_linux_runtime_for_development_and_portable_layouts() {
-        let development =
-            linux_runtime_search_dirs(Some(Path::new("/work/src-tauri/target/release")));
-        assert_eq!(
-            development,
-            vec![
-                PathBuf::from("/work/src-tauri/target/release"),
-                PathBuf::from("/work/src-tauri/target/release/lib"),
-            ]
-        );
-
-        let portable = linux_runtime_search_dirs(Some(Path::new("/tmp/rlive-portable")));
-        assert_eq!(
-            portable,
-            vec![
-                PathBuf::from("/tmp/rlive-portable"),
-                PathBuf::from("/tmp/rlive-portable/lib"),
-            ]
-        );
-    }
-
-    #[test]
-    fn locates_linux_runtime_for_package_and_appimage_layouts() {
-        for executable_dir in [
-            Path::new("/tmp/deb-root/usr/bin"),
-            Path::new("/tmp/rpm-root/usr/bin"),
-            Path::new("/tmp/rLive.AppDir/usr/bin"),
-        ] {
-            let directories = linux_runtime_search_dirs(Some(executable_dir));
-            assert_eq!(directories[0], executable_dir);
-            assert_eq!(
-                directories[1],
-                executable_dir.parent().unwrap().join("lib/rLive")
-            );
-            assert_eq!(directories[2], executable_dir.join("lib"));
-        }
-    }
-
-    #[test]
-    fn has_no_linux_runtime_search_path_without_an_executable_directory() {
-        assert!(linux_runtime_search_dirs(None).is_empty());
     }
 
     #[test]

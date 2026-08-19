@@ -39,6 +39,10 @@ for required in libsherpa-onnx-c-api.so libonnxruntime.so; do
     exit 1
   fi
 done
+if [[ -e "$release_dir/libonnxruntime_providers_cuda.so" ]]; then
+  echo "Linux 构建不得包含 Sherpa ONNX CUDA provider" >&2
+  exit 1
+fi
 
 runtime_files="$(mktemp)"
 runtime_config="$(mktemp --suffix=.json)"
