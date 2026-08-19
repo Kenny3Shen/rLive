@@ -1,34 +1,19 @@
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::ffi::OsString;
 use std::fs;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::fs::OpenOptions;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::sync::OnceLock;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-use std::sync::{Arc, Mutex};
+use std::sync::LazyLock;
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-use serde::{Deserialize, Serialize};
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-const APP_DATA_BOOTSTRAP_FILE: &str = "app-data-bootstrap.json";
-#[cfg(windows)]
-static PROCESS_APP_DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct AppDirectories {
     pub root: PathBuf,
     pub logs: PathBuf,
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    pub storage: AppDataStorage,
 }
 
 impl AppDirectories {
@@ -37,7 +22,7 @@ impl AppDirectories {
         let root = application_root(_mobile_data_dir)?;
 
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-        let (root, storage) = AppDataStorage::resolve()?;
+        let root = default_data_root(&system_data_root()?)?;
 
         fs::create_dir_all(&root).map_err(|error| {
             AppError::new(
@@ -45,123 +30,10 @@ impl AppDirectories {
                 format!("create application directory {}: {error}", root.display()),
             )
         })?;
-        Ok(Self {
-            logs: root.join("logs"),
-            root,
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            storage,
-        })
+        Ok(Self { logs: root.join("logs"), root })
     }
 }
 
-/// The app data root is selected before SQLite, logging, ASR and recording are
-/// initialized. Changing it while the process is running would leave those
-/// resources split across directories, so settings only update the bootstrap
-/// selection used by the next process.
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-#[derive(Debug, Clone)]
-pub struct AppDataStorage {
-    state: Arc<Mutex<AppDataStorageState>>,
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-#[derive(Debug)]
-struct AppDataStorageState {
-    current_root: PathBuf,
-    default_root: PathBuf,
-    selected_root: PathBuf,
-    bootstrap_path: PathBuf,
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppDataStorageInfo {
-    /// Directory selected for the next launch.
-    pub path: String,
-    /// Directory used by the current process and its open resources.
-    pub current_path: String,
-    pub default_path: String,
-    pub is_default: bool,
-    pub restart_required: bool,
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-#[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AppDataBootstrap {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    custom_path: Option<String>,
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-impl AppDataStorage {
-    fn resolve() -> AppResult<(PathBuf, Self)> {
-        let system_root = system_data_root()?;
-        let bootstrap_path = bootstrap_path(&system_root);
-        let default_root = default_data_root(&system_root)?;
-        let selected_root = select_initial_root(&default_root, &bootstrap_path)?;
-        #[cfg(windows)]
-        let _ = PROCESS_APP_DATA_ROOT.set(selected_root.clone());
-        let state = AppDataStorageState {
-            current_root: selected_root.clone(),
-            default_root,
-            selected_root: selected_root.clone(),
-            bootstrap_path,
-        };
-        Ok((
-            selected_root,
-            Self {
-                state: Arc::new(Mutex::new(state)),
-            },
-        ))
-    }
-
-    pub fn info(&self) -> AppDataStorageInfo {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .info()
-    }
-
-    pub fn set_path(&self, requested: Option<String>) -> AppResult<AppDataStorageInfo> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::new("app_data_dir_lock_error", "应用数据目录状态暂不可用"))?;
-        let selected_root = match requested {
-            Some(path) => {
-                if path.trim().is_empty() {
-                    return Err(AppError::new(
-                        "app_data_path_invalid",
-                        "应用数据保存位置不能为空",
-                    ));
-                }
-                prepare_data_root(Path::new(&path))?
-            }
-            None => state.default_root.clone(),
-        };
-        write_bootstrap(
-            &state.bootstrap_path,
-            (selected_root != state.default_root).then_some(selected_root.as_path()),
-        )?;
-        state.selected_root = selected_root;
-        Ok(state.info())
-    }
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-impl AppDataStorageState {
-    fn info(&self) -> AppDataStorageInfo {
-        AppDataStorageInfo {
-            path: path_to_string(&self.selected_root),
-            current_path: path_to_string(&self.current_root),
-            default_path: path_to_string(&self.default_root),
-            is_default: self.selected_root == self.default_root,
-            restart_required: self.selected_root != self.current_root,
-        }
-    }
-}
 
 /// `dirs` deliberately does not expose Android's app sandbox. Falling back to a
 /// relative path there makes startup depend on the process working directory
@@ -186,13 +58,6 @@ fn system_data_root() -> AppResult<PathBuf> {
         .ok_or_else(|| AppError::new("app_data_dir_error", "系统应用数据目录不可用"))
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-fn bootstrap_path(system_root: &Path) -> PathBuf {
-    dirs::config_dir()
-        .map(|directory| directory.join("rlive"))
-        .unwrap_or_else(|| system_root.to_path_buf())
-        .join(APP_DATA_BOOTSTRAP_FILE)
-}
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn default_data_root(system_root: &Path) -> AppResult<PathBuf> {
@@ -281,93 +146,6 @@ fn prepare_data_root(path: &Path) -> AppResult<PathBuf> {
     Ok(root)
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-fn read_bootstrap(path: &Path) -> AppResult<Option<AppDataBootstrap>> {
-    recover_recoverable_file(path, valid_app_data_bootstrap).map_err(|error| {
-        AppError::new(
-            "app_data_config_error",
-            format!("恢复应用数据目录引导配置失败 {}: {error}", path.display()),
-        )
-    })?;
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(AppError::new(
-                "app_data_config_error",
-                format!("读取应用数据目录引导配置失败 {}: {error}", path.display()),
-            ));
-        }
-    };
-    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-        AppError::new(
-            "app_data_config_error",
-            format!("应用数据目录引导配置已损坏 {}: {error}", path.display()),
-        )
-    })
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-fn valid_app_data_bootstrap(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<AppDataBootstrap>(bytes).is_ok()
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-fn select_initial_root(default_root: &Path, bootstrap_path: &Path) -> AppResult<PathBuf> {
-    match read_bootstrap(bootstrap_path)? {
-        Some(AppDataBootstrap {
-            custom_path: Some(path),
-        }) => {
-            let configured = PathBuf::from(path);
-            if !configured.is_absolute() {
-                return Err(AppError::new(
-                    "app_data_path_invalid",
-                    format!(
-                        "配置的应用数据保存位置不是绝对目录: {}。请修复或删除 {} 后重试",
-                        configured.display(),
-                        bootstrap_path.display()
-                    ),
-                ));
-            }
-            prepare_data_root(&configured).map_err(|error| {
-                AppError::new(
-                    "app_data_path_unavailable",
-                    format!(
-                        "配置的应用数据保存位置当前不可用 {}: {error}。为避免创建分叉数据，rLive 已停止启动；请恢复该目录或修复 {}",
-                        configured.display(),
-                        bootstrap_path.display()
-                    ),
-                )
-            })
-        }
-        Some(AppDataBootstrap { custom_path: None }) => Ok(default_root.to_path_buf()),
-        None => Ok(default_root.to_path_buf()),
-    }
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-fn write_bootstrap(path: &Path, custom_path: Option<&Path>) -> AppResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| AppError::new("app_data_config_error", "应用数据目录引导配置路径无效"))?;
-    fs::create_dir_all(parent).map_err(|error| {
-        AppError::new(
-            "app_data_config_error",
-            format!("创建应用数据目录配置位置失败: {error}"),
-        )
-    })?;
-    let config = AppDataBootstrap {
-        custom_path: custom_path.map(path_to_string),
-    };
-    let bytes = serde_json::to_vec_pretty(&config)
-        .map_err(|error| AppError::new("app_data_config_error", error.to_string()))?;
-    write_recoverable_file(path, &bytes, valid_app_data_bootstrap).map_err(|error| {
-        AppError::new(
-            "app_data_config_error",
-            format!("保存应用数据目录设置失败: {error}"),
-        )
-    })
-}
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn recoverable_sidecars(path: &Path) -> io::Result<(PathBuf, PathBuf)> {
@@ -551,25 +329,24 @@ fn strip_windows_verbatim_prefix(path: &str) -> String {
 /// Windows CUDA probing runs outside `AsrManager` and needs the same root the
 /// on-demand ASR runtime is staged into.
 #[cfg(windows)]
+static PROCESS_APP_DATA_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    system_data_root()
+        .and_then(|system_root| default_data_root(&system_root))
+        .ok()
+});
+
+#[cfg(windows)]
 pub fn application_data_root() -> Option<PathBuf> {
-    if let Some(root) = PROCESS_APP_DATA_ROOT.get() {
-        return Some(root.clone());
-    }
-    AppDataStorage::resolve().ok().map(|(root, _)| root)
+    PROCESS_APP_DATA_ROOT.clone()
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
 
     use uuid::Uuid;
 
-    use super::{
-        AppDataBootstrap, AppDataStorage, AppDataStorageState, install_root_from_executable,
-        prepare_data_root, read_bootstrap, select_initial_root, strip_windows_verbatim_prefix,
-        write_bootstrap,
-    };
+    use super::{install_root_from_executable, prepare_data_root, strip_windows_verbatim_prefix};
 
     #[test]
     fn strips_windows_drive_verbatim_prefix() {
@@ -597,172 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_bootstrap_uses_default_directory() {
-        let base = temp_directory("default");
-        let default_root = base.join("install");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        std::fs::create_dir_all(&default_root).unwrap();
-
-        let selected = select_initial_root(&default_root, &bootstrap).unwrap();
-        assert_eq!(selected, default_root);
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn storage_selection_reports_restart_until_restored_to_current_default() {
-        let base = temp_directory("selection");
-        let default_root = base.join("install");
-        let custom_root = base.join("custom ");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        std::fs::create_dir_all(&default_root).unwrap();
-        let default_root = std::fs::canonicalize(default_root).unwrap();
-        let storage = AppDataStorage {
-            state: Arc::new(Mutex::new(AppDataStorageState {
-                current_root: default_root.clone(),
-                default_root: default_root.clone(),
-                selected_root: default_root.clone(),
-                bootstrap_path: bootstrap.clone(),
-            })),
-        };
-
-        let selected = storage
-            .set_path(Some(custom_root.to_string_lossy().into_owned()))
-            .unwrap();
-        assert_eq!(selected.current_path, super::path_to_string(&default_root));
-        assert_eq!(
-            selected.path,
-            super::path_to_string(&std::fs::canonicalize(custom_root).unwrap())
-        );
-        assert!(!selected.is_default);
-        assert!(selected.restart_required);
-        assert!(
-            read_bootstrap(&bootstrap)
-                .unwrap()
-                .unwrap()
-                .custom_path
-                .is_some()
-        );
-
-        let restored = storage.set_path(None).unwrap();
-        assert_eq!(restored.path, restored.current_path);
-        assert!(restored.is_default);
-        assert!(!restored.restart_required);
-        assert_eq!(
-            read_bootstrap(&bootstrap).unwrap().unwrap().custom_path,
-            None
-        );
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn configured_unavailable_directory_stops_startup_instead_of_falling_back() {
-        let base = temp_directory("unavailable");
-        let default_root = base.join("install");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        let blocking_file = base.join("not-a-directory");
-        let configured = blocking_file.join("custom");
-        std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::write(&blocking_file, b"file").unwrap();
-        write_bootstrap(&bootstrap, Some(&configured)).unwrap();
-
-        let error = select_initial_root(&default_root, &bootstrap).unwrap_err();
-        assert_eq!(error.code, "app_data_path_unavailable");
-        assert!(error.message.contains("为避免创建分叉数据"));
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn corrupt_bootstrap_stops_startup_with_a_config_error() {
-        let base = temp_directory("corrupt");
-        let default_root = base.join("install");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
-        std::fs::write(&bootstrap, b"not-json").unwrap();
-
-        let error = select_initial_root(&default_root, &bootstrap).unwrap_err();
-        assert_eq!(error.code, "app_data_config_error");
-        assert!(error.message.contains("恢复应用数据目录引导配置失败"));
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn unreadable_bootstrap_stops_startup_with_a_config_error() {
-        let base = temp_directory("unreadable");
-        let default_root = base.join("install");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        std::fs::create_dir_all(&default_root).unwrap();
-        std::fs::create_dir_all(&bootstrap).unwrap();
-
-        let error = select_initial_root(&default_root, &bootstrap).unwrap_err();
-        assert_eq!(error.code, "app_data_config_error");
-        assert!(error.message.contains("恢复应用数据目录引导配置失败"));
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn interrupted_bootstrap_replacement_restores_the_committed_backup() {
-        let base = temp_directory("bootstrap-recovery");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        let committed = base.join("committed");
-        let uncommitted = base.join("uncommitted");
-        write_bootstrap(&bootstrap, Some(&committed)).unwrap();
-        let temporary = bootstrap.with_file_name("app-data-bootstrap.json.tmp");
-        let backup = bootstrap.with_file_name("app-data-bootstrap.json.bak");
-        std::fs::rename(&bootstrap, &backup).unwrap();
-        std::fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(&AppDataBootstrap {
-                custom_path: Some(super::path_to_string(&uncommitted)),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-
-        let recovered = read_bootstrap(&bootstrap).unwrap().unwrap();
-        assert_eq!(
-            recovered.custom_path,
-            Some(super::path_to_string(&committed))
-        );
-        assert!(!temporary.exists());
-        assert!(!backup.exists());
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn initial_bootstrap_publish_recovers_a_valid_temporary_file() {
-        let base = temp_directory("bootstrap-temporary");
-        let bootstrap = base.join("config").join("app-data-bootstrap.json");
-        let configured = base.join("configured");
-        let temporary = bootstrap.with_file_name("app-data-bootstrap.json.tmp");
-        std::fs::create_dir_all(temporary.parent().unwrap()).unwrap();
-        std::fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(&AppDataBootstrap {
-                custom_path: Some(super::path_to_string(&configured)),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-
-        let recovered = read_bootstrap(&bootstrap).unwrap().unwrap();
-        assert_eq!(
-            recovered.custom_path,
-            Some(super::path_to_string(&configured))
-        );
-        assert!(bootstrap.exists());
-        assert!(!temporary.exists());
-
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
     fn macos_bundle_uses_the_directory_containing_the_app() {
         let executable = PathBuf::from("/Applications/rLive.app/Contents/MacOS/rlive");
         assert_eq!(
@@ -773,6 +384,17 @@ mod tests {
             install_root_from_executable(&executable, false),
             Some(PathBuf::from("/Applications/rLive.app/Contents/MacOS"))
         );
+    }
+
+    #[test]
+    fn writable_directory_is_accepted_as_a_data_root() {
+        let base = temp_directory("writable");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let root = prepare_data_root(&base).unwrap();
+        assert_eq!(root, std::fs::canonicalize(&base).unwrap());
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[cfg(unix)]

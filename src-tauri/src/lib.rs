@@ -35,8 +35,6 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_immersive,
     android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-use commands::app_data::{app_data_set_storage_path, app_data_storage_info};
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
 use commands::danmaku::{
@@ -219,10 +217,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             settings_get,
             settings_set,
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            app_data_storage_info,
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            app_data_set_storage_path,
             #[cfg(not(target_os = "android"))]
             asr_get_status,
             #[cfg(not(target_os = "android"))]

@@ -1,7 +1,5 @@
 pub mod account;
 pub mod android_player_controls;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-pub mod app_data;
 #[cfg(not(target_os = "android"))]
 pub mod asr;
 pub mod danmaku;
