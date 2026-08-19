@@ -7,7 +7,8 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::recording::{
-    FfmpegRecordingOptions, RecordingItem, RecordingStartInput, RecordingStorageInfo,
+    AssExportOptions, FfmpegRecordingOptions, RecordingItem, RecordingStartInput,
+    RecordingStorageInfo,
 };
 use crate::state::AppState;
 
@@ -90,4 +91,27 @@ pub async fn recording_danmaku_url(
     id: String,
 ) -> AppResult<Option<String>> {
     state.recording.danmaku_url(id.trim()).await
+}
+
+/// Writes an ASS subtitle beside the recorded media so external players can
+/// load the recorded danmaku. Appearance, layout, and filtering use the
+/// independent recording ASS settings.
+#[tauri::command(async)]
+pub async fn recording_danmaku_export_ass(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<String> {
+    let options = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        AssExportOptions::try_from_settings(&crate::settings::get(&conn)?).map_err(|error| {
+            AppError::new(
+                "recording_ass_invalid_regex",
+                format!("ASS 弹幕屏蔽正则表达式无效: {error}"),
+            )
+        })?
+    };
+    state.recording.export_danmaku_ass(id.trim(), options).await
 }

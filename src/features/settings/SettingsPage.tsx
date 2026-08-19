@@ -71,6 +71,7 @@ import { FieldTip } from "@/features/settings/FieldTip";
 import { LanSyncField } from "@/features/settings/LanSyncField";
 import {
   FfmpegSettingsFields,
+  RecordingAssSettingsFields,
   RecordingDefaultsFields,
 } from "@/features/settings/RecordingSettingsFields";
 import { RecordingStoragePathField } from "@/features/settings/StoragePathSettings";
@@ -215,7 +216,7 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   recording:
-    "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 FFmpeg 超时 重连 HLS 分片 重试",
+    "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 ASS 导出 分辨率 字体 不透明度 描边 阴影 粗体 屏蔽 正则 FFmpeg 超时 重连 HLS 分片 重试",
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
@@ -1976,6 +1977,12 @@ export function SettingsPage() {
         </Section>
         <Section title="保存位置" keywords="录制 保存 路径 目录">
           <RecordingStoragePathField />
+        </Section>
+        <Section
+          title="导出 ASS 弹幕"
+          keywords="ASS 弹幕 导出 配置 选项 分辨率 字体 字号 不透明度 描边 阴影 粗体 滚动 显示区域 合并 礼物 醒目留言 屏蔽 关键词 正则"
+        >
+          <RecordingAssSettingsFields />
         </Section>
         <Section title="FFmpeg" keywords="FFmpeg 超时 重连 HLS 分片 重试">
           <FfmpegSettingsFields />

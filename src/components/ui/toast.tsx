@@ -73,7 +73,10 @@ export function Toaster({ children }: { children: React.ReactNode }) {
   return (
     <ToastPrimitive.Provider toastManager={toast} limit={3} timeout={4_000}>
       {children}
-      <ToastPrimitive.Portal container={container}>
+      {/* Base UI treats an explicit `null` container as "not yet resolved" and
+         never creates the portal node, so omit the prop entirely to fall back
+         to `<body>` while a fullscreen surface still overrides it. */}
+      <ToastPrimitive.Portal container={container ?? undefined}>
         {/* Inside a fullscreen player the bottom edge belongs to the control
            bar, so lift the stack clear of it instead of stacking on top. */}
         <ToastPrimitive.Viewport

@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "rlive"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3873,6 +3873,7 @@ dependencies = [
  "native-tls",
  "openssl",
  "percent-encoding",
+ "regex",
  "reqwest 0.13.4",
  "rusqlite",
  "serde",

@@ -30,10 +30,12 @@ impl AppDirectories {
                 format!("create application directory {}: {error}", root.display()),
             )
         })?;
-        Ok(Self { logs: root.join("logs"), root })
+        Ok(Self {
+            logs: root.join("logs"),
+            root,
+        })
     }
 }
-
 
 /// `dirs` deliberately does not expose Android's app sandbox. Falling back to a
 /// relative path there makes startup depend on the process working directory
@@ -57,7 +59,6 @@ fn system_data_root() -> AppResult<PathBuf> {
         .map(|directory| directory.join("rlive"))
         .ok_or_else(|| AppError::new("app_data_dir_error", "系统应用数据目录不可用"))
 }
-
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn default_data_root(system_root: &Path) -> AppResult<PathBuf> {
@@ -145,7 +146,6 @@ fn prepare_data_root(path: &Path) -> AppResult<PathBuf> {
     })?;
     Ok(root)
 }
-
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn recoverable_sidecars(path: &Path) -> io::Result<(PathBuf, PathBuf)> {

@@ -186,6 +186,24 @@ export type CaptionTranslationLanguage =
 
 export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
+export type RecordingAssSettings = {
+  resolution_width: number;
+  resolution_height: number;
+  font_name: string;
+  font_size: number;
+  opacity_percent: number;
+  outline: number;
+  shadow: number;
+  bold: boolean;
+  scroll_duration_seconds: number;
+  display_area_percent: number;
+  merge_window_seconds: number;
+  filter_gifts: boolean;
+  show_super_chat: boolean;
+  shield_rules: string[];
+  shield_regex: boolean;
+};
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   default_site: string;
@@ -245,6 +263,8 @@ export type AppSettings = {
   ffmpeg_reconnect_delay_max_seconds: number;
   /** Number of retries for a failed HLS segment, 0..=20. */
   ffmpeg_hls_segment_retry_count: number;
+  /** Independent layout, appearance, and filtering for recorded ASS exports. */
+  recording_ass: RecordingAssSettings;
   /** Platforms hidden from discovery and room navigation. */
   disabled_site_ids: SiteId[];
 };

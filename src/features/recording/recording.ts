@@ -497,3 +497,11 @@ export async function setRecordingStoragePath(path: string | null): Promise<Reco
 export async function recordingDanmakuUrl(id: string): Promise<string | null> {
   return invokeCmd<string | null>("recording_danmaku_url", { id });
 }
+
+/**
+ * Writes an ASS subtitle next to the recorded media and resolves with its
+ * absolute path. External players load it by the shared file name.
+ */
+export async function exportRecordingDanmakuAss(id: string): Promise<string> {
+  return invokeCmd<string>("recording_danmaku_export_ass", { id });
+}
