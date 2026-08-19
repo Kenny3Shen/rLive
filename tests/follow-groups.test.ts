@@ -24,6 +24,7 @@ function follow(overrides: Partial<FollowUser> = {}): FollowUser {
     user_name: "主播",
     face: "",
     tag_ids: [],
+    auto_record: false,
     live_status: null,
     live_started_at: null,
     updated_at: 1,

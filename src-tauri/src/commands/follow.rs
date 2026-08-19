@@ -53,6 +53,8 @@ pub struct FollowUserDto {
     pub user_name: String,
     pub face: String,
     pub tag_ids: Vec<String>,
+    #[serde(default)]
+    pub auto_record: bool,
     pub live_status: Option<bool>,
     pub live_started_at: Option<i64>,
     pub updated_at: i64,
@@ -66,6 +68,7 @@ impl From<FollowRecord> for FollowUserDto {
             user_name: r.user_name,
             face: r.face,
             tag_ids: r.tag_ids,
+            auto_record: r.auto_record,
             live_status: r.live_status.map(|v| v != 0),
             live_started_at: r.live_started_at,
             updated_at: r.updated_at,
@@ -81,6 +84,7 @@ impl From<FollowUserDto> for FollowRecord {
             user_name: d.user_name,
             face: d.face,
             tag_ids: d.tag_ids,
+            auto_record: d.auto_record,
             live_status: d.live_status.map(|b| if b { 1 } else { 0 }),
             live_started_at: d.live_started_at,
             updated_at: d.updated_at,
@@ -126,6 +130,17 @@ pub fn follow_set_tags(
 }
 
 #[tauri::command]
+pub fn follow_set_auto_record(
+    state: State<'_, AppState>,
+    site_id: String,
+    room_id: String,
+    auto_record: bool,
+) -> AppResult<()> {
+    let conn = lock_db(&state)?;
+    follow::set_auto_record(&conn, &site_id, &room_id, auto_record)
+}
+
+#[tauri::command]
 pub fn tag_list(state: State<'_, AppState>) -> AppResult<Vec<TagRecord>> {
     let conn = lock_db(&state)?;
     follow::list_tags(&conn)
@@ -159,11 +174,18 @@ pub fn tag_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
     follow::remove_tag(&mut conn, &id)
 }
 
-#[tauri::command]
-pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowUserDto>> {
+async fn refresh_follows(
+    state: &AppState,
+    auto_record_only: bool,
+) -> AppResult<Vec<FollowUserDto>> {
     let (follows, proxy) = {
-        let conn = lock_db(&state)?;
-        (follow::list(&conn)?, crate::settings::get(&conn)?.proxy)
+        let conn = lock_db(state)?;
+        let follows = if auto_record_only {
+            follow::list_auto_record(&conn)?
+        } else {
+            follow::list(&conn)?
+        };
+        (follows, crate::settings::get(&conn)?.proxy)
     };
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
@@ -179,7 +201,7 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
             .map_err(|_| AppError::new("refresh_error", "semaphore closed"))?;
         let cookie = {
             let sid = SiteId::from_str_loose(&site_id);
-            let conn = lock_db(&state)?;
+            let conn = lock_db(state)?;
             match sid {
                 Some(s) => account::get_cookie(&conn, &s)?,
                 None => None,
@@ -208,8 +230,12 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
 
     let mut updated = Vec::new();
     {
-        let conn = lock_db(&state)?;
-        let mut list = follow::list(&conn)?;
+        let conn = lock_db(state)?;
+        let mut list = if auto_record_only {
+            follow::list_auto_record(&conn)?
+        } else {
+            follow::list(&conn)?
+        };
         let now = chrono::Utc::now().timestamp_millis();
         for rec in &mut list {
             if let Some(live_status) = status_map.get(&(rec.site_id.clone(), rec.room_id.clone())) {
@@ -223,6 +249,18 @@ pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowU
     Ok(updated)
 }
 
+#[tauri::command]
+pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<Vec<FollowUserDto>> {
+    refresh_follows(&state, false).await
+}
+
+#[tauri::command]
+pub async fn follow_refresh_auto_record(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<FollowUserDto>> {
+    refresh_follows(&state, true).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +272,7 @@ mod tests {
             user_name: "主播".into(),
             face: String::new(),
             tag_ids: Vec::new(),
+            auto_record: false,
             live_status,
             live_started_at,
             updated_at: 0,

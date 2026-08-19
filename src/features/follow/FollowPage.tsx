@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/card";
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuGroup,
   ContextMenuItem,
@@ -96,7 +97,10 @@ import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
-import { useFollowRecordingController } from "@/features/recording/followRecording";
+import {
+  FOLLOW_AUTO_RECORD_QUERY_KEY,
+  useFollowRecordingController,
+} from "@/features/recording/followRecording";
 import {
   iptvFavoritesForSource,
   useAllIptvFavorites,
@@ -210,7 +214,6 @@ function GroupTarget({
 type FollowCardProps = {
   user: FollowUser;
   groups: readonly FollowGroup[];
-  selectedGroupId: string;
   now: number;
   moving: boolean;
   removing: boolean;
@@ -219,16 +222,18 @@ type FollowCardProps = {
   recordingActive: boolean;
   recordingBusy: boolean;
   recordingStarting: boolean;
+  autoRecordingBusy: boolean;
+  autoRecordingDisabled: boolean;
   onNavigate: (path: string) => void;
   onMove: (user: FollowUser, groupId: string) => void;
   onRemove: (user: FollowUser) => void;
   onStartRecording: (user: FollowUser) => void;
+  onAutoRecordingChange: (user: FollowUser, enabled: boolean) => void;
 };
 
 function FollowCard({
   user,
   groups,
-  selectedGroupId,
   now,
   moving,
   removing,
@@ -237,17 +242,16 @@ function FollowCard({
   recordingActive,
   recordingBusy,
   recordingStarting,
+  autoRecordingBusy,
+  autoRecordingDisabled,
   onNavigate,
   onMove,
   onRemove,
   onStartRecording,
+  onAutoRecordingChange,
 }: FollowCardProps) {
   const identity = followIdentity(user);
   const currentGroupId = followGroupId(user, groups);
-  const currentGroupName =
-    currentGroupId === UNGROUPED_FOLLOW_GROUP_ID
-      ? "未分组"
-      : (groups.find((group) => group.id === currentGroupId)?.name ?? "未分组");
   const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef } = useDraggable({
     id: identity,
     data: { follow: user },
@@ -339,10 +343,10 @@ function FollowCard({
             )}
             {offline && <Badge variant="secondary">未开播</Badge>}
             {user.live_status == null && <Badge variant="outline">状态未知</Badge>}
-            {selectedGroupId === ALL_FOLLOW_GROUP_ID && (
-              <Badge variant="outline" className="min-w-0 shrink">
-                <Folder aria-hidden />
-                <span className="truncate">{currentGroupName}</span>
+            {recordingSupported && user.auto_record && (
+              <Badge variant="outline">
+                <CircleDot aria-hidden />
+                自动录制
               </Badge>
             )}
           </CardContent>
@@ -358,13 +362,28 @@ function FollowCard({
               打开直播间
             </ContextMenuItem>
             {recordingSupported && (
-              <ContextMenuItem
-                disabled={!live || recordingBusy || recordingActive}
-                onClick={() => onStartRecording(user)}
-              >
-                {recordingStarting ? <Spinner aria-hidden /> : <CircleDot aria-hidden />}
-                {recordingActive ? "正在录制" : recordingStarting ? "正在开启录制…" : "开启录制"}
-              </ContextMenuItem>
+              <>
+                <ContextMenuItem
+                  disabled={!live || recordingBusy || recordingActive}
+                  onClick={() => onStartRecording(user)}
+                >
+                  {recordingStarting ? <Spinner aria-hidden /> : <CircleDot aria-hidden />}
+                  {recordingActive
+                    ? "正在录制"
+                    : recordingStarting
+                      ? "正在开启录制…"
+                      : "开启录制"}
+                </ContextMenuItem>
+                <ContextMenuCheckboxItem
+                  checked={user.auto_record}
+                  disabled={autoRecordingDisabled}
+                  closeOnClick
+                  onCheckedChange={(checked) => onAutoRecordingChange(user, checked)}
+                >
+                  {autoRecordingBusy ? <Spinner aria-hidden /> : <CircleDot aria-hidden />}
+                  自动录制
+                </ContextMenuCheckboxItem>
+              </>
             )}
             <ContextMenuSub>
               <ContextMenuSubTrigger>
@@ -668,6 +687,43 @@ export function FollowPage() {
       notify.error("移动分组失败", "请稍后重试。");
     },
     onSettled: () => void queryClient.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY }),
+  });
+
+  const autoRecordMutation = useMutation({
+    mutationFn: ({ user, enabled }: { user: FollowUser; enabled: boolean }) =>
+      invokeCmd("follow_set_auto_record", {
+        siteId: user.site_id,
+        roomId: user.room_id,
+        autoRecord: enabled,
+      }),
+    onMutate: async ({ user, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
+      const previous = queryClient.getQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY);
+      queryClient.setQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY, (current = []) =>
+        current.map((item) =>
+          followIdentity(item) === followIdentity(user)
+            ? { ...item, auto_record: enabled }
+            : item,
+        ),
+      );
+      return { previous };
+    },
+    onSuccess: (_, { user, enabled }) => {
+      notify.success(
+        enabled ? "已开启自动录制" : "已关闭自动录制",
+        enabled ? `${user.user_name}开播后将自动开始录制。` : user.user_name,
+      );
+    },
+    onError: (_, __, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(FOLLOW_LIST_QUERY_KEY, context.previous);
+      }
+      notify.error("自动录制设置失败", "请稍后重试。");
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: FOLLOW_AUTO_RECORD_QUERY_KEY });
+    },
   });
 
   const hasLiveDuration = items.some(
@@ -1099,12 +1155,14 @@ export function FollowPage() {
                                 const recordingStarting =
                                   recording.pendingTarget != null &&
                                   followIdentity(recording.pendingTarget) === identity;
+                                const autoRecordingBusy =
+                                  autoRecordMutation.isPending &&
+                                  followIdentity(autoRecordMutation.variables.user) === identity;
                                 return (
                                   <FollowCard
                                     key={identity}
                                     user={user}
                                     groups={groups}
-                                    selectedGroupId={selectedGroupId}
                                     now={now}
                                     moving={
                                       moveMutation.isPending &&
@@ -1119,10 +1177,17 @@ export function FollowPage() {
                                     recordingActive={Boolean(recording.activeFor(user))}
                                     recordingBusy={recording.busy}
                                     recordingStarting={recordingStarting}
+                                    autoRecordingBusy={autoRecordingBusy}
+                                    autoRecordingDisabled={autoRecordMutation.isPending}
                                     onNavigate={(path) => navigate(path)}
                                     onMove={moveFollow}
                                     onRemove={setPendingRemove}
                                     onStartRecording={recording.start}
+                                    onAutoRecordingChange={(target, enabled) => {
+                                      if (!autoRecordMutation.isPending) {
+                                        autoRecordMutation.mutate({ user: target, enabled });
+                                      }
+                                    }}
                                   />
                                 );
                               })}

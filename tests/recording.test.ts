@@ -18,9 +18,12 @@ import {
 import { shouldPromptBeforeRecordingLeave } from "../src/features/recording/RecordingLeaveGuard";
 import {
   activeRecordingForLiveRoom,
+  autoRecordableFollows,
+  followRecordingSessionKey,
   followRecordingContext,
   liveRecordingSourceKey,
 } from "../src/features/recording/followRecording";
+import type { FollowUser } from "../src/shared/types/live";
 import {
   filterRecordedDanmakuEntries,
   firstRecordedDanmakuAtOrAfter,
@@ -454,6 +457,21 @@ describe("active recording context matching", () => {
 describe("follow card recording", () => {
   const target = { site_id: "douyin" as const, room_id: " 123456 " };
 
+  function followedRoom(overrides: Partial<FollowUser>): FollowUser {
+    return {
+      site_id: "douyin",
+      room_id: "123456",
+      user_name: "主播",
+      face: "",
+      tag_ids: [],
+      auto_record: false,
+      live_status: false,
+      live_started_at: null,
+      updated_at: 1,
+      ...overrides,
+    };
+  }
+
   test("keeps the requested room identity in the stable source key", () => {
     expect(liveRecordingSourceKey(target)).toBe("live:douyin:123456");
 
@@ -487,6 +505,31 @@ describe("follow card recording", () => {
       cover: "https://example.test/avatar.jpg",
       userAvatar: "https://example.test/avatar.jpg",
     });
+  });
+
+  test("separates automatic attempts by live session", () => {
+    expect(
+      followRecordingSessionKey({
+        ...target,
+        live_started_at: 1_704_067_200_000,
+      }),
+    ).not.toBe(
+      followRecordingSessionKey({
+        ...target,
+        live_started_at: 1_704_070_800_000,
+      }),
+    );
+    expect(followRecordingSessionKey({ ...target, live_started_at: null })).toContain("unknown");
+  });
+
+  test("only auto-records live follows enabled individually", () => {
+    const enabledLive = followedRoom({ auto_record: true, live_status: true });
+    const disabledLive = followedRoom({ room_id: "2", live_status: true });
+    const enabledOffline = followedRoom({ room_id: "3", auto_record: true });
+
+    expect(autoRecordableFollows([enabledLive, disabledLive, enabledOffline])).toEqual([
+      enabledLive,
+    ]);
   });
 
   test("detects an active recording by requested key or canonical room identity", () => {

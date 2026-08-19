@@ -333,7 +333,7 @@ pub fn bilibili_danmaku_send_status(
     } else if !cookie_ready {
         "请先保存含 SESSDATA 和 bili_jct 的 B站 Cookie".into()
     } else {
-        "可发送单条普通滚动文本。".into()
+        "可发送单条弹幕。".into()
     };
     Ok(BilibiliDanmakuSendStatus {
         send_enabled,
@@ -406,7 +406,7 @@ pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DouyuD
     let message = if !send_enabled {
         "在设置中启用“弹幕发送功能”后可使用".into()
     } else if cookie_ready {
-        "可发送单条普通文本。".into()
+        "可发送单条弹幕。".into()
     } else {
         "请先在设置中扫码登录，或保存含账号、设备和弹幕令牌字段的完整斗鱼 Cookie".into()
     };

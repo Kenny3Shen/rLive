@@ -29,6 +29,7 @@ import {
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
 import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
+import { useFollowAutoRecording } from "../features/recording/followRecording";
 
 // Keep the discovery page on the critical path, but defer secondary pages
 // (especially the player and its danmaku renderer) until a route needs them.
@@ -64,6 +65,8 @@ function EnabledRoomRoute() {
 }
 
 function AppRuntime() {
+  useFollowAutoRecording();
+
   return (
     <>
       <AndroidBackNavigator />

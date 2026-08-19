@@ -11,6 +11,8 @@ pub struct FollowRecord {
     pub user_name: String,
     pub face: String,
     pub tag_ids: Vec<String>,
+    #[serde(default)]
+    pub auto_record: bool,
     pub live_status: Option<i32>,
     pub live_started_at: Option<i64>,
     pub updated_at: i64,
@@ -38,7 +40,7 @@ fn decode_tag_ids(raw: &str) -> AppResult<Vec<String>> {
 pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT site_id, room_id, user_name, face, tag_ids, live_status, live_started_at, updated_at
+            "SELECT site_id, room_id, user_name, face, tag_ids, auto_record, live_status, live_started_at, updated_at
              FROM follows
              ORDER BY updated_at DESC",
         )
@@ -51,9 +53,10 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Option<i32>>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, i64>(7)?,
+                row.get::<_, bool>(5)?,
+                row.get::<_, Option<i32>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, i64>(8)?,
             ))
         })
         .map_err(map_db_err)?;
@@ -66,6 +69,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
             user_name,
             face,
             tag_ids_raw,
+            auto_record,
             live_status,
             live_started_at,
             updated_at,
@@ -76,6 +80,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
             user_name,
             face,
             tag_ids: decode_tag_ids(&tag_ids_raw)?,
+            auto_record,
             live_status,
             live_started_at,
             updated_at,
@@ -87,12 +92,13 @@ pub fn list(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
 pub fn upsert(conn: &Connection, record: FollowRecord) -> AppResult<()> {
     let tag_ids = encode_tag_ids(&record.tag_ids)?;
     conn.execute(
-        "INSERT INTO follows (site_id, room_id, user_name, face, tag_ids, live_status, live_started_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO follows (site_id, room_id, user_name, face, tag_ids, auto_record, live_status, live_started_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(site_id, room_id) DO UPDATE SET
            user_name = excluded.user_name,
            face = excluded.face,
            tag_ids = excluded.tag_ids,
+           auto_record = excluded.auto_record,
            live_status = excluded.live_status,
            live_started_at = excluded.live_started_at,
            updated_at = excluded.updated_at",
@@ -102,6 +108,7 @@ pub fn upsert(conn: &Connection, record: FollowRecord) -> AppResult<()> {
             record.user_name,
             record.face,
             tag_ids,
+            record.auto_record,
             record.live_status,
             record.live_started_at,
             record.updated_at,
@@ -109,6 +116,13 @@ pub fn upsert(conn: &Connection, record: FollowRecord) -> AppResult<()> {
     )
     .map_err(map_db_err)?;
     Ok(())
+}
+
+pub fn list_auto_record(conn: &Connection) -> AppResult<Vec<FollowRecord>> {
+    Ok(list(conn)?
+        .into_iter()
+        .filter(|record| record.auto_record)
+        .collect())
 }
 
 pub fn remove(conn: &Connection, site_id: &str, room_id: &str) -> AppResult<()> {
@@ -131,6 +145,27 @@ pub fn set_tags(
         .execute(
             "UPDATE follows SET tag_ids = ?1 WHERE site_id = ?2 AND room_id = ?3",
             params![encoded, site_id, room_id],
+        )
+        .map_err(map_db_err)?;
+    if n == 0 {
+        return Err(crate::error::AppError::new(
+            "not_found",
+            format!("follow {site_id}/{room_id} not found"),
+        ));
+    }
+    Ok(())
+}
+
+pub fn set_auto_record(
+    conn: &Connection,
+    site_id: &str,
+    room_id: &str,
+    auto_record: bool,
+) -> AppResult<()> {
+    let n = conn
+        .execute(
+            "UPDATE follows SET auto_record = ?1 WHERE site_id = ?2 AND room_id = ?3",
+            params![auto_record, site_id, room_id],
         )
         .map_err(map_db_err)?;
     if n == 0 {
@@ -210,6 +245,7 @@ mod tests {
                 user_name: "u".into(),
                 face: "".into(),
                 tag_ids: vec![],
+                auto_record: false,
                 live_status: None,
                 live_started_at: None,
                 updated_at: 1,
@@ -232,6 +268,7 @@ mod tests {
                 user_name: "old".into(),
                 face: "".into(),
                 tag_ids: vec![],
+                auto_record: false,
                 live_status: None,
                 live_started_at: None,
                 updated_at: 1,
@@ -246,6 +283,7 @@ mod tests {
                 user_name: "new".into(),
                 face: "f".into(),
                 tag_ids: vec!["t1".into()],
+                auto_record: true,
                 live_status: Some(1),
                 live_started_at: Some(1_704_067_200_000),
                 updated_at: 2,
@@ -257,6 +295,7 @@ mod tests {
         assert_eq!(rows[0].user_name, "new");
         assert_eq!(rows[0].face, "f");
         assert_eq!(rows[0].tag_ids, vec!["t1".to_string()]);
+        assert!(rows[0].auto_record);
         assert_eq!(rows[0].live_status, Some(1));
         assert_eq!(rows[0].live_started_at, Some(1_704_067_200_000));
         assert_eq!(rows[0].updated_at, 2);
@@ -273,6 +312,7 @@ mod tests {
                 user_name: "u".into(),
                 face: "".into(),
                 tag_ids: vec![],
+                auto_record: false,
                 live_status: None,
                 live_started_at: None,
                 updated_at: 1,
@@ -294,6 +334,7 @@ mod tests {
                 user_name: "u".into(),
                 face: "".into(),
                 tag_ids: vec![],
+                auto_record: false,
                 live_status: None,
                 live_started_at: None,
                 updated_at: 1,
@@ -321,6 +362,34 @@ mod tests {
     }
 
     #[test]
+    fn set_and_list_auto_record_follows() {
+        let conn = open_in_memory().unwrap();
+        upsert(
+            &conn,
+            FollowRecord {
+                site_id: "bilibili".into(),
+                room_id: "1".into(),
+                user_name: "u".into(),
+                face: "".into(),
+                tag_ids: vec![],
+                auto_record: false,
+                live_status: None,
+                live_started_at: None,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+
+        set_auto_record(&conn, "bilibili", "1", true).unwrap();
+
+        let rows = list_auto_record(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].auto_record);
+        set_auto_record(&conn, "bilibili", "1", false).unwrap();
+        assert!(list_auto_record(&conn).unwrap().is_empty());
+    }
+
+    #[test]
     fn remove_tag_clears_follow_references() {
         let mut conn = open_in_memory().unwrap();
         upsert_tag(
@@ -339,6 +408,7 @@ mod tests {
                 user_name: "u".into(),
                 face: "".into(),
                 tag_ids: vec!["t1".into()],
+                auto_record: false,
                 live_status: None,
                 live_started_at: None,
                 updated_at: 1,

@@ -349,16 +349,17 @@ const subscribeToRecordingChanges = createSharedRecordingChangeSubscription<Quer
   },
 );
 
-export function useRecordings() {
+export function useRecordings(enabled = true) {
   const supported = recordingSupported();
+  const active = supported && enabled;
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (!supported) return;
+    if (!active) return;
     return subscribeToRecordingChanges(queryClient);
-  }, [queryClient, supported]);
+  }, [active, queryClient]);
   return useQuery({
     queryKey: RECORDINGS_QUERY_KEY,
-    enabled: supported,
+    enabled: active,
     queryFn: () => invokeCmd<RecordingItem[]>("recording_list"),
     staleTime: 500,
     refetchInterval: (query) =>

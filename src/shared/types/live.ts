@@ -124,6 +124,8 @@ export type FollowUser = {
   user_name: string;
   face: string;
   tag_ids: string[];
+  /** Start a background recording when this followed room goes live. */
+  auto_record: boolean;
   live_status: boolean | null;
   /** Unix timestamp in milliseconds for the current live session, if known. */
   live_started_at: number | null;
