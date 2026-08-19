@@ -20,6 +20,7 @@ import {
   activeRecordingForContext,
   RECORDINGS_QUERY_KEY,
   recordingErrorMessage,
+  setRecordingContinueOnLeave,
   stopRecording,
   useRecordings,
   type RecordingContext,
@@ -64,8 +65,25 @@ export function RecordingLeaveGuard({ context }: { context: RecordingContext | n
     if (blocker.state === "blocked" && !stopping) blocker.reset();
   }
 
-  function continueAndLeave() {
-    if (blocker.state === "blocked" && !stopping) blocker.proceed();
+  async function continueAndLeave() {
+    if (blocker.state !== "blocked" || !active || stopping) return;
+    const proceed = blocker.proceed;
+    const item = active;
+    setStopping(true);
+    try {
+      // Opt the session into background continuation before navigation, so
+      // the room unmount detaches its danmaku websocket to the recording
+      // instead of tearing it down. Media keeps recording either way.
+      const updated = await setRecordingContinueOnLeave(item.id, true);
+      queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) =>
+        (current ?? []).map((entry) => (entry.id === updated.id ? updated : entry)),
+      );
+      setStopping(false);
+      proceed();
+    } catch (error) {
+      notify.error("切换后台录制失败", recordingErrorMessage(error));
+      setStopping(false);
+    }
   }
 
   async function stopAndLeave() {
@@ -104,7 +122,7 @@ export function RecordingLeaveGuard({ context }: { context: RecordingContext | n
           <AlertDialogDescription>
             “{active?.title || context?.title || `当前${pageLabel}`}”正在录制。离开{pageLabel}
             前请选择如何处理这次录制。
-            {active?.include_danmaku && " 继续录制媒体时，弹幕会随直播间连接结束而停止收集。"}
+            {active?.include_danmaku && " 继续录制时，弹幕也会在后台持续记录，直到停止录制。"}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="sm:flex-wrap">

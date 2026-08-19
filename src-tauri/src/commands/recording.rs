@@ -66,6 +66,21 @@ pub async fn recording_stop(state: State<'_, AppState>, id: String) -> AppResult
     state.recording.stop(id.trim()).await
 }
 
+/// Flips the continue-after-leave flag of an active recording while the user
+/// is still on the room page. The leave guard calls this for its
+/// "继续录制并离开" action so the danmaku sidecar keeps collecting after the
+/// player page unmounts instead of losing the room connection.
+#[tauri::command]
+pub fn recording_set_continue_on_leave(
+    state: State<'_, AppState>,
+    id: String,
+    continue_on_leave: bool,
+) -> AppResult<RecordingItem> {
+    state
+        .recording
+        .set_continue_on_leave(id.trim(), continue_on_leave)
+}
+
 #[tauri::command]
 pub fn recording_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.recording.delete(id.trim())
