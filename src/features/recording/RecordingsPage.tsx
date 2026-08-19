@@ -572,7 +572,7 @@ export function RecordingsPage() {
   const exportAssMutation = useMutation({
     mutationFn: exportRecordingDanmakuAss,
     onSuccess: (path) =>
-      notify.success("弹幕字幕已导出", `与录像同目录同名，外部播放器可直接加载：${path}`),
+      notify.success(`弹幕字幕已导出：${path}`),
     onError: (error) => notify.error("导出弹幕字幕失败", recordingErrorMessage(error)),
   });
 
