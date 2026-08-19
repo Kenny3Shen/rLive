@@ -40,7 +40,10 @@ mod ass;
 pub use ass::AssExportOptions;
 
 const RECORDINGS_DIRECTORY: &str = "recordings";
-const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage.json";
+const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage-v2.json";
+const LEGACY_RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage.json";
+const RECORDING_STORAGE_CONFIG_VERSION: u32 = 2;
+const RECORDING_METADATA_VERSION: u32 = 2;
 const RECORDING_MANAGER_LOCK_FILE: &str = ".recording-manager.lock";
 const MAX_ACTIVE_RECORDINGS: usize = 4;
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
@@ -229,13 +232,22 @@ impl RecordingEventSink {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecordingStorageConfig {
-    #[serde(default)]
+    schema_version: u32,
     current_path: Option<String>,
-    #[serde(default)]
     known_paths: Vec<String>,
+}
+
+impl Default for RecordingStorageConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: RECORDING_STORAGE_CONFIG_VERSION,
+            current_path: None,
+            known_paths: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -336,7 +348,9 @@ impl RecordingStorageState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoredRecording {
+    schema_version: u32,
     id: String,
     source_key: String,
     source_kind: String,
@@ -345,7 +359,6 @@ struct StoredRecording {
     title: String,
     user_name: String,
     cover: String,
-    #[serde(default)]
     user_avatar: String,
     protocol: PlaybackProtocol,
     status: RecordingStatus,
@@ -353,13 +366,9 @@ struct StoredRecording {
     ended_at: Option<i64>,
     duration_ms: u64,
     size_bytes: u64,
-    #[serde(default)]
     include_danmaku: bool,
-    #[serde(default)]
     continue_on_leave: bool,
-    #[serde(default)]
     danmaku_count: u64,
-    #[serde(default)]
     danmaku_file: Option<String>,
     media_file: String,
     error: Option<String>,
@@ -403,6 +412,18 @@ impl StoredRecording {
             error: self.error.clone(),
         }
     }
+}
+
+fn parse_stored_recording(bytes: &[u8]) -> Result<StoredRecording, String> {
+    let stored =
+        serde_json::from_slice::<StoredRecording>(bytes).map_err(|error| error.to_string())?;
+    if stored.schema_version != RECORDING_METADATA_VERSION {
+        return Err(format!(
+            "录制 metadata 版本 {} 不受支持，当前版本为 {}",
+            stored.schema_version, RECORDING_METADATA_VERSION
+        ));
+    }
+    Ok(stored)
 }
 
 struct SessionState {
@@ -971,6 +992,7 @@ impl RecordingManager {
             None
         };
         let stored = StoredRecording {
+            schema_version: RECORDING_METADATA_VERSION,
             id: id.clone(),
             source_key: source_key.clone(),
             source_kind: normalize_text(&input.source_kind, "live"),
@@ -1229,7 +1251,7 @@ impl RecordingManager {
         if !is_safe_recording_id(id) {
             return Err(AppError::new("recording_invalid_id", "录制标识无效"));
         }
-        let (root, mut stored) = find_stored(&self.storage_roots(), id)?;
+        let (root, stored) = find_stored(&self.storage_roots(), id)?;
         if stored.status == RecordingStatus::Recording {
             return Err(AppError::new(
                 "recording_still_active",
@@ -1246,38 +1268,6 @@ impl RecordingManager {
         let file = root.join(id).join(media_file);
         if !file.exists() {
             return Err(AppError::new("recording_media_missing", "录制文件不存在"));
-        }
-        let is_flv_file = file
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("flv"));
-        if stored.protocol == PlaybackProtocol::Flv && is_flv_file {
-            let file_for_index = file.clone();
-            match tokio::task::spawn_blocking(move || {
-                ffmpeg_backend::ensure_flv_keyframe_index(&file_for_index)
-            })
-            .await
-            {
-                Ok(Ok(true)) => {
-                    stored.size_bytes = std::fs::metadata(&file)
-                        .map(|metadata| metadata.len())
-                        .unwrap_or(stored.size_bytes);
-                    if let Err(error) = write_metadata(&root.join(id), &stored) {
-                        tracing::warn!(recording_id = %id, error = %error.message, "保存索引化录制大小失败");
-                    }
-                    self.library
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .upsert(&root, stored.clone());
-                }
-                Ok(Ok(false)) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(recording_id = %id, error = %error, "旧 FLV 关键帧索引迁移失败，继续使用原文件");
-                }
-                Err(error) => {
-                    tracing::warn!(recording_id = %id, error = %error, "旧 FLV 关键帧索引任务终止，继续使用原文件");
-                }
-            }
         }
         self.playback.url(id, &stored.media_file).await
     }
@@ -2469,6 +2459,13 @@ fn acquire_recording_manager_lock(app_directory: &Path) -> AppResult<File> {
 fn load_storage_state(app_directory: &Path) -> AppResult<RecordingStorageState> {
     let default_root = prepare_storage_root(&app_directory.join(RECORDINGS_DIRECTORY))?;
     let config_path = app_directory.join(RECORDING_STORAGE_CONFIG_FILE);
+    let legacy_config_path = app_directory.join(LEGACY_RECORDING_STORAGE_CONFIG_FILE);
+    if legacy_config_path.is_file() {
+        tracing::warn!(
+            path = %legacy_config_path.display(),
+            "忽略不再支持的旧录制目录设置"
+        );
+    }
     crate::app_paths::recover_recoverable_file(&config_path, valid_recording_storage_config)
         .map_err(|error| {
             AppError::new(
@@ -2477,12 +2474,25 @@ fn load_storage_state(app_directory: &Path) -> AppResult<RecordingStorageState> 
             )
         })?;
     let config = match std::fs::read(&config_path) {
-        Ok(bytes) => serde_json::from_slice::<RecordingStorageConfig>(&bytes).map_err(|error| {
-            AppError::new(
-                "recording_storage_error",
-                format!("录制目录设置已损坏: {error}"),
-            )
-        })?,
+        Ok(bytes) => {
+            let config =
+                serde_json::from_slice::<RecordingStorageConfig>(&bytes).map_err(|error| {
+                    AppError::new(
+                        "recording_storage_error",
+                        format!("录制目录设置已损坏或版本不受支持: {error}"),
+                    )
+                })?;
+            if config.schema_version != RECORDING_STORAGE_CONFIG_VERSION {
+                return Err(AppError::new(
+                    "recording_storage_error",
+                    format!(
+                        "录制目录设置版本 {} 不受支持，当前版本为 {}",
+                        config.schema_version, RECORDING_STORAGE_CONFIG_VERSION
+                    ),
+                ));
+            }
+            config
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             RecordingStorageConfig::default()
         }
@@ -2532,7 +2542,8 @@ fn load_storage_state(app_directory: &Path) -> AppResult<RecordingStorageState> 
 }
 
 fn valid_recording_storage_config(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<RecordingStorageConfig>(bytes).is_ok()
+    serde_json::from_slice::<RecordingStorageConfig>(bytes)
+        .is_ok_and(|config| config.schema_version == RECORDING_STORAGE_CONFIG_VERSION)
 }
 
 fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
@@ -2616,8 +2627,38 @@ fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, 
             continue;
         };
         let Some(id) = name.to_str() else { continue };
-        if !is_safe_recording_id(id) || !source.is_dir() || !source.join("metadata.json").is_file()
-        {
+        if !is_safe_recording_id(id) || !source.is_dir() {
+            continue;
+        }
+        let metadata_path = source.join("metadata.json");
+        let metadata = match read_metadata_bytes(&metadata_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    path = %source.display(),
+                    error = %error,
+                    "目录切换时跳过无法读取的录制 metadata"
+                );
+                continue;
+            }
+        };
+        let stored = match parse_stored_recording(&metadata) {
+            Ok(stored) => stored,
+            Err(error) => {
+                tracing::warn!(
+                    path = %source.display(),
+                    error = %error,
+                    "目录切换时跳过版本不受支持或已损坏的录制 metadata"
+                );
+                continue;
+            }
+        };
+        if stored.id != id {
+            tracing::warn!(
+                path = %source.display(),
+                metadata_id = %stored.id,
+                "目录切换时跳过 metadata 标识与目录不一致的录制"
+            );
             continue;
         }
         let target = to.join(name);
@@ -2666,6 +2707,7 @@ fn ordered_roots(current: &Path, default_root: &Path, history: &[PathBuf]) -> Ve
 
 fn write_storage_config(storage: &RecordingStorageState) -> AppResult<()> {
     let config = RecordingStorageConfig {
+        schema_version: RECORDING_STORAGE_CONFIG_VERSION,
         current_path: (storage.current_root != storage.default_root)
             .then(|| crate::app_paths::path_to_string(&storage.current_root)),
         known_paths: storage
@@ -2698,7 +2740,7 @@ fn find_bundle(roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         let bundle = root.join(id);
         let metadata = bundle.join("metadata.json");
         let bytes = read_metadata_bytes(&metadata).ok()?;
-        let stored = serde_json::from_slice::<StoredRecording>(&bytes).ok()?;
+        let stored = parse_stored_recording(&bytes).ok()?;
         (stored.id == id && bundle.is_dir()).then_some(bundle)
     })
 }
@@ -2881,7 +2923,7 @@ fn recover_transaction_sidecars(
 }
 
 fn valid_metadata_replacement(bytes: &[u8], bundle: &Path) -> bool {
-    let Ok(stored) = serde_json::from_slice::<StoredRecording>(bytes) else {
+    let Ok(stored) = parse_stored_recording(bytes) else {
         return false;
     };
     bundle
@@ -2901,7 +2943,7 @@ fn recover_bundle_sidecars(bundle: &Path) -> std::io::Result<()> {
 
     let stored = std::fs::read(&metadata)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<StoredRecording>(&bytes).ok());
+        .and_then(|bytes| parse_stored_recording(&bytes).ok());
     if let Some(stored) = stored.as_ref()
         && !safe_relative_path(Path::new(&stored.media_file))
     {
@@ -2930,11 +2972,27 @@ fn scan_recording_root(root: &Path) -> HashMap<String, StoredRecording> {
         if !path.is_dir() {
             continue;
         }
-        let Ok(bytes) = read_metadata_bytes(&path.join("metadata.json")) else {
-            continue;
+        let bytes = match read_metadata_bytes(&path.join("metadata.json")) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "跳过无法读取的录制 metadata"
+                );
+                continue;
+            }
         };
-        let Ok(stored) = serde_json::from_slice::<StoredRecording>(&bytes) else {
-            continue;
+        let stored = match parse_stored_recording(&bytes) {
+            Ok(stored) => stored,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "跳过版本不受支持或已损坏的录制 metadata"
+                );
+                continue;
+            }
         };
         if !is_safe_recording_id(&stored.id) || !path.ends_with(&stored.id) {
             continue;
@@ -2948,8 +3006,12 @@ fn read_stored(root: &Path, id: &str) -> AppResult<StoredRecording> {
     let path = root.join(id).join("metadata.json");
     let bytes = read_metadata_bytes(&path)
         .map_err(|_| AppError::new("recording_not_found", "录制不存在"))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| AppError::new("recording_metadata_error", "录制信息损坏"))
+    parse_stored_recording(&bytes).map_err(|error| {
+        AppError::new(
+            "recording_metadata_error",
+            format!("录制信息损坏或版本不受支持: {error}"),
+        )
+    })
 }
 
 fn append_recovery_error(stored: &mut StoredRecording, message: impl Into<String>) {
@@ -2973,10 +3035,29 @@ fn recover_stale_recordings(root: &Path) -> AppResult<()> {
         if !is_safe_recording_id(&id) {
             continue;
         }
+        let metadata_path = path.join("metadata.json");
+        if let Ok(bytes) = read_metadata_bytes(&metadata_path)
+            && let Err(error) = parse_stored_recording(&bytes)
+        {
+            tracing::warn!(
+                recording_id = %id,
+                error = %error,
+                "跳过版本不受支持或已损坏的录制 metadata"
+            );
+            continue;
+        }
         let sidecar_error = recover_bundle_sidecars(&path).err();
         let mut stored = match read_stored(root, &id) {
             Ok(stored) => stored,
             Err(error) => {
+                if error.code == "recording_metadata_error" {
+                    tracing::warn!(
+                        recording_id = %id,
+                        error = %error.message,
+                        "跳过版本不受支持的录制 metadata"
+                    );
+                    continue;
+                }
                 if let Some(sidecar_error) = sidecar_error {
                     return Err(AppError::new(
                         "recording_recovery_error",
@@ -3587,15 +3668,16 @@ async fn write_simple_response(
 mod tests {
     use super::{
         ActiveSessionState, AssExportOptions, FfmpegRecordingOptions, FinalizingSession,
-        MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingLibraryIndex, RecordingManager,
-        RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session, SessionState,
-        StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
-        decode_playback_relative_path, finish_session, is_safe_recording_id, load_storage_state,
-        local_playback_url, media_file_name, parse_range, prepare_storage_root, read_stored,
-        recording_bundle_base, recording_file_stem, recover_bundle_sidecars,
-        recover_stale_recordings, safe_relative_path, salvage_temporary_media_after_worker_failure,
-        scan_recording_root, stop_sessions_until_deadline, storage_space_is_low,
-        stored_keeps_background_danmaku, wait_for_finalizing_sessions, write_metadata,
+        MINIMUM_FREE_SPACE_BYTES, RECORDING_METADATA_VERSION, RECORDING_STORAGE_CONFIG_VERSION,
+        RecordingEventSink, RecordingLibraryIndex, RecordingManager, RecordingStartInput,
+        RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
+        StoredRecording, TaskOutcome, create_recording_bundle, decode_playback_relative_path,
+        finish_session, is_safe_recording_id, load_storage_state, local_playback_url,
+        media_file_name, parse_range, prepare_storage_root, read_stored, recording_bundle_base,
+        recording_file_stem, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
+        salvage_temporary_media_after_worker_failure, scan_recording_root,
+        stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
+        wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use percent_encoding::percent_decode_str;
@@ -3872,6 +3954,7 @@ mod tests {
 
     fn completed_recording(id: String, title: &str) -> StoredRecording {
         StoredRecording {
+            schema_version: RECORDING_METADATA_VERSION,
             id,
             source_key: format!("live:bilibili:{title}"),
             source_kind: "live".into(),
@@ -3950,6 +4033,28 @@ mod tests {
         let items = index.items(std::slice::from_ref(&root));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "external");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recording_scan_skips_an_old_metadata_version_without_modifying_it() {
+        let root =
+            std::env::temp_dir().join(format!("rlive-recording-old-metadata-{}", Uuid::new_v4()));
+        let stored = completed_recording(test_recording_id(), "old-metadata");
+        let bundle = root.join(&stored.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join(&stored.media_file), b"old-media").unwrap();
+        let mut value = serde_json::to_value(stored).unwrap();
+        value["schema_version"] = serde_json::json!(1);
+        let metadata = serde_json::to_vec_pretty(&value).unwrap();
+        std::fs::write(bundle.join("metadata.json"), &metadata).unwrap();
+
+        assert!(scan_recording_root(&root).is_empty());
+        assert_eq!(
+            std::fs::read(bundle.join("metadata.json")).unwrap(),
+            metadata
+        );
+        assert!(bundle.join("stream.flv").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -4445,13 +4550,12 @@ mod tests {
     }
 
     #[test]
-    fn stored_recording_defaults_background_continuation_to_disabled() {
+    fn stored_recording_rejects_missing_background_continuation() {
         let mut legacy_metadata =
             serde_json::to_value(completed_recording("legacy".into(), "legacy")).unwrap();
         let metadata = legacy_metadata.as_object_mut().unwrap();
         metadata.remove("continue_on_leave");
-        let stored: StoredRecording = serde_json::from_value(legacy_metadata).unwrap();
-        assert!(!stored.continue_on_leave);
+        assert!(serde_json::from_value::<StoredRecording>(legacy_metadata).is_err());
     }
 
     #[test]
@@ -4482,6 +4586,38 @@ mod tests {
         let restarted = RecordingManager::new(&app_directory).unwrap();
         assert_eq!(restarted.list().unwrap().len(), 1);
         drop(restarted);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn storage_switch_leaves_an_old_metadata_bundle_in_place() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-storage-old-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let default_root = PathBuf::from(manager.storage_info().path);
+        let old = completed_recording(test_recording_id(), "old metadata");
+        let bundle = default_root.join(&old.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("stream.flv"), b"old").unwrap();
+        let mut value = serde_json::to_value(old).unwrap();
+        value["schema_version"] = serde_json::json!(1);
+        let id = value["id"].as_str().unwrap().to_owned();
+        std::fs::write(
+            bundle.join("metadata.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+
+        let custom_root = app_directory.join("custom-recordings");
+        let custom_info = manager
+            .set_storage_path(Some(custom_root.display().to_string()))
+            .unwrap();
+
+        assert!(bundle.is_dir());
+        assert!(!PathBuf::from(custom_info.path).join(id).exists());
+        assert!(manager.list().unwrap().is_empty());
+
+        drop(manager);
         std::fs::remove_dir_all(app_directory).unwrap();
     }
 
@@ -4615,11 +4751,12 @@ mod tests {
         std::fs::create_dir_all(&committed_root).unwrap();
         std::fs::create_dir_all(&uncommitted_root).unwrap();
         let config_path = app_directory.join(super::RECORDING_STORAGE_CONFIG_FILE);
-        let temporary = config_path.with_file_name("recording-storage.json.tmp");
-        let backup = config_path.with_file_name("recording-storage.json.bak");
+        let temporary = config_path.with_file_name("recording-storage-v2.json.tmp");
+        let backup = config_path.with_file_name("recording-storage-v2.json.bak");
         std::fs::write(
             &backup,
             serde_json::to_vec_pretty(&RecordingStorageConfig {
+                schema_version: RECORDING_STORAGE_CONFIG_VERSION,
                 current_path: Some(crate::app_paths::path_to_string(&committed_root)),
                 known_paths: Vec::new(),
             })
@@ -4629,6 +4766,7 @@ mod tests {
         std::fs::write(
             &temporary,
             serde_json::to_vec_pretty(&RecordingStorageConfig {
+                schema_version: RECORDING_STORAGE_CONFIG_VERSION,
                 current_path: Some(crate::app_paths::path_to_string(&uncommitted_root)),
                 known_paths: Vec::new(),
             })

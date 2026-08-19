@@ -8,6 +8,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::live::PlaybackProtocol;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct IptvFavoriteRecord {
     pub source_id: String,
     pub id: String,
@@ -22,6 +23,7 @@ pub struct IptvFavoriteRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct IptvFavoriteGroupRecord {
     pub id: String,
     pub name: String,

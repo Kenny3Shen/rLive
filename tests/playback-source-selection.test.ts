@@ -28,6 +28,7 @@ const sources: PlayUrl[] = [
   },
   {
     source_id: "third",
+    label: "第三线路",
     protocol: "flv",
     priority: 2,
     url: "https://three.example/live.flv",
@@ -62,7 +63,7 @@ describe("structured playback sources", () => {
     expect(lineName({ ...sources[0], label: "主线路（FLV）" }, 0)).toBe("主线路");
     expect(lineLabel(sources[1], 1)).toBe("备用线路（HLS）");
     expect(lineLabel("https://example.test/live.flv", 0)).toBe("线路1（FLV）");
-    expect(playbackSourceId({ url: "x" }, 2)).toBe("source:3");
+    expect(playbackSourceId(sources[2], 2)).toBe("third");
   });
 });
 

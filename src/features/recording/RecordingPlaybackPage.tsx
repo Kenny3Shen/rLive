@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, CircleDot, MessageSquareText, Tv, Videotape } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -24,7 +24,6 @@ import {
   formatRecordingDate,
   formatRecordingDuration,
   formatRecordingSize,
-  RECORDINGS_QUERY_KEY,
   RECORDING_PLAYBACK_QUERY_KEY,
   recordingErrorMessage,
   recordingPlaybackUrl,
@@ -217,7 +216,6 @@ export function RecordingPlaybackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { recordingId } = useParams<{ recordingId: string }>();
-  const queryClient = useQueryClient();
   const supported = recordingSupported();
   const recordings = useRecordings();
   const item = recordings.data?.find((entry) => entry.id === recordingId) ?? null;
@@ -225,11 +223,7 @@ export function RecordingPlaybackPage() {
     queryKey: [RECORDING_PLAYBACK_QUERY_KEY, recordingId],
     enabled: supported && Boolean(item) && item?.status !== "recording",
     queryFn: async () => {
-      const url = await recordingPlaybackUrl(recordingId!);
-      // Legacy playback normalization can update duration metadata. Keep the
-      // list cache fresh so returning to the library shows the corrected value.
-      await queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
-      return url;
+      return recordingPlaybackUrl(recordingId!);
     },
     staleTime: Number.POSITIVE_INFINITY,
   });

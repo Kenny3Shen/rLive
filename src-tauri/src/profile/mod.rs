@@ -11,7 +11,7 @@ use crate::models::settings::AppSettings;
 use crate::settings;
 use rusqlite::Connection;
 
-const PROFILE_VERSION: u32 = 1;
+const PROFILE_VERSION: u32 = 2;
 const PROFILE_FIELDS: &[&str] = &[
     "version",
     "exported_at",
@@ -53,7 +53,6 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "asr_translation_to",
     "iptv_custom_m3u_url",
     "recording_continue_after_leave",
-    "recording_auto_follow",
     "recording_include_danmaku",
     "recording_auto_split_minutes",
     "ffmpeg_rw_timeout_seconds",
@@ -84,6 +83,7 @@ const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "ffmpeg_rw_timeout_seconds",
     "ffmpeg_reconnect_delay_max_seconds",
     "ffmpeg_hls_segment_retry_count",
+    "recording_ass",
 ];
 const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_send_enabled",
@@ -272,7 +272,7 @@ fn read_package_text<R: Read>(reader: R) -> AppResult<String> {
 }
 
 fn decode_package(text: &str) -> AppResult<ProfilePackage> {
-    let value: serde_json::Value = serde_json::from_str(text)
+    let mut value: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))?;
     if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64)
         && version != u64::from(PROFILE_VERSION)
@@ -296,8 +296,41 @@ fn decode_package(text: &str) -> AppResult<ProfilePackage> {
         "profile.settings",
         PORTABLE_PROFILE_SETTINGS_FIELDS,
     )?;
+    fill_local_only_settings(&mut value)?;
     serde_json::from_value(value)
         .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))
+}
+
+fn fill_local_only_settings(value: &mut serde_json::Value) -> AppResult<()> {
+    let defaults = serde_json::to_value(AppSettings::default())
+        .map_err(|error| AppError::new("profile_schema_invalid", error.to_string()))?;
+    let default_settings = defaults.as_object().ok_or_else(|| {
+        AppError::new(
+            "profile_schema_invalid",
+            "current settings defaults must be a JSON object",
+        )
+    })?;
+    let settings = value
+        .get_mut("settings")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| {
+            AppError::new(
+                "profile_schema_invalid",
+                "profile.settings must be an object",
+            )
+        })?;
+    for field in LOCAL_ONLY_PROFILE_SETTINGS_FIELDS {
+        if !settings.contains_key(*field) {
+            let default = default_settings.get(*field).ok_or_else(|| {
+                AppError::new(
+                    "profile_schema_invalid",
+                    format!("missing current default for profile.settings.{field}"),
+                )
+            })?;
+            settings.insert((*field).to_string(), default.clone());
+        }
+    }
+    Ok(())
 }
 
 fn reject_unknown_fields(
@@ -487,23 +520,19 @@ mod tests {
     }
 
     #[test]
-    fn profile_accepts_legacy_global_auto_follow_without_exporting_it() {
+    fn profile_rejects_legacy_global_auto_follow() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
         value["settings"]["recording_auto_follow"] = serde_json::json!(true);
         let text = serde_json::to_string(&value).unwrap();
 
-        let package = decode_package(&text).unwrap();
+        let error = decode_package(&text).unwrap_err();
 
-        assert!(package.settings.legacy_recording_auto_follow);
-        assert!(
-            !serde_json::to_string(&package)
-                .unwrap()
-                .contains("recording_auto_follow")
-        );
+        assert_eq!(error.code, "profile_schema_invalid");
+        assert!(error.message.contains("recording_auto_follow"));
     }
 
     #[test]
-    fn profile_follow_from_before_auto_record_defaults_to_disabled() {
+    fn profile_rejects_missing_auto_record() {
         let mut package = ProfilePackage::sample();
         package.follows.push(FollowRecord {
             site_id: "bilibili".into(),
@@ -522,9 +551,7 @@ mod tests {
             .unwrap()
             .remove("auto_record");
 
-        let decoded = decode_package(&serde_json::to_string(&value).unwrap()).unwrap();
-
-        assert!(!decoded.follows[0].auto_record);
+        assert!(decode_package(&serde_json::to_string(&value).unwrap()).is_err());
     }
 
     #[test]
