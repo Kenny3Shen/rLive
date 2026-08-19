@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use crate::error::{AppError, AppResult};
 
 pub const HISTORY_RETENTION_LIMIT: i64 = 2_000;
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS follows (
   user_name TEXT NOT NULL,
   face TEXT NOT NULL DEFAULT '',
   tag_ids TEXT NOT NULL DEFAULT '[]',
+  auto_record INTEGER NOT NULL DEFAULT 0,
   live_status INTEGER,
   live_started_at INTEGER,
   updated_at INTEGER NOT NULL,
@@ -153,6 +154,9 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
     if version == SCHEMA_VERSION {
         return Ok(());
     }
+    if version == 1 {
+        return migrate_v1_to_v2(conn);
+    }
 
     let table_count: i64 = conn
         .query_row(
@@ -199,6 +203,21 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         .commit()
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))
 }
+
+fn migrate_v1_to_v2(conn: &Connection) -> AppResult<()> {
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    transaction
+        .execute_batch("ALTER TABLE follows ADD COLUMN auto_record INTEGER NOT NULL DEFAULT 0;")
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    transaction
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    transaction
+        .commit()
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))
+}
 pub fn map_db_err(err: rusqlite::Error) -> AppError {
     AppError::new("db_error", err.to_string())
 }
@@ -227,6 +246,51 @@ mod tests {
         assert!(columns.iter().any(|column| column == "room_id"));
         assert!(columns.iter().any(|column| column == "room_title"));
         assert!(columns.iter().any(|column| column == "room_user_name"));
+        let follow_columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('follows') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(follow_columns.iter().any(|column| column == "auto_record"));
+    }
+
+    #[test]
+    fn version_one_database_adds_per_follow_auto_record_disabled() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE follows (
+                site_id TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                user_name TEXT NOT NULL,
+                face TEXT NOT NULL DEFAULT '',
+                tag_ids TEXT NOT NULL DEFAULT '[]',
+                live_status INTEGER,
+                live_started_at INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (site_id, room_id)
+            );
+            INSERT INTO follows (site_id, room_id, user_name, updated_at)
+            VALUES ('bilibili', '1', 'user', 1);
+            PRAGMA user_version = 1;",
+        )
+        .unwrap();
+
+        initialize_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        let auto_record: bool = conn
+            .query_row(
+                "SELECT auto_record FROM follows WHERE site_id = 'bilibili' AND room_id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(!auto_record);
     }
 
     #[test]

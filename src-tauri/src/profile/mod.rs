@@ -53,6 +53,7 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "asr_translation_to",
     "iptv_custom_m3u_url",
     "recording_continue_after_leave",
+    "recording_auto_follow",
     "recording_include_danmaku",
     "recording_auto_split_minutes",
     "ffmpeg_rw_timeout_seconds",
@@ -486,6 +487,47 @@ mod tests {
     }
 
     #[test]
+    fn profile_accepts_legacy_global_auto_follow_without_exporting_it() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]["recording_auto_follow"] = serde_json::json!(true);
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert!(package.settings.legacy_recording_auto_follow);
+        assert!(
+            !serde_json::to_string(&package)
+                .unwrap()
+                .contains("recording_auto_follow")
+        );
+    }
+
+    #[test]
+    fn profile_follow_from_before_auto_record_defaults_to_disabled() {
+        let mut package = ProfilePackage::sample();
+        package.follows.push(FollowRecord {
+            site_id: "bilibili".into(),
+            room_id: "1".into(),
+            user_name: "u".into(),
+            face: "".into(),
+            tag_ids: vec![],
+            auto_record: true,
+            live_status: None,
+            live_started_at: None,
+            updated_at: 1,
+        });
+        let mut value = serde_json::to_value(package).unwrap();
+        value["follows"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("auto_record");
+
+        let decoded = decode_package(&serde_json::to_string(&value).unwrap()).unwrap();
+
+        assert!(!decoded.follows[0].auto_record);
+    }
+
+    #[test]
     fn profile_rejects_unknown_versions() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
         value["version"] = serde_json::json!(PROFILE_VERSION + 1);
@@ -616,12 +658,15 @@ mod tests {
             user_name: "u".into(),
             face: "".into(),
             tag_ids: vec![],
+            auto_record: true,
             live_status: None,
             live_started_at: None,
             updated_at: 1,
         });
         merge_into_db(&mut conn, &package).unwrap();
-        assert_eq!(follow::list(&conn).unwrap().len(), 1);
+        let follows = follow::list(&conn).unwrap();
+        assert_eq!(follows.len(), 1);
+        assert!(follows[0].auto_record);
     }
 
     #[test]

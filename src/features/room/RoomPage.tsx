@@ -205,6 +205,7 @@ export function RoomPage() {
           user_name: detail.user_name,
           face: detail.user_avatar,
           tag_ids: tagIdsForFollowGroup(groupId),
+          auto_record: false,
           live_status: detail.status,
           live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
           updated_at: Date.now(),
