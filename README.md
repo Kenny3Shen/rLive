@@ -131,7 +131,7 @@ $env:LIBCLANG_PATH = "D:\dev\LLVM-22.1.8\bin"
 $env:Path = "$env:LIBCLANG_PATH;$env:Path"
 ```
 
-直接运行 Cargo/Tauri 还需要 Visual Studio 的 `x64 Native Tools` 环境（包括 MSVC headers 和 Windows SDK）；`scripts/build-windows.ps1` 与 `scripts/build-windows-from-wsl.sh` 会自动调用 `vcvars64.bat`。Android 构建使用单独的 NDK clang 配置，不能复用到桌面目标。
+直接运行 Cargo/Tauri 还需要 Visual Studio 的 `x64 Native Tools` 环境（包括 MSVC headers 和 Windows SDK）；`scripts/build-windows.ps1` 与 `scripts/build-windows-from-wsl.sh` 会自动调用 `vcvars64.bat`。Android 构建使用单独的 NDK clang 配置，不能复用到桌面目标；Linux/WSL 下使用 `bun run tauri -- android ...` 时，`scripts/tauri.mjs` 会自动配置 NDK 的 bindgen、`cc-rs` 和 linker 环境。
 
 未设置 `FFMPEG_DIR` 时，脚本才会把固定版本的 FFmpeg 9.0.1 shared SDK 缓存到 `%LOCALAPPDATA%\rLive\build`。
 
