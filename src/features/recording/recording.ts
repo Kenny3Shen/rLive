@@ -7,6 +7,7 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import { isSiteId } from "@/shared/siteId";
 import type { PlayUrl, PlaybackProtocol, SiteId } from "@/shared/types/live";
 import { notify } from "@/components/ui/toast";
+import { formatByteSize } from "@/lib/utils";
 
 export type RecordingStatus = "recording" | "completed" | "interrupted" | "failed";
 
@@ -155,10 +156,7 @@ export function recordingSeekReached(
 }
 
 export function formatRecordingSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return (bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1) + " " + units[index];
+  return formatByteSize(bytes);
 }
 
 export function formatRecordingDate(timestamp: number): string {
