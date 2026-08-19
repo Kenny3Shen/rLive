@@ -73,10 +73,7 @@ import {
   FfmpegSettingsFields,
   RecordingDefaultsFields,
 } from "@/features/settings/RecordingSettingsFields";
-import {
-  AppDataStoragePathField,
-  RecordingStoragePathField,
-} from "@/features/settings/StoragePathSettings";
+import { RecordingStoragePathField } from "@/features/settings/StoragePathSettings";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1987,9 +1984,6 @@ export function SettingsPage() {
     ),
     data: (
       <SettingsContent title="数据">
-        <Section title="应用数据" keywords="数据 保存 路径 位置 目录 应用">
-          <AppDataStoragePathField />
-        </Section>
         <Section title="局域网同步" keywords="局域网 同步 Wi-Fi 配对 发送 接收">
           <LanSyncField />
         </Section>

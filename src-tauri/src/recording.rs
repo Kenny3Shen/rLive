@@ -711,6 +711,10 @@ impl RecordingManager {
     }
 
     pub fn set_storage_path(&self, requested: Option<String>) -> AppResult<RecordingStorageInfo> {
+        let _start_gate = self
+            .start_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let next_root = match requested {
             Some(path) => {
                 if path.trim().is_empty() {
@@ -728,19 +732,35 @@ impl RecordingManager {
                 .default_root
                 .clone(),
         };
-        let known_root = self
+        let current_root = self
             .storage
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .roots
-            .contains(&next_root);
-        if !known_root {
-            recover_stale_recordings(&next_root)?;
-            self.library
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .replace_root(next_root.clone(), scan_recording_root(&next_root));
+            .current_root
+            .clone();
+        if current_root == next_root {
+            return Ok(self.storage_info());
         }
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.reap_finished_locked(&mut sessions);
+        let mut finalizing = self
+            .finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::reap_finalizing_locked(&mut finalizing);
+        if !sessions.is_empty() || !finalizing.is_empty() {
+            return Err(AppError::new(
+                "recording_storage_busy",
+                "请先停止录制并等待收尾完成，再迁移录制保存位置",
+            ));
+        }
+        drop(finalizing);
+        drop(sessions);
+
+        let moved = migrate_recording_bundles(&current_root, &next_root)?;
         let mut storage = self
             .storage
             .lock()
@@ -754,9 +774,24 @@ impl RecordingManager {
         }
         next.current_root = next_root;
         next.roots = ordered_roots(&next.current_root, &next.default_root, &next.history);
-        write_storage_config(&next)?;
+        if let Err(error) = write_storage_config(&next) {
+            rollback_recording_bundles(&moved);
+            return Err(error);
+        }
         *storage = next;
-        Ok(storage.info())
+        let roots = storage.roots.clone();
+        drop(storage);
+        let mut library = self
+            .library
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        library.replace_root(current_root, HashMap::new());
+        library.replace_root(
+            roots[0].clone(),
+            scan_recording_root(&roots[0]),
+        );
+        library.refresh_changed_roots(&roots);
+        Ok(self.storage_info())
     }
 
     pub fn list(&self) -> AppResult<Vec<RecordingItem>> {
@@ -2478,6 +2513,43 @@ fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
     drop(file);
     let _ = std::fs::remove_file(probe);
     Ok(root)
+}
+
+fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, PathBuf)>> {
+    let mut moved = Vec::new();
+    let entries = std::fs::read_dir(from).map_err(|error| {
+        AppError::new("recording_storage_error", format!("读取原录制目录失败: {error}"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            AppError::new("recording_storage_error", format!("读取录制目录项失败: {error}"))
+        })?;
+        let source = entry.path();
+        let Some(name) = source.file_name() else { continue };
+        let Some(id) = name.to_str() else { continue };
+        if !is_safe_recording_id(id) || !source.is_dir() || !source.join("metadata.json").is_file() {
+            continue;
+        }
+        let target = to.join(name);
+        if target.exists() {
+            rollback_recording_bundles(&moved);
+            return Err(AppError::new("recording_storage_conflict", format!("目标录制目录已存在: {}", target.display())));
+        }
+        if let Err(error) = std::fs::rename(&source, &target) {
+            rollback_recording_bundles(&moved);
+            return Err(AppError::new("recording_storage_error", format!("迁移录制目录失败 {}: {error}", source.display())));
+        }
+        moved.push((source, target));
+    }
+    Ok(moved)
+}
+
+fn rollback_recording_bundles(moved: &[(PathBuf, PathBuf)]) {
+    for (source, target) in moved.iter().rev() {
+        if let Err(error) = std::fs::rename(target, source) {
+            tracing::error!(source = %source.display(), target = %target.display(), error = %error, "回滚录制目录迁移失败");
+        }
+    }
 }
 
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -4275,7 +4347,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_switch_keeps_default_and_historical_recordings_visible() {
+    fn storage_switch_migrates_existing_recordings() {
         let app_directory =
             std::env::temp_dir().join(format!("rlive-recording-storage-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
@@ -4284,45 +4356,85 @@ mod tests {
         let first_bundle = default_root.join(&first.id);
         std::fs::create_dir_all(&first_bundle).unwrap();
         std::fs::write(first_bundle.join("stream.flv"), b"a").unwrap();
+        std::fs::write(first_bundle.join("danmaku.jsonl"), b"{}\n").unwrap();
         write_metadata(&first_bundle, &first).unwrap();
 
         let custom_root = app_directory.join("custom-recordings ");
-        std::fs::create_dir_all(&custom_root).unwrap();
         let custom_info = manager
             .set_storage_path(Some(custom_root.display().to_string()))
             .unwrap();
-        assert!(!custom_info.is_default);
-        assert_eq!(
-            custom_info.path,
-            crate::app_paths::path_to_string(&std::fs::canonicalize(&custom_root).unwrap())
-        );
-        let second = completed_recording(test_recording_id(), "custom");
-        let second_bundle = PathBuf::from(&custom_info.path).join(&second.id);
-        std::fs::create_dir_all(&second_bundle).unwrap();
-        std::fs::write(second_bundle.join("stream.flv"), b"b").unwrap();
-        write_metadata(&second_bundle, &second).unwrap();
+        let migrated_bundle = PathBuf::from(&custom_info.path).join(&first.id);
+        assert!(!first_bundle.exists());
+        assert!(migrated_bundle.join("stream.flv").is_file());
+        assert!(migrated_bundle.join("danmaku.jsonl").is_file());
+        assert!(migrated_bundle.join("metadata.json").is_file());
+        assert_eq!(manager.list().unwrap().len(), 1);
 
-        let titles: HashSet<_> = manager
-            .list()
-            .unwrap()
-            .into_iter()
-            .map(|item| item.title)
-            .collect();
-        assert_eq!(titles, HashSet::from(["default".into(), "custom".into()]));
-
-        let default_info = manager.set_storage_path(None).unwrap();
-        assert!(default_info.is_default);
         drop(manager);
-
         let restarted = RecordingManager::new(&app_directory).unwrap();
-        let titles: HashSet<_> = restarted
-            .list()
-            .unwrap()
-            .into_iter()
-            .map(|item| item.title)
-            .collect();
-        assert_eq!(titles, HashSet::from(["default".into(), "custom".into()]));
+        assert_eq!(restarted.list().unwrap().len(), 1);
         drop(restarted);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn storage_switch_is_rejected_while_a_recording_is_finalizing() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-storage-busy-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let default_root = PathBuf::from(manager.storage_info().path);
+        let id = test_recording_id();
+        let bundle = default_root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let mut stored = completed_recording(id.clone(), "收尾中");
+        let state = active_session_state(default_root.clone(), bundle.clone(), id.clone());
+        manager
+            .finalizing
+            .lock()
+            .unwrap()
+            .insert(id.clone(), FinalizingSession { state });
+
+        let custom_root = app_directory.join("busy-target");
+        let error = manager
+            .set_storage_path(Some(custom_root.display().to_string()))
+            .unwrap_err();
+        assert_eq!(error.code, "recording_storage_busy");
+        assert!(bundle.join("metadata.json").is_file());
+        assert_eq!(
+            manager.storage_info().path,
+            crate::app_paths::path_to_string(&default_root)
+        );
+
+        manager.finalizing.lock().unwrap().remove(&id);
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn storage_switch_rolls_back_when_the_target_already_holds_the_bundle() {
+        let app_directory = std::env::temp_dir()
+            .join(format!("rlive-recording-storage-conflict-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let default_root = PathBuf::from(manager.storage_info().path);
+        let stored = completed_recording(test_recording_id(), "冲突");
+        let bundle = default_root.join(&stored.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("stream.flv"), b"a").unwrap();
+        write_metadata(&bundle, &stored).unwrap();
+
+        let custom_root = app_directory.join("conflict-target");
+        std::fs::create_dir_all(custom_root.join(&stored.id)).unwrap();
+        let error = manager
+            .set_storage_path(Some(custom_root.display().to_string()))
+            .unwrap_err();
+        assert_eq!(error.code, "recording_storage_conflict");
+        assert!(bundle.join("stream.flv").is_file());
+        assert_eq!(
+            manager.storage_info().path,
+            crate::app_paths::path_to_string(&default_root)
+        );
+
+        drop(manager);
         std::fs::remove_dir_all(app_directory).unwrap();
     }
 

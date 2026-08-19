@@ -17,7 +17,6 @@ import {
   parseRecordingAutoSplitMinutes,
   recordingPreferencesFromAppSettings,
 } from "../src/shared/stores/settingsStore";
-import { createAppDataStorageApi } from "../src/features/settings/appDataStorage";
 
 describe("FFmpeg recording settings", () => {
   test("clamps the read/write timeout and falls back to ten seconds", () => {
@@ -79,30 +78,3 @@ describe("FFmpeg recording settings", () => {
   });
 });
 
-describe("application data storage IPC", () => {
-  test("uses the desktop commands and preserves their camelCase response", async () => {
-    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-    const response = {
-      path: "D:\\rLive-data",
-      currentPath: "C:\\rLive-data",
-      defaultPath: "C:\\Program Files\\rLive",
-      isDefault: false,
-      restartRequired: true,
-    };
-    const api = createAppDataStorageApi(
-      async <T>(command: string, args?: Record<string, unknown>) => {
-        calls.push({ command, args });
-        return response as T;
-      },
-    );
-
-    expect(await api.info()).toEqual(response);
-    expect(await api.setPath("D:\\rLive-data")).toEqual(response);
-    expect(await api.setPath(null)).toEqual(response);
-    expect(calls).toEqual([
-      { command: "app_data_storage_info", args: undefined },
-      { command: "app_data_set_storage_path", args: { path: "D:\\rLive-data" } },
-      { command: "app_data_set_storage_path", args: { path: null } },
-    ]);
-  });
-});

@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { CircleDot, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -67,32 +68,34 @@ export function RecordingControl({ context, className, disabled = false }: Recor
         setOpen(nextOpen);
       }}
     >
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant={active ? "secondary" : "ghost"}
-            size="icon-sm"
-            className={cn(active && "text-destructive hover:text-destructive", className)}
-            aria-label={label}
-            title={label}
-            aria-pressed={active}
-            disabled={disabled || busy || !context}
-            onClick={() => {
-              if (active) controller.stop();
-            }}
-          />
-        }
-      >
-        <span className="relative inline-flex">
-          {active ? (
-            <Square data-icon="inline-start" aria-hidden />
-          ) : (
-            <CircleDot data-icon="inline-start" aria-hidden />
-          )}
-          {active && <ToolActiveDot tone="destructive" />}
-        </span>
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant={active ? "secondary" : "ghost"}
+                  size="icon-sm"
+                  className={cn(active && "text-destructive hover:text-destructive", className)}
+                  aria-label={label}
+                  aria-pressed={active}
+                  disabled={disabled || busy || !context}
+                  onClick={() => {
+                    if (active) controller.stop();
+                  }}
+                />
+              }
+            />
+          }
+        >
+          <span className="relative inline-flex">
+            {active ? <Square data-icon="inline-start" aria-hidden /> : <CircleDot data-icon="inline-start" aria-hidden />}
+            {active && <ToolActiveDot tone="destructive" />}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
       <PopoverContent
         side="bottom"
         align="end"
@@ -110,6 +113,7 @@ export function RecordingControl({ context, className, disabled = false }: Recor
               <FieldLabel htmlFor={danmakuSwitchId}>包含弹幕</FieldLabel>
             </FieldContent>
             <Switch
+              className="self-center"
               id={danmakuSwitchId}
               checked={canIncludeDanmaku && includeDanmaku}
               disabled={!canIncludeDanmaku || busy}
@@ -127,6 +131,7 @@ export function RecordingControl({ context, className, disabled = false }: Recor
               <FieldLabel htmlFor={continueSwitchId}>离开页面后继续录制</FieldLabel>
             </FieldContent>
             <Switch
+              className="self-center"
               id={continueSwitchId}
               checked={continueOnLeave}
               disabled={busy}
@@ -135,7 +140,7 @@ export function RecordingControl({ context, className, disabled = false }: Recor
             />
           </Field>
         </FieldGroup>
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end">
           <Button type="button" size="sm" disabled={busy || !context} onClick={startRecording}>
             <CircleDot data-icon="inline-start" aria-hidden />
             {busy ? "正在开始…" : "开始录制"}
