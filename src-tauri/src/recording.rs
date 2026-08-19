@@ -110,10 +110,24 @@ pub struct RecordingStartInput {
     pub cover: String,
     pub user_avatar: String,
     /// Save the active danmaku connection as a synchronized sidecar track.
-    pub include_danmaku: bool,
+    #[serde(default)]
+    pub include_danmaku: Option<bool>,
     /// Keep the media task and any requested danmaku sidecar capture alive
     /// when the current player page is left.
-    pub continue_on_leave: bool,
+    #[serde(default)]
+    pub continue_on_leave: Option<bool>,
+}
+
+impl RecordingStartInput {
+    pub(crate) fn with_recording_defaults(
+        mut self,
+        default_include_danmaku: bool,
+        default_continue_on_leave: bool,
+    ) -> Self {
+        self.include_danmaku = Some(self.include_danmaku.unwrap_or(default_include_danmaku));
+        self.continue_on_leave = Some(self.continue_on_leave.unwrap_or(default_continue_on_leave));
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -885,9 +899,11 @@ impl RecordingManager {
         }
         validate_start_input(&input)?;
         let source_key = input.source_key.trim().to_string();
+        let include_danmaku = input.include_danmaku.unwrap_or(false);
+        let continue_on_leave = input.continue_on_leave.unwrap_or(false);
         let _danmaku_start_reservation = self.reserve_background_danmaku_start(
             &source_key,
-            input.include_danmaku && input.continue_on_leave,
+            input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
         );
         let source_protocol = if input.source.protocol == PlaybackProtocol::Unknown {
             PlaybackProtocol::infer_from_url(&input.source.url)
@@ -974,7 +990,7 @@ impl RecordingManager {
             protocol => protocol,
         };
         let media_file = media_file_name(output_protocol, &input.source.url, &file_stem);
-        let danmaku_file = input.include_danmaku.then(|| "danmaku.jsonl".to_string());
+        let danmaku_file = include_danmaku.then(|| "danmaku.jsonl".to_string());
         let danmaku_writer = if danmaku_file.is_some() {
             Some(
                 OpenOptions::new()
@@ -1008,8 +1024,8 @@ impl RecordingManager {
             ended_at: None,
             duration_ms: 0,
             size_bytes: 0,
-            include_danmaku: input.include_danmaku,
-            continue_on_leave: input.continue_on_leave,
+            include_danmaku,
+            continue_on_leave,
             danmaku_count: 0,
             danmaku_file,
             media_file,
@@ -1039,7 +1055,7 @@ impl RecordingManager {
         }
         let (cancel, cancel_rx) = watch::channel(false);
         let task_state = state.clone();
-        let danmaku_finish_source = input.include_danmaku.then(|| source_key.clone());
+        let danmaku_finish_source = include_danmaku.then(|| source_key.clone());
         let proxy = proxy.map(str::to_string);
         let mut source = input.source;
         source.protocol = source_protocol;
@@ -4535,8 +4551,8 @@ mod tests {
                     user_name: "主播".into(),
                     cover: String::new(),
                     user_avatar: String::new(),
-                    include_danmaku: false,
-                    continue_on_leave: false,
+                    include_danmaku: Some(false),
+                    continue_on_leave: Some(false),
                 },
                 None,
             )
@@ -4547,6 +4563,36 @@ mod tests {
         manager.finalizing.lock().unwrap().remove(&id);
         drop(manager);
         std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn recording_start_input_resolves_missing_options_from_configured_defaults() {
+        let mut value = serde_json::to_value(manager_test_input(
+            "https://example.test/live.flv",
+            "live:bilibili:defaults",
+            "defaults",
+        ))
+        .unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("includeDanmaku");
+        object.remove("continueOnLeave");
+
+        let parsed: RecordingStartInput = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.include_danmaku, None);
+        assert_eq!(parsed.continue_on_leave, None);
+
+        let resolved = parsed.with_recording_defaults(true, true);
+        assert_eq!(resolved.include_danmaku, Some(true));
+        assert_eq!(resolved.continue_on_leave, Some(true));
+
+        let explicit = manager_test_input(
+            "https://example.test/live.flv",
+            "live:bilibili:explicit",
+            "explicit",
+        )
+        .with_recording_defaults(true, true);
+        assert_eq!(explicit.include_danmaku, Some(false));
+        assert_eq!(explicit.continue_on_leave, Some(false));
     }
 
     #[test]
@@ -5015,8 +5061,8 @@ mod tests {
             user_name: "测试主播".into(),
             cover: String::new(),
             user_avatar: String::new(),
-            include_danmaku: false,
-            continue_on_leave: false,
+            include_danmaku: Some(false),
+            continue_on_leave: Some(false),
         }
     }
 
