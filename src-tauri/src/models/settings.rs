@@ -1,5 +1,62 @@
 use serde::{Deserialize, Serialize};
 
+/// Appearance, layout, and filtering used when a recorded danmaku sidecar is
+/// converted to an ASS subtitle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingAssSettings {
+    pub resolution_width: u32,
+    pub resolution_height: u32,
+    /// Installed font family or PostScript name written into the ASS style.
+    pub font_name: String,
+    pub font_size: u32,
+    /// Text opacity as a whole percentage, 0 ..= 100.
+    pub opacity_percent: u32,
+    pub outline: f32,
+    pub shadow: f32,
+    pub bold: bool,
+    /// Time taken by one scrolling item to cross the canvas.
+    pub scroll_duration_seconds: u32,
+    /// Portion of the canvas height used by scrolling items, as a percentage.
+    pub display_area_percent: u32,
+    /// Fixed window used to merge duplicate chat messages; zero disables it.
+    pub merge_window_seconds: u32,
+    pub filter_gifts: bool,
+    pub show_super_chat: bool,
+    /// One literal substring or regular expression per item.
+    pub shield_rules: Vec<String>,
+    pub shield_regex: bool,
+}
+
+impl Default for RecordingAssSettings {
+    fn default() -> Self {
+        let font_name = if cfg!(target_os = "macos") {
+            "PingFang SC"
+        } else if cfg!(target_os = "linux") {
+            "Noto Sans SC"
+        } else {
+            "Microsoft YaHei"
+        };
+        Self {
+            resolution_width: 1920,
+            resolution_height: 1080,
+            font_name: font_name.into(),
+            font_size: 40,
+            opacity_percent: 80,
+            outline: 2.0,
+            shadow: 0.0,
+            bold: false,
+            scroll_duration_seconds: 12,
+            display_area_percent: 70,
+            merge_window_seconds: 10,
+            filter_gifts: true,
+            show_super_chat: true,
+            shield_rules: Vec::new(),
+            shield_regex: false,
+        }
+    }
+}
+
 /// Persisted application preferences (JSON in `settings_kv` key `app_settings`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +157,10 @@ pub struct AppSettings {
     pub ffmpeg_reconnect_delay_max_seconds: u32,
     /// Number of retries for a failed HLS media segment.
     pub ffmpeg_hls_segment_retry_count: u32,
+    /// ASS export options are optional when decoding settings written before
+    /// rLive 1.1, while current writes always include the full object.
+    #[serde(default)]
+    pub recording_ass: RecordingAssSettings,
 }
 
 fn default_quality_level() -> String {
@@ -211,6 +272,7 @@ impl Default for AppSettings {
             ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
             ffmpeg_reconnect_delay_max_seconds: default_ffmpeg_reconnect_delay_max_seconds(),
             ffmpeg_hls_segment_retry_count: default_ffmpeg_hls_segment_retry_count(),
+            recording_ass: RecordingAssSettings::default(),
         }
     }
 }
@@ -229,6 +291,18 @@ mod tests {
         assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
         assert_eq!(back.recording_auto_split_minutes, 0);
+        assert_eq!(back.recording_ass.resolution_width, 1920);
+        assert_eq!(back.recording_ass.scroll_duration_seconds, 12);
+    }
+
+    #[test]
+    fn settings_from_before_ass_options_use_export_defaults() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("recording_ass");
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert_eq!(settings.recording_ass, RecordingAssSettings::default());
     }
 
     #[test]

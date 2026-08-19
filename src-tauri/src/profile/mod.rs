@@ -58,6 +58,7 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "ffmpeg_rw_timeout_seconds",
     "ffmpeg_reconnect_delay_max_seconds",
     "ffmpeg_hls_segment_retry_count",
+    "recording_ass",
 ];
 const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "theme",
@@ -388,6 +389,7 @@ pub fn merge_into_db(
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
+    settings.recording_ass = package.settings.recording_ass.clone();
     // Do not copy `danmaku_send_enabled`, `asr_enabled`, `asr_provider`,
     // `asr_vad_enabled`, `asr_punctuation_enabled`,
     // `asr_speaker_diarization_enabled`, `asr_hotwords`,
@@ -661,6 +663,24 @@ mod tests {
         assert_eq!(imported.danmaku_font_stroke, 1.5);
         assert!(imported.danmaku_filter_gifts);
         assert!(!imported.super_chat_enabled);
+    }
+
+    #[test]
+    fn merge_carries_recording_ass_preferences() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.settings.recording_ass.resolution_width = 3840;
+        package.settings.recording_ass.resolution_height = 2160;
+        package.settings.recording_ass.font_name = "Noto Sans SC".into();
+        package.settings.recording_ass.font_size = 72;
+
+        merge_into_db(&mut conn, &package).unwrap();
+
+        let ass = settings::get(&conn).unwrap().recording_ass;
+        assert_eq!(ass.resolution_width, 3840);
+        assert_eq!(ass.resolution_height, 2160);
+        assert_eq!(ass.font_name, "Noto Sans SC");
+        assert_eq!(ass.font_size, 72);
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  Captions,
   CircleDot,
   Clock3,
   FolderOpen,
@@ -69,6 +70,7 @@ import { LIVE_SITE_IDS } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
 import {
   deleteRecording,
+  exportRecordingDanmakuAss,
   formatRecordingDate,
   formatRecordingDuration,
   formatRecordingSize,
@@ -157,21 +159,27 @@ function RecordingCard({
   item,
   revealing,
   stopping,
+  exportingAss,
   onOpen,
   onStop,
+  onExportAss,
   onReveal,
   onDelete,
 }: {
   item: RecordingItem;
   revealing: boolean;
   stopping: boolean;
+  exportingAss: boolean;
   onOpen?: () => void;
   onStop: () => void;
+  onExportAss: () => void;
   onReveal: () => void;
   onDelete: () => void;
 }) {
   const playable = item.status !== "recording" && Boolean(onOpen);
   const playbackPath = `/recordings/play/${encodeURIComponent(item.id)}`;
+  // The sidecar only exists once the task finished writing it.
+  const exportable = item.status !== "recording" && item.include_danmaku && item.danmaku_count > 0;
 
   return (
     <li className="min-w-0">
@@ -224,6 +232,28 @@ function RecordingCard({
                   {stopping ? <Spinner aria-hidden /> : <Square aria-hidden />}
                 </TooltipTrigger>
                 <TooltipContent>{stopping ? "正在保存" : "停止并保存"}</TooltipContent>
+              </Tooltip>
+            )}
+            {exportable && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={exportingAss}
+                      className="text-muted-foreground"
+                      aria-label="导出 ASS 弹幕字幕"
+                      onClick={onExportAss}
+                    />
+                  }
+                >
+                  {exportingAss ? <Spinner aria-hidden /> : <Captions aria-hidden />}
+                </TooltipTrigger>
+                <TooltipContent>
+                  {exportingAss ? "正在导出字幕" : "导出 ASS 弹幕字幕"}
+                </TooltipContent>
               </Tooltip>
             )}
             <Tooltip>
@@ -539,6 +569,13 @@ export function RecordingsPage() {
     onError: (error) => notify.error("无法打开文件位置", recordingErrorMessage(error)),
   });
 
+  const exportAssMutation = useMutation({
+    mutationFn: exportRecordingDanmakuAss,
+    onSuccess: (path) =>
+      notify.success("弹幕字幕已导出", `与录像同目录同名，外部播放器可直接加载：${path}`),
+    onError: (error) => notify.error("导出弹幕字幕失败", recordingErrorMessage(error)),
+  });
+
   const storageMutation = useMutation({
     mutationFn: setRecordingStoragePath,
     onSuccess: (info) => {
@@ -669,6 +706,10 @@ export function RecordingsPage() {
                         stopping={stopMutation.isPending && stopMutation.variables === item.id}
                         onOpen={item.status === "recording" ? undefined : () => openRecording(item)}
                         onStop={() => stopMutation.mutate(item.id)}
+                        exportingAss={
+                          exportAssMutation.isPending && exportAssMutation.variables === item.id
+                        }
+                        onExportAss={() => exportAssMutation.mutate(item.id)}
                         revealing={
                           revealMutation.isPending && revealMutation.variables === item.file_path
                         }

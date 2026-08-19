@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "1.0.3"
+version = "1.1.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -23,6 +23,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+regex = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

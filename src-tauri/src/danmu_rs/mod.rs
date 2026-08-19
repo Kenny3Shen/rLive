@@ -386,12 +386,7 @@ impl DanmakuManager {
 
     /// Detaches the current page without stopping its websocket. The tasks
     /// remain keyed by their recording source until that recording finishes.
-    #[cfg(any(
-        target_os = "windows",
-        target_os = "linux",
-        target_os = "macos",
-        test
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
     pub fn detach_for_generation(&self, generation: u64) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             return false;
@@ -420,12 +415,7 @@ impl DanmakuManager {
 
     /// Stops a retained connection only. An identical room that is currently
     /// open owns the active connection and must survive a recording stop.
-    #[cfg(any(
-        target_os = "windows",
-        target_os = "linux",
-        target_os = "macos",
-        test
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
     pub fn disconnect_background_for_source(&self, source_key: &str) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             return false;

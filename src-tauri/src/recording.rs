@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -34,6 +34,11 @@ use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol};
 #[path = "recording_ffmpeg.rs"]
 mod ffmpeg_backend;
 
+#[path = "recording_ass.rs"]
+mod ass;
+
+pub use ass::AssExportOptions;
+
 const RECORDINGS_DIRECTORY: &str = "recordings";
 const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage.json";
 const RECORDING_MANAGER_LOCK_FILE: &str = ".recording-manager.lock";
@@ -46,6 +51,7 @@ const RECORDING_PROGRESS_EVENT_INTERVAL_MS: u64 = 500;
 const RECORDING_CHANGED_EVENT: &str = "recording-changed";
 const RECORDING_PROGRESS_EVENT: &str = "recording-progress";
 static METADATA_IO_LOCK: Mutex<()> = Mutex::new(());
+static ASS_EXPORT_IO_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -786,10 +792,7 @@ impl RecordingManager {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         library.replace_root(current_root, HashMap::new());
-        library.replace_root(
-            roots[0].clone(),
-            scan_recording_root(&roots[0]),
-        );
+        library.replace_root(roots[0].clone(), scan_recording_root(&roots[0]));
         library.refresh_changed_roots(&roots);
         Ok(self.storage_info())
     }
@@ -1302,6 +1305,83 @@ impl RecordingManager {
             return Ok(None);
         }
         Ok(Some(self.playback.url(id, file).await?))
+    }
+
+    /// Converts the recorded danmaku sidecar into an ASS subtitle placed next
+    /// to the media file, using the media stem so external players such as
+    /// PotPlayer or mpv pick it up automatically. Returns the written path.
+    pub async fn export_danmaku_ass(
+        &self,
+        id: &str,
+        options: AssExportOptions,
+    ) -> AppResult<String> {
+        if !is_safe_recording_id(id) {
+            return Err(AppError::new("recording_invalid_id", "录制标识无效"));
+        }
+        let (root, stored) = find_stored(&self.storage_roots(), id)?;
+        if stored.status == RecordingStatus::Recording {
+            return Err(AppError::new(
+                "recording_still_active",
+                "录制结束后才能导出弹幕字幕",
+            ));
+        }
+        let Some(danmaku_file) = stored.danmaku_file.as_deref() else {
+            return Err(AppError::new(
+                "recording_danmaku_missing",
+                "该录制没有弹幕轨",
+            ));
+        };
+        let danmaku_relative = Path::new(danmaku_file);
+        let media_relative = Path::new(&stored.media_file);
+        if !safe_relative_path(danmaku_relative) || !safe_relative_path(media_relative) {
+            return Err(AppError::new(
+                "recording_metadata_error",
+                "录制文件路径无效",
+            ));
+        }
+        let bundle = root.join(id);
+        let source = bundle.join(danmaku_relative);
+        // Reuse the media stem so a subtitle sits beside the video with the
+        // name every desktop player looks for.
+        let target = bundle.join(media_relative).with_extension("ass");
+
+        tokio::task::spawn_blocking(move || -> AppResult<String> {
+            let _export_guard = ASS_EXPORT_IO_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let file = File::open(&source).map_err(|error| {
+                AppError::new(
+                    "recording_danmaku_missing",
+                    format!("读取弹幕轨失败: {error}"),
+                )
+            })?;
+            let count = write_bundle_file_with_sync(&target, |output| {
+                let mut writer = BufWriter::new(output);
+                let count = ass::write_ass(BufReader::new(file), &mut writer, &options)?;
+                writer.flush()?;
+                Ok((count > 0).then_some(count))
+            })
+            .map_err(|error| {
+                AppError::new(
+                    "recording_ass_export_failed",
+                    format!("生成或保存 ASS 字幕失败: {error}"),
+                )
+            })?;
+            if count.is_none() {
+                return Err(AppError::new(
+                    "recording_danmaku_empty",
+                    "按当前弹幕设置过滤后没有可导出的弹幕",
+                ));
+            }
+            Ok(crate::app_paths::path_to_string(&target))
+        })
+        .await
+        .map_err(|error| {
+            AppError::new(
+                "recording_ass_export_failed",
+                format!("导出弹幕字幕任务终止: {error}"),
+            )
+        })?
     }
 
     /// Appends one already-batched danmaku payload to every matching active
@@ -1973,12 +2053,12 @@ async fn run_direct_recording(
         let _ = tokio::fs::remove_file(&part).await;
         return outcome;
     }
-    if final_path.exists() {
-        if let Err(error) = tokio::fs::remove_file(&final_path).await {
-            outcome.status = RecordingStatus::Interrupted;
-            outcome.error = Some(format!("替换录制文件失败: {error}"));
-            return outcome;
-        }
+    if final_path.exists()
+        && let Err(error) = tokio::fs::remove_file(&final_path).await
+    {
+        outcome.status = RecordingStatus::Interrupted;
+        outcome.error = Some(format!("替换录制文件失败: {error}"));
+        return outcome;
     }
     if let Err(error) = tokio::fs::rename(&part, &final_path).await {
         outcome.status = RecordingStatus::Interrupted;
@@ -2338,6 +2418,7 @@ fn acquire_recording_manager_lock(app_directory: &Path) -> AppResult<File> {
     let path = app_directory.join(RECORDING_MANAGER_LOCK_FILE);
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&path)
@@ -2518,26 +2599,41 @@ fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
 fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, PathBuf)>> {
     let mut moved = Vec::new();
     let entries = std::fs::read_dir(from).map_err(|error| {
-        AppError::new("recording_storage_error", format!("读取原录制目录失败: {error}"))
+        AppError::new(
+            "recording_storage_error",
+            format!("读取原录制目录失败: {error}"),
+        )
     })?;
     for entry in entries {
         let entry = entry.map_err(|error| {
-            AppError::new("recording_storage_error", format!("读取录制目录项失败: {error}"))
+            AppError::new(
+                "recording_storage_error",
+                format!("读取录制目录项失败: {error}"),
+            )
         })?;
         let source = entry.path();
-        let Some(name) = source.file_name() else { continue };
+        let Some(name) = source.file_name() else {
+            continue;
+        };
         let Some(id) = name.to_str() else { continue };
-        if !is_safe_recording_id(id) || !source.is_dir() || !source.join("metadata.json").is_file() {
+        if !is_safe_recording_id(id) || !source.is_dir() || !source.join("metadata.json").is_file()
+        {
             continue;
         }
         let target = to.join(name);
         if target.exists() {
             rollback_recording_bundles(&moved);
-            return Err(AppError::new("recording_storage_conflict", format!("目标录制目录已存在: {}", target.display())));
+            return Err(AppError::new(
+                "recording_storage_conflict",
+                format!("目标录制目录已存在: {}", target.display()),
+            ));
         }
         if let Err(error) = std::fs::rename(&source, &target) {
             rollback_recording_bundles(&moved);
-            return Err(AppError::new("recording_storage_error", format!("迁移录制目录失败 {}: {error}", source.display())));
+            return Err(AppError::new(
+                "recording_storage_error",
+                format!("迁移录制目录失败 {}: {error}", source.display()),
+            ));
         }
         moved.push((source, target));
     }
@@ -2641,6 +2737,19 @@ fn read_metadata_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 fn write_bundle_file_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_bundle_file_with_sync(path, |file| {
+        file.write_all(bytes)?;
+        Ok(Some(()))
+    })?;
+    Ok(())
+}
+
+/// Writes through a sibling temporary file and publishes only when `write`
+/// returns `Some`. `None` is an intentional abort used by empty ASS exports.
+fn write_bundle_file_with_sync<T>(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> std::io::Result<Option<T>>,
+) -> std::io::Result<Option<T>> {
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -2662,11 +2771,19 @@ fn write_bundle_file_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .create_new(true)
         .write(true)
         .open(&temporary)?;
-    if let Err(error) = file.write_all(bytes) {
-        drop(file);
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
+    let result = match write(&mut file) {
+        Ok(Some(result)) => result,
+        Ok(None) => {
+            drop(file);
+            let _ = std::fs::remove_file(&temporary);
+            return Ok(None);
+        }
+        Err(error) => {
+            drop(file);
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
     if let Err(error) = file.flush().and_then(|_| file.sync_data()) {
         drop(file);
         let _ = std::fs::remove_file(&temporary);
@@ -2682,16 +2799,14 @@ fn write_bundle_file_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     match std::fs::rename(&temporary, path) {
         Ok(()) => {
             let _ = std::fs::remove_file(&backup);
-            Ok(())
+            Ok(Some(result))
         }
         Err(error) => {
-            if had_target {
-                if let Err(rollback_error) = std::fs::rename(&backup, path) {
-                    return Err(std::io::Error::new(
-                        error.kind(),
-                        format!("发布录制文件失败: {error}; 恢复原文件失败: {rollback_error}"),
-                    ));
-                }
+            if had_target && let Err(rollback_error) = std::fs::rename(&backup, path) {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!("发布录制文件失败: {error}; 恢复原文件失败: {rollback_error}"),
+                ));
             }
             Err(error)
         }
@@ -2912,20 +3027,13 @@ fn recover_stale_recordings(root: &Path) -> AppResult<()> {
         if let Some(error) = sidecar_error {
             append_recovery_error(&mut stored, format!("恢复临时替换文件失败: {error}"));
         }
-        if has_orphan_part {
-            if let Err(error) = std::fs::rename(&part, &final_path) {
-                append_recovery_error(&mut stored, format!("恢复临时媒体失败: {error}"));
-            }
+        if has_orphan_part && let Err(error) = std::fs::rename(&part, &final_path) {
+            append_recovery_error(&mut stored, format!("恢复临时媒体失败: {error}"));
         }
         if !final_path.is_file() {
             append_recovery_error(&mut stored, "录制媒体文件缺失");
         }
-        if was_recording {
-            stored.status = RecordingStatus::Interrupted;
-            if stored.ended_at.is_none() {
-                stored.ended_at = Some(unix_ms());
-            }
-        } else if has_orphan_part && final_path.is_file() {
+        if was_recording || has_orphan_part && final_path.is_file() {
             stored.status = RecordingStatus::Interrupted;
             if stored.ended_at.is_none() {
                 stored.ended_at = Some(unix_ms());
@@ -2947,10 +3055,10 @@ fn refresh_recording_metadata(bundle: &Path, stored: &mut StoredRecording) {
     let media_relative = Path::new(&stored.media_file);
     if safe_relative_path(media_relative) {
         let media = bundle.join(media_relative);
-        if media.is_file() {
-            if let Ok(duration_ms) = ffmpeg_backend::probe_media_duration(&media) {
-                stored.duration_ms = duration_ms;
-            }
+        if media.is_file()
+            && let Ok(duration_ms) = ffmpeg_backend::probe_media_duration(&media)
+        {
+            stored.duration_ms = duration_ms;
         }
     }
     if let Some(count) = count_recorded_danmaku(bundle, stored) {
@@ -3478,21 +3586,21 @@ async fn write_simple_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveSessionState, FfmpegRecordingOptions, FinalizingSession, MINIMUM_FREE_SPACE_BYTES,
-        RecordingEventSink, RecordingLibraryIndex, RecordingManager, RecordingStartInput,
-        RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
-        StoredRecording, TaskOutcome, create_recording_bundle, decode_playback_relative_path,
-        finish_session, is_safe_recording_id, load_storage_state, local_playback_url,
-        media_file_name, parse_range, prepare_storage_root, read_stored, recording_bundle_base,
-        recording_file_stem, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
-        salvage_temporary_media_after_worker_failure, scan_recording_root,
-        stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
-        wait_for_finalizing_sessions, write_metadata,
+        ActiveSessionState, AssExportOptions, FfmpegRecordingOptions, FinalizingSession,
+        MINIMUM_FREE_SPACE_BYTES, RecordingEventSink, RecordingLibraryIndex, RecordingManager,
+        RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session, SessionState,
+        StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
+        decode_playback_relative_path, finish_session, is_safe_recording_id, load_storage_state,
+        local_playback_url, media_file_name, parse_range, prepare_storage_root, read_stored,
+        recording_bundle_base, recording_file_stem, recover_bundle_sidecars,
+        recover_stale_recordings, safe_relative_path, salvage_temporary_media_after_worker_failure,
+        scan_recording_root, stop_sessions_until_deadline, storage_space_is_low,
+        stored_keeps_background_danmaku, wait_for_finalizing_sessions, write_metadata,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
     use percent_encoding::percent_decode_str;
     use reqwest::Url;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::fs::OpenOptions;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -4386,7 +4494,8 @@ mod tests {
         let id = test_recording_id();
         let bundle = default_root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
-        let mut stored = completed_recording(id.clone(), "收尾中");
+        let stored = completed_recording(id.clone(), "收尾中");
+        write_metadata(&bundle, &stored).unwrap();
         let state = active_session_state(default_root.clone(), bundle.clone(), id.clone());
         manager
             .finalizing
@@ -4410,10 +4519,67 @@ mod tests {
         std::fs::remove_dir_all(app_directory).unwrap();
     }
 
+    #[tokio::test]
+    async fn danmaku_ass_export_writes_a_subtitle_beside_the_media() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-ass-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+        let mut stored = completed_recording(test_recording_id(), "字幕导出");
+        stored.include_danmaku = true;
+        stored.danmaku_file = Some("danmaku.jsonl".into());
+        let bundle = root.join(&stored.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("stream.flv"), b"a").unwrap();
+        std::fs::write(
+            bundle.join("danmaku.jsonl"),
+            br#"{"offset_ms":1200,"events":[{"kind":"chat","user":"viewer","is_self":false,"content":"\u4f60\u597d","color":null,"ts":1}]}
+"#,
+        )
+        .unwrap();
+        write_metadata(&bundle, &stored).unwrap();
+
+        let options =
+            AssExportOptions::try_from_settings(&crate::models::settings::AppSettings::default())
+                .unwrap();
+        let path = manager
+            .export_danmaku_ass(&stored.id, options.clone())
+            .await
+            .unwrap();
+
+        // The media stem drives the name so external players auto-load it.
+        assert_eq!(
+            path,
+            crate::app_paths::path_to_string(&bundle.join("stream.ass"))
+        );
+        let script = std::fs::read_to_string(bundle.join("stream.ass")).unwrap();
+        assert!(script.contains("[Events]"));
+        assert!(script.contains("Dialogue: 0,0:00:01.20,"));
+        assert!(script.contains("你好"));
+
+        // A recording without a sidecar reports a distinct error instead of
+        // writing an empty subtitle.
+        let mut plain = completed_recording(test_recording_id(), "无弹幕");
+        plain.include_danmaku = false;
+        let plain_bundle = root.join(&plain.id);
+        std::fs::create_dir_all(&plain_bundle).unwrap();
+        write_metadata(&plain_bundle, &plain).unwrap();
+        let error = manager
+            .export_danmaku_ass(&plain.id, options)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "recording_danmaku_missing");
+
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
     #[test]
     fn storage_switch_rolls_back_when_the_target_already_holds_the_bundle() {
-        let app_directory = std::env::temp_dir()
-            .join(format!("rlive-recording-storage-conflict-{}", Uuid::new_v4()));
+        let app_directory = std::env::temp_dir().join(format!(
+            "rlive-recording-storage-conflict-{}",
+            Uuid::new_v4()
+        ));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let default_root = PathBuf::from(manager.storage_info().path);
         let stored = completed_recording(test_recording_id(), "冲突");
@@ -4632,9 +4798,7 @@ mod tests {
                 if length == 0 {
                     continue;
                 }
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
-                );
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n";
                 if socket.write_all(response.as_bytes()).await.is_err() {
                     continue;
                 }

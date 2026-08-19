@@ -11,6 +11,8 @@ import {
   FFMPEG_RW_TIMEOUT_SECONDS_MIN,
   RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
   RECORDING_AUTO_SPLIT_MINUTES_MAX,
+  RECORDING_ASS_DEFAULT_SETTINGS,
+  normalizeRecordingAssSettings,
   parseFfmpegHlsSegmentRetryCount,
   parseFfmpegReconnectDelayMaxSeconds,
   parseFfmpegRwTimeoutSeconds,
@@ -66,6 +68,11 @@ describe("FFmpeg recording settings", () => {
         ffmpeg_rw_timeout_seconds: 18,
         ffmpeg_reconnect_delay_max_seconds: 12,
         ffmpeg_hls_segment_retry_count: 7,
+        recording_ass: {
+          ...RECORDING_ASS_DEFAULT_SETTINGS,
+          resolution_width: 3840,
+          resolution_height: 2160,
+        },
       }),
     ).toEqual({
       recordingIncludeDanmaku: true,
@@ -74,7 +81,43 @@ describe("FFmpeg recording settings", () => {
       ffmpegRwTimeoutSeconds: 18,
       ffmpegReconnectDelayMaxSeconds: 12,
       ffmpegHlsSegmentRetryCount: 7,
+      recordingAssSettings: {
+        ...RECORDING_ASS_DEFAULT_SETTINGS,
+        resolution_width: 3840,
+        resolution_height: 2160,
+      },
+    });
+  });
+
+  test("normalizes ASS layout, style, and shield rules", () => {
+    expect(
+      normalizeRecordingAssSettings({
+        ...RECORDING_ASS_DEFAULT_SETTINGS,
+        resolution_width: 1,
+        resolution_height: 99_999,
+        font_name: " Bad,Font\n",
+        font_size: 999,
+        opacity_percent: 120,
+        outline: 1.74,
+        shadow: Number.NaN,
+        scroll_duration_seconds: 0,
+        display_area_percent: 0,
+        merge_window_seconds: 99,
+        shield_rules: [" 广告 ", "广告", "", "联系方式"],
+      }),
+    ).toEqual({
+      ...RECORDING_ASS_DEFAULT_SETTINGS,
+      resolution_width: 320,
+      resolution_height: 4320,
+      font_name: "BadFont",
+      font_size: 160,
+      opacity_percent: 100,
+      outline: 1.5,
+      shadow: RECORDING_ASS_DEFAULT_SETTINGS.shadow,
+      scroll_duration_seconds: 1,
+      display_area_percent: 10,
+      merge_window_seconds: 30,
+      shield_rules: ["广告", "联系方式"],
     });
   });
 });
-

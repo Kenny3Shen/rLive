@@ -17,6 +17,7 @@ import type {
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
+  RecordingAssSettings,
   SiteId,
 } from "../types/live";
 import type { QualityLevel } from "../types/player";
@@ -100,11 +101,123 @@ export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT = 8;
 export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MIN = 0;
 export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX = 20;
 export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT = 5;
+export const RECORDING_ASS_RESOLUTION_WIDTH_MIN = 320;
+export const RECORDING_ASS_RESOLUTION_WIDTH_MAX = 7680;
+export const RECORDING_ASS_RESOLUTION_HEIGHT_MIN = 240;
+export const RECORDING_ASS_RESOLUTION_HEIGHT_MAX = 4320;
+export const RECORDING_ASS_FONT_SIZE_MIN = 8;
+export const RECORDING_ASS_FONT_SIZE_MAX = 160;
+export const RECORDING_ASS_STYLE_WIDTH_MIN = 0;
+export const RECORDING_ASS_STYLE_WIDTH_MAX = 4;
+export const RECORDING_ASS_SCROLL_DURATION_SECONDS_MIN = 1;
+export const RECORDING_ASS_SCROLL_DURATION_SECONDS_MAX = 60;
+export const RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN = 10;
+export const RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX = 100;
+export const RECORDING_ASS_MERGE_WINDOW_SECONDS_MIN = 0;
+export const RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX = 30;
+
+export const RECORDING_ASS_DEFAULT_SETTINGS: RecordingAssSettings = {
+  resolution_width: 1920,
+  resolution_height: 1080,
+  font_name: "Microsoft YaHei",
+  font_size: 40,
+  opacity_percent: 80,
+  outline: 2,
+  shadow: 0,
+  bold: false,
+  scroll_duration_seconds: 12,
+  display_area_percent: 70,
+  merge_window_seconds: 10,
+  filter_gifts: true,
+  show_super_chat: true,
+  shield_rules: [],
+  shield_regex: false,
+};
 
 function parseBoundedInteger(value: unknown, min: number, max: number, fallback: number): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return fallback;
   return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function parseRecordingAssStyleWidth(value: unknown, fallback: number): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(numeric)) return fallback;
+  const stepped = Math.round(numeric * 2) / 2;
+  return Math.min(RECORDING_ASS_STYLE_WIDTH_MAX, Math.max(RECORDING_ASS_STYLE_WIDTH_MIN, stepped));
+}
+
+function sanitizeRecordingAssText(value: string, allowNewline: boolean): string {
+  return Array.from(value)
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      if (code === 0x0a && allowNewline) return true;
+      return code >= 0x20 && code !== 0x7f && character !== ",";
+    })
+    .join("");
+}
+
+export function normalizeRecordingAssSettings(value: RecordingAssSettings): RecordingAssSettings {
+  const fontName = sanitizeRecordingAssText(value.font_name, false).trim().slice(0, 80);
+  const shieldRules = Array.from(
+    new Set(
+      value.shield_rules
+        .map((rule) => sanitizeRecordingAssText(rule, false).trim().slice(0, 200))
+        .filter(Boolean),
+    ),
+  ).slice(0, 100);
+  return {
+    resolution_width: parseBoundedInteger(
+      value.resolution_width,
+      RECORDING_ASS_RESOLUTION_WIDTH_MIN,
+      RECORDING_ASS_RESOLUTION_WIDTH_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.resolution_width,
+    ),
+    resolution_height: parseBoundedInteger(
+      value.resolution_height,
+      RECORDING_ASS_RESOLUTION_HEIGHT_MIN,
+      RECORDING_ASS_RESOLUTION_HEIGHT_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.resolution_height,
+    ),
+    font_name: fontName || RECORDING_ASS_DEFAULT_SETTINGS.font_name,
+    font_size: parseBoundedInteger(
+      value.font_size,
+      RECORDING_ASS_FONT_SIZE_MIN,
+      RECORDING_ASS_FONT_SIZE_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.font_size,
+    ),
+    opacity_percent: parseBoundedInteger(
+      value.opacity_percent,
+      0,
+      100,
+      RECORDING_ASS_DEFAULT_SETTINGS.opacity_percent,
+    ),
+    outline: parseRecordingAssStyleWidth(value.outline, RECORDING_ASS_DEFAULT_SETTINGS.outline),
+    shadow: parseRecordingAssStyleWidth(value.shadow, RECORDING_ASS_DEFAULT_SETTINGS.shadow),
+    bold: value.bold,
+    scroll_duration_seconds: parseBoundedInteger(
+      value.scroll_duration_seconds,
+      RECORDING_ASS_SCROLL_DURATION_SECONDS_MIN,
+      RECORDING_ASS_SCROLL_DURATION_SECONDS_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.scroll_duration_seconds,
+    ),
+    display_area_percent: parseBoundedInteger(
+      value.display_area_percent,
+      RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN,
+      RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.display_area_percent,
+    ),
+    merge_window_seconds: parseBoundedInteger(
+      value.merge_window_seconds,
+      RECORDING_ASS_MERGE_WINDOW_SECONDS_MIN,
+      RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.merge_window_seconds,
+    ),
+    filter_gifts: value.filter_gifts,
+    show_super_chat: value.show_super_chat,
+    shield_rules: shieldRules,
+    shield_regex: value.shield_regex,
+  };
 }
 
 export function parseFfmpegRwTimeoutSeconds(value: unknown): number {
@@ -152,6 +265,7 @@ export function recordingPreferencesFromAppSettings(
     | "ffmpeg_rw_timeout_seconds"
     | "ffmpeg_reconnect_delay_max_seconds"
     | "ffmpeg_hls_segment_retry_count"
+    | "recording_ass"
   >,
 ) {
   return {
@@ -167,6 +281,7 @@ export function recordingPreferencesFromAppSettings(
     ffmpegHlsSegmentRetryCount: parseFfmpegHlsSegmentRetryCount(
       settings.ffmpeg_hls_segment_retry_count,
     ),
+    recordingAssSettings: normalizeRecordingAssSettings(settings.recording_ass),
   };
 }
 
@@ -244,6 +359,7 @@ type SettingsState = {
   ffmpegRwTimeoutSeconds: number;
   ffmpegReconnectDelayMaxSeconds: number;
   ffmpegHlsSegmentRetryCount: number;
+  recordingAssSettings: RecordingAssSettings;
   /** True after first successful backend load. */
   hydratedFromBackend: boolean;
   setTheme: (theme: ThemeMode) => void;
@@ -272,6 +388,7 @@ type SettingsState = {
   setFfmpegRwTimeoutSeconds: (seconds: number) => void;
   setFfmpegReconnectDelayMaxSeconds: (seconds: number) => void;
   setFfmpegHlsSegmentRetryCount: (count: number) => void;
+  setRecordingAssSettings: (patch: Partial<RecordingAssSettings>) => void;
   applyFromBackend: (settings: AppSettings) => void;
   /** Load settings from Rust; backend becomes source of truth. */
   loadFromBackend: () => Promise<void>;
@@ -314,6 +431,7 @@ const defaultSettings: AppSettings = {
   ffmpeg_rw_timeout_seconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
   ffmpeg_reconnect_delay_max_seconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
   ffmpeg_hls_segment_retry_count: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
+  recording_ass: RECORDING_ASS_DEFAULT_SETTINGS,
 };
 
 function toAppSettings(state: SettingsState): AppSettings {
@@ -352,6 +470,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     ffmpeg_rw_timeout_seconds: state.ffmpegRwTimeoutSeconds,
     ffmpeg_reconnect_delay_max_seconds: state.ffmpegReconnectDelayMaxSeconds,
     ffmpeg_hls_segment_retry_count: state.ffmpegHlsSegmentRetryCount,
+    recording_ass: state.recordingAssSettings,
   };
 }
 
@@ -395,6 +514,7 @@ export const useSettingsStore = create<SettingsState>()(
       ffmpegRwTimeoutSeconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
       ffmpegReconnectDelayMaxSeconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
       ffmpegHlsSegmentRetryCount: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
+      recordingAssSettings: RECORDING_ASS_DEFAULT_SETTINGS,
       hydratedFromBackend: false,
       setTheme: (theme) => {
         set({ theme });
@@ -651,6 +771,14 @@ export const useSettingsStore = create<SettingsState>()(
         void get().persistToBackend({
           ffmpeg_hls_segment_retry_count: ffmpegHlsSegmentRetryCount,
         });
+      },
+      setRecordingAssSettings: (patch) => {
+        const recordingAssSettings = normalizeRecordingAssSettings({
+          ...get().recordingAssSettings,
+          ...patch,
+        });
+        set({ recordingAssSettings });
+        void get().persistToBackend({ recording_ass: recordingAssSettings });
       },
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
