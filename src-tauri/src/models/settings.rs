@@ -252,7 +252,7 @@ impl Default for AppSettings {
             asr_translation_to: default_asr_translation_to(),
             iptv_custom_m3u_url: None,
             recording_continue_after_leave: false,
-            recording_include_danmaku: false,
+            recording_include_danmaku: true,
             recording_auto_split_minutes: 0,
             ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
             ffmpeg_reconnect_delay_max_seconds: default_ffmpeg_reconnect_delay_max_seconds(),
@@ -275,6 +275,7 @@ mod tests {
         assert_eq!(back.ffmpeg_rw_timeout_seconds, 10);
         assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
+        assert!(back.recording_include_danmaku);
         assert_eq!(back.recording_auto_split_minutes, 0);
         assert!(!v.contains("recording_auto_follow"));
         assert_eq!(back.recording_ass.resolution_width, 1920);
