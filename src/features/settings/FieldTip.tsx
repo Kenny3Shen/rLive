@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isMobileClient } from "@/shared/clientPlatform";
 
 /**
  * Inline info icon that replaces static FieldDescription copy in settings
@@ -8,13 +9,21 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  * targets stay clean.
  */
 export function FieldTip({ children }: { children: ReactNode }) {
+  const mobile = isMobileClient();
+  const triggerId = useId();
+  const [open, setOpen] = useState(false);
+
   return (
-    <Tooltip>
+    <Tooltip {...(mobile ? { open, onOpenChange: setOpen, triggerId } : {})}>
       <TooltipTrigger
+        closeOnClick={!mobile}
+        id={triggerId}
         render={
           <button
             type="button"
             aria-label="查看说明"
+            aria-expanded={mobile ? open : undefined}
+            onClick={mobile ? () => setOpen((value) => !value) : undefined}
             className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-ring"
           />
         }
