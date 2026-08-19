@@ -374,7 +374,9 @@ mod tests {
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
         assert_eq!(s.recording_ass.resolution_width, 1920);
+        assert_eq!(s.recording_ass.font_size, 36);
         assert_eq!(s.recording_ass.opacity_percent, 80);
+        assert_eq!(s.recording_ass.display_area_percent, 25);
     }
 
     #[test]
