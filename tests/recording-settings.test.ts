@@ -21,6 +21,11 @@ import {
 } from "../src/shared/stores/settingsStore";
 
 describe("FFmpeg recording settings", () => {
+  test("uses the requested ASS recording defaults", () => {
+    expect(RECORDING_ASS_DEFAULT_SETTINGS.font_size).toBe(36);
+    expect(RECORDING_ASS_DEFAULT_SETTINGS.display_area_percent).toBe(25);
+  });
+
   test("clamps the read/write timeout and falls back to ten seconds", () => {
     expect(parseFfmpegRwTimeoutSeconds(FFMPEG_RW_TIMEOUT_SECONDS_MIN - 1)).toBe(
       FFMPEG_RW_TIMEOUT_SECONDS_MIN,

@@ -41,13 +41,13 @@ impl Default for RecordingAssSettings {
             resolution_width: 1920,
             resolution_height: 1080,
             font_name: font_name.into(),
-            font_size: 40,
+            font_size: 36,
             opacity_percent: 80,
             outline: 2.0,
             shadow: 0.0,
             bold: false,
             scroll_duration_seconds: 12,
-            display_area_percent: 70,
+            display_area_percent: 25,
             merge_window_seconds: 10,
             filter_gifts: true,
             show_super_chat: true,
@@ -278,7 +278,9 @@ mod tests {
         assert_eq!(back.recording_auto_split_minutes, 0);
         assert!(!v.contains("recording_auto_follow"));
         assert_eq!(back.recording_ass.resolution_width, 1920);
+        assert_eq!(back.recording_ass.font_size, 36);
         assert_eq!(back.recording_ass.scroll_duration_seconds, 12);
+        assert_eq!(back.recording_ass.display_area_percent, 25);
     }
 
     #[test]
