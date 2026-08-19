@@ -49,8 +49,8 @@ use commands::danmaku_send_history::{
     danmaku_send_history_list_all,
 };
 use commands::follow::{
-    follow_add, follow_list, follow_refresh, follow_remove, follow_set_tags, tag_list, tag_remove,
-    tag_upsert,
+    follow_add, follow_list, follow_refresh, follow_refresh_auto_record, follow_remove,
+    follow_set_auto_record, follow_set_tags, tag_list, tag_remove, tag_upsert,
 };
 use commands::history::{history_add, history_clear, history_list, history_remove};
 use commands::image_proxy::image_proxy_url;
@@ -297,7 +297,9 @@ pub fn run() {
             follow_add,
             follow_remove,
             follow_set_tags,
+            follow_set_auto_record,
             follow_refresh,
+            follow_refresh_auto_record,
             tag_list,
             tag_upsert,
             tag_remove,

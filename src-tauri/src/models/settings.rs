@@ -146,6 +146,9 @@ pub struct AppSettings {
     /// Disabled by default: leaving a room or player while recording asks the
     /// user and stops the session, saving what was captured so far.
     pub recording_continue_after_leave: bool,
+    /// Accepted only to read settings written by the unreleased global toggle.
+    #[serde(default, rename = "recording_auto_follow", skip_serializing)]
+    pub legacy_recording_auto_follow: bool,
     /// Include the synchronized danmaku sidecar by default for live recordings.
     pub recording_include_danmaku: bool,
     /// Maximum duration of one FFmpeg recording bundle in minutes.
@@ -267,6 +270,7 @@ impl Default for AppSettings {
             asr_translation_to: default_asr_translation_to(),
             iptv_custom_m3u_url: None,
             recording_continue_after_leave: false,
+            legacy_recording_auto_follow: false,
             recording_include_danmaku: false,
             recording_auto_split_minutes: 0,
             ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
@@ -291,6 +295,8 @@ mod tests {
         assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
         assert_eq!(back.recording_auto_split_minutes, 0);
+        assert!(!back.legacy_recording_auto_follow);
+        assert!(!v.contains("recording_auto_follow"));
         assert_eq!(back.recording_ass.resolution_width, 1920);
         assert_eq!(back.recording_ass.scroll_duration_seconds, 12);
     }
@@ -303,6 +309,23 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(value).unwrap();
 
         assert_eq!(settings.recording_ass, RecordingAssSettings::default());
+    }
+
+    #[test]
+    fn settings_accept_and_drop_legacy_global_auto_follow() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["recording_auto_follow"] = serde_json::json!(true);
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert!(settings.legacy_recording_auto_follow);
+        assert!(
+            !serde_json::to_value(settings)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("recording_auto_follow")
+        );
     }
 
     #[test]
