@@ -14,7 +14,7 @@ use crate::state::AppState;
 
 fn configured_recording_options(
     state: &AppState,
-) -> AppResult<(Option<String>, FfmpegRecordingOptions)> {
+) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool, bool)> {
     let conn = state
         .db
         .lock()
@@ -30,6 +30,8 @@ fn configured_recording_options(
                 Duration::from_secs(u64::from(settings.recording_auto_split_minutes) * 60)
             }),
         },
+        settings.recording_include_danmaku,
+        settings.recording_continue_after_leave,
     ))
 }
 
@@ -48,9 +50,11 @@ pub async fn recording_start(
     // while this start request is still preparing its session.
     let _danmaku_start_reservation = state.recording.reserve_background_danmaku_start(
         input.source_key.trim(),
-        input.include_danmaku && input.continue_on_leave,
+        input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
     );
-    let (proxy, ffmpeg_options) = configured_recording_options(state.inner())?;
+    let (proxy, ffmpeg_options, default_include_danmaku, default_continue_on_leave) =
+        configured_recording_options(state.inner())?;
+    let input = input.with_recording_defaults(default_include_danmaku, default_continue_on_leave);
     state
         .recording
         .start_with_ffmpeg_options(input, proxy.as_deref(), ffmpeg_options)

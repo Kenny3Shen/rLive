@@ -9,7 +9,12 @@ import { cn } from "@/lib/utils";
 import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { useRecordingController, type RecordingContext } from "./recording";
+import {
+  resolveRecordingControlOptions,
+  useRecordingController,
+  type RecordingContext,
+  type RecordingStartOptions,
+} from "./recording";
 
 type RecordingControlProps = {
   context: RecordingContext | null;
@@ -27,8 +32,14 @@ export function RecordingControl({ context, className, disabled = false }: Recor
   const defaultIncludeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
   const defaultContinueOnLeave = useSettingsStore((state) => state.recordingContinueAfterLeave);
   const [open, setOpen] = useState(false);
-  const [includeDanmaku, setIncludeDanmaku] = useState(defaultIncludeDanmaku);
-  const [continueOnLeave, setContinueOnLeave] = useState(defaultContinueOnLeave);
+  const [overrides, setOverrides] = useState<RecordingStartOptions>({});
+  const { includeDanmaku, continueOnLeave } = resolveRecordingControlOptions(
+    {
+      includeDanmaku: defaultIncludeDanmaku,
+      continueOnLeave: defaultContinueOnLeave,
+    },
+    overrides,
+  );
   const danmakuSwitchId = useId();
   const continueSwitchId = useId();
   const canIncludeDanmaku = context?.sourceKind === "live";
@@ -51,8 +62,7 @@ export function RecordingControl({ context, className, disabled = false }: Recor
       includeDanmaku: canIncludeDanmaku && includeDanmaku,
       continueOnLeave,
     });
-    setIncludeDanmaku(defaultIncludeDanmaku);
-    setContinueOnLeave(defaultContinueOnLeave);
+    setOverrides({});
     setOpen(false);
   }
 
@@ -61,9 +71,12 @@ export function RecordingControl({ context, className, disabled = false }: Recor
       open={open}
       onOpenChange={(nextOpen) => {
         if (busy || active) return;
-        if (nextOpen) {
-          setIncludeDanmaku(defaultIncludeDanmaku);
-          setContinueOnLeave(defaultContinueOnLeave);
+        if (
+          !nextOpen ||
+          overrides.includeDanmaku !== undefined ||
+          overrides.continueOnLeave !== undefined
+        ) {
+          setOverrides({});
         }
         setOpen(nextOpen);
       }}
@@ -90,7 +103,11 @@ export function RecordingControl({ context, className, disabled = false }: Recor
           }
         >
           <span className="relative inline-flex">
-            {active ? <Square data-icon="inline-start" aria-hidden /> : <CircleDot data-icon="inline-start" aria-hidden />}
+            {active ? (
+              <Square data-icon="inline-start" aria-hidden />
+            ) : (
+              <CircleDot data-icon="inline-start" aria-hidden />
+            )}
             {active && <ToolActiveDot tone="destructive" />}
           </span>
         </TooltipTrigger>
@@ -117,7 +134,9 @@ export function RecordingControl({ context, className, disabled = false }: Recor
               id={danmakuSwitchId}
               checked={canIncludeDanmaku && includeDanmaku}
               disabled={!canIncludeDanmaku || busy}
-              onCheckedChange={(checked) => setIncludeDanmaku(Boolean(checked))}
+              onCheckedChange={(checked) =>
+                setOverrides((current) => ({ ...current, includeDanmaku: Boolean(checked) }))
+              }
               aria-label="包含弹幕"
             />
           </Field>
@@ -135,7 +154,9 @@ export function RecordingControl({ context, className, disabled = false }: Recor
               id={continueSwitchId}
               checked={continueOnLeave}
               disabled={busy}
-              onCheckedChange={(checked) => setContinueOnLeave(Boolean(checked))}
+              onCheckedChange={(checked) =>
+                setOverrides((current) => ({ ...current, continueOnLeave: Boolean(checked) }))
+              }
               aria-label="离开页面后继续录制"
             />
           </Field>

@@ -93,6 +93,21 @@ export type RecordingStartOptions = {
   continueOnLeave?: boolean;
 };
 
+export type RecordingOptionDefaults = {
+  includeDanmaku: boolean;
+  continueOnLeave: boolean;
+};
+
+export function resolveRecordingControlOptions(
+  defaults: RecordingOptionDefaults,
+  overrides: RecordingStartOptions = {},
+): RecordingOptionDefaults {
+  return {
+    includeDanmaku: overrides.includeDanmaku ?? defaults.includeDanmaku,
+    continueOnLeave: overrides.continueOnLeave ?? defaults.continueOnLeave,
+  };
+}
+
 export function recordingErrorMessage(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
     return String((error as { message: unknown }).message);
@@ -369,7 +384,7 @@ export function useRecordings(enabled = true) {
 
 export async function startRecording(
   context: RecordingContext,
-  { includeDanmaku = false, continueOnLeave = false }: RecordingStartOptions = {},
+  { includeDanmaku, continueOnLeave }: RecordingStartOptions = {},
 ): Promise<RecordingItem> {
   return invokeCmd<RecordingItem>("recording_start", {
     input: {
@@ -382,8 +397,8 @@ export async function startRecording(
       userName: context.userName ?? "",
       cover: context.cover ?? "",
       userAvatar: context.userAvatar ?? "",
-      includeDanmaku,
-      continueOnLeave,
+      ...(includeDanmaku === undefined ? {} : { includeDanmaku }),
+      ...(continueOnLeave === undefined ? {} : { continueOnLeave }),
     },
   });
 }
@@ -393,10 +408,8 @@ export function useRecordingController(context: RecordingContext | null) {
   const supported = recordingSupported();
   const query = useRecordings();
   const startMutation = useMutation({
-    mutationFn: ({ includeDanmaku = false, continueOnLeave = false }: RecordingStartOptions) =>
-      context
-        ? startRecording(context, { includeDanmaku, continueOnLeave })
-        : Promise.reject(new Error("缺少录制上下文")),
+    mutationFn: (options: RecordingStartOptions = {}) =>
+      context ? startRecording(context, options) : Promise.reject(new Error("缺少录制上下文")),
     onSuccess: (item) => {
       queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) => [
         item,
