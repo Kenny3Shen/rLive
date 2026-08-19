@@ -63,8 +63,9 @@ use commands::lan_sync::{lan_sync_receive, lan_sync_start, lan_sync_status, lan_
 use commands::profile::{profile_export, profile_import};
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::recording::{
-    recording_danmaku_url, recording_delete, recording_list, recording_playback_url,
-    recording_set_storage_path, recording_start, recording_stop, recording_storage_info,
+    recording_danmaku_export_ass, recording_danmaku_url, recording_delete, recording_list,
+    recording_playback_url, recording_set_storage_path, recording_start, recording_stop,
+    recording_storage_info,
 };
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -243,6 +244,8 @@ pub fn run() {
             recording_set_storage_path,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_danmaku_url,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_danmaku_export_ass,
             account_get_cookie,
             account_get_profile,
             account_set_cookie,
