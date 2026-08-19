@@ -20,10 +20,32 @@ import {
   parseRecordingAutoSplitMinutes,
   recordingPreferencesFromAppSettings,
 } from "../src/shared/stores/settingsStore";
+import { resolveRecordingControlOptions } from "../src/features/recording/recording";
 
 describe("FFmpeg recording settings", () => {
   test("includes danmaku by default", () => {
     expect(RECORDING_INCLUDE_DANMAKU_DEFAULT).toBe(true);
+  });
+
+  test("follows hydrated recording defaults until a session option is changed", () => {
+    expect(
+      resolveRecordingControlOptions({ includeDanmaku: false, continueOnLeave: false }),
+    ).toEqual({
+      includeDanmaku: false,
+      continueOnLeave: false,
+    });
+    expect(resolveRecordingControlOptions({ includeDanmaku: true, continueOnLeave: true })).toEqual(
+      {
+        includeDanmaku: true,
+        continueOnLeave: true,
+      },
+    );
+    expect(
+      resolveRecordingControlOptions(
+        { includeDanmaku: true, continueOnLeave: true },
+        { continueOnLeave: false },
+      ),
+    ).toEqual({ includeDanmaku: true, continueOnLeave: false });
   });
 
   test("uses the requested ASS recording defaults", () => {
