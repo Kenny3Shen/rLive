@@ -68,6 +68,7 @@ import { cn, SITE_LABELS } from "@/lib/utils";
 import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { FieldTip } from "@/features/settings/FieldTip";
+import { ImageCacheField } from "@/features/settings/CacheSettings";
 import { LanSyncField } from "@/features/settings/LanSyncField";
 import {
   FfmpegSettingsFields,
@@ -210,7 +211,7 @@ const settingsCategories: {
 const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
-const settingsCategorySearchText: Record<SettingsCategory, string> = {
+export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
     "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
@@ -219,7 +220,7 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
     "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 ASS 导出 分辨率 字体 不透明度 描边 阴影 粗体 屏蔽 正则 FFmpeg 超时 重连 HLS 分片 重试",
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
-  data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案",
+  data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案 缓存 图片缓存 图片 头像 封面 清除 清理 占用 空间 cache",
   about: "关于 rLive 当前版本 version 项目主页 github 免责声明",
 };
 
@@ -2034,6 +2035,9 @@ export function SettingsPage() {
               </Button>
             </div>
           </Field>
+        </Section>
+        <Section title="本地缓存" keywords="缓存 图片 头像 封面 清除 清理 占用 空间">
+          <ImageCacheField />
         </Section>
       </SettingsContent>
     ),

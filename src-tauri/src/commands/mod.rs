@@ -2,6 +2,7 @@ pub mod account;
 pub mod android_player_controls;
 #[cfg(not(target_os = "android"))]
 pub mod asr;
+pub mod cache;
 pub mod danmaku;
 pub mod danmaku_favorite;
 pub mod danmaku_send_history;

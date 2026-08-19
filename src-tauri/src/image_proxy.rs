@@ -9,8 +9,9 @@
 //! responses for small image bodies). Started lazily on first use and kept
 //! for the app lifetime.
 
-use std::sync::Mutex;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 
 use reqwest::Url;
 use tauri::async_runtime::JoinHandle;
@@ -19,6 +20,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::error::{AppError, AppResult};
+use crate::image_cache::{ImageCache, MAX_IMAGE_BYTES, sniff_image_type};
 
 /// Hosts the proxy is willing to fetch. The frontend rewrites only these CDNs
 /// (`shouldProxyHost` in `src/shared/api/imageProxy.ts`), so this allowlist
@@ -38,14 +40,12 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
     "twitch.tv",
 ];
 
-/// Images are small; the bound also prevents a malicious local page from
-/// turning this listener into a memory-buffering downloader.
-const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub struct ImageProxy {
     state: Mutex<Option<ImageProxyInner>>,
     port: AtomicU16,
+    cache: Arc<ImageCache>,
 }
 
 struct ImageProxyInner {
@@ -53,18 +53,22 @@ struct ImageProxyInner {
     task: JoinHandle<()>,
 }
 
-impl Default for ImageProxy {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ImageProxy {
-    pub fn new() -> Self {
+    pub fn new(cache_root: PathBuf) -> Self {
         Self {
             state: Mutex::new(None),
             port: AtomicU16::new(0),
+            cache: Arc::new(ImageCache::new(cache_root)),
         }
+    }
+
+    pub async fn cache_usage(&self) -> crate::image_cache::CacheUsage {
+        self.cache.usage().await
+    }
+
+    pub async fn cache_clear(&self) -> AppResult<crate::image_cache::CacheUsage> {
+        self.cache.clear().await?;
+        Ok(self.cache.usage().await)
     }
 
     pub fn stop(&self) {
@@ -106,12 +110,21 @@ impl ImageProxy {
         }
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let task = tauri::async_runtime::spawn(run_image_proxy(listener, hosts, shutdown_rx));
+        let task = tauri::async_runtime::spawn(run_image_proxy(
+            listener,
+            hosts,
+            shutdown_rx,
+            self.cache.clone(),
+        ));
         *state = Some(ImageProxyInner {
             shutdown: shutdown_tx,
             task,
         });
         self.port.store(port, Ordering::Release);
+        let cache = self.cache.clone();
+        tauri::async_runtime::spawn(async move {
+            cache.sweep().await;
+        });
         Ok(Self::base_url(port))
     }
 
@@ -149,6 +162,7 @@ async fn run_image_proxy(
     listener: TcpListener,
     allowed_hosts: &'static [&'static str],
     mut shutdown: watch::Receiver<bool>,
+    cache: Arc<ImageCache>,
 ) {
     let client = match reqwest::Client::builder()
         .use_native_tls()
@@ -177,9 +191,11 @@ async fn run_image_proxy(
                 match accept {
                     Ok((mut socket, _)) => {
                         let client = client.clone();
+                        let cache = cache.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) =
-                                handle_image_request(&mut socket, &client, allowed_hosts).await
+                                handle_image_request(&mut socket, &client, allowed_hosts, cache)
+                                    .await
                             {
                                 tracing::debug!(%e, "image proxy request ended");
                             }
@@ -199,6 +215,7 @@ async fn handle_image_request(
     socket: &mut tokio::net::TcpStream,
     client: &reqwest::Client,
     allowed_hosts: &'static [&'static str],
+    cache: Arc<ImageCache>,
 ) -> Result<(), String> {
     let mut buf = [0u8; 4096];
     let n = socket
@@ -254,6 +271,12 @@ async fn handle_image_request(
             .await;
     }
 
+    if method == "GET"
+        && let Some((bytes, content_type)) = cache.get(upstream_url.as_str()).await
+    {
+        return write_response_bytes(socket, 200, "OK", content_type, &bytes).await;
+    }
+
     let mut request = client.get(upstream_url.clone());
     if let Some(referer) = referer_for(upstream_url.host_str().unwrap_or_default()) {
         request = request.header("referer", referer);
@@ -300,7 +323,17 @@ async fn handle_image_request(
 
     // Full-body write with explicit Content-Length: the Windows WebView can
     // cut off chunked responses when a small image arrives fast.
-    write_response_bytes(socket, status, status_reason, &content_type, &bytes).await
+    write_response_bytes(socket, status, status_reason, &content_type, &bytes).await?;
+
+    if sniff_image_type(&bytes).is_some() {
+        let cache = cache.clone();
+        let url = upstream_url.to_string();
+        let bytes = bytes.clone();
+        tauri::async_runtime::spawn(async move {
+            cache.put(&url, &bytes).await;
+        });
+    }
+    Ok(())
 }
 
 fn parse_image_url(raw: &str) -> Option<Url> {
@@ -439,7 +472,7 @@ mod tests {
             let length = stream.read(&mut request).unwrap();
             *headers_seen_clone.lock().unwrap() =
                 String::from_utf8_lossy(&request[..length]).to_ascii_lowercase();
-            let body = b"\x89PNG-fake-image";
+            let body = b"\x89PNG\r\n\x1a\nfake-image";
             stream
                 .write_all(
                     format!(
@@ -452,7 +485,11 @@ mod tests {
             stream.write_all(body).unwrap();
         });
 
-        let proxy = ImageProxy::new();
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-image-proxy-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let proxy = ImageProxy::new(cache_root.clone());
         let base = proxy.start_with_allowlist(&["127.0.0.1"]).await.unwrap();
         // Explicitly build the URL-encoded form to exercise percent decoding.
         let encoded_upstream = format!("http://{upstream_addr}/pic.png")
@@ -487,18 +524,55 @@ mod tests {
         )
         .await;
 
-        proxy.stop();
         server.join().unwrap();
         assert!(read_result.is_ok(), "proxy did not answer in time");
         let response_text = String::from_utf8_lossy(&response);
         assert!(response_text.contains("200 OK"));
         assert!(response_text.contains("Content-Type: image/png"));
-        assert!(response_text.contains("Content-Length: 15"));
-        assert!(response.ends_with(b"\r\n\r\n\x89PNG-fake-image"));
+        assert!(response_text.contains("Content-Length: 18"));
+        assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nfake-image"));
         // Unknown hosts are allowed only under the test allowlist and receive
         // no platform Referer (see `referer_for`).
         let upstream_request = headers_seen.lock().unwrap();
         assert!(!upstream_request.contains("referer:"));
         assert!(upstream_request.contains("get /pic.png"));
+        drop(upstream_request);
+
+        let cache_ready = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if proxy.cache_usage().await.files == 1 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(cache_ready.is_ok(), "proxy did not persist the image");
+
+        // The one-shot upstream listener is closed now. A second request must
+        // still succeed, proving the response came from the disk cache.
+        let mut cached_local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+            .await
+            .unwrap();
+        cached_local
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut cached_response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            cached_local.read_to_end(&mut cached_response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(String::from_utf8_lossy(&cached_response).contains("200 OK"));
+        assert!(cached_response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nfake-image"));
+
+        proxy.stop();
+        let _ = std::fs::remove_dir_all(cache_root);
     }
 }

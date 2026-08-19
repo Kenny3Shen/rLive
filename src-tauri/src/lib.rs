@@ -7,6 +7,7 @@ mod danmu_rs;
 mod db;
 mod error;
 mod http_client;
+mod image_cache;
 mod image_proxy;
 mod iptv;
 mod lan_sync;
@@ -37,6 +38,7 @@ use commands::android_player_controls::{
 };
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
+use commands::cache::{cache_clear, cache_usage};
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
     douyu_danmaku_send, douyu_danmaku_send_status, huya_danmaku_send, huya_danmaku_send_status,
@@ -278,6 +280,8 @@ pub fn run() {
             stream_proxy_probe_sources,
             stream_proxy_telemetry,
             image_proxy_url,
+            cache_usage,
+            cache_clear,
             danmaku_connect,
             danmaku_disconnect,
             bilibili_danmaku_send_status,

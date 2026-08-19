@@ -19,6 +19,7 @@ use crate::error::{AppError, AppResult};
 pub struct AppDirectories {
     pub root: PathBuf,
     pub logs: PathBuf,
+    pub cache: PathBuf,
 }
 
 impl AppDirectories {
@@ -37,6 +38,7 @@ impl AppDirectories {
         })?;
         Ok(Self {
             logs: root.join("logs"),
+            cache: root.join("cache"),
             root,
         })
     }
