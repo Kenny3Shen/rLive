@@ -1,11 +1,16 @@
-use std::ffi::OsString;
 use std::fs;
-use std::fs::OpenOptions;
-use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+use std::ffi::OsString;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+use std::fs::OpenOptions;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+use std::io::{self, ErrorKind, Write};
 #[cfg(windows)]
 use std::sync::LazyLock;
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
