@@ -494,6 +494,17 @@ export async function stopRecording(id: string): Promise<RecordingItem> {
   return invokeCmd<RecordingItem>("recording_stop", { id });
 }
 
+/** Keeps an active recording alive after its player page closes. */
+export async function setRecordingContinueOnLeave(
+  id: string,
+  continueOnLeave: boolean,
+): Promise<RecordingItem> {
+  return invokeCmd<RecordingItem>("recording_set_continue_on_leave", {
+    id,
+    continueOnLeave,
+  });
+}
+
 export async function deleteRecording(id: string): Promise<void> {
   await invokeCmd<void>("recording_delete", { id });
 }

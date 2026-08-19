@@ -66,8 +66,8 @@ use commands::profile::{profile_export, profile_import};
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::recording::{
     recording_danmaku_export_ass, recording_danmaku_url, recording_delete, recording_list,
-    recording_playback_url, recording_set_storage_path, recording_start, recording_stop,
-    recording_storage_info,
+    recording_playback_url, recording_set_continue_on_leave, recording_set_storage_path,
+    recording_start, recording_stop, recording_storage_info,
 };
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -236,6 +236,8 @@ pub fn run() {
             recording_start,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_stop,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_set_continue_on_leave,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_delete,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]

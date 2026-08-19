@@ -1161,6 +1161,56 @@ impl RecordingManager {
         Ok(item)
     }
 
+    /// Marks an active recording as continuing after its player page closes.
+    ///
+    /// The leave guard calls this when the user chooses "继续录制并离开" while
+    /// leaving the room. Flipping the flag makes
+    /// `has_background_danmaku_recording` true, so the room's danmaku websocket
+    /// is detached to the background on unmount (and released when the session
+    /// finishes) instead of being torn down.
+    pub fn set_continue_on_leave(
+        &self,
+        id: &str,
+        continue_on_leave: bool,
+    ) -> AppResult<RecordingItem> {
+        let state = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            sessions
+                .values()
+                .find_map(|session| {
+                    session
+                        .active
+                        .owns_recording_id(id)
+                        .then(|| session.active.current())
+                })
+                .ok_or_else(|| AppError::new("recording_not_found", "录制不存在"))?
+        };
+        let stored = {
+            let mut stored = state
+                .stored
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if stored.status != RecordingStatus::Recording {
+                return Err(AppError::new(
+                    "recording_not_active",
+                    "录制已结束，无法切换后台继续录制",
+                ));
+            }
+            stored.continue_on_leave = continue_on_leave;
+            stored.clone()
+        };
+        write_metadata(&state.bundle, &stored)?;
+        state
+            .library
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .upsert(&state.root, stored);
+        Ok(state.snapshot())
+    }
+
     pub async fn stop(&self, id: &str) -> AppResult<RecordingItem> {
         let (state, cancel, task) = {
             let mut sessions = self
@@ -4123,6 +4173,50 @@ mod tests {
         }
         assert!(!manager.has_background_danmaku_recording(source));
         assert!(danmaku.disconnect_background_for_source(source));
+
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn continue_on_leave_flag_retains_background_danmaku_after_leave_guard() {
+        let app_directory = std::env::temp_dir().join(format!(
+            "rlive-recording-continue-on-leave-{}",
+            Uuid::new_v4()
+        ));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+        let id = test_recording_id();
+        let bundle = root.join(&id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        let state = active_session_state(root.clone(), bundle.clone(), id.clone());
+        {
+            let mut stored = state.stored.lock().unwrap();
+            stored.source_key = "live:douyu:100".into();
+            stored.include_danmaku = true;
+            stored.continue_on_leave = false;
+            stored.danmaku_file = Some("danmaku.jsonl".into());
+        }
+        let (cancel, _cancel_rx) = watch::channel(false);
+        let task = tauri::async_runtime::spawn(std::future::pending::<()>());
+        manager.sessions.lock().unwrap().insert(
+            id.clone(),
+            Session {
+                active: Arc::new(ActiveSessionState::new(state.clone())),
+                cancel,
+                task,
+            },
+        );
+
+        // A room recording that has not opted into background continuation
+        // keeps no danmaku connection until the leave guard flips the flag.
+        assert!(!manager.has_background_danmaku_recording("live:douyu:100"));
+        let item = manager.set_continue_on_leave(&id, true).unwrap();
+        assert!(item.continue_on_leave);
+        assert!(manager.has_background_danmaku_recording("live:douyu:100"));
+        // The persisted metadata carries the new flag, so a restart keeps the
+        // same contract.
+        assert!(read_stored(&root, &id).unwrap().continue_on_leave);
 
         drop(manager);
         std::fs::remove_dir_all(app_directory).unwrap();
