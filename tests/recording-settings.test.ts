@@ -12,6 +12,7 @@ import {
   RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
   RECORDING_AUTO_SPLIT_MINUTES_MAX,
   RECORDING_ASS_DEFAULT_SETTINGS,
+  RECORDING_INCLUDE_DANMAKU_DEFAULT,
   normalizeRecordingAssSettings,
   parseFfmpegHlsSegmentRetryCount,
   parseFfmpegReconnectDelayMaxSeconds,
@@ -21,6 +22,10 @@ import {
 } from "../src/shared/stores/settingsStore";
 
 describe("FFmpeg recording settings", () => {
+  test("includes danmaku by default", () => {
+    expect(RECORDING_INCLUDE_DANMAKU_DEFAULT).toBe(true);
+  });
+
   test("uses the requested ASS recording defaults", () => {
     expect(RECORDING_ASS_DEFAULT_SETTINGS.font_size).toBe(36);
     expect(RECORDING_ASS_DEFAULT_SETTINGS.display_area_percent).toBe(25);

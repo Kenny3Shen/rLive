@@ -373,6 +373,7 @@ mod tests {
         assert_eq!(s.asr_translation_to, "zh-CN");
         assert!(s.danmaku_shield_words.is_empty());
         assert!(s.proxy.is_none());
+        assert!(s.recording_include_danmaku);
         assert_eq!(s.recording_ass.resolution_width, 1920);
         assert_eq!(s.recording_ass.font_size, 36);
         assert_eq!(s.recording_ass.opacity_percent, 80);
