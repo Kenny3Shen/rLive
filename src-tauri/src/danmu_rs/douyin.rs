@@ -2,7 +2,7 @@
 //!
 //! Douyin's web IM endpoint requires a short-lived, signed WSS URL. rLive
 //! builds that URL locally: room metadata + anonymous user id, MSSDK
-//! signature via Boa, then a direct WebSocket with gzip / protobuf framing,
+//! signature via QuickJS, then a direct WebSocket with gzip / protobuf framing,
 //! heartbeat and ACK.  The dial rotates through several webcast edge hosts
 //! and the read loop reconnects with an exponential, status-aware backoff.
 

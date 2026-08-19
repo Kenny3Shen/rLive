@@ -42,7 +42,7 @@
 
 1. 从房间详情取得内部 `room_id`（以及可选的 `web_rid`）。
 2. 生成匿名 12 位 `user_unique_id`。
-3. 用固定 webcast 客户端参数计算 MD5 stub，再通过嵌入的 `webmssdk` 脚本（Boa）得到 `signature`。
+3. 用固定 webcast 客户端参数计算 MD5 stub，再通过嵌入的 `webmssdk` 脚本（QuickJS）得到 `signature`。
 4. 将签名附到 `wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/` 查询串。
 5. 携带本次网页会话 Cookie、`Origin` 与 UA 直连 WebSocket；帧层处理 gzip / protobuf、心跳与 ACK。
 
