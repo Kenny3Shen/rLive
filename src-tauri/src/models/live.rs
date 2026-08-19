@@ -224,12 +224,9 @@ pub struct TwitchAdRecovery {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayUrl {
-    #[serde(default)]
     pub source_id: String,
-    #[serde(default)]
     pub label: String,
     pub protocol: PlaybackProtocol,
-    #[serde(default)]
     pub priority: u32,
     pub url: String,
     pub headers: std::collections::HashMap<String, String>,

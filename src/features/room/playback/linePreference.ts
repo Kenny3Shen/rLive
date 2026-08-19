@@ -77,7 +77,7 @@ export function rememberPlaybackLine(
   if (!roomKey || !line || !storage || !Number.isInteger(index) || index < 0) return;
   const preference: PlaybackLinePreference = {
     roomKey,
-    sourceId: line.source_id?.trim() || null,
+    sourceId: line.source_id.trim() || null,
     index,
     updatedAt: now,
   };

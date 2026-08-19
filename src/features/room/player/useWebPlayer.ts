@@ -407,10 +407,10 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
   return JSON.stringify([
     playUrl.url,
     Object.entries(playUrl.headers).sort(([a], [b]) => a.localeCompare(b)),
-    playUrl.source_id ?? null,
-    playUrl.label ?? null,
+    playUrl.source_id,
+    playUrl.label,
     playUrl.protocol,
-    playUrl.priority ?? null,
+    playUrl.priority,
   ]);
 }
 
@@ -536,13 +536,24 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
     ) {
       return null;
     }
+    const sourceId = parsed[2];
+    const label = parsed[3];
+    const priority = parsed[5];
+    if (
+      typeof sourceId !== "string" ||
+      typeof label !== "string" ||
+      typeof priority !== "number" ||
+      !Number.isFinite(priority)
+    ) {
+      return null;
+    }
     return {
       url: parsed[0],
       headers: Object.fromEntries(entries),
-      source_id: typeof parsed[2] === "string" ? parsed[2] : undefined,
-      label: typeof parsed[3] === "string" ? parsed[3] : undefined,
+      source_id: sourceId,
+      label,
       protocol,
-      priority: typeof parsed[5] === "number" && Number.isFinite(parsed[5]) ? parsed[5] : undefined,
+      priority,
     };
   } catch {
     return null;

@@ -67,14 +67,26 @@ describe("player session queue", () => {
     const first = playUrlKey({
       url: "https://cdn.example/live.flv",
       headers: { Referer: "https://example/", Cookie: "SESS=one" },
+      source_id: "primary",
+      label: "主线路",
+      protocol: "flv",
+      priority: 0,
     });
     const equivalent = playUrlKey({
       url: "https://cdn.example/live.flv",
       headers: { Cookie: "SESS=one", Referer: "https://example/" },
+      source_id: "primary",
+      label: "主线路",
+      protocol: "flv",
+      priority: 0,
     });
     const changed = playUrlKey({
       url: "https://cdn.example/live.flv",
       headers: { Cookie: "SESS=two", Referer: "https://example/" },
+      source_id: "primary",
+      label: "主线路",
+      protocol: "flv",
+      priority: 0,
     });
 
     expect(equivalent).toBe(first);
@@ -99,11 +111,21 @@ describe("player session queue", () => {
   });
 
   test("soft-switches only a changed source handled by the same protocol plugin", () => {
-    const flvSource = { url: "https://cdn.example/live", headers: {}, protocol: "flv" as const };
+    const flvSource = {
+      url: "https://cdn.example/live",
+      headers: {},
+      source_id: "primary",
+      label: "主线路",
+      protocol: "flv" as const,
+      priority: 0,
+    };
     const mpegTsSource = {
       url: "https://cdn.example/opaque",
       headers: {},
+      source_id: "mpeg-ts",
+      label: "MPEG-TS线路",
       protocol: "mpeg_ts" as const,
+      priority: 0,
     };
     expect(webPlaybackKind(mpegTsSource)).toBe("mpegts");
     expect(

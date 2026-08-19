@@ -14,14 +14,12 @@ export function playbackProtocol(
   return "flv";
 }
 
-export function playbackSourceId(source: PlaybackSourceLike, index: number): string {
-  return source.source_id?.trim() || `source:${index + 1}`;
+export function playbackSourceId(source: PlaybackSourceLike, _index: number): string {
+  return source.source_id.trim();
 }
 
-export function playbackSourcePriority(source: PlaybackSourceLike, index: number): number {
-  return typeof source.priority === "number" && Number.isFinite(source.priority)
-    ? Math.max(0, source.priority)
-    : index;
+export function playbackSourcePriority(source: PlaybackSourceLike, _index: number): number {
+  return Math.max(0, source.priority);
 }
 
 export function playbackProtocolLabel(protocol: PlaybackProtocol): string {
@@ -41,9 +39,9 @@ export function playbackProtocolLabel(protocol: PlaybackProtocol): string {
 
 /** Use stable, human-readable names rather than exposing CDN host names. */
 export function lineName(source: string | PlaybackSourceLike, index: number): string {
-  const suppliedLabel = typeof source === "string" ? "" : source.label?.trim();
+  const suppliedLabel = typeof source === "string" ? "" : source.label.trim();
   const displayLabel = suppliedLabel
-    ?.replace(/\s*(?:[（(]\s*)?(?:flv|hls)(?:\s*[）)])?\s*$/i, "")
+    .replace(/\s*(?:[（(]\s*)?(?:flv|hls)(?:\s*[）)])?\s*$/i, "")
     .trim();
   return displayLabel || `线路${index + 1}`;
 }

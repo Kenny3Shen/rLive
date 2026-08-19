@@ -66,6 +66,7 @@ const WINDOWS_RUNTIME_DLLS: &[&str] = &[
 
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
+#[cfg(any(windows, test))]
 const ASR_PROVIDER_CUDA: &str = "cuda";
 // The Windows v1.13.4 CUDA archive supports Pascal (sm_61) and newer NVIDIA
 // architectures.
@@ -1585,6 +1586,7 @@ fn asr_thread_count() -> i32 {
     asr_thread_count_for_available(available)
 }
 
+#[cfg(any(windows, test))]
 fn normalize_asr_provider(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,

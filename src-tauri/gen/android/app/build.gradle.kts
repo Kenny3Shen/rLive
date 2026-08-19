@@ -34,8 +34,8 @@ android {
         applicationId = "com.shenss.rlive"
         minSdk = 24
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "2").toInt()
+        versionName = tauriProperties.getProperty("tauri.android.versionName", "2.0.0")
     }
     signingConfigs {
         if (hasReleaseSigningConfig) {

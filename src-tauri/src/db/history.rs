@@ -5,6 +5,7 @@ use crate::db::schema::map_db_err;
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HistoryRecord {
     pub site_id: String,
     pub room_id: String,

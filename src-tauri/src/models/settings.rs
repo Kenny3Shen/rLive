@@ -95,60 +95,45 @@ pub struct AppSettings {
     /// It remains disabled until the user explicitly enables it in Settings and
     /// is not profile-imported. A Cookie and each platform's own validation
     /// are still required after this global consent is enabled.
-    #[serde(default)]
     pub danmaku_send_enabled: bool,
     /// Device-local consent for the optional on-device ASR model. It remains
     /// disabled by default so first launch never downloads model data.
-    #[serde(default)]
     pub asr_enabled: bool,
     /// Device-local ASR execution provider: `auto`, `cpu`, or `cuda`.
-    #[serde(default = "default_asr_provider")]
     pub asr_provider: String,
     /// Enable Zipformer's silence-based endpoint/VAD rules. Defaults to true;
     /// disabling it keeps only the maximum utterance length boundary.
-    #[serde(default = "default_asr_vad_enabled")]
     pub asr_vad_enabled: bool,
     /// Enable the optional CT-Transformer punctuation model. Defaults to true.
-    #[serde(default = "default_asr_punctuation_enabled")]
     pub asr_punctuation_enabled: bool,
     /// Optional endpoint-level speaker differentiation. This setting is
     /// device-local because enabling it downloads and loads an additional
     /// speaker embedding model.
-    #[serde(default)]
     pub asr_speaker_diarization_enabled: bool,
     /// Device-local domain phrases (主播名、游戏名等), one phrase per item.
-    #[serde(default)]
     pub asr_hotwords: Vec<String>,
     /// Device-local streaming PCM chunk interval in seconds, clamped to
     /// 0.2..=1.0 with one decimal place.
-    #[serde(default = "default_asr_window_seconds")]
     pub asr_window_seconds: f32,
     /// Player subtitle font size in CSS pixels.
     pub asr_font_size: u32,
     /// Device-local consent for sending committed ASR captions to Google
     /// Translate. Disabled by default because subtitle text leaves the device.
-    #[serde(default)]
     pub asr_translation_enabled: bool,
     /// Google Translate source language, or `auto` for language detection.
-    #[serde(default = "default_asr_translation_from")]
     pub asr_translation_from: String,
     /// Google Translate target language, or `auto` for automatic selection.
-    #[serde(default = "default_asr_translation_to")]
     pub asr_translation_to: String,
     /// Optional custom IPTV M3U address for this device.
     ///
     /// A playlist URL can identify a private source or include an access token,
     /// so it is intentionally excluded from profile export and import.
-    #[serde(default)]
     pub iptv_custom_m3u_url: Option<String>,
     /// Keep a running recording alive in the background after leaving its page.
     ///
     /// Disabled by default: leaving a room or player while recording asks the
     /// user and stops the session, saving what was captured so far.
     pub recording_continue_after_leave: bool,
-    /// Accepted only to read settings written by the unreleased global toggle.
-    #[serde(default, rename = "recording_auto_follow", skip_serializing)]
-    pub legacy_recording_auto_follow: bool,
     /// Include the synchronized danmaku sidecar by default for live recordings.
     pub recording_include_danmaku: bool,
     /// Maximum duration of one FFmpeg recording bundle in minutes.
@@ -160,9 +145,6 @@ pub struct AppSettings {
     pub ffmpeg_reconnect_delay_max_seconds: u32,
     /// Number of retries for a failed HLS media segment.
     pub ffmpeg_hls_segment_retry_count: u32,
-    /// ASS export options are optional when decoding settings written before
-    /// rLive 1.1, while current writes always include the full object.
-    #[serde(default)]
     pub recording_ass: RecordingAssSettings,
 }
 
@@ -259,7 +241,7 @@ impl Default for AppSettings {
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: default_asr_provider(),
-            asr_vad_enabled: true,
+            asr_vad_enabled: default_asr_vad_enabled(),
             asr_punctuation_enabled: default_asr_punctuation_enabled(),
             asr_speaker_diarization_enabled: false,
             asr_hotwords: Vec::new(),
@@ -270,7 +252,6 @@ impl Default for AppSettings {
             asr_translation_to: default_asr_translation_to(),
             iptv_custom_m3u_url: None,
             recording_continue_after_leave: false,
-            legacy_recording_auto_follow: false,
             recording_include_danmaku: false,
             recording_auto_split_minutes: 0,
             ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
@@ -295,37 +276,25 @@ mod tests {
         assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
         assert_eq!(back.recording_auto_split_minutes, 0);
-        assert!(!back.legacy_recording_auto_follow);
         assert!(!v.contains("recording_auto_follow"));
         assert_eq!(back.recording_ass.resolution_width, 1920);
         assert_eq!(back.recording_ass.scroll_duration_seconds, 12);
     }
 
     #[test]
-    fn settings_from_before_ass_options_use_export_defaults() {
+    fn settings_require_ass_options() {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         value.as_object_mut().unwrap().remove("recording_ass");
 
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert_eq!(settings.recording_ass, RecordingAssSettings::default());
+        assert!(serde_json::from_value::<AppSettings>(value).is_err());
     }
 
     #[test]
-    fn settings_accept_and_drop_legacy_global_auto_follow() {
+    fn settings_reject_legacy_global_auto_follow() {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         value["recording_auto_follow"] = serde_json::json!(true);
 
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert!(settings.legacy_recording_auto_follow);
-        assert!(
-            !serde_json::to_value(settings)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("recording_auto_follow")
-        );
+        assert!(serde_json::from_value::<AppSettings>(value).is_err());
     }
 
     #[test]

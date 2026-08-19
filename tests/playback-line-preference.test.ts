@@ -17,8 +17,22 @@ function memoryStorage() {
 }
 
 const lines: PlayUrl[] = [
-  { url: "https://one.example/live.flv", headers: {}, source_id: "line-one" },
-  { url: "https://two.example/live.flv", headers: {}, source_id: "line-two" },
+  {
+    url: "https://one.example/live.flv",
+    headers: {},
+    source_id: "line-one",
+    label: "第一线路",
+    protocol: "flv",
+    priority: 0,
+  },
+  {
+    url: "https://two.example/live.flv",
+    headers: {},
+    source_id: "line-two",
+    label: "第二线路",
+    protocol: "flv",
+    priority: 1,
+  },
 ];
 
 describe("room playback line preference", () => {

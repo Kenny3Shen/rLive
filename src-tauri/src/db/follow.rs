@@ -5,13 +5,13 @@ use crate::db::schema::map_db_err;
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct FollowRecord {
     pub site_id: String,
     pub room_id: String,
     pub user_name: String,
     pub face: String,
     pub tag_ids: Vec<String>,
-    #[serde(default)]
     pub auto_record: bool,
     pub live_status: Option<i32>,
     pub live_started_at: Option<i64>,
@@ -19,6 +19,7 @@ pub struct FollowRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TagRecord {
     pub id: String,
     pub name: String,

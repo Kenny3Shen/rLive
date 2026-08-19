@@ -65,13 +65,8 @@ pub async fn probe_sources(
 }
 
 async fn probe_source(client: &Client, index: usize, source: PlayUrl) -> StreamProxyProbe {
-    let source_id = if source.source_id.trim().is_empty() {
-        format!("source:{}", index + 1)
-    } else {
-        source.source_id.clone()
-    };
     let mut result = StreamProxyProbe {
-        source_id,
+        source_id: source.source_id.clone(),
         index,
         available: false,
         status: None,

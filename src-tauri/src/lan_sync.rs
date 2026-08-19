@@ -17,7 +17,9 @@ use tokio::time::Instant;
 use crate::error::{AppError, AppResult};
 use crate::profile::MAX_PROFILE_BYTES;
 
-const PROFILE_PATH: &str = "/rlive-sync/v1/profile";
+const PROFILE_PATH: &str = "/rlive-sync/v2/profile";
+const LEGACY_PROFILE_PATH: &str = "/rlive-sync/v1/profile";
+const SYNC_PROTOCOL_VERSION: &str = "2";
 const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -385,7 +387,7 @@ async fn write_response(
     body: &str,
 ) -> io::Result<()> {
     let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-rLive-Sync-Version: 1\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-rLive-Sync-Version: {SYNC_PROTOCOL_VERSION}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(response.as_bytes()).await?;
@@ -442,6 +444,12 @@ fn normalized_receive_url(endpoint: &str) -> AppResult<reqwest::Url> {
                 "同步地址必须是私有局域网 IP，不能使用公网地址或域名",
             )
         })?;
+    if url.path() == LEGACY_PROFILE_PATH {
+        return Err(AppError::new(
+            "lan_sync_protocol_error",
+            "目标地址使用了不再支持的 rLive 局域网同步协议",
+        ));
+    }
     if !is_lan_ip(host) || !matches!(url.path(), "" | "/" | PROFILE_PATH) {
         return Err(AppError::new(
             "lan_sync_invalid_address",
@@ -485,6 +493,17 @@ pub async fn receive_profile(endpoint: &str, code: &str) -> AppResult<Vec<u8>> {
             )
             .retryable()
         })?;
+    let protocol_ok = response
+        .headers()
+        .get("x-rlive-sync-version")
+        .and_then(|value| value.to_str().ok())
+        == Some(SYNC_PROTOCOL_VERSION);
+    if !protocol_ok {
+        return Err(AppError::new(
+            "lan_sync_protocol_error",
+            "目标地址不是受支持的 rLive 局域网同步服务",
+        ));
+    }
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err(AppError::new(
             "lan_sync_pairing_failed",
@@ -498,17 +517,6 @@ pub async fn receive_profile(endpoint: &str, code: &str) -> AppResult<Vec<u8>> {
                 "发送设备拒绝同步请求（HTTP {}）",
                 response.status().as_u16()
             ),
-        ));
-    }
-    let protocol_ok = response
-        .headers()
-        .get("x-rlive-sync-version")
-        .and_then(|value| value.to_str().ok())
-        == Some("1");
-    if !protocol_ok {
-        return Err(AppError::new(
-            "lan_sync_protocol_error",
-            "目标地址不是受支持的 rLive 局域网同步服务",
         ));
     }
     if response
@@ -552,7 +560,7 @@ mod tests {
             normalized_receive_url("192.168.1.20:43210")
                 .unwrap()
                 .as_str(),
-            "http://192.168.1.20:43210/rlive-sync/v1/profile"
+            "http://192.168.1.20:43210/rlive-sync/v2/profile"
         );
         assert!(normalized_receive_url("http://127.0.0.1:43210").is_ok());
         assert!(normalized_receive_url("https://192.168.1.20:43210").is_err());
@@ -565,8 +573,11 @@ mod tests {
             normalized_receive_url("http://[::1]:43210")
                 .unwrap()
                 .as_str(),
-            "http://[::1]:43210/rlive-sync/v1/profile"
+            "http://[::1]:43210/rlive-sync/v2/profile"
         );
+        let error =
+            normalized_receive_url("http://192.168.1.20:43210/rlive-sync/v1/profile").unwrap_err();
+        assert_eq!(error.code, "lan_sync_protocol_error");
     }
 
     #[test]
@@ -594,7 +605,7 @@ mod tests {
         let task = tokio::spawn(async move {
             run_session(
                 vec![listener],
-                r#"{"version":1}"#.into(),
+                r#"{"version":2}"#.into(),
                 "123456".into(),
                 shutdown,
                 task_info,
@@ -605,7 +616,7 @@ mod tests {
         let error = receive_profile(&endpoint, "000000").await.unwrap_err();
         assert_eq!(error.code, "lan_sync_pairing_failed");
         let profile = receive_profile(&endpoint, "123456").await.unwrap();
-        assert_eq!(profile, br#"{"version":1}"#);
+        assert_eq!(profile, br#"{"version":2}"#);
         task.await.unwrap();
         assert_eq!(info.lock().unwrap().status, LanSyncSessionState::Completed);
     }
@@ -625,7 +636,7 @@ mod tests {
         let task = tokio::spawn(async move {
             run_session(
                 vec![listener],
-                r#"{"version":1}"#.into(),
+                r#"{"version":2}"#.into(),
                 "123456".into(),
                 shutdown,
                 task_info,
