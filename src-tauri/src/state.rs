@@ -174,7 +174,7 @@ impl AppState {
             stream_proxy: StreamProxy::new(),
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording: RecordingManager::new(app_directory)?,
-            image_proxy: ImageProxy::new(),
+            image_proxy: ImageProxy::new(directories.cache.join("images")),
             lan_sync: LanSyncManager::new(),
         })
     }
