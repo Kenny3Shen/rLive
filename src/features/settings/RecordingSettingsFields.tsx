@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Field, FieldContent, FieldDescription, FieldTitle } from "@/components/ui/field";
+import { Field, FieldContent, FieldTitle } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { FieldTip } from "@/features/settings/FieldTip";
 import { Switch } from "@/components/ui/switch";
 import {
   FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX,
@@ -61,10 +62,10 @@ function NumberSettingField({
       <FieldContent>
         <FieldTitle>
           <span id={`${id}-label`}>{title}</span>
+          <FieldTip>{description}</FieldTip>
         </FieldTitle>
-        <FieldDescription>{description}</FieldDescription>
       </FieldContent>
-      <InputGroup className="w-28 max-w-full shrink-0">
+      <InputGroup className="w-28 max-w-full shrink-0 self-center">
         <InputGroupInput
           id={id}
           aria-labelledby={`${id}-label`}
@@ -103,22 +104,28 @@ export function RecordingDefaultsFields() {
     <>
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldTitle id="recording-include-danmaku-label">默认录制弹幕</FieldTitle>
-          <FieldDescription>直播录制默认创建同步弹幕轨，开始录制前仍可单独调整。</FieldDescription>
+          <FieldTitle>
+            <span id="recording-include-danmaku-label">默认录制弹幕</span>
+            <FieldTip>直播录制默认创建同步弹幕轨，开始录制前仍可单独调整。</FieldTip>
+          </FieldTitle>
         </FieldContent>
         <Switch
           aria-labelledby="recording-include-danmaku-label"
+          className="self-center"
           checked={includeDanmaku}
           onCheckedChange={setIncludeDanmaku}
         />
       </Field>
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldTitle id="recording-continue-after-leave-label">默认后台录制</FieldTitle>
-          <FieldDescription>离开直播间或 IPTV 播放页后继续录制，直到手动停止。</FieldDescription>
+          <FieldTitle>
+            <span id="recording-continue-after-leave-label">默认后台录制</span>
+            <FieldTip>离开直播间或 IPTV 播放页后继续录制，直到手动停止。</FieldTip>
+          </FieldTitle>
         </FieldContent>
         <Switch
           aria-labelledby="recording-continue-after-leave-label"
+          className="self-center"
           checked={continueAfterLeave}
           onCheckedChange={setContinueAfterLeave}
         />

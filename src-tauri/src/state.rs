@@ -30,8 +30,6 @@ pub struct AppState {
     pub recording: RecordingManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    pub app_data_storage: crate::app_paths::AppDataStorage,
 }
 
 /// Conservative per-room write gate for the Bilibili sender.
@@ -178,8 +176,6 @@ impl AppState {
             recording: RecordingManager::new(app_directory)?,
             image_proxy: ImageProxy::new(),
             lan_sync: LanSyncManager::new(),
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            app_data_storage: directories.storage.clone(),
         })
     }
 }

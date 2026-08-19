@@ -13,7 +13,8 @@
               "enable": true
             }
           },
-          "checkOnSave": {
+          "checkOnSave": true,
+          "check": {
             "command": "clippy"
           },
           "procMacro": {
@@ -28,8 +29,11 @@
       }
     },
     "typescript-language-server": {
-      "command": "typescript-language-server",
-      "args": ["--stdio", "--tsserver-path", "./node_modules/@typescript/typescript-linux-x64/lib/tsc"],
+      "disabled": true
+    },
+    "typescript-go": {
+      "command": "tsc",
+      "args": ["--lsp", "-stdio"],
       "fileTypes": [".ts", ".tsx", ".js", ".jsx"],
       "rootMarkers": ["tsconfig.json", "jsconfig.json", "package.json"],
       "settings": {

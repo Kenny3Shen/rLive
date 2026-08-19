@@ -544,7 +544,7 @@ export function RecordingsPage() {
     onSuccess: (info) => {
       queryClient.setQueryData(RECORDING_STORAGE_QUERY_KEY, info);
       void queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
-      notify.success(info.is_default ? "已恢复默认录制目录" : "录制保存位置已更新");
+      notify.success(info.is_default ? "已恢复默认录制目录" : "录制保存位置已更新，已有录制已迁移");
     },
     onError: (error) => notify.error("无法更新录制保存位置", recordingErrorMessage(error)),
   });
@@ -710,7 +710,7 @@ export function RecordingsPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>录制保存位置</DialogTitle>
-            <DialogDescription>新录制写入当前目录，已有录制仍保留在原位置。</DialogDescription>
+            <DialogDescription>新录制和已有录制都使用当前目录。</DialogDescription>
           </DialogHeader>
           <div className="flex min-w-0 items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2.5">
             <HardDrive className="shrink-0 text-muted-foreground" aria-hidden />

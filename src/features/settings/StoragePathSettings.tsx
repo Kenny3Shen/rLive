@@ -22,13 +22,6 @@ import {
   recordingSupported,
   setRecordingStoragePath,
 } from "@/features/recording/recording";
-import {
-  appDataStorageInfo,
-  setAppDataStoragePath,
-  type AppDataStorageInfo,
-} from "./appDataStorage";
-
-const APP_DATA_STORAGE_QUERY_KEY = ["app-data-storage"] as const;
 
 type StoragePathControlProps = {
   id: string;
@@ -91,41 +84,17 @@ function StoragePathControl({
           )
         )}
       </FieldContent>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onReset}
-          disabled={unavailable || busy || isDefault}
-        >
-          {action === "reset" ? (
-            <Spinner data-icon="inline-start" />
-          ) : (
-            <RotateCcw data-icon="inline-start" aria-hidden />
-          )}
+      <div className="flex flex-wrap items-center gap-2 self-center">
+        <Button type="button" variant="outline" size="sm" onClick={onReset} disabled={unavailable || busy || isDefault}>
+          {action === "reset" ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" aria-hidden />}
           恢复默认
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onReveal}
-          disabled={unavailable || busy || !path}
-        >
-          {action === "reveal" ? (
-            <Spinner data-icon="inline-start" />
-          ) : (
-            <FolderOpen data-icon="inline-start" aria-hidden />
-          )}
+        <Button type="button" variant="outline" size="sm" onClick={onReveal} disabled={unavailable || busy || !path}>
+          {action === "reveal" ? <Spinner data-icon="inline-start" /> : <FolderOpen data-icon="inline-start" aria-hidden />}
           显示目录
         </Button>
         <Button type="button" size="sm" onClick={onChoose} disabled={unavailable || busy}>
-          {action === "choose" ? (
-            <Spinner data-icon="inline-start" />
-          ) : (
-            <FolderCog data-icon="inline-start" aria-hidden />
-          )}
+          {action === "choose" ? <Spinner data-icon="inline-start" /> : <FolderCog data-icon="inline-start" aria-hidden />}
           更改位置
         </Button>
       </div>
@@ -160,12 +129,7 @@ export function RecordingStoragePathField() {
     setAction("choose");
     setActionError(null);
     try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "选择录制保存位置",
-        defaultPath: info?.path,
-      });
+      const selected = await openDialog({ directory: true, multiple: false, title: "选择录制保存位置", defaultPath: info?.path });
       if (typeof selected === "string") await update.mutateAsync(selected);
     } catch (cause) {
       setActionError(`无法更新录制保存位置：${recordingErrorMessage(cause)}`);
@@ -204,114 +168,14 @@ export function RecordingStoragePathField() {
     <StoragePathControl
       id="recording-storage-path"
       title="录制保存位置"
-      description="视频、录制元数据和弹幕轨保存在此目录。更改位置不会移动已有录制。"
+      description="视频、录制元数据和弹幕轨保存在此目录。更改位置时会同步迁移已有录制。"
       path={info?.path ?? ""}
       defaultPath={info?.default_path ?? ""}
       isDefault={info?.is_default ?? true}
       unavailable={!supported}
       action={action}
       error={error}
-      status={
-        info?.available_bytes == null
-          ? null
-          : `磁盘剩余 ${formatRecordingSize(info.available_bytes)}${
-              info.available_bytes < info.minimum_free_bytes ? "，不足以开始录制" : ""
-            }`
-      }
-      onChoose={() => void choose()}
-      onReset={() => void reset()}
-      onReveal={() => void reveal()}
-    />
-  );
-}
-
-export function AppDataStoragePathField() {
-  const supported = recordingSupported();
-  const queryClient = useQueryClient();
-  const [action, setAction] = useState<StoragePathControlProps["action"]>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const storage = useQuery({
-    queryKey: APP_DATA_STORAGE_QUERY_KEY,
-    enabled: supported,
-    queryFn: appDataStorageInfo,
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-  const update = useMutation({
-    mutationFn: setAppDataStoragePath,
-    onSuccess: (info) =>
-      queryClient.setQueryData<AppDataStorageInfo>(APP_DATA_STORAGE_QUERY_KEY, info),
-  });
-  const info = storage.data;
-  const error = actionError ?? (storage.error ? recordingErrorMessage(storage.error) : null);
-
-  function updateStatus(next: AppDataStorageInfo) {
-    setStatus(
-      next.restartRequired
-        ? `已保存。当前仍使用 ${next.currentPath}，重启 rLive 后切换到新位置。`
-        : "应用数据保存位置已更新。",
-    );
-  }
-
-  async function choose() {
-    if (!supported || action) return;
-    setAction("choose");
-    setActionError(null);
-    setStatus(null);
-    try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "选择应用数据保存位置",
-        defaultPath: info?.path,
-      });
-      if (typeof selected === "string") updateStatus(await update.mutateAsync(selected));
-    } catch (cause) {
-      setActionError(`无法更新应用数据保存位置：${recordingErrorMessage(cause)}`);
-    } finally {
-      setAction(null);
-    }
-  }
-
-  async function reset() {
-    if (!supported || action || info?.isDefault) return;
-    setAction("reset");
-    setActionError(null);
-    setStatus(null);
-    try {
-      updateStatus(await update.mutateAsync(null));
-    } catch (cause) {
-      setActionError(`无法恢复默认应用数据位置：${recordingErrorMessage(cause)}`);
-    } finally {
-      setAction(null);
-    }
-  }
-
-  async function reveal() {
-    if (!info || action) return;
-    setAction("reveal");
-    setActionError(null);
-    try {
-      await revealItemInDir(info.restartRequired ? info.path : info.currentPath);
-    } catch (cause) {
-      setActionError(`无法显示应用数据目录：${recordingErrorMessage(cause)}`);
-    } finally {
-      setAction(null);
-    }
-  }
-
-  return (
-    <StoragePathControl
-      id="app-data-storage-path"
-      title="应用数据保存位置"
-      description="数据库、设置、日志、本地模型和默认录制目录保存在此位置。变更将在重启后生效，不会自动移动当前目录中的已有数据。"
-      path={info?.path ?? ""}
-      defaultPath={info?.defaultPath ?? ""}
-      isDefault={info?.isDefault ?? true}
-      unavailable={!supported}
-      action={action}
-      error={error}
-      status={status}
+      status={info?.available_bytes == null ? null : `磁盘剩余 ${formatRecordingSize(info.available_bytes)}${info.available_bytes < info.minimum_free_bytes ? "，不足以开始录制" : ""}`}
       onChoose={() => void choose()}
       onReset={() => void reset()}
       onReveal={() => void reveal()}
