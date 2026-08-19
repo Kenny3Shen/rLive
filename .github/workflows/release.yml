@@ -203,6 +203,11 @@ jobs:
             libxdo-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            libavutil-dev \
+            libclang-dev \
+            pkg-config \
             patchelf \
             rpm \
             cpio \
@@ -477,6 +482,7 @@ jobs:
           export NDK_HOME="$ANDROID_NDK_HOME"
           ndk_toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           test -x "$ndk_toolchain/llvm-ranlib"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=aarch64-linux-android24"
           export RANLIB_aarch64_linux_android="$ndk_toolchain/llvm-ranlib"
           bun run tauri -- android build --ci --target aarch64 --apk
 

@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "2.1.2"
+version = "2.1.3"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -48,7 +48,9 @@ flate2 = "1"
 brotli = "8"
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
-boa_engine = "0.20"
+# QuickJS-NG executes the embedded site-signing scripts; these paths only need
+# eval and function calls, so disable the optional serde/chrono/bigint features.
+quickjs-rusty = { version = "0.14", default-features = false }
 
 tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["native-tls", "charset"] }
 

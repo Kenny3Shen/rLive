@@ -93,7 +93,7 @@ rLive 是基于 Tauri 的跨平台直播客户端。它在 Rust 后端统一平�
 ### 环境要求
 
 - [Rust](https://www.rust-lang.org/tools/install)、[Bun](https://bun.sh/) 和 [Tauri 2 前置环境](https://v2.tauri.app/start/prerequisites/)
-- 桌面构建需要与 `ffmpeg-next 9.0.0` 兼容的 FFmpeg headers、link libraries 和运行库，以及 `pkg-config` / `FFMPEG_DIR` 与供 bindgen 使用的 libclang
+- Rust 构建需要 clang/libclang 供 `quickjs-rusty` 与桌面 `ffmpeg-next 9.0.0` 的 bindgen 使用；桌面构建还需要匹配的 FFmpeg headers、link libraries、运行库，以及 `pkg-config` / `FFMPEG_DIR`
 - Android 不编译桌面 FFmpeg、录制或本地 ASR 模块，环境配置见 [Android 开发文档](docs/zh/Android开发-Windows.md)
 
 ### 启动
@@ -122,7 +122,18 @@ Windows 推荐在 WSL 中维护源码。复制 `scripts/windows-sync.conf.exampl
 ./scripts/build-windows-from-wsl.sh
 ```
 
-脚本优先读取进程级或用户级 `FFMPEG_DIR` 与 `LIBCLANG_PATH`。需要把依赖放在开发盘时，可将完整 FFmpeg SDK 放在 `D:\dev\FFmpeg`、将 MSVC 兼容的 `libclang.dll` 放在 `D:\dev\LLVM\bin`，再设置对应环境变量。未设置 `FFMPEG_DIR` 时，脚本才会把固定版本的 FFmpeg 9.0.1 shared SDK 缓存到 `%LOCALAPPDATA%\rLive\build`。
+该脚本会同步源码镜像并在 MSVC 环境中执行 `bun run tauri dev`；正式 release 构建使用 Windows PowerShell 的 `scripts/build-windows.ps1`。
+
+脚本优先读取进程级或用户级 `FFMPEG_DIR` 与 `LIBCLANG_PATH`，并会把同时包含 `libclang.dll` 和 `clang.exe` 的 MSVC-compatible LLVM `bin` 目录加入当前构建进程的 `PATH`。需要把依赖放在开发盘时，可将完整 FFmpeg SDK 放在 `D:\dev\FFmpeg`、将独立 LLVM 放在 `D:\dev\LLVM-22.1.8\bin`，再设置对应环境变量。不要把 Android NDK 的 LLVM 路径用于桌面构建。直接在 PowerShell 执行 Cargo/Tauri 构建时，至少先设置：
+
+```powershell
+$env:LIBCLANG_PATH = "D:\dev\LLVM-22.1.8\bin"
+$env:Path = "$env:LIBCLANG_PATH;$env:Path"
+```
+
+直接运行 Cargo/Tauri 还需要 Visual Studio 的 `x64 Native Tools` 环境（包括 MSVC headers 和 Windows SDK）；`scripts/build-windows.ps1` 与 `scripts/build-windows-from-wsl.sh` 会自动调用 `vcvars64.bat`。Android 构建使用单独的 NDK clang 配置，不能复用到桌面目标。
+
+未设置 `FFMPEG_DIR` 时，脚本才会把固定版本的 FFmpeg 9.0.1 shared SDK 缓存到 `%LOCALAPPDATA%\rLive\build`。
 
 Windows 构建会校验固定的 Gyan FFmpeg archive，并把 `avformat`、`avcodec`、`avutil`、`swresample`、上游 GPLv3 许可证和构建说明放到 `rlive.exe` 同目录。携带上游许可证不代表应用整体分发合规已经完成。
 

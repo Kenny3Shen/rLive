@@ -39,12 +39,33 @@ function Get-ConfiguredEnvironmentValue([string]$Name) {
 }
 
 function Find-LibClangDirectory {
-    $configuredPath = Get-ConfiguredEnvironmentValue "LIBCLANG_PATH"
-    if ($configuredPath -and (Test-Path (Join-Path $configuredPath "libclang.dll"))) {
-        return [IO.Path]::GetFullPath($configuredPath)
+    function Test-DesktopClangDirectory([string]$Candidate) {
+        if ([string]::IsNullOrWhiteSpace($Candidate)) {
+            return $false
+        }
+        # The Android NDK clang is a host compiler for Android tooling. Its
+        # resource directory does not provide the MSVC desktop headers needed
+        # by libquickjs-ng-sys when the target is x86_64-pc-windows-msvc.
+        if ($Candidate -match '(?i)[\\/]android-sdk[\\/]|[\\/]ndk[\\/]') {
+            return $false
+        }
+        return (
+            (Test-Path (Join-Path $Candidate "libclang.dll")) -and
+            (Test-Path (Join-Path $Candidate "clang.exe"))
+        )
     }
 
+    # WSL interop can pass a stale process-level value even after the user
+    # environment has been updated, so inspect all scopes before fallbacks.
+    $configuredPaths = @(
+        [Environment]::GetEnvironmentVariable("LIBCLANG_PATH", "Process"),
+        [Environment]::GetEnvironmentVariable("LIBCLANG_PATH", "User"),
+        [Environment]::GetEnvironmentVariable("LIBCLANG_PATH", "Machine")
+    ) | Where-Object { $_ } | Select-Object -Unique
+
     $candidates = @(
+        $configuredPaths
+        "D:\dev\LLVM-22.1.8\bin"
         "D:\dev\LLVM\bin",
         "D:\VS\BuildTools\VC\Tools\Llvm\x64\bin",
         "D:\LLVM\bin",
@@ -64,12 +85,12 @@ function Find-LibClangDirectory {
     }
 
     foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path (Join-Path $candidate "libclang.dll"))) {
+        if (Test-DesktopClangDirectory $candidate) {
             return [IO.Path]::GetFullPath($candidate)
         }
     }
 
-    throw "libclang.dll not found. Install LLVM/Clang or set LIBCLANG_PATH to its bin directory."
+    throw "clang.exe and libclang.dll not found. Install LLVM/Clang or set LIBCLANG_PATH to its bin directory."
 }
 
 function Assert-FfmpegSdk([string]$SdkRoot) {
@@ -201,7 +222,10 @@ $readmeSource = Join-Path $ffmpegRoot "README.txt"
 
 $env:LIBCLANG_PATH = Find-LibClangDirectory
 $env:RLIVE_FFMPEG_RUNTIME_DIR = Join-Path $ffmpegRoot "bin"
-$env:Path = $env:RLIVE_FFMPEG_RUNTIME_DIR + ";" + $env:Path
+# libquickjs-ng-sys invokes cc-rs with the literal compiler name `clang`.
+# LIBCLANG_PATH is used by bindgen, but cc-rs resolves the executable through
+# PATH, so expose the same LLVM bin directory to both build steps.
+$env:Path = $env:LIBCLANG_PATH + ";" + $env:RLIVE_FFMPEG_RUNTIME_DIR + ";" + $env:Path
 
 if ($StageDestination) {
     $StageDestination = [IO.Path]::GetFullPath($StageDestination)
@@ -219,3 +243,4 @@ if ($StageDestination) {
 
 Write-Host "FFMPEG_DIR: $env:FFMPEG_DIR"
 Write-Host "LIBCLANG_PATH: $env:LIBCLANG_PATH"
+Write-Host "CLANG_PATH: $(Join-Path $env:LIBCLANG_PATH 'clang.exe')"

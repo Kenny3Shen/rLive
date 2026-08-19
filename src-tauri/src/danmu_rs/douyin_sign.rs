@@ -1,12 +1,11 @@
 //! Local Douyin webcast signature (MSSDK / X-Bogus style).
 //!
 //! The web IM WSS URL needs a short-lived `signature` query parameter derived
-//! from room id + anonymous `user_unique_id`.  The algorithm lives in Douyin's
-//! browser `webmssdk` script; rLive evaluates that script with Boa, the same
-//! approach used for Douyu room play-sign.
+//! from room id + anonymous `user_unique_id`. The algorithm lives in Douyin's
+//! browser `webmssdk` script; rLive evaluates that script with QuickJS.
 
-use boa_engine::{Context, JsString, Source, js_string};
 use md5::{Digest, Md5};
+use quickjs_rusty::Context;
 
 use crate::error::{AppError, AppResult};
 use crate::sites::douyin::DEFAULT_USER_AGENT;
@@ -15,9 +14,6 @@ use crate::sites::douyin::DEFAULT_USER_AGENT;
 const WEB_MS_SDK: &str = include_str!("../../assets/douyin_webmssdk.js");
 
 const MAX_SIGNATURE_ATTEMPTS: usize = 16;
-/// Debug builds of Boa need a much deeper native stack to parse/eval the
-/// minified MSSDK; 16 MiB matches the working standalone boa-eval harness.
-const SIGN_THREAD_STACK: usize = 16 * 1024 * 1024;
 
 /// MD5 stub of the fixed webcast client parameters (Simple Live `getMsStub`).
 pub fn ms_stub(room_id: &str, user_unique_id: &str) -> AppResult<String> {
@@ -34,11 +30,10 @@ pub fn ms_stub(room_id: &str, user_unique_id: &str) -> AppResult<String> {
 /// Compute a WSS `signature` for the given internal room id and anonymous uid.
 pub fn get_signature(room_id: &str, user_unique_id: &str) -> AppResult<String> {
     let stub = ms_stub(room_id, user_unique_id)?;
-    // Boa is not Send across threads after construction, so evaluate on a
-    // dedicated large-stack thread and return only the finished string.
+    // Keep CPU-heavy script evaluation out of the async runtime. QuickJS's
+    // Context is created and consumed on this dedicated thread.
     let handle = std::thread::Builder::new()
         .name("douyin-sign".into())
-        .stack_size(SIGN_THREAD_STACK)
         .spawn(move || evaluate_signature(&stub))
         .map_err(|error| {
             AppError::new(
@@ -55,15 +50,20 @@ pub fn get_signature(room_id: &str, user_unique_id: &str) -> AppResult<String> {
 }
 
 fn evaluate_signature(stub: &str) -> AppResult<String> {
-    let mut ctx = Context::default();
-    // Raise Boa's own VM call-frame budget; the MSSDK is heavily nested.
-    ctx.runtime_limits_mut().set_stack_size_limit(128 * 1024);
-    eval_js(&mut ctx, WEB_MS_SDK, "webmssdk")?;
+    let ctx = Context::builder().build().map_err(|error| {
+        AppError::new(
+            "douyin_sign_runtime",
+            format!("抖音弹幕签名运行时创建失败: {error}"),
+        )
+        .with_site("douyin")
+    })?;
+    ctx.update_stack_top();
+    eval_js(&ctx, WEB_MS_SDK, "webmssdk")?;
 
     // The SDK occasionally emits base64 padding or hyphens that the WSS edge
     // rejects; Simple Live regenerates until the value is clean.
     for _ in 0..MAX_SIGNATURE_ATTEMPTS {
-        let signature = call_get_mssdk_signature(&mut ctx, stub)?;
+        let signature = call_get_mssdk_signature(&ctx, stub)?;
         if !signature.is_empty() && !signature.contains(['-', '=']) {
             return Ok(signature);
         }
@@ -76,44 +76,23 @@ fn evaluate_signature(stub: &str) -> AppResult<String> {
     )
 }
 
-fn call_get_mssdk_signature(ctx: &mut Context, stub: &str) -> AppResult<String> {
-    // Prefer calling the function object with typed arguments so neither the
-    // stub nor the fixed UA is interpolated into JS source.
-    let global = ctx.global_object();
-    let function = global
-        .get(js_string!("getMSSDKSignature"), ctx)
-        .map_err(|error| {
-            AppError::new(
-                "douyin_sign_eval",
-                format!("抖音弹幕签名函数不可用: {error}"),
-            )
-            .with_site("douyin")
-        })?;
-    let Some(function) = function.as_callable() else {
-        return Err(AppError::new("douyin_sign_eval", "抖音弹幕签名函数不可用").with_site("douyin"));
-    };
-
-    let stub_value = JsString::from(stub).into();
-    let ua_value = JsString::from(DEFAULT_USER_AGENT).into();
-    let value = function
-        .call(&function.clone().into(), &[stub_value, ua_value], ctx)
+fn call_get_mssdk_signature(ctx: &Context, stub: &str) -> AppResult<String> {
+    let value = ctx
+        .call_function("getMSSDKSignature", vec![stub, DEFAULT_USER_AGENT])
         .map_err(|error| {
             AppError::new("douyin_sign_eval", format!("抖音弹幕签名计算失败: {error}"))
                 .with_site("douyin")
                 .retryable()
         })?;
-    value
-        .to_string(ctx)
-        .map(|js| js.to_std_string_escaped())
-        .map_err(|error| {
-            AppError::new("douyin_sign_eval", format!("抖音弹幕签名结果无效: {error}"))
-                .with_site("douyin")
-                .retryable()
-        })
+    value.js_to_string().map_err(|error| {
+        AppError::new("douyin_sign_eval", format!("抖音弹幕签名结果无效: {error}"))
+            .with_site("douyin")
+            .retryable()
+    })
 }
 
-fn eval_js(ctx: &mut Context, src: &str, stage: &str) -> AppResult<()> {
-    ctx.eval(Source::from_bytes(src)).map_err(|error| {
+fn eval_js(ctx: &Context, src: &str, stage: &str) -> AppResult<()> {
+    ctx.eval(src, false).map_err(|error| {
         AppError::new(
             "douyin_sign_eval",
             format!("抖音弹幕签名脚本加载失败 ({stage}): {error}"),
@@ -178,7 +157,6 @@ mod tests {
         assert!(!signature.is_empty());
         assert!(!signature.contains('-'));
         assert!(!signature.contains('='));
-        // Second call reuses the cached runtime.
         let again = get_signature("1234567890", "9876543210").expect("signature again");
         assert!(!again.is_empty());
     }
