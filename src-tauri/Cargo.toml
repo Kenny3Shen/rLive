@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "1.2.1"
+version = "2.0.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -48,7 +48,7 @@ flate2 = "1"
 brotli = "8"
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
-boa_engine = "0.21"
+boa_engine = "0.20"
 
 tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["native-tls", "charset"] }
 

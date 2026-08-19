@@ -253,9 +253,48 @@ fn normalize_ass_style_width(value: f32) -> f32 {
     (value.clamp(0.0, RECORDING_ASS_STYLE_WIDTH_MAX) * 2.0).round() / 2.0
 }
 
-/// Load app settings from `settings_kv`, or return defaults if missing/invalid.
+/// Load app settings from `settings_kv`, or return defaults only when no record exists.
 pub fn get(conn: &Connection) -> AppResult<AppSettings> {
     Ok(get_with_status(conn)?.0)
+}
+
+fn decode_saved_settings(json: &str) -> AppResult<AppSettings> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+        AppError::new(
+            "settings_schema_unsupported",
+            format!("当前设置不是受支持的 rLive 2.0 格式: {error}"),
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        AppError::new("settings_schema_unsupported", "当前设置必须是 JSON object")
+    })?;
+    let default_value = serde_json::to_value(AppSettings::default()).map_err(|error| {
+        AppError::new(
+            "settings_schema_unsupported",
+            format!("无法读取当前设置字段定义: {error}"),
+        )
+    })?;
+    let default_object = default_value.as_object().ok_or_else(|| {
+        AppError::new(
+            "settings_schema_unsupported",
+            "当前设置字段定义必须是 JSON object",
+        )
+    })?;
+    if let Some(field) = default_object
+        .keys()
+        .find(|field| !object.contains_key(field.as_str()))
+    {
+        return Err(AppError::new(
+            "settings_schema_unsupported",
+            format!("当前设置缺少必填字段 {field}"),
+        ));
+    }
+    serde_json::from_value(value).map_err(|error| {
+        AppError::new(
+            "settings_schema_unsupported",
+            format!("当前设置不是受支持的 rLive 2.0 格式: {error}"),
+        )
+    })
 }
 
 /// Load settings along with whether a valid saved settings record exists.
@@ -271,20 +310,15 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
         .optional()
         .map_err(map_db_err)?;
 
-    match raw {
-        None => Ok((AppSettings::default(), false)),
-        Some(json) => match serde_json::from_str(&json) {
-            Ok(mut settings) => {
-                normalize_site_preferences(&mut settings);
-                normalize_danmaku_preferences(&mut settings);
-                normalize_asr_preferences(&mut settings);
-                normalize_recording_preferences(&mut settings);
-                Ok((settings, true))
-            }
-            // Corrupt JSON: fall back to defaults so the app remains usable.
-            Err(_) => Ok((AppSettings::default(), false)),
-        },
-    }
+    let Some(json) = raw else {
+        return Ok((AppSettings::default(), false));
+    };
+    let mut settings = decode_saved_settings(&json)?;
+    normalize_site_preferences(&mut settings);
+    normalize_danmaku_preferences(&mut settings);
+    normalize_asr_preferences(&mut settings);
+    normalize_recording_preferences(&mut settings);
+    Ok((settings, true))
 }
 
 /// Persist full app settings under key `app_settings`.
@@ -586,15 +620,30 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_defaults_on_corrupt_json() {
+    fn rejects_corrupt_json_instead_of_resetting_defaults() {
         let conn = open_in_memory().unwrap();
         conn.execute(
             "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
             params![SETTINGS_KEY, "{not-valid-json"],
         )
         .unwrap();
-        let (s, has_saved_settings) = get_with_status(&conn).unwrap();
-        assert!(!has_saved_settings);
-        assert_eq!(s, AppSettings::default());
+        let error = get_with_status(&conn).unwrap_err();
+        assert_eq!(error.code, "settings_schema_unsupported");
+    }
+
+    #[test]
+    fn rejects_saved_settings_with_a_missing_current_field() {
+        let conn = open_in_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("asr_enabled");
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+        )
+        .unwrap();
+
+        let error = get_with_status(&conn).unwrap_err();
+        assert_eq!(error.code, "settings_schema_unsupported");
+        assert!(error.message.contains("asr_enabled"));
     }
 }

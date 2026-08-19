@@ -60,13 +60,13 @@ export type TwitchAdRecovery = {
 /** Structured playback candidate returned by the native site adapter. */
 export type PlayUrl = {
   /** Stable within a quality payload; never contains a signed URL or request headers. */
-  source_id?: string;
+  source_id: string;
   /** Safe user-facing name supplied by the site adapter. */
-  label?: string;
+  label: string;
   /** Explicit transport selected by the native site adapter. */
   protocol: PlaybackProtocol;
   /** Lower values retain the platform's preferred ordering. */
-  priority?: number;
+  priority: number;
   url: string;
   headers: Record<string, string>;
   /** Native-only context used to replace Twitch ad playlists behind the local proxy. */

@@ -255,7 +255,7 @@ export const useMultiRoomStore = create<MultiRoomState>()(
       clear: () => set({ slots: [...EMPTY_MULTI_ROOM_SLOTS] }),
     }),
     {
-      name: "rlive-multi-room-v1",
+      name: "rlive-multi-room-v2",
       partialize: (state) => ({
         slots: state.slots,
         layout: state.layout,

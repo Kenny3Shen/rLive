@@ -10,6 +10,7 @@ import {
 } from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { ErrorState } from "@/shared/components/ErrorState";
 import { Shell } from "./layout/Shell";
 import { AndroidBackNavigator } from "./androidBackNavigation";
 import { RouteModulePreloader } from "./RouteModulePreloader";
@@ -101,5 +102,21 @@ const router = createBrowserRouter(
 );
 
 export function App() {
+  const settingsLoadError = useSettingsStore((state) => state.settingsLoadError);
+  const loadFromBackend = useSettingsStore((state) => state.loadFromBackend);
+
+  if (settingsLoadError) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-4 py-8">
+        <ErrorState
+          error={settingsLoadError}
+          title="无法读取当前设置"
+          onRetry={() => void loadFromBackend().catch(() => {})}
+          className="w-full max-w-xl"
+        />
+      </main>
+    );
+  }
+
   return <RouterProvider router={router} />;
 }

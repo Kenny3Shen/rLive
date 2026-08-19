@@ -94,6 +94,7 @@ export function iptvChannelPlayUrl(channel: IptvChannel): PlayUrl {
     source_id: `iptv:${channel.id}`,
     label: channel.name,
     protocol: playbackKind === "mpegts" ? "mpeg_ts" : playbackKind,
+    priority: 0,
     url: channel.url,
     headers: channel.headers,
   };

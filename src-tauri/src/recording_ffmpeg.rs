@@ -14,7 +14,6 @@ use super::{
 };
 
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
@@ -25,7 +24,6 @@ use ffmpeg_next as ffmpeg;
 
 static FFMPEG_INIT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static FFMPEG_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static LEGACY_INDEX_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const TIMESTAMP_TIME_BASE: Rational = Rational(1, 1_000_000);
 
 pub(super) async fn run(
@@ -380,131 +378,6 @@ fn remux(
         }
     }
     outcome
-}
-
-/// Add the FLV keyframe index required for fast unbuffered VOD seeks.
-///
-/// Older rLive versions did not request `add_keyframe_index` from FFmpeg, so
-/// mpegts.js could only seek inside the already buffered window. The migration
-/// is deliberately best effort: a failed remux leaves the original media in
-/// place and the caller can still serve it through the existing path.
-pub(super) fn ensure_flv_keyframe_index(path: &Path) -> Result<bool, String> {
-    let lock = LEGACY_INDEX_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !path.is_file() {
-        return Err("录制媒体文件不存在".into());
-    }
-    if flv_contains_keyframe_index(path)? {
-        return Ok(false);
-    }
-
-    initialize()?;
-    let part = path.with_file_name(format!(
-        "{}.indexed.part",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| "录制媒体文件名无效".to_string())?
-    ));
-    remove_part(&part);
-
-    let mut input = format::input(path).map_err(|error| format!("读取旧 FLV 失败: {error}"))?;
-    let mut output =
-        format::output_as(&part, "flv").map_err(|error| format!("创建索引化 FLV 失败: {error}"))?;
-    let mut stream_mapping = vec![-1_i32; input.nb_streams() as usize];
-    let mut input_time_bases = vec![Rational(0, 1); input.nb_streams() as usize];
-    let mut output_index = 0_i32;
-    for (input_index, stream) in input.streams().enumerate() {
-        if !matches!(
-            stream.parameters().medium(),
-            media::Type::Audio | media::Type::Video
-        ) {
-            continue;
-        }
-        stream_mapping[input_index] = output_index;
-        input_time_bases[input_index] = stream.time_base();
-        let mut output_stream = output
-            .add_stream(encoder::find(codec::Id::None))
-            .map_err(|error| format!("创建索引化 FLV 轨道失败: {error}"))?;
-        output_stream.set_parameters(stream.parameters());
-        unsafe {
-            (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
-        }
-        output_index += 1;
-    }
-    if output_index == 0 {
-        drop(output);
-        remove_part(&part);
-        return Err("旧 FLV 未发现可回放的音视频轨道".into());
-    }
-    let mut output_options = Dictionary::new();
-    output_options.set("flvflags", "add_keyframe_index");
-    let header_error = output.write_header_with(output_options).err();
-    if let Some(error) = header_error {
-        drop(output);
-        remove_part(&part);
-        return Err(format!("写入索引化 FLV 头失败: {error}"));
-    }
-
-    let mut wrote_packet = false;
-    loop {
-        let mut packet = Packet::empty();
-        match packet.read(&mut input) {
-            Ok(()) => {}
-            Err(Error::Eof) => break,
-            Err(error) => {
-                drop(output);
-                remove_part(&part);
-                return Err(format!("索引化旧 FLV 失败: {error}"));
-            }
-        }
-        let input_index = packet.stream();
-        let Some(&mapped_index) = stream_mapping.get(input_index) else {
-            continue;
-        };
-        if mapped_index < 0 {
-            continue;
-        }
-        let Some(output_stream) = output.stream(mapped_index as usize) else {
-            drop(output);
-            remove_part(&part);
-            return Err("索引化 FLV 轨道映射失效".into());
-        };
-        packet.rescale_ts(input_time_bases[input_index], output_stream.time_base());
-        packet.set_position(-1);
-        packet.set_stream(mapped_index as usize);
-        if let Err(error) = packet.write_interleaved(&mut output) {
-            drop(output);
-            remove_part(&part);
-            return Err(format!("写入索引化 FLV 数据失败: {error}"));
-        }
-        wrote_packet = true;
-    }
-
-    if let Err(error) = output.write_trailer() {
-        drop(output);
-        remove_part(&part);
-        return Err(format!("写入索引化 FLV 尾失败: {error}"));
-    }
-    drop(output);
-    drop(input);
-    if !wrote_packet {
-        remove_part(&part);
-        return Err("旧 FLV 没有可回放的数据包".into());
-    }
-    publish_part(&part, path).map_err(|error| format!("替换旧 FLV 失败: {error}"))?;
-    Ok(true)
-}
-
-fn flv_contains_keyframe_index(path: &Path) -> Result<bool, String> {
-    let mut file = fs::File::open(path).map_err(|error| format!("读取录制媒体失败: {error}"))?;
-    let mut bytes = Vec::with_capacity(8 * 1024 * 1024);
-    file.by_ref()
-        .take(8 * 1024 * 1024)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("读取录制媒体元数据失败: {error}"))?;
-    Ok(bytes
-        .windows(b"keyframes".len())
-        .any(|window| window == b"keyframes"))
 }
 
 enum StopReason {

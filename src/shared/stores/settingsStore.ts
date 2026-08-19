@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { invokeCmd } from "../api/tauri";
+import { invokeCmd, isTauriUnavailableError } from "../api/tauri";
 import { isMobileClient } from "../clientPlatform";
 import {
   DEFAULT_SITE_ID,
@@ -360,8 +360,10 @@ type SettingsState = {
   ffmpegReconnectDelayMaxSeconds: number;
   ffmpegHlsSegmentRetryCount: number;
   recordingAssSettings: RecordingAssSettings;
-  /** True after first successful backend load. */
+  /** True after backend load or the browser-only no-backend fallback. */
   hydratedFromBackend: boolean;
+  /** A real Tauri settings/schema error blocks the app until it is resolved. */
+  settingsLoadError: unknown | null;
   setTheme: (theme: ThemeMode) => void;
   setSiteId: (siteId: string) => void;
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
@@ -516,6 +518,7 @@ export const useSettingsStore = create<SettingsState>()(
       ffmpegHlsSegmentRetryCount: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
       recordingAssSettings: RECORDING_ASS_DEFAULT_SETTINGS,
       hydratedFromBackend: false,
+      settingsLoadError: null,
       setTheme: (theme) => {
         set({ theme });
         void get().persistToBackend({ theme });
@@ -818,6 +821,7 @@ export const useSettingsStore = create<SettingsState>()(
           iptvCustomM3uUrl: settings.iptv_custom_m3u_url?.trim() || null,
           ...recordingPreferencesFromAppSettings(settings),
           hydratedFromBackend: true,
+          settingsLoadError: null,
         });
       },
       loadFromBackend: async () => {
@@ -833,9 +837,15 @@ export const useSettingsStore = create<SettingsState>()(
             default_site: siteId,
             disabled_site_ids: disabledSiteIds,
           });
-        } catch {
-          // Outside Tauri (vite-only) or backend unavailable: keep local defaults.
-          set({ hydratedFromBackend: true });
+        } catch (error) {
+          // Browser-only development has no Rust settings source. A real Tauri
+          // schema error must remain observable instead of becoming defaults.
+          if (isTauriUnavailableError(error)) {
+            set({ hydratedFromBackend: true, settingsLoadError: null });
+            return;
+          }
+          set({ hydratedFromBackend: false, settingsLoadError: error });
+          throw error;
         }
       },
       persistToBackend: async (patch) => {
@@ -859,8 +869,8 @@ export const useSettingsStore = create<SettingsState>()(
       },
     }),
     {
-      name: "rlive-settings-v1",
-      // Dual-write localStorage for theme flash; backend overwrites after load.
+      name: "rlive-settings-v2",
+      // Persist the small v2 local state needed for first paint; backend overwrites after load.
       partialize: (s) => ({
         theme: s.theme,
         siteId: s.siteId,

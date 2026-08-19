@@ -18,7 +18,7 @@
         let theme = "system";
         try {
           theme =
-            JSON.parse(localStorage.getItem("rlive-settings-v1") || "{}").state?.theme || theme;
+            JSON.parse(localStorage.getItem("rlive-settings-v2") || "{}").state?.theme || theme;
         } catch {
           // An invalid persisted value should never delay the first paint.
         }

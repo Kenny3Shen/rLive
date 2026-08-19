@@ -33,7 +33,7 @@ applyTheme(initialSettings.theme);
 useSettingsStore.subscribe((settings, previous) => {
   if (settings.theme !== previous.theme) applyTheme(settings.theme);
 });
-void useSettingsStore.getState().loadFromBackend();
+void useSettingsStore.getState().loadFromBackend().catch(() => {});
 // Start the loopback image proxy as early as possible so first-paint covers
 // and avatars route through it instead of being hotlink-rejected.
 void preloadImageProxy();
