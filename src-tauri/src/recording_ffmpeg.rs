@@ -105,43 +105,8 @@ fn remux(
     let started = Instant::now();
 
     let mut options = Dictionary::new();
-    let headers = ffmpeg_header_block(&source);
-    if !headers.is_empty() {
-        options.set("headers", &headers);
-    }
-    if let Some(proxy) = proxy
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        options.set("http_proxy", proxy);
-    }
-    // Keep blocking reads inside the manager's 15 second graceful-shutdown
-    // window even if a protocol handler temporarily misses the interrupt flag.
-    options.set("probesize", "32768");
-    options.set("analyzeduration", "1000000");
-    options.set("fpsprobesize", "2");
-    options.set("max_probe_packets", "64");
-    let rw_timeout_us = recording_options
-        .rw_timeout_seconds
-        .saturating_mul(1_000_000)
-        .to_string();
-    let reconnect_delay_max = recording_options.reconnect_delay_max_seconds.to_string();
-    options.set("rw_timeout", &rw_timeout_us);
-    options.set("reconnect", "1");
-    options.set("reconnect_streamed", "1");
-    options.set("reconnect_on_network_error", "1");
-    options.set("reconnect_on_http_error", "408,425,429,5xx");
-    options.set("reconnect_delay_max", &reconnect_delay_max);
-    if source_protocol == super::PlaybackProtocol::Hls {
-        // HLS parsing, playlist refreshes, AES-128 keys and byte ranges all
-        // stay inside libavformat. Start at the live edge and retry transient
-        // segment failures without maintaining a second playlist parser here.
-        options.set("live_start_index", "-1");
-        let segment_retry_count = recording_options.hls_segment_retry_count.to_string();
-        options.set("seg_max_retry", &segment_retry_count);
-        options.set("http_persistent", "1");
-        options.set("http_multiple", "1");
+    for (key, value) in build_input_options(&source, proxy.as_deref(), &recording_options) {
+        options.set(&key, &value);
     }
 
     let callback_cancel = cancel.clone();
@@ -392,6 +357,78 @@ fn remux(
         }
     }
     outcome
+}
+
+/// Builds the demuxer options for one recording, as ordered key/value pairs.
+///
+/// Returned as pairs rather than written into a `Dictionary` so the protocol
+/// branches below stay directly testable; `Dictionary` exposes no reader.
+fn build_input_options(
+    source: &PlayUrl,
+    proxy: Option<&str>,
+    recording_options: &FfmpegRecordingOptions,
+) -> Vec<(String, String)> {
+    let mut options: Vec<(String, String)> = Vec::new();
+    let mut set = |key: &str, value: String| options.push((key.to_string(), value));
+
+    let headers = ffmpeg_header_block(source);
+    if !headers.is_empty() {
+        set("headers", headers);
+    }
+    if let Some(proxy) = proxy.map(str::trim).filter(|value| !value.is_empty()) {
+        set("http_proxy", proxy.to_string());
+    }
+    // Keep blocking reads inside the manager's 15 second graceful-shutdown
+    // window even if a protocol handler temporarily misses the interrupt flag.
+    set("probesize", "32768".into());
+    set("analyzeduration", "1000000".into());
+    set("fpsprobesize", "2".into());
+    set("max_probe_packets", "64".into());
+    set(
+        "rw_timeout",
+        recording_options
+            .rw_timeout_seconds
+            .saturating_mul(1_000_000)
+            .to_string(),
+    );
+    // A corrupt packet is dropped instead of being remuxed into the recording.
+    // Without this the demuxer hands truncated slices straight to the muxer and
+    // the damage only surfaces later, inside the viewer's decoder.
+    set("fflags", "+discardcorrupt".into());
+
+    if source.protocol == super::PlaybackProtocol::Hls {
+        // HLS parsing, playlist refreshes, AES-128 keys and byte ranges all
+        // stay inside libavformat. Start at the live edge and retry transient
+        // segment failures without maintaining a second playlist parser here.
+        set("live_start_index", "-1".into());
+        set(
+            "seg_max_retry",
+            recording_options.hls_segment_retry_count.to_string(),
+        );
+        set("http_persistent", "1".into());
+        set("http_multiple", "1".into());
+        // Reconnecting is only safe on a segmented protocol, where a retry
+        // resumes at a segment boundary.
+        //
+        // A continuous stream such as FLV must not get these options: on
+        // reconnect libavformat resumes at the byte level with no notion of
+        // container framing, so the new response — its fresh FLV header and
+        // `onMetaData` tag included — lands in the middle of whatever tag was
+        // being written. That yields a structurally intact file whose H.264
+        // slices contain foreign bytes, which fails only at playback time as
+        // `PIPELINE_ERROR_DECODE`. A dropped continuous stream ends the task
+        // instead, and the manager records the rest into a new session.
+        set("reconnect", "1".into());
+        set("reconnect_streamed", "1".into());
+        set("reconnect_on_network_error", "1".into());
+        set("reconnect_on_http_error", "408,425,429,5xx".into());
+        set(
+            "reconnect_delay_max",
+            recording_options.reconnect_delay_max_seconds.to_string(),
+        );
+    }
+
+    options
 }
 
 enum StopReason {
@@ -742,7 +779,10 @@ fn interrupted(error: String) -> TaskOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{PacketTimeline, publish_part};
+    use super::super::PlaybackProtocol;
+    use super::{
+        FfmpegRecordingOptions, PacketTimeline, PlayUrl, build_input_options, publish_part,
+    };
     use ffmpeg_next::{Packet, Rational};
     use std::fs;
     use std::io::Write;
@@ -767,6 +807,105 @@ mod tests {
         assert!(!part.exists());
         assert_eq!(fs::read(&final_path).unwrap(), b"flushed media");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn source(protocol: PlaybackProtocol) -> PlayUrl {
+        PlayUrl {
+            source_id: "test".into(),
+            label: "test".into(),
+            protocol,
+            priority: 0,
+            url: "https://example.com/live".into(),
+            headers: Default::default(),
+            twitch_ad_recovery: None,
+        }
+    }
+
+    fn option_keys(options: &[(String, String)]) -> Vec<&str> {
+        options.iter().map(|(key, _)| key.as_str()).collect()
+    }
+
+    /// The reconnect options splice a reconnected response into the middle of an
+    /// FLV tag, so a continuous stream must never receive them.
+    #[test]
+    fn reconnect_options_are_limited_to_segmented_sources() {
+        let recording_options = FfmpegRecordingOptions::default();
+        const RECONNECT_KEYS: [&str; 5] = [
+            "reconnect",
+            "reconnect_streamed",
+            "reconnect_on_network_error",
+            "reconnect_on_http_error",
+            "reconnect_delay_max",
+        ];
+
+        for protocol in [PlaybackProtocol::Flv, PlaybackProtocol::MpegTs] {
+            let options = build_input_options(&source(protocol), None, &recording_options);
+            let keys = option_keys(&options);
+            for key in RECONNECT_KEYS {
+                assert!(
+                    !keys.contains(&key),
+                    "{protocol:?} 不应带重连参数，但出现了 {key}"
+                );
+            }
+            assert!(!keys.contains(&"seg_max_retry"));
+        }
+
+        let options = build_input_options(&source(PlaybackProtocol::Hls), None, &recording_options);
+        let keys = option_keys(&options);
+        for key in RECONNECT_KEYS {
+            assert!(keys.contains(&key), "HLS 应带重连参数 {key}");
+        }
+        assert!(keys.contains(&"seg_max_retry"));
+    }
+
+    /// A corrupt packet must be dropped by the demuxer on every protocol rather
+    /// than remuxed into the recording.
+    #[test]
+    fn corrupt_packets_are_discarded_on_every_protocol() {
+        let recording_options = FfmpegRecordingOptions::default();
+        for protocol in [
+            PlaybackProtocol::Flv,
+            PlaybackProtocol::MpegTs,
+            PlaybackProtocol::Hls,
+        ] {
+            let options = build_input_options(&source(protocol), None, &recording_options);
+            assert!(
+                options
+                    .iter()
+                    .any(|(key, value)| key == "fflags" && value.contains("discardcorrupt")),
+                "{protocol:?} 缺少 +discardcorrupt"
+            );
+        }
+    }
+
+    #[test]
+    fn reconnect_delay_and_segment_retry_come_from_settings() {
+        let recording_options = FfmpegRecordingOptions {
+            rw_timeout_seconds: 12,
+            reconnect_delay_max_seconds: 21,
+            hls_segment_retry_count: 7,
+            split_duration: None,
+        };
+        let options = build_input_options(&source(PlaybackProtocol::Hls), None, &recording_options);
+        let value = |key: &str| {
+            options
+                .iter()
+                .find(|(option_key, _)| option_key == key)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("reconnect_delay_max"), Some("21"));
+        assert_eq!(value("seg_max_retry"), Some("7"));
+        assert_eq!(value("rw_timeout"), Some("12000000"));
+    }
+
+    #[test]
+    fn blank_proxy_is_not_forwarded_to_the_demuxer() {
+        let recording_options = FfmpegRecordingOptions::default();
+        let flv = source(PlaybackProtocol::Flv);
+        let blank = build_input_options(&flv, Some("   "), &recording_options);
+        assert!(!option_keys(&blank).contains(&"http_proxy"));
+        let padded = build_input_options(&flv, Some(" http://127.0.0.1:1080 "), &recording_options);
+        assert!(option_keys(&padded).contains(&"http_proxy"));
     }
 
     fn packet(stream: usize, dts: i64, pts: i64) -> Packet {
