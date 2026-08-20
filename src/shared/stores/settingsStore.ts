@@ -88,7 +88,11 @@ const ASR_WINDOW_SECONDS_MAX = 1;
 export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
 export const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
-export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = false;
+/**
+ * Background recording is unconditional, so this is the fixed start value of
+ * the per-task "离开页面后继续录制" switch rather than a stored preference.
+ */
+export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = true;
 export const RECORDING_AUTO_SPLIT_MINUTES_MIN = 0;
 export const RECORDING_AUTO_SPLIT_MINUTES_MAX = 24 * 60;
 export const RECORDING_AUTO_SPLIT_MINUTES_DEFAULT = 0;
@@ -260,7 +264,6 @@ export function recordingPreferencesFromAppSettings(
   settings: Pick<
     AppSettings,
     | "recording_include_danmaku"
-    | "recording_continue_after_leave"
     | "recording_auto_split_minutes"
     | "ffmpeg_rw_timeout_seconds"
     | "ffmpeg_reconnect_delay_max_seconds"
@@ -270,7 +273,6 @@ export function recordingPreferencesFromAppSettings(
 ) {
   return {
     recordingIncludeDanmaku: settings.recording_include_danmaku,
-    recordingContinueAfterLeave: settings.recording_continue_after_leave,
     recordingAutoSplitMinutes: parseRecordingAutoSplitMinutes(
       settings.recording_auto_split_minutes,
     ),
@@ -354,7 +356,6 @@ type SettingsState = {
   /** Device-local custom IPTV M3U address; never included in profile packages. */
   iptvCustomM3uUrl: string | null;
   recordingIncludeDanmaku: boolean;
-  recordingContinueAfterLeave: boolean;
   recordingAutoSplitMinutes: number;
   ffmpegRwTimeoutSeconds: number;
   ffmpegReconnectDelayMaxSeconds: number;
@@ -385,7 +386,6 @@ type SettingsState = {
   markDanmakuCookieChanged: () => void;
   setIptvCustomM3uUrl: (url: string | null) => void;
   setRecordingIncludeDanmaku: (enabled: boolean) => void;
-  setRecordingContinueAfterLeave: (enabled: boolean) => void;
   setRecordingAutoSplitMinutes: (minutes: number) => void;
   setFfmpegRwTimeoutSeconds: (seconds: number) => void;
   setFfmpegReconnectDelayMaxSeconds: (seconds: number) => void;
@@ -428,7 +428,6 @@ const defaultSettings: AppSettings = {
   asr_translation_to: "zh-CN",
   iptv_custom_m3u_url: null,
   recording_include_danmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
-  recording_continue_after_leave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
   recording_auto_split_minutes: RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
   ffmpeg_rw_timeout_seconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
   ffmpeg_reconnect_delay_max_seconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
@@ -467,7 +466,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     asr_translation_to: state.asrTranslationTo,
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
     recording_include_danmaku: state.recordingIncludeDanmaku,
-    recording_continue_after_leave: state.recordingContinueAfterLeave,
     recording_auto_split_minutes: state.recordingAutoSplitMinutes,
     ffmpeg_rw_timeout_seconds: state.ffmpegRwTimeoutSeconds,
     ffmpeg_reconnect_delay_max_seconds: state.ffmpegReconnectDelayMaxSeconds,
@@ -511,7 +509,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuCookieRevision: 0,
       iptvCustomM3uUrl: null,
       recordingIncludeDanmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
-      recordingContinueAfterLeave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
       recordingAutoSplitMinutes: RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
       ffmpegRwTimeoutSeconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
       ffmpegReconnectDelayMaxSeconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
@@ -742,12 +739,6 @@ export const useSettingsStore = create<SettingsState>()(
       setRecordingIncludeDanmaku: (recordingIncludeDanmaku) => {
         set({ recordingIncludeDanmaku });
         void get().persistToBackend({ recording_include_danmaku: recordingIncludeDanmaku });
-      },
-      setRecordingContinueAfterLeave: (recordingContinueAfterLeave) => {
-        set({ recordingContinueAfterLeave });
-        void get().persistToBackend({
-          recording_continue_after_leave: recordingContinueAfterLeave,
-        });
       },
       setRecordingAutoSplitMinutes: (minutes) => {
         const recordingAutoSplitMinutes = parseRecordingAutoSplitMinutes(minutes);

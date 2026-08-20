@@ -12,6 +12,7 @@ import {
   RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
   RECORDING_AUTO_SPLIT_MINUTES_MAX,
   RECORDING_ASS_DEFAULT_SETTINGS,
+  RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
   RECORDING_INCLUDE_DANMAKU_DEFAULT,
   normalizeRecordingAssSettings,
   parseFfmpegHlsSegmentRetryCount,
@@ -91,11 +92,20 @@ describe("FFmpeg recording settings", () => {
     expect(parseRecordingAutoSplitMinutes(undefined)).toBe(RECORDING_AUTO_SPLIT_MINUTES_DEFAULT);
   });
 
+  test("starts a new task with background recording enabled", () => {
+    expect(RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT).toBe(true);
+    expect(
+      resolveRecordingControlOptions({
+        includeDanmaku: true,
+        continueOnLeave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+      }).continueOnLeave,
+    ).toBe(true);
+  });
+
   test("maps backend recording defaults into the frontend preference shape", () => {
     expect(
       recordingPreferencesFromAppSettings({
         recording_include_danmaku: true,
-        recording_continue_after_leave: true,
         recording_auto_split_minutes: 90,
         ffmpeg_rw_timeout_seconds: 18,
         ffmpeg_reconnect_delay_max_seconds: 12,
@@ -108,7 +118,6 @@ describe("FFmpeg recording settings", () => {
       }),
     ).toEqual({
       recordingIncludeDanmaku: true,
-      recordingContinueAfterLeave: true,
       recordingAutoSplitMinutes: 90,
       ffmpegRwTimeoutSeconds: 18,
       ffmpegReconnectDelayMaxSeconds: 12,

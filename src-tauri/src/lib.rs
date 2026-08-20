@@ -36,6 +36,8 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_immersive,
     android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+use commands::app_lifecycle::{app_confirm_exit, recording_active_count};
 #[cfg(not(target_os = "android"))]
 use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
 use commands::cache::{cache_clear, cache_usage};
@@ -78,11 +80,16 @@ use commands::stream_proxy::{
     stream_proxy_probe_sources, stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry,
 };
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 
 const MAX_LOG_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Emitted instead of closing the window while recordings are still running.
+/// The frontend answers with `app_confirm_exit` or by dismissing its dialog.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+const APP_EXIT_REQUESTED_EVENT: &str = "app-exit-requested";
 
 /**
  * Registers the narrow Android bridge used by the live-player edge gestures.
@@ -321,6 +328,10 @@ pub fn run() {
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
             android_player_controls_set_immersive,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_active_count,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            app_confirm_exit,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -330,7 +341,20 @@ pub fn run() {
                 event: tauri::WindowEvent::CloseRequested { api, .. },
                 ..
             } if label == "main" => {
+                // The close is always prevented first: exiting from inside this
+                // handler is what lets the shutdown path finalize its work, and
+                // an active recording additionally needs the user's answer.
                 api.prevent_close();
+                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+                if let Some(state) = app_handle.try_state::<AppState>()
+                    && state.inner().recording.active_count() > 0
+                    && app_handle.emit(APP_EXIT_REQUESTED_EVENT, ()).is_ok()
+                {
+                    // The frontend owns the decision from here: it either calls
+                    // `app_confirm_exit` or leaves the window open. A failed
+                    // emit means no webview can ask, so fall through and exit.
+                    return;
+                }
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
                     state.stream_proxy.stop();
