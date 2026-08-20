@@ -131,11 +131,7 @@ pub struct AppSettings {
     pub iptv_custom_m3u_url: Option<String>,
     /// Accepted only to read settings written before background recording became
     /// unconditional. Recordings now always continue after their page is left.
-    #[serde(
-        default,
-        rename = "recording_continue_after_leave",
-        skip_serializing
-    )]
+    #[serde(default, rename = "recording_continue_after_leave", skip_serializing)]
     pub legacy_recording_continue_after_leave: bool,
     /// Include the synchronized danmaku sidecar by default for live recordings.
     pub recording_include_danmaku: bool,

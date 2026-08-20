@@ -524,7 +524,7 @@ export function FfmpegSettingsFields() {
       <NumberSettingField
         id="ffmpeg-reconnect-delay"
         title="最大重连延迟"
-        description="限制连续重连之间的最长等待时间。"
+        description="限制连续重连之间的最长等待时间，仅对 HLS 直播流生效。"
         value={reconnectDelay}
         min={FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN}
         max={FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX}
