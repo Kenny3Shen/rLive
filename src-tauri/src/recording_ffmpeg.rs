@@ -25,6 +25,9 @@ use ffmpeg_next as ffmpeg;
 static FFMPEG_INIT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static FFMPEG_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const TIMESTAMP_TIME_BASE: Rational = Rational(1, 1_000_000);
+/// Consecutive packets a live stream may fail to write before the recording
+/// gives up. A single transient timestamp/muxer anomaly must not end the task.
+const MAX_INVALID_WRITE_FAILURES: u32 = 12;
 
 pub(super) async fn run(
     source: PlayUrl,
@@ -251,6 +254,7 @@ fn remux(
 
     let mut wrote_packet = false;
     let mut invalid_packets = 0_u32;
+    let mut consecutive_write_failures = 0_u32;
     let mut last_progress = Instant::now();
     let mut last_space_check = Instant::now() - STORAGE_SPACE_CHECK_INTERVAL;
     let mut timeline = PacketTimeline::new(input.nb_streams() as usize);
@@ -316,8 +320,18 @@ fn remux(
         let packet_size = packet.size() as u64;
         let first_packet = !wrote_packet;
         if let Err(error) = packet.write_interleaved(&mut output) {
+            if consecutive_write_failures < MAX_INVALID_WRITE_FAILURES {
+                consecutive_write_failures += 1;
+                tracing::warn!(
+                    stream = mapped_index,
+                    error = %error,
+                    "Rust FFmpeg 写入媒体包失败，已跳过该包"
+                );
+                continue;
+            }
             break StopReason::Failed(format!("Rust FFmpeg 写入媒体包失败: {error}"));
         }
+        consecutive_write_failures = 0;
         wrote_packet = true;
         state.bytes.fetch_add(packet_size, Ordering::Relaxed);
         if first_packet || last_progress.elapsed() >= Duration::from_millis(500) {
@@ -415,12 +429,29 @@ struct PacketTimeline {
     last_input_clock_us: Vec<Option<i64>>,
     last_output_clock_us: Option<i64>,
     previous_epochs: Vec<Option<PreviousEpoch>>,
+    rebase_after_synthetic: Vec<bool>,
 }
 
 #[derive(Clone, Copy)]
 struct PreviousEpoch {
     offset_us: i64,
     cutoff_us: i64,
+}
+
+/// Upper bound (in microseconds) for a credible live-stream packet clock.
+/// Values beyond this are produced by `AV_NOPTS_VALUE`, by overflow inside
+/// libav's rescale, or by truly corrupt source timestamps (常见于斗鱼等 FLV
+/// 流在 CDN 切换/重连后发生的跳变). Such packets are rewritten onto a
+/// synthetic monotonic clock instead of failing the whole recording.
+const MAX_SANE_TIMESTAMP_US: i64 = 1_i64 << 47;
+/// Upper bound (in source time-base ticks) for a normalized output timestamp.
+const MAX_SANE_TIMESTAMP_TICKS: i64 = 1_i64 << 56;
+/// FFmpeg's "no timestamp" sentinel.
+const AV_NOPTS_VALUE: i64 = i64::MIN;
+
+/// Treats `AV_NOPTS_VALUE` as an absent timestamp rather than a real value.
+fn usable_timestamp(value: Option<i64>) -> Option<i64> {
+    value.filter(|value| *value != AV_NOPTS_VALUE)
 }
 
 impl PacketTimeline {
@@ -430,7 +461,66 @@ impl PacketTimeline {
             last_input_clock_us: vec![None; stream_count],
             last_output_clock_us: None,
             previous_epochs: vec![None; stream_count],
+            rebase_after_synthetic: vec![false; stream_count],
         }
+    }
+
+    fn tick_us(time_base: Rational) -> i64 {
+        1_i64
+            .rescale(time_base, TIMESTAMP_TIME_BASE)
+            .unsigned_abs()
+            .max(1) as i64
+    }
+
+    fn start_new_epoch(&mut self, stream_index: usize, input_clock_us: i64, time_base: Rational) {
+        let old_offset = self.epoch_offset_us.unwrap_or_default();
+        let tick_us = Self::tick_us(time_base);
+        let next_output = self
+            .last_output_clock_us
+            .unwrap_or_else(|| tick_us.saturating_neg())
+            .saturating_add(tick_us);
+        self.epoch_offset_us = Some(next_output.saturating_sub(input_clock_us));
+        for (index, previous_input) in self.last_input_clock_us.iter().enumerate() {
+            self.previous_epochs[index] = (index != stream_index)
+                .then_some(*previous_input)
+                .flatten()
+                .map(|cutoff_us| PreviousEpoch {
+                    offset_us: old_offset,
+                    cutoff_us,
+                });
+        }
+        self.previous_epochs[stream_index] = None;
+        self.last_input_clock_us[stream_index] = None;
+    }
+
+    /// Rewrites a packet whose source timestamps are absent or unrepresentable
+    /// onto a monotonic clock that continues right after the last written
+    /// packet, so the muxer never sees `NOPTS` or absurd values while the
+    /// recording keeps running.
+    fn synthesize_timestamps(
+        &mut self,
+        packet: &mut Packet,
+        stream_index: usize,
+        time_base: Rational,
+    ) {
+        let tick_us = Self::tick_us(time_base);
+        let synthetic_us = self
+            .last_output_clock_us
+            .unwrap_or_else(|| tick_us.saturating_neg())
+            .saturating_add(tick_us);
+        let synthetic_ticks = synthetic_us.rescale(TIMESTAMP_TIME_BASE, time_base);
+        packet.set_dts(Some(synthetic_ticks));
+        packet.set_pts(Some(synthetic_ticks));
+        self.rebase_after_synthetic[stream_index] = true;
+        self.last_output_clock_us = Some(
+            self.last_output_clock_us
+                .map_or(synthetic_us, |previous| previous.max(synthetic_us)),
+        );
+        tracing::warn!(
+            stream = stream_index,
+            synthetic_ticks,
+            "直播流携带缺失或异常时间戳，已重写为单调时间轴"
+        );
     }
 
     fn normalize(&mut self, packet: &mut Packet, time_base: Rational) -> Result<(), String> {
@@ -438,76 +528,79 @@ impl PacketTimeline {
         let Some(mut last_input) = self.last_input_clock_us.get(stream_index).copied() else {
             return Err("Rust FFmpeg 时间轴轨道索引失效".into());
         };
-        let Some(input_clock) = packet.dts().or_else(|| packet.pts()) else {
+        // `AV_NOPTS_VALUE` must not be treated as a real clock value, or the
+        // rescale can overflow and previously aborted the recording with a
+        // "时间轴溢出" error. Strip it and fall through to a usable sibling.
+        let dts = usable_timestamp(packet.dts());
+        let pts = usable_timestamp(packet.pts());
+        if packet.dts().is_some() && dts.is_none() {
+            packet.set_dts(None);
+        }
+        if packet.pts().is_some() && pts.is_none() {
+            packet.set_pts(None);
+        }
+        let Some(input_clock) = dts.or(pts) else {
+            self.synthesize_timestamps(packet, stream_index, time_base);
             return Ok(());
         };
         let input_clock_us = input_clock.rescale(time_base, TIMESTAMP_TIME_BASE);
+        if input_clock_us.saturating_abs() > MAX_SANE_TIMESTAMP_US {
+            self.synthesize_timestamps(packet, stream_index, time_base);
+            return Ok(());
+        }
 
-        let previous_epoch_offset = self.previous_epochs[stream_index].and_then(|previous| {
-            if input_clock_us >= previous.cutoff_us {
-                self.previous_epochs[stream_index] = Some(PreviousEpoch {
-                    cutoff_us: input_clock_us,
-                    ..previous
-                });
-                Some(previous.offset_us)
-            } else {
-                self.previous_epochs[stream_index] = None;
-                self.last_input_clock_us[stream_index] = None;
-                last_input = None;
-                None
-            }
-        });
+        let rebase_after_synthetic = self.rebase_after_synthetic[stream_index];
+        if rebase_after_synthetic {
+            self.rebase_after_synthetic[stream_index] = false;
+            self.start_new_epoch(stream_index, input_clock_us, time_base);
+            last_input = None;
+        }
+        let previous_epoch_offset = if rebase_after_synthetic {
+            None
+        } else {
+            self.previous_epochs[stream_index].and_then(|previous| {
+                if input_clock_us >= previous.cutoff_us {
+                    self.previous_epochs[stream_index] = Some(PreviousEpoch {
+                        cutoff_us: input_clock_us,
+                        ..previous
+                    });
+                    Some(previous.offset_us)
+                } else {
+                    self.previous_epochs[stream_index] = None;
+                    self.last_input_clock_us[stream_index] = None;
+                    last_input = None;
+                    None
+                }
+            })
+        };
         if self.epoch_offset_us.is_none() {
-            self.epoch_offset_us = Some(
-                input_clock_us
-                    .checked_neg()
-                    .ok_or_else(|| "Rust FFmpeg 无法归一化直播流起始时间戳".to_string())?,
-            );
+            self.epoch_offset_us = Some(input_clock_us.saturating_neg());
         } else if previous_epoch_offset.is_none()
             && last_input.is_some_and(|previous| input_clock_us < previous)
         {
-            let old_offset = self.epoch_offset_us.unwrap_or_default();
-            let tick_us = 1_i64
-                .rescale(time_base, TIMESTAMP_TIME_BASE)
-                .unsigned_abs()
-                .max(1) as i64;
-            let next_output = self
-                .last_output_clock_us
-                .unwrap_or(-tick_us)
-                .checked_add(tick_us)
-                .ok_or_else(|| "Rust FFmpeg 直播流时间轴溢出".to_string())?;
-            self.epoch_offset_us = Some(
-                next_output
-                    .checked_sub(input_clock_us)
-                    .ok_or_else(|| "Rust FFmpeg 直播流时间轴溢出".to_string())?,
-            );
-            for (index, previous_input) in self.last_input_clock_us.iter().enumerate() {
-                self.previous_epochs[index] = (index != stream_index)
-                    .then_some(*previous_input)
-                    .flatten()
-                    .map(|cutoff_us| PreviousEpoch {
-                        offset_us: old_offset,
-                        cutoff_us,
-                    });
-            }
-            self.last_input_clock_us[stream_index] = None;
+            // Saturated arithmetic keeps a discontinuous stream alive instead
+            // of aborting the recording on an extreme PTS/DTS jump; final
+            // outputs are re-validated below before they reach the muxer.
+            self.start_new_epoch(stream_index, input_clock_us, time_base);
         }
 
         let offset_ticks = previous_epoch_offset
             .or(self.epoch_offset_us)
             .unwrap_or_default()
             .rescale(TIMESTAMP_TIME_BASE, time_base);
-        if let Some(pts) = packet.pts() {
-            packet.set_pts(Some(
-                pts.checked_add(offset_ticks)
-                    .ok_or_else(|| "Rust FFmpeg PTS 时间轴溢出".to_string())?,
-            ));
+        let next_pts = pts.map(|value| value.saturating_add(offset_ticks));
+        let next_dts = dts.map(|value| value.saturating_add(offset_ticks));
+        if next_pts.is_some_and(|value| value.saturating_abs() > MAX_SANE_TIMESTAMP_TICKS)
+            || next_dts.is_some_and(|value| value.saturating_abs() > MAX_SANE_TIMESTAMP_TICKS)
+        {
+            self.synthesize_timestamps(packet, stream_index, time_base);
+            return Ok(());
         }
-        if let Some(dts) = packet.dts() {
-            packet.set_dts(Some(
-                dts.checked_add(offset_ticks)
-                    .ok_or_else(|| "Rust FFmpeg DTS 时间轴溢出".to_string())?,
-            ));
+        if let Some(pts) = next_pts {
+            packet.set_pts(Some(pts));
+        }
+        if let Some(dts) = next_dts {
+            packet.set_dts(Some(dts));
         }
 
         let output_clock = packet.dts().or_else(|| packet.pts()).unwrap_or(input_clock);
@@ -737,5 +830,49 @@ mod tests {
         assert_eq!(packets[0].dts(), Some(0));
         assert_eq!(packets[1].dts(), Some(0));
         assert_eq!(packets[2].dts(), Some(1_000));
+    }
+
+    #[test]
+    fn packet_timeline_ignores_nopts_dts_and_uses_pts() {
+        let mut timeline = PacketTimeline::new(1);
+        let mut packet = packet(0, i64::MIN, 5_000);
+        let time_base = Rational(1, 1_000);
+
+        timeline.normalize(&mut packet, time_base).unwrap();
+
+        // AV_NOPTS_VALUE dts is cleared instead of overflowing the offset;
+        // the packet keeps its usable pts on the normalized timeline.
+        assert_eq!(packet.dts(), None);
+        assert_eq!(packet.pts(), Some(0));
+    }
+
+    #[test]
+    fn packet_timeline_rewrites_absurd_timestamps_onto_monotonic_clock() {
+        let mut timeline = PacketTimeline::new(1);
+        let time_base = Rational(1, 1_000);
+        let mut packets = [
+            packet(0, i64::MAX, i64::MAX),
+            packet(0, i64::MIN, i64::MIN),
+            packet(0, 5_000, 5_040),
+        ];
+        for packet in &mut packets {
+            timeline.normalize(packet, time_base).unwrap();
+        }
+
+        // Every output timestamp stays inside a sane envelope and remains
+        // monotonic across the synthetic-to-real transition.
+        let dts: Vec<Option<i64>> = packets.iter().map(|packet| packet.dts()).collect();
+        assert!(dts[0].is_some());
+        assert!(dts[1].is_some());
+        assert!(packets[1].dts().unwrap() > packets[0].dts().unwrap());
+        assert!(packets[2].dts().unwrap() > packets[1].dts().unwrap());
+        assert_eq!(packets[2].dts(), Some(2));
+        assert_eq!(packets[2].pts(), Some(42));
+        for packet in &packets {
+            let dts = packet.dts().unwrap();
+            let pts = packet.pts().unwrap();
+            assert!(dts.saturating_abs() < 1_i64 << 40);
+            assert!(pts.saturating_abs() < 1_i64 << 40);
+        }
     }
 }
