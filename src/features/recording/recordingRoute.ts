@@ -21,3 +21,34 @@ export function withRecordingView(current: URLSearchParams, view: RecordingView)
   else next.set(RECORDING_VIEW_PARAM, view);
   return next;
 }
+
+/**
+ * Builds the playback path for a recording id.
+ *
+ * An id is a two-level bundle path (`platform_room/user_timestamp`), and the
+ * playback route spends one segment on each level. Encoding the whole id with
+ * `encodeURIComponent` instead would turn the separator into `%2F`, which the
+ * router hands back only half-decoded and which then matches no library item.
+ */
+export function recordingPlaybackPath(id: string): string {
+  const levels = id.split("/").map(encodeURIComponent).join("/");
+  return `/recordings/play/${levels}`;
+}
+
+/**
+ * Rebuilds the recording id from the playback route params. Returns null when a
+ * level is missing, so a hand-typed URL fails to match rather than resolving to
+ * a partial id.
+ */
+export function recordingIdFromPlaybackParams(
+  roomDir: string | undefined,
+  sessionDir: string | undefined,
+): string | null {
+  if (!roomDir || !sessionDir) return null;
+  try {
+    return `${decodeURIComponent(roomDir)}/${decodeURIComponent(sessionDir)}`;
+  } catch {
+    // A malformed percent-escape cannot name a recording.
+    return null;
+  }
+}
