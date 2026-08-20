@@ -20,6 +20,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import type { SiteId } from "@/shared/types/live";
 import { RecordingPlayer } from "./RecordingPlayer";
+import { recordingIdFromPlaybackParams } from "./recordingRoute";
 import {
   formatRecordingDate,
   formatRecordingDuration,
@@ -215,7 +216,10 @@ function PlaybackLayout({ item, children }: { item: RecordingItem; children: Rea
 export function RecordingPlaybackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { recordingId } = useParams<{ recordingId: string }>();
+  const { roomDir, sessionDir } = useParams<{ roomDir: string; sessionDir: string }>();
+  // The id spans both route segments, so it is rejoined here rather than read
+  // from a single param.
+  const recordingId = recordingIdFromPlaybackParams(roomDir, sessionDir);
   const supported = recordingSupported();
   const recordings = useRecordings();
   const item = recordings.data?.find((entry) => entry.id === recordingId) ?? null;

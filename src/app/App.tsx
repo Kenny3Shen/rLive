@@ -91,7 +91,10 @@ const router = createBrowserRouter(
         <Route path="follow" element={<FollowPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="recordings" element={<RecordingsPage />} />
-        <Route path="recordings/play/:recordingId" element={<RecordingPlaybackPage />} />
+        {/* A recording id spans two path levels (`platform_room/user_time`), so
+            the route carries one segment per level. A single `:recordingId`
+            would receive a half-decoded param and never match a library item. */}
+        <Route path="recordings/play/:roomDir/:sessionDir" element={<RecordingPlaybackPage />} />
         <Route path="iptv/play" element={<IptvPlayerPage />} />
         <Route path="iptv" element={<IptvPage />} />
         <Route path="settings" element={<SettingsPage />} />

@@ -19,6 +19,8 @@ import {
 } from "../src/features/recording/recording";
 import {
   RECORDING_VIEW_PARAM,
+  recordingIdFromPlaybackParams,
+  recordingPlaybackPath,
   recordingViewFromSearch,
   withRecordingView,
 } from "../src/features/recording/recordingRoute";
@@ -626,5 +628,30 @@ describe("recording leave confirmation policy", () => {
       shouldPromptBeforeRecordingLeave(recordingItem(), "/room/bilibili/100", "/room/bilibili/100"),
     ).toBe(false);
     expect(shouldPromptBeforeRecordingLeave(null, "/room/bilibili/100", "/")).toBe(false);
+  });
+});
+
+describe("recording playback route", () => {
+  const id = "bilibili_100/主播_20260820-192158";
+
+  test("spends one path segment on each bundle level", () => {
+    // Encoding the id as a single segment would emit %2F, which react-router
+    // hands back only half-decoded, so the id would match no library item.
+    const path = recordingPlaybackPath(id);
+    expect(path).toBe("/recordings/play/bilibili_100/%E4%B8%BB%E6%92%AD_20260820-192158");
+    expect(path).not.toContain("%2F");
+  });
+
+  test("rejoins the id from both route params", () => {
+    const [roomDir, sessionDir] = recordingPlaybackPath(id)
+      .replace("/recordings/play/", "")
+      .split("/");
+    expect(recordingIdFromPlaybackParams(roomDir, sessionDir)).toBe(id);
+  });
+
+  test("refuses a half-written or malformed playback path", () => {
+    expect(recordingIdFromPlaybackParams("bilibili_100", undefined)).toBeNull();
+    expect(recordingIdFromPlaybackParams(undefined, "主播_1")).toBeNull();
+    expect(recordingIdFromPlaybackParams("bilibili_100", "%E4%B8")).toBeNull();
   });
 });
