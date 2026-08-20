@@ -975,15 +975,15 @@ impl RecordingManager {
         let root = self.current_root();
         ensure_sufficient_storage_space(&root)?;
         let started_at = unix_ms();
-        let bundle_base = recording_bundle_base(&input);
-        let bundle =
-            create_recording_bundle(&root, &self.storage_roots(), &bundle_base, started_at)?;
+        let room_dir = recording_bundle_room_dir(&input);
+        let session_dir = recording_bundle_session_dir(&input, started_at);
+        let (bundle, id) = create_recording_bundle(
+            &root,
+            &self.storage_roots(),
+            &room_dir,
+            &session_dir,
+        )?;
         let bundle_guard = BundleGuard::new(bundle.clone());
-        let id = bundle
-            .file_name()
-            .and_then(|value| value.to_str())
-            .expect("recording bundle name is valid UTF-8")
-            .to_string();
         let title = normalize_text(&input.title, "未命名直播");
         let user_name = normalize_text(&input.user_name, "");
         let file_stem = recording_file_stem(&user_name, &title, started_at);
@@ -1061,7 +1061,7 @@ impl RecordingManager {
         let proxy = proxy.map(str::to_string);
         let mut source = input.source;
         source.protocol = source_protocol;
-        let segment_bundle_base = bundle_base.clone();
+        let segment_room_dir = room_dir.clone();
         let segment_storage_roots = self.storage_roots();
         let mut sessions = self
             .sessions
@@ -1105,7 +1105,7 @@ impl RecordingManager {
                     match create_split_segment(
                         &task_state,
                         &source.url,
-                        &segment_bundle_base,
+                        &segment_room_dir,
                         &segment_storage_roots,
                     ) {
                         Ok(next_state) => {
@@ -1807,24 +1807,30 @@ fn salvage_temporary_media_after_worker_failure(state: &Arc<SessionState>) {
 fn create_split_segment(
     previous_state: &Arc<SessionState>,
     source_url: &str,
-    bundle_base: &str,
+    room_dir: &str,
     storage_roots: &[PathBuf],
 ) -> AppResult<Arc<SessionState>> {
     ensure_sufficient_storage_space(&previous_state.root)?;
     let started_at = unix_ms();
-    let bundle =
-        create_recording_bundle(&previous_state.root, storage_roots, bundle_base, started_at)?;
-    let bundle_guard = BundleGuard::new(bundle.clone());
-    let id = bundle
-        .file_name()
-        .and_then(|value| value.to_str())
-        .expect("recording bundle name is valid UTF-8")
-        .to_string();
     let previous = previous_state
         .stored
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
+    // A split is a new session of the same room, so it stays under the same room
+    // directory and only takes a fresh `username_starttime` level.
+    let session_dir = format!(
+        "{}_{}",
+        sanitize_bundle_component(&previous.user_name, "未知用户", 120),
+        recording_timestamp(started_at)
+    );
+    let (bundle, id) = create_recording_bundle(
+        &previous_state.root,
+        storage_roots,
+        room_dir,
+        &session_dir,
+    )?;
+    let bundle_guard = BundleGuard::new(bundle.clone());
     let file_stem = recording_file_stem(&previous.user_name, &previous.title, started_at);
     let media_file = media_file_name(previous.protocol, source_url, &file_stem);
     let danmaku_writer = if previous.include_danmaku {
@@ -2316,7 +2322,8 @@ fn recording_file_stem(user_name: &str, title: &str, started_at: i64) -> String 
     format!("{user}_{title}_{timestamp}")
 }
 
-fn recording_bundle_base(input: &RecordingStartInput) -> String {
+/// Outer bundle level: every session of one room lands under `platform_roomid`.
+fn recording_bundle_room_dir(input: &RecordingStartInput) -> String {
     let platform = input
         .site_id
         .as_deref()
@@ -2340,31 +2347,58 @@ fn recording_bundle_base(input: &RecordingStartInput) -> String {
     )
 }
 
+/// Inner bundle level: one recording session, named `username_starttime`. The
+/// timestamp is the same `recording_timestamp` the media file name carries, so a
+/// session directory and the file inside it agree.
+fn recording_bundle_session_dir(input: &RecordingStartInput, started_at: i64) -> String {
+    format!(
+        "{}_{}",
+        sanitize_bundle_component(&input.user_name, "未知用户", 120),
+        recording_timestamp(started_at)
+    )
+}
+
+/// Creates `<root>/<room_dir>/<session_dir>/` and returns the absolute bundle
+/// path together with the id, which is that bundle relative to `root`.
+///
+/// The room level is shared by every session of the room, so only the session
+/// level takes a suffix when two recordings start within the same second.
 fn create_recording_bundle(
     root: &Path,
     known_roots: &[PathBuf],
-    base: &str,
-    started_at: i64,
-) -> AppResult<PathBuf> {
-    if !is_safe_recording_id(base) {
+    room_dir: &str,
+    session_dir: &str,
+) -> AppResult<(PathBuf, String)> {
+    if !is_safe_bundle_segment(room_dir) || !is_safe_bundle_segment(session_dir) {
         return Err(AppError::new("recording_storage_error", "录制目录名称无效"));
     }
-    let timestamped = format!("{base}_{}", recording_timestamp(started_at));
+    let room_root = root.join(room_dir);
+    std::fs::create_dir_all(&room_root).map_err(|error| {
+        AppError::new(
+            "recording_storage_error",
+            format!("创建录制空间失败: {error}"),
+        )
+    })?;
     for sequence in 0..10_000_u32 {
         let name = match sequence {
-            0 => base.to_string(),
-            1 => timestamped.clone(),
-            _ => format!("{timestamped}_{sequence}"),
+            0 => session_dir.to_string(),
+            _ => format!("{session_dir}_{sequence}"),
         };
+        let id = format!("{room_dir}/{name}");
+        if !is_safe_recording_id(&id) {
+            return Err(AppError::new("recording_storage_error", "录制目录名称无效"));
+        }
+        // A recording is addressed by this relative id, so it has to be free in
+        // every configured storage root and not just the one being written to.
         if known_roots
             .iter()
-            .any(|known_root| known_root.join(&name).exists())
+            .any(|known_root| known_root.join(&id).exists())
         {
             continue;
         }
-        let bundle = root.join(name);
+        let bundle = room_root.join(&name);
         match std::fs::create_dir(&bundle) {
-            Ok(()) => return Ok(bundle),
+            Ok(()) => return Ok((bundle, id)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(AppError::new(
@@ -2376,7 +2410,7 @@ fn create_recording_bundle(
     }
     Err(AppError::new(
         "recording_storage_error",
-        format!("无法为 {base} 分配不重复的录制目录"),
+        format!("无法为 {room_dir}/{session_dir} 分配不重复的录制目录"),
     ))
 }
 
@@ -2453,29 +2487,56 @@ fn unix_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
+/// Validates a recording id, which is also its path relative to a storage root.
+///
+/// The id has exactly two segments — `<platform>_<room>/<user>_<timestamp>` — so
+/// one room groups all of its sessions. This is the only guard against traversing
+/// out of a storage root, so it rejects anything that is not two plain names:
+/// `..`, absolute paths, empty or dot-only segments, and separators beyond the
+/// single `/` that joins the two levels.
 fn is_safe_recording_id(id: &str) -> bool {
     if id.is_empty()
-        || id.len() > 240
+        || id.len() > 360
         || id.trim() != id
-        || id.ends_with('.')
         || id.chars().any(|character| {
             character.is_control()
                 || matches!(
                     character,
-                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                    '<' | '>' | ':' | '"' | '\\' | '|' | '?' | '*'
                 )
         })
     {
         return false;
     }
-    let Some((platform, room)) = id.split_once('_') else {
+    let Some((room_dir, session_dir)) = id.split_once('/') else {
+        return false;
+    };
+    if !is_safe_bundle_segment(room_dir) || !is_safe_bundle_segment(session_dir) {
+        return false;
+    }
+    // The room level keeps the `<platform>_<room>` shape the library groups by.
+    let Some((platform, room)) = room_dir.split_once('_') else {
         return false;
     };
     if platform.is_empty() || room.is_empty() {
         return false;
     }
+    // Belt and braces: the parsed form must still be exactly two plain
+    // components, so no `.`/`..`/prefix slips through the textual checks.
     let mut components = Path::new(id).components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+    matches!(components.next(), Some(Component::Normal(_)))
+        && matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none()
+}
+
+/// One level of a bundle path: a plain directory name and nothing else.
+fn is_safe_bundle_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.trim() == segment
+        && !segment.ends_with('.')
+        && !segment.contains('/')
+        && segment != "."
+        && segment != ".."
 }
 
 fn acquire_recording_manager_lock(app_directory: &Path) -> AppResult<File> {
@@ -2689,27 +2750,16 @@ fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
 
 fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, PathBuf)>> {
     let mut moved = Vec::new();
-    let entries = std::fs::read_dir(from).map_err(|error| {
+    // Bundles sit two levels down, so the ids drive the move and the room level
+    // is recreated under the target root as needed.
+    let candidates = list_bundle_candidates(from).map_err(|error| {
         AppError::new(
             "recording_storage_error",
-            format!("读取原录制目录失败: {error}"),
+            format!("读取原录制目录失败: {}", error.message),
         )
     })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            AppError::new(
-                "recording_storage_error",
-                format!("读取录制目录项失败: {error}"),
-            )
-        })?;
-        let source = entry.path();
-        let Some(name) = source.file_name() else {
-            continue;
-        };
-        let Some(id) = name.to_str() else { continue };
-        if !is_safe_recording_id(id) || !source.is_dir() {
-            continue;
-        }
+    for (id, source) in candidates {
+        let id = id.as_str();
         let metadata_path = source.join("metadata.json");
         let metadata = match read_metadata_bytes(&metadata_path) {
             Ok(bytes) => bytes,
@@ -2741,12 +2791,23 @@ fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, 
             );
             continue;
         }
-        let target = to.join(name);
+        let target = to.join(id);
         if target.exists() {
             rollback_recording_bundles(&moved);
             return Err(AppError::new(
                 "recording_storage_conflict",
                 format!("目标录制目录已存在: {}", target.display()),
+            ));
+        }
+        // The room level may not exist in the target root yet. Creating it before
+        // the rename keeps the move a single atomic step per bundle.
+        if let Some(parent) = target.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            rollback_recording_bundles(&moved);
+            return Err(AppError::new(
+                "recording_storage_error",
+                format!("创建目标录制目录失败 {}: {error}", parent.display()),
             ));
         }
         if let Err(error) = std::fs::rename(&source, &target) {
@@ -2813,6 +2874,14 @@ fn write_storage_config(storage: &RecordingStorageState) -> AppResult<()> {
 }
 
 fn find_bundle(roots: &[PathBuf], id: &str) -> Option<PathBuf> {
+    find_bundle_in_root(roots, id).map(|(_root, bundle)| bundle)
+}
+
+/// Locates a recording and reports which storage root holds it.
+///
+/// The root is returned rather than derived from the bundle: an id spans two path
+/// levels, so `bundle.parent()` is the room directory and not the storage root.
+fn find_bundle_in_root(roots: &[PathBuf], id: &str) -> Option<(PathBuf, PathBuf)> {
     if !is_safe_recording_id(id) {
         return None;
     }
@@ -2821,16 +2890,12 @@ fn find_bundle(roots: &[PathBuf], id: &str) -> Option<PathBuf> {
         let metadata = bundle.join("metadata.json");
         let bytes = read_metadata_bytes(&metadata).ok()?;
         let stored = parse_stored_recording(&bytes).ok()?;
-        (stored.id == id && bundle.is_dir()).then_some(bundle)
+        (stored.id == id && bundle.is_dir()).then(|| (root.clone(), bundle))
     })
 }
 
 fn find_stored(roots: &[PathBuf], id: &str) -> AppResult<(PathBuf, StoredRecording)> {
-    let bundle =
-        find_bundle(roots, id).ok_or_else(|| AppError::new("recording_not_found", "录制不存在"))?;
-    let root = bundle
-        .parent()
-        .map(Path::to_path_buf)
+    let (root, _bundle) = find_bundle_in_root(roots, id)
         .ok_or_else(|| AppError::new("recording_not_found", "录制不存在"))?;
     let stored = read_stored(&root, id)?;
     Ok((root, stored))
@@ -3002,14 +3067,15 @@ fn recover_transaction_sidecars(
     Ok(())
 }
 
+/// Accepts a metadata replacement only when it belongs to this bundle.
+///
+/// The id spans both bundle levels, so it is matched against the room and session
+/// directories together rather than against the bundle's own name.
 fn valid_metadata_replacement(bytes: &[u8], bundle: &Path) -> bool {
     let Ok(stored) = parse_stored_recording(bytes) else {
         return false;
     };
-    bundle
-        .file_name()
-        .and_then(|value| value.to_str())
-        .is_some_and(|id| stored.id == id && is_safe_recording_id(id))
+    is_safe_recording_id(&stored.id) && bundle.ends_with(&stored.id)
 }
 
 fn recover_bundle_sidecars(bundle: &Path) -> std::io::Result<()> {
@@ -3041,43 +3107,100 @@ fn recording_root_modified_at(root: &Path) -> Option<SystemTime> {
         .ok()
 }
 
+/// Lists every `<room_dir>/<session_dir>` under a storage root as `(id, path)`.
+///
+/// Used by the recovery pass, which needs the id alongside the directory. Entries
+/// whose two levels do not form a valid id are skipped, so a stray directory or a
+/// pre-nesting single-level bundle is ignored rather than treated as a recording.
+fn list_bundle_candidates(root: &Path) -> AppResult<Vec<(String, PathBuf)>> {
+    let room_entries = std::fs::read_dir(root)
+        .map_err(|error| AppError::new("recording_storage_error", error.to_string()))?;
+    let mut candidates = Vec::new();
+    for room_entry in room_entries {
+        let Ok(room_entry) = room_entry else { continue };
+        let room_path = room_entry.path();
+        if !room_path.is_dir() {
+            continue;
+        }
+        let room_name = room_entry.file_name().to_string_lossy().to_string();
+        let Ok(session_entries) = std::fs::read_dir(&room_path) else {
+            continue;
+        };
+        for session_entry in session_entries {
+            let Ok(session_entry) = session_entry else {
+                continue;
+            };
+            let path = session_entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let session_name = session_entry.file_name().to_string_lossy().to_string();
+            let id = format!("{room_name}/{session_name}");
+            if !is_safe_recording_id(&id) {
+                continue;
+            }
+            candidates.push((id, path));
+        }
+    }
+    Ok(candidates)
+}
+
+/// Scans `<root>/<room_dir>/<session_dir>/metadata.json`.
+///
+/// Bundles live two levels down, so the outer loop walks room directories and the
+/// inner one their sessions. Single-level directories written before this layout
+/// carry no session level and are simply not found.
 fn scan_recording_root(root: &Path) -> HashMap<String, StoredRecording> {
     let mut recordings = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(room_entries) = std::fs::read_dir(root) else {
         return recordings;
     };
-    for entry in entries {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
-        if !path.is_dir() {
+    for room_entry in room_entries {
+        let Ok(room_entry) = room_entry else { continue };
+        let room_path = room_entry.path();
+        if !room_path.is_dir() {
             continue;
         }
-        let bytes = match read_metadata_bytes(&path.join("metadata.json")) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "跳过无法读取的录制 metadata"
-                );
-                continue;
-            }
-        };
-        let stored = match parse_stored_recording(&bytes) {
-            Ok(stored) => stored,
-            Err(error) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "跳过版本不受支持或已损坏的录制 metadata"
-                );
-                continue;
-            }
-        };
-        if !is_safe_recording_id(&stored.id) || !path.ends_with(&stored.id) {
+        let Ok(session_entries) = std::fs::read_dir(&room_path) else {
             continue;
+        };
+        for session_entry in session_entries {
+            let Ok(session_entry) = session_entry else {
+                continue;
+            };
+            let path = session_entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let bytes = match read_metadata_bytes(&path.join("metadata.json")) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "跳过无法读取的录制 metadata"
+                    );
+                    continue;
+                }
+            };
+            let stored = match parse_stored_recording(&bytes) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "跳过版本不受支持或已损坏的录制 metadata"
+                    );
+                    continue;
+                }
+            };
+            // `Path::ends_with` compares whole components, so a two-segment id
+            // still has to match the room and session directories exactly.
+            if !is_safe_recording_id(&stored.id) || !path.ends_with(&stored.id) {
+                continue;
+            }
+            recordings.insert(stored.id.clone(), stored);
         }
-        recordings.insert(stored.id.clone(), stored);
     }
     recordings
 }
@@ -3103,18 +3226,7 @@ fn append_recovery_error(stored: &mut StoredRecording, message: impl Into<String
 }
 
 fn recover_stale_recordings(root: &Path) -> AppResult<()> {
-    let entries = std::fs::read_dir(root)
-        .map_err(|error| AppError::new("recording_storage_error", error.to_string()))?;
-    for entry in entries {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let id = entry.file_name().to_string_lossy().to_string();
-        if !is_safe_recording_id(&id) {
-            continue;
-        }
+    for (id, path) in list_bundle_candidates(root)? {
         let metadata_path = path.join("metadata.json");
         if let Ok(bytes) = read_metadata_bytes(&metadata_path)
             && let Err(error) = parse_stored_recording(&bytes)
@@ -3409,7 +3521,12 @@ fn local_playback_url(base_url: &str, token: &str, id: &str, relative: &str) -> 
     let mut segments = url
         .path_segments_mut()
         .map_err(|_| AppError::new("recording_server_error", "录制回放地址不支持文件路径"))?;
-    segments.clear().push(token).push(id);
+    segments.clear().push(token);
+    // The id spans two path levels, so it contributes two URL segments. The
+    // server splits them back apart in the same order.
+    for level in id.split('/') {
+        segments.push(level);
+    }
     for component in Path::new(relative).components() {
         let Component::Normal(value) = component else {
             return Err(AppError::new(
@@ -3500,15 +3617,24 @@ async fn handle_playback_client(
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
-    let Some(encoded_id) = components.next() else {
+    // A recording id is two path levels, so it occupies two URL segments here.
+    let Some(encoded_room) = components.next() else {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
-    let Ok(id) = percent_decode_str(encoded_id).decode_utf8() else {
+    let Some(encoded_session) = components.next() else {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
-    let id = id.as_ref();
+    let (Ok(room), Ok(session)) = (
+        percent_decode_str(encoded_room).decode_utf8(),
+        percent_decode_str(encoded_session).decode_utf8(),
+    ) else {
+        write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    };
+    let id = format!("{room}/{session}");
+    let id = id.as_str();
     if !is_safe_recording_id(id) {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
@@ -3753,8 +3879,9 @@ mod tests {
         RecordingEventSink, RecordingLibraryIndex, RecordingManager, RecordingStartInput,
         RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
         StoredRecording, TaskOutcome, create_recording_bundle, decode_playback_relative_path,
-        finish_session, is_safe_recording_id, load_storage_state, local_playback_url,
-        media_file_name, parse_range, prepare_storage_root, read_stored, recording_bundle_base,
+        find_bundle, finish_session, is_safe_recording_id, load_storage_state, local_playback_url,
+        media_file_name, parse_range, prepare_storage_root, read_stored,
+        recording_bundle_room_dir, recording_bundle_session_dir, recording_timestamp,
         recording_file_stem, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
         salvage_temporary_media_after_worker_failure, scan_recording_root,
         stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
@@ -3772,8 +3899,11 @@ mod tests {
     use tokio::sync::{oneshot, watch};
     use uuid::Uuid;
 
+    /// A recording id in the on-disk shape: `<platform>_<room>/<user>_<time>`.
+    /// Tests that create a bundle by hand must `create_dir_all` it, since the id
+    /// now spans a room directory and a session directory.
     fn test_recording_id() -> String {
-        format!("bilibili_{}", Uuid::new_v4())
+        format!("bilibili_{}/主播_20260820-192158", Uuid::new_v4())
     }
 
     #[test]
@@ -3808,50 +3938,121 @@ mod tests {
         let input = manager_test_input("https://example.test/live.flv", "live:bilibili:100", "100");
         let started_at = 1_700_000_000_000;
 
-        let base = recording_bundle_base(&input);
-        assert_eq!(base, "bilibili_100");
-        let roots = [root.clone()];
-        let first = create_recording_bundle(&root, &roots, &base, started_at).unwrap();
-        let second = create_recording_bundle(&root, &roots, &base, started_at).unwrap();
-        let third = create_recording_bundle(&root, &roots, &base, started_at).unwrap();
+        let room_dir = recording_bundle_room_dir(&input);
+        assert_eq!(room_dir, "bilibili_100");
+        let session_dir = recording_bundle_session_dir(&input, started_at);
+        // The session level pairs the user name with the same timestamp the media
+        // file carries, so a bundle and the file inside it agree.
+        assert!(session_dir.ends_with(&recording_timestamp(started_at)));
 
-        assert_eq!(first.file_name().unwrap(), "bilibili_100");
-        assert!(
-            second
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("bilibili_100_")
-        );
-        assert!(third.file_name().unwrap().to_string_lossy().ends_with("_2"));
-        assert!(is_safe_recording_id("bilibili_100"));
-        assert!(!is_safe_recording_id(&Uuid::new_v4().to_string()));
-        assert!(!is_safe_recording_id("../bilibili_100"));
-        assert!(!is_safe_recording_id("bilibili:100"));
+        let roots = [root.clone()];
+        let (first, first_id) =
+            create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
+        let (_second, second_id) =
+            create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
+        let (_third, third_id) =
+            create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
+
+        // Every session of one room shares the room directory; only the session
+        // level takes a suffix when two of them collide.
+        assert_eq!(first, root.join(&room_dir).join(&session_dir));
+        assert_eq!(first_id, format!("{room_dir}/{session_dir}"));
+        assert_eq!(second_id, format!("{room_dir}/{session_dir}_1"));
+        assert_eq!(third_id, format!("{room_dir}/{session_dir}_2"));
+        assert!(first.starts_with(root.join(&room_dir)));
 
         let historical_root =
             root.with_file_name(format!("rlive-recording-name-history-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&historical_root).unwrap();
         let all_roots = [historical_root.clone(), root.clone()];
-        let historical =
-            create_recording_bundle(&historical_root, &all_roots, &base, started_at).unwrap();
-        assert!(
-            historical
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with("_3")
-        );
+        let (_historical, historical_id) =
+            create_recording_bundle(&historical_root, &all_roots, &room_dir, &session_dir).unwrap();
+        // Ids address a recording across every storage root, so a name already
+        // taken in another root is skipped rather than reused.
+        assert_eq!(historical_id, format!("{room_dir}/{session_dir}_3"));
 
         let mut iptv = input;
         iptv.site_id = None;
         iptv.room_id = None;
         iptv.source_kind = "iptv".into();
         iptv.source_key = "iptv:source:cctv1".into();
-        assert_eq!(recording_bundle_base(&iptv), "iptv_cctv1");
+        assert_eq!(recording_bundle_room_dir(&iptv), "iptv_cctv1");
 
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(historical_root).unwrap();
+    }
+
+    #[test]
+    fn scan_finds_nested_bundles_and_ignores_single_level_ones() {
+        let root = std::env::temp_dir().join(format!("rlive-recording-scan-{}", Uuid::new_v4()));
+
+        // Two sessions of the same room share one room directory.
+        let first_id = "bilibili_100/主播_20260820-192158".to_string();
+        let second_id = "bilibili_100/主播_20260820-193000".to_string();
+        for id in [&first_id, &second_id] {
+            let bundle = root.join(id);
+            std::fs::create_dir_all(&bundle).unwrap();
+            write_metadata(&bundle, &completed_recording(id.clone(), "100")).unwrap();
+        }
+
+        // A pre-nesting single-level bundle: its metadata sits one level up, so
+        // the two-level scan does not reach it. The files stay on disk untouched.
+        let legacy = root.join("bilibili_legacy");
+        std::fs::create_dir_all(&legacy).unwrap();
+        write_metadata(
+            &legacy,
+            &completed_recording("bilibili_legacy".into(), "legacy"),
+        )
+        .unwrap();
+
+        let found = scan_recording_root(&root);
+        assert_eq!(found.len(), 2);
+        assert!(found.contains_key(&first_id));
+        assert!(found.contains_key(&second_id));
+        assert!(!found.contains_key("bilibili_legacy"));
+        assert!(legacy.join("metadata.json").is_file());
+
+        // Both sessions resolve back to their own bundle through the id.
+        let roots = [root.clone()];
+        assert_eq!(
+            find_bundle(&roots, &first_id).unwrap(),
+            root.join(&first_id)
+        );
+        assert!(find_bundle(&roots, "bilibili_legacy").is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recording_id_accepts_two_levels_and_rejects_traversal() {
+        assert!(is_safe_recording_id("bilibili_100/user_20260820-192158"));
+        assert!(is_safe_recording_id("iptv_cctv1/未知用户_20260820-192158"));
+
+        // A single level is the pre-nesting layout and is no longer an id.
+        assert!(!is_safe_recording_id("bilibili_100"));
+        // Three levels would let a bundle hide below its room directory.
+        assert!(!is_safe_recording_id("bilibili_100/user_1/extra"));
+        assert!(!is_safe_recording_id(&Uuid::new_v4().to_string()));
+
+        // Traversal, absolute paths, and dot-only levels stay rejected: this is
+        // the only guard keeping playback and deletion inside a storage root.
+        assert!(!is_safe_recording_id("../bilibili_100/user_1"));
+        assert!(!is_safe_recording_id("bilibili_100/../../etc"));
+        assert!(!is_safe_recording_id("bilibili_100/.."));
+        assert!(!is_safe_recording_id("bilibili_100/."));
+        assert!(!is_safe_recording_id("/bilibili_100/user_1"));
+        assert!(!is_safe_recording_id("bilibili_100//user_1"));
+        assert!(!is_safe_recording_id("bilibili_100/user_1/"));
+        assert!(!is_safe_recording_id("bilibili_100\\user_1"));
+        assert!(!is_safe_recording_id("bilibili:100/user_1"));
+        // The room level still has to carry the `<platform>_<room>` shape.
+        assert!(!is_safe_recording_id("bilibili/user_1"));
+        assert!(!is_safe_recording_id("_100/user_1"));
+        // Trailing dots and surrounding whitespace break Windows paths.
+        assert!(!is_safe_recording_id("bilibili_100/user_1."));
+        assert!(!is_safe_recording_id("bilibili_100./user_1"));
+        assert!(!is_safe_recording_id(" bilibili_100/user_1"));
+        assert!(!is_safe_recording_id("bilibili_100/user_1 "));
     }
 
     #[test]
@@ -3913,12 +4114,10 @@ mod tests {
     #[test]
     fn concurrent_metadata_replacements_leave_a_valid_bundle() {
         let root = std::env::temp_dir().join(format!("rlive-metadata-write-{}", Uuid::new_v4()));
-        let bundle = root.join(test_recording_id());
+        let id = test_recording_id();
+        let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
-        let stored = completed_recording(
-            bundle.file_name().unwrap().to_string_lossy().into_owned(),
-            "metadata",
-        );
+        let stored = completed_recording(id, "metadata");
         write_metadata(&bundle, &stored).unwrap();
 
         let barrier = Arc::new(Barrier::new(8));
@@ -3949,12 +4148,11 @@ mod tests {
     #[test]
     fn startup_recovery_prefers_valid_metadata_tmp_over_old_backup() {
         let root = std::env::temp_dir().join(format!("rlive-metadata-recovery-{}", Uuid::new_v4()));
-        let bundle = root.join(test_recording_id());
+        let id = test_recording_id();
+        let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
-        let mut old = completed_recording(
-            bundle.file_name().unwrap().to_string_lossy().into_owned(),
-            "old",
-        );
+        // The id spans both bundle levels, so it cannot come from `file_name()`.
+        let mut old = completed_recording(id, "old");
         old.status = RecordingStatus::Recording;
         let mut next = old.clone();
         next.status = RecordingStatus::Completed;
@@ -4009,7 +4207,7 @@ mod tests {
 
     #[test]
     fn local_playback_urls_round_trip_unicode_and_spaces() {
-        let id = "斗鱼_房间 100";
+        let id = "斗鱼_房间 100/斗鱼主播_20260816-120000";
         let file = "斗鱼主播_标题 测试_20260816-120000.flv";
         let url = local_playback_url("http://127.0.0.1:1234", "token", id, file).unwrap();
 
@@ -4018,7 +4216,16 @@ mod tests {
         assert!(url.contains("%20"));
         let parsed = Url::parse(&url).unwrap();
         let segments = parsed.path_segments().unwrap().collect::<Vec<_>>();
-        assert_eq!(percent_decode_str(segments[1]).decode_utf8().unwrap(), id);
+        // The id occupies two segments after the token, and the playback server
+        // rejoins exactly those two. Encoder and parser have to agree here or
+        // every recording plays back as a 404.
+        let room = percent_decode_str(segments[1]).decode_utf8().unwrap();
+        let session = percent_decode_str(segments[2]).decode_utf8().unwrap();
+        assert_eq!(format!("{room}/{session}"), id);
+        assert!(is_safe_recording_id(&format!("{room}/{session}")));
+        // The separator inside the id must not survive as a literal, or the two
+        // levels would collapse into one unusable segment.
+        assert!(!segments[1].contains("%2F"));
         let encoded = segments.last().unwrap().to_string();
         assert_eq!(
             decode_playback_relative_path([encoded.as_str()]),

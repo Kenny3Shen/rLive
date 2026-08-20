@@ -71,6 +71,7 @@ import type { SiteId } from "@/shared/types/live";
 import { useRecordingHeaderState } from "./recordingHeaderState";
 import {
   RECORDING_VIEW_PARAM,
+  recordingPlaybackPath,
   recordingViewFromSearch,
   withRecordingView,
   type RecordingView,
@@ -186,7 +187,7 @@ function RecordingCard({
   onDelete: () => void;
 }) {
   const playable = item.status !== "recording" && Boolean(onOpen);
-  const playbackPath = `/recordings/play/${encodeURIComponent(item.id)}`;
+  const playbackPath = recordingPlaybackPath(item.id);
   // The sidecar only exists once the task finished writing it.
   const exportable = item.status !== "recording" && item.include_danmaku && item.danmaku_count > 0;
 
@@ -674,7 +675,7 @@ export function RecordingsPage() {
   function openRecording(item: RecordingItem) {
     const params = new URLSearchParams({ user: recordingUserGroupKey(item) });
     if (platformFilter !== "all") params.set("platform", platformFilter);
-    navigate(`/recordings/play/${encodeURIComponent(item.id)}?${params.toString()}`);
+    navigate(`${recordingPlaybackPath(item.id)}?${params.toString()}`);
   }
 
   if (!supported) {
