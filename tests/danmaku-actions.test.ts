@@ -4,7 +4,10 @@ import {
   formatDanmakuClipboardText,
   isDanmakuActionFailure,
 } from "../src/features/room/danmaku/useDanmakuActions";
-import { danmakuVisibleContentRect } from "../src/features/room/danmaku/DanmuJsDanmaku";
+import {
+  danmakuVisibleContentRect,
+  isDanmakuPinTap,
+} from "../src/features/room/danmaku/DanmuJsDanmaku";
 
 describe("danmaku clipboard actions", () => {
   test("copies a normalized message without altering its wording", () => {
@@ -32,8 +35,8 @@ describe("danmaku clipboard actions", () => {
   });
 });
 
-describe("floating danmaku hover geometry", () => {
-  test("excludes the reserved repeat-count slot from the hover border", () => {
+describe("floating danmaku selection geometry", () => {
+  test("excludes the reserved repeat-count slot from the selection border", () => {
     const content = { x: 20, y: 30, width: 120, height: 24 };
     const count = { x: 140, y: 30, width: 22, height: 24 };
     const reservedRoot = { x: 20, y: 30, width: 220, height: 24 };
@@ -45,5 +48,19 @@ describe("floating danmaku hover geometry", () => {
       width: 142,
       height: 24,
     });
+  });
+});
+
+describe("floating danmaku pin gesture", () => {
+  test("pins on a short press that stayed on the comment", () => {
+    expect(isDanmakuPinTap(0, 0, 0)).toBe(true);
+    expect(isDanmakuPinTap(6, -8, 200)).toBe(true);
+  });
+
+  test("leaves a drag or a long press to the player stage", () => {
+    // A volume or brightness drag can begin on a comment; it must still reach
+    // the stage instead of pinning.
+    expect(isDanmakuPinTap(0, 40, 200)).toBe(false);
+    expect(isDanmakuPinTap(0, 0, 400)).toBe(false);
   });
 });
