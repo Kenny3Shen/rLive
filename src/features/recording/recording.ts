@@ -8,6 +8,7 @@ import { isSiteId } from "@/shared/siteId";
 import type { PlayUrl, PlaybackProtocol, SiteId } from "@/shared/types/live";
 import { notify } from "@/components/ui/toast";
 import { formatByteSize } from "@/lib/utils";
+import type { RecordingView } from "./recordingRoute";
 
 export type RecordingStatus = "recording" | "completed" | "interrupted" | "failed";
 
@@ -79,6 +80,22 @@ export function recordingsForPlatform(
   platform: RecordingPlatformFilter,
 ): readonly RecordingItem[] {
   return platform === "all" ? items : items.filter((item) => item.site_id === platform);
+}
+
+/** Split the library by the header scope. "已录制" covers every finished task,
+ * including interrupted and failed ones, because those are equally no longer
+ * running and still have media on disk. */
+export function recordingsForView(
+  items: readonly RecordingItem[],
+  view: RecordingView,
+): readonly RecordingItem[] {
+  if (view === "all") return items;
+  const recording = view === "recording";
+  return items.filter((item) => (item.status === "recording") === recording);
+}
+
+export function activeRecordingCount(items: readonly RecordingItem[] | undefined): number {
+  return items?.reduce((count, item) => count + (item.status === "recording" ? 1 : 0), 0) ?? 0;
 }
 
 export function recordingUserGroupKey(
@@ -511,6 +528,17 @@ export async function deleteRecording(id: string): Promise<void> {
 
 export async function recordingStorageInfo(): Promise<RecordingStorageInfo> {
   return invokeCmd<RecordingStorageInfo>("recording_storage_info");
+}
+
+/**
+ * Stops every recording and exits the application.
+ *
+ * The window close handler prevented its own close and asked the user, so this
+ * is the confirmed answer. It never resolves on success: the process is gone
+ * before the reply can be delivered.
+ */
+export async function confirmAppExit(): Promise<void> {
+  await invokeCmd<void>("app_confirm_exit");
 }
 
 export async function setRecordingStoragePath(path: string | null): Promise<RecordingStorageInfo> {

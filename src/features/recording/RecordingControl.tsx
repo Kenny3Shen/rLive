@@ -8,7 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
+  useSettingsStore,
+} from "@/shared/stores/settingsStore";
 import {
   resolveRecordingControlOptions,
   useRecordingController,
@@ -30,13 +33,14 @@ type RecordingControlProps = {
 export function RecordingControl({ context, className, disabled = false }: RecordingControlProps) {
   const controller = useRecordingController(context);
   const defaultIncludeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
-  const defaultContinueOnLeave = useSettingsStore((state) => state.recordingContinueAfterLeave);
   const [open, setOpen] = useState(false);
   const [overrides, setOverrides] = useState<RecordingStartOptions>({});
+  // Background continuation is always on for a new task; the switch below only
+  // opts this one session out of it, and is not backed by a stored preference.
   const { includeDanmaku, continueOnLeave } = resolveRecordingControlOptions(
     {
       includeDanmaku: defaultIncludeDanmaku,
-      continueOnLeave: defaultContinueOnLeave,
+      continueOnLeave: RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
     },
     overrides,
   );

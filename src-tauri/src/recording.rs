@@ -118,14 +118,14 @@ pub struct RecordingStartInput {
     pub continue_on_leave: Option<bool>,
 }
 
+/// Background continuation is unconditional: an unspecified request keeps the
+/// task alive after its page is left, and only an explicit `false` opts out.
+pub(crate) const CONTINUE_ON_LEAVE_DEFAULT: bool = true;
+
 impl RecordingStartInput {
-    pub(crate) fn with_recording_defaults(
-        mut self,
-        default_include_danmaku: bool,
-        default_continue_on_leave: bool,
-    ) -> Self {
+    pub(crate) fn with_recording_defaults(mut self, default_include_danmaku: bool) -> Self {
         self.include_danmaku = Some(self.include_danmaku.unwrap_or(default_include_danmaku));
-        self.continue_on_leave = Some(self.continue_on_leave.unwrap_or(default_continue_on_leave));
+        self.continue_on_leave = Some(self.continue_on_leave.unwrap_or(CONTINUE_ON_LEAVE_DEFAULT));
         self
     }
 }
@@ -1510,6 +1510,18 @@ impl RecordingManager {
                         source_key,
                     )
             })
+    }
+
+    /// Number of tasks currently capturing media, matching the rows the library
+    /// shows as 录制中. Sessions already finalizing are excluded: they are
+    /// saving rather than recording, and the shutdown path waits for them.
+    pub fn active_count(&self) -> usize {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.reap_finished_locked(&mut sessions);
+        sessions.len()
     }
 
     pub async fn stop_all_graceful(&self) {
@@ -4675,7 +4687,9 @@ mod tests {
         assert_eq!(parsed.include_danmaku, None);
         assert_eq!(parsed.continue_on_leave, None);
 
-        let resolved = parsed.with_recording_defaults(true, true);
+        // Background continuation has no configurable default any more, so an
+        // unspecified request always resolves to keeping the task alive.
+        let resolved = parsed.with_recording_defaults(true);
         assert_eq!(resolved.include_danmaku, Some(true));
         assert_eq!(resolved.continue_on_leave, Some(true));
 
@@ -4684,7 +4698,7 @@ mod tests {
             "live:bilibili:explicit",
             "explicit",
         )
-        .with_recording_defaults(true, true);
+        .with_recording_defaults(true);
         assert_eq!(explicit.include_danmaku, Some(false));
         assert_eq!(explicit.continue_on_leave, Some(false));
     }

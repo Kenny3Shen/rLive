@@ -17,23 +17,27 @@ import {
   Tv,
 } from "lucide-react";
 import { revealThemeAt } from "@/app/theme";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
+import { activeRecordingCount, useRecordings } from "@/features/recording/recording";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_NAVIGATION_STATE } from "./sidebarNavigation";
 
-const navItems: {
+type NavItem = {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   end?: boolean;
   className?: string;
-}[] = [
+};
+
+const navItems: NavItem[] = [
   { to: "/", label: "首页", icon: Home, end: true },
   { to: "/follow", label: "关注", icon: Heart },
   { to: "/category", label: "分类", icon: LayoutGrid },
@@ -48,13 +52,13 @@ function SidebarLink({
   icon: Icon,
   end,
   className,
+  badgeCount = 0,
+  badgeLabel,
   onIntent,
-}: {
-  to: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  end?: boolean;
-  className?: string;
+}: NavItem & {
+  /** Rendered as a small counter over the icon when greater than zero. */
+  badgeCount?: number;
+  badgeLabel?: string;
   onIntent?: () => void;
 }) {
   const navigate = useNavigate();
@@ -91,12 +95,26 @@ function SidebarLink({
     >
       {({ isActive }) => (
         <>
-          <Icon
-            className={cn(
-              "motion-nav-icon size-5 transition-transform duration-150 ease-[var(--motion-ease-out)] motion-reduced:transition-none",
-              isActive && "text-primary",
+          <span className="relative inline-flex shrink-0">
+            <Icon
+              className={cn(
+                "motion-nav-icon size-5 transition-transform duration-150 ease-[var(--motion-ease-out)] motion-reduced:transition-none",
+                isActive && "text-primary",
+              )}
+            />
+            {badgeCount > 0 && (
+              <Badge
+                variant="default"
+                aria-label={badgeLabel}
+                // A solid fill rather than the tinted `destructive` variant: a
+                // counter this small has to stay readable over the icon it
+                // covers, and the sidebar-coloured ring keeps it detached.
+                className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
+              >
+                {badgeCount > 99 ? "99+" : badgeCount}
+              </Badge>
             )}
-          />
+          </span>
           <span
             data-slot="app-sidebar-label"
             className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[10px] max-md:leading-3 max-md:font-medium"
@@ -193,6 +211,10 @@ function AppearanceToggle() {
 export function Sidebar() {
   const queryClient = useQueryClient();
   const siteId = useSiteId();
+  // The recording list is already shared and event-driven, so subscribing here
+  // keeps the badge live without adding a second polling source.
+  const recordings = useRecordings();
+  const activeRecordings = activeRecordingCount(recordings.data);
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(queryClient, siteId);
   }, [queryClient, siteId]);
@@ -207,13 +229,18 @@ export function Sidebar() {
         className="flex w-full flex-1 flex-col items-center gap-2 max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden"
         aria-label="主导航"
       >
-        {navItems.map((item) => (
-          <SidebarLink
-            key={item.to}
-            {...item}
-            onIntent={item.to === "/" ? preloadHome : undefined}
-          />
-        ))}
+        {navItems.map((item) => {
+          const recordingBadge = item.to === "/recordings" ? activeRecordings : 0;
+          return (
+            <SidebarLink
+              key={item.to}
+              {...item}
+              badgeCount={recordingBadge}
+              badgeLabel={recordingBadge > 0 ? `${recordingBadge} 项录制进行中` : undefined}
+              onIntent={item.to === "/" ? preloadHome : undefined}
+            />
+          );
+        })}
         <div data-slot="app-sidebar-preferences" className="mt-auto max-md:hidden">
           <AppearanceToggle />
         </div>

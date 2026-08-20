@@ -255,8 +255,6 @@ export type AppSettings = {
   iptv_custom_m3u_url: string | null;
   /** Include the live-room danmaku sidecar by default when opening recording options. */
   recording_include_danmaku: boolean;
-  /** Keep a recording running after leaving its player page by default. */
-  recording_continue_after_leave: boolean;
   /** Automatically finish and continue FFmpeg recordings in minute-sized bundles; 0 disables. */
   recording_auto_split_minutes: number;
   /** FFmpeg network read/write timeout in seconds, 3..=60. */

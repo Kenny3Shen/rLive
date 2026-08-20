@@ -31,6 +31,7 @@ import {
 import { HomePage } from "../features/home/HomePage";
 import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
 import { useFollowAutoRecording } from "../features/recording/followRecording";
+import { RecordingExitGuard } from "../features/recording/RecordingExitGuard";
 
 // Keep the discovery page on the critical path, but defer secondary pages
 // (especially the player and its danmaku renderer) until a route needs them.
@@ -73,6 +74,7 @@ function AppRuntime() {
       <AndroidBackNavigator />
       <IptvStartupWarmup />
       <RouteModulePreloader />
+      <RecordingExitGuard />
       <Outlet />
     </>
   );
