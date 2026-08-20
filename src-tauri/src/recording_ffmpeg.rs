@@ -28,6 +28,14 @@ const TIMESTAMP_TIME_BASE: Rational = Rational(1, 1_000_000);
 /// Consecutive packets a live stream may fail to write before the recording
 /// gives up. A single transient timestamp/muxer anomaly must not end the task.
 const MAX_INVALID_WRITE_FAILURES: u32 = 12;
+/// How long a started recording may go without writing a single media packet
+/// before it is treated as a dead stream.
+///
+/// `rw_timeout` only covers a socket that stops delivering bytes. A CDN can
+/// keep the connection alive while serving nothing usable — the read succeeds,
+/// the packets are all discarded, and the file silently stops growing. This is
+/// the bound on that case, so the task ends and reports instead of hanging.
+const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) async fn run(
     source: PlayUrl,
@@ -219,9 +227,10 @@ fn remux(
 
     let mut wrote_packet = false;
     let mut invalid_packets = 0_u32;
-    let mut consecutive_write_failures = 0_u32;
+    let mut consecutive_write_failures = vec![0_u32; output_index as usize];
     let mut last_progress = Instant::now();
     let mut last_space_check = Instant::now() - STORAGE_SPACE_CHECK_INTERVAL;
+    let mut last_written_packet = Instant::now();
     let mut timeline = PacketTimeline::new(input.nb_streams() as usize);
     let stop_reason = loop {
         if *cancel.borrow() {
@@ -232,6 +241,11 @@ fn remux(
             .is_some_and(|limit| started.elapsed() >= limit)
         {
             break StopReason::SplitLimit;
+        }
+        // Only meaningful once the stream has proven itself: before the first
+        // packet the elapsed time is startup probing, not a stall.
+        if wrote_packet && last_written_packet.elapsed() >= STREAM_STALL_TIMEOUT {
+            break StopReason::Stalled;
         }
         if last_space_check.elapsed() >= STORAGE_SPACE_CHECK_INTERVAL {
             last_space_check = Instant::now();
@@ -267,9 +281,17 @@ fn remux(
         }
 
         let input_index = packet.stream();
+        // A packet on a stream index that did not exist when the mapping was
+        // built means the source started a different program mid-recording.
+        // Some CDNs do this after a broadcast ends, serving an unrelated filler
+        // stream on the same URL; continuing would append it to the recording.
         let Some(&mapped_index) = stream_mapping.get(input_index) else {
+            if wrote_packet {
+                break StopReason::SourceChanged;
+            }
             continue;
         };
+        // A deliberately unselected stream (an unused HLS variant) stays silent.
         if mapped_index < 0 {
             continue;
         }
@@ -285,8 +307,16 @@ fn remux(
         let packet_size = packet.size() as u64;
         let first_packet = !wrote_packet;
         if let Err(error) = packet.write_interleaved(&mut output) {
-            if consecutive_write_failures < MAX_INVALID_WRITE_FAILURES {
-                consecutive_write_failures += 1;
+            // Counted per track. A single stream can be persistently
+            // unwritable — a CDN serving FLV audio that is not valid ADTS is the
+            // known case — while the other keeps succeeding. A shared counter
+            // would be reset by the healthy track and never reach the limit, so
+            // the recording would run on silently dropping every audio packet.
+            let failures = consecutive_write_failures
+                .get_mut(mapped_index as usize)
+                .expect("每个输出轨在建表时都分配了失败计数");
+            if *failures < MAX_INVALID_WRITE_FAILURES {
+                *failures += 1;
                 tracing::warn!(
                     stream = mapped_index,
                     error = %error,
@@ -294,10 +324,14 @@ fn remux(
                 );
                 continue;
             }
-            break StopReason::Failed(format!("Rust FFmpeg 写入媒体包失败: {error}"));
+            break StopReason::TrackUnwritable {
+                stream: mapped_index,
+                error: error.to_string(),
+            };
         }
-        consecutive_write_failures = 0;
+        consecutive_write_failures[mapped_index as usize] = 0;
         wrote_packet = true;
+        last_written_packet = Instant::now();
         state.bytes.fetch_add(packet_size, Ordering::Relaxed);
         if first_packet || last_progress.elapsed() >= Duration::from_millis(500) {
             update_progress(&state, &part, started);
@@ -315,17 +349,20 @@ fn remux(
 
     if !wrote_packet {
         remove_part(&part);
+        // Nothing was recorded, so a stop cause other than the two intentional
+        // ones is a failure rather than a short recording.
         return match stop_reason {
             StopReason::Cancelled => interrupted("停止前尚未收到媒体数据".into()),
             StopReason::SplitLimit => interrupted("自动分割前尚未收到媒体数据".into()),
-            StopReason::StorageLow(available) => failed(join_errors(
-                format_storage_space_error(available),
+            other => failed(join_errors(
+                other.error_message().unwrap_or_default(),
                 trailer_error,
             )),
-            StopReason::Failed(error) => failed(join_errors(error, trailer_error)),
         };
     }
 
+    // Media was written, so the file stands on its own. Every unintentional stop
+    // cause keeps what was recorded and reports why it ended early.
     let mut outcome = match stop_reason {
         StopReason::Cancelled if trailer_error.is_none() => TaskOutcome {
             status: RecordingStatus::Completed,
@@ -337,13 +374,11 @@ fn remux(
             error: None,
             split: true,
         },
-        StopReason::StorageLow(available) => interrupted(join_errors(
-            format_storage_space_error(available),
+        StopReason::Cancelled | StopReason::SplitLimit => interrupted(trailer_error.unwrap()),
+        other => interrupted(join_errors(
+            other.error_message().unwrap_or_default(),
             trailer_error,
         )),
-        StopReason::Cancelled => interrupted(trailer_error.unwrap()),
-        StopReason::SplitLimit => interrupted(trailer_error.unwrap()),
-        StopReason::Failed(error) => interrupted(join_errors(error, trailer_error)),
     };
     match publish_part(&part, &final_path) {
         Ok(size) => state.bytes.store(size, Ordering::Relaxed),
@@ -435,7 +470,44 @@ enum StopReason {
     Cancelled,
     SplitLimit,
     StorageLow(u64),
+    /// The connection stayed open but stopped yielding writable media packets.
+    Stalled,
+    /// The source began a different program than the one being recorded.
+    SourceChanged,
+    /// One output track could not accept packets for long enough that the rest
+    /// of the recording would be missing it entirely.
+    TrackUnwritable {
+        stream: i32,
+        error: String,
+    },
     Failed(String),
+}
+
+/// Reported when a stream goes quiet without closing, so the recording ends with
+/// a cause the user can act on rather than an open task that never grows.
+fn stall_error() -> String {
+    format!(
+        "直播流 {} 秒内没有新的媒体数据，已停止录制",
+        STREAM_STALL_TIMEOUT.as_secs()
+    )
+}
+
+impl StopReason {
+    /// The user-facing reason a recording stopped, for the reasons that carry one.
+    fn error_message(&self) -> Option<String> {
+        match self {
+            Self::Cancelled | Self::SplitLimit => None,
+            Self::StorageLow(available) => Some(format_storage_space_error(*available)),
+            Self::Stalled => Some(stall_error()),
+            Self::SourceChanged => {
+                Some("直播源已切换为其他节目，已停止录制以避免混入无关内容".into())
+            }
+            Self::TrackUnwritable { stream, error } => Some(format!(
+                "轨道 {stream} 连续 {MAX_INVALID_WRITE_FAILURES} 个媒体包无法写入，已停止录制: {error}"
+            )),
+            Self::Failed(error) => Some(error.clone()),
+        }
+    }
 }
 
 pub(super) fn probe_media_duration(path: &Path) -> Result<u64, String> {
@@ -781,7 +853,8 @@ fn interrupted(error: String) -> TaskOutcome {
 mod tests {
     use super::super::PlaybackProtocol;
     use super::{
-        FfmpegRecordingOptions, PacketTimeline, PlayUrl, build_input_options, publish_part,
+        FfmpegRecordingOptions, PacketTimeline, PlayUrl, STREAM_STALL_TIMEOUT, StopReason,
+        build_input_options, publish_part,
     };
     use ffmpeg_next::{Packet, Rational};
     use std::fs;
@@ -906,6 +979,54 @@ mod tests {
         assert!(!option_keys(&blank).contains(&"http_proxy"));
         let padded = build_input_options(&flv, Some(" http://127.0.0.1:1080 "), &recording_options);
         assert!(option_keys(&padded).contains(&"http_proxy"));
+    }
+
+    /// The two intentional stops carry no error; every other cause must explain
+    /// itself, or a recording would end with a blank reason.
+    #[test]
+    fn only_intentional_stops_have_no_error_message() {
+        assert_eq!(StopReason::Cancelled.error_message(), None);
+        assert_eq!(StopReason::SplitLimit.error_message(), None);
+
+        for reason in [
+            StopReason::Stalled,
+            StopReason::SourceChanged,
+            StopReason::StorageLow(1024),
+            StopReason::TrackUnwritable {
+                stream: 1,
+                error: "boom".into(),
+            },
+            StopReason::Failed("读取中断".into()),
+        ] {
+            let message = reason.error_message();
+            assert!(
+                message
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+                "停止原因缺少可读说明"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stall_reports_the_timeout_it_waited() {
+        let message = StopReason::Stalled.error_message().unwrap();
+        assert!(
+            message.contains(&STREAM_STALL_TIMEOUT.as_secs().to_string()),
+            "停滞说明应包含等待秒数: {message}"
+        );
+    }
+
+    #[test]
+    fn an_unwritable_track_reports_which_track_and_why() {
+        let message = StopReason::TrackUnwritable {
+            stream: 3,
+            error: "ADTS 缺失".into(),
+        }
+        .error_message()
+        .unwrap();
+        assert!(message.contains('3'), "应指明轨道编号: {message}");
+        assert!(message.contains("ADTS 缺失"), "应保留底层错误: {message}");
     }
 
     fn packet(stream: usize, dts: i64, pts: i64) -> Packet {
