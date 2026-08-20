@@ -977,12 +977,8 @@ impl RecordingManager {
         let started_at = unix_ms();
         let room_dir = recording_bundle_room_dir(&input);
         let session_dir = recording_bundle_session_dir(&input, started_at);
-        let (bundle, id) = create_recording_bundle(
-            &root,
-            &self.storage_roots(),
-            &room_dir,
-            &session_dir,
-        )?;
+        let (bundle, id) =
+            create_recording_bundle(&root, &self.storage_roots(), &room_dir, &session_dir)?;
         let bundle_guard = BundleGuard::new(bundle.clone());
         let title = normalize_text(&input.title, "未命名直播");
         let user_name = normalize_text(&input.user_name, "");
@@ -1824,12 +1820,8 @@ fn create_split_segment(
         sanitize_bundle_component(&previous.user_name, "未知用户", 120),
         recording_timestamp(started_at)
     );
-    let (bundle, id) = create_recording_bundle(
-        &previous_state.root,
-        storage_roots,
-        room_dir,
-        &session_dir,
-    )?;
+    let (bundle, id) =
+        create_recording_bundle(&previous_state.root, storage_roots, room_dir, &session_dir)?;
     let bundle_guard = BundleGuard::new(bundle.clone());
     let file_stem = recording_file_stem(&previous.user_name, &previous.title, started_at);
     let media_file = media_file_name(previous.protocol, source_url, &file_stem);
@@ -2500,10 +2492,7 @@ fn is_safe_recording_id(id: &str) -> bool {
         || id.trim() != id
         || id.chars().any(|character| {
             character.is_control()
-                || matches!(
-                    character,
-                    '<' | '>' | ':' | '"' | '\\' | '|' | '?' | '*'
-                )
+                || matches!(character, '<' | '>' | ':' | '"' | '\\' | '|' | '?' | '*')
         })
     {
         return false;
@@ -3875,14 +3864,13 @@ mod tests {
     use super::{
         ActiveSessionState, AssExportOptions, CONTINUE_ON_LEAVE_DEFAULT, FfmpegRecordingOptions,
         FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RECORDING_METADATA_VERSION,
-        RECORDING_STORAGE_CONFIG_VERSION,
-        RecordingEventSink, RecordingLibraryIndex, RecordingManager, RecordingStartInput,
-        RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
-        StoredRecording, TaskOutcome, create_recording_bundle, decode_playback_relative_path,
-        find_bundle, finish_session, is_safe_recording_id, load_storage_state, local_playback_url,
-        media_file_name, parse_range, prepare_storage_root, read_stored,
-        recording_bundle_room_dir, recording_bundle_session_dir, recording_timestamp,
-        recording_file_stem, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
+        RECORDING_STORAGE_CONFIG_VERSION, RecordingEventSink, RecordingLibraryIndex,
+        RecordingManager, RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session,
+        SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
+        decode_playback_relative_path, find_bundle, finish_session, is_safe_recording_id,
+        load_storage_state, local_playback_url, media_file_name, parse_range, prepare_storage_root,
+        read_stored, recording_bundle_room_dir, recording_bundle_session_dir, recording_file_stem,
+        recording_timestamp, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
         salvage_temporary_media_after_worker_failure, scan_recording_root,
         stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
         wait_for_finalizing_sessions, write_metadata,
