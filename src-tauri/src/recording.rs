@@ -1296,18 +1296,27 @@ impl RecordingManager {
                 ));
             }
         }
-        let Some(bundle) = find_bundle(&self.storage_roots(), id) else {
+        // The storage root comes from the lookup, not from `bundle.parent()`:
+        // an id spans two path levels, so the parent is the room directory. The
+        // library is keyed by storage root, so a room directory would silently
+        // match no entry and leave the deleted recording in the index.
+        let Some((root, bundle)) = find_bundle_in_root(&self.storage_roots(), id) else {
             return Ok(());
         };
         std::fs::remove_dir_all(&bundle).map_err(|error| {
             AppError::new("recording_delete_error", format!("删除录制失败: {error}"))
         })?;
-        if let Some(root) = bundle.parent() {
-            self.library
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(root, id);
+        // An emptied room directory is not left behind as a stray entry, but a
+        // room that still holds other sessions must survive.
+        if let Some(room_dir) = bundle.parent()
+            && room_dir != root
+        {
+            let _ = std::fs::remove_dir(room_dir);
         }
+        self.library
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&root, id);
         Ok(())
     }
 
@@ -4009,6 +4018,58 @@ mod tests {
         assert!(find_bundle(&roots, "bilibili_legacy").is_none());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Deleting must drop the recording from the cached library index too.
+    ///
+    /// The index is keyed by storage root. Deriving that root from
+    /// `bundle.parent()` yields the room directory under the nested layout, which
+    /// matches no index entry, so the deleted card reappeared on every refresh.
+    #[test]
+    fn deleting_a_recording_also_drops_it_from_the_library_index() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-delete-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+
+        // Two sessions of one room, so the room directory must outlive the first
+        // delete and disappear only with the second.
+        let kept_id = "bilibili_100/主播_20260820-192158".to_string();
+        let removed_id = "bilibili_100/主播_20260820-193000".to_string();
+        for id in [&kept_id, &removed_id] {
+            let bundle = root.join(id);
+            std::fs::create_dir_all(&bundle).unwrap();
+            write_metadata(&bundle, &completed_recording(id.clone(), "100")).unwrap();
+        }
+
+        // Listing first is what populates the cached index.
+        let listed = manager.list().unwrap();
+        assert_eq!(listed.len(), 2);
+
+        manager.delete(&removed_id).unwrap();
+        let after = manager.list().unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [kept_id.as_str()],
+            "删除后的录制不应继续出现在列表中"
+        );
+        assert!(!root.join(&removed_id).exists());
+        // The surviving session keeps the shared room directory.
+        assert!(root.join("bilibili_100").is_dir());
+
+        manager.delete(&kept_id).unwrap();
+        assert!(manager.list().unwrap().is_empty());
+        // The last session of a room takes the emptied room directory with it.
+        assert!(!root.join("bilibili_100").exists());
+
+        // Deleting something already gone stays a success.
+        manager.delete(&removed_id).unwrap();
+
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).ok();
     }
 
     #[test]
