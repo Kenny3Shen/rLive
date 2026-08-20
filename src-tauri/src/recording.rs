@@ -900,7 +900,9 @@ impl RecordingManager {
         validate_start_input(&input)?;
         let source_key = input.source_key.trim().to_string();
         let include_danmaku = input.include_danmaku.unwrap_or(false);
-        let continue_on_leave = input.continue_on_leave.unwrap_or(false);
+        // Same default as the command layer, so a direct `start` call behaves like
+        // an IPC one instead of silently opting out of background continuation.
+        let continue_on_leave = input.continue_on_leave.unwrap_or(CONTINUE_ON_LEAVE_DEFAULT);
         let _danmaku_start_reservation = self.reserve_background_danmaku_start(
             &source_key,
             input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
@@ -3745,8 +3747,9 @@ async fn write_simple_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveSessionState, AssExportOptions, FfmpegRecordingOptions, FinalizingSession,
-        MINIMUM_FREE_SPACE_BYTES, RECORDING_METADATA_VERSION, RECORDING_STORAGE_CONFIG_VERSION,
+        ActiveSessionState, AssExportOptions, CONTINUE_ON_LEAVE_DEFAULT, FfmpegRecordingOptions,
+        FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RECORDING_METADATA_VERSION,
+        RECORDING_STORAGE_CONFIG_VERSION,
         RecordingEventSink, RecordingLibraryIndex, RecordingManager, RecordingStartInput,
         RecordingStatus, RecordingStorageConfig, Session, SessionState, StoredDanmakuBatch,
         StoredRecording, TaskOutcome, create_recording_bundle, decode_playback_relative_path,
@@ -4701,6 +4704,16 @@ mod tests {
         .with_recording_defaults(true);
         assert_eq!(explicit.include_danmaku, Some(false));
         assert_eq!(explicit.continue_on_leave, Some(false));
+    }
+
+    #[test]
+    fn continue_on_leave_default_is_unconditional() {
+        // `Manager::start` resolves the same default as the command layer, so a
+        // caller that skips `with_recording_defaults` still gets background
+        // continuation instead of silently opting out of it.
+        assert!(CONTINUE_ON_LEAVE_DEFAULT);
+        assert!(None::<bool>.unwrap_or(CONTINUE_ON_LEAVE_DEFAULT));
+        assert!(!Some(false).unwrap_or(CONTINUE_ON_LEAVE_DEFAULT));
     }
 
     #[test]

@@ -531,6 +531,17 @@ export async function recordingStorageInfo(): Promise<RecordingStorageInfo> {
 }
 
 /**
+ * Number of recordings the backend is currently capturing.
+ *
+ * The library query is event-driven with a slow poll behind it, so its cached
+ * list can lag a task that just started or just ended. The exit dialog asks the
+ * backend directly instead, because it decides whether to ask the user at all.
+ */
+export async function fetchActiveRecordingCount(): Promise<number> {
+  return await invokeCmd<number>("recording_active_count");
+}
+
+/**
  * Stops every recording and exits the application.
  *
  * The window close handler prevented its own close and asked the user, so this
