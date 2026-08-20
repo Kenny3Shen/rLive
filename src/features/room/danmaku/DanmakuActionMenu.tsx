@@ -1,4 +1,4 @@
-import { memo, type PointerEvent as ReactPointerEvent } from "react";
+import { memo } from "react";
 import { Copy, MessageSquarePlus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -37,18 +37,18 @@ export type DanmakuHoverTarget = {
 const MENU_HALF_WIDTH_PX = 72;
 const MENU_HALF_WIDTH_LARGE_PX = 88;
 /**
- * Marks the menu so the stage renderer can recognise it as a `pointerleave`
- * destination. Declared here, where the attribute is actually applied, so the
- * pointer delegate imports it in the same direction as the component itself.
+ * Marks the menu so the stage renderer can tell a press that landed on it apart
+ * from a press elsewhere, which dismisses the pinned comment. Declared here,
+ * where the attribute is actually applied, so the pointer delegate imports it in
+ * the same direction as the component itself.
  */
 export const DANMAKU_MENU_ATTR = "data-danmaku-menu";
 /**
  * Visual distance between the comment and the pill.
  *
- * This gap is bridged by transparent padding rather than left as empty space:
- * the pointer has to cross it to reach the buttons, and an unbridged gap fires
- * `pointerleave` on the stage before `pointerenter` on the pill, which released
- * the freeze and took the menu away before it could be clicked.
+ * Rendered as transparent padding rather than a positioning offset so the gap
+ * stays inside the element: a press that lands slightly short of a button still
+ * counts as a press on the menu and does not dismiss the pin.
  */
 const MENU_GAP_PX = 6;
 /** Below this the pill would clip the top edge, so it flips under the comment. */
@@ -62,8 +62,6 @@ type DanmakuActionMenuProps = {
   roomUserName?: string;
   /** Larger aiming targets for a fullscreen desktop stage. */
   large?: boolean;
-  /** Receives the event so the caller can tell where the pointer is going. */
-  onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
 };
 
 export const DanmakuActionMenu = memo(function DanmakuActionMenu({
@@ -73,7 +71,6 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   roomTitle,
   roomUserName,
   large = false,
-  onPointerLeave,
 }: DanmakuActionMenuProps) {
   const message = target.content.trim();
   const actions = useDanmakuActions({
@@ -102,8 +99,8 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
       // toggle playback or fullscreen. `pointermove` still bubbles, keeping the
       // controls awake while the pointer rests here.
       data-player-hud
-      // Lets the stage recognise this element as the pointer's destination on
-      // its own `pointerleave`, which fires before this element's `pointerenter`.
+      // Lets the outside-press delegate recognise this element, so pressing the
+      // menu never counts as the press that dismisses the pinned comment.
       {...{ [DANMAKU_MENU_ATTR]: "" }}
       role="group"
       aria-label={`${target.user || "匿名"} 的弹幕操作`}
@@ -118,12 +115,9 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
       style={{
         left: `clamp(${halfWidth}px, ${anchorX}px, calc(100% - ${halfWidth}px))`,
         top: flipBelow ? target.top + target.height : Math.max(0, target.top),
-        // Widen the bridge to the full gap the pill was previously offset by, so
-        // a diagonal approach lands on padding too.
         paddingLeft: MENU_GAP_PX,
         paddingRight: MENU_GAP_PX,
       }}
-      onPointerLeave={onPointerLeave}
       onPointerDown={(event) => event.stopPropagation()}
       onPointerUp={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}

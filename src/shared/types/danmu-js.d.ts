@@ -57,6 +57,11 @@ declare module "danmu.js" {
   };
 
   export type DanmuJsEventMap = {
+    /**
+     * Native hover selection. Declared for completeness only — the app pins with
+     * its own press delegate and creates instances with `mouseControl: false`,
+     * so nothing subscribes to this.
+     */
     bullet_hover: { bullet: DanmuJsBullet; event: Event };
     bullet_attached: unknown;
     bullet_remove: { bullet: DanmuJsBullet };
