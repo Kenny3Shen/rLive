@@ -465,10 +465,8 @@ export function RecordingAssSettingsFields() {
 
 export function RecordingDefaultsFields() {
   const includeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
-  const continueAfterLeave = useSettingsStore((state) => state.recordingContinueAfterLeave);
   const autoSplitMinutes = useSettingsStore((state) => state.recordingAutoSplitMinutes);
   const setIncludeDanmaku = useSettingsStore((state) => state.setRecordingIncludeDanmaku);
-  const setContinueAfterLeave = useSettingsStore((state) => state.setRecordingContinueAfterLeave);
   const setAutoSplitMinutes = useSettingsStore((state) => state.setRecordingAutoSplitMinutes);
 
   return (
@@ -485,20 +483,6 @@ export function RecordingDefaultsFields() {
           className="self-center"
           checked={includeDanmaku}
           onCheckedChange={setIncludeDanmaku}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>
-            <span id="recording-continue-after-leave-label">默认后台录制</span>
-            <FieldTip>离开直播间或 IPTV 播放页后继续录制，直到手动停止。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="recording-continue-after-leave-label"
-          className="self-center"
-          checked={continueAfterLeave}
-          onCheckedChange={setContinueAfterLeave}
         />
       </Field>
       <NumberSettingField

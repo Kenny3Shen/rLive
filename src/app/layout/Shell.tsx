@@ -31,6 +31,12 @@ import { HistoryClearButton, HistoryViewSwitcher } from "@/features/history/Hist
 import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState";
 import { FollowViewSwitcher } from "@/features/follow/FollowHeaderControls";
 import { useFollowHeaderSnapshot } from "@/features/follow/followHeaderState";
+import {
+  RecordingStorageButton,
+  RecordingViewSwitcher,
+} from "@/features/recording/RecordingHeaderControls";
+import { recordingSupported } from "@/features/recording/recording";
+import { useRecordingHeaderSnapshot } from "@/features/recording/recordingHeaderState";
 import { canSearchNavigateBack } from "@/features/search/search";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
@@ -135,10 +141,14 @@ export function Shell() {
   const isSearch = pathname === "/search";
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
+  // Recording is desktop-only, so a deep link on mobile keeps the plain header
+  // above the page's own "仅支持桌面端" state instead of empty scope tabs.
+  const isRecordings = pathname === "/recordings" && recordingSupported();
   const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
   const historyHeader = useHistoryHeaderSnapshot();
   const followHeader = useFollowHeaderSnapshot();
+  const recordingHeader = useRecordingHeaderSnapshot();
 
   // React Router records each pushState entry with an incrementing `idx`.
   // Comparing it across renders tells the tab transition which way the user
@@ -205,7 +215,7 @@ export function Shell() {
   // live/IPTV tab does not remount FollowPage and discard its transition state.
   // IPTV follow groups animate inside IptvFollowView rather than in this layer.
   const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv;
-  const showTopNavigation = useGroupedPageContainer || isHistory;
+  const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
@@ -647,6 +657,12 @@ export function Shell() {
                             value={historyHeader.view}
                             onValueChange={historyHeader.onViewChange}
                           />
+                        ) : isRecordings ? (
+                          <RecordingViewSwitcher
+                            value={recordingHeader.view}
+                            counts={recordingHeader.counts}
+                            onValueChange={recordingHeader.onViewChange}
+                          />
                         ) : isFollow ? (
                           <FollowViewSwitcher
                             value={followHeader.view}
@@ -689,6 +705,8 @@ export function Shell() {
                         pending={historyHeader.clearPending}
                         onRequestClear={historyHeader.onRequestClear}
                       />
+                    ) : isRecordings ? (
+                      <RecordingStorageButton onRequestStorage={recordingHeader.onRequestStorage} />
                     ) : isFollow || isIptv ? null : (
                       <HeaderSearch />
                     )}

@@ -14,7 +14,7 @@ use crate::state::AppState;
 
 fn configured_recording_options(
     state: &AppState,
-) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool, bool)> {
+) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool)> {
     let conn = state
         .db
         .lock()
@@ -31,7 +31,6 @@ fn configured_recording_options(
             }),
         },
         settings.recording_include_danmaku,
-        settings.recording_continue_after_leave,
     ))
 }
 
@@ -52,9 +51,9 @@ pub async fn recording_start(
         input.source_key.trim(),
         input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
     );
-    let (proxy, ffmpeg_options, default_include_danmaku, default_continue_on_leave) =
+    let (proxy, ffmpeg_options, default_include_danmaku) =
         configured_recording_options(state.inner())?;
-    let input = input.with_recording_defaults(default_include_danmaku, default_continue_on_leave);
+    let input = input.with_recording_defaults(default_include_danmaku);
     state
         .recording
         .start_with_ffmpeg_options(input, proxy.as_deref(), ffmpeg_options)

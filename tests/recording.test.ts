@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  activeRecordingCount,
   activeRecordingForContext,
   applyRecordingProgress,
   clampRecordingPlaybackTime,
@@ -12,9 +13,15 @@ import {
   recordingProtocolLabel,
   recordingUserGroupKey,
   recordingsForPlatform,
+  recordingsForView,
   type RecordingContext,
   type RecordingItem,
 } from "../src/features/recording/recording";
+import {
+  RECORDING_VIEW_PARAM,
+  recordingViewFromSearch,
+  withRecordingView,
+} from "../src/features/recording/recordingRoute";
 import { shouldPromptBeforeRecordingLeave } from "../src/features/recording/RecordingLeaveGuard";
 import {
   activeRecordingForLiveRoom,
@@ -248,6 +255,46 @@ describe("recording presentation helpers", () => {
     expect(recordingsForPlatform(items, "twitch")).toEqual([twitch]);
     expect(recordingsForPlatform(items, "all")).toBe(items);
     expect(recordingUserGroupKey(bilibili)).not.toBe(recordingUserGroupKey(twitch));
+  });
+
+  test("scopes the library by the header tab, counting every finished state as recorded", () => {
+    const active = recordingItem({ id: "active", status: "recording" });
+    const completed = recordingItem({ id: "completed", status: "completed" });
+    const interrupted = recordingItem({ id: "interrupted", status: "interrupted" });
+    const failed = recordingItem({ id: "failed", status: "failed" });
+    const items = [active, completed, interrupted, failed];
+
+    expect(recordingViewFromSearch(null)).toBe("all");
+    expect(recordingViewFromSearch("recording")).toBe("recording");
+    expect(recordingViewFromSearch("recorded")).toBe("recorded");
+    expect(recordingViewFromSearch("bogus")).toBe("all");
+
+    expect(recordingsForView(items, "all")).toBe(items);
+    expect(recordingsForView(items, "recording")).toEqual([active]);
+    expect(recordingsForView(items, "recorded")).toEqual([completed, interrupted, failed]);
+  });
+
+  test("keeps the recording view out of the address bar only when it is the default", () => {
+    const params = new URLSearchParams({ platform: "twitch" });
+
+    expect(withRecordingView(params, "all").toString()).toBe("platform=twitch");
+    expect(withRecordingView(params, "recording").get(RECORDING_VIEW_PARAM)).toBe("recording");
+    // The source params are never mutated in place.
+    expect(params.has(RECORDING_VIEW_PARAM)).toBe(false);
+  });
+
+  test("counts only capturing tasks for the navigation badge", () => {
+    expect(activeRecordingCount(undefined)).toBe(0);
+    expect(activeRecordingCount([])).toBe(0);
+    expect(
+      activeRecordingCount([
+        recordingItem({ id: "a", status: "recording" }),
+        recordingItem({ id: "b", status: "recording" }),
+        recordingItem({ id: "c", status: "completed" }),
+        recordingItem({ id: "d", status: "interrupted" }),
+        recordingItem({ id: "e", status: "failed" }),
+      ]),
+    ).toBe(2);
   });
 
   test("formats short and long durations as timecodes", () => {

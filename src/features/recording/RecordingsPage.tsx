@@ -1,7 +1,7 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Captions,
@@ -68,7 +68,15 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LIVE_SITE_IDS } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
+import { useRecordingHeaderState } from "./recordingHeaderState";
 import {
+  RECORDING_VIEW_PARAM,
+  recordingViewFromSearch,
+  withRecordingView,
+  type RecordingView,
+} from "./recordingRoute";
+import {
+  activeRecordingCount,
   deleteRecording,
   exportRecordingDanmakuAss,
   formatRecordingDate,
@@ -83,6 +91,7 @@ import {
   recordingSupported,
   recordingUserGroupKey,
   recordingsForPlatform,
+  recordingsForView,
   setRecordingStoragePath,
   stopRecording,
   useRecordings,
@@ -530,14 +539,55 @@ export function RecordingsPage() {
   const items = useMemo(() => recordings.data ?? [], [recordings.data]);
   const requestedPlatform = searchParams.get("platform");
   const platformFilter: PlatformFilter = recordingPlatformFromSearch(requestedPlatform);
+  const view = recordingViewFromSearch(searchParams.get(RECORDING_VIEW_PARAM));
+  // The header tabs count the whole library rather than the active platform, so
+  // switching to a scope never shows a tab labelled with rows it cannot list.
+  const activeCount = activeRecordingCount(items);
+  const viewCounts = useMemo(
+    () => ({
+      all: items.length,
+      recording: activeCount,
+      recorded: items.length - activeCount,
+    }),
+    [activeCount, items.length],
+  );
+  const scopedItems = useMemo(() => recordingsForView(items, view), [items, view]);
   const filteredItems = useMemo(
-    () => recordingsForPlatform(items, platformFilter),
-    [items, platformFilter],
+    () => recordingsForPlatform(scopedItems, platformFilter),
+    [platformFilter, scopedItems],
   );
   const userGroups = useMemo(() => recordingUserGroups(filteredItems), [filteredItems]);
   const requestedUser = searchParams.get("user");
   const selectedGroup =
     userGroups.find((group) => group.key === requestedUser) ?? userGroups[0] ?? null;
+
+  const selectView = useCallback(
+    (nextView: RecordingView) => {
+      setSearchParams(
+        (current) => {
+          const next = withRecordingView(current, nextView);
+          // The selected user rarely exists in both scopes, so let the new
+          // scope pick its own first group instead of falling back silently.
+          next.delete("user");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const openStorage = useCallback(() => setStorageOpen(true), []);
+  useRecordingHeaderState(
+    useMemo(
+      () => ({
+        view,
+        counts: viewCounts,
+        onViewChange: selectView,
+        onRequestStorage: openStorage,
+      }),
+      [openStorage, selectView, view, viewCounts],
+    ),
+  );
 
   const stopMutation = useMutation({
     mutationFn: stopRecording,
@@ -571,8 +621,7 @@ export function RecordingsPage() {
 
   const exportAssMutation = useMutation({
     mutationFn: exportRecordingDanmakuAss,
-    onSuccess: (path) =>
-      notify.success(`弹幕字幕已导出：${path}`),
+    onSuccess: (path) => notify.success(`弹幕字幕已导出：${path}`),
     onError: (error) => notify.error("导出弹幕字幕失败", recordingErrorMessage(error)),
   });
 
@@ -644,20 +693,6 @@ export function RecordingsPage() {
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[1600px] flex-col gap-4">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">录制库</h1>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          onClick={() => setStorageOpen(true)}
-        >
-          <HardDrive data-icon="inline-start" aria-hidden />
-          保存位置
-        </Button>
-      </header>
-
       {recordings.isPending ? (
         <RecordingsSkeleton />
       ) : recordings.isError ? (
@@ -668,7 +703,7 @@ export function RecordingsPage() {
         />
       ) : (
         <>
-          {items.length > 0 ? (
+          {scopedItems.length > 0 ? (
             <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
               <RecordingUserList
                 groups={userGroups}
@@ -737,9 +772,19 @@ export function RecordingsPage() {
                 <EmptyMedia variant="icon">
                   <Videotape aria-hidden />
                 </EmptyMedia>
-                <EmptyTitle>还没有本地录制</EmptyTitle>
+                <EmptyTitle>
+                  {view === "recording"
+                    ? "当前没有录制中的任务"
+                    : view === "recorded"
+                      ? "还没有已保存的录制"
+                      : "还没有本地录制"}
+                </EmptyTitle>
                 <EmptyDescription>
-                  进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。
+                  {view === "recording"
+                    ? "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。开始后任务会持续在后台录制。"
+                    : view === "recorded"
+                      ? "停止录制后的任务会保存到这里，可直接回放、导出弹幕字幕或定位文件。"
+                      : "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。"}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>

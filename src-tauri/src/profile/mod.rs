@@ -52,6 +52,9 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "asr_translation_from",
     "asr_translation_to",
     "iptv_custom_m3u_url",
+    // Accepted from packages written before background recording became
+    // unconditional, then dropped rather than applied. It is deliberately not
+    // in the portable (required) list, so current exports may omit it.
     "recording_continue_after_leave",
     "recording_include_danmaku",
     "recording_auto_split_minutes",
@@ -77,7 +80,6 @@ const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "quality_level",
     "playback_soft_switch_enabled",
     "asr_font_size",
-    "recording_continue_after_leave",
     "recording_include_danmaku",
     "recording_auto_split_minutes",
     "ffmpeg_rw_timeout_seconds",
@@ -517,6 +519,22 @@ mod tests {
 
         assert_eq!(error.code, "profile_schema_invalid");
         assert!(error.message.contains("danmaku_font_weight"));
+    }
+
+    #[test]
+    fn profile_accepts_legacy_continue_after_leave_without_exporting_it() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]["recording_continue_after_leave"] = serde_json::json!(true);
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert!(package.settings.legacy_recording_continue_after_leave);
+        assert!(
+            !serde_json::to_string(&package)
+                .unwrap()
+                .contains("recording_continue_after_leave")
+        );
     }
 
     #[test]
