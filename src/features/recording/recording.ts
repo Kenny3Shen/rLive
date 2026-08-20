@@ -61,6 +61,18 @@ export type RecordingContext = {
   userName?: string;
   cover?: string;
   userAvatar?: string;
+  /**
+   * Supplies a play URL for the recording alone, replacing `source` at start.
+   *
+   * Set this wherever `source` is the URL an on-screen player is already
+   * pulling. The player streams through the Rust `stream_proxy` while the
+   * recording connects upstream directly, so one address means two independent
+   * connections; a site that signs per request and permits a single consumer per
+   * signature drops the second, and the recording fails moments after starting.
+   *
+   * Callers that already fetched a URL nobody else is using leave this unset.
+   */
+  resolveRecordingSource?: () => Promise<PlayUrl>;
 };
 
 export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
@@ -403,9 +415,19 @@ export async function startRecording(
   context: RecordingContext,
   { includeDanmaku, continueOnLeave }: RecordingStartOptions = {},
 ): Promise<RecordingItem> {
+  // A dedicated URL is preferred but never required: if the site cannot hand out
+  // another line, recording the shared one is better than not recording at all.
+  let source = context.source;
+  if (context.resolveRecordingSource) {
+    try {
+      source = await context.resolveRecordingSource();
+    } catch {
+      source = context.source;
+    }
+  }
   return invokeCmd<RecordingItem>("recording_start", {
     input: {
-      source: context.source,
+      source,
       sourceKey: context.sourceKey,
       sourceKind: context.sourceKind,
       siteId: context.siteId ?? null,

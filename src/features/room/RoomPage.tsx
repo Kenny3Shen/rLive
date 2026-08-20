@@ -27,6 +27,7 @@ import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/t
 import { PlayerPane } from "./PlayerPane";
 import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
 import type { RecordingContext } from "@/features/recording/recording";
+import { fetchRecordingPlayUrl } from "@/features/recording/recordingSource";
 import { RecordingControl } from "@/features/recording/RecordingControl";
 import { RecordingLeaveGuard } from "@/features/recording/RecordingLeaveGuard";
 import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
@@ -163,6 +164,7 @@ export function RoomPage() {
 
   const detail = detailQuery.data;
   const roomSessionKey = siteId && roomId ? `${siteId}:${roomId}` : undefined;
+  const activeQuality = playback.qualities[playback.qualityIndex];
   const recordingContext = useMemo<RecordingContext | null>(
     () =>
       playback.playUrl
@@ -176,9 +178,21 @@ export function RoomPage() {
             userName: detail?.user_name ?? "",
             cover: detail?.cover || detail?.user_avatar || "",
             userAvatar: detail?.user_avatar || "",
+            // `playback.playUrl` is the address this page's player is streaming,
+            // so the recording asks the site for one of its own instead.
+            resolveRecordingSource:
+              siteId && detail && activeQuality
+                ? () =>
+                    fetchRecordingPlayUrl(
+                      siteId,
+                      detail,
+                      activeQuality,
+                      playback.playUrl?.source_id,
+                    )
+                : undefined,
           }
         : null,
-    [detail, playback.playUrl, roomId, siteId],
+    [activeQuality, detail, playback.playUrl, roomId, siteId],
   );
   // These controls belong to the room session rather than the settings tab,
   // so title-bar and fullscreen surfaces keep the same live controller.

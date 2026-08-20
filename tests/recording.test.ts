@@ -25,6 +25,7 @@ import {
   withRecordingView,
 } from "../src/features/recording/recordingRoute";
 import { shouldPromptBeforeRecordingLeave } from "../src/features/recording/RecordingLeaveGuard";
+import { pickRecordingLine } from "../src/features/recording/recordingSource";
 import {
   activeRecordingForLiveRoom,
   autoRecordableFollows,
@@ -32,7 +33,7 @@ import {
   followRecordingContext,
   liveRecordingSourceKey,
 } from "../src/features/recording/followRecording";
-import type { FollowUser } from "../src/shared/types/live";
+import type { FollowUser, PlayUrl } from "../src/shared/types/live";
 import {
   filterRecordedDanmakuEntries,
   firstRecordedDanmakuAtOrAfter,
@@ -653,5 +654,48 @@ describe("recording playback route", () => {
     expect(recordingIdFromPlaybackParams("bilibili_100", undefined)).toBeNull();
     expect(recordingIdFromPlaybackParams(undefined, "主播_1")).toBeNull();
     expect(recordingIdFromPlaybackParams("bilibili_100", "%E4%B8")).toBeNull();
+  });
+});
+
+describe("dedicated recording play url", () => {
+  function line(sourceId: string, url: string): PlayUrl {
+    return {
+      url,
+      headers: {},
+      source_id: sourceId,
+      label: sourceId,
+      protocol: "flv",
+      priority: 0,
+    };
+  }
+
+  test("keeps the watched line by identity, not by position", () => {
+    // A re-fetch may reorder CDNs. Selecting by index would hand the recording a
+    // different line than the one on screen.
+    const refetched = [
+      line("cdn-b", "https://b.example/2.flv"),
+      line("cdn-a", "https://a.example/2.flv"),
+    ];
+    expect(pickRecordingLine(refetched, "cdn-a").source_id).toBe("cdn-a");
+  });
+
+  test("falls back to the first line when the watched one is gone", () => {
+    const refetched = [line("cdn-c", "https://c.example/2.flv")];
+    expect(pickRecordingLine(refetched, "cdn-a").source_id).toBe("cdn-c");
+    expect(pickRecordingLine(refetched).source_id).toBe("cdn-c");
+  });
+
+  test("reports an empty line list instead of returning undefined", () => {
+    expect(() => pickRecordingLine([], "cdn-a")).toThrow("平台未返回可用播放地址");
+  });
+
+  test("a re-signed url differs from the one the player holds", () => {
+    // The point of the re-fetch: the recording must not share the player's
+    // address, or a per-request signature is consumed by two connections.
+    const played = line("cdn-a", "https://a.example/live.flv?sign=first&tt=1");
+    const resigned = line("cdn-a", "https://a.example/live.flv?sign=second&tt=2");
+    const picked = pickRecordingLine([resigned], played.source_id);
+    expect(picked.source_id).toBe(played.source_id);
+    expect(picked.url).not.toBe(played.url);
   });
 });
