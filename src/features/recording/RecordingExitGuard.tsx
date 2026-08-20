@@ -17,6 +17,7 @@ import { notify } from "@/components/ui/toast";
 import {
   activeRecordingCount,
   confirmAppExit,
+  fetchActiveRecordingCount,
   recordingErrorMessage,
   recordingSupported,
   useRecordings,
@@ -37,11 +38,20 @@ const APP_EXIT_REQUESTED_EVENT = "app-exit-requested";
 export function RecordingExitGuard() {
   const supported = recordingSupported();
   const recordings = useRecordings(supported);
-  const activeCount = activeRecordingCount(recordings.data);
+  // The count the backend reported with its close request. It is authoritative
+  // and current, where the library query is a cache with a 15s poll behind it,
+  // so a task that started or ended moments ago would still be miscounted.
+  const [reportedCount, setReportedCount] = useState<number | null>(null);
+  const cachedCount = activeRecordingCount(recordings.data);
+  // The reported count only ever establishes that tasks *were* running. Once the
+  // event-driven list says nothing is capturing, that is the newer fact and the
+  // auto-exit below can take it.
+  const activeCount =
+    recordings.isSuccess && cachedCount === 0 ? 0 : (reportedCount ?? cachedCount);
   // The backend only asks when it has active tasks, so an unresolved list means
   // "unknown", not "none". Auto-exit waits for it rather than skipping the
   // question the user was supposed to answer.
-  const countKnown = recordings.isSuccess;
+  const countKnown = reportedCount !== null || recordings.isSuccess;
   const [open, setOpen] = useState(false);
   const [exiting, setExiting] = useState(false);
 
@@ -52,7 +62,14 @@ export function RecordingExitGuard() {
 
     void (async () => {
       try {
-        const cleanup = await listen(APP_EXIT_REQUESTED_EVENT, () => setOpen(true));
+        const cleanup = await listen(APP_EXIT_REQUESTED_EVENT, () => {
+          setOpen(true);
+          // Best-effort refinement of the copy. A failure leaves the cached
+          // count in place, which still names a number rather than none.
+          void fetchActiveRecordingCount()
+            .then((count) => setReportedCount(count))
+            .catch(() => undefined);
+        });
         if (disposed) cleanup();
         else unlisten = cleanup;
       } catch {

@@ -12,9 +12,11 @@ use tauri::State;
 use crate::error::AppResult;
 use crate::state::AppState;
 
-/// Number of recordings currently capturing media. The exit dialog reads it so
-/// its copy matches the library, and the sidebar badge falls back to it when the
-/// recording list query has not settled yet.
+/// Number of recordings currently capturing media.
+///
+/// The exit dialog reads it when the close handler asks, because the frontend's
+/// recording list is a cache with a slow poll behind it and would misname the
+/// count for a task that just started or just ended.
 #[tauri::command]
 pub fn recording_active_count(state: State<'_, AppState>) -> usize {
     state.recording.active_count()
