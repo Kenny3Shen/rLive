@@ -27,12 +27,15 @@ import {
   clampDanmuArea,
   createDanmuBulletElement,
   danmuCommentFromEvent,
+  danmuGhostRecordIds,
   danmuLayerAreaConfig,
   danmuLaneHeight,
+  danmuMaxActiveComments,
   danmuMoveVPlayRate,
   danmuRenderLayer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
+  isPinnedDanmakuEvent,
   updateDanmuAggregation,
   updateDanmuAppearance,
   type DanmuJsBulletMeta,
@@ -147,6 +150,10 @@ type RuntimeBullet = {
   meta: DanmuJsBulletMeta;
   layer: DanmuJsRenderLayer;
   instance: DanmuJsInstance;
+  /** When the comment was handed to danmu.js, for the ghost sweep below. */
+  sentAt: number;
+  /** Set from the attach hook: only an attached comment has a bullet on screen. */
+  attached: boolean;
 };
 
 type DanmuJsInstances = Record<DanmuJsRenderLayer, DanmuJsInstance>;
@@ -306,6 +313,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const laneHeight = danmuLaneHeight(fontSize);
   const sizeReady = stageSize.width > 0 && stageSize.height > 0;
   const sizeReadyRef = useRef(sizeReady);
+  const stageHeightRef = useRef(stageSize.height);
   const areaRef = useRef(normalizedArea);
   const laneHeightRef = useRef(laneHeight);
 
@@ -326,6 +334,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     areaRef.current = normalizedArea;
     laneHeightRef.current = laneHeight;
     sizeReadyRef.current = sizeReady;
+    stageHeightRef.current = stageSize.height;
     configRef.current = {
       fontSize,
       fontStroke,
@@ -348,6 +357,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     opacity,
     shieldMatcher,
     siteId,
+    stageSize.height,
     superChatEnabled,
     sizeReady,
   ]);
@@ -495,6 +505,22 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     enqueueDanmuJsPending(pendingEventsRef.current, events);
   }, []);
 
+  /**
+   * Drops records for comments danmu.js accepted but never rendered.
+   *
+   * `Main.readData` discards a real-time comment without building a Bullet when
+   * every lane is busy, and that path fires neither `bullet_remove` nor the
+   * detach hook. Those records used to accumulate until the active budget was
+   * exhausted, at which point the oldest record — a bullet still scrolling across
+   * the stage — was evicted, which is why the first comments of a busy room
+   * vanished mid-flight. Reclaiming them here keeps the budget honest about what
+   * is actually on screen.
+   */
+  const sweepGhostRecords = useCallback(() => {
+    const ghosts = danmuGhostRecordIds(recordOrderRef.current, recordsRef.current);
+    for (const id of ghosts) removeRecordRef.current(id, true);
+  }, []);
+
   const renderEvents = useCallback(
     (events: readonly DanmakuEvent[]) => {
       const instances = instancesRef.current;
@@ -503,6 +529,12 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         return;
       }
 
+      sweepGhostRecords();
+      const maxActiveComments = danmuMaxActiveComments(
+        stageHeightRef.current,
+        laneHeightRef.current,
+        areaRef.current,
+      );
       const config = configRef.current;
       const supportsSuperChat = config.superChatEnabled && siteSupportsSuperChat(config.siteId);
       for (const event of events) {
@@ -525,7 +557,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         if (aggregation.key && aggregation.count > 1) {
           const targetId = aggregationTargetsRef.current.get(aggregation.key);
           const target = targetId ? recordsRef.current.get(targetId) : undefined;
-          if (target) {
+          // Merging into a comment that never reached the screen would hide the
+          // repeat as well. A real-time comment attaches synchronously inside
+          // `sendComment`, so an unattached target can only be a silent drop.
+          if (target?.attached) {
             updateDanmuAggregation(target.comment, aggregation.count);
             continue;
           }
@@ -533,11 +568,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           aggregation = aggregatorRef.current.aggregate(event);
         }
 
-        while (recordsRef.current.size >= DANMU_JS_MAX_ACTIVE_COMMENTS) {
-          const oldest = recordOrderRef.current[0];
-          if (!oldest) break;
-          removeRecordRef.current(oldest, true);
-        }
+        // Saturation drops the newest comment, never one already in flight: a
+        // bullet that entered the stage has to be allowed to finish crossing it.
+        // Fixed comments bypass the budget because they take no scrolling lane and
+        // carry their own caps.
+        if (!isPinnedDanmakuEvent(event) && recordsRef.current.size >= maxActiveComments) continue;
 
         const id = `rlive-danmu-${runtimeEpochRef.current}-${++sequenceRef.current}`;
         const comment = danmuCommentFromEvent(event, {
@@ -552,7 +587,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         const layer = danmuRenderLayer(comment);
         const instance = instances[layer];
         const meta = comment.__rliveMeta;
-        recordsRef.current.set(id, { comment, meta, layer, instance });
+        recordsRef.current.set(id, {
+          comment,
+          meta,
+          layer,
+          instance,
+          sentAt: Date.now(),
+          attached: false,
+        });
         recordOrderRef.current.push(id);
         if (meta.aggregationKey) aggregationTargetsRef.current.set(meta.aggregationKey, id);
 
@@ -575,7 +617,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         instance.sendComment(comment);
       }
     },
-    [queueEvents],
+    [queueEvents, sweepGhostRecords],
   );
   const renderEventsRef = useRef(renderEvents);
   useLayoutEffect(() => {
@@ -715,6 +757,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
             if (!meta) return;
             meta.element = element;
             element.dataset.rliveDanmakuId = meta.id;
+            const record = recordsRef.current.get(meta.id);
+            if (record) record.attached = true;
             if (selectedIdRef.current === meta.id) {
               element.dataset.rliveDanmakuSelected = "true";
             }
