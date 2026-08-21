@@ -2,20 +2,27 @@ import { describe, expect, test } from "bun:test";
 import type { DanmuJsBullet, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
+  DANMU_JS_ATTACH_TIMEOUT_MS,
   DANMU_JS_DEFAULT_DURATION_MS,
   DANMU_JS_DEFAULT_MOVE_V,
   DANMU_JS_FONT_WEIGHT,
+  DANMU_JS_LANE_ACTIVE_COMMENTS,
+  DANMU_JS_MAX_ACTIVE_COMMENTS,
   DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT,
+  DANMU_JS_MIN_ACTIVE_COMMENTS,
   clampDanmuArea,
   clampDanmuFontStroke,
   danmuAreaConfig,
   danmuCommentFromEvent,
+  danmuGhostRecordIds,
   danmuLayerAreaConfig,
   danmuLaneHeight,
+  danmuMaxActiveComments,
   danmuMoveVPlayRate,
   danmuRenderLayer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
+  isPinnedDanmakuEvent,
   safeDanmuColor,
   updateDanmuAggregation,
   updateDanmuAppearance,
@@ -397,5 +404,51 @@ describe("danmu.js bounded pending lifecycle", () => {
 
     enqueueDanmuJsPending(queue, events, 100, Number.NaN);
     expect(queue).toHaveLength(80);
+  });
+});
+
+describe("danmu.js active budget under heavy traffic", () => {
+  test("scales the budget with the lanes the stage really offers", () => {
+    const laneHeight = danmuLaneHeight(18);
+    expect(laneHeight).toBe(25);
+
+    // 1080p stage, quarter area: floor(270 / 25) = 10 lanes.
+    expect(danmuMaxActiveComments(1080, laneHeight, 0.25)).toBe(
+      Math.max(DANMU_JS_MIN_ACTIVE_COMMENTS, 10 * DANMU_JS_LANE_ACTIVE_COMMENTS),
+    );
+    // Same stage with the full area keeps far more bullets in flight than the
+    // old fixed cap of 80 allowed, which is what used to cut them off midway.
+    expect(danmuMaxActiveComments(1080, laneHeight, 1)).toBe(43 * DANMU_JS_LANE_ACTIVE_COMMENTS);
+    expect(danmuMaxActiveComments(1080, laneHeight, 1)).toBeGreaterThan(80);
+
+    // Tiny stages still get a workable floor, and the ceiling stays bounded.
+    expect(danmuMaxActiveComments(120, laneHeight, 0.25)).toBe(DANMU_JS_MIN_ACTIVE_COMMENTS);
+    expect(danmuMaxActiveComments(Number.NaN, laneHeight, 0.25)).toBe(
+      DANMU_JS_MIN_ACTIVE_COMMENTS,
+    );
+    expect(danmuMaxActiveComments(20_000, laneHeight, 1)).toBe(DANMU_JS_MAX_ACTIVE_COMMENTS);
+    expect(danmuMaxActiveComments(1080, Number.NaN, 1)).toBeGreaterThan(
+      DANMU_JS_MIN_ACTIVE_COMMENTS,
+    );
+  });
+
+  test("reclaims only records danmu.js never attached", () => {
+    const records = new Map([
+      ["scrolling", { sentAt: 0, attached: true }],
+      ["dropped", { sentAt: 0, attached: false }],
+      ["just-sent", { sentAt: 900, attached: false }],
+    ]);
+    const order = ["scrolling", "dropped", "just-sent", "unknown"];
+
+    expect(danmuGhostRecordIds(order, records, 1_500)).toEqual(["dropped"]);
+    expect(danmuGhostRecordIds(order, records, DANMU_JS_ATTACH_TIMEOUT_MS)).toEqual([]);
+    expect(danmuGhostRecordIds(order, records, 2_500)).toEqual(["dropped", "just-sent"]);
+    expect(danmuGhostRecordIds(order, records, 1_500, Number.NaN)).toEqual(["dropped"]);
+  });
+
+  test("keeps fixed comments outside the scrolling budget", () => {
+    expect(isPinnedDanmakuEvent(chat())).toBe(false);
+    expect(isPinnedDanmakuEvent(chat({ is_self: true }))).toBe(true);
+    expect(isPinnedDanmakuEvent(chat({ kind: "super_chat" }))).toBe(true);
   });
 });
