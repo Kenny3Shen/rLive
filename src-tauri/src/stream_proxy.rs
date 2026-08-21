@@ -1615,6 +1615,24 @@ mod tests {
     #[tokio::test]
     #[ignore = "live Kai Cenat commercial-break replacement; requires channel and external network"]
     async fn live_kaicenat_commercial_break_replacement_smoke() {
+        // The fallback profiles can only mint a playlist while the channel is
+        // live; off air every profile answers with nothing to replace and the
+        // recovery correctly degrades to the wait manifest. Skip instead of
+        // reporting that expected degradation as a proxy regression.
+        use crate::sites::traits::LiveSite;
+
+        let probe = crate::sites::twitch::TwitchSite::new(
+            crate::http_client::build_client(None).expect("Twitch probe client"),
+        );
+        let detail = probe
+            .get_room_detail("kaicenat")
+            .await
+            .expect("Kai Cenat room detail");
+        if !detail.status {
+            eprintln!("Kai Cenat is offline; skipping live commercial-break replacement probe");
+            return;
+        }
+
         let recovery = TwitchAdRecoverySession::new(
             TwitchAdRecovery {
                 login: "kaicenat".into(),
