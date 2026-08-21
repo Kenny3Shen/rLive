@@ -872,6 +872,83 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
+    /// Opens the warmed recording proxy through the *in-process* libavformat
+    /// binding with the real `build_input_options` dictionary — the exact call
+    /// the recording performs. The CLI smoke test in `stream_proxy` proves the
+    /// proxy serves media; this one proves the option set the recording itself
+    /// passes can also describe those streams.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "live Twitch in-process demux; requires TWITCH_VARIANT_URL and external network"]
+    async fn live_twitch_recording_options_open_the_warmed_proxy_in_process() {
+        let variant = std::env::var("TWITCH_VARIANT_URL").expect("TWITCH_VARIANT_URL");
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "user-agent".to_string(),
+            crate::sites::twitch::DEFAULT_USER_AGENT.to_string(),
+        );
+        headers.insert(
+            "referer".to_string(),
+            "https://www.twitch.tv/dota2ti".to_string(),
+        );
+        let proxy = crate::stream_proxy::StreamProxy::new();
+        let session_id = "recording:live-inproc";
+        let local = proxy
+            .start(
+                variant,
+                headers,
+                session_id.into(),
+                true,
+                None,
+                Some(crate::models::live::TwitchAdRecovery {
+                    login: "dota2ti".into(),
+                    selector: "video-group:chunked".into(),
+                    target_width: 1920,
+                    target_height: 1080,
+                    target_frame_rate_milli: 60_000,
+                }),
+            )
+            .await
+            .expect("recording proxy");
+        proxy
+            .wait_for_playable_manifest(
+                &local,
+                session_id,
+                crate::stream_proxy::TWITCH_RECORDING_WARMUP_BUDGET,
+            )
+            .await
+            .expect("warm-up");
+
+        let mut source =
+            PlayUrl::inferred("twitch:chunked", "Twitch HLS", 0, local, Default::default());
+        source.protocol = PlaybackProtocol::Hls;
+        let options = build_input_options(&source, None, &FfmpegRecordingOptions::default());
+        for (key, value) in &options {
+            eprintln!("option {key}={value}");
+        }
+        let url = source.url.clone();
+        let opened = tokio::task::spawn_blocking(move || {
+            super::initialize().expect("ffmpeg init");
+            let mut dictionary = ffmpeg_next::Dictionary::new();
+            for (key, value) in &options {
+                dictionary.set(key, value);
+            }
+            ffmpeg_next::format::input_with_interrupt_and_dictionary(&url, || false, dictionary)
+                .map(|input| {
+                    input
+                        .streams()
+                        .map(|stream| format!("{:?}", stream.parameters().medium()))
+                        .collect::<Vec<_>>()
+                })
+        })
+        .await
+        .expect("demux task");
+        proxy.stop_for_session(session_id);
+        match opened {
+            Ok(streams) => eprintln!("in-process open ok streams={streams:?}"),
+            Err(error) => panic!("in-process open failed: {error}"),
+        }
+    }
+
     #[test]
     fn publish_part_flushes_with_a_write_capable_handle_before_rename() {
         let root =
