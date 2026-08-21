@@ -320,12 +320,10 @@ fn publish_temporary_file(path: &Path, temporary: &Path, backup: &Path) -> io::R
 /// `canonicalize` returns Windows verbatim paths (`\\?\C:\...` or
 /// `\\?\UNC\server\share`) which native dialogs and the web UI should not
 /// expose. Internally callers may retain the canonical `PathBuf`.
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn path_to_string(path: &Path) -> String {
     strip_windows_verbatim_prefix(&path.to_string_lossy())
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn strip_windows_verbatim_prefix(path: &str) -> String {
     if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
         return format!(r"\\{rest}");
