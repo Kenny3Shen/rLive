@@ -42,6 +42,14 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
 
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// WebView cache lifetime for disk-cached images (avatars, category icons):
+/// their URL changes when the picture does, so a long lifetime is safe.
+const CACHED_IMAGE_MAX_AGE: u32 = 24 * 60 * 60;
+/// Live room covers keep only a short WebView lifetime — long enough that
+/// scrolling a grid back and forth does not refetch, short enough that a
+/// stable-URL preview (Twitch `previews-ttv`) still refreshes while browsing.
+const COVER_MAX_AGE: u32 = 120;
+
 pub struct ImageProxy {
     state: Mutex<Option<ImageProxyInner>>,
     port: AtomicU16,
@@ -63,6 +71,9 @@ impl ImageProxy {
     }
 
     pub async fn cache_usage(&self) -> crate::image_cache::CacheUsage {
+        // The settings page offers to open the reported directory, so make
+        // sure it exists even before the first image has been cached.
+        self.cache.ensure_root().await;
         self.cache.usage().await
     }
 
@@ -232,8 +243,15 @@ async fn handle_image_request(
     let target = parts.next().unwrap_or("");
 
     if method == "OPTIONS" {
-        return write_response_bytes(socket, 204, "No Content", "text/plain; charset=utf-8", &[])
-            .await;
+        return write_response_bytes(
+            socket,
+            204,
+            "No Content",
+            "text/plain; charset=utf-8",
+            &[],
+            ImageFreshness::NoStore,
+        )
+        .await;
     }
     if method != "GET" && method != "HEAD" {
         return write_response_bytes(
@@ -242,15 +260,23 @@ async fn handle_image_request(
             "Method Not Allowed",
             "text/plain; charset=utf-8",
             &[],
+            ImageFreshness::NoStore,
         )
         .await;
     }
 
-    let raw_url = target
+    let query = target
         .strip_prefix("/img?")
         .or_else(|| target.strip_prefix("/img"))
-        .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("url=")))
         .unwrap_or_default();
+    let raw_url = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("url="))
+        .unwrap_or_default();
+    // Live room covers opt out of the disk cache: their URLs either carry a
+    // capture timestamp (a new key per refresh, never read again) or stay
+    // stable while the picture behind them rotates.
+    let use_cache = !query.split('&').any(|pair| pair == "nocache=1");
 
     let upstream_url = match parse_image_url(raw_url) {
         Some(url) => url,
@@ -261,20 +287,37 @@ async fn handle_image_request(
                 "Bad Request",
                 "text/plain; charset=utf-8",
                 &[],
+                ImageFreshness::NoStore,
             )
             .await;
         }
     };
 
     if !host_is_allowed(upstream_url.host_str().unwrap_or_default(), allowed_hosts) {
-        return write_response_bytes(socket, 403, "Forbidden", "text/plain; charset=utf-8", &[])
-            .await;
+        return write_response_bytes(
+            socket,
+            403,
+            "Forbidden",
+            "text/plain; charset=utf-8",
+            &[],
+            ImageFreshness::NoStore,
+        )
+        .await;
     }
 
     if method == "GET"
+        && use_cache
         && let Some((bytes, content_type)) = cache.get(upstream_url.as_str()).await
     {
-        return write_response_bytes(socket, 200, "OK", content_type, &bytes).await;
+        return write_response_bytes(
+            socket,
+            200,
+            "OK",
+            content_type,
+            &bytes,
+            ImageFreshness::Seconds(CACHED_IMAGE_MAX_AGE),
+        )
+        .await;
     }
 
     let mut request = client.get(upstream_url.clone());
@@ -293,7 +336,15 @@ async fn handle_image_request(
         .to_string();
 
     if method == "HEAD" {
-        return write_response_bytes(socket, status, status_reason, &content_type, &[]).await;
+        return write_response_bytes(
+            socket,
+            status,
+            status_reason,
+            &content_type,
+            &[],
+            ImageFreshness::NoStore,
+        )
+        .await;
     }
 
     if !upstream.status().is_success() {
@@ -305,6 +356,7 @@ async fn handle_image_request(
             status_reason,
             "text/plain; charset=utf-8",
             body.as_bytes(),
+            ImageFreshness::NoStore,
         )
         .await;
     }
@@ -317,15 +369,29 @@ async fn handle_image_request(
             "Bad Gateway",
             "text/plain; charset=utf-8",
             b"image too large",
+            ImageFreshness::NoStore,
         )
         .await;
     }
 
     // Full-body write with explicit Content-Length: the Windows WebView can
     // cut off chunked responses when a small image arrives fast.
-    write_response_bytes(socket, status, status_reason, &content_type, &bytes).await?;
+    let freshness = if use_cache {
+        ImageFreshness::Seconds(CACHED_IMAGE_MAX_AGE)
+    } else {
+        ImageFreshness::Seconds(COVER_MAX_AGE)
+    };
+    write_response_bytes(
+        socket,
+        status,
+        status_reason,
+        &content_type,
+        &bytes,
+        freshness,
+    )
+    .await?;
 
-    if sniff_image_type(&bytes).is_some() {
+    if use_cache && sniff_image_type(&bytes).is_some() {
         let cache = cache.clone();
         let url = upstream_url.to_string();
         let bytes = bytes.clone();
@@ -376,12 +442,30 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+/// WebView cache lifetime for a proxied image. Only successful image bodies
+/// get one; errors and empty bodies must not be remembered.
+#[derive(Clone, Copy)]
+enum ImageFreshness {
+    NoStore,
+    Seconds(u32),
+}
+
+impl ImageFreshness {
+    fn header(self) -> String {
+        match self {
+            Self::NoStore => "Cache-Control: no-store\r\n".to_string(),
+            Self::Seconds(seconds) => format!("Cache-Control: private, max-age={seconds}\r\n"),
+        }
+    }
+}
+
 async fn write_response_bytes(
     socket: &mut tokio::net::TcpStream,
     status: u16,
     reason: &str,
     content_type: &str,
     body: &[u8],
+    freshness: ImageFreshness,
 ) -> Result<(), String> {
     let header = if status == 204 {
         "HTTP/1.1 204 No Content\r\n\
@@ -393,9 +477,10 @@ async fn write_response_bytes(
             "HTTP/1.1 {status} {reason}\r\n\
              Content-Type: {content_type}\r\n\
              Access-Control-Allow-Origin: *\r\n\
-             Cache-Control: private, max-age=86400\r\n\
+             {}\
              Connection: close\r\n\
              Content-Length: {}\r\n\r\n",
+            freshness.header(),
             body.len()
         )
     };
@@ -571,6 +656,90 @@ mod tests {
         .unwrap();
         assert!(String::from_utf8_lossy(&cached_response).contains("200 OK"));
         assert!(cached_response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nfake-image"));
+
+        proxy.stop();
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
+    /// Live room covers pass `nocache=1`: the body must still be proxied (the
+    /// Referer is the whole point) but never reach the disk cache, and the
+    /// WebView must only hold it briefly.
+    #[tokio::test]
+    async fn nocache_requests_are_proxied_without_touching_the_disk_cache() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener as StdTcpListener;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let upstream = StdTcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = upstream.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request).unwrap();
+                let body = b"\x89PNG\r\n\x1a\nlive-cover";
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-image-proxy-nocache-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let proxy = ImageProxy::new(cache_root.clone());
+        let base = proxy.start_with_allowlist(&["127.0.0.1"]).await.unwrap();
+        let encoded = format!("http://{upstream_addr}/cover.png")
+            .bytes()
+            .map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (byte as char).to_string()
+                }
+                _ => format!("%{byte:02X}"),
+            })
+            .collect::<String>();
+        let path = format!("/img?nocache=1&url={encoded}");
+
+        for _ in 0..2 {
+            let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+                .await
+                .unwrap();
+            local
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                local.read_to_end(&mut response),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let text = String::from_utf8_lossy(&response);
+            assert!(text.contains("200 OK"), "{text}");
+            assert!(
+                text.contains("Cache-Control: private, max-age=120"),
+                "{text}"
+            );
+            assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nlive-cover"));
+        }
+
+        // Both requests reached the (two-shot) upstream, so neither was served
+        // from disk, and nothing was written either.
+        server.join().unwrap();
+        assert_eq!(proxy.cache_usage().await.files, 0);
 
         proxy.stop();
         let _ = std::fs::remove_dir_all(cache_root);

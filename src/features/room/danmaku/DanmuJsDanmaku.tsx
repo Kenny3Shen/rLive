@@ -27,12 +27,15 @@ import {
   clampDanmuArea,
   createDanmuBulletElement,
   danmuCommentFromEvent,
+  danmuGhostRecordIds,
   danmuLayerAreaConfig,
   danmuLaneHeight,
+  danmuMaxActiveComments,
   danmuMoveVPlayRate,
   danmuRenderLayer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
+  isPinnedDanmakuEvent,
   updateDanmuAggregation,
   updateDanmuAppearance,
   type DanmuJsBulletMeta,
@@ -44,6 +47,7 @@ import {
 } from "./danmuJsAdapter";
 import { installDanmuJsFixedPriorCompat } from "./danmuJsCompat";
 import { loadDanmuJs } from "./danmuJsLoader";
+import { releaseDanmuJsPin, removeDanmuJsPin, resumeDanmuJsPin } from "./danmuJsPin";
 import {
   MAX_SUPER_CHAT_DEDUPE_KEYS,
   siteSupportsSuperChat,
@@ -57,6 +61,40 @@ export type DanmakuHitRect = {
   width: number;
   height: number;
 };
+
+/**
+ * Safety net for a pinned comment.
+ *
+ * Pinning parks the danmu.js Bullet in `forcedPause`, a state only an explicit
+ * restart leaves. Every dismissal path below releases it, but a comment frozen
+ * across a stage resize or a layer teardown used to stay on screen forever, so
+ * a pin also expires on its own. Generous on purpose: it must not interrupt
+ * someone still reading the comment they pinned.
+ */
+const DANMU_JS_PIN_AUTO_RELEASE_MS = 20_000;
+/**
+ * A press only pins if it stayed put, so dragging a volume/brightness gesture
+ * that happens to start on a comment is not read as a pin. Mirrors the stage tap
+ * thresholds in `PlayerPane`, duplicated rather than imported because that module
+ * renders this one.
+ */
+const DANMU_JS_PIN_TAP_MAX_DISTANCE_PX = 14;
+const DANMU_JS_PIN_TAP_MAX_DURATION_MS = 320;
+/**
+ * How long a claimed press keeps suppressing the mouse events derived from it.
+ * `click` follows its `pointerup` in the same task, and the `dblclick` of a
+ * double press follows the second one, so this only has to outlast one gesture.
+ */
+const DANMU_JS_PIN_CLAIM_WINDOW_MS = 500;
+
+/** Short, mostly stationary press: a pin rather than the start of a gesture. */
+export function isDanmakuPinTap(deltaX: number, deltaY: number, durationMs: number): boolean {
+  return (
+    durationMs >= 0 &&
+    durationMs <= DANMU_JS_PIN_TAP_MAX_DURATION_MS &&
+    Math.hypot(deltaX, deltaY) <= DANMU_JS_PIN_TAP_MAX_DISTANCE_PX
+  );
+}
 
 export function danmakuVisibleContentRect(
   contentRect: DanmakuHitRect | null,
@@ -112,6 +150,10 @@ type RuntimeBullet = {
   meta: DanmuJsBulletMeta;
   layer: DanmuJsRenderLayer;
   instance: DanmuJsInstance;
+  /** When the comment was handed to danmu.js, for the ghost sweep below. */
+  sentAt: number;
+  /** Set from the attach hook: only an attached comment has a bullet on screen. */
+  attached: boolean;
 };
 
 type DanmuJsInstances = Record<DanmuJsRenderLayer, DanmuJsInstance>;
@@ -243,6 +285,15 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const sequenceRef = useRef(0);
   const runtimeEpochRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
+  const pinTapRef = useRef<{
+    pointerId: number;
+    id: string;
+    element: HTMLElement;
+    startX: number;
+    startY: number;
+    startedAt: number;
+  } | null>(null);
+  const claimedPressAtRef = useRef(0);
   const reducedMotion = useReducedMotionPreference();
   const pageVisible = usePageVisibility();
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -262,6 +313,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const laneHeight = danmuLaneHeight(fontSize);
   const sizeReady = stageSize.width > 0 && stageSize.height > 0;
   const sizeReadyRef = useRef(sizeReady);
+  const stageHeightRef = useRef(stageSize.height);
   const areaRef = useRef(normalizedArea);
   const laneHeightRef = useRef(laneHeight);
 
@@ -282,6 +334,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     areaRef.current = normalizedArea;
     laneHeightRef.current = laneHeight;
     sizeReadyRef.current = sizeReady;
+    stageHeightRef.current = stageSize.height;
     configRef.current = {
       fontSize,
       fontStroke,
@@ -304,6 +357,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     opacity,
     shieldMatcher,
     siteId,
+    stageSize.height,
     superChatEnabled,
     sizeReady,
   ]);
@@ -331,18 +385,52 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return () => observer.disconnect();
   }, [active, pageVisible]);
 
-  const releaseSelection = useCallback((removed = false) => {
-    const selectedId = selectedIdRef.current;
-    selectedIdRef.current = null;
-    const record = selectedId ? recordsRef.current.get(selectedId) : undefined;
-    const element = record?.meta.element;
+  const removeRecordRef = useRef<(id: string, removeFromInstance: boolean) => void>(() => {});
+
+  /**
+   * Undoes one pin on the danmu.js side, given the record that holds it.
+   *
+   * `dropped` means the bullet is going away regardless — its own record is
+   * being torn down, or the whole layer is — so the freeze only has to be handed
+   * back. Otherwise the bullet has to move again, and when danmu.js cannot
+   * restart it the comment is removed instead: a bullet stranded in
+   * `forcedPause` has no running transition, so the `transitionend` that its own
+   * removal waits for would never arrive and it would hold its track forever.
+   */
+  const unpinRecord = useCallback((record: RuntimeBullet, id: string, dropped: boolean) => {
+    const element = record.meta.element;
     if (element) {
       delete element.dataset.rliveDanmakuSelected;
       element.style.removeProperty("z-index");
     }
-    if (selectedId && !removed) record?.instance.restartComment(selectedId);
-    setHoverTarget(null);
+    if (dropped) {
+      releaseDanmuJsPin(record.instance, id);
+      return;
+    }
+    if (!resumeDanmuJsPin(record.instance, id)) {
+      removeRecordRef.current(id, true);
+      return;
+    }
+    // A resumed bullet only moves again once its main loop ticks.
+    if (record.instance.status === "paused") record.instance.play();
   }, []);
+  const unpinRecordRef = useRef(unpinRecord);
+  useLayoutEffect(() => {
+    unpinRecordRef.current = unpinRecord;
+  }, [unpinRecord]);
+
+  /** Ends the current pin, if any. See {@link unpinRecord} for `dropped`. */
+  const releaseSelection = useCallback(
+    (dropped = false) => {
+      const selectedId = selectedIdRef.current;
+      selectedIdRef.current = null;
+      setHoverTarget(null);
+      if (!selectedId) return;
+      const record = recordsRef.current.get(selectedId);
+      if (record) unpinRecord(record, selectedId, dropped);
+    },
+    [unpinRecord],
+  );
   const releaseSelectionRef = useRef(releaseSelection);
   useLayoutEffect(() => {
     releaseSelectionRef.current = releaseSelection;
@@ -366,18 +454,24 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       aggregationTargetsRef.current.delete(key);
       aggregatorRef.current.forget(key);
     }
+    // The map entry is already gone, so `releaseSelection` could no longer find
+    // the record: unpin through the one still in hand, before the element
+    // references that cleanup needs are dropped below.
+    if (selectedIdRef.current === id) {
+      selectedIdRef.current = null;
+      setHoverTarget(null);
+      unpinRecordRef.current(record, id, true);
+    }
     record.meta.element = undefined;
     record.meta.contentElement = undefined;
     record.meta.countElement = undefined;
     record.meta.countSlotElement = undefined;
-    if (selectedIdRef.current === id) releaseSelectionRef.current(true);
-    if (removeFromInstance) record.instance.removeComment(id);
+    if (removeFromInstance) removeDanmuJsPin(record.instance, id);
     const layerHasRecords = Array.from(recordsRef.current.values()).some(
       (candidate) => candidate.instance === record.instance,
     );
     if (!layerHasRecords && record.instance.status === "playing") record.instance.pause();
   }, []);
-  const removeRecordRef = useRef(removeRecord);
   useLayoutEffect(() => {
     removeRecordRef.current = removeRecord;
   }, [removeRecord]);
@@ -411,6 +505,22 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     enqueueDanmuJsPending(pendingEventsRef.current, events);
   }, []);
 
+  /**
+   * Drops records for comments danmu.js accepted but never rendered.
+   *
+   * `Main.readData` discards a real-time comment without building a Bullet when
+   * every lane is busy, and that path fires neither `bullet_remove` nor the
+   * detach hook. Those records used to accumulate until the active budget was
+   * exhausted, at which point the oldest record — a bullet still scrolling across
+   * the stage — was evicted, which is why the first comments of a busy room
+   * vanished mid-flight. Reclaiming them here keeps the budget honest about what
+   * is actually on screen.
+   */
+  const sweepGhostRecords = useCallback(() => {
+    const ghosts = danmuGhostRecordIds(recordOrderRef.current, recordsRef.current);
+    for (const id of ghosts) removeRecordRef.current(id, true);
+  }, []);
+
   const renderEvents = useCallback(
     (events: readonly DanmakuEvent[]) => {
       const instances = instancesRef.current;
@@ -419,6 +529,12 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         return;
       }
 
+      sweepGhostRecords();
+      const maxActiveComments = danmuMaxActiveComments(
+        stageHeightRef.current,
+        laneHeightRef.current,
+        areaRef.current,
+      );
       const config = configRef.current;
       const supportsSuperChat = config.superChatEnabled && siteSupportsSuperChat(config.siteId);
       for (const event of events) {
@@ -441,7 +557,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         if (aggregation.key && aggregation.count > 1) {
           const targetId = aggregationTargetsRef.current.get(aggregation.key);
           const target = targetId ? recordsRef.current.get(targetId) : undefined;
-          if (target) {
+          // Merging into a comment that never reached the screen would hide the
+          // repeat as well. A real-time comment attaches synchronously inside
+          // `sendComment`, so an unattached target can only be a silent drop.
+          if (target?.attached) {
             updateDanmuAggregation(target.comment, aggregation.count);
             continue;
           }
@@ -449,11 +568,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           aggregation = aggregatorRef.current.aggregate(event);
         }
 
-        while (recordsRef.current.size >= DANMU_JS_MAX_ACTIVE_COMMENTS) {
-          const oldest = recordOrderRef.current[0];
-          if (!oldest) break;
-          removeRecordRef.current(oldest, true);
-        }
+        // Saturation drops the newest comment, never one already in flight: a
+        // bullet that entered the stage has to be allowed to finish crossing it.
+        // Fixed comments bypass the budget because they take no scrolling lane and
+        // carry their own caps.
+        if (!isPinnedDanmakuEvent(event) && recordsRef.current.size >= maxActiveComments) continue;
 
         const id = `rlive-danmu-${runtimeEpochRef.current}-${++sequenceRef.current}`;
         const comment = danmuCommentFromEvent(event, {
@@ -468,7 +587,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         const layer = danmuRenderLayer(comment);
         const instance = instances[layer];
         const meta = comment.__rliveMeta;
-        recordsRef.current.set(id, { comment, meta, layer, instance });
+        recordsRef.current.set(id, {
+          comment,
+          meta,
+          layer,
+          instance,
+          sentAt: Date.now(),
+          attached: false,
+        });
         recordOrderRef.current.push(id);
         if (meta.aggregationKey) aggregationTargetsRef.current.set(meta.aggregationKey, id);
 
@@ -491,7 +617,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         instance.sendComment(comment);
       }
     },
-    [queueEvents],
+    [queueEvents, sweepGhostRecords],
   );
   const renderEventsRef = useRef(renderEvents);
   useLayoutEffect(() => {
@@ -565,20 +691,13 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       const id = bulletId(payload?.bullet?.id);
       if (id) removeRecordRef.current(id, false);
     };
-    const onBulletHover = (payload: { bullet: DanmuJsBullet }) => {
-      const id = bulletId(payload?.bullet?.id);
-      const element = payload?.bullet?.el;
-      if (id && element instanceof HTMLElement) selectBullet(id, element);
-    };
 
     const destroyInstances = () => {
       const current = instances;
       if (!current) return;
       if (listenersAttached) {
         current.scroll.off("bullet_remove", onBulletRemove);
-        current.scroll.off("bullet_hover", onBulletHover);
         current.top.off("bullet_remove", onBulletRemove);
-        current.top.off("bullet_hover", onBulletHover);
         listenersAttached = false;
       }
       restoreFixedPriorCompat();
@@ -638,6 +757,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
             if (!meta) return;
             meta.element = element;
             element.dataset.rliveDanmakuId = meta.id;
+            const record = recordsRef.current.get(meta.id);
+            if (record) record.attached = true;
             if (selectedIdRef.current === meta.id) {
               element.dataset.rliveDanmakuSelected = "true";
             }
@@ -664,8 +785,12 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
             defaultOff: true,
             area: danmuLayerAreaConfig(layer, areaRef.current),
             channelSize: laneHeightRef.current,
-            mouseControl: true,
-            mouseControlPause: true,
+            // Pinning is driven by our own press delegate on the layer below, so
+            // danmu.js' hover path stays off. It also owns a single global freeze
+            // slot whose `mouseControl` flag, once set, suppresses every later
+            // hover on the instance — nothing here should be able to set it.
+            mouseControl: false,
+            mouseControlPause: false,
             needResizeObserver: true,
             maxCommentsLength: DANMU_JS_MAX_ACTIVE_COMMENTS,
             interval: 250,
@@ -691,9 +816,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         instances.scroll.setPlayRate("scroll", danmuMoveVPlayRate(configRef.current.danmakuSpeed));
         instancesRef.current = instances;
         instances.scroll.on("bullet_remove", onBulletRemove);
-        instances.scroll.on("bullet_hover", onBulletHover);
         instances.top.on("bullet_remove", onBulletRemove);
-        instances.top.on("bullet_hover", onBulletHover);
         listenersAttached = true;
         instances.scroll.resize();
         instances.top.resize();
@@ -712,7 +835,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       // The separate session effect above owns pending-queue invalidation.
       clearRenderedState(true);
     };
-  }, [active, pageVisible, reducedMotion, selectBullet, sessionKey, sizeReady]);
+  }, [active, pageVisible, reducedMotion, sessionKey, sizeReady]);
 
   useEffect(() => {
     instancesRef.current?.scroll.setPlayRate("scroll", danmuMoveVPlayRate(danmakuSpeed));
@@ -756,12 +879,25 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       releaseSelection();
     };
 
-    // A mouse naturally closes the menu through pointerout. Touch input has no
-    // persistent hover target, so listen above the player and explicitly close
-    // the frozen comment when the next press starts on blank space or chrome.
+    // Pinning is press-driven on both desktop and touch, so a pin ends on the
+    // next press that lands anywhere other than this comment or its menu. Listen
+    // in the capture phase above the player so chrome that stops propagation
+    // still dismisses the pin.
     document.addEventListener("pointerdown", dismissOnOutsidePointerDown, true);
     return () => document.removeEventListener("pointerdown", dismissOnOutsidePointerDown, true);
   }, [hoverTarget?.hoverKey, releaseSelection]);
+
+  useEffect(() => {
+    if (!hoverTarget?.hoverKey) return;
+    // Nothing outside this component can be relied on to end a pin: a stage
+    // resize, a layer teardown or a rejected re-attach can all strand the frozen
+    // bullet. Expire the pin on its own so a comment can never stay parked.
+    const timer = window.setTimeout(
+      () => releaseSelectionRef.current(),
+      DANMU_JS_PIN_AUTO_RELEASE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [hoverTarget?.hoverKey]);
 
   useEffect(() => {
     const selectedId = hoverTarget?.hoverKey;
@@ -772,7 +908,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       const meta = recordsRef.current.get(selectedId)?.meta;
       const rect = meta && relativeVisualRect(host, meta);
       if (!meta || !rect) {
-        if (selectedIdRef.current === selectedId) releaseSelectionRef.current(true);
+        // The bullet lost its box, but it may still sit in the render queue in
+        // `forcedPause`. Go through the resuming path so it cannot stay parked.
+        if (selectedIdRef.current === selectedId) releaseSelectionRef.current();
         return;
       }
       setHoverTarget((current) =>
@@ -797,25 +935,97 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return () => window.cancelAnimationFrame(frame);
   }, [hoverTarget?.hoverKey]);
 
-  const handlePointerOut = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const selectedId = selectedIdRef.current;
-      if (!selectedId || isMenuTarget(event.relatedTarget)) return;
-      const relatedBullet = bulletElementFromTarget(event.relatedTarget);
-      if (relatedBullet?.dataset.rliveDanmakuId === selectedId) return;
-      releaseSelection();
+  // Desktop and touch share one press gesture. Which comment a press aims at is
+  // decided on pointerdown, because the comment keeps moving underneath: only the
+  // press being short and still is checked on pointerup, so a volume/brightness
+  // drag that happens to begin on a comment still reaches the stage. The
+  // document-level delegate above owns dismissal.
+  const handleLayerPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const bullet = bulletElementFromTarget(event.target);
+    const id = bullet?.dataset.rliveDanmakuId;
+    if (!id || !recordsRef.current.has(id)) {
+      pinTapRef.current = null;
+      return;
+    }
+    pinTapRef.current = {
+      pointerId: event.pointerId,
+      id,
+      element: bullet,
+      startX: event.clientX,
+      startY: event.clientY,
+      startedAt: Date.now(),
+    };
+  }, []);
+
+  const finishPress = useCallback(
+    (event: PointerEvent) => {
+      const tap = pinTapRef.current;
+      if (!tap || tap.pointerId !== event.pointerId) return;
+      pinTapRef.current = null;
+      if (
+        !isDanmakuPinTap(
+          event.clientX - tap.startX,
+          event.clientY - tap.startY,
+          Date.now() - tap.startedAt,
+        )
+      ) {
+        return;
+      }
+      if (!recordsRef.current.has(tap.id)) return;
+      // Claim the completed press: the stage reads `defaultPrevented` and will
+      // not turn it into a control-bar toggle or a double-tap fullscreen.
+      event.preventDefault();
+      claimedPressAtRef.current = Date.now();
+      if (selectedIdRef.current === tap.id) releaseSelection();
+      else selectBullet(tap.id, tap.element);
     },
-    [releaseSelection],
+    [releaseSelection, selectBullet],
   );
-  const handleMenuPointerLeave = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      const selectedId = selectedIdRef.current;
-      const relatedBullet = bulletElementFromTarget(event.relatedTarget);
-      if (selectedId && relatedBullet?.dataset.rliveDanmakuId === selectedId) return;
-      releaseSelection();
-    },
-    [releaseSelection],
-  );
+  const finishPressRef = useRef(finishPress);
+  useLayoutEffect(() => {
+    finishPressRef.current = finishPress;
+  }, [finishPress]);
+
+  useEffect(() => {
+    // The release cannot be caught on the layer itself. A comment keeps moving
+    // under the pointer, and the layer takes no pointer events, so a mouse
+    // pointerup a few frames after the press often hit-tests to the picture
+    // instead. Touch is different again — it captures to the element that got the
+    // pointerdown — so the only place that reliably sees both is the document.
+    // Capture phase, above the stage, is also what lets `preventDefault` reach
+    // the stage's own bubble-phase tap handler in time.
+    const onPointerUp = (event: PointerEvent) => finishPressRef.current(event);
+    const onPointerCancel = (event: PointerEvent) => {
+      if (pinTapRef.current?.pointerId === event.pointerId) pinTapRef.current = null;
+    };
+    // `preventDefault` on a pointerup does not stop the click and dblclick it
+    // produces, and those bubble to ancestors that read a press on the picture as
+    // their own gesture (the multi-room grid promotes a cell that way). Their
+    // target is the common ancestor of press and release, so a drifted comment
+    // leaves them pointing at the picture: go by the claim the press recorded.
+    const swallowClaimedClick = (event: MouseEvent) => {
+      if (isMenuTarget(event.target)) return;
+      if (Date.now() - claimedPressAtRef.current > DANMU_JS_PIN_CLAIM_WINDOW_MS) return;
+      event.stopPropagation();
+    };
+    // Any press that did not start on a comment ends the claim, so pressing a
+    // control right after pinning is never swallowed by the window above.
+    const dropStaleClaim = (event: PointerEvent) => {
+      if (!bulletElementFromTarget(event.target)) claimedPressAtRef.current = 0;
+    };
+    document.addEventListener("pointerdown", dropStaleClaim, true);
+    document.addEventListener("pointerup", onPointerUp, true);
+    document.addEventListener("pointercancel", onPointerCancel, true);
+    document.addEventListener("click", swallowClaimedClick, true);
+    document.addEventListener("dblclick", swallowClaimedClick, true);
+    return () => {
+      document.removeEventListener("pointerdown", dropStaleClaim, true);
+      document.removeEventListener("pointerup", onPointerUp, true);
+      document.removeEventListener("pointercancel", onPointerCancel, true);
+      document.removeEventListener("click", swallowClaimedClick, true);
+      document.removeEventListener("dblclick", swallowClaimedClick, true);
+    };
+  }, []);
 
   return (
     <div ref={hostRef} className={cn("pointer-events-none absolute inset-0", className)}>
@@ -823,9 +1033,12 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         ref={scrollContainerRef}
         aria-hidden="true"
         data-rlive-danmaku-layer="scroll"
+        // The layer itself never takes the pointer; only the bullet text inside
+        // it does (see `createDanmuBulletElement`), which is what makes a press
+        // on empty picture fall through to the stage.
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
         style={{ opacity: 1 }}
-        onPointerOut={handlePointerOut}
+        onPointerDown={handleLayerPointerDown}
       />
       <div
         ref={topContainerRef}
@@ -833,7 +1046,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         data-rlive-danmaku-layer="top"
         className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
         style={{ opacity: 1 }}
-        onPointerOut={handlePointerOut}
+        onPointerDown={handleLayerPointerDown}
       />
       {hoverTarget && (
         <>
@@ -856,7 +1069,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
             roomTitle={roomTitle}
             roomUserName={roomUserName}
             large={large}
-            onPointerLeave={handleMenuPointerLeave}
           />
         </>
       )}

@@ -9,7 +9,34 @@ import {
 import { floatingDanmakuText } from "./filter";
 import { superChatDurationMs } from "../superChat";
 
-export const DANMU_JS_MAX_ACTIVE_COMMENTS = 80;
+/**
+ * Hard ceiling for locally tracked bullets, and the floor the adaptive budget
+ * never drops below.
+ *
+ * The budget only bounds our own bookkeeping: how many bullets actually reach
+ * the screen is decided by danmu.js' lane logic, which rejects a comment when no
+ * lane is free. A tall stage with a full display area legitimately carries
+ * several hundred scrolling bullets at once, so a budget below that would start
+ * discarding comments danmu.js still had room for.
+ */
+export const DANMU_JS_MAX_ACTIVE_COMMENTS = 800;
+export const DANMU_JS_MIN_ACTIVE_COMMENTS = 120;
+/**
+ * Bullets one scrolling lane can hold at the same time. A lane accepts the next
+ * comment once its head has fully entered the stage, so with the default 100
+ * px/s it keeps roughly a dozen bullets in flight on a wide stage.
+ */
+export const DANMU_JS_LANE_ACTIVE_COMMENTS = 12;
+/**
+ * How long a sent comment may stay unattached before it counts as dropped.
+ *
+ * `Main.readData` takes a real-time comment off its data pool and discards it
+ * without constructing a Bullet when every lane is busy, and that path fires
+ * neither `bullet_remove` nor the detach hook. Attaching otherwise happens
+ * synchronously inside `sendComment`, so anything still unattached after this
+ * window can only be one of those silent drops.
+ */
+export const DANMU_JS_ATTACH_TIMEOUT_MS = 1_000;
 export const DANMU_JS_MAX_PENDING_COMMENTS = 80;
 export const DANMU_JS_MAX_SUPER_CHATS = 3;
 export const DANMU_JS_PENDING_MAX_AGE_MS = 5_000;
@@ -103,6 +130,52 @@ export function danmuLaneHeight(fontSize: number): number {
   return Math.max(16, Math.round(clampDanmuFontSize(fontSize) * 1.4));
 }
 
+/**
+ * How many bullets may be tracked at once for the current stage.
+ *
+ * Mirrors danmu.js' own lane count (`floor(stageHeight * area / channelSize)`)
+ * so the budget scales with the display area instead of cutting comments off on
+ * a large player.
+ */
+export function danmuMaxActiveComments(
+  stageHeight: number,
+  laneHeight: number,
+  area: number,
+): number {
+  const safeHeight = Number.isFinite(stageHeight) ? Math.max(0, stageHeight) : 0;
+  const safeLaneHeight = Math.max(1, Number.isFinite(laneHeight) ? Math.floor(laneHeight) : 16);
+  const lanes = Math.floor(Math.floor(safeHeight * clampDanmuArea(area)) / safeLaneHeight);
+  const budget = Math.max(0, lanes) * DANMU_JS_LANE_ACTIVE_COMMENTS;
+  return Math.min(DANMU_JS_MAX_ACTIVE_COMMENTS, Math.max(DANMU_JS_MIN_ACTIVE_COMMENTS, budget));
+}
+
+export type DanmuJsAttachState = {
+  sentAt: number;
+  attached: boolean;
+};
+
+/**
+ * Ids of comments danmu.js accepted but never rendered.
+ *
+ * See {@link DANMU_JS_ATTACH_TIMEOUT_MS}: these records have no bullet behind
+ * them, so dropping them frees budget without taking anything off the screen.
+ */
+export function danmuGhostRecordIds(
+  order: readonly string[],
+  records: ReadonlyMap<string, DanmuJsAttachState>,
+  now = Date.now(),
+  timeout = DANMU_JS_ATTACH_TIMEOUT_MS,
+): string[] {
+  const safeTimeout = Math.max(0, Number.isFinite(timeout) ? timeout : DANMU_JS_ATTACH_TIMEOUT_MS);
+  const ghosts: string[] = [];
+  for (const id of order) {
+    const record = records.get(id);
+    if (!record || record.attached) continue;
+    if (now - record.sentAt > safeTimeout) ghosts.push(id);
+  }
+  return ghosts;
+}
+
 /** Convert the requested px/s into danmu.js' multiplier for the 100 px/s base moveV. */
 export function danmuMoveVPlayRate(moveV: number): number {
   const safeMoveV = Number.isFinite(moveV) && moveV > 0 ? moveV : DANMU_JS_DEFAULT_MOVE_V;
@@ -112,6 +185,17 @@ export function danmuMoveVPlayRate(moveV: number): number {
 /** Use danmu.js' native proportional area without overriding it with `lines`. */
 export function danmuAreaConfig(area: number): { start: number; end: number } {
   return { start: 0, end: clampDanmuArea(area) };
+}
+
+/**
+ * Whether an event is rendered as a fixed comment on the top layer.
+ *
+ * Those never compete for a scrolling lane and are bounded on their own (super
+ * chats by their own cap, own messages by the top lanes), so the active budget
+ * does not apply to them.
+ */
+export function isPinnedDanmakuEvent(event: DanmakuEvent): boolean {
+  return event.kind === "super_chat" || event.is_self === true;
 }
 
 /** Keep fixed comments independent from the configured scrolling area. */
@@ -225,7 +309,7 @@ export function danmuCommentFromEvent(
 
   const aggregationCount = Math.max(1, Math.floor(options.aggregationCount ?? 1));
   const isSuperChat = event.kind === "super_chat";
-  const isPinned = isSuperChat || event.is_self === true;
+  const isPinned = isPinnedDanmakuEvent(event);
   const meta: DanmuJsBulletMeta = {
     id: options.id,
     event,
