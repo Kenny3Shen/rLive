@@ -971,8 +971,9 @@ mod tests {
 
     use super::{
         HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, TwitchAdRecoverySession,
-        is_twitch_ad_manifest, looks_like_hls_manifest, manifest_has_playable_segment,
-        mark_all_hls_segments_as_gaps, mark_twitch_ad_segments_as_gaps, probe_sources,
+        hls_path_extension, is_twitch_ad_manifest, looks_like_hls_manifest,
+        manifest_has_playable_segment, mark_all_hls_segments_as_gaps,
+        mark_twitch_ad_segments_as_gaps, probe_sources, resolve_upstream_target,
         rewrite_hls_manifest, twitch_wait_manifest, validate_probe_sample,
     };
     use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
@@ -1135,13 +1136,83 @@ mod tests {
         let rewritten =
             rewrite_hls_manifest(manifest, &upstream, "http://127.0.0.1:41500", &resources);
 
-        assert!(rewritten.contains("URI=\"http://127.0.0.1:41500/hls/1\""));
-        assert!(rewritten.contains("http://127.0.0.1:41500/hls/2"));
-        assert!(rewritten.contains("http://127.0.0.1:41500/hls/3"));
+        assert!(rewritten.contains("URI=\"http://127.0.0.1:41500/hls/1.bin\""));
+        assert!(rewritten.contains("http://127.0.0.1:41500/hls/2.m3u8"));
+        assert!(rewritten.contains("http://127.0.0.1:41500/hls/3.ts"));
         assert_eq!(
             resources.resolve(2).as_deref(),
             Some("https://media.example.test/live/variant/720p.m3u8")
         );
+    }
+
+    #[test]
+    fn rewritten_segment_urls_carry_an_extension_ffmpeg_will_open() {
+        let resources = HlsResources::new();
+        let upstream = Url::parse("https://video-weaver.example/live/chunked/index.m3u8").unwrap();
+        // A Twitch fMP4 segment: the extension is followed by a signed query
+        // that must not reach the local path.
+        let manifest = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MAP:URI=\"https://cdn.example/v1/segment/init.mp4?dna=SECRET\"\n",
+            "#EXTINF:2.000,live\n",
+            "https://cdn.example/v1/segment/AAAA.mp4?dna=SECRET\n",
+            "#EXTINF:2.000,live\n",
+            "https://cdn.example/v1/segment/opaque\n",
+        );
+
+        let rewritten =
+            rewrite_hls_manifest(manifest, &upstream, "http://127.0.0.1:41500", &resources);
+
+        // FFmpeg 8+ enables `extension_picky` by default and refuses a segment
+        // whose extension is not in its allowed list, so an extensionless URL
+        // fails `avformat_open_input` outright.
+        assert!(
+            rewritten.contains("URI=\"http://127.0.0.1:41500/hls/1.mp4\""),
+            "init segment kept no extension: {rewritten}"
+        );
+        assert!(rewritten.contains("http://127.0.0.1:41500/hls/2.mp4"));
+        // Nothing recognizable to carry over stays extensionless rather than
+        // getting an invented extension.
+        assert!(rewritten.contains("http://127.0.0.1:41500/hls/3\n"));
+        assert!(
+            !rewritten.contains("dna=SECRET\n") && !rewritten.contains("/hls/2.mp4?dna"),
+            "the signed query leaked into a local URL: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn an_extended_hls_path_resolves_to_the_same_registry_entry() {
+        let resources = HlsResources::new();
+        let id = resources.register("https://cdn.example/segment.mp4?dna=SECRET".into());
+
+        assert_eq!(
+            resolve_upstream_target(&format!("/hls/{id}.mp4"), "http://unused/live", &resources)
+                .as_deref(),
+            Ok("https://cdn.example/segment.mp4?dna=SECRET")
+        );
+        // The bare form a previously issued manifest may still reference keeps
+        // working, and a non-numeric id is still rejected.
+        assert_eq!(
+            resolve_upstream_target(&format!("/hls/{id}"), "http://unused/live", &resources)
+                .as_deref(),
+            Ok("https://cdn.example/segment.mp4?dna=SECRET")
+        );
+        assert!(resolve_upstream_target("/hls/x.mp4", "http://unused/live", &resources).is_err());
+    }
+
+    #[test]
+    fn only_a_short_alphanumeric_path_extension_is_carried_over() {
+        let extension =
+            |url: &str| hls_path_extension(&Url::parse(url).unwrap()).unwrap_or_default();
+
+        assert_eq!(extension("https://cdn.example/a/b.ts?token=x.y"), "ts");
+        assert_eq!(extension("https://cdn.example/a/b.M3U8"), "m3u8");
+        // No extension, an over-long one, and a non-alphanumeric one all stay
+        // out of the local path.
+        assert_eq!(extension("https://cdn.example/a/segment"), "");
+        assert_eq!(extension("https://cdn.example/a/b.superlong"), "");
+        assert_eq!(extension("https://cdn.example/a/b.ts%2f"), "");
+        assert_eq!(extension("https://cdn.example/"), "");
     }
 
     #[test]
@@ -1439,6 +1510,55 @@ mod tests {
             .await
             .expect_err("a stopped session must not keep warming up");
         assert_eq!(error.code, "stream_proxy_superseded");
+    }
+
+    /// Holds a warmed, recording-shaped proxy open so an *external* demuxer can
+    /// be pointed at it. Prints `PROXY_URL=` on stdout. Run with
+    /// `TWITCH_VARIANT_URL=<variant playlist>` and optional
+    /// `RLIVE_PROXY_HOLD_SECS`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "holds a live Twitch recording proxy open for external probing"]
+    async fn live_twitch_recording_proxy_stays_open_for_external_probe() {
+        let variant = std::env::var("TWITCH_VARIANT_URL").expect("TWITCH_VARIANT_URL");
+        let hold = std::env::var("RLIVE_PROXY_HOLD_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(90);
+        let mut headers = HashMap::new();
+        headers.insert(
+            "user-agent".to_string(),
+            crate::sites::twitch::DEFAULT_USER_AGENT.to_string(),
+        );
+        headers.insert(
+            "referer".to_string(),
+            "https://www.twitch.tv/dota2ti".to_string(),
+        );
+        let proxy = StreamProxy::new();
+        let session_id = "recording:hold";
+        let local = proxy
+            .start(
+                variant,
+                headers,
+                session_id.into(),
+                true,
+                None,
+                Some(crate::models::live::TwitchAdRecovery {
+                    login: "dota2ti".into(),
+                    selector: "video-group:chunked".into(),
+                    target_width: 1920,
+                    target_height: 1080,
+                    target_frame_rate_milli: 60_000,
+                }),
+            )
+            .await
+            .expect("recording proxy");
+        proxy
+            .wait_for_playable_manifest(&local, session_id, super::TWITCH_RECORDING_WARMUP_BUDGET)
+            .await
+            .expect("warm-up");
+        println!("PROXY_URL={local}");
+        tokio::time::sleep(std::time::Duration::from_secs(hold)).await;
+        proxy.stop_for_session(session_id);
     }
 
     /// Records a few seconds from a live channel through the real recording path
@@ -2331,6 +2451,9 @@ fn resolve_upstream_target(
     if id.is_empty() || id.contains('/') {
         return Err("invalid HLS resource path");
     }
+    // Rewritten URLs carry the upstream extension for FFmpeg's benefit; the
+    // registry itself is still keyed by the numeric id alone.
+    let id = id.split_once('.').map_or(id, |(id, _)| id);
     let id = id
         .parse::<u64>()
         .map_err(|_| "invalid HLS resource identifier")?;
@@ -2624,7 +2747,31 @@ fn hls_local_url(
         return None;
     }
     let id = hls_resources.register(resolved.to_string());
-    Some(format!("{local_origin}/hls/{id}"))
+    // FFmpeg's HLS demuxer only opens segment URLs whose extension is in its
+    // allowed list, and since FFmpeg 8 `extension_picky` turns that into the
+    // default. An extensionless `/hls/{id}` plays fine in a browser but makes
+    // `avformat_open_input` fail with `Invalid data found when processing
+    // input`, which kills a recording before it writes a byte. Carrying the
+    // upstream extension over keeps the rewritten URL recognizable to both.
+    Some(match hls_path_extension(&resolved) {
+        Some(extension) => format!("{local_origin}/hls/{id}.{extension}"),
+        None => format!("{local_origin}/hls/{id}"),
+    })
+}
+
+/// The upstream path's file extension, when it is short and alphanumeric.
+///
+/// Read from the path only. A Twitch segment URL ends in `.mp4?dna=<token>`,
+/// and neither that token nor any other query material may leak into a local
+/// path. An unusual or absent extension yields `None`, and the rewritten URL
+/// stays extensionless rather than inventing one.
+fn hls_path_extension(url: &Url) -> Option<String> {
+    let last = url.path_segments()?.next_back()?;
+    let extension = last.rsplit_once('.')?.1;
+    (!extension.is_empty()
+        && extension.len() <= 5
+        && extension.chars().all(|value| value.is_ascii_alphanumeric()))
+    .then(|| extension.to_ascii_lowercase())
 }
 
 async fn write_text_response(
