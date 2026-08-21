@@ -1297,12 +1297,17 @@ fn percent_decode(value: &str) -> String {
 
 /// Fallback web id: the `s_v_web_id` cookie is a real browser fingerprint
 /// from the same session, used when `RENDER_DATA` lacks an explicit id.
+///
+/// Most cookies carry a `verify_…` fingerprint that the danmaku signature
+/// cannot consume (over-long, and `_` would forge fields in the delimited
+/// stub); those are dropped so the danmaku layer keeps its anonymous id
+/// instead of failing the handshake.
 fn session_web_id(cookie: &str) -> Option<String> {
     cookie
         .split(';')
         .map(str::trim)
         .find_map(|pair| pair.strip_prefix("s_v_web_id="))
-        .filter(|id| !id.is_empty())
+        .filter(|id| crate::danmu_rs::douyin_sign::is_valid_web_id(id))
         .map(str::to_string)
 }
 
@@ -1845,6 +1850,15 @@ mod tests {
         assert_eq!(session_web_id(cookie).as_deref(), Some("deadbeef"));
         assert_eq!(session_web_id("ttwid=1|abc; msToken=xyz"), None);
         assert_eq!(session_web_id(""), None);
+    }
+
+    /// A browser's real `s_v_web_id` is a `verify_…` fingerprint that the
+    /// danmaku signature cannot consume, so it must not be attached as the
+    /// room's `user_unique_id`.
+    #[test]
+    fn session_web_id_drops_unsignable_verify_fingerprints() {
+        let cookie = "ttwid=1|abc; s_v_web_id=verify_m9x0k1a2_HqLpZzXk_8T1c_4Vd2_Wm5NpQrStUvW";
+        assert_eq!(session_web_id(cookie), None);
     }
 
     /// The category browser injects a synthetic "全部X" tile whose id is `0`.
