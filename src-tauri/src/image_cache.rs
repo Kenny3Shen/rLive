@@ -25,6 +25,11 @@ const CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
 const CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const TOUCH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// A `put` writes at most `MAX_IMAGE_BYTES` and commits immediately, so a
+/// temporary file older than this cannot belong to an in-flight write: it is
+/// the residue of a process that died between `write` and `rename`.
+const ORPHAN_TTL: Duration = Duration::from_secs(60 * 60);
+const TEMPORARY_SUFFIX: &str = ".tmp-";
 const SWEEP_WRITE_INTERVAL: u64 = 64;
 const SWEEP_TARGET_PERCENT: u64 = 80;
 
@@ -47,6 +52,15 @@ struct CacheEntry {
     path: PathBuf,
     bytes: u64,
     modified: SystemTime,
+}
+
+/// Everything the cache directory holds. Committed entries are what `usage`
+/// reports and what the budget applies to; orphans are temporary files from
+/// interrupted writes, tracked separately so a sweep can reclaim them.
+#[derive(Debug, Default)]
+struct CacheSnapshot {
+    entries: Vec<CacheEntry>,
+    orphans: Vec<CacheEntry>,
 }
 
 impl ImageCache {
@@ -115,7 +129,7 @@ impl ImageCache {
             return;
         }
 
-        let temporary = parent.join(format!("{key}.tmp-{}", Uuid::new_v4().simple()));
+        let temporary = parent.join(temporary_file_name(&key));
         if let Err(error) = fs::write(&temporary, bytes).await {
             tracing::debug!(error = %error, "write image cache temporary file failed");
             let _ = fs::remove_file(&temporary).await;
@@ -145,14 +159,19 @@ impl ImageCache {
         }
     }
 
+    /// Reports committed cache entries. Temporary files from interrupted
+    /// writes are excluded: they are garbage the next sweep reclaims, not
+    /// cache content the user can benefit from.
     pub async fn usage(&self) -> CacheUsage {
-        let entries = self.collect_entries().await;
+        let entries = self.snapshot().await.entries;
         CacheUsage {
             bytes: entries
                 .iter()
                 .fold(0_u64, |total, entry| total.saturating_add(entry.bytes)),
             files: entries.len() as u64,
-            path: self.root.display().to_string(),
+            // The root is canonicalized, so on Windows it carries the `\\?\`
+            // verbatim prefix that must not reach the UI or a native dialog.
+            path: crate::app_paths::path_to_string(&self.root),
         }
     }
 
@@ -167,8 +186,19 @@ impl ImageCache {
                 ));
             }
         }
+        // Recreate the (now empty) directory so the path reported by `usage`
+        // stays browsable from the settings page.
+        self.ensure_root().await;
         self.writes.store(0, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Best-effort: the cache itself creates what it needs on write, but the
+    /// settings page offers to open this directory before anything is cached.
+    pub(crate) async fn ensure_root(&self) {
+        if let Err(error) = fs::create_dir_all(&self.root).await {
+            tracing::debug!(error = %error, "create image cache root failed");
+        }
     }
 
     pub(crate) async fn sweep(&self) {
@@ -183,18 +213,30 @@ impl ImageCache {
         {
             return;
         }
+        // Clears the flag even if the sweep panics or its task is aborted, so
+        // one failure cannot disable eviction for the rest of the process.
+        let _guard = SweepGuard(&self.sweeping);
 
         self.sweep_inner(budget).await;
-        self.sweeping.store(false, Ordering::Release);
     }
 
     async fn sweep_inner(&self, budget: u64) {
         let now = SystemTime::now();
         let cutoff = now.checked_sub(CACHE_TTL).unwrap_or(SystemTime::UNIX_EPOCH);
+        let orphan_cutoff = now
+            .checked_sub(ORPHAN_TTL)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let snapshot = self.snapshot().await;
         let mut survivors = Vec::new();
         let mut total = 0_u64;
 
-        for entry in self.collect_entries().await {
+        for orphan in snapshot.orphans {
+            if orphan.modified < orphan_cutoff {
+                remove_entry(&orphan.path).await;
+            }
+        }
+
+        for entry in snapshot.entries {
             if entry.modified < cutoff {
                 if remove_entry(&entry.path).await {
                     continue;
@@ -228,76 +270,94 @@ impl ImageCache {
         self.root.join(&key[..2]).join(key)
     }
 
-    async fn collect_entries(&self) -> Vec<CacheEntry> {
-        let mut directories = match fs::read_dir(&self.root).await {
-            Ok(directories) => directories,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-            Err(error) => {
-                tracing::debug!(error = %error, "read image cache directory failed");
-                return Vec::new();
-            }
-        };
-        let mut entries = Vec::new();
+    /// Walks the two-level cache tree in one blocking task. The directory can
+    /// hold thousands of files, and a `tokio::fs` walk would dispatch a
+    /// separate blocking job per `read_dir` and per `metadata`.
+    async fn snapshot(&self) -> CacheSnapshot {
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || collect_snapshot(&root))
+            .await
+            .unwrap_or_default()
+    }
+}
 
-        loop {
-            let directory = match directories.next_entry().await {
-                Ok(Some(directory)) => directory,
-                Ok(None) => break,
-                Err(error) => {
-                    tracing::debug!(error = %error, "read image cache subdirectory failed");
-                    break;
-                }
-            };
-            let is_directory = match directory.file_type().await {
-                Ok(file_type) => file_type.is_dir(),
-                Err(error) => {
-                    tracing::debug!(error = %error, "read image cache entry type failed");
-                    false
-                }
-            };
-            if !is_directory {
+fn collect_snapshot(root: &Path) -> CacheSnapshot {
+    let mut snapshot = CacheSnapshot::default();
+    let directories = match std::fs::read_dir(root) {
+        Ok(directories) => directories,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return snapshot,
+        Err(error) => {
+            tracing::debug!(error = %error, "read image cache directory failed");
+            return snapshot;
+        }
+    };
+
+    for directory in directories {
+        let directory = match directory {
+            Ok(directory) => directory,
+            Err(error) => {
+                tracing::debug!(error = %error, "read image cache subdirectory failed");
                 continue;
             }
+        };
+        let is_directory = match directory.file_type() {
+            Ok(file_type) => file_type.is_dir(),
+            Err(error) => {
+                tracing::debug!(error = %error, "read image cache entry type failed");
+                false
+            }
+        };
+        if !is_directory {
+            continue;
+        }
 
-            let mut files = match fs::read_dir(directory.path()).await {
-                Ok(files) => files,
+        let files = match std::fs::read_dir(directory.path()) {
+            Ok(files) => files,
+            Err(error) => {
+                tracing::debug!(error = %error, "read image cache files failed");
+                continue;
+            }
+        };
+        for file in files {
+            let file = match file {
+                Ok(file) => file,
                 Err(error) => {
-                    tracing::debug!(error = %error, "read image cache files failed");
+                    tracing::debug!(error = %error, "read image cache file entry failed");
                     continue;
                 }
             };
-            loop {
-                let file = match files.next_entry().await {
-                    Ok(Some(file)) => file,
-                    Ok(None) => break,
-                    Err(error) => {
-                        tracing::debug!(error = %error, "read image cache file entry failed");
-                        break;
-                    }
-                };
-                let Some(name) = file.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
-                if !is_cache_file_name(&name) {
+            let name = file.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let committed = if is_cache_file_name(name) {
+                true
+            } else if is_orphan_file_name(name) {
+                false
+            } else {
+                continue;
+            };
+            let metadata = match file.metadata() {
+                Ok(metadata) if metadata.is_file() => metadata,
+                Ok(_) => continue,
+                Err(error) => {
+                    tracing::debug!(error = %error, "read image cache file metadata failed");
                     continue;
                 }
-                let metadata = match file.metadata().await {
-                    Ok(metadata) if metadata.is_file() => metadata,
-                    Ok(_) => continue,
-                    Err(error) => {
-                        tracing::debug!(error = %error, "read image cache file metadata failed");
-                        continue;
-                    }
-                };
-                entries.push(CacheEntry {
-                    path: file.path(),
-                    bytes: metadata.len(),
-                    modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                });
+            };
+            let entry = CacheEntry {
+                path: file.path(),
+                bytes: metadata.len(),
+                modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            };
+            if committed {
+                snapshot.entries.push(entry);
+            } else {
+                snapshot.orphans.push(entry);
             }
         }
-        entries
     }
+    snapshot
 }
 
 fn cache_key(url: &str) -> String {
@@ -306,6 +366,30 @@ fn cache_key(url: &str) -> String {
 
 fn is_cache_file_name(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn temporary_file_name(key: &str) -> String {
+    format!("{key}{TEMPORARY_SUFFIX}{}", Uuid::new_v4().simple())
+}
+
+/// Matches the names `temporary_file_name` produces. Anything else in the
+/// cache tree is left alone: this module must only reclaim its own files.
+fn is_orphan_file_name(value: &str) -> bool {
+    let Some((key, suffix)) = value.split_once(TEMPORARY_SUFFIX) else {
+        return false;
+    };
+    is_cache_file_name(key)
+        && suffix.len() == 32
+        && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Releases the sweep flag on every exit path, including unwind.
+struct SweepGuard<'a>(&'a AtomicBool);
+
+impl Drop for SweepGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 pub(crate) fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
@@ -352,7 +436,10 @@ async fn remove_entry(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageCache, cache_key, is_cache_file_name, sniff_image_type};
+    use super::{
+        ImageCache, cache_key, is_cache_file_name, is_orphan_file_name, sniff_image_type,
+        temporary_file_name,
+    };
     use std::fs::OpenOptions;
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
@@ -380,6 +467,20 @@ mod tests {
         assert!(is_cache_file_name(&key));
         assert!(!key.contains('/'));
         assert!(!key.contains('\\'));
+    }
+
+    #[test]
+    fn orphan_names_match_only_this_modules_temporary_files() {
+        let key = cache_key("https://example.com/a.png");
+        let temporary = temporary_file_name(&key);
+        assert!(is_orphan_file_name(&temporary));
+        assert!(!is_cache_file_name(&temporary));
+        assert!(!is_orphan_file_name(&key));
+        assert!(!is_orphan_file_name(&format!("{key}.tmp-short")));
+        assert!(!is_orphan_file_name(
+            "notes.tmp-00000000000000000000000000000000"
+        ));
+        assert!(!is_orphan_file_name("rlive.db"));
     }
 
     #[test]
@@ -451,6 +552,38 @@ mod tests {
         assert_eq!(cache.get("https://example.com/old").await, None);
         assert_eq!(cache.get("https://example.com/middle").await, None);
         assert!(cache.get("https://example.com/new").await.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sweep_reclaims_stale_temporary_files_only() {
+        let root = test_root();
+        let cache = ImageCache::new(root.clone());
+        cache
+            .put("https://example.com/kept.png", b"\x89PNG\r\n\x1a\ncache")
+            .await;
+
+        let key = cache_key("https://example.com/interrupted.png");
+        let directory = root.join(&key[..2]);
+        std::fs::create_dir_all(&directory).unwrap();
+        let stale = directory.join(temporary_file_name(&key));
+        let fresh = directory.join(temporary_file_name(&key));
+        let unrelated = directory.join("keep-me.txt");
+        for path in [&stale, &fresh, &unrelated] {
+            std::fs::write(path, b"partial").unwrap();
+        }
+        set_modified(&stale, Duration::from_secs(2 * 60 * 60));
+
+        // Temporary files occupy disk but are not cache content.
+        let usage = cache.usage().await;
+        assert_eq!(usage.files, 1);
+        assert_eq!(usage.bytes, b"\x89PNG\r\n\x1a\ncache".len() as u64);
+
+        cache.sweep().await;
+        assert!(!stale.exists(), "stale temporary file survived the sweep");
+        assert!(fresh.exists(), "an in-flight write was reclaimed too early");
+        assert!(unrelated.exists(), "sweep touched a file it does not own");
+        assert!(cache.get("https://example.com/kept.png").await.is_some());
         let _ = std::fs::remove_dir_all(root);
     }
 }
