@@ -28,6 +28,10 @@ const TIMESTAMP_TIME_BASE: Rational = Rational(1, 1_000_000);
 /// Consecutive packets a live stream may fail to write before the recording
 /// gives up. A single transient timestamp/muxer anomaly must not end the task.
 const MAX_INVALID_WRITE_FAILURES: u32 = 12;
+/// Consecutive undecodable reads a live stream may produce before the recording
+/// gives up. Transient corruption is normal on a live CDN; a source that never
+/// recovers is not.
+const MAX_INVALID_READS: u32 = 100;
 /// How long a started recording may go without writing a single media packet
 /// before it is treated as a dead stream.
 ///
@@ -262,21 +266,17 @@ fn remux(
         let mut packet = Packet::empty();
         match packet.read(&mut input) {
             Ok(()) => invalid_packets = 0,
-            Err(Error::InvalidData) if invalid_packets < 100 => {
-                invalid_packets += 1;
-                continue;
-            }
-            Err(Error::Exit) if *cancel.borrow() => break StopReason::Cancelled,
-            Err(Error::Exit)
-                if recording_options
-                    .split_duration
-                    .is_some_and(|limit| started.elapsed() >= limit) =>
-            {
-                break StopReason::SplitLimit;
-            }
-            Err(Error::Eof) => break StopReason::Failed("直播流已结束".into()),
             Err(error) => {
-                break StopReason::Failed(format!("Rust FFmpeg 读取直播流中断: {error}"));
+                let split_due = recording_options
+                    .split_duration
+                    .is_some_and(|limit| started.elapsed() >= limit);
+                match classify_read_failure(error, *cancel.borrow(), split_due, invalid_packets) {
+                    ReadFailure::Retry => {
+                        invalid_packets += 1;
+                        continue;
+                    }
+                    ReadFailure::Stop(reason) => break reason,
+                }
             }
         }
 
@@ -478,6 +478,46 @@ fn build_input_options(
     options
 }
 
+/// What a failed demuxer read means for the recording.
+#[derive(Debug, PartialEq, Eq)]
+enum ReadFailure {
+    /// A recoverable corrupt packet: read again rather than end the recording.
+    Retry,
+    Stop(StopReason),
+}
+
+/// Maps one demuxer read error to the reason the recording stops.
+///
+/// `cancelled` and `split_due` are exactly the two conditions the interrupt
+/// callback reports, and they are checked before the error itself. Once the
+/// callback has asked libavformat to abort, whichever error surfaces describes
+/// the aborted I/O and says nothing about the stream: FFmpeg's HLS demuxer
+/// reports an interrupted segment fetch as `AVERROR_EOF`, not `AVERROR_EXIT`.
+/// Reading that as a real end of stream finished a perfectly good recording as
+/// `interrupted` with 「直播流已结束」 even though the user had pressed stop and
+/// the file on disk was complete.
+fn classify_read_failure(
+    error: Error,
+    cancelled: bool,
+    split_due: bool,
+    invalid_packets: u32,
+) -> ReadFailure {
+    if cancelled {
+        return ReadFailure::Stop(StopReason::Cancelled);
+    }
+    if split_due {
+        return ReadFailure::Stop(StopReason::SplitLimit);
+    }
+    match error {
+        Error::InvalidData if invalid_packets < MAX_INVALID_READS => ReadFailure::Retry,
+        Error::Eof => ReadFailure::Stop(StopReason::Failed("直播流已结束".into())),
+        error => ReadFailure::Stop(StopReason::Failed(format!(
+            "Rust FFmpeg 读取直播流中断: {error}"
+        ))),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum StopReason {
     Cancelled,
     SplitLimit,
@@ -865,10 +905,10 @@ fn interrupted(error: String) -> TaskOutcome {
 mod tests {
     use super::super::PlaybackProtocol;
     use super::{
-        FfmpegRecordingOptions, PacketTimeline, PlayUrl, STREAM_STALL_TIMEOUT, StopReason,
-        build_input_options, publish_part,
+        FfmpegRecordingOptions, MAX_INVALID_READS, PacketTimeline, PlayUrl, ReadFailure,
+        STREAM_STALL_TIMEOUT, StopReason, build_input_options, classify_read_failure, publish_part,
     };
-    use ffmpeg_next::{Packet, Rational};
+    use ffmpeg_next::{Error, Packet, Rational};
     use std::fs;
     use std::io::Write;
 
@@ -1108,6 +1148,59 @@ mod tests {
         assert!(!option_keys(&blank).contains(&"http_proxy"));
         let padded = build_input_options(&flv, Some(" http://127.0.0.1:1080 "), &recording_options);
         assert!(option_keys(&padded).contains(&"http_proxy"));
+    }
+
+    #[test]
+    fn a_read_error_after_a_stop_request_is_a_cancellation_not_an_ended_stream() {
+        // FFmpeg's HLS demuxer aborts a segment fetch with `AVERROR_EOF`, so the
+        // error alone cannot distinguish "the user pressed stop" from "the
+        // broadcast ended". The interrupt conditions decide first.
+        for error in [Error::Eof, Error::Exit, Error::InvalidData, Error::Unknown] {
+            assert!(
+                matches!(
+                    classify_read_failure(error, true, false, 0),
+                    ReadFailure::Stop(StopReason::Cancelled)
+                ),
+                "{error} after a stop request was not treated as a cancellation"
+            );
+            assert!(
+                matches!(
+                    classify_read_failure(error, false, true, 0),
+                    ReadFailure::Stop(StopReason::SplitLimit)
+                ),
+                "{error} at the split boundary was not treated as a split"
+            );
+        }
+    }
+
+    #[test]
+    fn an_uninterrupted_read_error_still_reports_why_the_stream_ended() {
+        assert_eq!(
+            classify_read_failure(Error::Eof, false, false, 0),
+            ReadFailure::Stop(StopReason::Failed("直播流已结束".into()))
+        );
+        // Corrupt packets are retried up to the budget, then reported.
+        assert_eq!(
+            classify_read_failure(Error::InvalidData, false, false, 0),
+            ReadFailure::Retry
+        );
+        assert_eq!(
+            classify_read_failure(Error::InvalidData, false, false, MAX_INVALID_READS - 1),
+            ReadFailure::Retry
+        );
+        assert!(matches!(
+            classify_read_failure(Error::InvalidData, false, false, MAX_INVALID_READS),
+            ReadFailure::Stop(StopReason::Failed(_))
+        ));
+        let ReadFailure::Stop(StopReason::Failed(message)) =
+            classify_read_failure(Error::Unknown, false, false, 0)
+        else {
+            panic!("一个未被中断的 I/O 错误应结束录制");
+        };
+        assert!(
+            message.starts_with("Rust FFmpeg 读取直播流中断"),
+            "{message}"
+        );
     }
 
     /// The two intentional stops carry no error; every other cause must explain

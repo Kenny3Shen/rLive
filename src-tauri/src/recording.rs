@@ -5462,6 +5462,37 @@ mod tests {
         (format!("http://{address}/live.flv"), server)
     }
 
+    /// Twelve one-second H.264/AAC MPEG-TS segments, ready to serve as an HLS
+    /// media playlist. The first segment carries the PAT/PMT, so it is longer
+    /// than the rest.
+    fn manager_test_ts_segments() -> Vec<Vec<u8>> {
+        use base64::Engine as _;
+        use std::io::Read as _;
+
+        const TS_FIXTURE_GZIP: &str = "H4sIAAAAAAACA9Xbf2wTVRwA8Hf7PRBZ143uh8JNIDhh7V27dW23Yx1jdBhJRjSGGGN9vV7Xc9fe7e6gmxKsxj8IMUQCIRETf0UTNJoM/0H/UId/KFGj0fgHGGMgMUT8A7fEP0gk1O+rJAy7Jkf/sO9tyfXdvffuvvfu3qcve2+xqKsF7VjcjLhzCBW4AuJu5NsmWrmGXbsyhjLV/KhiHlBlRRBzB8e+LtD1E4uiFoTm1xRjR9wieuhM3UcFNn5ikxB7zbynGPtltIi6yWbtZbgL385PXqM79lEkNE4idOzlQ6TdLyGUz9f3oGY/JrvNi2Q7tWNh1c/PcfB8alFxM7H0wDMkI/3dcB4+GuoLhSd+Gb/66ZWLE2dPbrvAX9x47c9Zf7Cf7+Nl3VR4EZJmQBRCfEBUxHAqDBkTXijg2zM5Huvr50cfH4OSSUWGjDHdmNOUlM37BSHQ5xf8ATiYtm0j4vPlcjnvATWp6BrOevUYh1zmlI9cyZu2MxqU0w1b1bNWhJdxAsuSwJtKShL5pJLQdHlaEiLwy+Ms1uYshezxGUVKqpi39icgJfCGNQfFYRs3k5LoFaAIbPiMOqsk4+RcpEbcxNkpRRKDvJw29QyOQ1WRt01F01QLSoRmQ0nZhoQ8k4FtUsHJZ/WsIvnFbaLIp7Blxw2IvdWaVg2oeOskM0ZcT6UshVS00yZUsiBT0/VpnIad+O1jlga9+PYBgc+axcvIagbbJBQ1ayumhqEQHE9o+008F5f1jIGLQUH72CZWs3AKKGhiUiZl4oxCTpVT1Km0bUBqWpmDbMl/KxHPqFnYsWQlC7EH/OiuXzVF3k+uX7wmaUtTsdLkCckSTph8JgENSB5BQoV8uA14ZeDD1jXyHPgZEr8keIOQNEgoxU88KwXDkLBsxYAKqgGPBl4AqNEPj3lGElCevKfK4ZcaTh9fhWr/vh4b5YRctDp9DSJZQJFi/2q8gAtLWrT2jRu/1qBH8AE5KHgDolcU/KhGiN5L8rjnb3AdfOOyJPTV/lPQAa8ahxCFlCzjY/Wxpdt8jJ7iu96FdhcPR+mJdAH1/gvdFbxyY9/R7pyfxthX/+Ug9qjLxfCYwMXwmMDF8JhgwJqEjvvY/+vMMkDWLL3gePxBfH+Re3/TF3l08yb01QCNfXVtjRNnUBB8514N0e67a6+r1Pd+Gtvd1eLI94HjUSobfAGtL96Gez0u63srw763Mux7K8O+DxLfl+6rmu/u+bfuyvfl4/cgjc64f3Tkewh8r9mNaPfd0yKW+j5IY7u3X3Lke4hy3z3XyvvuZth3N8O+uxn2PQy+17z5W9V879TPVTx+D9PoTOfbjnyPEN+vn6fd9+7v95b6HqGx3bvnHfk+RLnv939W3vc2hn1vY9j3NoZ9HwLfayc/qJrvG7yXKx6/D9PozAbTke/D4Hvt6Vdo973n6Eyp7xKN7d6Td+T7dsp933i0vO/tDPvezrDv7Qz7LoHvdciumu8br3GVjt/RdjCybt8+2o3csudYqZEjNBq5eYcjIwUaY98y6Sh28fUo1V2yeEfu4h31PoXv9H0dw76vY9j3dQz7PkJ8nx+umu+9H/ZUPH6nci1E78eOxu8CfDfVN/G0fzf13XOm9LuJynntrV868r2f8vF730/lx+8ehn33MOy7h2HfRfC9/um6qvnu00Yr/vv7AI3O+A478t1PfD/7O+2+i9/8UOo7lfPa4klHvg9S7nvgnfK+dzDsewfDvncw7HsAfG9Y+23VfB/Yiisev4dodGZgnyPfyfr3hql52n0fPLLC+ncq57UHU458j1Due9gu73snw753Mux7J+Pr3xs+P1E138N/VL7+fYhGZ4YedLz+vdEzS7vv0sMrrH+ncl5bCjryXaLc95Gd5X3vYtj3LoZ972J8/Xuj/mTVfB95r/L179tpdGbkuuP1741fRWn3faxZZGRueKzB2dwwO/Or423/mV/tZtj3boZ972Z8/XvThk1V8308Xfn6dyr/T34863j9e1OuiXbfY+dXWP9O5bx27KAj3wOUj993HylzG/8ACyylLrRIAAA=";
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(TS_FIXTURE_GZIP)
+            .unwrap();
+        let mut ts_stream = Vec::new();
+        flate2::read::GzDecoder::new(compressed.as_slice())
+            .read_to_end(&mut ts_stream)
+            .unwrap();
+        const TS_PACKET_SIZE: usize = 188;
+        const FIRST_SEGMENT_SIZE: usize = 11 * TS_PACKET_SIZE;
+        const FOLLOWING_SEGMENT_SIZE: usize = 8 * TS_PACKET_SIZE;
+        assert_eq!(
+            (ts_stream.len() - FIRST_SEGMENT_SIZE) % FOLLOWING_SEGMENT_SIZE,
+            0
+        );
+        let mut segments = vec![ts_stream[..FIRST_SEGMENT_SIZE].to_vec()];
+        segments.extend(
+            ts_stream[FIRST_SEGMENT_SIZE..]
+                .chunks_exact(FOLLOWING_SEGMENT_SIZE)
+                .map(<[u8]>::to_vec),
+        );
+        segments
+    }
+
     fn manager_test_input(url: &str, source_key: &str, room_id: &str) -> RecordingStartInput {
         RecordingStartInput {
             source: crate::models::live::PlayUrl::inferred(
@@ -5663,32 +5694,7 @@ mod tests {
 
     #[tokio::test]
     async fn ffmpeg_manager_remuxes_hls_master_without_following_unused_variant() {
-        use base64::Engine as _;
-        use std::io::Read as _;
-
-        // Twelve one-second H.264/AAC HLS segments, concatenated and compressed.
-        const TS_FIXTURE_GZIP: &str = "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";
-        let compressed = base64::engine::general_purpose::STANDARD
-            .decode(TS_FIXTURE_GZIP)
-            .unwrap();
-        let mut ts_stream = Vec::new();
-        flate2::read::GzDecoder::new(compressed.as_slice())
-            .read_to_end(&mut ts_stream)
-            .unwrap();
-        const TS_PACKET_SIZE: usize = 188;
-        const FIRST_SEGMENT_SIZE: usize = 11 * TS_PACKET_SIZE;
-        const FOLLOWING_SEGMENT_SIZE: usize = 8 * TS_PACKET_SIZE;
-        assert_eq!(
-            (ts_stream.len() - FIRST_SEGMENT_SIZE) % FOLLOWING_SEGMENT_SIZE,
-            0
-        );
-        let mut segments = vec![ts_stream[..FIRST_SEGMENT_SIZE].to_vec()];
-        segments.extend(
-            ts_stream[FIRST_SEGMENT_SIZE..]
-                .chunks_exact(FOLLOWING_SEGMENT_SIZE)
-                .map(<[u8]>::to_vec),
-        );
-        let segments = Arc::new(segments);
+        let segments = Arc::new(manager_test_ts_segments());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let high_revision = Arc::new(AtomicU64::new(0));
@@ -5828,6 +5834,153 @@ mod tests {
                 .streams()
                 .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Audio })
         );
+
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    /// Stopping an HLS recording must report 「已保存」, not 「已中断」, even when
+    /// no data is arriving.
+    ///
+    /// The stop reaches libavformat through the interrupt callback while a
+    /// segment fetch is blocked, which is when a real recording finished as
+    /// `Interrupted` with 「直播流已结束」: the HLS demuxer reported the aborted
+    /// fetch as `AVERROR_EOF` and the worker read that as the broadcast ending.
+    ///
+    /// This is the end-to-end contract, not a test of that classification.
+    /// Whether the aborted read surfaces an error or one last flushed packet is
+    /// decided inside libavformat, and with segments this small it flushes, so
+    /// the loop ends at its own cancellation check. The classification itself is
+    /// pinned by `classify_read_failure`'s unit tests in `recording_ffmpeg`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stopping_an_hls_recording_while_a_fetch_is_stalled_completes_it() {
+        let segments = Arc::new(manager_test_ts_segments());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let sequence = Arc::new(AtomicU64::new(0));
+        // Flipped once media is on disk. From then on a segment fetch never
+        // answers, so the stop request has to interrupt a blocked read.
+        let stall = Arc::new(AtomicBool::new(false));
+        let stalled_fetches = Arc::new(AtomicU64::new(0));
+        let server_stall = stall.clone();
+        let server_stalled = stalled_fetches.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let segments = segments.clone();
+                let sequence = sequence.clone();
+                let stall = server_stall.clone();
+                let stalled = server_stalled.clone();
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 4096];
+                    let Ok(length) = socket.read(&mut request).await else {
+                        return;
+                    };
+                    let head = String::from_utf8_lossy(&request[..length]);
+                    let path = head
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("");
+                    let (content_type, body) = if path == "/live.m3u8" {
+                        // A one-segment sliding window: the demuxer has to come
+                        // back for a reload after every segment instead of running
+                        // ahead on a buffered window.
+                        let current = sequence.load(Ordering::Relaxed);
+                        (
+                            "application/vnd.apple.mpegurl",
+                            format!(
+                                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{current}\n#EXTINF:1.000,\nsegment-{current}.ts\n"
+                            )
+                            .into_bytes(),
+                        )
+                    } else {
+                        let requested = path
+                            .strip_prefix("/segment-")
+                            .and_then(|path| path.strip_suffix(".ts"))
+                            .and_then(|index| index.parse::<usize>().ok())
+                            .and_then(|index| Some((index, segments.get(index)?)));
+                        let Some((index, segment)) = requested else {
+                            let _ = socket
+                                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                .await;
+                            return;
+                        };
+                        if stall.load(Ordering::Relaxed) {
+                            // Headers only, then silence, so the demuxer is
+                            // blocked inside this fetch when the stop arrives.
+                            let _ = socket
+                                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: 1504\r\nConnection: close\r\n\r\n")
+                                .await;
+                            stalled.fetch_add(1, Ordering::Relaxed);
+                            std::future::pending::<()>().await;
+                            return;
+                        }
+                        // Advance the window only once its segment has actually
+                        // been served, so no segment is ever skipped.
+                        let last = segments.len().saturating_sub(1) as u64;
+                        let next = ((index as u64) + 1).min(last);
+                        let _ = sequence.fetch_update(
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                            |sequence| Some(sequence.max(next)),
+                        );
+                        ("video/mp2t", segment.clone())
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    if socket.write_all(response.as_bytes()).await.is_ok() {
+                        let _ = socket.write_all(&body).await;
+                    }
+                });
+            }
+        });
+
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-hls-stop-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let active = manager
+            .start(
+                manager_test_input(
+                    &format!("http://{address}/live.m3u8"),
+                    "live:bilibili:hls-stop",
+                    "hls-stop",
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
+        stall.store(true, Ordering::Relaxed);
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            while stalled_fetches.load(Ordering::Relaxed) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("测试服务器应开始一次会被停止打断的分片请求");
+        // Long enough for the demuxer to drain what it already fetched and block
+        // inside the stalled request.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let stopped = manager.stop(&active.id).await.unwrap();
+        assert_eq!(
+            stopped.status,
+            RecordingStatus::Completed,
+            "停止 HLS 录制应保存而非中断: {:?}",
+            stopped.error
+        );
+        assert!(stopped.error.is_none(), "{:?}", stopped.error);
+        let root = PathBuf::from(manager.storage_info().path);
+        let stored = super::read_stored(&root, &active.id).unwrap();
+        let final_path = root.join(&active.id).join(stored.media_file);
+        assert!(final_path.is_file());
 
         server.abort();
         let _ = server.await;
