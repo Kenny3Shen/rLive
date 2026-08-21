@@ -28,6 +28,15 @@ const MAX_PROBE_SAMPLE_BYTES: usize = 64 * 1024;
 // FFmpeg gives each localhost read 10 seconds. Leave enough time to deliver a
 // gap playlist before the demuxer treats the local proxy as unresponsive.
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
+/// Longest a recording waits for its Twitch manifest proxy to produce a
+/// playlist that carries real segments. The slow case is a commercial break
+/// plus a sweep over the fallback player profiles; past this point the
+/// recording reports why it cannot start instead of handing libavformat a
+/// placeholder-only playlist it can never open.
+pub const TWITCH_RECORDING_WARMUP_BUDGET: Duration = Duration::from_secs(20);
+/// Twitch media playlists advertise ~2 second segments, so re-polling faster
+/// than this cannot surface media that is not there yet.
+const TWITCH_RECORDING_WARMUP_INTERVAL: Duration = Duration::from_millis(1_000);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StreamProxyProbe {
@@ -385,9 +394,9 @@ impl TwitchAdRecoverySession {
                 }
                 state.active_profile = None;
             }
-            Err(_) => tracing::debug!(
+            Err(_) => tracing::warn!(
                 budget_ms = TWITCH_MANIFEST_RECOVERY_BUDGET.as_millis(),
-                "Twitch ad playlist recovery exceeded its response budget"
+                "Twitch 广告清单替换超出响应预算"
             ),
         }
 
@@ -484,6 +493,7 @@ impl TwitchAdRecoverySession {
         } else if let Some((last_clean, last_url)) = state.last_clean_manifest.as_ref() {
             (mark_all_hls_segments_as_gaps(last_clean), last_url.clone())
         } else {
+            tracing::warn!("Twitch 广告替换与历史清单均不可用，只能返回占位清单");
             (twitch_wait_manifest(), upstream_url.clone())
         };
         TwitchManifestReplacement {
@@ -523,9 +533,9 @@ impl TwitchAdRecoverySession {
                 return replacement;
             }
             Ok(None) => {}
-            Err(_) => tracing::debug!(
+            Err(_) => tracing::warn!(
                 budget_ms = TWITCH_MANIFEST_RECOVERY_BUDGET.as_millis(),
-                "Twitch manifest renewal exceeded its response budget"
+                "Twitch 清单续期超出响应预算"
             ),
         }
 
@@ -586,6 +596,7 @@ impl TwitchAdRecoverySession {
             .as_ref()
             .map(|(manifest, url)| (mark_all_hls_segments_as_gaps(manifest), url.clone()))
             .unwrap_or_else(|| {
+                tracing::warn!("Twitch 清单续期失败且没有历史清单，只能返回占位清单");
                 let url = state
                     .current_manifest_url
                     .as_deref()
@@ -844,6 +855,72 @@ impl StreamProxy {
         Ok(format!("http://127.0.0.1:{port}/live"))
     }
 
+    /// Block until this proxy's `/live` endpoint answers with a playlist a
+    /// one-shot demuxer can open, or until `budget` runs out.
+    ///
+    /// [`Self::start`] only binds the listener; it never fetches `/live`. A
+    /// browser player tolerates that because it keeps reloading the playlist
+    /// until media appears, but libavformat calls `avformat_open_input` exactly
+    /// once. If that single response is the gap-only wait playlist the Twitch
+    /// recovery path emits — during a commercial break, on an expired token, or
+    /// after a failed upstream — every segment is an `#EXT-X-GAP` placeholder,
+    /// the demuxer finds no readable data and the whole recording dies with
+    /// `Invalid data found when processing input` before one byte is written.
+    /// Recording therefore warms the proxy up here and only hands ffmpeg a URL
+    /// that has already proven it serves real segments.
+    pub async fn wait_for_playable_manifest(
+        &self,
+        local_url: &str,
+        session_id: &str,
+        budget: Duration,
+    ) -> AppResult<()> {
+        let client = build_loopback_client()?;
+        let deadline = Instant::now() + budget;
+        let mut attempts = 0_u32;
+        // Every path through the poll below records why that attempt failed, so
+        // the timeout can name the last real cause instead of a placeholder.
+        let mut last_reason: String;
+        loop {
+            // A stop or a replacement start during warm-up removes this
+            // listener; polling a dead port until the budget expires would
+            // only delay the outcome the caller already decided.
+            if self.telemetry_for_session(session_id).is_none() {
+                return Err(AppError::new(
+                    "stream_proxy_superseded",
+                    "录制清单代理在预热期间已被停止",
+                ));
+            }
+            attempts = attempts.saturating_add(1);
+            match client.get(local_url).send().await {
+                Ok(response) if response.status().is_success() => {
+                    let body = response.text().await.unwrap_or_default();
+                    if manifest_has_playable_segment(&body) {
+                        return Ok(());
+                    }
+                    last_reason = format!(
+                        "清单只包含 {} 个占位分片",
+                        body.matches("#EXT-X-GAP").count()
+                    );
+                }
+                Ok(response) => last_reason = format!("HTTP {}", response.status().as_u16()),
+                Err(_) => last_reason = "本地清单请求失败".into(),
+            }
+            if Instant::now() + TWITCH_RECORDING_WARMUP_INTERVAL >= deadline {
+                tracing::warn!(
+                    attempts,
+                    reason = %last_reason,
+                    "Twitch 录制清单预热超时，未取得可录制的分片"
+                );
+                return Err(AppError::new(
+                    "stream_proxy_no_playable_manifest",
+                    format!("直播清单暂时没有可录制的分片（{last_reason}）"),
+                )
+                .retryable());
+            }
+            tokio::time::sleep(TWITCH_RECORDING_WARMUP_INTERVAL).await;
+        }
+    }
+
     /// Reserve the next generation for `session_id`. The active listener stays
     /// usable until the replacement has bound and built its network client.
     fn reserve_start(&self, session_id: &str) -> u64 {
@@ -894,9 +971,9 @@ mod tests {
 
     use super::{
         HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, TwitchAdRecoverySession,
-        is_twitch_ad_manifest, looks_like_hls_manifest, mark_all_hls_segments_as_gaps,
-        mark_twitch_ad_segments_as_gaps, probe_sources, rewrite_hls_manifest, twitch_wait_manifest,
-        validate_probe_sample,
+        is_twitch_ad_manifest, looks_like_hls_manifest, manifest_has_playable_segment,
+        mark_all_hls_segments_as_gaps, mark_twitch_ad_segments_as_gaps, probe_sources,
+        rewrite_hls_manifest, twitch_wait_manifest, validate_probe_sample,
     };
     use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
     use tokio::sync::{oneshot, watch};
@@ -1200,6 +1277,339 @@ mod tests {
         assert!(looks_like_hls_manifest(manifest.as_bytes()));
         assert!(manifest.contains("#EXT-X-TARGETDURATION:2"));
         assert!(manifest.contains("#EXT-X-GAP"));
+    }
+
+    /// The playability check exists solely to keep a gap-only playlist away from
+    /// `avformat_open_input`, so the wait playlist the recovery path emits and a
+    /// fully gapped clean playlist must both read as unplayable.
+    #[test]
+    fn placeholder_only_playlists_are_not_playable() {
+        assert!(!manifest_has_playable_segment(&twitch_wait_manifest()));
+
+        let clean = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-VERSION:6\n",
+            "#EXT-X-TARGETDURATION:2\n",
+            "#EXTINF:2.000,live\n",
+            "https://cdn.example.test/1.ts\n",
+            "#EXTINF:2.000,live\n",
+            "https://cdn.example.test/2.ts\n"
+        );
+        assert!(manifest_has_playable_segment(clean));
+        assert!(!manifest_has_playable_segment(
+            &mark_all_hls_segments_as_gaps(clean)
+        ));
+
+        // A break that gaps only its ad segments still carries recordable media.
+        let partial = concat!(
+            "#EXTM3U\n",
+            "#EXTINF:2.000,\n",
+            "https://cdn.example.test/ad.ts\n",
+            "#EXTINF:2.000,live\n",
+            "https://cdn.example.test/3.ts\n"
+        );
+        assert!(manifest_has_playable_segment(
+            &mark_twitch_ad_segments_as_gaps(partial)
+        ));
+
+        // An init segment alone is not media, and neither is a non-manifest body.
+        assert!(!manifest_has_playable_segment(concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MAP:URI=\"https://cdn.example.test/init.mp4\"\n"
+        )));
+        assert!(!manifest_has_playable_segment("<html>error</html>"));
+    }
+
+    /// Recording must not hand ffmpeg a URL whose only response is placeholders:
+    /// the demuxer opens it once, finds no media and fails the whole session.
+    #[tokio::test]
+    async fn warmup_rejects_a_proxy_that_only_serves_gap_playlists() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = upstream.accept().await else {
+                    return;
+                };
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request).await;
+                let body = super::twitch_wait_manifest();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let proxy = StreamProxy::new();
+        let session_id = "recording:gap-only";
+        let local_url = proxy
+            .start(
+                format!("http://{upstream_address}/live.m3u8"),
+                HashMap::new(),
+                session_id.into(),
+                true,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let error = proxy
+            .wait_for_playable_manifest(&local_url, session_id, std::time::Duration::from_secs(3))
+            .await
+            .expect_err("a gap-only playlist must not be accepted for recording");
+        assert_eq!(error.code, "stream_proxy_no_playable_manifest");
+        proxy.stop_for_session(session_id);
+        server.abort();
+    }
+
+    /// The same warm-up must return as soon as real segments are available, so a
+    /// healthy channel starts recording without paying the whole budget.
+    #[tokio::test]
+    async fn warmup_accepts_a_playlist_that_carries_real_segments() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = upstream.accept().await else {
+                    return;
+                };
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request).await;
+                let body = concat!(
+                    "#EXTM3U\n",
+                    "#EXT-X-VERSION:6\n",
+                    "#EXT-X-TARGETDURATION:2\n",
+                    "#EXTINF:2.000,live\n",
+                    "1.ts\n"
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let proxy = StreamProxy::new();
+        let session_id = "recording:playable";
+        let local_url = proxy
+            .start(
+                format!("http://{upstream_address}/live.m3u8"),
+                HashMap::new(),
+                session_id.into(),
+                true,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        proxy
+            .wait_for_playable_manifest(&local_url, session_id, std::time::Duration::from_secs(20))
+            .await
+            .expect("a playlist with real segments must be accepted");
+        proxy.stop_for_session(session_id);
+        server.abort();
+    }
+
+    /// Stopping the recording during warm-up must end the wait immediately
+    /// rather than polling a dead listener until the budget expires.
+    #[tokio::test]
+    async fn warmup_ends_when_the_session_is_stopped() {
+        let proxy = StreamProxy::new();
+        let session_id = "recording:stopped";
+        let local_url = proxy
+            .start(
+                "http://unreachable.invalid/live.m3u8".into(),
+                HashMap::new(),
+                session_id.into(),
+                true,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        proxy.stop_for_session(session_id);
+
+        let error = proxy
+            .wait_for_playable_manifest(&local_url, session_id, std::time::Duration::from_secs(20))
+            .await
+            .expect_err("a stopped session must not keep warming up");
+        assert_eq!(error.code, "stream_proxy_superseded");
+    }
+
+    /// Records a few seconds from a live channel through the real recording path
+    /// (recording proxy + warm-up + libavformat) and asserts a non-trivial file
+    /// lands on disk.  Run with `TWITCH_VARIANT_URL=<variant playlist>`.
+    ///
+    /// `flavor = "multi_thread"` is required: ffmpeg is driven with a blocking
+    /// `Command`, and on a current-thread runtime that would starve the proxy's
+    /// own accept loop, leaving ffmpeg's request pending in the listen backlog.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "live Twitch recording; requires TWITCH_VARIANT_URL and external network"]
+    async fn live_twitch_recording_writes_media_through_the_warmed_proxy() {
+        let variant = std::env::var("TWITCH_VARIANT_URL").expect("TWITCH_VARIANT_URL");
+        let mut headers = HashMap::new();
+        headers.insert(
+            "user-agent".to_string(),
+            crate::sites::twitch::DEFAULT_USER_AGENT.to_string(),
+        );
+        headers.insert(
+            "referer".to_string(),
+            "https://www.twitch.tv/dota2ti".to_string(),
+        );
+        let proxy = StreamProxy::new();
+        let session_id = "recording:live-warmup";
+        let local = proxy
+            .start(
+                variant,
+                headers,
+                session_id.into(),
+                true,
+                None,
+                Some(crate::models::live::TwitchAdRecovery {
+                    login: "dota2ti".into(),
+                    selector: "video-group:chunked".into(),
+                    target_width: 1920,
+                    target_height: 1080,
+                    target_frame_rate_milli: 60_000,
+                }),
+            )
+            .await
+            .expect("recording proxy");
+        let warmed = std::time::Instant::now();
+        proxy
+            .wait_for_playable_manifest(&local, session_id, super::TWITCH_RECORDING_WARMUP_BUDGET)
+            .await
+            .expect("warm-up should find real segments on a live channel");
+        eprintln!("warmup_ms={}", warmed.elapsed().as_millis());
+
+        let output = std::env::temp_dir().join("rlive-live-warmup.ts");
+        let _ = std::fs::remove_file(&output);
+        let ffmpeg_input = local.clone();
+        let ffmpeg_output = output.clone();
+        let status = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-live_start_index",
+                    "-1",
+                    "-probesize",
+                    "8000000",
+                    "-analyzeduration",
+                    "10000000",
+                    "-fflags",
+                    "+discardcorrupt",
+                    "-i",
+                    &ffmpeg_input,
+                    "-t",
+                    "6",
+                    "-c",
+                    "copy",
+                    "-f",
+                    "mpegts",
+                    "-y",
+                ])
+                .arg(&ffmpeg_output)
+                .status()
+        })
+        .await
+        .expect("ffmpeg task")
+        .expect("ffmpeg");
+        let size = std::fs::metadata(&output)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        eprintln!("ffmpeg status={status} bytes={size}");
+        proxy.stop_for_session(session_id);
+        assert!(status.success(), "ffmpeg failed against the warmed proxy");
+        assert!(size > 512 * 1024, "recording was too small: {size} bytes");
+        let _ = std::fs::remove_file(&output);
+    }
+
+    /// Reproduces the recording hand-off end to end against a live channel:
+    /// the real proxy, `force_hls = true`, Twitch recovery attached, then every
+    /// URL the rewritten primary manifest points at.  Run with
+    /// `TWITCH_VARIANT_URL=<variant playlist>`.
+    #[tokio::test]
+    #[ignore = "live Twitch recording hand-off; requires TWITCH_VARIANT_URL and external network"]
+    async fn live_twitch_recording_proxy_serves_a_playable_manifest() {
+        let variant = std::env::var("TWITCH_VARIANT_URL").expect("TWITCH_VARIANT_URL");
+        let mut headers = HashMap::new();
+        headers.insert(
+            "user-agent".to_string(),
+            crate::sites::twitch::DEFAULT_USER_AGENT.to_string(),
+        );
+        headers.insert(
+            "referer".to_string(),
+            "https://www.twitch.tv/dota2ti".to_string(),
+        );
+        let proxy = StreamProxy::new();
+        let local = proxy
+            .start(
+                variant,
+                headers,
+                "recording:live-smoke".into(),
+                true,
+                None,
+                Some(crate::models::live::TwitchAdRecovery {
+                    login: "dota2ti".into(),
+                    selector: "video-group:chunked".into(),
+                    target_width: 1920,
+                    target_height: 1080,
+                    target_frame_rate_milli: 60_000,
+                }),
+            )
+            .await
+            .expect("recording proxy");
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client");
+
+        let response = client.get(&local).send().await.expect("primary request");
+        let status = response.status();
+        let manifest = response.text().await.expect("primary body");
+        eprintln!("primary status={status} bytes={}", manifest.len());
+        eprintln!(
+            "gap markers={} first lines:\n{}",
+            manifest.matches("#EXT-X-GAP").count(),
+            manifest.lines().take(6).collect::<Vec<_>>().join("\n")
+        );
+
+        let targets = manifest
+            .lines()
+            .flat_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.starts_with("#EXT-X-MAP:") {
+                    return trimmed
+                        .split_once("URI=\"")
+                        .and_then(|(_, rest)| rest.split_once('"'))
+                        .map(|(url, _)| url.to_string())
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                }
+                if trimmed.starts_with("http") {
+                    return vec![trimmed.to_string()];
+                }
+                Vec::new()
+            })
+            .take(3)
+            .collect::<Vec<_>>();
+        assert!(!targets.is_empty(), "no fetchable target in the manifest");
+        for target in targets {
+            let response = client.get(&target).send().await.expect("segment request");
+            let status = response.status();
+            let bytes = response.bytes().await.map(|body| body.len()).unwrap_or(0);
+            eprintln!("segment {target} -> {status} bytes={bytes}");
+            assert!(status.is_success(), "segment failed: {status}");
+            assert!(bytes > 0, "segment was empty");
+        }
+        proxy.stop_for_session("recording:live-smoke");
     }
 
     #[tokio::test]
@@ -2003,6 +2413,59 @@ fn mark_hls_segments_as_gaps(manifest: &str, mark_all: bool) -> String {
         body.push('\n');
     }
     body
+}
+
+/// Client used to warm a recording proxy up over loopback.
+///
+/// Deliberately not the relay's own upstream client: that one may carry the
+/// user's HTTP proxy, and routing `127.0.0.1` through it would fail.
+fn build_loopback_client() -> AppResult<Client> {
+    Client::builder()
+        .no_proxy()
+        .timeout(PROBE_TIMEOUT)
+        .build()
+        .map_err(|_| AppError::new("stream_proxy_warmup_client", "本地清单预热客户端初始化失败"))
+}
+
+/// Whether an HLS media playlist offers at least one segment a demuxer can
+/// actually read.
+///
+/// `#EXT-X-GAP` declares that the URI that follows it holds no media, which is
+/// exactly what the Twitch ad/wait paths emit. A playlist made only of those is
+/// valid HLS and a polling player rides it out, but `avformat_open_input` reads
+/// the placeholders once, finds nothing, and fails the recording outright.
+fn manifest_has_playable_segment(manifest: &str) -> bool {
+    if !looks_like_hls_manifest(manifest.as_bytes()) {
+        return false;
+    }
+    let mut in_segment = false;
+    let mut gapped = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("#EXTINF") {
+            in_segment = true;
+            gapped = false;
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("#EXT-X-GAP") {
+            gapped = true;
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if in_segment {
+            if !gapped {
+                return true;
+            }
+            in_segment = false;
+            gapped = false;
+        }
+    }
+    false
 }
 
 fn twitch_wait_manifest() -> String {

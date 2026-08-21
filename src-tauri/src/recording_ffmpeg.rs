@@ -413,12 +413,15 @@ fn build_input_options(
     if let Some(proxy) = proxy.map(str::trim).filter(|value| !value.is_empty()) {
         set("http_proxy", proxy.to_string());
     }
-    // Keep blocking reads inside the manager's 15 second graceful-shutdown
-    // window even if a protocol handler temporarily misses the interrupt flag.
-    set("probesize", "32768".into());
-    set("analyzeduration", "1000000".into());
-    set("fpsprobesize", "2".into());
-    set("max_probe_packets", "64".into());
+    // A continuous stream announces its codecs in the very first tag, so a tiny
+    // probe keeps startup fast and blocking reads inside the manager's 15 second
+    // graceful-shutdown window. Segmented sources get a larger budget below.
+    if source.protocol != super::PlaybackProtocol::Hls {
+        set("probesize", "32768".into());
+        set("analyzeduration", "1000000".into());
+        set("fpsprobesize", "2".into());
+        set("max_probe_packets", "64".into());
+    }
     set(
         "rw_timeout",
         recording_options
@@ -436,6 +439,15 @@ fn build_input_options(
         // stay inside libavformat. Start at the live edge and retry transient
         // segment failures without maintaining a second playlist parser here.
         set("live_start_index", "-1".into());
+        // Probing must span the fMP4 init segment plus a whole media segment, or
+        // libavformat can open the playlist and still fail to describe the
+        // streams. Twitch segments run ~2 MB each, so a 32 KB probe routinely
+        // ends inside the init segment. Cancellation is unaffected: the
+        // interrupt callback is polled during I/O, not after the probe.
+        set("probesize", "8000000".into());
+        set("analyzeduration", "10000000".into());
+        set("fpsprobesize", "10".into());
+        set("max_probe_packets", "512".into());
         set(
             "seg_max_retry",
             recording_options.hls_segment_retry_count.to_string(),
@@ -929,6 +941,46 @@ mod tests {
             assert!(keys.contains(&key), "HLS 应带重连参数 {key}");
         }
         assert!(keys.contains(&"seg_max_retry"));
+    }
+
+    /// A 32 KB probe routinely ends inside a Twitch fMP4 init segment, so the
+    /// demuxer opens the playlist and still cannot describe the streams. HLS
+    /// therefore probes far past one segment, while a continuous stream keeps the
+    /// tiny budget its first tag already satisfies.
+    #[test]
+    fn hls_probes_past_one_segment_while_continuous_streams_stay_small() {
+        let recording_options = FfmpegRecordingOptions::default();
+        let value = |options: &[(String, String)], key: &str| {
+            options
+                .iter()
+                .find(|(option_key, _)| option_key == key)
+                .map(|(_, value)| value.clone())
+        };
+
+        let hls = build_input_options(&source(PlaybackProtocol::Hls), None, &recording_options);
+        let probesize = value(&hls, "probesize").expect("HLS 缺少 probesize");
+        assert!(
+            probesize.parse::<u64>().unwrap() >= 4_000_000,
+            "HLS probesize 应覆盖初始化分片与一个媒体分片，实际为 {probesize}"
+        );
+        let analyzeduration = value(&hls, "analyzeduration").expect("HLS 缺少 analyzeduration");
+        assert!(analyzeduration.parse::<u64>().unwrap() >= 5_000_000);
+        assert_eq!(
+            hls.iter()
+                .filter(|(key, _)| key == "probesize" || key == "analyzeduration")
+                .count(),
+            2,
+            "同一个参数不应被写入两次"
+        );
+
+        for protocol in [PlaybackProtocol::Flv, PlaybackProtocol::MpegTs] {
+            let options = build_input_options(&source(protocol), None, &recording_options);
+            assert_eq!(value(&options, "probesize").as_deref(), Some("32768"));
+            assert_eq!(
+                value(&options, "analyzeduration").as_deref(),
+                Some("1000000")
+            );
+        }
     }
 
     /// A corrupt packet must be dropped by the demuxer on every protocol rather

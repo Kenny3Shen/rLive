@@ -41,7 +41,7 @@
 抖音实时弹幕连接地址受短时签名保护。rLive 在本机完成：
 
 1. 从房间详情取得内部 `room_id`（以及可选的 `web_rid`）。
-2. 生成匿名 12 位 `user_unique_id`。
+2. 生成匿名 12 位 `user_unique_id`；SSR 房间页或 `s_v_web_id` Cookie 提供的会话标识只有在可用于签名时才采用。签名 stub 以 `,`、`=` 拼接字段，WSS 查询串与 `internal_ext` 另加 `|`、`&`，因此只接受长度不超过 32 的 ASCII 字母数字标识；浏览器 Cookie 里的 `verify_…` 指纹带 `_`、`-`、`%` 且明显更长，会被丢弃并回退到匿名标识，而不是让整个弹幕连接失败。
 3. 用固定 webcast 客户端参数计算 MD5 stub，再通过嵌入的 `webmssdk` 脚本（QuickJS）得到 `signature`。
 4. 将签名附到 `wss://webcast3-ws-web-lq.douyin.com/webcast/im/push/v2/` 查询串。
 5. 携带本次网页会话 Cookie、`Origin` 与 UA 直连 WebSocket；帧层处理 gzip / protobuf、心跳与 ACK。

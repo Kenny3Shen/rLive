@@ -111,13 +111,20 @@ fn validate_numeric_component(value: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// The web id may be a numeric `user_unique_id` or an alphanumeric
-/// `s_v_web_id` from the browser session; the signature input accepts both.
+/// Whether a web id can be signed with.
+///
+/// [`ms_stub`] joins its fields with `,` and `=`, and the WSS query plus
+/// `internal_ext` add `|` and `&`, so any id carrying a delimiter would forge
+/// extra fields.  Douyin's own `user_unique_id` is a decimal snowflake, while
+/// a browser session's `s_v_web_id` cookie is longer and contains `_`, `-` and
+/// `%` — that shape is unusable here, so callers must fall back to a locally
+/// generated anonymous id instead of failing the whole handshake.
+pub fn is_valid_web_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
 fn validate_web_id_component(value: &str, label: &str) -> AppResult<()> {
-    if value.is_empty()
-        || value.len() > 32
-        || !value.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    {
+    if !is_valid_web_id(value) {
         return Err(
             AppError::new("douyin_invalid_room", format!("无效的抖音{label}")).with_site("douyin"),
         );
@@ -149,6 +156,21 @@ mod tests {
         assert!(ms_stub("1234567890", "deadbeef1234").is_ok());
         assert!(ms_stub("1234567890", "7392091211001140287").is_ok());
         assert!(ms_stub("1234567890", "1|with-pipe").is_err());
+    }
+
+    /// A real `s_v_web_id` cookie is far longer than a snowflake and carries
+    /// `_`/`-`/`%`, so it can never be signed with.  Callers rely on this
+    /// predicate to fall back before reaching [`ms_stub`].
+    #[test]
+    fn session_cookie_shaped_web_ids_are_rejected() {
+        assert!(!is_valid_web_id(
+            "verify_m9x0k1a2_HqLpZzXk_8T1c_4Vd2_Wm5NpQrStUvW"
+        ));
+        assert!(!is_valid_web_id("verify_m9x0k1a2"));
+        assert!(!is_valid_web_id("0123456789012345678901234567890123"));
+        assert!(!is_valid_web_id(""));
+        assert!(is_valid_web_id("7392091211001140287"));
+        assert!(is_valid_web_id("deadbeef1234"));
     }
 
     #[test]

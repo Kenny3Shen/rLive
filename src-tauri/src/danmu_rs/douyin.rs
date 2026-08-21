@@ -244,7 +244,13 @@ fn numeric_field(value: Option<&serde_json::Value>) -> Option<String> {
 
 /// The SSR room page exposes the session's own web id (a numeric string or
 /// number).  Unlike [`numeric_field`] it is not required to be digits-only,
-/// because `s_v_web_id` fallbacks are alphanumeric.
+/// because alphanumeric ids are signable too.
+///
+/// Ids that cannot be signed with — a `s_v_web_id` cookie value, for instance,
+/// which is over-long and carries `_`/`-`/`%` — are dropped here so the caller
+/// falls back to [`generate_user_unique_id`].  Signing with them is impossible
+/// (they would forge fields in the delimited signature stub) and failing the
+/// handshake would leave the room with no danmaku at all.
 fn web_id_field(value: Option<&serde_json::Value>) -> Option<String> {
     let value = value?;
     let id = match value {
@@ -252,7 +258,14 @@ fn web_id_field(value: Option<&serde_json::Value>) -> Option<String> {
         serde_json::Value::Number(value) => value.to_string(),
         _ => return None,
     };
-    (!id.is_empty()).then_some(id)
+    if !douyin_sign::is_valid_web_id(&id) {
+        tracing::debug!(
+            length = id.len(),
+            "抖音会话 web id 无法用于弹幕签名，改用本地匿名标识"
+        );
+        return None;
+    }
+    Some(id)
 }
 
 fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
@@ -1031,6 +1044,30 @@ mod tests {
             args.user_unique_id
                 .bytes()
                 .all(|byte| byte.is_ascii_digit())
+        );
+    }
+
+    /// Entering a Douyin cookie used to break danmaku outright: the room page
+    /// attaches the session's `s_v_web_id` as `user_unique_id`, and that value
+    /// cannot be signed with, so the handshake failed with 「无效的抖音用户标识」。
+    /// It must degrade to the anonymous id instead.
+    #[test]
+    fn build_connection_falls_back_when_the_session_web_id_is_unsignable() {
+        let raw = serde_json::json!({
+            "room_id": "1234567890123456789",
+            "user_unique_id": "verify_m9x0k1a2_HqLpZzXk_8T1c_4Vd2_Wm5NpQrStUvW",
+        });
+        let args = build_connection("522864404974", &raw, "").expect("connection");
+        assert_eq!(args.user_unique_id.len(), 12);
+        assert!(
+            args.user_unique_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        );
+        assert!(!args.signature.is_empty());
+        assert!(
+            args.internal_ext
+                .contains(&format!("wss_push_did:{}", args.user_unique_id))
         );
     }
 

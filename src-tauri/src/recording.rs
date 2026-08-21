@@ -1944,7 +1944,7 @@ async fn run_ffmpeg_recording(
     proxy: Option<String>,
     ffmpeg_options: FfmpegRecordingOptions,
     state: Arc<SessionState>,
-    cancel: watch::Receiver<bool>,
+    mut cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
     let twitch_recovery = source.twitch_ad_recovery.clone();
     if source.protocol != PlaybackProtocol::Hls || twitch_recovery.is_none() {
@@ -1979,6 +1979,47 @@ async fn run_ffmpeg_recording(
             };
         }
     };
+
+    // `start` only binds the loopback listener. Wait until it actually serves a
+    // playlist with readable segments before ffmpeg opens it: the demuxer probes
+    // the URL exactly once, so an ad break or a stale token at this moment would
+    // otherwise abort the whole recording with `Invalid data found when
+    // processing input` and leave no media file behind.
+    //
+    // `None` below means a stop won the race. A cancellation that arrived before
+    // this point leaves `changed()` with nothing to report, so the flag is read
+    // directly first.
+    let warmup = if *cancel.borrow() {
+        None
+    } else {
+        tokio::select! {
+            _ = cancel.changed() => None,
+            result = recording_proxy.wait_for_playable_manifest(
+                &local_url,
+                &proxy_session_id,
+                crate::stream_proxy::TWITCH_RECORDING_WARMUP_BUDGET,
+            ) => Some(result),
+        }
+    };
+    match warmup {
+        Some(Ok(())) => {}
+        Some(Err(error)) => {
+            recording_proxy.stop_for_session(&proxy_session_id);
+            return TaskOutcome {
+                status: RecordingStatus::Failed,
+                error: Some(format!("等待 Twitch 录制清单失败: {}", error.message)),
+                split: false,
+            };
+        }
+        None => {
+            recording_proxy.stop_for_session(&proxy_session_id);
+            return TaskOutcome {
+                status: RecordingStatus::Interrupted,
+                error: Some("录制在等待直播清单期间被停止".into()),
+                split: false,
+            };
+        }
+    }
 
     source.url = local_url;
     source.headers.clear();
