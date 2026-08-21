@@ -25,7 +25,7 @@ import {
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
 import { RoomIdentityLine } from "@/shared/components/player/RoomIdentityLine";
-import { cn, normalizeImageUrl } from "@/lib/utils";
+import { cn, normalizeCoverUrl } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { LiveRoomDetail } from "@/shared/types/live";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -495,7 +495,7 @@ export function MultiRoomPlayer({
   const userName = detail?.user_name || room.userName;
   const userAvatar = detail?.user_avatar;
   const online = detail?.online;
-  const cover = normalizeImageUrl(detail?.cover || room.cover);
+  const cover = normalizeCoverUrl(detail?.cover || room.cover);
   const loading = detailQuery.isLoading || playback.loading;
   const error = detailQuery.error ?? playback.error ?? playback.loadError ?? player.loadError;
   const showHost = !loading && error == null && !!playback.playUrl;

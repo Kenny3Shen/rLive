@@ -54,18 +54,35 @@ export function preloadImageProxy(): Promise<string | null> {
   return getImageProxyBase();
 }
 
+export type ProxyImageOptions = {
+  /**
+   * Keep the fetched body in the backend disk cache. Off for live room covers:
+   * platforms mint a fresh URL per capture (Huya bakes a second-precision
+   * timestamp into the filename, Douyu the same in `asrpic`), so every refresh
+   * would write a new entry that is never read again and evict the avatars that
+   * do repeat. Those images still go through the proxy for the Referer.
+   */
+  cache?: boolean;
+};
+
 /**
  * Rewrite a remote image URL through the localhost hotlink proxy, or return
  * `undefined` when the proxy is unavailable or the host is not proxied.
  */
-export function proxyImageUrl(url: string): string | undefined {
+export function proxyImageUrl(url: string, options?: ProxyImageOptions): string | undefined {
   if (proxyBase === null) return undefined;
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") return undefined;
     if (!shouldProxyHost(parsed.hostname)) return undefined;
-    return `${proxyBase}/img?url=${encodeURIComponent(parsed.href)}`;
+    return buildProxyTarget(proxyBase, parsed.href, options);
   } catch {
     return undefined;
   }
+}
+
+/** Request target for one proxied image; `nocache=1` opts out of the disk cache. */
+export function buildProxyTarget(base: string, href: string, options?: ProxyImageOptions): string {
+  const flags = options?.cache === false ? "nocache=1&" : "";
+  return `${base}/img?${flags}url=${encodeURIComponent(href)}`;
 }

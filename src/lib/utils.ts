@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { proxyImageUrl } from "@/shared/api/imageProxy";
+import { proxyImageUrl, type ProxyImageOptions } from "@/shared/api/imageProxy";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -37,8 +37,30 @@ export function formatByteSize(bytes: number): string {
  * additionally routed through the localhost image proxy, which attaches the
  * platform Referer the WebView cannot send. URLs that predate the proxy's
  * startup or belong to unknown hosts are returned untouched.
+ *
+ * Use this for avatars and other artwork that keeps one URL across sessions.
+ * Live room covers belong to `normalizeCoverUrl`.
  */
 export function normalizeImageUrl(value: string | null | undefined): string | undefined {
+  return normalizeRemoteImage(value);
+}
+
+/**
+ * `normalizeImageUrl` for live room covers, which are excluded from the disk
+ * cache. Cover artwork is either re-minted per capture (Huya bakes a
+ * second-precision timestamp into the filename, Douyu does the same in
+ * `asrpic`) or served from a stable URL whose content rotates every few minutes
+ * (Twitch `previews-ttv`). Caching the first kind fills the budget with entries
+ * that are never read again; caching the second kind shows a frozen preview.
+ */
+export function normalizeCoverUrl(value: string | null | undefined): string | undefined {
+  return normalizeRemoteImage(value, { cache: false });
+}
+
+function normalizeRemoteImage(
+  value: string | null | undefined,
+  options?: ProxyImageOptions,
+): string | undefined {
   const raw = value?.trim();
   if (!raw) return undefined;
 
@@ -47,7 +69,7 @@ export function normalizeImageUrl(value: string | null | undefined): string | un
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") return undefined;
-    return proxyImageUrl(parsed.href) ?? parsed.href;
+    return proxyImageUrl(parsed.href, options) ?? parsed.href;
   } catch {
     return undefined;
   }

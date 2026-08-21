@@ -22,7 +22,7 @@ import {
 import { notify } from "@/components/ui/toast";
 import { preloadRouteModule } from "@/app/routeModules";
 import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
-import { formatOnline, normalizeImageUrl, cn } from "@/lib/utils";
+import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
 
 type RoomCardProps = {
   room: LiveRoomItem;
@@ -32,7 +32,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
-  const normalizedCover = normalizeImageUrl(room.cover);
+  const normalizedCover = normalizeCoverUrl(room.cover);
   const [pendingFollowUser, setPendingFollowUser] = useState<FollowUser | null>(null);
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
