@@ -620,10 +620,10 @@ function AccountCard({
 
   return (
     <>
-      <Field>
+      <Field orientation="horizontal">
         <FieldContent>
           <div className="flex flex-wrap items-center gap-2">
-            <FieldTitle>
+            <FieldTitle className="min-h-7">
               <SiteLogo siteId={siteId} className="size-5" />
               {title}
             </FieldTitle>
@@ -706,7 +706,7 @@ function AccountCard({
             )}
           </div>
         </FieldContent>
-        <div className="hidden flex-wrap items-center justify-end gap-2 sm:flex">
+        <div className="hidden shrink-0 flex-wrap items-center justify-end gap-2 sm:flex">
           {qrLogin && (
             <Button variant="outline" size="sm" onClick={() => setLoginMethod("qr")}>
               <QrCode data-icon="inline-start" aria-hidden />
