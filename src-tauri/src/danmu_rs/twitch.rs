@@ -513,6 +513,8 @@ pub async fn run_loop(
             Ok(end) => DisconnectReason::Dropped {
                 messages: end.messages,
                 connected_for: end.connected_for,
+                // The IRC loop breaks without keeping the transport cause.
+                detail: None,
             },
             // Dial, tunnel, and IRC transport failures are all recoverable;
             // the policy decides when the streak has gone on too long.
