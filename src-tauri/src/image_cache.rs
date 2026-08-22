@@ -153,7 +153,7 @@ impl ImageCache {
 
         if committed {
             let writes = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
-            if writes % SWEEP_WRITE_INTERVAL == 0 {
+            if writes.is_multiple_of(SWEEP_WRITE_INTERVAL) {
                 self.sweep().await;
             }
         }
@@ -237,10 +237,8 @@ impl ImageCache {
         }
 
         for entry in snapshot.entries {
-            if entry.modified < cutoff {
-                if remove_entry(&entry.path).await {
-                    continue;
-                }
+            if entry.modified < cutoff && remove_entry(&entry.path).await {
+                continue;
             }
             total = total.saturating_add(entry.bytes);
             survivors.push(entry);

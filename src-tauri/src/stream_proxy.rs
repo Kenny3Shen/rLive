@@ -33,9 +33,15 @@ const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
 /// plus a sweep over the fallback player profiles; past this point the
 /// recording reports why it cannot start instead of handing libavformat a
 /// placeholder-only playlist it can never open.
+///
+/// Recording is desktop-only, so this and the warm-up path below follow the
+/// same gate as the `recording` module rather than becoming dead code on
+/// Android.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub const TWITCH_RECORDING_WARMUP_BUDGET: Duration = Duration::from_secs(20);
 /// Twitch media playlists advertise ~2 second segments, so re-polling faster
 /// than this cannot surface media that is not there yet.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const TWITCH_RECORDING_WARMUP_INTERVAL: Duration = Duration::from_millis(1_000);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -868,6 +874,7 @@ impl StreamProxy {
     /// `Invalid data found when processing input` before one byte is written.
     /// Recording therefore warms the proxy up here and only hands ffmpeg a URL
     /// that has already proven it serves real segments.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub async fn wait_for_playable_manifest(
         &self,
         local_url: &str,
@@ -2560,6 +2567,7 @@ fn mark_hls_segments_as_gaps(manifest: &str, mark_all: bool) -> String {
 ///
 /// Deliberately not the relay's own upstream client: that one may carry the
 /// user's HTTP proxy, and routing `127.0.0.1` through it would fail.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn build_loopback_client() -> AppResult<Client> {
     Client::builder()
         .no_proxy()
@@ -2575,6 +2583,7 @@ fn build_loopback_client() -> AppResult<Client> {
 /// exactly what the Twitch ad/wait paths emit. A playlist made only of those is
 /// valid HLS and a polling player rides it out, but `avformat_open_input` reads
 /// the placeholders once, finds nothing, and fails the recording outright.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn manifest_has_playable_segment(manifest: &str) -> bool {
     if !looks_like_hls_manifest(manifest.as_bytes()) {
         return false;

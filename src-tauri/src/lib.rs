@@ -81,7 +81,10 @@ use commands::stream_proxy::{
     stream_proxy_probe_sources, stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry,
 };
 use state::AppState;
-use tauri::{Emitter, Manager};
+// Only the desktop close handler emits an event; Android has no exit prompt.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+use tauri::Emitter;
+use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 

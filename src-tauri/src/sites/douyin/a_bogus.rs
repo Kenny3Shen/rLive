@@ -91,9 +91,11 @@ fn sm3_sum(data: &[u8]) -> [u8; 32] {
     buffer.extend_from_slice(&bit_length.to_be_bytes());
 
     let mut w = [0u32; 132];
-    for block in buffer.chunks_exact(64) {
-        for (t, word) in block.chunks_exact(4).take(16).enumerate() {
-            w[t] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+    let (blocks, _) = buffer.as_chunks::<64>();
+    for block in blocks {
+        let (words, _) = block.as_chunks::<4>();
+        for (t, word) in words.iter().take(16).enumerate() {
+            w[t] = u32::from_be_bytes(*word);
         }
         for j in 16..68 {
             let a = w[j - 16] ^ w[j - 9] ^ left_rotate(w[j - 3], 15);
@@ -142,8 +144,9 @@ fn sm3_sum(data: &[u8]) -> [u8; 32] {
     }
 
     let mut out = [0u8; 32];
-    for (chunk, value) in out.chunks_exact_mut(4).zip(reg.iter()) {
-        chunk.copy_from_slice(&value.to_be_bytes());
+    let (chunks, _) = out.as_chunks_mut::<4>();
+    for (chunk, value) in chunks.iter_mut().zip(reg.iter()) {
+        *chunk = value.to_be_bytes();
     }
     out
 }

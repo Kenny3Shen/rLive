@@ -5008,9 +5008,24 @@ mod tests {
         // `Manager::start` resolves the same default as the command layer, so a
         // caller that skips `with_recording_defaults` still gets background
         // continuation instead of silently opting out of it.
-        assert!(CONTINUE_ON_LEAVE_DEFAULT);
-        assert!(None::<bool>.unwrap_or(CONTINUE_ON_LEAVE_DEFAULT));
-        assert!(!Some(false).unwrap_or(CONTINUE_ON_LEAVE_DEFAULT));
+        const { assert!(CONTINUE_ON_LEAVE_DEFAULT) };
+
+        let mut unspecified = manager_test_input("https://example.test/live.flv", "live:a", "a");
+        unspecified.continue_on_leave = None;
+        assert_eq!(
+            unspecified
+                .clone()
+                .with_recording_defaults(false)
+                .continue_on_leave,
+            Some(CONTINUE_ON_LEAVE_DEFAULT)
+        );
+
+        let mut opted_out = unspecified;
+        opted_out.continue_on_leave = Some(false);
+        assert_eq!(
+            opted_out.with_recording_defaults(false).continue_on_leave,
+            Some(false)
+        );
     }
 
     #[test]
@@ -5485,11 +5500,8 @@ mod tests {
             0
         );
         let mut segments = vec![ts_stream[..FIRST_SEGMENT_SIZE].to_vec()];
-        segments.extend(
-            ts_stream[FIRST_SEGMENT_SIZE..]
-                .chunks_exact(FOLLOWING_SEGMENT_SIZE)
-                .map(<[u8]>::to_vec),
-        );
+        let (following, _) = ts_stream[FIRST_SEGMENT_SIZE..].as_chunks::<FOLLOWING_SEGMENT_SIZE>();
+        segments.extend(following.iter().map(|segment| segment.to_vec()));
         segments
     }
 
