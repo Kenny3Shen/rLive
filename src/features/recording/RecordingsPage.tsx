@@ -126,23 +126,39 @@ function recordingUserAvatar(item: RecordingItem): string {
   return item.user_avatar?.trim() || item.cover;
 }
 
+/**
+ * Thumbnail for one recording: the room cover it was captured with, falling
+ * back to the owner avatar and then the platform mark.
+ *
+ * The cover is what the card should show — it is the picture of that specific
+ * broadcast. But a recording stores the URL it was started with, and several
+ * platforms mint a cover address per capture, so a stored one can stop
+ * resolving. Rather than give up on covers, this steps down only when one
+ * actually fails to load: cover, then avatar, then the icon that sits
+ * underneath. Without that step the WebView draws its broken-image glyph.
+ */
 function RecordingArtwork({ item }: { item: RecordingItem }) {
   const cover = normalizeImageUrl(item.cover);
+  const avatar = normalizeImageUrl(item.user_avatar);
+  // Distinct keys so switching source remounts the img and retries the load.
+  const [failed, setFailed] = useState<string[]>([]);
+  const artwork = [cover, avatar].find((candidate) => candidate && !failed.includes(candidate));
   const SourceIcon = item.source_kind === "iptv" ? Tv : Radio;
 
   return (
-    <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle">
-      {cover ? (
+    <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle">
+      <SourceIcon className="size-4" aria-hidden />
+      {artwork && (
         <img
-          src={cover}
+          key={artwork}
+          src={artwork}
           alt=""
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          className="size-full object-cover"
+          onError={() => setFailed((current) => [...current, artwork])}
+          className="absolute inset-0 size-full object-cover"
         />
-      ) : (
-        <SourceIcon className="size-4" aria-hidden />
       )}
     </span>
   );
@@ -368,21 +384,23 @@ function RecordingUserAvatar({
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle",
+        "relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle",
         compact ? "size-6" : "size-7",
       )}
     >
-      {cover ? (
+      <UserRound className={compact ? "size-3.5" : "size-4"} aria-hidden />
+      {cover && (
         <img
           src={cover}
           alt=""
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          className="size-full object-cover"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+          className="absolute inset-0 size-full object-cover"
         />
-      ) : (
-        <UserRound className={compact ? "size-3.5" : "size-4"} aria-hidden />
       )}
     </span>
   );
