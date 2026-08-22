@@ -30,12 +30,12 @@ const LINE_HEIGHT_RATIO: f64 = 1.4;
 const NARROW_CHAR_WIDTH_RATIO: f64 = 0.55;
 /// 宽度估算的安全系数。没有字体度量时逐字累加会低估字距、连字和字体差异，而
 /// 低估宽度会让「尾部让位时刻」算得过早，直接造成同行追尾重叠。
-const WIDTH_SAFETY_FACTOR: f64 = 1.06;
+const WIDTH_SAFETY_FACTOR: f64 = 1.02;
 /// 同一行相邻弹幕之间保留的水平安全间距，按字号比例给出。占位条件取等号时两条
 /// 弹幕会首尾相接，加上描边后看起来就是粘在一起。
-const LANE_GAP_RATIO: f64 = 0.3;
+const LANE_GAP_RATIO: f64 = 0.1;
 /// 安全间距最多占用画面宽度的这一比例，避免极端字号挤掉滚动容量。
-const LANE_GAP_MAX_WIDTH_RATIO: i32 = 4;
+const LANE_GAP_MAX_WIDTH_RATIO: i32 = 2;
 
 /// 所有行都被占用时的处理策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
