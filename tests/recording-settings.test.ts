@@ -12,6 +12,7 @@ import {
   RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
   RECORDING_AUTO_SPLIT_MINUTES_MAX,
   RECORDING_ASS_DEFAULT_SETTINGS,
+  RECORDING_ASS_MAX_DELAY_SECONDS_MAX,
   RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
   RECORDING_INCLUDE_DANMAKU_DEFAULT,
   normalizeRecordingAssSettings,
@@ -160,5 +161,40 @@ describe("FFmpeg recording settings", () => {
       merge_window_seconds: 30,
       shield_rules: ["广告", "联系方式"],
     });
+  });
+
+  test("defaults to a bounded delay so crowded lanes neither overlap nor drop chat", () => {
+    expect(RECORDING_ASS_DEFAULT_SETTINGS.overflow_policy).toBe("delay");
+    expect(RECORDING_ASS_DEFAULT_SETTINGS.max_delay_seconds).toBe(5);
+  });
+
+  test("normalizes the ASS overflow policy and its delay budget", () => {
+    expect(
+      normalizeRecordingAssSettings({
+        ...RECORDING_ASS_DEFAULT_SETTINGS,
+        overflow_policy: "unsupported" as never,
+        max_delay_seconds: 999,
+      }),
+    ).toEqual({
+      ...RECORDING_ASS_DEFAULT_SETTINGS,
+      overflow_policy: "delay",
+      max_delay_seconds: RECORDING_ASS_MAX_DELAY_SECONDS_MAX,
+    });
+
+    for (const policy of ["overlap", "drop", "delay"] as const) {
+      expect(
+        normalizeRecordingAssSettings({
+          ...RECORDING_ASS_DEFAULT_SETTINGS,
+          overflow_policy: policy,
+        }).overflow_policy,
+      ).toBe(policy);
+    }
+
+    expect(
+      normalizeRecordingAssSettings({
+        ...RECORDING_ASS_DEFAULT_SETTINGS,
+        max_delay_seconds: -5,
+      }).max_delay_seconds,
+    ).toBe(0);
   });
 });

@@ -17,6 +17,7 @@ import type {
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
+  RecordingAssOverflowPolicy,
   RecordingAssSettings,
   SiteId,
 } from "../types/live";
@@ -117,6 +118,8 @@ export const RECORDING_ASS_SCROLL_DURATION_SECONDS_MIN = 1;
 export const RECORDING_ASS_SCROLL_DURATION_SECONDS_MAX = 60;
 export const RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN = 10;
 export const RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX = 100;
+export const RECORDING_ASS_MAX_DELAY_SECONDS_MIN = 0;
+export const RECORDING_ASS_MAX_DELAY_SECONDS_MAX = 30;
 export const RECORDING_ASS_MERGE_WINDOW_SECONDS_MIN = 0;
 export const RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX = 30;
 
@@ -131,12 +134,20 @@ export const RECORDING_ASS_DEFAULT_SETTINGS: RecordingAssSettings = {
   bold: false,
   scroll_duration_seconds: 12,
   display_area_percent: 25,
+  overflow_policy: "delay",
+  max_delay_seconds: 5,
   merge_window_seconds: 10,
   filter_gifts: true,
   show_super_chat: true,
   shield_rules: [],
   shield_regex: false,
 };
+
+function parseRecordingAssOverflowPolicy(value: unknown): RecordingAssOverflowPolicy {
+  return value === "overlap" || value === "drop" || value === "delay"
+    ? value
+    : RECORDING_ASS_DEFAULT_SETTINGS.overflow_policy;
+}
 
 function parseBoundedInteger(value: unknown, min: number, max: number, fallback: number): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
@@ -210,6 +221,13 @@ export function normalizeRecordingAssSettings(value: RecordingAssSettings): Reco
       RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN,
       RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX,
       RECORDING_ASS_DEFAULT_SETTINGS.display_area_percent,
+    ),
+    overflow_policy: parseRecordingAssOverflowPolicy(value.overflow_policy),
+    max_delay_seconds: parseBoundedInteger(
+      value.max_delay_seconds,
+      RECORDING_ASS_MAX_DELAY_SECONDS_MIN,
+      RECORDING_ASS_MAX_DELAY_SECONDS_MAX,
+      RECORDING_ASS_DEFAULT_SETTINGS.max_delay_seconds,
     ),
     merge_window_seconds: parseBoundedInteger(
       value.merge_window_seconds,

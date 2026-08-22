@@ -30,6 +30,7 @@ const RECORDING_ASS_SCROLL_DURATION_SECONDS_MIN: u32 = 1;
 const RECORDING_ASS_SCROLL_DURATION_SECONDS_MAX: u32 = 60;
 const RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN: u32 = 10;
 const RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX: u32 = 100;
+const RECORDING_ASS_MAX_DELAY_SECONDS_MAX: u32 = 30;
 const RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 const RECORDING_ASS_FONT_NAME_MAX_CHARS: usize = 80;
 const RECORDING_ASS_SHIELD_RULE_MAX_CHARS: usize = 200;
@@ -215,6 +216,13 @@ fn normalize_recording_preferences(settings: &mut AppSettings) {
         RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN,
         RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX,
     );
+    if !matches!(ass.overflow_policy.as_str(), "overlap" | "drop" | "delay") {
+        ass.overflow_policy =
+            crate::models::settings::RecordingAssSettings::default().overflow_policy;
+    }
+    ass.max_delay_seconds = ass
+        .max_delay_seconds
+        .min(RECORDING_ASS_MAX_DELAY_SECONDS_MAX);
     ass.merge_window_seconds = ass
         .merge_window_seconds
         .min(RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX);
@@ -506,6 +514,8 @@ mod tests {
         settings.recording_ass.shadow = f32::NAN;
         settings.recording_ass.scroll_duration_seconds = 0;
         settings.recording_ass.display_area_percent = 0;
+        settings.recording_ass.overflow_policy = "unsupported".into();
+        settings.recording_ass.max_delay_seconds = 90;
         settings.recording_ass.merge_window_seconds = 90;
         settings.recording_ass.shield_rules =
             vec![" 广告 ".into(), "广告".into(), "".into(), "联系方式".into()];
@@ -532,7 +542,13 @@ mod tests {
             ass.merge_window_seconds,
             RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX
         );
+        assert_eq!(ass.overflow_policy, "delay");
+        assert_eq!(ass.max_delay_seconds, RECORDING_ASS_MAX_DELAY_SECONDS_MAX);
         assert_eq!(ass.shield_rules, vec!["广告", "联系方式"]);
+
+        settings.recording_ass.overflow_policy = "drop".into();
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().recording_ass.overflow_policy, "drop");
     }
 
     #[test]
@@ -648,5 +664,28 @@ mod tests {
         let error = get_with_status(&conn).unwrap_err();
         assert_eq!(error.code, "settings_schema_unsupported");
         assert!(error.message.contains("asr_enabled"));
+    }
+
+    /// 溢出策略是在 2.4 之后加入的，旧记录缺少这两个字段时按默认值补齐，其余
+    /// `recording_ass` 字段仍然必填。
+    #[test]
+    fn backfills_recording_ass_overflow_options_for_older_records() {
+        let conn = open_in_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let ass = value
+            .get_mut("recording_ass")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap();
+        ass.remove("overflow_policy");
+        ass.remove("max_delay_seconds");
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+        )
+        .unwrap();
+
+        let ass = get(&conn).unwrap().recording_ass;
+        assert_eq!(ass.overflow_policy, "delay");
+        assert_eq!(ass.max_delay_seconds, 5);
     }
 }
