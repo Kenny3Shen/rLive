@@ -242,7 +242,7 @@ export function AsrChunkIntervalField({
   return (
     <PreferenceSliderField
       id={`${idPrefix}-asr-chunk-interval`}
-      title="字幕更新间隔"
+      title="更新间隔"
       description={layout === "page" ? "越短，刷新越快。" : undefined}
       value={draft}
       min={ASR_CHUNK_SECONDS_MIN}
@@ -448,7 +448,7 @@ export function DanmakuAppearanceSettingsFields({
       />
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-font-size`}
-        title="字号"
+        title="弹幕字号"
         value={fontSize}
         min={12}
         max={36}
