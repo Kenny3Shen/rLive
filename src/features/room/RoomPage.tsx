@@ -587,7 +587,7 @@ function RoomTopBar({
         <TooltipContent side="bottom">返回上一页</TooltipContent>
       </Tooltip>
       <p
-        className="absolute inset-x-24 truncate text-center text-sm font-medium tracking-tight text-foreground/90 md:inset-x-40"
+        className="absolute inset-x-24 truncate text-center text-sm font-medium tracking-tight md:inset-x-40"
         title={title}
       >
         {title}

@@ -148,16 +148,12 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     return (
       <div
         className={cn(
-          "rounded-md border border-transparent px-1.5 py-1 leading-relaxed",
+          "rounded-md border border-transparent px-1.5 py-1 leading-relaxed font-semibold",
           event.is_self === true && "border-primary/60",
         )}
       >
         <DanmakuSender event={event} user={user} surface={surface} />
-        <DanmakuRichText
-          content={event.content}
-          spans={event.spans}
-          className="text-foreground/90"
-        />
+        <DanmakuRichText content={event.content} spans={event.spans} />
       </div>
     );
   }
@@ -174,16 +170,12 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
         type="button"
         aria-label={`选择 ${user} 的弹幕`}
         className={cn(
-          "block w-full cursor-pointer appearance-none rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left leading-relaxed text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted",
+          "block w-full cursor-pointer appearance-none rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left leading-relaxed font-semibold text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted",
           event.is_self === true && "border-primary/60",
         )}
       >
         <DanmakuSender event={event} user={user} surface={surface} />
-        <DanmakuRichText
-          content={event.content}
-          spans={event.spans}
-          className="text-foreground/90"
-        />
+        <DanmakuRichText content={event.content} spans={event.spans} />
       </PopoverTrigger>
       <PopoverContent side="left" align="start" className="w-40 p-1">
         <div className="flex flex-col gap-1">
@@ -550,7 +542,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
         <ScrollArea className="h-full min-h-0">
           <div
-            className="flex flex-col gap-0.5 px-2.5 py-2 text-sm font-medium"
+            className="flex flex-col gap-0.5 px-2.5 py-2 text-sm"
             // Keep the side list independent from the inherited floating-danmaku outline.
             style={{ WebkitTextStroke: "0px", paintOrder: "normal" }}
           >
