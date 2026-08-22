@@ -69,6 +69,7 @@ import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { ImageCacheField } from "@/features/settings/CacheSettings";
+import { AppLogField } from "@/features/settings/AppLogField";
 import { LanSyncField } from "@/features/settings/LanSyncField";
 import {
   FfmpegSettingsFields,
@@ -221,7 +222,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   account:
     "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案 缓存 图片缓存 图片 头像 封面 清除 清理 占用 空间 cache",
-  about: "关于 rLive 当前版本 version 项目主页 github 免责声明",
+  about: "关于 rLive 当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断",
 };
 
 const SettingsSearchContext = createContext("");
@@ -1706,13 +1707,17 @@ function AboutSettings() {
   return (
     <div className="flex flex-col gap-4">
       <AlertDialog>
-        <Section title="关于 rLive" keywords="当前版本 version 项目主页 github 免责声明">
+        <Section
+          title="关于 rLive"
+          keywords="当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断"
+        >
           <Field orientation="horizontal">
             <FieldTitle id="app-version">当前版本</FieldTitle>
             <Badge variant="secondary" className="tabular-nums">
               v{appVersion}
             </Badge>
           </Field>
+          <AppLogField />
           <Field orientation="horizontal">
             <FieldTitle id="project-homepage">项目主页</FieldTitle>
             <Button onClick={openProjectHomepage} variant="outline">

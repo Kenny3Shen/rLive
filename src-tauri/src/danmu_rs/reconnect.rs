@@ -37,9 +37,16 @@ const JITTER_MAX_MS: u64 = 800;
 pub enum DisconnectReason {
     /// The socket was established and later closed. `messages` and
     /// `connected_for` decide whether it counted as a productive session.
+    ///
+    /// `detail` carries the transport-level cause (a read error, an explicit
+    /// server close, an idle timeout). It is logged but deliberately kept out
+    /// of the user-facing notice: strings like
+    /// `读取失败: … (os error 10054)` diagnose a middlebox resetting the
+    /// socket and mean nothing to a viewer waiting for chat to resume.
     Dropped {
         messages: u64,
         connected_for: Duration,
+        detail: Option<String>,
     },
     /// Dial, handshake, or transport failure that a later attempt may survive.
     Transient { message: String },
@@ -57,6 +64,16 @@ pub enum DisconnectReason {
 }
 
 impl DisconnectReason {
+    /// A session that connected and later ended, tagged with its transport
+    /// cause for the log.
+    pub fn dropped(messages: u64, connected_for: Duration, detail: impl Into<String>) -> Self {
+        Self::Dropped {
+            messages,
+            connected_for,
+            detail: Some(detail.into()),
+        }
+    }
+
     pub fn transient(message: impl Into<String>) -> Self {
         Self::Transient {
             message: message.into(),
@@ -75,6 +92,19 @@ impl DisconnectReason {
             Self::Transient { message }
             | Self::Throttled { message, .. }
             | Self::Fatal { message } => message,
+        }
+    }
+
+    /// The cause to record in the log. A `Dropped` session reports its
+    /// transport detail here so a reconnect can be diagnosed after the fact;
+    /// `message()` stays the stable, user-facing summary.
+    fn log_reason(&self) -> &str {
+        match self {
+            Self::Dropped {
+                detail: Some(detail),
+                ..
+            } => detail,
+            other => other.message(),
         }
     }
 }
@@ -202,12 +232,12 @@ impl ReconnectPolicy {
         }
 
         if self.failures >= self.limits.max_consecutive_failures {
-            let message = reason.message().to_owned();
             let notice = format!(
-                "弹幕连续 {} 次重连失败（{message}）；已停止自动重连",
-                self.failures
+                "弹幕连续 {} 次重连失败（{}）；已停止自动重连",
+                self.failures,
+                reason.message()
             );
-            self.log_stop(StopCause::FailureStreak, &message);
+            self.log_stop(StopCause::FailureStreak, reason.log_reason());
             return Decision::Stop {
                 notice,
                 cause: StopCause::FailureStreak,
@@ -216,7 +246,7 @@ impl ReconnectPolicy {
 
         if self.attempts >= self.limits.max_total_attempts {
             let notice = format!("弹幕本次观看已重连 {} 次；已停止自动重连", self.attempts);
-            self.log_stop(StopCause::AttemptBudget, reason.message());
+            self.log_stop(StopCause::AttemptBudget, reason.log_reason());
             return Decision::Stop {
                 notice,
                 cause: StopCause::AttemptBudget,
@@ -230,7 +260,7 @@ impl ReconnectPolicy {
             failures = self.failures,
             attempts = self.attempts,
             delay_secs = delay.as_secs(),
-            reason = reason.message(),
+            reason = reason.log_reason(),
             "danmaku disconnected, scheduling reconnect"
         );
         Decision::Retry { delay, notice }
@@ -243,6 +273,7 @@ impl ReconnectPolicy {
             DisconnectReason::Dropped {
                 messages,
                 connected_for,
+                ..
             } => *messages > 0 || *connected_for >= self.limits.healthy_after,
             _ => false,
         }
@@ -316,6 +347,7 @@ mod tests {
         DisconnectReason::Dropped {
             messages,
             connected_for: Duration::from_secs(secs),
+            detail: None,
         }
     }
 
@@ -340,6 +372,38 @@ mod tests {
         let decision = policy.on_disconnect(DisconnectReason::fatal("房间不存在"));
         assert_eq!(stop_cause(&decision), StopCause::Refused);
         assert_eq!(policy.attempts(), 1);
+    }
+
+    /// A dropped session records its transport cause for the log while the
+    /// notice the viewer reads stays free of socket vocabulary.
+    #[test]
+    fn a_dropped_session_logs_its_cause_but_does_not_show_it() {
+        let reason = DisconnectReason::dropped(
+            147,
+            Duration::from_secs(70),
+            "读取失败: IO error: 远程主机强迫关闭了一个现有的连接。 (os error 10054)",
+        );
+        assert!(reason.log_reason().contains("os error 10054"));
+        assert_eq!(reason.message(), "连接已断开");
+
+        let mut policy = ReconnectPolicy::with_defaults("test");
+        let decision = policy.on_disconnect(reason);
+        match decision {
+            Decision::Retry { notice, .. } => {
+                assert!(notice.contains("已收 147 条"), "notice was: {notice}");
+                assert!(
+                    !notice.contains("os error"),
+                    "notice leaked detail: {notice}"
+                );
+            }
+            Decision::Stop { notice, .. } => panic!("expected retry, stopped: {notice}"),
+        }
+    }
+
+    /// A loop that breaks without keeping a cause still logs a usable reason.
+    #[test]
+    fn a_dropped_session_without_detail_falls_back_to_the_summary() {
+        assert_eq!(dropped(5, 10).log_reason(), "连接已断开");
     }
 
     #[test]

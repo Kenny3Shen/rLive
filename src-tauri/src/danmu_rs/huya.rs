@@ -938,6 +938,9 @@ async fn run_connection_once(
     DisconnectReason::Dropped {
         messages: msg_count,
         connected_for: connected_at.elapsed(),
+        // This loop breaks without keeping the transport cause; the policy
+        // falls back to its stable summary.
+        detail: None,
     }
 }
 
