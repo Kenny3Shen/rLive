@@ -19,6 +19,15 @@ pub struct RecordingAssSettings {
     pub scroll_duration_seconds: u32,
     /// Portion of the canvas height used by scrolling items, as a percentage.
     pub display_area_percent: u32,
+    /// Lane exhaustion strategy: `overlap` | `drop` | `delay`.
+    ///
+    /// Backfilled for records written before the option existed, because the
+    /// remaining fields stay required and must not be masked by defaults.
+    #[serde(default = "default_recording_ass_overflow_policy")]
+    pub overflow_policy: String,
+    /// Upper bound of the time shift applied by the `delay` policy, in seconds.
+    #[serde(default = "default_recording_ass_max_delay_seconds")]
+    pub max_delay_seconds: u32,
     /// Fixed window used to merge duplicate chat messages; zero disables it.
     pub merge_window_seconds: u32,
     pub filter_gifts: bool,
@@ -26,6 +35,16 @@ pub struct RecordingAssSettings {
     /// One literal substring or regular expression per item.
     pub shield_rules: Vec<String>,
     pub shield_regex: bool,
+}
+
+/// Recorded playback is offline, so a bounded time shift is preferable to
+/// either overlapping bullets or discarded chat.
+fn default_recording_ass_overflow_policy() -> String {
+    "delay".into()
+}
+
+fn default_recording_ass_max_delay_seconds() -> u32 {
+    5
 }
 
 impl Default for RecordingAssSettings {
@@ -48,6 +67,8 @@ impl Default for RecordingAssSettings {
             bold: false,
             scroll_duration_seconds: 12,
             display_area_percent: 25,
+            overflow_policy: default_recording_ass_overflow_policy(),
+            max_delay_seconds: default_recording_ass_max_delay_seconds(),
             merge_window_seconds: 10,
             filter_gifts: true,
             show_super_chat: true,
