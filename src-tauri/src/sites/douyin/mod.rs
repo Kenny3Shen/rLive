@@ -852,12 +852,25 @@ fn first_image_url(value: &Value) -> String {
     }
 }
 
+/// Normalize one image address, discarding anything that is not fetchable.
+///
+/// A Douyin image object carries both `url_list` (real CDN addresses) and `uri`
+/// (a bare storage key such as `aweme-avatar/tos-cn-i-0813_…`). The key search
+/// in [`first_image_url`] falls through to `uri` whenever `url_list` is missing
+/// or empty, and that value is not loadable by anything: the frontend drops it,
+/// so a recording that stored it keeps a permanently blank thumbnail. Rejecting
+/// it here lets the caller continue to the next candidate — in practice the
+/// owner avatar — instead of persisting an address that can never render.
 fn normalize_image_url(value: &str) -> String {
     let value = value.trim();
-    if let Some(value) = value.strip_prefix("//") {
-        format!("https://{value}")
+    let normalized = match value.strip_prefix("//") {
+        Some(rest) => format!("https://{rest}"),
+        None => value.to_string(),
+    };
+    if is_http_url(&normalized) {
+        normalized
     } else {
-        value.to_string()
+        String::new()
     }
 }
 
@@ -1607,6 +1620,30 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    /// A Douyin image object always carries a bare `uri` storage key next to
+    /// `url_list`. When the CDN list is missing or empty the key search must not
+    /// hand that key back: nothing can fetch it, and a recording that stored it
+    /// would keep an unloadable thumbnail forever. The owner avatar is the
+    /// fallback a room detail then lands on.
+    #[test]
+    fn image_lookup_skips_bare_storage_keys() {
+        let uri_only = serde_json::json!({
+            "url_list": [],
+            "uri": "aweme-avatar/tos-cn-i-0813_owu79eqipENAAAA02CuixC0iIOBA7uAVFgfLgz",
+        });
+        assert_eq!(first_image_url(&uri_only), "");
+
+        // A usable CDN address still wins, and a protocol-relative one is upgraded.
+        let with_urls = serde_json::json!({
+            "url_list": ["//p11-webcast.douyinpic.com/img/cover.image"],
+            "uri": "aweme-avatar/tos-cn-i-0813_owu79eqip",
+        });
+        assert_eq!(
+            first_image_url(&with_urls),
+            "https://p11-webcast.douyinpic.com/img/cover.image"
+        );
+    }
 
     #[test]
     fn merges_response_cookies_without_losing_saved_cookie() {
