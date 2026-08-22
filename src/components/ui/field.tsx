@@ -51,14 +51,21 @@ function FieldGroup({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
+/**
+ * `items-start` keeps the control pinned to the first line when FieldContent
+ * stacks a description or error under the title. When the content is only the
+ * title, that top-edge alignment instead drops taller controls (h-8 inputs and
+ * selects, h-7/h-8 buttons) a few pixels below the label's optical center, so
+ * those rows opt back into `items-center`.
+ */
 const fieldVariants = cva("group/field flex w-full gap-2 data-[invalid=true]:text-destructive", {
   variants: {
     orientation: {
       vertical: "flex-col *:w-full [&>.sr-only]:w-auto",
       horizontal:
-        "flex-row items-center has-[>[data-slot=field-content]]:items-start *:data-[slot=field-label]:flex-auto has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
+        "flex-row items-center has-[>[data-slot=field-content]]:items-start has-[>[data-slot=field-content]>[data-slot=field-label]:only-child]:items-center *:data-[slot=field-label]:flex-auto has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
       responsive:
-        "flex-col *:w-full @md/field-group:flex-row @md/field-group:items-center @md/field-group:*:w-auto @md/field-group:has-[>[data-slot=field-content]]:items-start @md/field-group:*:data-[slot=field-label]:flex-auto [&>.sr-only]:w-auto @md/field-group:has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
+        "flex-col *:w-full @md/field-group:flex-row @md/field-group:items-center @md/field-group:*:w-auto @md/field-group:has-[>[data-slot=field-content]]:items-start @md/field-group:has-[>[data-slot=field-content]>[data-slot=field-label]:only-child]:items-center @md/field-group:*:data-[slot=field-label]:flex-auto [&>.sr-only]:w-auto @md/field-group:has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
     },
   },
   defaultVariants: {
