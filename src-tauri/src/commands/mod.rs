@@ -8,6 +8,7 @@ pub mod cache;
 pub mod danmaku;
 pub mod danmaku_favorite;
 pub mod danmaku_send_history;
+pub mod diagnostics;
 pub mod follow;
 pub mod history;
 pub mod image_proxy;
