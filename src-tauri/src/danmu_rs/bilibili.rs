@@ -5,9 +5,10 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Url};
 use serde_json::Value;
+use tokio::net::TcpStream;
 use tokio::time;
 use tokio_tungstenite::{
-    connect_async,
+    client_async_tls_with_config,
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 
@@ -1108,6 +1109,44 @@ async fn refresh_connection_info(
         .map_err(str::to_string)
 }
 
+/// How long a danmaku socket may sit idle before the kernel probes the peer.
+///
+/// Bilibili pushes chat continuously in a busy room, but a quiet room plus the
+/// 30s application heartbeat still leaves the socket idle long enough for NAT
+/// and firewall middleboxes to age out their translation entry. When that
+/// happens the peer answers the next write with an RST, which the read half
+/// reports as `os error 10054` on Windows (WSAECONNRESET) — a disconnect the
+/// application never announced. Kernel keepalive keeps the mapping warm and
+/// surfaces a genuinely dead path in bounded time.
+const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Apply keepalive and `TCP_NODELAY` to a freshly connected danmaku socket.
+///
+/// Split out from the dial so the option set can be asserted against a real
+/// socket: reading this code is not evidence that the kernel accepted the knobs.
+fn tune_danmaku_socket(stream: &TcpStream) {
+    // Chat frames are small and latency-sensitive; do not wait for Nagle.
+    let _ = stream.set_nodelay(true);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(TCP_KEEPALIVE_IDLE)
+        .with_interval(TCP_KEEPALIVE_INTERVAL);
+    // Best-effort: a platform that rejects an individual keepalive knob must
+    // not prevent the connection from being used.
+    let _ = socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive);
+}
+
+/// Open the TCP transport for a danmaku socket with keepalive and `TCP_NODELAY`.
+///
+/// `connect_async` would dial with kernel defaults, which on Windows means
+/// keepalive is off entirely. Building the socket here is the only place the
+/// options can be set before the TLS handshake consumes the stream.
+async fn open_danmaku_tcp(host: &str) -> std::io::Result<TcpStream> {
+    let stream = TcpStream::connect((host, 443)).await?;
+    tune_danmaku_socket(&stream);
+    Ok(stream)
+}
+
 async fn run_connection(
     events: &DanmakuEventSender,
     args: &BilibiliDanmakuArgs,
@@ -1147,7 +1186,19 @@ async fn run_connection(
             headers.insert("Cookie", cookie);
         }
     }
-    let (ws, _) = match connect_async(request).await {
+    let socket = match open_danmaku_tcp(host).await {
+        Ok(socket) => socket,
+        Err(error) => {
+            return ConnectionEnd {
+                message_count: 0,
+                authenticated: false,
+                auth_rejected: false,
+                reason: format!("连接失败: {error}"),
+                connected_for: Duration::ZERO,
+            };
+        }
+    };
+    let (ws, _) = match client_async_tls_with_config(request, socket, None, None).await {
         Ok(connection) => connection,
         Err(error) => {
             return ConnectionEnd {
@@ -1330,10 +1381,11 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
                 ended.reason
             ))
         } else if ended.authenticated || ended.message_count > 0 {
-            DisconnectReason::Dropped {
-                messages: ended.message_count,
-                connected_for: ended.connected_for,
-            }
+            DisconnectReason::dropped(
+                ended.message_count,
+                ended.connected_for,
+                ended.reason.clone(),
+            )
         } else {
             DisconnectReason::transient(ended.reason.clone())
         };
@@ -1419,6 +1471,41 @@ mod tests {
             String::from_utf8(request).unwrap()
         });
         (format!("http://{address}/msg/send"), server)
+    }
+
+    /// The RST this guards against (`os error 10054`) came from a middlebox
+    /// dropping an idle mapping, so the fix is only real if the kernel actually
+    /// accepted the options. Assert against a live socket rather than trusting
+    /// that the setter was called.
+    #[tokio::test]
+    async fn a_danmaku_socket_gets_keepalive_and_nodelay() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = tokio::spawn(async move { listener.accept().await.unwrap() });
+        let stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let _server = accepted.await.unwrap();
+
+        // Baseline: both options are off by default, so the assertions below
+        // observe this call rather than a kernel default that happens to match.
+        assert!(!stream.nodelay().unwrap(), "nodelay is on before tuning");
+        assert!(
+            !socket2::SockRef::from(&stream).keepalive().unwrap(),
+            "keepalive is on before tuning"
+        );
+
+        tune_danmaku_socket(&stream);
+
+        assert!(stream.nodelay().unwrap(), "nodelay was not applied");
+        let socket = socket2::SockRef::from(&stream);
+        assert!(socket.keepalive().unwrap(), "keepalive was not enabled");
+        // The idle time and probe interval are what keep a NAT mapping warm;
+        // enabling keepalive with the kernel's 2h default would not.
+        assert_eq!(socket.tcp_keepalive_time().unwrap(), TCP_KEEPALIVE_IDLE);
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            socket.tcp_keepalive_interval().unwrap(),
+            TCP_KEEPALIVE_INTERVAL
+        );
     }
 
     #[test]
