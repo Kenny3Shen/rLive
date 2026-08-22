@@ -249,12 +249,7 @@ export function useFollowAutoRecording() {
   }, [autoFollows.data, autoFollows.dataUpdatedAt, enabled, queryClient]);
 
   useEffect(() => {
-    if (
-      !enabled ||
-      !autoFollows.data ||
-      recordings.isPending ||
-      autoRunRef.current
-    ) {
+    if (!enabled || !autoFollows.data || recordings.isPending || autoRunRef.current) {
       return;
     }
     const liveTargets = autoRecordableFollows(autoFollows.data);
@@ -267,8 +262,7 @@ export function useFollowAutoRecording() {
           const cachedTarget = queryClient
             .getQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY)
             ?.find(
-              (follow) =>
-                follow.site_id === target.site_id && follow.room_id === target.room_id,
+              (follow) => follow.site_id === target.site_id && follow.room_id === target.room_id,
             );
           if (cachedTarget && !cachedTarget.auto_record) continue;
           const sessionKey = followRecordingSessionKey(target);

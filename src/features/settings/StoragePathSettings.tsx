@@ -85,16 +85,40 @@ function StoragePathControl({
         )}
       </FieldContent>
       <div className="flex flex-wrap items-center gap-2 self-center">
-        <Button type="button" variant="outline" size="sm" onClick={onReset} disabled={unavailable || busy || isDefault}>
-          {action === "reset" ? <Spinner data-icon="inline-start" /> : <RotateCcw data-icon="inline-start" aria-hidden />}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onReset}
+          disabled={unavailable || busy || isDefault}
+        >
+          {action === "reset" ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <RotateCcw data-icon="inline-start" aria-hidden />
+          )}
           恢复默认
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onReveal} disabled={unavailable || busy || !path}>
-          {action === "reveal" ? <Spinner data-icon="inline-start" /> : <FolderOpen data-icon="inline-start" aria-hidden />}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onReveal}
+          disabled={unavailable || busy || !path}
+        >
+          {action === "reveal" ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <FolderOpen data-icon="inline-start" aria-hidden />
+          )}
           显示目录
         </Button>
         <Button type="button" size="sm" onClick={onChoose} disabled={unavailable || busy}>
-          {action === "choose" ? <Spinner data-icon="inline-start" /> : <FolderCog data-icon="inline-start" aria-hidden />}
+          {action === "choose" ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <FolderCog data-icon="inline-start" aria-hidden />
+          )}
           更改位置
         </Button>
       </div>
@@ -129,7 +153,12 @@ export function RecordingStoragePathField() {
     setAction("choose");
     setActionError(null);
     try {
-      const selected = await openDialog({ directory: true, multiple: false, title: "选择录制保存位置", defaultPath: info?.path });
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "选择录制保存位置",
+        defaultPath: info?.path,
+      });
       if (typeof selected === "string") await update.mutateAsync(selected);
     } catch (cause) {
       setActionError(`无法更新录制保存位置：${recordingErrorMessage(cause)}`);
@@ -175,7 +204,11 @@ export function RecordingStoragePathField() {
       unavailable={!supported}
       action={action}
       error={error}
-      status={info?.available_bytes == null ? null : `磁盘剩余 ${formatRecordingSize(info.available_bytes)}${info.available_bytes < info.minimum_free_bytes ? "，不足以开始录制" : ""}`}
+      status={
+        info?.available_bytes == null
+          ? null
+          : `磁盘剩余 ${formatRecordingSize(info.available_bytes)}${info.available_bytes < info.minimum_free_bytes ? "，不足以开始录制" : ""}`
+      }
       onChoose={() => void choose()}
       onReset={() => void reset()}
       onReveal={() => void reveal()}
