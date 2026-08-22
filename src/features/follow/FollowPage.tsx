@@ -368,11 +368,7 @@ function FollowCard({
                   onClick={() => onStartRecording(user)}
                 >
                   {recordingStarting ? <Spinner aria-hidden /> : <CircleDot aria-hidden />}
-                  {recordingActive
-                    ? "正在录制"
-                    : recordingStarting
-                      ? "正在开启录制…"
-                      : "开启录制"}
+                  {recordingActive ? "正在录制" : recordingStarting ? "正在开启录制…" : "开启录制"}
                 </ContextMenuItem>
                 <ContextMenuCheckboxItem
                   checked={user.auto_record}
@@ -701,9 +697,7 @@ export function FollowPage() {
       const previous = queryClient.getQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY);
       queryClient.setQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY, (current = []) =>
         current.map((item) =>
-          followIdentity(item) === followIdentity(user)
-            ? { ...item, auto_record: enabled }
-            : item,
+          followIdentity(item) === followIdentity(user) ? { ...item, auto_record: enabled } : item,
         ),
       );
       return { previous };
