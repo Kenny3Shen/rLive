@@ -12,7 +12,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
+  DialogCloseButton,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -31,6 +31,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { formatByteSize } from "@/lib/utils";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { invokeCmd } from "@/shared/api/tauri";
+import { FieldTip } from "./FieldTip";
 
 /** One log file's tail, mirroring `commands::diagnostics::LogFileContent`. */
 export type LogFileContent = {
@@ -161,10 +162,12 @@ export function AppLogField() {
     >
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldTitle id="app-log-title">运行日志</FieldTitle>
-          <FieldDescription>
-            仅记录警告和错误，不含 Cookie、账号凭据和弹幕内容。反馈问题时可复制这里的内容。
-          </FieldDescription>
+          <FieldTitle id="app-log-title">
+            <span>运行日志</span>
+            <FieldTip>
+              仅记录警告和错误，不含 Cookie、账号凭据和弹幕内容。反馈问题时可复制这里的内容。
+            </FieldTip>
+          </FieldTitle>
         </FieldContent>
         <DialogTrigger
           render={
@@ -303,7 +306,9 @@ export function AppLogField() {
             )}
             {clear.isPending ? "正在清空…" : "清空"}
           </Button>
-          <DialogClose render={<Button variant="secondary">关闭</Button>} />
+          {/* Same outline variant and `sm` size as the four action buttons
+              beside it; every other dialog closes with an outline button too. */}
+          <DialogCloseButton size="sm">关闭</DialogCloseButton>
         </DialogFooter>
       </DialogContent>
     </Dialog>
