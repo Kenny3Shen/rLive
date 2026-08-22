@@ -12,6 +12,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Textarea } from "@/components/ui/textarea";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX,
   FFMPEG_HLS_SEGMENT_RETRY_COUNT_MIN,
@@ -26,6 +27,8 @@ import {
   RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN,
   RECORDING_ASS_FONT_SIZE_MAX,
   RECORDING_ASS_FONT_SIZE_MIN,
+  RECORDING_ASS_MAX_DELAY_SECONDS_MAX,
+  RECORDING_ASS_MAX_DELAY_SECONDS_MIN,
   RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX,
   RECORDING_ASS_MERGE_WINDOW_SECONDS_MIN,
   RECORDING_ASS_RESOLUTION_HEIGHT_MAX,
@@ -388,6 +391,49 @@ export function RecordingAssSettingsFields() {
         }
         onCommit={(display_area_percent) => setSettings({ display_area_percent })}
       />
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>
+            <span id="recording-ass-overflow-policy-label">轨道排满时</span>
+            <FieldTip>
+              滚动弹幕的容量由显示区域、字号和滚动时间决定。刷屏房间会把每一行都占满：延迟会把弹幕推后到最早空出的行，丢弃会直接舍弃，重叠保留全部弹幕但允许互相遮挡。
+            </FieldTip>
+          </FieldTitle>
+        </FieldContent>
+        <ToggleGroup
+          aria-labelledby="recording-ass-overflow-policy-label"
+          className="self-center"
+          value={[settings.overflow_policy]}
+          variant="outline"
+          size="sm"
+          spacing={1}
+          onValueChange={(values) => {
+            const next = values[0];
+            if (next === "delay" || next === "drop" || next === "overlap") {
+              setSettings({ overflow_policy: next });
+            }
+          }}
+        >
+          <ToggleGroupItem value="delay">延迟</ToggleGroupItem>
+          <ToggleGroupItem value="drop">丢弃</ToggleGroupItem>
+          <ToggleGroupItem value="overlap">重叠</ToggleGroupItem>
+        </ToggleGroup>
+      </Field>
+      {settings.overflow_policy === "delay" && (
+        <NumberSettingField
+          id="recording-ass-max-delay"
+          title="最大延迟"
+          description="允许把弹幕推后多久以避免重叠；超过此时间仍无可用轨道才丢弃，设为 0 等同于丢弃。"
+          value={settings.max_delay_seconds}
+          min={RECORDING_ASS_MAX_DELAY_SECONDS_MIN}
+          max={RECORDING_ASS_MAX_DELAY_SECONDS_MAX}
+          unit="秒"
+          normalize={(value) =>
+            normalizeAssPatch(settings, { max_delay_seconds: Number(value) }).max_delay_seconds
+          }
+          onCommit={(max_delay_seconds) => setSettings({ max_delay_seconds })}
+        />
+      )}
       <NumberSettingField
         id="recording-ass-merge-window"
         title="重复弹幕合并"

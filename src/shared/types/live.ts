@@ -188,6 +188,12 @@ export type CaptionTranslationLanguage =
 
 export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
+/**
+ * Lane exhaustion strategy used by the ASS exporter: keep every danmaku and
+ * allow overlap, discard, or shift the start time inside a delay budget.
+ */
+export type RecordingAssOverflowPolicy = "overlap" | "drop" | "delay";
+
 export type RecordingAssSettings = {
   resolution_width: number;
   resolution_height: number;
@@ -199,6 +205,9 @@ export type RecordingAssSettings = {
   bold: boolean;
   scroll_duration_seconds: number;
   display_area_percent: number;
+  overflow_policy: RecordingAssOverflowPolicy;
+  /** Upper bound of the shift applied by the `delay` policy, in seconds. */
+  max_delay_seconds: number;
   merge_window_seconds: number;
   filter_gifts: boolean;
   show_super_chat: boolean;

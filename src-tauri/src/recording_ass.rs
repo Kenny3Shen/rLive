@@ -5,8 +5,10 @@
 //! 都由独立的录制 ASS 配置决定，不受直播播放器设置变化影响。
 //!
 //! 滚动布局参考 DanmakuFactory（MIT, <https://github.com/hihkm/DanmakuFactory>）：
-//! 每行维护「上一条尾部完全进屏时间」与「上一条离屏时间」，两个条件都不冲突
-//! 才占用该行；所有行都冲突时回退到最早空出的行，而不是丢弃弹幕。
+//! 每行维护「上一条尾部让出安全间距的时间」与「上一条离屏时间」，两个条件都不
+//! 冲突才占用该行。所有行都冲突时按 `overflow_policy` 处理：`overlap` 回退到最
+//! 早空出的行并保留全部弹幕（可能重叠），`drop` 直接丢弃，`delay` 把该条推迟到
+//! 最早可用时刻、超过 `max_delay_seconds` 才丢弃。
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -24,6 +26,28 @@ const SUPER_CHAT_RGB: u32 = 0xFF_D7_6A;
 const DEFAULT_RGB: u32 = 0xFF_FF_FF;
 /// 行间距占字号的比例，与 `danmuLaneHeight` 的 1.4 倍行高一致。
 const LINE_HEIGHT_RATIO: f64 = 1.4;
+/// 非全角字符的宽度系数。中文字体的半角字形通常在 0.5–0.6 em 之间。
+const NARROW_CHAR_WIDTH_RATIO: f64 = 0.55;
+/// 宽度估算的安全系数。没有字体度量时逐字累加会低估字距、连字和字体差异，而
+/// 低估宽度会让「尾部让位时刻」算得过早，直接造成同行追尾重叠。
+const WIDTH_SAFETY_FACTOR: f64 = 1.06;
+/// 同一行相邻弹幕之间保留的水平安全间距，按字号比例给出。占位条件取等号时两条
+/// 弹幕会首尾相接，加上描边后看起来就是粘在一起。
+const LANE_GAP_RATIO: f64 = 0.3;
+/// 安全间距最多占用画面宽度的这一比例，避免极端字号挤掉滚动容量。
+const LANE_GAP_MAX_WIDTH_RATIO: i32 = 4;
+
+/// 所有行都被占用时的处理策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverflowPolicy {
+    /// 回退到最早空出的行，保留全部弹幕，可能重叠。
+    Overlap,
+    /// 丢弃该条弹幕，保证不重叠。
+    Drop,
+    /// 推迟到最早可用时刻，超过延迟上限才丢弃。回放是离线场景，允许时间平移。
+    Delay,
+}
+
 #[derive(Debug, Clone)]
 enum ShieldMatcher {
     Literals(Vec<String>),
@@ -45,6 +69,13 @@ pub struct AssExportOptions {
     bold: bool,
     scroll_duration_ms: i64,
     area: f32,
+    /// 同行相邻弹幕之间的水平安全间距，单位为 ASS 画布像素。
+    lane_gap: i32,
+    /// 描边与阴影相对文字度量额外占用的横向像素。
+    stroke_padding: i32,
+    overflow_policy: OverflowPolicy,
+    /// `Delay` 策略允许的最大时间平移。
+    max_delay_ms: i64,
     merge_window_ms: i64,
     filter_gifts: bool,
     show_super_chat: bool,
@@ -66,8 +97,26 @@ impl AssExportOptions {
                     .collect(),
             )
         };
+        let play_res_x = ass.resolution_width as i32;
+        // 描边向两侧各扩张 outline 像素，阴影朝一个方向偏移，两者都让实际占位
+        // 大于纯文字度量。
+        let positive = |value: f32| {
+            if value.is_finite() {
+                value.max(0.0)
+            } else {
+                0.0
+            }
+        };
+        let stroke_padding = (positive(ass.outline) * 2.0 + positive(ass.shadow)).ceil() as i32;
+        let lane_gap = ((f64::from(font_size) * LANE_GAP_RATIO).round() as i32)
+            .clamp(1, (play_res_x / LANE_GAP_MAX_WIDTH_RATIO).max(1));
+        let overflow_policy = match ass.overflow_policy.as_str() {
+            "overlap" => OverflowPolicy::Overlap,
+            "drop" => OverflowPolicy::Drop,
+            _ => OverflowPolicy::Delay,
+        };
         Ok(Self {
-            play_res_x: ass.resolution_width as i32,
+            play_res_x,
             play_res_y: ass.resolution_height as i32,
             top_margin: (ass.resolution_height as i32 / 135).max(1),
             font_name: ass.font_name.clone(),
@@ -79,6 +128,10 @@ impl AssExportOptions {
             bold: ass.bold,
             scroll_duration_ms: i64::from(ass.scroll_duration_seconds) * 1_000,
             area: ass.display_area_percent as f32 / 100.0,
+            lane_gap,
+            stroke_padding,
+            overflow_policy,
+            max_delay_ms: i64::from(ass.max_delay_seconds) * 1_000,
             merge_window_ms: i64::from(ass.merge_window_seconds) * 1_000,
             filter_gifts: ass.filter_gifts,
             show_super_chat: ass.show_super_chat,
@@ -89,6 +142,11 @@ impl AssExportOptions {
     fn lane_count(&self) -> usize {
         let usable = (self.play_res_y as f32 * self.area) as i32 - self.top_margin;
         (usable / self.line_height).max(1) as usize
+    }
+
+    /// 一条弹幕实际占用的横向像素：文字度量估算加描边扩张。
+    fn rendered_width(&self, text: &str) -> i32 {
+        estimated_text_width(text, self.font_size).saturating_add(self.stroke_padding)
     }
 
     fn is_shielded(&self, content: &str) -> bool {
@@ -119,13 +177,26 @@ struct AssDanmaku {
 
 #[derive(Clone)]
 struct RollLane {
-    /// 该行上一条弹幕尾部完全进入画面的时间。
-    tail_entered_at: i64,
+    /// 下一条弹幕最早可以出现的时间：上一条尾部离开右边缘并让出安全间距的时刻。
+    free_from: i64,
     /// 该行上一条弹幕完全离开画面的时间。
     left_at: i64,
 }
 
-/// 把弹幕轨转换为 ASS 并写入 `writer`，返回写出的弹幕条数。
+/// 一条已经完成行与时间分配的弹幕。`delay` 策略会推迟起始时间，因此写出前按起始
+/// 时间重排，保证 ASS 事件仍然递增。
+struct PlacedDanmaku {
+    start_ms: i64,
+    end_ms: i64,
+    /// 所在行顶部在画布上的 y 坐标。
+    y: i32,
+    width: i32,
+    rgb: u32,
+    text: String,
+}
+
+/// 把弹幕轨转换为 ASS 并写入 `writer`，返回写出的弹幕条数。按溢出策略丢弃的弹幕不
+/// 计入返回值，因此全部被丢弃时调用方会按「无可导出弹幕」处理。
 ///
 /// 单行 JSON 解析失败会被跳过：录制被强制结束时最后一行可能不完整，其余批次
 /// 仍然可用。
@@ -134,10 +205,10 @@ pub fn write_ass<R: BufRead, W: Write>(
     writer: &mut W,
     options: &AssExportOptions,
 ) -> std::io::Result<u64> {
-    let danmaku = collect_danmaku(reader, options);
+    let placed = layout(collect_danmaku(reader, options), options);
     write_header(writer, options)?;
-    write_events(writer, &danmaku, options)?;
-    Ok(danmaku.len() as u64)
+    write_events(writer, &placed, options)?;
+    Ok(placed.len() as u64)
 }
 
 fn collect_danmaku<R: BufRead>(reader: R, options: &AssExportOptions) -> Vec<AssDanmaku> {
@@ -339,48 +410,67 @@ fn write_header<W: Write>(writer: &mut W, options: &AssExportOptions) -> std::io
     )
 }
 
-fn write_events<W: Write>(
-    writer: &mut W,
-    danmaku: &[AssDanmaku],
-    options: &AssExportOptions,
-) -> std::io::Result<()> {
-    let lane_count = options.lane_count();
+/// 把按时间排序的弹幕分配到滚动行。两个占位条件都包含安全间距，因此同行相邻弹幕
+/// 不会首尾相接。
+fn layout(danmaku: Vec<AssDanmaku>, options: &AssExportOptions) -> Vec<PlacedDanmaku> {
     let mut lanes = vec![
         RollLane {
-            tail_entered_at: i64::MIN,
+            free_from: i64::MIN,
             left_at: i64::MIN,
         };
-        lane_count
+        options.lane_count()
     ];
+    let mut placed: Vec<PlacedDanmaku> = Vec::with_capacity(danmaku.len());
 
     for entry in danmaku {
         let text = if entry.count > 1 {
             format!("{} ×{}", entry.text, entry.count)
         } else {
-            entry.text.clone()
+            entry.text
         };
-        let width = estimated_text_width(&text, options.font_size);
-        let travel = options.play_res_x + width;
+        let width = options.rendered_width(&text);
+        let travel = i64::from(options.play_res_x) + i64::from(width);
         let roll_ms = options.scroll_duration_ms;
-        // 弹幕尾部完全进入画面、以及弹幕头部触及左边缘的时刻。
-        let tail_entered_at = entry.offset_ms + roll_ms * i64::from(width) / i64::from(travel);
-        let reaches_left_at =
-            entry.offset_ms + roll_ms * i64::from(options.play_res_x) / i64::from(travel);
-        let left_at = entry.offset_ms + roll_ms;
+        // 头部推进到距左边缘一个安全间距处、以及尾部进屏后再让出一个安全间距所需的时间。
+        let reach_gap_ms = roll_ms * i64::from(options.play_res_x - options.lane_gap) / travel;
+        let free_after_ms = roll_ms * i64::from(width + options.lane_gap) / travel;
 
-        let lane = pick_lane(&lanes, entry.offset_ms, reaches_left_at);
-        lanes[lane] = RollLane {
-            tail_entered_at,
-            left_at,
+        let Some((lane, start_ms)) = pick_lane(&lanes, entry.offset_ms, reach_gap_ms, options)
+        else {
+            continue;
         };
+        lanes[lane] = RollLane {
+            free_from: start_ms + free_after_ms,
+            left_at: start_ms + roll_ms,
+        };
+        placed.push(PlacedDanmaku {
+            start_ms,
+            end_ms: start_ms + roll_ms,
+            y: options.top_margin + lane as i32 * options.line_height,
+            width,
+            rgb: entry.rgb,
+            text,
+        });
+    }
 
-        let y = options.top_margin + lane as i32 * options.line_height;
-        let start_x = options.play_res_x + width / 2;
-        let end_x = -width / 2;
+    // 稳定排序，同一时刻的弹幕保持自上而下的行顺序。
+    placed.sort_by_key(|item| item.start_ms);
+    placed
+}
+
+fn write_events<W: Write>(
+    writer: &mut W,
+    placed: &[PlacedDanmaku],
+    options: &AssExportOptions,
+) -> std::io::Result<()> {
+    for entry in placed {
+        let y = entry.y;
+        let start_x = options.play_res_x + entry.width / 2;
+        let end_x = -entry.width / 2;
         write!(writer, "Dialogue: 0,")?;
-        write_timestamp(writer, entry.offset_ms)?;
+        write_timestamp(writer, entry.start_ms)?;
         write!(writer, ",")?;
-        write_timestamp(writer, left_at)?;
+        write_timestamp(writer, entry.end_ms)?;
         write!(
             writer,
             ",R2L,,0000,0000,0000,,{{\\move({start_x},{y},{end_x},{y})"
@@ -388,38 +478,58 @@ fn write_events<W: Write>(
         if entry.rgb != DEFAULT_RGB {
             write!(writer, "\\c{}", ass_color(entry.rgb))?;
         }
-        writeln!(writer, "}}{}", escape_ass_text(&text))?;
+        writeln!(writer, "}}{}", escape_ass_text(&entry.text))?;
     }
     Ok(())
 }
 
-/// 首个不会与前一条追尾的行；所有行都冲突时选最早空出的行，保留全部弹幕。
-fn pick_lane(lanes: &[RollLane], offset_ms: i64, reaches_left_at: i64) -> usize {
-    for (index, lane) in lanes.iter().enumerate() {
-        if offset_ms >= lane.tail_entered_at && reaches_left_at >= lane.left_at {
-            return index;
+/// 首个当前就可用的行；所有行都被占用时按溢出策略处理。返回行号与最终起始时间，
+/// `None` 表示按策略丢弃该条弹幕。
+fn pick_lane(
+    lanes: &[RollLane],
+    offset_ms: i64,
+    reach_gap_ms: i64,
+    options: &AssExportOptions,
+) -> Option<(usize, i64)> {
+    // 该行能接纳下一条弹幕的最早时刻：上一条尾部已让位，且新弹幕头部追到安全间距
+    // 处时上一条已经离屏。
+    let earliest = |lane: &RollLane| {
+        lane.free_from
+            .max(lane.left_at.saturating_sub(reach_gap_ms))
+    };
+    if let Some(index) = lanes.iter().position(|lane| offset_ms >= earliest(lane)) {
+        return Some((index, offset_ms));
+    }
+    match options.overflow_policy {
+        OverflowPolicy::Overlap => lanes
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, lane)| lane.left_at)
+            .map(|(index, _)| (index, offset_ms)),
+        OverflowPolicy::Drop => None,
+        OverflowPolicy::Delay => {
+            let (index, start_ms) = lanes
+                .iter()
+                .enumerate()
+                .map(|(index, lane)| (index, earliest(lane)))
+                .min_by_key(|&(index, start_ms)| (start_ms, index))?;
+            (start_ms - offset_ms <= options.max_delay_ms).then_some((index, start_ms))
         }
     }
-    lanes
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, lane)| lane.left_at)
-        .map(|(index, _)| index)
-        .unwrap_or(0)
 }
 
-/// 没有字体度量时的宽度估算：全角字符按一个字号，其余按 0.55 个字号。低估会让
-/// 弹幕互相重叠，因此对宽字符取满宽。
+/// 没有字体度量时的宽度估算：全角字符按一个字号，其余按 `NARROW_CHAR_WIDTH_RATIO`，
+/// 整体再乘上安全系数。低估会让弹幕互相重叠，因此对宽字符取满宽并向上取整。
 fn estimated_text_width(text: &str, font_size: i32) -> i32 {
     let mut units = 0.0_f64;
     for character in text.chars() {
         units += if is_wide_character(character) {
             1.0
         } else {
-            0.55
+            NARROW_CHAR_WIDTH_RATIO
         };
     }
-    ((units * f64::from(font_size)).round() as i32).max(1)
+    ((units * f64::from(font_size) * WIDTH_SAFETY_FACTOR).ceil() as i32).max(1)
 }
 
 fn is_wide_character(character: char) -> bool {
@@ -614,6 +724,223 @@ mod tests {
         assert!(positions[1].contains(&format!(",{},", options.top_margin + options.line_height)));
     }
 
+    /// 每行只能容下一条时，后续弹幕就走溢出分支。
+    fn crowded_batch(count: usize) -> String {
+        let events: Vec<String> = (0..count)
+            .map(|index| event("chat", &format!("溢出测试{index}")))
+            .collect();
+        format!(r#"{{"offset_ms":0,"events":[{}]}}"#, events.join(","))
+    }
+
+    fn dialogue_starts(script: &str) -> Vec<String> {
+        script
+            .lines()
+            .filter(|line| line.starts_with("Dialogue:"))
+            .map(|line| line.split(',').nth(1).unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn overlap_policy_keeps_every_danmaku_on_the_earliest_lane() {
+        let mut settings = AppSettings::default();
+        settings.recording_ass.overflow_policy = "overlap".into();
+        let options = AssExportOptions::try_from_settings(&settings).unwrap();
+        let lanes = options.lane_count();
+
+        let (script, count) = render(&[&crowded_batch(lanes + 3)], &options);
+
+        assert_eq!(count as usize, lanes + 3);
+        // 回退分支不平移时间，所有弹幕仍然从 0 开始。
+        assert!(
+            dialogue_starts(&script)
+                .iter()
+                .all(|start| start == "0:00:00.00")
+        );
+    }
+
+    #[test]
+    fn drop_policy_discards_danmaku_that_no_lane_can_hold() {
+        let mut settings = AppSettings::default();
+        settings.recording_ass.overflow_policy = "drop".into();
+        let options = AssExportOptions::try_from_settings(&settings).unwrap();
+        let lanes = options.lane_count();
+
+        let (script, count) = render(&[&crowded_batch(lanes + 3)], &options);
+
+        assert_eq!(count as usize, lanes);
+        assert!(!script.contains(&format!("溢出测试{lanes}")));
+    }
+
+    #[test]
+    fn delay_policy_shifts_danmaku_inside_the_configured_budget() {
+        let mut settings = AppSettings::default();
+        settings.recording_ass.overflow_policy = "delay".into();
+        settings.recording_ass.max_delay_seconds = 5;
+        let options = AssExportOptions::try_from_settings(&settings).unwrap();
+        let lanes = options.lane_count();
+
+        let (script, count) = render(&[&crowded_batch(lanes + 1)], &options);
+
+        assert_eq!(count as usize, lanes + 1);
+        let starts = dialogue_starts(&script);
+        // 写出前按起始时间重排，被推迟的那一条落到最后。
+        assert_eq!(
+            starts.iter().filter(|start| *start == "0:00:00.00").count(),
+            lanes
+        );
+        assert_ne!(starts.last().unwrap(), "0:00:00.00");
+
+        // 超出延迟上限的弹幕仍然丢弃，不会无限堆积。
+        settings.recording_ass.max_delay_seconds = 0;
+        let strict = AssExportOptions::try_from_settings(&settings).unwrap();
+        let (_, strict_count) = render(&[&crowded_batch(lanes + 1)], &strict);
+        assert_eq!(strict_count as usize, lanes);
+    }
+
+    #[test]
+    fn keeps_a_safety_gap_between_neighbours_on_one_lane() {
+        let mut settings = AppSettings::default();
+        settings.recording_ass.overflow_policy = "drop".into();
+        settings.recording_ass.display_area_percent = 10;
+        settings.recording_ass.font_size = 100;
+        let options = AssExportOptions::try_from_settings(&settings).unwrap();
+        assert_eq!(options.lane_count(), 1);
+        assert!(options.lane_gap > 0);
+
+        // 安全间距把占用时间往后推，因此刚好首尾相接的时刻仍然不可用。
+        let text = "测试";
+        let width = options.rendered_width(text);
+        let travel = i64::from(options.play_res_x) + i64::from(width);
+        let touching_ms = options.scroll_duration_ms * i64::from(width) / travel;
+        let (_, count) = render(
+            &[
+                &format!(r#"{{"offset_ms":0,"events":[{}]}}"#, event("chat", text)),
+                &format!(
+                    r#"{{"offset_ms":{touching_ms},"events":[{}]}}"#,
+                    event("chat", text)
+                ),
+            ],
+            &options,
+        );
+
+        assert_eq!(count, 1);
+    }
+
+    /// 从 `\move` 参数反推出的一条弹幕几何轨迹。
+    struct ParsedBullet {
+        start_ms: i64,
+        end_ms: i64,
+        y: i32,
+        start_x: f64,
+        end_x: f64,
+        width: f64,
+    }
+
+    impl ParsedBullet {
+        /// 允许外推：区间之外的位置仍然沿同一条直线，不影响重叠判定。
+        fn center_at(&self, ms: i64) -> f64 {
+            let progress = (ms - self.start_ms) as f64 / (self.end_ms - self.start_ms) as f64;
+            self.start_x + (self.end_x - self.start_x) * progress
+        }
+
+        fn left_at(&self, ms: i64) -> f64 {
+            self.center_at(ms) - self.width / 2.0
+        }
+
+        fn right_at(&self, ms: i64) -> f64 {
+            self.center_at(ms) + self.width / 2.0
+        }
+    }
+
+    fn parse_timestamp(value: &str) -> i64 {
+        let mut parts = value.split(':');
+        let hours: i64 = parts.next().unwrap().parse().unwrap();
+        let minutes: i64 = parts.next().unwrap().parse().unwrap();
+        let (seconds, centiseconds) = parts.next().unwrap().split_once('.').unwrap();
+        hours * 3_600_000
+            + minutes * 60_000
+            + seconds.parse::<i64>().unwrap() * 1_000
+            + centiseconds.parse::<i64>().unwrap() * 10
+    }
+
+    fn parse_dialogue(line: &str, play_res_x: i32) -> ParsedBullet {
+        let mut fields = line.split(',');
+        fields.next().unwrap();
+        let start_ms = parse_timestamp(fields.next().unwrap());
+        let end_ms = parse_timestamp(fields.next().unwrap());
+        let coordinates: Vec<f64> = line
+            .split_once("{\\move(")
+            .unwrap()
+            .1
+            .split_once(')')
+            .unwrap()
+            .0
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
+        let (start_x, y, end_x) = (coordinates[0], coordinates[1], coordinates[2]);
+        ParsedBullet {
+            start_ms,
+            end_ms,
+            y: y as i32,
+            start_x,
+            end_x,
+            width: start_x - end_x - f64::from(play_res_x),
+        }
+    }
+
+    #[test]
+    fn dense_traffic_never_overlaps_under_drop_or_delay() {
+        // 10 秒内 400 条（约 40 条/秒），远超默认 5 行 × 12 秒的滚动容量。
+        let batches: Vec<String> = (0..200)
+            .map(|index| {
+                format!(
+                    r#"{{"offset_ms":{},"events":[{},{}]}}"#,
+                    index * 50,
+                    event("chat", &format!("压力测试{index}")),
+                    event("chat", &format!("stress{index}")),
+                )
+            })
+            .collect();
+        let lines: Vec<&str> = batches.iter().map(String::as_str).collect();
+
+        let mut counts = Vec::new();
+        for policy in ["drop", "delay"] {
+            let mut settings = AppSettings::default();
+            settings.recording_ass.overflow_policy = policy.into();
+            settings.recording_ass.max_delay_seconds = 5;
+            let options = AssExportOptions::try_from_settings(&settings).unwrap();
+            let (script, count) = render(&lines, &options);
+            assert!(count > 0, "{policy} 仍然应该写出弹幕");
+            counts.push(count);
+
+            let mut lanes: std::collections::HashMap<i32, Vec<ParsedBullet>> =
+                std::collections::HashMap::new();
+            for line in script.lines().filter(|line| line.starts_with("Dialogue:")) {
+                let bullet = parse_dialogue(line, options.play_res_x);
+                lanes.entry(bullet.y).or_default().push(bullet);
+            }
+            assert_eq!(lanes.len(), options.lane_count());
+
+            for (y, bullets) in &lanes {
+                // 位置差是时间的线性函数，两个临界时刻不相交即全程不相交。
+                for pair in bullets.windows(2) {
+                    let (ahead, behind) = (&pair[0], &pair[1]);
+                    assert!(behind.start_ms >= ahead.start_ms, "写出顺序应按时间递增");
+                    for moment in [behind.start_ms, ahead.end_ms] {
+                        assert!(
+                            behind.left_at(moment) >= ahead.right_at(moment),
+                            "{policy} 在 y={y}、{moment}ms 出现重叠"
+                        );
+                    }
+                }
+            }
+        }
+
+        // 延迟策略以时间平移换取保留量，不应该比直接丢弃保留得更少。
+        assert!(counts[1] > counts[0]);
+    }
+
     #[test]
     fn skips_an_incomplete_final_line() {
         let (_, count) = render(
@@ -644,7 +971,9 @@ mod tests {
 
     #[test]
     fn estimates_wide_characters_as_full_width() {
-        assert_eq!(estimated_text_width("中文", 30), 60);
+        // 宽字符取满宽，再加上安全系数，宁可高估也不能低估。
+        assert!(estimated_text_width("中文", 30) >= 60);
+        assert!(estimated_text_width("中文", 30) <= 72);
         assert!(estimated_text_width("abcd", 30) < estimated_text_width("中文中文", 30));
     }
 
