@@ -93,10 +93,8 @@ fn read_tail(path: &std::path::Path) -> LogFileContent {
     // The tail can begin mid-line, and a multi-byte character can straddle the
     // seek offset, so decode lossily and drop the first partial line.
     let mut text = String::from_utf8_lossy(&buffer).into_owned();
-    if truncated {
-        if let Some(newline) = text.find('\n') {
-            text = text[newline + 1..].to_owned();
-        }
+    if truncated && let Some(newline) = text.find('\n') {
+        text = text[newline + 1..].to_owned();
     }
     LogFileContent {
         path: display,

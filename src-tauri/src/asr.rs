@@ -1498,10 +1498,8 @@ pub fn decode_base64_pcm(encoded: &str) -> AppResult<Vec<f32>> {
         return Err(AppError::new("asr_pcm_decode", "音频片段格式无效"));
     }
 
-    let pcm: Vec<f32> = bytes
-        .chunks_exact(std::mem::size_of::<f32>())
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
+    let (samples, _) = bytes.as_chunks::<{ std::mem::size_of::<f32>() }>();
+    let pcm: Vec<f32> = samples.iter().copied().map(f32::from_le_bytes).collect();
     if pcm.iter().any(|sample| !sample.is_finite()) {
         return Err(AppError::new("asr_pcm_decode", "音频片段包含无效采样"));
     }

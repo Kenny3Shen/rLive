@@ -618,10 +618,11 @@ mod tests {
         assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nfake-image"));
         // Unknown hosts are allowed only under the test allowlist and receive
         // no platform Referer (see `referer_for`).
-        let upstream_request = headers_seen.lock().unwrap();
-        assert!(!upstream_request.contains("referer:"));
-        assert!(upstream_request.contains("get /pic.png"));
-        drop(upstream_request);
+        {
+            let upstream_request = headers_seen.lock().unwrap();
+            assert!(!upstream_request.contains("referer:"));
+            assert!(upstream_request.contains("get /pic.png"));
+        }
 
         let cache_ready = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
