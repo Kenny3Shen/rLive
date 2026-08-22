@@ -81,10 +81,7 @@ function IptvPlayerTopBar({
 
       <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-12">
         <div className="min-w-0 text-center">
-          <p
-            className="truncate text-sm font-semibold tracking-tight text-foreground/90"
-            title={title}
-          >
+          <p className="truncate text-sm font-semibold tracking-tight" title={title}>
             {title}
           </p>
           <p className="hidden truncate text-xs text-muted-foreground sm:block" title={sourceLabel}>

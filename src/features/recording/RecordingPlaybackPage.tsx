@@ -76,7 +76,7 @@ function PlaybackTopBar({ title, onBack }: { title: string; onBack: () => void }
         <TooltipContent side="bottom">返回录制库</TooltipContent>
       </Tooltip>
       <p
-        className="absolute inset-x-16 truncate text-center text-sm font-semibold tracking-tight text-foreground/90"
+        className="absolute inset-x-16 truncate text-center text-sm font-semibold tracking-tight"
         title={title}
       >
         {title}
