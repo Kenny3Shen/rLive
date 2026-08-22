@@ -52,7 +52,10 @@ pub struct AppLogSnapshot {
 /// A missing file is a normal state, not an error: nothing has gone wrong yet.
 /// Seeking rather than reading the whole file keeps a rotated 2 MiB log cheap.
 fn read_tail(path: &std::path::Path) -> LogFileContent {
-    let display = path.display().to_string();
+    // `AppDirectories::resolve` canonicalizes, which on Windows yields a
+    // verbatim `\\?\D:\…` path. That prefix is an API detail no user should be
+    // shown or asked to retype, so every path leaving over IPC is normalized.
+    let display = crate::app_paths::path_to_string(path);
     let Ok(metadata) = path.metadata() else {
         return LogFileContent {
             path: display,
@@ -111,7 +114,7 @@ pub async fn app_log_snapshot() -> AppResult<AppLogSnapshot> {
     let directories = AppDirectories::resolve(None)?;
     let logs = directories.logs;
     Ok(AppLogSnapshot {
-        directory: logs.display().to_string(),
+        directory: crate::app_paths::path_to_string(&logs),
         current: read_tail(&logs.join("rlive.log")),
         previous: read_tail(&logs.join("rlive.previous.log")),
     })
