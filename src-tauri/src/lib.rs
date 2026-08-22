@@ -52,6 +52,7 @@ use commands::danmaku_send_history::{
     danmaku_send_history_clear, danmaku_send_history_clear_all, danmaku_send_history_list,
     danmaku_send_history_list_all,
 };
+use commands::diagnostics::{app_log_clear, app_log_snapshot};
 use commands::follow::{
     follow_add, follow_list, follow_refresh, follow_refresh_auto_record, follow_remove,
     follow_set_auto_record, follow_set_tags, tag_list, tag_remove, tag_upsert,
@@ -332,6 +333,8 @@ pub fn run() {
             recording_active_count,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             app_confirm_exit,
+            app_log_snapshot,
+            app_log_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -2068,6 +2068,9 @@ async fn connect_and_read(
     Ok(DisconnectReason::Dropped {
         messages: msg_count,
         connected_for: connected_at.elapsed(),
+        // This loop breaks without keeping the transport cause; the policy
+        // falls back to its stable summary.
+        detail: None,
     })
 }
 
