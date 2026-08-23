@@ -1854,6 +1854,12 @@ export function PlayerPane({
                     roomTitle={roomTitle}
                     roomUserName={roomUserName}
                     overlay
+                    // The composer lives inside the player chrome, so its quick
+                    // picker must portal into the stage rather than <body>:
+                    // fullscreen puts the stage in the top layer (or on a fixed
+                    // z-index layer in the Tauri clients), and a body-level
+                    // popup renders underneath it.
+                    portalContainer={player.stageRef}
                     onOverlayInteractionChange={handleComposerOverlayInteractionChange}
                   />
                 ) : null
