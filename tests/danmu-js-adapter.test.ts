@@ -20,6 +20,7 @@ import {
   danmuMaxActiveComments,
   danmuMoveVPlayRate,
   danmuRenderLayer,
+  danmuReservesLeadingCountSpacer,
   enqueueDanmuJsPending,
   flushDanmuJsPending,
   isPinnedDanmakuEvent,
@@ -383,6 +384,21 @@ describe("danmu.js repeat aggregation", () => {
     updateDanmuAggregation(comment!, DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT + 10);
     expect(comment?.txt).toBe(`你好 ×${DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT}+`);
     expect(comment?.__rliveMeta.aggregationCount).toBe(DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT + 10);
+  });
+
+  test("balances the counter slot only on the centered fixed bullets", () => {
+    const key = "self 你好";
+
+    // A fixed bullet is centered on its full width, so the trailing counter slot
+    // must be mirrored by a leading spacer to keep the text on center.
+    expect(danmuReservesLeadingCountSpacer(chat({ is_self: true }), key)).toBe(true);
+    // Scrolling bullets are anchored on their left edge: a spacer would only
+    // indent them.
+    expect(danmuReservesLeadingCountSpacer(chat(), key)).toBe(false);
+    // No counter slot, nothing to balance.
+    expect(danmuReservesLeadingCountSpacer(chat({ is_self: true }), undefined)).toBe(false);
+    // SC is fixed too, but never carries an aggregation key.
+    expect(danmuReservesLeadingCountSpacer(chat({ kind: "super_chat" }), undefined)).toBe(false);
   });
 });
 
