@@ -42,6 +42,11 @@ export const DANMU_JS_MAX_SUPER_CHATS = 3;
 export const DANMU_JS_PENDING_MAX_AGE_MS = 5_000;
 export const DANMU_JS_DEFAULT_DURATION_MS = 15_000;
 export const DANMU_JS_DEFAULT_MOVE_V = 100;
+/**
+ * Reserved width for the repeat counter, wide enough for the longest suffix
+ * (` ×9999+`) so a count appearing or growing never reflows the text beside it.
+ */
+const DANMU_JS_COUNT_SLOT_WIDTH = "5.25ch";
 /** Bilibili live player's default `bold: true` mapped to CSS numeric weight. */
 export const DANMU_JS_FONT_WEIGHT = 700;
 export const DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
@@ -375,6 +380,22 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
   }
 }
 
+/**
+ * Whether a bullet needs a leading spacer matching its repeat-counter slot.
+ *
+ * danmu.js centers a fixed comment by offsetting the whole bullet by half its
+ * measured width (`left: 50%` + `margin-left: -width/2` in `Bullet.startMove`),
+ * so the reserved trailing counter slot would push the visible text left of
+ * center by half a slot. An equally wide leading spacer restores the balance.
+ * Scrolling bullets are anchored on their left edge, so they need none.
+ */
+export function danmuReservesLeadingCountSpacer(
+  event: DanmakuEvent,
+  aggregationKey: string | undefined,
+): boolean {
+  return Boolean(aggregationKey) && isPinnedDanmakuEvent(event);
+}
+
 /** Build a safe custom element for danmu.js' `bulletCreateEl` hook. */
 export function createDanmuBulletElement(
   comment: DanmuJsComment & { __rliveMeta?: DanmuJsBulletMeta },
@@ -407,13 +428,26 @@ export function createDanmuBulletElement(
   if (meta) meta.contentElement = content;
 
   if (meta?.aggregationKey) {
+    if (danmuReservesLeadingCountSpacer(meta.event, meta.aggregationKey)) {
+      const leadingSpacer = document.createElement("span");
+      leadingSpacer.className = "rlive-danmu-count-spacer";
+      leadingSpacer.dataset.rliveDanmakuCountSpacer = "";
+      leadingSpacer.setAttribute("aria-hidden", "true");
+      leadingSpacer.style.display = "inline-block";
+      leadingSpacer.style.width = DANMU_JS_COUNT_SLOT_WIDTH;
+      leadingSpacer.style.minWidth = DANMU_JS_COUNT_SLOT_WIDTH;
+      leadingSpacer.style.flex = `0 0 ${DANMU_JS_COUNT_SLOT_WIDTH}`;
+      leadingSpacer.style.pointerEvents = "none";
+      root.insertBefore(leadingSpacer, content);
+    }
+
     const countSlot = document.createElement("span");
     countSlot.className = "rlive-danmu-count-slot";
     countSlot.dataset.rliveDanmakuCountSlot = "";
     countSlot.style.display = "inline-block";
-    countSlot.style.width = "5.25ch";
-    countSlot.style.minWidth = "5.25ch";
-    countSlot.style.flex = "0 0 5.25ch";
+    countSlot.style.width = DANMU_JS_COUNT_SLOT_WIDTH;
+    countSlot.style.minWidth = DANMU_JS_COUNT_SLOT_WIDTH;
+    countSlot.style.flex = `0 0 ${DANMU_JS_COUNT_SLOT_WIDTH}`;
     countSlot.style.whiteSpace = "nowrap";
     countSlot.style.pointerEvents = "none";
 
