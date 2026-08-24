@@ -1,7 +1,5 @@
 import {
-  aggregatedDanmakuText,
   createShieldMatcher,
-  danmakuContentAggregationKey,
   floatingDanmakuText,
   isDanmakuEvent,
   shouldShowValidatedOnFloatingDanmaku,
@@ -26,11 +24,6 @@ export type RecordedDanmakuFilterOptions = {
   filterGifts: boolean;
   showSuperChat: boolean;
   shieldWords: readonly string[];
-};
-
-export type RecordedDanmakuFrameEntry = RecordedDanmakuEntry & {
-  baseText: string;
-  aggregationCount: number;
 };
 
 function isStoredBatch(value: unknown): value is StoredDanmakuBatch {
@@ -106,58 +99,4 @@ export function filterRecordedDanmakuEntries(
       (options.showSuperChat || entry.event.kind !== "super_chat") &&
       !isShielded(entry.event),
   );
-}
-
-/**
- * Build only the media-time window that can currently be visible. Duplicate
- * chat content is grouped without looking ahead, so seeking never reveals a
- * count from a future point in the recording.
- */
-export function recordedDanmakuFrame(
-  entries: readonly RecordedDanmakuEntry[],
-  currentMs: number,
-  lookbackMs: number,
-  mergeWindowSeconds: number,
-): RecordedDanmakuFrameEntry[] {
-  const current = Number.isFinite(currentMs) ? Math.max(0, currentMs) : 0;
-  const lookback = Number.isFinite(lookbackMs) ? Math.max(0, lookbackMs) : 0;
-  const first = firstRecordedDanmakuAtOrAfter(entries, current - lookback);
-  // Sidecar offsets are integer milliseconds. This upper bound includes the
-  // exact current millisecond while excluding every future entry.
-  const last = firstRecordedDanmakuAtOrAfter(entries, Math.floor(current) + 1);
-  const mergeWindowMs = Number.isFinite(mergeWindowSeconds)
-    ? Math.max(0, Math.round(mergeWindowSeconds * 1_000))
-    : 0;
-  const frame: RecordedDanmakuFrameEntry[] = [];
-  const groups = new Map<string, { index: number; lastOffsetMs: number }>();
-
-  for (let index = first; index < last; index += 1) {
-    const entry = entries[index]!;
-    const aggregationKey = mergeWindowMs > 0 ? danmakuContentAggregationKey(entry.event) : null;
-    const existingGroup = aggregationKey ? groups.get(aggregationKey) : undefined;
-
-    if (
-      existingGroup &&
-      entry.offsetMs >= existingGroup.lastOffsetMs &&
-      entry.offsetMs - existingGroup.lastOffsetMs <= mergeWindowMs
-    ) {
-      const existing = frame[existingGroup.index]!;
-      const aggregationCount = existing.aggregationCount + 1;
-      frame[existingGroup.index] = {
-        ...existing,
-        text: aggregatedDanmakuText(existing.baseText, aggregationCount),
-        aggregationCount,
-      };
-      existingGroup.lastOffsetMs = entry.offsetMs;
-      continue;
-    }
-
-    const frameIndex = frame.length;
-    frame.push({ ...entry, baseText: entry.text, aggregationCount: 1 });
-    if (aggregationKey) {
-      groups.set(aggregationKey, { index: frameIndex, lastOffsetMs: entry.offsetMs });
-    }
-  }
-
-  return frame;
 }
