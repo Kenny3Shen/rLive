@@ -211,6 +211,7 @@ jobs:
             patchelf \
             rpm \
             cpio \
+            libarchive-tools \
             xvfb
 
       - name: Install frontend dependencies
@@ -326,53 +327,62 @@ jobs:
           test "${#rpm_files[@]}" -eq 1
           rpm_dir="$RUNNER_TEMP/rlive-rpm-contents"
           mkdir -p "$rpm_dir"
-          # `rpm2archive` goes through libarchive and reports what it rejects,
-          # so it is tried first and `rpm2cpio` is kept only as a fallback.
-          # `-n` keeps the tar uncompressed and on stdout. Its entries carry a
-          # `./` prefix, which `tar -x` strips, so the extracted layout is the
-          # same `usr/...` tree the assertions below expect.
+          # `rpm2archive` is tried first: it is the maintained tool, and `-n`
+          # keeps the tar uncompressed on stdout. Its entries carry a `./`
+          # prefix, which `tar -x` strips, so the layout matches the `usr/...`
+          # tree the assertions below expect.
           #
-          # Both paths capture stderr and the exit status. In the previous run
-          # `rpm2cpio` failed while `rpm --version` and `%{PAYLOADCOMPRESSOR}`
-          # both reported a healthy gzip package, and because its diagnostics
-          # went to a discarded stream there was nothing left to explain why.
+          # `bsdtar` is the fallback rather than `rpm2cpio` because it is the
+          # only genuinely independent path. Both rpm tools go through librpm,
+          # which verifies the payload digest before handing anything over, so a
+          # librpm-side rejection fails identically in both. libarchive has its
+          # own rpm filter that skips the header and decompresses the payload
+          # directly, so it still extracts when librpm refuses.
+          #
+          # An empty payload counts as a failure: `rpm2cpio` reports the number
+          # of bytes it copied and treats zero as an error without writing
+          # anything to stderr, which is exactly what the previous run showed —
+          # a non-zero exit, no diagnostics, and a package whose header `rpm -qp`
+          # could still read. `rpm -Kv` below names each digest check instead of
+          # leaving that to inference.
           rpm_payload="$RUNNER_TEMP/rlive-rpm-payload.tar"
           rpm_extract_log="$RUNNER_TEMP/rlive-rpm-extract.log"
+
+          echo "rpm 载荷与摘要校验:"
+          rpm -Kv "${rpm_files[0]}" || true
+
           extracted_with=""
           set +e
           rpm2archive -n - < "${rpm_files[0]}" > "$rpm_payload" 2> "$rpm_extract_log"
           rpm2archive_status=$?
           set -e
-          if [[ "$rpm2archive_status" -eq 0 ]]; then
-            extracted_with="tar"
+          if [[ "$rpm2archive_status" -eq 0 && -s "$rpm_payload" ]]; then
+            extracted_with="rpm2archive"
+            tar -xf "$rpm_payload" -C "$rpm_dir"
           else
-            echo "rpm2archive 解包失败 (退出码 $rpm2archive_status)，回退到 rpm2cpio" >&2
+            echo "rpm2archive 未产出可用载荷 (退出码 $rpm2archive_status)，改用 bsdtar" >&2
             sed 's/^/  rpm2archive: /' "$rpm_extract_log" >&2 || true
             set +e
-            rpm2cpio "${rpm_files[0]}" > "$rpm_payload" 2> "$rpm_extract_log"
-            rpm2cpio_status=$?
+            bsdtar -xf "${rpm_files[0]}" -C "$rpm_dir" 2> "$rpm_extract_log"
+            bsdtar_status=$?
             set -e
-            if [[ "$rpm2cpio_status" -ne 0 ]]; then
-              echo "::error::无法解出 ${rpm_files[0]} 的载荷 (rpm2cpio 退出码 $rpm2cpio_status)" >&2
-              sed 's/^/  rpm2cpio: /' "$rpm_extract_log" >&2 || true
+            if [[ "$bsdtar_status" -ne 0 ]]; then
+              echo "::error::无法解出 ${rpm_files[0]} 的载荷 (bsdtar 退出码 $bsdtar_status)" >&2
+              sed 's/^/  bsdtar: /' "$rpm_extract_log" >&2 || true
               rpm --version >&2
               rpm -qp --qf 'PAYLOADCOMPRESSOR=%{PAYLOADCOMPRESSOR}\nPAYLOADFORMAT=%{PAYLOADFORMAT}\nARCHIVESIZE=%{ARCHIVESIZE}\n' \
                 "${rpm_files[0]}" >&2 || true
               ls -l "${rpm_files[0]}" >&2
+              df -h "$RUNNER_TEMP" >&2 || true
               # Keep the package itself for offline analysis: this failure has
               # already survived two rounds of reasoning from logs alone.
               mkdir -p "$PWD/rpm-failure"
               cp "${rpm_files[0]}" "$PWD/rpm-failure/" || true
               exit 1
             fi
-            extracted_with="cpio"
+            extracted_with="bsdtar"
           fi
-          echo "rpm 载荷已由 $extracted_with 格式解出"
-          if [[ "$extracted_with" == "tar" ]]; then
-            tar -xf "$rpm_payload" -C "$rpm_dir"
-          else
-            (cd "$rpm_dir" && cpio -idmu < "$rpm_payload")
-          fi
+          echo "rpm 载荷已由 $extracted_with 解出"
           verify_runtime "$rpm_dir/usr/bin/rlive" "$rpm_dir/usr/lib/rLive" '$ORIGIN/../lib/rLive'
           smoke_start "$rpm_dir/usr/bin/rlive" "$RUNNER_TEMP/rlive-rpm-smoke"
 
