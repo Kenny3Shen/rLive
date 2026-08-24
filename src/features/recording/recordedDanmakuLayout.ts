@@ -22,8 +22,12 @@ export type RecordedDanmakuLayoutOptions = {
   padding: number;
   /** Minimum horizontal distance kept between neighbours on one lane. */
   laneGap: number;
-  /** Rendered width of a bullet, stroke expansion included. */
-  measure: (text: string) => number;
+  /**
+   * Rendered width of a bullet, stroke expansion included. `entry` and `count`
+   * are passed alongside the aggregated text because a bullet carrying image
+   * emotes is not measurable from its text alone.
+   */
+  measure: (text: string, entry: RecordedDanmakuEntry, count: number) => number;
   /** Lifetime of a bullet with the given rendered width. */
   lifetimeFor: (width: number) => number;
   /** Reduced motion pins bullets in place, so a lane is exclusive end to end. */
@@ -60,6 +64,8 @@ export type RecordedDanmakuLayout = {
 export type RecordedDanmakuBullet = {
   placement: RecordedDanmakuPlacement;
   text: string;
+  /** Messages folded into this bullet that already happened, at least 1. */
+  count: number;
   /** Fraction of the lifetime already elapsed, 0 ..= 1. */
   progress: number;
   ageMs: number;
@@ -149,9 +155,10 @@ export function layoutRecordedDanmaku(
   for (const group of groups) {
     // Reserve room for the largest count this group can reach so a growing
     // counter never widens a bullet past the gap its lane was granted.
+    const maxCount = group.memberOffsets.length;
     const width = Math.max(
       1,
-      options.measure(aggregatedDanmakuText(group.baseText, group.memberOffsets.length)),
+      options.measure(aggregatedDanmakuText(group.baseText, maxCount), group.entry, maxCount),
     );
     const lifetimeMs = Math.max(1, options.lifetimeFor(width));
     const travel = stageWidth + width + padding * 2;
@@ -238,14 +245,16 @@ export function visibleRecordedDanmaku(
     const placement = placements[index]!;
     const ageMs = current - placement.startMs;
     if (ageMs < 0 || ageMs >= placement.lifetimeMs) continue;
-    let count = 0;
+    let happened = 0;
     for (const offsetMs of placement.memberOffsets) {
       if (offsetMs > current) break;
-      count += 1;
+      happened += 1;
     }
+    const count = Math.max(1, happened);
     bullets.push({
       placement,
-      text: aggregatedDanmakuText(placement.baseText, Math.max(1, count)),
+      text: aggregatedDanmakuText(placement.baseText, count),
+      count,
       progress: Math.min(1, ageMs / placement.lifetimeMs),
       ageMs,
     });
