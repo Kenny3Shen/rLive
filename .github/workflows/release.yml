@@ -269,9 +269,25 @@ jobs:
               readelf -d "$binary" >&2
               exit 1
             fi
-            if ! readelf -d "$binary" | grep -Fq "$expected_rpath"; then
-              echo "::error::$binary 的 RUNPATH 缺少 $expected_rpath" >&2
+            # `expected_rpath` is a space-separated list of acceptable values, so
+            # AppImage can be checked too: linuxdeploy gathers the libraries it
+            # bundles into `usr/lib` and rewrites RUNPATH to its own layout,
+            # dropping the `$ORIGIN/../lib/rLive` that build.rs links in. The
+            # binding check that actually matters is the `ldd` pass below; this
+            # one only rejects a binary whose search path lost `$ORIGIN`
+            # entirely.
+            local rpath_matched=""
+            local candidate
+            for candidate in $expected_rpath; do
+              if readelf -d "$binary" | grep -Fq "$candidate"; then
+                rpath_matched="$candidate"
+                break
+              fi
+            done
+            if [[ -z "$rpath_matched" ]]; then
+              echo "::error::$binary 的 RUNPATH 不含以下任一候选: $expected_rpath" >&2
               readelf -d "$binary" >&2
+              find "$runtime_dir" -maxdepth 1 -name '*.so*' -printf '  %f\n' >&2 || true
               exit 1
             fi
             if readelf -d "$binary" | grep -Fq 'sherpa-onnx-prebuilt'; then
@@ -392,7 +408,19 @@ jobs:
           appimage_dir="$RUNNER_TEMP/rlive-appimage-contents"
           mkdir -p "$appimage_dir"
           (cd "$appimage_dir" && "$appimage_file" --appimage-extract >/dev/null)
-          verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib/rLive" '$ORIGIN/../lib/rLive'
+          # linuxdeploy rewrites RUNPATH to the layout it deploys, so accept its
+          # `$ORIGIN/../lib` alongside the value build.rs links in. Record where
+          # the Sherpa runtime actually landed before asserting: a RUNPATH of
+          # `$ORIGIN/../lib` only resolves if linuxdeploy also copied the
+          # libraries out of `usr/lib/rLive`, and locally an ELF with that
+          # RUNPATH and the libraries left in `rLive/` fails `ldd` with
+          # `not found`. The `ldd` check inside verify_runtime is what decides;
+          # this listing is here so a failure names the layout instead of
+          # requiring another round of inference.
+          echo "AppImage 运行库布局:"
+          find "$appimage_dir/squashfs-root/usr/lib" -maxdepth 2 \
+            \( -name 'libsherpa*' -o -name 'libonnxruntime*' \) -printf '  %P\n' | sort
+          verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib/rLive" '$ORIGIN/../lib/rLive $ORIGIN/../lib'
           set +e
           APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a env \
             XDG_DATA_HOME="$RUNNER_TEMP/rlive-appimage-smoke/data" \
