@@ -38,8 +38,14 @@ import {
   filterRecordedDanmakuEntries,
   firstRecordedDanmakuAtOrAfter,
   parseRecordedDanmakuSidecar,
-  recordedDanmakuFrame,
+  type RecordedDanmakuEntry,
 } from "../src/features/recording/recordedDanmaku";
+import {
+  layoutRecordedDanmaku,
+  RECORDED_DANMAKU_MAX_DELAY_MS,
+  visibleRecordedDanmaku,
+  type RecordedDanmakuLayoutOptions,
+} from "../src/features/recording/recordedDanmakuLayout";
 
 const liveContext: RecordingContext = {
   source: {
@@ -83,6 +89,51 @@ function recordingItem(overrides: Partial<RecordingItem> = {}): RecordingItem {
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+const LAYOUT_STAGE_WIDTH = 960;
+const LAYOUT_PADDING = 20;
+const LAYOUT_FONT_SIZE = 24;
+const LAYOUT_SPEED_PX_PER_S = 160;
+
+/** Stand-in for canvas metrics: a fixed advance per code point. */
+function measureText(text: string): number {
+  return [...text].length * LAYOUT_FONT_SIZE;
+}
+
+function layoutOptions(
+  overrides: Partial<RecordedDanmakuLayoutOptions> = {},
+): RecordedDanmakuLayoutOptions {
+  return {
+    laneCount: 4,
+    stageWidth: LAYOUT_STAGE_WIDTH,
+    padding: LAYOUT_PADDING,
+    laneGap: LAYOUT_FONT_SIZE * 0.6,
+    measure: measureText,
+    lifetimeFor: (width) =>
+      ((LAYOUT_STAGE_WIDTH + width + LAYOUT_PADDING * 2) / LAYOUT_SPEED_PX_PER_S) * 1_000,
+    staticLayout: false,
+    mergeWindowMs: 0,
+    maxGroupSpanMs: 30_000,
+    ...overrides,
+  };
+}
+
+function chatEntries(
+  count: number,
+  step: number,
+  content: (index: number) => string,
+): RecordedDanmakuEntry[] {
+  return parseRecordedDanmakuSidecar(
+    Array.from({ length: count }, (_, index) =>
+      JSON.stringify({
+        offset_ms: index * step,
+        events: [
+          { kind: "chat", user: `用户${index}`, content: content(index), color: null, ts: index },
+        ],
+      }),
+    ).join("\n"),
+  );
 }
 
 describe("recording change subscription", () => {
@@ -417,16 +468,119 @@ describe("recording presentation helpers", () => {
         .map((batch) => JSON.stringify(batch))
         .join("\n"),
     );
+    const layout = layoutRecordedDanmaku(entries, layoutOptions({ mergeWindowMs: 10_000 }));
 
-    const beforeFuture = recordedDanmakuFrame(entries, 2500, 5000, 10);
+    expect(layout.placements).toHaveLength(1);
+    // One lane holds the whole group, and the reserved width already covers the
+    // widest text it will ever paint.
+    expect(layout.placements[0]?.memberOffsets).toEqual([1000, 2000, 4000]);
+    expect(layout.placements[0]?.width).toBe(measureText("加油 ×3"));
+
+    const beforeFuture = visibleRecordedDanmaku(layout, 2500);
     expect(beforeFuture).toHaveLength(1);
     expect(beforeFuture[0]?.text).toBe("加油 ×2");
-    expect(beforeFuture[0]?.aggregationCount).toBe(2);
 
-    const afterFuture = recordedDanmakuFrame(entries, 4000, 5000, 10);
+    const afterFuture = visibleRecordedDanmaku(layout, 4000);
     expect(afterFuture).toHaveLength(1);
     expect(afterFuture[0]?.text).toBe("加油 ×3");
-    expect(afterFuture[0]?.aggregationCount).toBe(3);
+  });
+});
+
+describe("recorded danmaku lane layout", () => {
+  test("dense traffic never overlaps on a lane", () => {
+    // 120 messages 150 ms apart against four lanes: far more traffic than the
+    // stage can carry, which is exactly the case that used to stack text.
+    const entries = chatEntries(120, 150, (index) => `密集弹幕内容${index}`);
+    const layout = layoutRecordedDanmaku(entries, layoutOptions());
+
+    expect(layout.placements.length).toBeGreaterThan(0);
+    expect(layout.placements.length).toBeLessThan(entries.length);
+
+    for (let currentMs = 0; currentMs <= 20_000; currentMs += 50) {
+      const perLane = new Map<number, { left: number; right: number }[]>();
+      for (const bullet of visibleRecordedDanmaku(layout, currentMs)) {
+        const { placement } = bullet;
+        // Same geometry the canvas painter uses.
+        const left =
+          LAYOUT_STAGE_WIDTH +
+          LAYOUT_PADDING -
+          (LAYOUT_STAGE_WIDTH + placement.width + LAYOUT_PADDING * 2) * bullet.progress;
+        const box = { left, right: left + placement.width };
+        const lane = perLane.get(placement.lane);
+        if (lane) lane.push(box);
+        else perLane.set(placement.lane, [box]);
+      }
+      for (const [lane, boxes] of perLane) {
+        boxes.sort((left, right) => left.left - right.left);
+        for (let index = 1; index < boxes.length; index += 1) {
+          const previous = boxes[index - 1]!;
+          const current = boxes[index]!;
+          // Rounding in the progress term can cost a fraction of a pixel; a
+          // visible overlap is orders of magnitude larger than that.
+          expect(current.left - previous.right).toBeGreaterThan(-0.5);
+        }
+      }
+    }
+  });
+
+  test("keeps every message when traffic fits the lanes", () => {
+    const entries = chatEntries(8, 3_000, (index) => `稀疏${index}`);
+    const layout = layoutRecordedDanmaku(entries, layoutOptions());
+
+    expect(layout.placements).toHaveLength(entries.length);
+    // Nothing had to be delayed, so each bullet still starts at its own offset.
+    expect(layout.placements.map((placement) => placement.startMs)).toEqual(
+      entries.map((entry) => entry.offsetMs),
+    );
+  });
+
+  test("bounds the delay fallback instead of shifting a bullet far from its moment", () => {
+    const entries = chatEntries(60, 20, (index) => `突发${index}`);
+    const layout = layoutRecordedDanmaku(entries, layoutOptions({ laneCount: 2 }));
+
+    for (const placement of layout.placements) {
+      expect(placement.startMs - placement.entry.offsetMs).toBeLessThanOrEqual(
+        RECORDED_DANMAKU_MAX_DELAY_MS,
+      );
+      expect(placement.startMs).toBeGreaterThanOrEqual(placement.entry.offsetMs);
+    }
+  });
+
+  test("gives a pinned bullet its lane for the whole lifetime under reduced motion", () => {
+    const entries = chatEntries(6, 500, (index) => `静态${index}`);
+    const layout = layoutRecordedDanmaku(
+      entries,
+      layoutOptions({ laneCount: 2, staticLayout: true, lifetimeFor: () => 4_000 }),
+    );
+
+    const perLane = new Map<number, { startMs: number; endMs: number }[]>();
+    for (const placement of layout.placements) {
+      const lane = perLane.get(placement.lane);
+      const span = { startMs: placement.startMs, endMs: placement.endMs };
+      if (lane) lane.push(span);
+      else perLane.set(placement.lane, [span]);
+    }
+    for (const spans of perLane.values()) {
+      spans.sort((left, right) => left.startMs - right.startMs);
+      for (let index = 1; index < spans.length; index += 1) {
+        expect(spans[index]!.startMs).toBeGreaterThanOrEqual(spans[index - 1]!.endMs);
+      }
+    }
+  });
+
+  test("splits a merge group that would outlive its anchor", () => {
+    const entries = chatEntries(4, 4_000, () => "重复弹幕");
+    const layout = layoutRecordedDanmaku(
+      entries,
+      layoutOptions({ mergeWindowMs: 10_000, maxGroupSpanMs: 5_000 }),
+    );
+
+    // The anchor may only absorb duplicates that arrive while it is still on
+    // screen; later ones become their own bullets instead of vanishing.
+    expect(layout.placements.length).toBeGreaterThan(1);
+    expect(
+      layout.placements.flatMap((placement) => placement.memberOffsets).sort((a, b) => a - b),
+    ).toEqual(entries.map((entry) => entry.offsetMs));
   });
 });
 

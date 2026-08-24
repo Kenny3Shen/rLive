@@ -7,19 +7,22 @@ import {
   danmuLaneHeight,
   safeDanmuColor,
 } from "@/features/room/danmaku/danmuJsAdapter";
+import { prefersReducedMotion } from "@/shared/motion/preference";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
+import { filterRecordedDanmakuEntries, type RecordedDanmakuEntry } from "./recordedDanmaku";
 import {
-  filterRecordedDanmakuEntries,
-  recordedDanmakuFrame,
-  type RecordedDanmakuEntry,
-} from "./recordedDanmaku";
+  layoutRecordedDanmaku,
+  visibleRecordedDanmaku,
+  type RecordedDanmakuLayout,
+} from "./recordedDanmakuLayout";
 
 const REDUCED_MOTION_LIFETIME_MS = 4_000;
 const MIN_DANMAKU_LIFETIME_MS = 3_500;
 const MAX_DANMAKU_LIFETIME_MS = 30_000;
-const MAX_TEXT_TRAVEL_WIDTH_PX = 1_200;
 const HORIZONTAL_PADDING = 20;
 const FADE_OUT_MS = 500;
+/** Horizontal breathing room between neighbours on one lane, as a font ratio. */
+const LANE_GAP_RATIO = 0.6;
 const FONT_FAMILY = '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 
 type RecordedDanmakuCanvasProps = {
@@ -66,8 +69,17 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     let animationFrame = 0;
     let cssWidth = 0;
     let cssHeight = 0;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let layout: RecordedDanmakuLayout | null = null;
+    const reducedMotion = prefersReducedMotion();
     const lineHeight = danmuLaneHeight(fontSize);
+
+    /** Measuring and painting must share one font, or widths drift apart. */
+    function applyTextStyle(context: CanvasRenderingContext2D) {
+      context.font = `700 ${fontSize}px ${FONT_FAMILY}`;
+      context.textBaseline = "middle";
+      context.lineJoin = "round";
+      if (fontStroke > 0) context.lineWidth = fontStroke * 2;
+    }
 
     function scrollingLifetime(textWidth: number): number {
       const travelDistance = cssWidth + textWidth + HORIZONTAL_PADDING * 2;
@@ -77,70 +89,80 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       );
     }
 
-    function frameLookback(): number {
-      if (reducedMotion) return REDUCED_MOTION_LIFETIME_MS;
-      return scrollingLifetime(Math.min(MAX_TEXT_TRAVEL_WIDTH_PX, cssWidth * 1.5));
+    /**
+     * Lane assignment depends on measured widths and the stage size, so it is
+     * rebuilt whenever those change and reused by every frame in between.
+     */
+    function buildLayout() {
+      const context = canvas.getContext("2d");
+      if (!context || visibleEntries.length === 0 || cssWidth <= 1 || cssHeight <= 1) {
+        layout = null;
+        return;
+      }
+      applyTextStyle(context);
+      const usableHeight = Math.max(lineHeight, cssHeight * area);
+      const laneCount = Math.max(1, Math.floor((usableHeight - HORIZONTAL_PADDING) / lineHeight));
+      // A stroke widens the painted glyphs on both sides, so charge it to the
+      // reserved width; otherwise neighbours look glued together at the gap.
+      const strokePadding = fontStroke > 0 ? fontStroke * 2 : 0;
+      const maxLifetime = reducedMotion
+        ? REDUCED_MOTION_LIFETIME_MS
+        : scrollingLifetime(cssWidth + fontSize * 8);
+      layout = layoutRecordedDanmaku(visibleEntries, {
+        laneCount,
+        stageWidth: cssWidth,
+        padding: HORIZONTAL_PADDING,
+        laneGap: fontSize * LANE_GAP_RATIO,
+        measure: (text) => context.measureText(text).width + strokePadding,
+        lifetimeFor: (width) =>
+          reducedMotion ? REDUCED_MOTION_LIFETIME_MS : scrollingLifetime(width),
+        staticLayout: reducedMotion,
+        mergeWindowMs: Math.max(0, Math.round(mergeWindowSeconds * 1_000)),
+        maxGroupSpanMs: maxLifetime,
+      });
     }
 
     function draw() {
       const context = canvas.getContext("2d");
       if (!context) return;
       context.clearRect(0, 0, cssWidth, cssHeight);
-      if (
-        !active ||
-        visibleEntries.length === 0 ||
-        opacity <= 0 ||
-        cssWidth <= 1 ||
-        cssHeight <= 1
-      ) {
-        return;
-      }
+      if (!active || !layout || opacity <= 0) return;
 
       const currentMs = Math.max(0, video.currentTime * 1_000);
-      const frame = recordedDanmakuFrame(
-        visibleEntries,
-        currentMs,
-        frameLookback(),
-        mergeWindowSeconds,
-      );
-      const usableHeight = Math.max(lineHeight, cssHeight * area);
-      const tracks = Math.max(1, Math.floor((usableHeight - HORIZONTAL_PADDING) / lineHeight));
-      context.font = `700 ${fontSize}px ${FONT_FAMILY}`;
-      context.textBaseline = "middle";
-      context.lineJoin = "round";
-      if (fontStroke > 0) context.lineWidth = fontStroke * 2;
+      applyTextStyle(context);
 
-      for (const entry of frame) {
-        const age = currentMs - entry.offsetMs;
-        const width = context.measureText(entry.text).width;
-        const lifetime = reducedMotion ? REDUCED_MOTION_LIFETIME_MS : scrollingLifetime(width);
-        if (age < 0 || age > lifetime) continue;
-
-        const progress = Math.min(1, age / lifetime);
+      for (const bullet of visibleRecordedDanmaku(layout, currentMs)) {
+        const { placement } = bullet;
+        const width = placement.width;
         const x = reducedMotion
           ? Math.max(HORIZONTAL_PADDING, cssWidth - width - HORIZONTAL_PADDING)
-          : cssWidth + HORIZONTAL_PADDING - (cssWidth + width + HORIZONTAL_PADDING * 2) * progress;
-        const lane = entry.sequence % tracks;
-        const y = HORIZONTAL_PADDING + fontSize / 2 + lane * lineHeight;
-        const fade = Math.min(1, Math.max(0, (lifetime - age) / FADE_OUT_MS));
+          : cssWidth +
+            HORIZONTAL_PADDING -
+            (cssWidth + width + HORIZONTAL_PADDING * 2) * bullet.progress;
+        const y = HORIZONTAL_PADDING + fontSize / 2 + placement.lane * lineHeight;
+        const remaining = placement.lifetimeMs - bullet.ageMs;
+        const fade = Math.min(1, Math.max(0, remaining / FADE_OUT_MS));
         context.globalAlpha = opacity * fade;
         if (fontStroke > 0) {
           context.strokeStyle = "rgba(0, 0, 0, 0.92)";
-          context.strokeText(entry.text, x, y);
+          context.strokeText(bullet.text, x, y);
         }
         context.fillStyle = safeDanmuColor(
-          entry.event.color,
-          entry.event.kind === "super_chat" ? "#ffd76a" : "#ffffff",
+          placement.entry.event.color,
+          placement.entry.event.kind === "super_chat" ? "#ffd76a" : "#ffffff",
         );
-        context.fillText(entry.text, x, y);
+        context.fillText(bullet.text, x, y);
       }
       context.globalAlpha = 1;
     }
 
     function resize() {
       const rectangle = stage.getBoundingClientRect();
-      cssWidth = Math.max(1, rectangle.width);
-      cssHeight = Math.max(1, rectangle.height);
+      const nextWidth = Math.max(1, rectangle.width);
+      const nextHeight = Math.max(1, rectangle.height);
+      const changed = nextWidth !== cssWidth || nextHeight !== cssHeight;
+      cssWidth = nextWidth;
+      cssHeight = nextHeight;
       const pixelRatio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
       canvas.width = Math.max(1, Math.round(cssWidth * pixelRatio));
       canvas.height = Math.max(1, Math.round(cssHeight * pixelRatio));
@@ -148,6 +170,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       canvas.style.height = `${cssHeight}px`;
       const context = canvas.getContext("2d");
       context?.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      if (changed || !layout) buildLayout();
       draw();
     }
 
