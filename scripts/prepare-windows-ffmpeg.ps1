@@ -93,6 +93,45 @@ function Find-LibClangDirectory {
     throw "clang.exe and libclang.dll not found. Install LLVM/Clang or set LIBCLANG_PATH to its bin directory."
 }
 
+function Find-ArchiveExtractor {
+    # The pinned SDK ships as a 7-Zip archive, so the extractor must handle
+    # LZMA. bsdtar (`tar.exe` on Windows) is built without the LZMA codec on
+    # GitHub's windows runners and fails with "LZMA codec is unsupported", so
+    # prefer a real 7-Zip and keep tar only as a fallback for hosts that ship a
+    # libarchive with LZMA support.
+    $sevenZipCandidates = [Collections.Generic.List[string]]::new()
+    foreach ($name in @("7z", "7za")) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command) {
+            $sevenZipCandidates.Add($command.Source)
+        }
+    }
+    foreach ($programFiles in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($programFiles) {
+            $sevenZipCandidates.Add((Join-Path $programFiles "7-Zip\7z.exe"))
+        }
+    }
+
+    foreach ($candidate in $sevenZipCandidates) {
+        if (Test-Path $candidate) {
+            return @{
+                Kind = "7z"
+                Path = [IO.Path]::GetFullPath($candidate)
+            }
+        }
+    }
+
+    $tar = Get-Command tar -ErrorAction SilentlyContinue
+    if ($tar) {
+        return @{
+            Kind = "tar"
+            Path = $tar.Source
+        }
+    }
+
+    throw "No archive extractor found. Install 7-Zip (or a tar with LZMA support), or set FFMPEG_DIR."
+}
+
 function Assert-FfmpegSdk([string]$SdkRoot) {
     $requiredFiles = @(
         "include\libavutil\avutil.h",
@@ -172,18 +211,19 @@ function Get-ManagedFfmpegSdk {
         }
     }
 
-    $tar = Get-Command tar -ErrorAction SilentlyContinue
-    if (-not $tar) {
-        throw "tar.exe not found. Install a current Windows tar implementation or set FFMPEG_DIR."
-    }
+    $extractor = Find-ArchiveExtractor
+    Write-Host "Extracting the FFmpeg SDK with $($extractor.Path)"
 
     $extractDirectory = Join-Path $cacheDirectory "ffmpeg-extract-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $extractDirectory | Out-Null
     try {
-        Invoke-NativeCommand $tar.Source @(
-            "-xf", $archivePath,
-            "-C", $extractDirectory
-        ) "Could not extract the FFmpeg SDK"
+        # `-bso0` silences 7-Zip's file listing while keeping errors on stderr.
+        $extractArguments = if ($extractor.Kind -eq "7z") {
+            @("x", $archivePath, "-o$extractDirectory", "-y", "-bso0")
+        } else {
+            @("-xf", $archivePath, "-C", $extractDirectory)
+        }
+        Invoke-NativeCommand $extractor.Path $extractArguments "Could not extract the FFmpeg SDK"
 
         $extractedRoots = @(
             Get-ChildItem $extractDirectory -Directory |
