@@ -223,7 +223,21 @@ jobs:
           set -euo pipefail
           # Every check below is a bare `test`/`diff` under `set -e`, so a failure
           # otherwise aborts the step with no indication of which one tripped.
-          trap 'echo "::error::Linux 包校验失败于第 ${LINENO} 行" >&2' ERR
+          error_trap='echo "::error::Linux 包校验失败于第 ${LINENO} 行" >&2'
+          trap "$error_trap" ERR
+
+          # `set +e` stops a non-zero status from aborting the step but does NOT
+          # stop the ERR trap from firing, so the deliberately-non-zero commands
+          # below (`timeout` returning 124 on a healthy smoke start, the rpm
+          # extraction probes) each logged a bogus "校验失败" line — run
+          # 32785100701 reported line 203 while every step succeeded. Clear and
+          # restore the trap around those regions with an inline `trap - ERR`.
+          # It has to be inline rather than a `suspend_error_trap` helper: a
+          # `trap - ERR` executed inside a helper only applies to that helper's
+          # own scope, so the caller's trap is back in force as soon as it
+          # returns. Inline in the same scope works, including inside
+          # smoke_start.
+
           bun run bundle:linux
 
           release_dir="$PWD/src-tauri/target/release"
@@ -316,12 +330,14 @@ jobs:
             local state_dir="$2"
             echo "启动冒烟测试: $binary"
             set +e
+            trap - ERR
             xvfb-run -a env \
               XDG_DATA_HOME="$state_dir/data" \
               XDG_CONFIG_HOME="$state_dir/config" \
               XDG_CACHE_HOME="$state_dir/cache" \
               timeout --signal=TERM 8s "$binary"
             local status=$?
+            trap "$error_trap" ERR
             set -e
             if [[ "$status" -ne 124 ]]; then
               echo "::error::$binary 未存活满 8 秒即退出 (退出码 $status)" >&2
@@ -369,8 +385,10 @@ jobs:
 
           extracted_with=""
           set +e
+          trap - ERR
           rpm2archive -n - < "${rpm_files[0]}" > "$rpm_payload" 2> "$rpm_extract_log"
           rpm2archive_status=$?
+          trap "$error_trap" ERR
           set -e
           if [[ "$rpm2archive_status" -eq 0 && -s "$rpm_payload" ]]; then
             extracted_with="rpm2archive"
@@ -379,8 +397,10 @@ jobs:
             echo "rpm2archive 未产出可用载荷 (退出码 $rpm2archive_status)，改用 bsdtar" >&2
             sed 's/^/  rpm2archive: /' "$rpm_extract_log" >&2 || true
             set +e
+            trap - ERR
             bsdtar -xf "${rpm_files[0]}" -C "$rpm_dir" 2> "$rpm_extract_log"
             bsdtar_status=$?
+            trap "$error_trap" ERR
             set -e
             if [[ "$bsdtar_status" -ne 0 ]]; then
               echo "::error::无法解出 ${rpm_files[0]} 的载荷 (bsdtar 退出码 $bsdtar_status)" >&2
@@ -409,25 +429,27 @@ jobs:
           mkdir -p "$appimage_dir"
           (cd "$appimage_dir" && "$appimage_file" --appimage-extract >/dev/null)
           # linuxdeploy rewrites RUNPATH to the layout it deploys, so accept its
-          # `$ORIGIN/../lib` alongside the value build.rs links in. Record where
-          # the Sherpa runtime actually landed before asserting: a RUNPATH of
-          # `$ORIGIN/../lib` only resolves if linuxdeploy also copied the
-          # libraries out of `usr/lib/rLive`, and locally an ELF with that
-          # RUNPATH and the libraries left in `rLive/` fails `ldd` with
-          # `not found`. The `ldd` check inside verify_runtime is what decides;
-          # this listing is here so a failure names the layout instead of
-          # requiring another round of inference.
+          # `$ORIGIN/../lib` alongside the value build.rs links in. That value
+          # resolves because linuxdeploy copies the runtime it deploys up into
+          # `usr/lib` as well: run 32785100701 listed `libonnxruntime.so` and
+          # `libsherpa-onnx-c-api.so` at both `usr/lib` and `usr/lib/rLive`, and
+          # `ldd` passed. Keep the listing and the `ldd` check — if a future
+          # linuxdeploy stops copying them, the libraries stay in `rLive/` only,
+          # `$ORIGIN/../lib` no longer resolves, and the AppImage is genuinely
+          # broken rather than merely differently laid out.
           echo "AppImage 运行库布局:"
           find "$appimage_dir/squashfs-root/usr/lib" -maxdepth 2 \
             \( -name 'libsherpa*' -o -name 'libonnxruntime*' \) -printf '  %P\n' | sort
           verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib/rLive" '$ORIGIN/../lib/rLive $ORIGIN/../lib'
           set +e
+          trap - ERR
           APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a env \
             XDG_DATA_HOME="$RUNNER_TEMP/rlive-appimage-smoke/data" \
             XDG_CONFIG_HOME="$RUNNER_TEMP/rlive-appimage-smoke/config" \
             XDG_CACHE_HOME="$RUNNER_TEMP/rlive-appimage-smoke/cache" \
             timeout --signal=TERM 8s "$appimage_file"
           appimage_status=$?
+          trap "$error_trap" ERR
           set -e
           if [[ "$appimage_status" -ne 124 ]]; then
             echo "::error::AppImage 未存活满 8 秒即退出 (退出码 $appimage_status)" >&2
