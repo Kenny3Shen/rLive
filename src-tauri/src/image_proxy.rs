@@ -30,6 +30,7 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
     "douyu.com",
     "hdslb.com",
     "bilibili.com",
+    "biliimg.com",
     "huya.com",
     "msstatic.com",
     "douyin.com",
@@ -147,7 +148,10 @@ impl ImageProxy {
 fn referer_for(host: &str) -> Option<&'static str> {
     if host.ends_with("douyucdn.cn") || host.ends_with("douyu.com") {
         Some("https://www.douyu.com/")
-    } else if host.ends_with("hdslb.com") || host.ends_with("bilibili.com") {
+    } else if host.ends_with("hdslb.com")
+        || host.ends_with("bilibili.com")
+        || host.ends_with("biliimg.com")
+    {
         Some("https://live.bilibili.com/")
     } else if host.ends_with("huya.com") || host.ends_with("msstatic.com") {
         Some("https://www.huya.com/")
@@ -506,6 +510,8 @@ mod tests {
     fn allowed_host_matching_uses_suffixes() {
         assert!(host_is_allowed("rpic.douyucdn.cn", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("i0.hdslb.com", ALLOWED_IMAGE_HOSTS));
+        // Danmaku image emotes may be hosted here; keep it cacheable.
+        assert!(host_is_allowed("i0.biliimg.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("huyaimg.msstatic.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed(
             "p3-sign.douyinpic.com",
@@ -528,6 +534,10 @@ mod tests {
         );
         assert_eq!(
             referer_for("i0.hdslb.com"),
+            Some("https://live.bilibili.com/")
+        );
+        assert_eq!(
+            referer_for("i0.biliimg.com"),
             Some("https://live.bilibili.com/")
         );
         assert_eq!(referer_for("static-cdn.jtvnw.net"), None);

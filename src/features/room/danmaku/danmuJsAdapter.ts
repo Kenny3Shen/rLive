@@ -4,6 +4,7 @@ import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
   DANMAKU_IMAGE_FALLBACK_TEXT,
   DANMAKU_IMAGE_SCALE,
+  danmakuImageRequestUrl,
   floatingRichSpans,
   normalizeDanmakuImageUrl,
 } from "./content";
@@ -350,12 +351,15 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
       continue;
     }
     const image = document.createElement("img");
-    image.src = imageUrl;
     image.alt = "";
     image.draggable = false;
     image.loading = "eager";
     image.decoding = "async";
     image.referrerPolicy = BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY;
+    // Assigned after the policy, which only applies to a request that has not
+    // started yet, and which still matters when the proxy is not up and the
+    // direct CDN URL is used.
+    image.src = danmakuImageRequestUrl(imageUrl);
     image.className = "rlive-danmu-image";
     image.style.width = `${DANMAKU_IMAGE_SCALE}em`;
     image.style.height = `${DANMAKU_IMAGE_SCALE}em`;
@@ -364,8 +368,16 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
     image.style.flex = "0 0 auto";
     image.addEventListener(
       "error",
-      () => image.replaceWith(document.createTextNode(DANMAKU_IMAGE_FALLBACK_TEXT)),
-      { once: true },
+      () => {
+        // A proxy that is down must not cost the emote its picture: retry once
+        // against the CDN before falling back to the text marker.
+        if (image.src !== imageUrl) {
+          image.src = imageUrl;
+          return;
+        }
+        image.replaceWith(document.createTextNode(DANMAKU_IMAGE_FALLBACK_TEXT));
+      },
+      { once: false },
     );
     parent.appendChild(image);
   }

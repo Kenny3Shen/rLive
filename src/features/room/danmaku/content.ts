@@ -1,3 +1,4 @@
+import { proxyImageUrl } from "@/shared/api/imageProxy";
 import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 
 /** Simple Live renders protocol image emotes at 1.35× the chat font size. */
@@ -56,6 +57,21 @@ export function normalizeDanmakuImageUrl(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Request URL for one already normalized emote address.
+ *
+ * Emotes are the most repeated images in the app: a room draws from a few dozen
+ * distinct ones, each appearing thousands of times across a session and again in
+ * every recording of it. Routing them through the localhost image proxy puts
+ * them in the same disk cache as avatars and category icons, so a repeat costs a
+ * local read instead of a CDN round trip. Before the proxy has started the
+ * direct CDN URL is returned, which still loads (see
+ * `BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY`) but is not cached across restarts.
+ */
+export function danmakuImageRequestUrl(imageUrl: string): string {
+  return proxyImageUrl(imageUrl) ?? imageUrl;
 }
 
 export function isDanmakuContentSpan(value: unknown): value is DanmakuContentSpan {

@@ -2,6 +2,7 @@ import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
   DANMAKU_IMAGE_HORIZONTAL_GAP,
   DANMAKU_IMAGE_SCALE,
+  danmakuImageRequestUrl,
   floatingRichSpans,
   withDanmakuContentSuffix,
 } from "@/features/room/danmaku/content";
@@ -126,12 +127,23 @@ export function createRecordedDanmakuImageCache(onSettled: () => void): Recorded
       }
       entries.set(url, entry);
       image.addEventListener("load", () => settle(entry, "ready"), { once: true });
-      image.addEventListener("error", () => settle(entry, "failed"), { once: true });
+      image.addEventListener("error", () => {
+        // A proxy that is down must not cost the emote its picture: retry once
+        // against the CDN before the bullet falls back to its text marker.
+        if (image.src !== url) {
+          image.src = url;
+          return;
+        }
+        settle(entry, "failed");
+      });
       // Bilibili's CDN rejects the webview's `tauri://…` Referer, and the policy
       // only applies to a request that has not started yet.
       image.referrerPolicy = BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY;
       image.decoding = "async";
-      image.src = url;
+      // Prefer the localhost proxy so a repeat playback reads the emote from the
+      // disk cache instead of the CDN. The policy above still covers the direct
+      // fallback used before the proxy has started.
+      image.src = danmakuImageRequestUrl(url);
       return null;
     },
     hasFailed(url) {
