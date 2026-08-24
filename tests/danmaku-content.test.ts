@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
+  danmakuImageRequestUrl,
   floatingRichSpans,
   hasValidDanmakuContentSpans,
   normalizeDanmakuImageUrl,
   richDanmakuContent,
   withDanmakuContentSuffix,
 } from "../src/features/room/danmaku/content";
+import { buildProxyTarget, shouldProxyHost } from "../src/shared/api/imageProxy";
 import type { DanmakuEvent } from "../src/shared/types/live";
 
 const EMOTE_URL = "//i0.hdslb.com/bfs/emote/question.png";
@@ -131,5 +133,29 @@ describe("floating rich spans", () => {
       floatingRichSpans(spanEvent({ spans: [{ type: "text", text: "纯文本" }] })),
     ).toBeUndefined();
     expect(floatingRichSpans(spanEvent({ spans: null }))).toBeUndefined();
+  });
+});
+
+describe("danmaku emote request urls", () => {
+  test("falls back to the direct CDN url when the image proxy is not running", () => {
+    // Outside Tauri the proxy never resolves, so the emote must still load
+    // directly instead of losing its picture.
+    expect(danmakuImageRequestUrl(NORMALIZED_EMOTE_URL)).toBe(NORMALIZED_EMOTE_URL);
+  });
+
+  test("keeps the proxy target on the cached path so a repeat emote is a local read", () => {
+    const base = "http://127.0.0.1:51234";
+    expect(buildProxyTarget(base, NORMALIZED_EMOTE_URL)).toBe(
+      `${base}/img?url=${encodeURIComponent(NORMALIZED_EMOTE_URL)}`,
+    );
+    expect(buildProxyTarget(base, NORMALIZED_EMOTE_URL)).not.toContain("nocache=1");
+  });
+
+  test("proxies every host the span validator trusts", () => {
+    for (const host of ["i0.hdslb.com", "bilibili.com", "i0.biliimg.com"]) {
+      expect(shouldProxyHost(host)).toBe(true);
+    }
+    expect(shouldProxyHost("example.invalid")).toBe(false);
+    expect(shouldProxyHost("evil-hdslb.com")).toBe(false);
   });
 });

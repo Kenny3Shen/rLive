@@ -10,6 +10,7 @@ const PROXIED_HOST_SUFFIXES = [
   "douyu.com",
   "hdslb.com",
   "bilibili.com",
+  "biliimg.com",
   "huya.com",
   "msstatic.com",
   "douyin.com",
@@ -36,7 +37,11 @@ function getImageProxyBase(): Promise<string | null> {
   return proxyPromise;
 }
 
-function shouldProxyHost(hostname: string): boolean {
+/**
+ * Whether the backend proxy will fetch this host. Exported so a test can assert
+ * that every CDN the danmaku span validator trusts is also cacheable.
+ */
+export function shouldProxyHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   return PROXIED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
