@@ -1,9 +1,11 @@
-import type { DanmakuContentSpan } from "@/shared/types/live";
+import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 
 /** Simple Live renders protocol image emotes at 1.35× the chat font size. */
 export const DANMAKU_IMAGE_SCALE = 1.35;
 /** Total inline breathing room around one image emote, in CSS pixels. */
 export const DANMAKU_IMAGE_HORIZONTAL_GAP = 2;
+/** Shown in place of an emote whose URL is rejected or whose request fails. */
+export const DANMAKU_IMAGE_FALLBACK_TEXT = "[表情]";
 /**
  * Bilibili's CDN rejects the desktop webview's `tauri://…` Referer with 403.
  * Explicitly omitting it keeps DOM image requests compatible
@@ -91,6 +93,24 @@ export function richDanmakuContent(spans: unknown): readonly DanmakuContentSpan[
     if (imageUrl) normalized.push({ type: "image", image_url: imageUrl });
   }
   return normalized.some((span) => span.type === "image") ? normalized : null;
+}
+
+/**
+ * Rich fragments for a floating bullet, with the `【SC】` marker restored when
+ * the payload only carries the raw message. Both the live DOM renderer and the
+ * recorded-playback canvas read spans through here so the two paths cannot
+ * drift apart.
+ */
+export function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentSpan[] | undefined {
+  const spans = richDanmakuContent(event.spans);
+  if (!spans) return undefined;
+  const firstSpan = spans[0];
+  const hasSuperChatMarker =
+    firstSpan?.type === "text" && firstSpan.text.trimStart().startsWith("【SC】");
+  if (event.kind === "super_chat" && !hasSuperChatMarker) {
+    return [{ type: "text", text: "【SC】" }, ...spans];
+  }
+  return spans;
 }
 
 /** Add an aggregation suffix after the last rich fragment without changing image order. */

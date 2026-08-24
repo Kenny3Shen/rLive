@@ -2,9 +2,10 @@ import type { DanmuJsComment, DanmuJsStyle } from "danmu.js";
 import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
+  DANMAKU_IMAGE_FALLBACK_TEXT,
   DANMAKU_IMAGE_SCALE,
+  floatingRichSpans,
   normalizeDanmakuImageUrl,
-  richDanmakuContent,
 } from "./content";
 import { floatingDanmakuText } from "./filter";
 import { superChatDurationMs } from "../superChat";
@@ -255,18 +256,6 @@ function aggregateSuffix(count: number): string {
     : ` ×${safeCount}`;
 }
 
-function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentSpan[] | undefined {
-  const spans = richDanmakuContent(event.spans);
-  if (!spans) return undefined;
-  const firstSpan = spans[0];
-  const hasSuperChatMarker =
-    firstSpan?.type === "text" && firstSpan.text.trimStart().startsWith("【SC】");
-  if (event.kind === "super_chat" && !hasSuperChatMarker) {
-    return [{ type: "text", text: "【SC】" }, ...spans];
-  }
-  return spans;
-}
-
 export function danmuStyleForEvent(
   event: DanmakuEvent,
   options: Pick<DanmuJsMappingOptions, "fontSize" | "fontStroke" | "opacity">,
@@ -357,7 +346,7 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
 
     const imageUrl = normalizeDanmakuImageUrl(span.image_url);
     if (!imageUrl) {
-      appendText(parent, "[表情]");
+      appendText(parent, DANMAKU_IMAGE_FALLBACK_TEXT);
       continue;
     }
     const image = document.createElement("img");
@@ -373,9 +362,11 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
     image.style.marginInline = "1px";
     image.style.objectFit = "contain";
     image.style.flex = "0 0 auto";
-    image.addEventListener("error", () => image.replaceWith(document.createTextNode("[表情]")), {
-      once: true,
-    });
+    image.addEventListener(
+      "error",
+      () => image.replaceWith(document.createTextNode(DANMAKU_IMAGE_FALLBACK_TEXT)),
+      { once: true },
+    );
     parent.appendChild(image);
   }
 }

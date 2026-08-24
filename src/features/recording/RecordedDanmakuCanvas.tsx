@@ -7,6 +7,10 @@ import {
   danmuLaneHeight,
   safeDanmuColor,
 } from "@/features/room/danmaku/danmuJsAdapter";
+import {
+  DANMAKU_IMAGE_FALLBACK_TEXT,
+  DANMAKU_IMAGE_HORIZONTAL_GAP,
+} from "@/features/room/danmaku/content";
 import { prefersReducedMotion } from "@/shared/motion/preference";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
 import { filterRecordedDanmakuEntries, type RecordedDanmakuEntry } from "./recordedDanmaku";
@@ -15,6 +19,13 @@ import {
   visibleRecordedDanmaku,
   type RecordedDanmakuLayout,
 } from "./recordedDanmakuLayout";
+import {
+  createRecordedDanmakuImageCache,
+  recordedDanmakuSegments,
+  recordedDanmakuSegmentsWidth,
+  recordedDanmakuSpans,
+  type RecordedDanmakuSegment,
+} from "./recordedDanmakuSpans";
 
 const REDUCED_MOTION_LIFETIME_MS = 4_000;
 const MIN_DANMAKU_LIFETIME_MS = 3_500;
@@ -72,6 +83,21 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     let layout: RecordedDanmakuLayout | null = null;
     const reducedMotion = prefersReducedMotion();
     const lineHeight = danmuLaneHeight(fontSize);
+    // A paused overlay has no animation frame to piggyback on, so an emote that
+    // arrives late needs an explicit repaint.
+    const images = createRecordedDanmakuImageCache(() => {
+      if (video.paused || video.ended) draw();
+    });
+
+    // A stroke widens the painted glyphs on both sides, so charge it to the
+    // reserved width; otherwise neighbours look glued together at the gap.
+    const strokePadding = fontStroke > 0 ? fontStroke * 2 : 0;
+    /**
+     * Segments are measured during layout and reused by every frame that paints
+     * the bullet. The key carries the count because a growing repeat counter
+     * changes the trailing text segment.
+     */
+    const segmentCache = new Map<string, RecordedDanmakuSegment[] | null>();
 
     /** Measuring and painting must share one font, or widths drift apart. */
     function applyTextStyle(context: CanvasRenderingContext2D) {
@@ -79,6 +105,62 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       context.textBaseline = "middle";
       context.lineJoin = "round";
       if (fontStroke > 0) context.lineWidth = fontStroke * 2;
+    }
+
+    /** Null for a plain-text bullet, which takes the cheaper single-call path. */
+    function cachedSegments(
+      context: CanvasRenderingContext2D,
+      entry: RecordedDanmakuEntry,
+      count: number,
+    ): RecordedDanmakuSegment[] | null {
+      const key = `${entry.sequence}:${count}`;
+      const cached = segmentCache.get(key);
+      if (cached !== undefined) return cached;
+      const spans = recordedDanmakuSpans(entry, count);
+      const segments = spans
+        ? recordedDanmakuSegments(spans, fontSize, (text) => context.measureText(text).width)
+        : null;
+      segmentCache.set(key, segments);
+      return segments;
+    }
+
+    /**
+     * Paint one bullet fragment by fragment from `x`, with `y` on the text
+     * baseline centre. Every segment advances the cursor by its reserved width,
+     * including a slot whose image has not arrived yet, so a late emote never
+     * shifts the fragments after it.
+     */
+    function paintSegments(
+      context: CanvasRenderingContext2D,
+      segments: readonly RecordedDanmakuSegment[],
+      x: number,
+      y: number,
+    ) {
+      let cursor = x;
+      for (const segment of segments) {
+        if (segment.type === "text") {
+          if (fontStroke > 0) context.strokeText(segment.text, cursor, y);
+          context.fillText(segment.text, cursor, y);
+          cursor += segment.width;
+          continue;
+        }
+        const image = images.resolve(segment.url);
+        if (image) {
+          context.drawImage(
+            image,
+            cursor + DANMAKU_IMAGE_HORIZONTAL_GAP / 2,
+            y - segment.size / 2,
+            segment.size,
+            segment.size,
+          );
+        } else if (images.hasFailed(segment.url)) {
+          // Mirror the DOM layer, which swaps a broken emote for a text marker
+          // rather than leaving a hole in the sentence.
+          if (fontStroke > 0) context.strokeText(DANMAKU_IMAGE_FALLBACK_TEXT, cursor, y);
+          context.fillText(DANMAKU_IMAGE_FALLBACK_TEXT, cursor, y);
+        }
+        cursor += segment.width;
+      }
     }
 
     function scrollingLifetime(textWidth: number): number {
@@ -100,11 +182,9 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
         return;
       }
       applyTextStyle(context);
+      segmentCache.clear();
       const usableHeight = Math.max(lineHeight, cssHeight * area);
       const laneCount = Math.max(1, Math.floor((usableHeight - HORIZONTAL_PADDING) / lineHeight));
-      // A stroke widens the painted glyphs on both sides, so charge it to the
-      // reserved width; otherwise neighbours look glued together at the gap.
-      const strokePadding = fontStroke > 0 ? fontStroke * 2 : 0;
       const maxLifetime = reducedMotion
         ? REDUCED_MOTION_LIFETIME_MS
         : scrollingLifetime(cssWidth + fontSize * 8);
@@ -113,7 +193,14 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
         stageWidth: cssWidth,
         padding: HORIZONTAL_PADDING,
         laneGap: fontSize * LANE_GAP_RATIO,
-        measure: (text) => context.measureText(text).width + strokePadding,
+        measure: (text, entry, count) => {
+          const segments = cachedSegments(context, entry, count);
+          const width =
+            segments === null
+              ? context.measureText(text).width
+              : recordedDanmakuSegmentsWidth(segments);
+          return width + strokePadding;
+        },
         lifetimeFor: (width) =>
           reducedMotion ? REDUCED_MOTION_LIFETIME_MS : scrollingLifetime(width),
         staticLayout: reducedMotion,
@@ -143,15 +230,18 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
         const remaining = placement.lifetimeMs - bullet.ageMs;
         const fade = Math.min(1, Math.max(0, remaining / FADE_OUT_MS));
         context.globalAlpha = opacity * fade;
-        if (fontStroke > 0) {
-          context.strokeStyle = "rgba(0, 0, 0, 0.92)";
-          context.strokeText(bullet.text, x, y);
-        }
+        if (fontStroke > 0) context.strokeStyle = "rgba(0, 0, 0, 0.92)";
         context.fillStyle = safeDanmuColor(
           placement.entry.event.color,
           placement.entry.event.kind === "super_chat" ? "#ffd76a" : "#ffffff",
         );
-        context.fillText(bullet.text, x, y);
+        const segments = cachedSegments(context, placement.entry, bullet.count);
+        if (segments === null) {
+          if (fontStroke > 0) context.strokeText(bullet.text, x, y);
+          context.fillText(bullet.text, x, y);
+          continue;
+        }
+        paintSegments(context, segments, x, y);
       }
       context.globalAlpha = 1;
     }
@@ -206,6 +296,8 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       video.removeEventListener("pause", scheduleFrame);
       video.removeEventListener("seeked", draw);
       video.removeEventListener("timeupdate", draw);
+      images.dispose();
+      segmentCache.clear();
     };
   }, [
     active,

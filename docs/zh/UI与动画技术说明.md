@@ -27,7 +27,7 @@
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题 Radial Reveal |
 | 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、主题揭示、加载旋转和短状态过渡 |
 | 直播画面弹幕 | `danmu.js@1.2.1` + CSS transition | DOM 轨道与飘屏；不属于页面 UI 动画层 |
-| 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按本地媒体时间绘制录制 sidecar，行占位整段预计算，外观与过滤读取直播弹幕设置 |
+| 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按本地媒体时间绘制录制 sidecar，行占位整段预计算，图片表情按分段测量与 `drawImage` 绘制，外观与过滤读取直播弹幕设置 |
 
 当前项目不使用 Framer Motion，也没有启用 ScrollTrigger。不要为一个局部效果引入第二套并行动画体系；先判断现有 GSAP、CSS、`PagePan`、`PageZoom` 或 View Transition 是否已经覆盖需求。
 
