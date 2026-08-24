@@ -326,15 +326,53 @@ jobs:
           test "${#rpm_files[@]}" -eq 1
           rpm_dir="$RUNNER_TEMP/rlive-rpm-contents"
           mkdir -p "$rpm_dir"
-          # `rpm2cpio` is a shell wrapper that asks `rpm` which decompressor the
-          # payload needs, so report both sides of the pipe when it fails.
-          if ! rpm2cpio "${rpm_files[0]}" > "$RUNNER_TEMP/rlive-rpm-payload.cpio"; then
-            echo "::error::rpm2cpio 无法解出 ${rpm_files[0]} 的载荷" >&2
-            rpm --version
-            rpm -qp --qf '%{PAYLOADCOMPRESSOR}\n' "${rpm_files[0]}" || true
-            exit 1
+          # `rpm2archive` goes through libarchive and reports what it rejects,
+          # so it is tried first and `rpm2cpio` is kept only as a fallback.
+          # `-n` keeps the tar uncompressed and on stdout. Its entries carry a
+          # `./` prefix, which `tar -x` strips, so the extracted layout is the
+          # same `usr/...` tree the assertions below expect.
+          #
+          # Both paths capture stderr and the exit status. In the previous run
+          # `rpm2cpio` failed while `rpm --version` and `%{PAYLOADCOMPRESSOR}`
+          # both reported a healthy gzip package, and because its diagnostics
+          # went to a discarded stream there was nothing left to explain why.
+          rpm_payload="$RUNNER_TEMP/rlive-rpm-payload.tar"
+          rpm_extract_log="$RUNNER_TEMP/rlive-rpm-extract.log"
+          extracted_with=""
+          set +e
+          rpm2archive -n - < "${rpm_files[0]}" > "$rpm_payload" 2> "$rpm_extract_log"
+          rpm2archive_status=$?
+          set -e
+          if [[ "$rpm2archive_status" -eq 0 ]]; then
+            extracted_with="tar"
+          else
+            echo "rpm2archive 解包失败 (退出码 $rpm2archive_status)，回退到 rpm2cpio" >&2
+            sed 's/^/  rpm2archive: /' "$rpm_extract_log" >&2 || true
+            set +e
+            rpm2cpio "${rpm_files[0]}" > "$rpm_payload" 2> "$rpm_extract_log"
+            rpm2cpio_status=$?
+            set -e
+            if [[ "$rpm2cpio_status" -ne 0 ]]; then
+              echo "::error::无法解出 ${rpm_files[0]} 的载荷 (rpm2cpio 退出码 $rpm2cpio_status)" >&2
+              sed 's/^/  rpm2cpio: /' "$rpm_extract_log" >&2 || true
+              rpm --version >&2
+              rpm -qp --qf 'PAYLOADCOMPRESSOR=%{PAYLOADCOMPRESSOR}\nPAYLOADFORMAT=%{PAYLOADFORMAT}\nARCHIVESIZE=%{ARCHIVESIZE}\n' \
+                "${rpm_files[0]}" >&2 || true
+              ls -l "${rpm_files[0]}" >&2
+              # Keep the package itself for offline analysis: this failure has
+              # already survived two rounds of reasoning from logs alone.
+              mkdir -p "$PWD/rpm-failure"
+              cp "${rpm_files[0]}" "$PWD/rpm-failure/" || true
+              exit 1
+            fi
+            extracted_with="cpio"
           fi
-          (cd "$rpm_dir" && cpio -idmu < "$RUNNER_TEMP/rlive-rpm-payload.cpio")
+          echo "rpm 载荷已由 $extracted_with 格式解出"
+          if [[ "$extracted_with" == "tar" ]]; then
+            tar -xf "$rpm_payload" -C "$rpm_dir"
+          else
+            (cd "$rpm_dir" && cpio -idmu < "$rpm_payload")
+          fi
           verify_runtime "$rpm_dir/usr/bin/rlive" "$rpm_dir/usr/lib/rLive" '$ORIGIN/../lib/rLive'
           smoke_start "$rpm_dir/usr/bin/rlive" "$RUNNER_TEMP/rlive-rpm-smoke"
 
@@ -362,6 +400,15 @@ jobs:
           cp "${deb_files[0]}" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-amd64.deb"
           cp "${rpm_files[0]}" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-x86_64.rpm"
           cp "$appimage_file" "release-assets/linux/rLive_${RELEASE_VERSION}_linux-x86_64.AppImage"
+
+      - name: Upload the rpm that failed extraction
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-rpm-failure
+          path: rpm-failure/*.rpm
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
