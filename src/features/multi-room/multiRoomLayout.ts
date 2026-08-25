@@ -29,6 +29,12 @@ export const MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES = [
   "col-start-2 row-start-2",
 ] as const;
 
+/** Two feeds share the width evenly on a single row. */
+export const MULTI_ROOM_TWO_SLOT_CLASSES = [
+  "col-start-1 row-start-1",
+  "col-start-2 row-start-1",
+] as const;
+
 export const MULTI_ROOM_SLOT_LABELS = [
   "主画面",
   "上方左侧",
@@ -47,10 +53,28 @@ export const MULTI_ROOM_FOUR_EQUAL_SLOT_LABELS = [
   "右下画面",
 ] as const;
 
+export const MULTI_ROOM_TWO_SLOT_LABELS = ["主画面", "右侧画面"] as const;
+
+function multiRoomSlotPlacement(
+  layout: MultiRoomLayout,
+  fourLayout: MultiRoomFourLayout,
+): { classes: readonly string[]; labels: readonly string[] } {
+  if (layout === 2) {
+    return { classes: MULTI_ROOM_TWO_SLOT_CLASSES, labels: MULTI_ROOM_TWO_SLOT_LABELS };
+  }
+  if (layout === 4) {
+    return fourLayout === "equal"
+      ? { classes: MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES, labels: MULTI_ROOM_FOUR_EQUAL_SLOT_LABELS }
+      : { classes: MULTI_ROOM_FOUR_SLOT_CLASSES, labels: MULTI_ROOM_FOUR_SLOT_LABELS };
+  }
+  return { classes: MULTI_ROOM_SLOT_CLASSES, labels: MULTI_ROOM_SLOT_LABELS };
+}
+
 export function multiRoomGridClassName(
   layout: MultiRoomLayout = 6,
   fourLayout: MultiRoomFourLayout = "main-left",
 ): string {
+  if (layout === 2) return "grid-cols-2 grid-rows-1";
   return layout === 4 && fourLayout === "equal"
     ? "grid-cols-2 grid-rows-2"
     : "grid-cols-3 grid-rows-3";
@@ -61,13 +85,7 @@ export function multiRoomSlotClassName(
   layout: MultiRoomLayout = 6,
   fourLayout: MultiRoomFourLayout = "main-left",
 ): string {
-  const classes =
-    layout === 4
-      ? fourLayout === "equal"
-        ? MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES
-        : MULTI_ROOM_FOUR_SLOT_CLASSES
-      : MULTI_ROOM_SLOT_CLASSES;
-  return classes[index] ?? "";
+  return multiRoomSlotPlacement(layout, fourLayout).classes[index] ?? "";
 }
 
 export function multiRoomSlotLabel(
@@ -75,13 +93,7 @@ export function multiRoomSlotLabel(
   layout: MultiRoomLayout = 6,
   fourLayout: MultiRoomFourLayout = "main-left",
 ): string {
-  const labels =
-    layout === 4
-      ? fourLayout === "equal"
-        ? MULTI_ROOM_FOUR_EQUAL_SLOT_LABELS
-        : MULTI_ROOM_FOUR_SLOT_LABELS
-      : MULTI_ROOM_SLOT_LABELS;
-  return labels[index] ?? `画面 ${index + 1}`;
+  return multiRoomSlotPlacement(layout, fourLayout).labels[index] ?? `画面 ${index + 1}`;
 }
 
 export function isMultiRoomMainSlot(index: number): boolean {
@@ -98,6 +110,10 @@ if (MULTI_ROOM_FOUR_SLOT_CLASSES.length !== 4) {
 
 if (MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES.length !== 4) {
   throw new Error("四画面均分布局槽位数量不一致");
+}
+
+if (MULTI_ROOM_TWO_SLOT_CLASSES.length !== 2 || MULTI_ROOM_TWO_SLOT_LABELS.length !== 2) {
+  throw new Error("双画面布局槽位数量不一致");
 }
 
 if (MULTI_ROOM_SLOT_LABELS.length !== MULTI_ROOM_MAX_SLOTS) {

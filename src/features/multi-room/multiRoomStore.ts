@@ -4,7 +4,7 @@ import type { LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
 
 export const MULTI_ROOM_MAX_SLOTS = 6;
 export const MULTI_ROOM_MAIN_SLOT = 0;
-export const MULTI_ROOM_LAYOUT_OPTIONS = [4, 6] as const;
+export const MULTI_ROOM_LAYOUT_OPTIONS = [2, 4, 6] as const;
 export const MULTI_ROOM_FOUR_LAYOUT_OPTIONS = ["main-left", "equal"] as const;
 
 export type MultiRoomLayout = (typeof MULTI_ROOM_LAYOUT_OPTIONS)[number];
@@ -246,9 +246,18 @@ export const useMultiRoomStore = create<MultiRoomState>()(
       },
       setLayout: (layout) => {
         const normalizedLayout = normalizeMultiRoomLayout(layout);
-        if (normalizedLayout === get().layout) return true;
-        if (get().slots.filter(Boolean).length > normalizedLayout) return false;
-        set({ layout: normalizedLayout });
+        const current = get();
+        if (normalizedLayout === current.layout) return true;
+        // Compact first: a smaller layout only renders the leading slots, so a
+        // gap would otherwise hide a still-playing room outside the new grid.
+        const slots = normalizeMultiRoomSlots(current.slots);
+        if (slots.filter(Boolean).length > normalizedLayout) return false;
+        const mainChanged =
+          slots[MULTI_ROOM_MAIN_SLOT]?.key !== current.slots[MULTI_ROOM_MAIN_SLOT]?.key;
+        set({
+          layout: normalizedLayout,
+          slots: mainChanged ? normalizeMultiRoomAudioRoles(slots) : slots,
+        });
         return true;
       },
       setFourLayout: (layout) => set({ fourLayout: normalizeMultiRoomFourLayout(layout) }),
