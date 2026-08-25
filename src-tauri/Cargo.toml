@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "2.6.8"
+version = "2.6.9"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -12,11 +12,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 # Link FFmpeg from static archives instead of the platform's shared libraries.
 #
-# Only the macOS release build enables this, and it must stay an opt-in feature
-# rather than a `cfg(target_os = "macos")` dependency entry: Cargo resolves
-# features as a global union across every target section, so requesting
-# `ffmpeg-next/static` there would also switch Windows and Linux to static
-# linking, where both are built against shared runtime libraries.
+# The macOS and Linux release builds enable this; Windows ships the pinned
+# FFmpeg DLLs instead. It must stay an opt-in feature rather than a
+# `cfg(...)` dependency entry: Cargo resolves features as a global union across
+# every target section, so requesting `ffmpeg-next/static` there would also
+# switch Windows to static linking, where it is built against the shared
+# runtime DLLs. A local development build on any platform keeps using whatever
+# FFmpeg pkg-config finds unless the feature is passed explicitly.
 ffmpeg-static = ["ffmpeg-next/static"]
 
 [build-dependencies]

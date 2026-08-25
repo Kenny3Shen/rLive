@@ -203,16 +203,24 @@ jobs:
             libxdo-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libavformat-dev \
-            libavcodec-dev \
-            libavutil-dev \
             libclang-dev \
+            libssl-dev \
+            nasm \
             pkg-config \
             patchelf \
             rpm \
             cpio \
             libarchive-tools \
             xvfb
+
+      # The distro `libav*-dev` packages are deliberately absent: FFmpeg comes
+      # from the pinned source build below, and leaving the system headers
+      # installed would let a misconfigured build silently fall back to them.
+      - name: Build static FFmpeg libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/prepare-linux-ffmpeg.sh
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -238,7 +246,7 @@ jobs:
           # returns. Inline in the same scope works, including inside
           # smoke_start.
 
-          bun run bundle:linux
+          bun run bundle:linux -- --ffmpeg-static
 
           release_dir="$PWD/src-tauri/target/release"
           runtime_manifest="$RUNNER_TEMP/rlive-linux-runtime.manifest"
@@ -320,6 +328,20 @@ jobs:
                 exit 1
               fi
             done
+            # FFmpeg is linked from the pinned static archives, so no `libav*`
+            # or `libswresample` NEEDED entry may survive. Without this the
+            # packages would silently depend on the build machine's `libav*.so`
+            # and fail to start wherever that soname is absent — which is the
+            # exact failure the static build exists to prevent. Read NEEDED from
+            # readelf rather than ldd: ldd also lists transitive dependencies,
+            # and libavcodec reached through another library would be a
+            # different bug than this one.
+            if readelf -d "$binary" | grep -E '\(NEEDED\)' \
+              | grep -Eq 'libav(format|codec|util|device|filter)|libsw(resample|scale)'; then
+              echo "::error::$binary 动态依赖 FFmpeg，应为静态链接" >&2
+              readelf -d "$binary" | grep -E '\(NEEDED\)' >&2
+              exit 1
+            fi
           }
 
           # Staying alive for the whole 8 s window (timeout's exit 124) is the
