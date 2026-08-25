@@ -450,9 +450,9 @@ Windows-native schannel backend provides TLS. Source: $FfmpegDownloadUrl
 Configure options:
 $($ConfigureOptions -join "`n")
 
-The corresponding source can be obtained from the rLive project at
-https://github.com/Kenny3Shen/rLive, which also documents the LGPL relinking
-notes under docs/zh/.
+These libraries are linked dynamically, so they can be replaced with your own
+build of the same FFmpeg 9.0.1 ABI. The exact source and the options above are
+also recorded in the rLive project at https://github.com/Kenny3Shen/rLive.
 "@ | Set-Content (Join-Path $stageRoot "README.txt") -Encoding ascii
 
         Assert-FfmpegSdk $stageRoot
