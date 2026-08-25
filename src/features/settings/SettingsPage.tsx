@@ -377,7 +377,8 @@ function QrLogin({
     <Field>
       <FieldContent>
         <div className="flex flex-wrap items-center gap-4">
-          <div className="rounded-xl border border-border-subtle bg-card p-2 shadow-sm">
+          {/* 二维码底色固定为白色（含白色静默区），避免深色主题下反色导致无法扫码。 */}
+          <div className="rounded-xl border border-border-subtle bg-white p-3 text-neutral-500 shadow-sm">
             {session ? (
               isHostedQrImageUrl(session.qr_code_url) ? (
                 // Huya UDB returns a PNG from getQrImg; other platforms give a
@@ -387,7 +388,7 @@ function QrLogin({
                   alt={`${siteName}登录二维码`}
                   width={176}
                   height={176}
-                  className="size-44 rounded-lg bg-white object-contain"
+                  className="size-44 bg-white object-contain"
                   draggable={false}
                 />
               ) : (
@@ -395,14 +396,14 @@ function QrLogin({
                   value={session.qr_code_url}
                   size={176}
                   level="M"
-                  includeMargin={false}
+                  marginSize={0}
                   fgColor="#111111"
                   bgColor="#ffffff"
                   title={`${siteName}登录二维码`}
                 />
               )
             ) : (
-              <div className="flex size-44 items-center justify-center text-muted-foreground">
+              <div className="flex size-44 items-center justify-center">
                 <RefreshCw className="size-5 animate-spin-soft" aria-hidden />
                 <span className="sr-only">正在加载二维码</span>
               </div>
