@@ -389,6 +389,111 @@ jobs:
           bun run bundle:linux -- --ffmpeg-static
 
           release_dir="$PWD/src-tauri/target/release"
+
+          # The AppImage carried the ASR runtime twice: once where
+          # `bundle.resources` installs it (`usr/lib/rLive/`) and once where
+          # linuxdeploy gathers everything the binary needs (`usr/lib/`).
+          # linuxdeploy also rewrites RUNPATH to `$ORIGIN/../lib` alone, so the
+          # copy that actually gets loaded is the one in `usr/lib` and the
+          # `rLive/` subdirectory is dead weight — 30 MB uncompressed, 7.6 MB in
+          # the shipped file. Drop it from the AppDir and rebuild the image with
+          # the same tools tauri just used.
+          #
+          # A file is pruned on either of two independent grounds: linuxdeploy
+          # re-deployed a byte-identical copy into `usr/lib`, or nothing in the
+          # AppDir references it by soname at all. The second case covers
+          # `libsherpa-onnx-cxx-api.so`, the C++ wrapper that this build neither
+          # links (it is absent from every NEEDED entry) nor dlopens (`asr.rs`
+          # opens only the CUDA driver by name) — linuxdeploy therefore never
+          # deploys it, and keeping it would leave `usr/lib/rLive/` populated
+          # with a library that no longer sits on any search path.
+          #
+          # The reference scan has to include `rLive/` itself, not just `usr/bin`
+          # and `usr/lib`: `libonnxruntime.so` is named by no NEEDED entry except
+          # the one in `libsherpa-onnx-c-api.so`. Scanning only the deployed
+          # copies would call it unreferenced in exactly the case this code is
+          # careful about — linuxdeploy having stopped deploying the runtime —
+          # and delete the last copy left.
+          #
+          # Anything that is neither re-deployed nor unreferenced stays put: if a
+          # future linuxdeploy stops gathering the runtime, the copies remain the
+          # only ones present and the AppImage keeps working with tauri's
+          # original layout instead of losing the library it actually loads.
+          appimage_appdir="$release_dir/bundle/appimage/rLive.AppDir"
+          appimage_bundled_lib="$appimage_appdir/usr/lib/rLive"
+          if [[ -d "$appimage_bundled_lib" ]]; then
+            appimage_needed="$(mktemp)"
+            while IFS= read -r elf; do
+              readelf -d "$elf" 2>/dev/null \
+                | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'
+            done < <(
+              find "$appimage_appdir/usr/bin" -maxdepth 1 -type f
+              find "$appimage_appdir/usr/lib" -maxdepth 1 -type f -name '*.so*'
+              find "$appimage_bundled_lib" -maxdepth 1 -type f -name '*.so*'
+            ) | sort -u > "$appimage_needed"
+            test -s "$appimage_needed"
+
+            pruned_count=0
+            kept_count=0
+            while IFS= read -r duplicate; do
+              soname="$(basename "$duplicate")"
+              deployed="$appimage_appdir/usr/lib/$soname"
+              if [[ -f "$deployed" ]] && cmp -s "$duplicate" "$deployed"; then
+                rm -f "$duplicate"
+                pruned_count=$((pruned_count + 1))
+              elif ! grep -Fxq "$soname" "$appimage_needed"; then
+                echo "删除无人引用的运行库: ${duplicate#"$appimage_appdir/"}"
+                rm -f "$duplicate"
+                pruned_count=$((pruned_count + 1))
+              else
+                kept_count=$((kept_count + 1))
+                echo "保留未被 linuxdeploy 重新部署的运行库: ${duplicate#"$appimage_appdir/"}"
+              fi
+            done < <(find "$appimage_bundled_lib" -maxdepth 1 -type f -name '*.so*' | sort)
+            echo "AppDir 去重: 删除 $pruned_count 个运行库，保留 $kept_count 个"
+            # rmdir, not rm -rf: an empty directory means every file was
+            # accounted for, and a non-empty one must survive intact.
+            rmdir "$appimage_bundled_lib" 2>/dev/null || true
+
+            if [[ "$pruned_count" -gt 0 ]]; then
+              # mapfile with an explicit count, not a bare `find` substitution:
+              # two matches would otherwise concatenate into a two-line value and
+              # the rebuild would write to a path containing a newline.
+              mapfile -t appimage_stale_files < <(
+                find "$release_dir/bundle/appimage" -maxdepth 1 -type f \
+                  -name '*.AppImage' | sort
+              )
+              if [[ "${#appimage_stale_files[@]}" -ne 1 ]]; then
+                echo "::error::期望恰好一个 AppImage，实际 ${#appimage_stale_files[@]} 个" >&2
+                printf '  %s\n' "${appimage_stale_files[@]}" >&2
+                exit 1
+              fi
+              appimage_stale="${appimage_stale_files[0]}"
+              # tauri caches these under `dirs::cache_dir()/tauri` unless a local
+              # tools directory is configured (linuxdeploy.rs `tools_path`).
+              appimage_tools="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+              appimage_linuxdeploy="$appimage_tools/linuxdeploy-x86_64.AppImage"
+              test -x "$appimage_linuxdeploy"
+              # linuxdeploy resolves `--plugin gtk` and `--output appimage` by
+              # searching PATH for `linuxdeploy-plugin-<name>`, so the cache
+              # directory has to be on PATH for the same plugins tauri used to be
+              # the ones that run here.
+              test -x "$appimage_tools/linuxdeploy-plugin-gtk.sh"
+              rm -f "$appimage_stale"
+              # Same invocation tauri makes (linuxdeploy.rs): the gtk plugin and
+              # the appimage output plugin, with OUTPUT and ARCH in the
+              # environment. The gtk plugin is idempotent over an AppDir it has
+              # already processed, and re-running it keeps the deployed set
+              # identical to what tauri produced apart from the pruned copies.
+              PATH="$appimage_tools:$PATH" \
+                APPIMAGE_EXTRACT_AND_RUN=1 OUTPUT="$appimage_stale" ARCH=x86_64 \
+                "$appimage_linuxdeploy" --appimage-extract-and-run \
+                --appdir "$appimage_appdir" --plugin gtk --output appimage
+              test -f "$appimage_stale"
+            fi
+          else
+            echo "AppDir 中没有 usr/lib/rLive，跳过去重"
+          fi
           runtime_manifest="$RUNNER_TEMP/rlive-linux-runtime.manifest"
           find "$release_dir" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$runtime_manifest"
           test -s "$runtime_manifest"
@@ -403,18 +508,43 @@ jobs:
             local binary="$1"
             local runtime_dir="$2"
             local expected_rpath="$3"
+            # `exact` for deb/rpm, whose runtime directory holds precisely what
+            # release staging produced, and `subset` for the AppImage, where the
+            # runtime sits in `usr/lib` next to the ~136 libraries linuxdeploy
+            # gathers. Requiring equality there would compare the staging
+            # manifest against all of them and always fail.
+            local manifest_mode="${4:-exact}"
             local actual_manifest
             actual_manifest="$(mktemp)"
-            echo "校验运行库布局: $runtime_dir"
+            echo "校验运行库布局: $runtime_dir ($manifest_mode)"
             if [[ ! -d "$runtime_dir" ]]; then
               echo "::error::运行库目录不存在: $runtime_dir" >&2
               find "$(dirname "$runtime_dir")" -maxdepth 2 >&2 || true
               exit 1
             fi
             find "$runtime_dir" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$actual_manifest"
-            if ! diff -u "$runtime_manifest" "$actual_manifest"; then
-              echo "::error::$runtime_dir 的运行库清单与 release staging 不一致" >&2
-              exit 1
+            if [[ "$manifest_mode" == "exact" ]]; then
+              if ! diff -u "$runtime_manifest" "$actual_manifest"; then
+                echo "::error::$runtime_dir 的运行库清单与 release staging 不一致" >&2
+                exit 1
+              fi
+            else
+              # linuxdeploy deploys only what the binary actually needs, so
+              # `libsherpa-onnx-cxx-api.so` — which nothing in this build links
+              # or dlopens — is legitimately absent. Assert on the libraries
+              # that must be reachable instead, and let `ldd` below decide
+              # whether the layout really works.
+              local staged
+              while IFS= read -r staged; do
+                case "$staged" in
+                  libsherpa-onnx-cxx-api.so) continue ;;
+                esac
+                if ! grep -Fxq "$staged" "$actual_manifest"; then
+                  echo "::error::$runtime_dir 缺少 release staging 的运行库: $staged" >&2
+                  sort "$actual_manifest" >&2
+                  exit 1
+                fi
+              done < "$runtime_manifest"
             fi
             if [[ ! -x "$binary" ]]; then
               echo "::error::可执行文件缺失或不可执行: $binary" >&2
@@ -590,19 +720,32 @@ jobs:
           appimage_dir="$RUNNER_TEMP/rlive-appimage-contents"
           mkdir -p "$appimage_dir"
           (cd "$appimage_dir" && "$appimage_file" --appimage-extract >/dev/null)
-          # linuxdeploy rewrites RUNPATH to the layout it deploys, so accept its
-          # `$ORIGIN/../lib` alongside the value build.rs links in. That value
-          # resolves because linuxdeploy copies the runtime it deploys up into
-          # `usr/lib` as well: run 32785100701 listed `libonnxruntime.so` and
-          # `libsherpa-onnx-c-api.so` at both `usr/lib` and `usr/lib/rLive`, and
-          # `ldd` passed. Keep the listing and the `ldd` check — if a future
-          # linuxdeploy stops copying them, the libraries stay in `rLive/` only,
-          # `$ORIGIN/../lib` no longer resolves, and the AppImage is genuinely
-          # broken rather than merely differently laid out.
+          # linuxdeploy rewrites RUNPATH to `$ORIGIN/../lib` alone, dropping the
+          # `$ORIGIN/../lib/rLive` that build.rs links in, and gathers the
+          # runtime it deploys into `usr/lib`. The AppDir pruning above removes
+          # the now-unreachable `usr/lib/rLive/` copies, so the runtime lives at
+          # `usr/lib` and that is where this checks it. The `ldd` pass inside
+          # verify_runtime is the assertion that actually matters: it resolves
+          # against the real RUNPATH, so it fails if the pruning ever removed a
+          # copy that was still the reachable one.
           echo "AppImage 运行库布局:"
           find "$appimage_dir/squashfs-root/usr/lib" -maxdepth 2 \
             \( -name 'libsherpa*' -o -name 'libonnxruntime*' \) -printf '  %P\n' | sort
-          verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib/rLive" '$ORIGIN/../lib/rLive $ORIGIN/../lib'
+          # `usr/lib/rLive/` surviving is not a failure by itself: the pruning
+          # deliberately keeps anything it could not account for. What must never
+          # survive is a duplicate of a library that also sits in `usr/lib`,
+          # which is the waste this change exists to remove.
+          if [[ -d "$appimage_dir/squashfs-root/usr/lib/rLive" ]]; then
+            echo "AppImage 保留的 usr/lib/rLive 内容:"
+            find "$appimage_dir/squashfs-root/usr/lib/rLive" -maxdepth 1 -type f -printf '  %f\n' | sort
+            while IFS= read -r leftover; do
+              if [[ -f "$appimage_dir/squashfs-root/usr/lib/$(basename "$leftover")" ]]; then
+                echo "::error::AppImage 仍同时保留两份 $(basename "$leftover")，去重未生效" >&2
+                exit 1
+              fi
+            done < <(find "$appimage_dir/squashfs-root/usr/lib/rLive" -maxdepth 1 -type f -name '*.so*')
+          fi
+          verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib" '$ORIGIN/../lib' subset
           set +e
           trap - ERR
           APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a env \
