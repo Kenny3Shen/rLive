@@ -424,8 +424,12 @@ jobs:
           if [[ -d "$appimage_bundled_lib" ]]; then
             appimage_needed="$(mktemp)"
             while IFS= read -r elf; do
+              # `|| true`: `usr/bin` holds `xdg-open`, a shell script, and
+              # readelf exits 1 on anything that is not an ELF. Under
+              # `pipefail` that became the exit status of the whole loop and
+              # the ERR trap aborted the step.
               readelf -d "$elf" 2>/dev/null \
-                | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'
+                | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p' || true
             done < <(
               find "$appimage_appdir/usr/bin" -maxdepth 1 -type f
               find "$appimage_appdir/usr/lib" -maxdepth 1 -type f -name '*.so*'
