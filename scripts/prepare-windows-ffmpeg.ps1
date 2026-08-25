@@ -209,7 +209,15 @@ function Find-Msys2Root {
 
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path (Join-Path $candidate "usr\bin\bash.exe"))) {
-            return [IO.Path]::GetFullPath($candidate)
+            $root = [IO.Path]::GetFullPath($candidate)
+            # pacman installs the rest of the toolchain, so a root without it is
+            # not usable. Checking here turns what would otherwise be a bare
+            # "command not found" from inside a generated script into a message
+            # that names the directory that was probed.
+            if (-not (Test-Path (Join-Path $root "usr\bin\pacman.exe"))) {
+                throw "MSYS2 at $root has no usr\bin\pacman.exe; cannot install the build toolchain."
+            }
+            return $root
         }
     }
 
@@ -221,12 +229,22 @@ FFmpeg SDK that was prepared elsewhere.
 "@
 }
 
+# PATH for every MSYS2 invocation below. /etc/profile is what normally assembles
+# it, and `--noprofile` skips that, so a bash started here would otherwise
+# inherit only the Windows PATH and fail on `pacman: command not found`.
+# /mingw64/bin comes first so `configure` probes the MinGW-w64 gcc and nasm that
+# will compile the libraries; /usr/bin supplies pacman, make, tar and coreutils.
+# The Windows PATH is deliberately not appended: a stray Windows tool ahead of an
+# MSYS2 one is exactly the kind of drift this build avoids.
+$Msys2PathExport = 'export PATH="/mingw64/bin:/usr/bin:/usr/local/bin"'
+
 function ConvertTo-Msys2Path([string]$Msys2Root, [string]$WindowsPath) {
     # MSYS2 needs POSIX paths; cygpath is the only reliable converter for drive
-    # letters and UNC roots.
+    # letters and UNC roots. cygpath lives in /usr/bin, which --noprofile leaves
+    # off PATH, so set it here too.
     $bash = Join-Path $Msys2Root "usr\bin\bash.exe"
     $escaped = $WindowsPath.Replace("\", "\\").Replace('"', '\"')
-    $converted = & $bash --noprofile --norc -c "cygpath -u `"$escaped`"" 2>$null
+    $converted = & $bash --noprofile --norc -c "$Msys2PathExport; cygpath -u `"$escaped`"" 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($converted)) {
         throw "Could not convert $WindowsPath to an MSYS2 path."
     }
@@ -242,7 +260,10 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
     # core.autocrlf checkout would otherwise put a CR on every line of the
     # here-string.
     $scriptPath = Join-Path ([IO.Path]::GetTempPath()) "rlive-msys2-$([Guid]::NewGuid().ToString('N')).sh"
-    $normalized = ($Script -replace "`r`n", "`n" -replace "`r", "`n")
+    # PATH is prepended to the script itself rather than wrapped around it with
+    # `bash -c ... . script`, which would leak the script's `set -e` and `exit`
+    # into the outer shell.
+    $normalized = ($Msys2PathExport + "`n" + $Script -replace "`r`n", "`n" -replace "`r", "`n")
     if (-not $normalized.EndsWith("`n")) {
         $normalized += "`n"
     }
@@ -252,9 +273,12 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
     $scriptPosix = ConvertTo-Msys2Path $Msys2Root $scriptPath
 
     # MSYS2's own launchers set MSYSTEM and re-exec a login shell; calling
-    # bash.exe directly is enough as long as MSYSTEM names the MinGW64
-    # environment so /mingw64/bin lands on PATH. `-l` would reset the working
-    # directory, so the script always cd's to an absolute path itself.
+    # bash.exe directly avoids `-l` resetting the working directory, so the
+    # script always cd's to an absolute path itself. MSYSTEM is still set because
+    # the toolchain reads it, but it does not build PATH: /etc/profile does, and
+    # --noprofile skips it, leaving bash with the Windows PATH and no /usr/bin.
+    # Every MSYS2 command therefore has to be reachable through the PATH set
+    # here, or it fails with "command not found".
     $previousMsystem = $env:MSYSTEM
     $previousChere = $env:CHERE_INVOKING
     # `Stop` would turn MSYS2's ordinary progress output on stderr into a
@@ -294,7 +318,10 @@ function Install-Msys2BuildTools([string]$Msys2Root) {
     )
     # Probing is a plain `-c` command rather than a script so that its non-zero
     # "tools missing" exit is not mistaken for a failure by Invoke-Msys2Bash.
-    $probe = 'missing=0; command -v make > /dev/null || missing=1; ' +
+    # It must export the same PATH, or every tool looks missing and the install
+    # runs on an installation that already has them.
+    $probe = "$Msys2PathExport; " +
+        'missing=0; command -v make > /dev/null || missing=1; ' +
         'command -v diff > /dev/null || missing=1; ' +
         'for tool in gcc nasm pkg-config; do test -x "/mingw64/bin/$tool.exe" || missing=1; done; ' +
         'exit "$missing"'
@@ -375,9 +402,9 @@ function Build-FfmpegSdk([string]$Msys2Root, [string]$ArchivePath, [string]$SdkR
         # One option group per continued line, so a configure failure in the log
         # points at the group that caused it.
         $configureArguments = ($ConfigureOptions | ForEach-Object { "  $_ \" }) -join "`n"
+        # PATH is exported by Invoke-Msys2Bash ahead of this script.
         $build = @"
 set -euo pipefail
-export PATH="/mingw64/bin:`$PATH"
 
 cd "$buildPosix"
 echo "Unpacking the FFmpeg $FfmpegVersion source"
