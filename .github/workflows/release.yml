@@ -163,8 +163,41 @@ jobs:
             ConvertTo-Json -Depth 4 |
             Set-Content $runtimeConfig -Encoding utf8
 
-          bun run tauri -- bundle --ci --bundles nsis,msi --config $runtimeConfig
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # tauri's WiX bundler globs every *.dll beside the executable and adds
+          # all of them to the MSI, keeping only WebView2Loader.dll out of scope
+          # of the resources config (upstream tauri-bundler carries a TODO about
+          # exactly this). NSIS installs the resources allow list alone, so the
+          # two installers disagreed: the MSI shipped the ASR runtime, including
+          # a 354 MB onnxruntime_providers_cuda.dll, even though asr.rs
+          # downloads that runtime on demand into the user data directory and
+          # loads it only from there. Move the DLLs the installers must not
+          # carry out of the way for the duration of the bundle.
+          $bundledDllPattern = '^((avutil|avcodec|avformat)-[0-9]+|WebView2Loader)\.dll$'
+          $quarantineDirectory = Join-Path $env:RUNNER_TEMP "windows-unbundled-dlls"
+          New-Item -ItemType Directory -Force $quarantineDirectory | Out-Null
+          $quarantinedDlls = @(
+            Get-ChildItem $releaseDirectory -Filter "*.dll" -File |
+              Where-Object { $_.Name -notmatch $bundledDllPattern }
+          )
+          foreach ($quarantinedDll in $quarantinedDlls) {
+            Move-Item $quarantinedDll.FullName `
+              (Join-Path $quarantineDirectory $quarantinedDll.Name) -Force
+          }
+          Write-Host "Withheld $($quarantinedDlls.Count) DLLs from the installers."
+
+          $bundleExitCode = 1
+          try {
+            bun run tauri -- bundle --ci --bundles nsis,msi --config $runtimeConfig
+            $bundleExitCode = $LASTEXITCODE
+          } finally {
+            # Restore the staging directory even when bundling fails, so a rerun
+            # of this job does not start from a half-emptied release directory.
+            foreach ($quarantinedDll in $quarantinedDlls) {
+              Move-Item (Join-Path $quarantineDirectory $quarantinedDll.Name) `
+                (Join-Path $releaseDirectory $quarantinedDll.Name) -Force
+            }
+          }
+          if ($bundleExitCode -ne 0) { exit $bundleExitCode }
 
           $setup = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
           if ($setup.Count -ne 1) {
@@ -182,6 +215,92 @@ jobs:
 
           if (Get-ChildItem "release-assets/windows" -Recurse -Filter "*.dll" -File) {
             throw "Windows release assets unexpectedly contain ASR runtime DLLs."
+          }
+
+          # That check only sees loose files next to the installers, which is how
+          # the MSI shipped the ASR runtime unnoticed for several releases. Read
+          # the MSI File table and the NSIS payload listing instead, so both
+          # installers are asserted on their actual contents.
+          $expectedNames = @($runtimeFiles | ForEach-Object { $_.Name })
+          $msiPath = (Resolve-Path `
+            "release-assets/windows/rLive_$($env:RELEASE_VERSION)_windows-x64.msi").Path
+
+          # 7z reports the MSI payload under WiX's generated component ids
+          # ("PathFile_I26a8b29..."), so the real names have to come from the
+          # File table. The query runs under Windows PowerShell rather than this
+          # step's pwsh: the WindowsInstaller COM automation is what ships with
+          # the OS and is exercised there, and pwsh 7 COM interop on
+          # parameterized properties such as StringData is less dependable.
+          $msiQueryScript = Join-Path $env:RUNNER_TEMP "read-msi-file-table.ps1"
+          # Assembled line by line rather than as a here-string: a here-string
+          # inside a YAML block would carry this step's indentation into the
+          # generated script and tie it to the block's nesting depth.
+          @(
+            'param([Parameter(Mandatory = $true)][string] $Path)',
+            '$ErrorActionPreference = "Stop"',
+            '$msiInstaller = New-Object -ComObject WindowsInstaller.Installer',
+            '$database = $msiInstaller.OpenDatabase($Path, 0)',
+            '$view = $database.OpenView(''SELECT `FileName` FROM `File`'')',
+            '$view.Execute()',
+            'while ($null -ne ($record = $view.Fetch())) {',
+            '  # FileName is "SHORTNME.DLL|the real long name.dll" whenever the',
+            '  # file needs a short alias, so the long name is the trailing field.',
+            '  ($record.StringData(1) -split ''\|'')[-1]',
+            '}'
+          ) | Set-Content $msiQueryScript -Encoding ascii
+          $msiPayload = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File $msiQueryScript -Path $msiPath)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($msiPayload.Count -eq 0) { throw "Reading the MSI File table returned no rows." }
+
+          # The NSIS side is read from the installer script tauri renders and
+          # hands to makensis, which is the authoritative list of what the setup
+          # writes into the installation directory. Extracting the built .exe
+          # instead would need a 7-Zip on PATH that nothing else in this workflow
+          # relies on.
+          $nsisScript = @(Get-ChildItem "src-tauri/target/release/nsis" -Recurse `
+            -Filter "installer.nsi" -File)
+          if ($nsisScript.Count -ne 1) {
+            throw "Expected exactly one rendered installer.nsi, found $($nsisScript.Count)."
+          }
+          # Both `File "<src>"` (the main binary) and
+          # `File /a "/oname=<name>" "<src>"` (every resource) appear; the
+          # installed name is the /oname value when present and the source file
+          # name otherwise.
+          $nsisPayload = @(
+            Get-Content $nsisScript[0].FullName |
+              ForEach-Object {
+                # [regex]::Match, not -match: the latter writes $matches, which
+                # the -notmatch in the assertion loop below overwrites in turn.
+                $named = [regex]::Match($_, '^\s*File\s+/a\s+"/oname=([^"]+)"')
+                if ($named.Success) {
+                  Split-Path $named.Groups[1].Value -Leaf
+                } else {
+                  $plain = [regex]::Match($_, '^\s*File\s+"([^"]+)"\s*$')
+                  if ($plain.Success) { Split-Path $plain.Groups[1].Value -Leaf }
+                }
+              }
+          )
+          if ($nsisPayload.Count -eq 0) { throw "Reading the NSIS payload returned no entries." }
+
+          foreach ($packaged in @(
+            @{ Name = "MSI"; Payload = $msiPayload },
+            @{ Name = "NSIS setup"; Payload = $nsisPayload }
+          )) {
+            $payloadDlls = @(
+              $packaged.Payload | Where-Object { $_ -like "*.dll" } | Sort-Object -Unique
+            )
+            $unbundled = @($payloadDlls | Where-Object { $_ -notmatch $bundledDllPattern })
+            if ($unbundled.Count -gt 0) {
+              throw "$($packaged.Name) payload ships DLLs it must not carry: $($unbundled -join ', ')"
+            }
+            $missing = @(
+              $expectedNames | Where-Object { $packaged.Payload -notcontains $_ }
+            )
+            if ($missing.Count -gt 0) {
+              throw "$($packaged.Name) payload is missing staged runtime files: $($missing -join ', ')"
+            }
+            Write-Host "$($packaged.Name) payload carries $($payloadDlls.Count) DLLs, all expected."
           }
 
       - name: Upload Windows packages
