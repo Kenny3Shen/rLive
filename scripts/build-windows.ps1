@@ -217,7 +217,7 @@ if (-not (Test-Path $exe)) {
 }
 
 $releaseDirectory = Split-Path $exe -Parent
-foreach ($library in @("avutil", "swresample", "avcodec", "avformat")) {
+foreach ($library in @("avutil", "avcodec", "avformat")) {
     $runtimeDlls = @(Get-ChildItem $releaseDirectory -Filter "$library-*.dll" -File)
     if ($runtimeDlls.Count -ne 1) {
         throw "Build requires one staged $library runtime DLL, found $($runtimeDlls.Count)."

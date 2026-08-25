@@ -69,7 +69,13 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build Windows binary
+      # Builds the trimmed FFmpeg SDK from the pinned official source using the
+      # MSYS2 installation the runner image already ships (at C:\msys64, off
+      # PATH), then links and stages against it. The distro-equivalent shortcut
+      # of downloading a prebuilt full_build archive is deliberately not used:
+      # it shipped 116 MB of DLLs for a remux-only application and put the
+      # release under a GPLv3 audit.
+      - name: Build Windows binary against the trimmed FFmpeg SDK
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -106,15 +112,30 @@ jobs:
             }
           }
 
-          $avcodecDlls = @(Get-ChildItem "src-tauri/target/release" -Filter "avcodec-*.dll" -File)
-          if ($avcodecDlls.Count -ne 1) {
-            throw "Expected one staged avcodec DLL, found $($avcodecDlls.Count)."
-          }
-          & $dumpbin /imports $avcodecDlls[0].FullName |
-            Out-File "$env:RUNNER_TEMP/avcodec-imports.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ((Get-Content "$env:RUNNER_TEMP/avcodec-imports.txt" -Raw) -notmatch "swresample-[0-9]+\.dll") {
-            throw "The staged avcodec DLL does not import the expected swresample runtime DLL."
+          # The trimmed SDK's dependency graph is closed: avformat -> avcodec ->
+          # avutil and nothing else. A DLL importing an FFmpeg library outside
+          # that set means the staged runtime is incomplete and the application
+          # would fail to start on a user's machine.
+          foreach ($stagedDll in @("avutil", "avcodec", "avformat")) {
+            # Not $matches: that is an automatic variable PowerShell overwrites on
+            # every -match/-notmatch in this scope, including the one below.
+            $stagedFiles = @(Get-ChildItem "src-tauri/target/release" -Filter "$stagedDll-*.dll" -File)
+            if ($stagedFiles.Count -ne 1) {
+              throw "Expected one staged $stagedDll DLL, found $($stagedFiles.Count)."
+            }
+            & $dumpbin /imports $stagedFiles[0].FullName |
+              Out-File "$env:RUNNER_TEMP/$stagedDll-imports.txt"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $dllImports = Get-Content "$env:RUNNER_TEMP/$stagedDll-imports.txt" -Raw
+            $unexpected = @(
+              [regex]::Matches($dllImports, '(?i)\b(av|sw)[a-z]+-[0-9]+\.dll') |
+                ForEach-Object { $_.Value.ToLowerInvariant() } |
+                Sort-Object -Unique |
+                Where-Object { $_ -notmatch '^(avutil|avcodec|avformat)-[0-9]+\.dll$' }
+            )
+            if ($unexpected.Count -gt 0) {
+              throw "Staged $stagedDll DLL imports unbundled FFmpeg libraries: $($unexpected -join ', ')"
+            }
           }
 
       - name: Bundle Windows installers (NSIS setup and MSI)
@@ -125,12 +146,12 @@ jobs:
           $releaseDirectory = (Resolve-Path "src-tauri/target/release").Path
           $runtimeFiles = @(
             Get-ChildItem $releaseDirectory -File |
-              Where-Object { $_.Name -match '^(avutil|avcodec|avformat|swresample)-[0-9]+\.dll$' }
+              Where-Object { $_.Name -match '^(avutil|avcodec|avformat)-[0-9]+\.dll$' }
           )
           $runtimeFiles += Get-Item (Join-Path $releaseDirectory "FFmpeg-LICENSE.txt")
           $runtimeFiles += Get-Item (Join-Path $releaseDirectory "FFmpeg-README.txt")
-          if ($runtimeFiles.Count -ne 6) {
-            throw "Expected four FFmpeg DLLs and two notice files for installer bundling."
+          if ($runtimeFiles.Count -ne 5) {
+            throw "Expected three FFmpeg DLLs and two notice files for installer bundling."
           }
 
           $resources = @{}

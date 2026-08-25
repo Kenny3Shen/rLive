@@ -133,9 +133,9 @@ $env:Path = "$env:LIBCLANG_PATH;$env:Path"
 
 直接运行 Cargo/Tauri 还需要 Visual Studio 的 `x64 Native Tools` 环境（包括 MSVC headers 和 Windows SDK）；`scripts/build-windows.ps1` 与 `scripts/build-windows-from-wsl.sh` 会自动调用 `vcvars64.bat`。Android 构建使用单独的 NDK clang 配置，不能复用到桌面目标；Linux/WSL 下使用 `bun run tauri -- android ...` 时，`scripts/tauri.mjs` 会自动配置 NDK 的 bindgen、`cc-rs` 和 linker 环境。
 
-未设置 `FFMPEG_DIR` 时，脚本才会把固定版本的 FFmpeg 9.0.1 shared SDK 缓存到 `%LOCALAPPDATA%\rLive\build`。
+未设置 `FFMPEG_DIR` 时，脚本才会用 MSYS2 与 MinGW-w64 自建裁剪版 FFmpeg 9.0.1 shared SDK，并缓存到 `%LOCALAPPDATA%\rLive\build`。所需 MSYS2 工具链（`make`、`diffutils`、`mingw-w64-x86_64-gcc`、`mingw-w64-x86_64-nasm`、`mingw-w64-x86_64-pkgconf`）缺失时由脚本用 pacman 补齐。
 
-Windows 构建会校验固定的 Gyan FFmpeg archive，并把 `avformat`、`avcodec`、`avutil`、`swresample`、上游 GPLv3 许可证和构建说明放到 `rlive.exe` 同目录。携带上游许可证不代表应用整体分发合规已经完成。
+Windows 构建会校验固定的官方 FFmpeg 源码 SHA-256，只启用录制用到的组件，并把 `avformat`、`avcodec`、`avutil`、LGPL 2.1 许可证和构建说明放到 `rlive.exe` 同目录。携带上游许可证不代表应用整体分发合规已经完成。
 
 ## 文档
 
