@@ -288,7 +288,12 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
         $env:MSYSTEM = "MINGW64"
         $env:CHERE_INVOKING = "1"
         $ErrorActionPreference = "Continue"
-        & $bash --noprofile --norc $scriptPosix
+        # Out-Host, not bare invocation: a PowerShell function returns everything
+        # written to the success stream, so the build's stdout would otherwise be
+        # collected into the caller's return value. Get-ManagedFfmpegSdk returned
+        # the whole pacman and make transcript alongside the SDK path, and
+        # Test-Path then choked on "::" as an invalid wildcard.
+        & $bash --noprofile --norc $scriptPosix | Out-Host
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousPreference
