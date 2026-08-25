@@ -301,9 +301,9 @@ export function MultiRoomPage() {
             <ToggleGroupItem
               key={option}
               value={String(option)}
-              aria-label={`${option} 画面布局`}
-              disabled={option === 4 && roomCount > 4}
-              title={option === 4 && roomCount > 4 ? "请先将直播间减少到 4 路" : undefined}
+              aria-label={option === 2 ? "2 画面左右等分布局" : `${option} 画面布局`}
+              disabled={roomCount > option}
+              title={roomCount > option ? `请先将直播间减少到 ${option} 路` : undefined}
             >
               {option}画面
             </ToggleGroupItem>
@@ -387,7 +387,7 @@ export function MultiRoomPage() {
       >
         <div
           data-multi-room-grid
-          data-multi-room-layout={layout === 4 ? fourLayout : "six"}
+          data-multi-room-layout={layout === 2 ? "two-equal" : layout === 4 ? fourLayout : "six"}
           className={cn(
             "grid min-h-0 flex-1 gap-px overflow-hidden bg-border/60",
             multiRoomGridClassName(layout, fourLayout),
