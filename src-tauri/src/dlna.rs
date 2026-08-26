@@ -75,9 +75,11 @@ impl DlnaManager {
         Self {
             session: Mutex::new(None),
             // 设备描述与 SOAP 都在局域网明文 HTTP 上完成；不启用 Cookie，
-            // 也绝不复用带平台登录态的客户端。
+            // 也绝不复用带平台登录态的客户端。设备地址是局域网 IP，必须
+            // 直连，不能被系统/应用 HTTP 代理劫持。
             client: reqwest::Client::builder()
                 .user_agent(DEFAULT_UA)
+                .no_proxy()
                 .build()
                 .unwrap_or_default(),
         }
@@ -501,8 +503,11 @@ async fn handle_relay_connection(mut socket: TcpStream, config: Arc<RelayConfig>
         return;
     }
 
+    // 中继回源同样直连：上游可能是回环测试源或局域网源，走代理会被
+    // 劫持到错误出口。
     let client = reqwest::Client::builder()
         .user_agent(DEFAULT_UA)
+        .no_proxy()
         .build()
         .expect("relay http client");
     let mut request = client.get(target);
@@ -713,5 +718,211 @@ mod tests {
         assert!(is_loopback_target("http://127.0.0.1:8080/x"));
         assert!(is_loopback_target("http://LOCALHOST/y"));
         assert!(!is_loopback_target("http://cdn.example/z"));
+    }
+
+    /// 端到端验证：模拟 DLNA 电视（设备描述 + SOAP 端点）与媒体源，
+    /// 走完 cast 的完整链路——设备描述解析、SetAVTransportURI/Play 下发、
+    /// 中继回源携带投屏 headers、令牌拦截与断开时的 Stop。
+    #[tokio::test]
+    async fn cast_end_to_end_against_a_mock_renderer() {
+        if lan_ipv4().is_err() {
+            // 没有可用局域网 IPv4 的环境无法构造中继地址。
+            return;
+        }
+
+        let recorded: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // ---- 模拟渲染器：设备描述 + SOAP 控制端点 ----
+        let renderer = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let renderer_addr = renderer.local_addr().unwrap().to_string();
+        let device_description = "<?xml version=\"1.0\"?>\
+<root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion>\
+<device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>\
+<friendlyName>客厅电视</friendlyName><serviceList><service>\
+<serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>\
+<controlURL>/control</controlURL></service></serviceList></device></root>";
+        let recorded_renderer = Arc::clone(&recorded);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = renderer.accept().await else {
+                    break;
+                };
+                let recorded = Arc::clone(&recorded_renderer);
+                tokio::spawn(async move {
+                    let Some(request) = read_http_request(&mut socket).await else {
+                        return;
+                    };
+                    let is_description = request.starts_with("GET /desc.xml");
+                    recorded.lock().unwrap().push(request);
+                    let body: Vec<u8> = if is_description {
+                        device_description.as_bytes().to_vec()
+                    } else {
+                        // SOAP 成功应答；不能包含 "UPnPError"。
+                        br#"{\"s:Envelope\":{}}"#.to_vec()
+                    };
+                    let content_type = if is_description {
+                        "text/xml"
+                    } else {
+                        "text/xml; charset=\"utf-8\""
+                    };
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        content_type,
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+
+        // ---- 模拟媒体源：固定 FLV 字节，校验投屏 headers 注入 ----
+        // 绑定到局域网地址而非回环：中继会拒绝回环上游，真实场景中媒体
+        // 源也在本机之外。
+        let origin_ip = match lan_ipv4().unwrap() {
+            IpAddr::V4(ip) => ip,
+            IpAddr::V6(_) => return,
+        };
+        let origin = TcpListener::bind(std::net::SocketAddr::new(IpAddr::V4(origin_ip), 0))
+            .await
+            .unwrap();
+        let origin_port = origin.local_addr().unwrap().port();
+        let recorded_origin = Arc::clone(&recorded);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = origin.accept().await else {
+                    break;
+                };
+                let recorded = Arc::clone(&recorded_origin);
+                tokio::spawn(async move {
+                    let Some(request) = read_http_request(&mut socket).await else {
+                        return;
+                    };
+                    recorded.lock().unwrap().push(request);
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        b"FLV-BYTES-0123456789".len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(b"FLV-BYTES-0123456789").await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+
+        let manager = DlnaManager::new();
+        let status = manager
+            .cast(
+                format!("http://{renderer_addr}/desc.xml"),
+                format!("http://{origin_ip}:{origin_port}/live.flv"),
+                [("referer".into(), "https://live.example/room".into())]
+                    .into_iter()
+                    .collect(),
+                "测试直播".into(),
+            )
+            .await
+            .expect("cast should succeed against the mock renderer");
+        assert_eq!(status.device_name, "客厅电视");
+
+        // 设备描述被拉取，且两条 SOAP 指令都到达控制端点。
+        let requests = recorded.lock().unwrap().clone();
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.contains("GET /desc.xml"))
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.contains("#SetAVTransportURI"))
+        );
+        assert!(requests.iter().any(|request| request.contains("#Play")));
+
+        // 从 SetAVTransportURI 提取下发给电视的中继地址并实际访问。
+        let set_uri_request = requests
+            .iter()
+            .find(|request| request.contains("#SetAVTransportURI"))
+            .expect("set uri request");
+        let current_uri = Regex::new(r"<CurrentURI>([^<]+)</CurrentURI>")
+            .unwrap()
+            .captures(set_uri_request)
+            .map(|captures| captures[1].to_string())
+            .expect("current uri in soap body")
+            // SOAP 正文中的 XML 转义由接收方（电视）还原。
+            .replace("&amp;", "&");
+        assert!(current_uri.starts_with("http://"), "{current_uri}");
+        assert!(current_uri.contains("/stream?url="), "{current_uri}");
+
+        // 经中继取流：内容来自媒体源，且上游请求带上了登记的 referer。
+        // 测试客户端同样必须绕过系统代理，避免环境变量干扰断言。
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = client.get(&current_uri).send().await.expect("relay fetch");
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        assert_eq!(
+            status,
+            200,
+            "relay said: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(body.as_ref(), b"FLV-BYTES-0123456789");
+        let origin_requests = recorded.lock().unwrap().clone();
+        assert!(origin_requests.iter().any(|request| {
+            request.contains("GET /live.flv")
+                && request.contains("referer: https://live.example/room")
+        }));
+
+        // 错误令牌必须被拒绝。
+        let tampered = current_uri.replacen("token=", "token=wrong", 1);
+        let denied = client.get(&tampered).send().await.expect("denied fetch");
+        assert_eq!(denied.status(), 403);
+
+        // 断开后电视收到 Stop。
+        manager.stop().await.unwrap();
+        let requests = recorded.lock().unwrap().clone();
+        assert!(requests.iter().any(|request| request.contains("#Stop")));
+    }
+
+    /// 读取一条完整 HTTP 请求（头 + Content-Length 正文）。
+    async fn read_http_request(socket: &mut TcpStream) -> Option<String> {
+        let mut buffer = Vec::with_capacity(1024);
+        let mut byte = [0_u8; 1];
+        loop {
+            match socket.read(&mut byte).await {
+                Ok(1) => buffer.push(byte[0]),
+                _ => return None,
+            }
+            if buffer.ends_with(b"\r\n\r\n") || buffer.ends_with(b"\n\n") {
+                break;
+            }
+            if buffer.len() > 16_384 {
+                return None;
+            }
+        }
+        let head_end = buffer
+            .windows(4)
+            .rposition(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .unwrap_or(buffer.len());
+        let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
+        let content_length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        let mut body = buffer[head_end.min(buffer.len())..].to_vec();
+        while body.len() < content_length {
+            match socket.read(&mut byte).await {
+                Ok(1) => body.push(byte[0]),
+                _ => break,
+            }
+        }
+        Some(format!("{}{}", head, String::from_utf8_lossy(&body)))
     }
 }
