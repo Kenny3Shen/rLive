@@ -75,7 +75,7 @@ export function describeCaptionTranslationFailure(error: unknown): CaptionTransl
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_CACHE_LIMIT = 160;
 
-/** A small LRU cache prevents repeated live phrases from consuming API quota. */
+/** 小型 LRU 缓存，避免重复的直播语句消耗 API 配额。 */
 export class CaptionTranslationClient {
   private readonly cache = new Map<string, string>();
 

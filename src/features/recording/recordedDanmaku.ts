@@ -38,9 +38,8 @@ function isStoredBatch(value: unknown): value is StoredDanmakuBatch {
 }
 
 /**
- * Parse the append-only JSONL sidecar defensively. A partially written final
- * line is ignored so recordings recovered after a forced shutdown still keep
- * every complete batch before it.
+ * 以防御方式解析追加式 JSONL 伴生文件。被部分写入的最后一行会被忽略，
+ * 强制关机恢复出的录制仍保留其之前的每一个完整批次。
  */
 export function parseRecordedDanmakuSidecar(text: string): RecordedDanmakuEntry[] {
   const entries: RecordedDanmakuEntry[] = [];
@@ -87,7 +86,7 @@ export function firstRecordedDanmakuAtOrAfter(
   return low;
 }
 
-/** Apply the same message visibility policy as the live floating layer. */
+/** 应用与直播悬浮层一致的消息可见性策略。 */
 export function filterRecordedDanmakuEntries(
   entries: readonly RecordedDanmakuEntry[],
   options: RecordedDanmakuFilterOptions,

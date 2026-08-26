@@ -108,13 +108,12 @@ type HistoryCardProps = {
 function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   const title = item.title || "未命名直播间";
   const roomPath = `/room/${item.site_id}/${encodeURIComponent(item.room_id)}`;
-  // Records written before the cover column existed, and platforms that never
-  // supply artwork, fall back to the platform mark rather than an empty box.
+  // 早于封面列出现写入的记录，以及从不提供封面的平台，
+  // 回退到平台标识而不是空盒子。
   const cover = normalizeImageUrl(item.cover);
 
-  // No context menu here: a tap opens the room and the delete button covers the
-  // only other action, so a right-click/long-press menu would just duplicate
-  // both on every card.
+  // 这里不放上下文菜单：点按打开房间、删除按钮覆盖了仅剩的操作，
+  // 右键/长按菜单只会在每张卡上重复这两个功能。
   return (
     <div
       role="button"
@@ -148,7 +147,7 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
             <SiteLogo siteId={item.site_id} className="size-7" />
           </span>
         )}
-        {/* The platform mark stays legible over artwork of any brightness. */}
+        {/* 让平台标识在任何亮度的封面上都保持可读。 */}
         <span className="absolute bottom-1 left-1 flex size-5 items-center justify-center rounded-md bg-black/60 backdrop-blur-sm">
           <SiteLogo siteId={item.site_id} className="size-3.5" />
         </span>
@@ -194,7 +193,7 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   );
 }
 
-/** The room a message was sent to, or a plain platform label when unavailable. */
+/** 消息发往的房间；不可得时用纯平台标签。 */
 function danmakuRoomLabel(item: DanmakuSendHistoryItem): string {
   const title = item.room_title?.trim();
   if (title) return title;
@@ -221,8 +220,8 @@ function DanmakuSendHistoryCard({
           <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
             <SiteLogo siteId={item.site_id} className="size-4" />
           </span>
-          {/* Which room the message went to is the point of this row, so it is
-              the card's title rather than a footnote under the content. */}
+          {/* 消息发往哪个房间正是这一行的重点，
+              因此它是卡片标题而不是内容下的脚注。 */}
           {roomId && onOpenRoom ? (
             <button
               type="button"
@@ -502,9 +501,9 @@ export function HistoryPage() {
     else clearDanmakuSendHistoryMutation.mutate();
   };
 
-  // The header owns the view tabs and the clear button, so publish the state
-  // they render from and listen for the clear they request. The confirmation
-  // dialog stays here with the mutations that back it.
+  // 头部拥有视图页签和清空按钮，因此发布它们渲染所需的状态，
+  // 并监听它们请求的清空动作。确认对话框留在这里，
+  // 与其背后的变更逻辑放在一起。
   const requestClear = useCallback(() => {
     resetActiveClearMutation();
     setClearOpen(true);
@@ -526,8 +525,8 @@ export function HistoryPage() {
     value: activeView,
     onChange: (view: HistoryView) => handleViewChange(view),
     enabled: isMobileClient(),
-    // Both panels ride one track, so the next page is already on screen and
-    // tracks the finger instead of appearing only after the release.
+    // 两个面板共用一条 track，下一页已经在屏上并跟随手指移动，
+    // 而不是释放后才出现。
     layout: "track",
   });
 
@@ -574,12 +573,12 @@ export function HistoryPage() {
 
           <div
             data-slot="horizontal-swipe-viewport"
-            // Clip only the horizontal axis: the list grows downward inside
-            // Shell's scroller, so clipping both would truncate long histories.
+            // 只裁剪横向轴：列表在 Shell 的滚动容器内向下生长，
+            // 两个方向都裁剪会截断长历史。
             //
-            // Each panel gives its cards one pixel for their outward ring and
-            // clips that paint to its own page. This keeps the neighbouring
-            // panel's first card edge from peeking through after a tab switch.
+            // 每个面板为自己的卡片留出一像素的外扩描边，
+            // 并把该绘制裁剪到自己的页面内。这样切换页签后
+            // 相邻面板第一张卡的边缘不会透出来。
             className="min-w-0 overflow-x-clip"
           >
             <div
@@ -591,11 +590,9 @@ export function HistoryPage() {
               <TabsContent
                 value="watch"
                 keepMounted
-                // The track keeps both panels side by side so the outgoing and
-                // incoming pages travel together under the finger. Base UI
-                // hides a kept-mounted panel, which would collapse the row —
-                // visibility is the track's job, so undo it here and mark the
-                // inactive page inert instead.
+                // track 让两个面板并排存在，离场页与进场页在手指之下一起移动。Base UI 会
+                // 隐藏保持挂载的面板，导致整行塌陷 —— 可见性归 track 管，
+                // 所以在这里撤销隐藏，并把非活动页标记为 inert。
                 hidden={false}
                 inert={activeView === "watch" ? undefined : true}
                 className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"

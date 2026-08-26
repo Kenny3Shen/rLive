@@ -11,8 +11,8 @@ use crate::models::live::SiteId;
 
 const MAX_ACCOUNT_NAME_CHARS: usize = 128;
 
-/// Load cookie for a site. Returns `None` when unset.
-/// Never log the full cookie value.
+/// 读取某站点的 cookie。未设置时返回 `None`。
+/// 绝不记录完整的 cookie 值。
 pub fn get_cookie(conn: &Connection, site_id: &SiteId) -> AppResult<Option<String>> {
     let site = site_id.as_str();
     let mut stmt = conn
@@ -25,11 +25,11 @@ pub fn get_cookie(conn: &Connection, site_id: &SiteId) -> AppResult<Option<Strin
     Ok(cookie)
 }
 
-/// Store cookie for a site (upsert). Empty string is stored as-is; callers may clear instead.
+/// 保存某站点的 cookie（upsert）。空字符串按原样存储；调用方可改为清除。
 pub fn set_cookie(conn: &Connection, site_id: &SiteId, cookie: &str) -> AppResult<()> {
     let site = site_id.as_str();
     let now = chrono::Utc::now().timestamp();
-    // Log only metadata — never the full cookie string.
+    // 只记录元数据 —— 绝不记录完整的 cookie 字符串。
     tracing::debug!(
         site_id = site,
         cookie_len = cookie.len(),
@@ -46,7 +46,7 @@ pub fn set_cookie(conn: &Connection, site_id: &SiteId, cookie: &str) -> AppResul
     Ok(())
 }
 
-/// Remove cookie row for a site.
+/// 删除某站点的 cookie 记录行。
 pub fn clear_cookie(conn: &Connection, site_id: &SiteId) -> AppResult<()> {
     let site = site_id.as_str();
     tracing::debug!(site_id = site, "account_clear_cookie");
@@ -55,22 +55,21 @@ pub fn clear_cookie(conn: &Connection, site_id: &SiteId) -> AppResult<()> {
     Ok(())
 }
 
-/// Return a display name carried by a platform's browser Cookie, if that
-/// platform provides one.  This intentionally accepts only known name fields
-/// rather than attempting to infer an identity from opaque session values.
+/// 返回某平台浏览器 Cookie 中携带的显示名（若该平台提供）。
+/// 这里刻意只接受已知的名称字段，
+/// 而不尝试从不透明的会话值中推断身份。
 ///
-/// The result is suitable for the account-settings summary only.  It does not
-/// validate that a session is currently accepted by the upstream platform.
+/// 结果仅适用于账号设置页的摘要展示，
+/// 并不校验该会话当前是否仍被上游平台接受。
 pub fn display_name_from_cookie(site_id: &SiteId, cookie: &str) -> Option<String> {
     let name_keys: &[&str] = match site_id {
-        // Bilibili normally needs a profile request because QR-login callback
-        // Cookies do not include this optional field.  Keep it as a fallback
-        // for browser exports that do include it.
+        // Bilibili 通常需要额外请求个人资料，因为扫码登录回调的 Cookie 不包含
+        // 这个可选字段。这里保留它，作为确实包含该字段的浏览器导出的兜底。
         SiteId::Bilibili => &["DedeUserName"],
         SiteId::Douyu => &["acf_username"],
         SiteId::Huya => &["udb_n", "username"],
-        // Some manually exported Douyin Cookies carry one of these fields;
-        // do not mistake a numeric login/session token for a display name.
+        // 部分手动导出的抖音 Cookie 会携带其中某个字段；
+        // 不要把数字型的登录/会话 token 误当成显示名。
         SiteId::Douyin => &["nickname", "user_name", "username"],
         _ => &[],
     };
@@ -100,9 +99,9 @@ fn normalize_display_name(value: String) -> Option<String> {
     (!value.is_empty() && value.chars().count() <= MAX_ACCOUNT_NAME_CHARS).then(|| value.to_owned())
 }
 
-/// Decode percent escapes without applying URL-form's `+` → space rule.
-/// Browser Cookie values use a literal plus, and several platforms encode
-/// Chinese account names with percent escapes.
+/// 解码百分号转义，但不套用 URL 表单中 `+` → 空格的规则。
+/// 浏览器 Cookie 值使用的是字面加号，且多个平台会用百分号转义
+/// 编码中文账号名。
 fn percent_decode_cookie_value(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -166,8 +165,8 @@ mod tests {
                 .as_deref(),
             Some("虎牙+用户")
         );
-        // Some Huya browser exports carry the display name in `username`
-        // instead of (or in addition to) `udb_n`; `udb_n` takes priority.
+        // 部分虎牙浏览器导出把显示名放在 `username` 而不是（或同时放在）
+        // `udb_n` 中；以 `udb_n` 优先。
         assert_eq!(
             display_name_from_cookie(&SiteId::Huya, "username=%E5%B0%8F%E8%99%8E; yyuid=42")
                 .as_deref(),

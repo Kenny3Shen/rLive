@@ -58,8 +58,7 @@ describe("floating danmaku pin gesture", () => {
   });
 
   test("leaves a drag or a long press to the player stage", () => {
-    // A volume or brightness drag can begin on a comment; it must still reach
-    // the stage instead of pinning.
+    // 音量或亮度拖拽可能从评论上开始；它必须仍能到达舞台而不是变成钉住。
     expect(isDanmakuPinTap(0, 40, 200)).toBe(false);
     expect(isDanmakuPinTap(0, 0, 400)).toBe(false);
   });

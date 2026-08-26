@@ -29,7 +29,7 @@ function sidebarDestinationIndex(pathname: string): number {
   );
 }
 
-/** Maps the sidebar's visual top-to-bottom order to the matching page-pan direction. */
+/** 把侧栏自上而下的视觉顺序映射到对应的页面平移方向。 */
 export function sidebarNavigationDirection(fromPathname: string, toPathname: string): 1 | -1 {
   const fromIndex = sidebarDestinationIndex(fromPathname);
   const toIndex = sidebarDestinationIndex(toPathname);
@@ -37,7 +37,7 @@ export function sidebarNavigationDirection(fromPathname: string, toPathname: str
   return fromIndex >= 0 && toIndex >= 0 && toIndex < fromIndex ? -1 : 1;
 }
 
-/** Never carry a platform panel from one bottom-navigation destination into another. */
+/** 绝不让平台面板从一个底部导航目的地带入另一个。 */
 export function routeScopedPreviousGroup(
   previousPathname: string,
   previousGroup: string,

@@ -13,19 +13,19 @@ use crate::state::{
 
 #[derive(Debug, Serialize)]
 pub struct BilibiliDanmakuSendStatus {
-    /// The user has enabled this device-local write capability.
+    /// 用户已启用这项仅限本机的写入能力。
     pub send_enabled: bool,
-    /// The local account has both required session/CSRF cookie values.
+    /// 本地账号同时具备所需的 session 与 CSRF cookie 值。
     pub cookie_ready: bool,
-    /// Both checks passed; the composer may accept a message.
+    /// 两项检查都通过；输入框可以接受消息。
     pub available: bool,
-    /// Safe user-facing guidance. It intentionally contains no credential data.
+    /// 面向用户的安全提示文案。其中刻意不包含任何凭据数据。
     pub message: String,
 }
 
-/// Availability of the locally stored Douyu account for one user-initiated
-/// ordinary text message. The shared device-local sending permission and the
-/// authenticated Cookie are both required before the user can submit it.
+/// 本地保存的斗鱼账号对一条由用户发起的普通文本消息是否可用。
+/// 用户提交之前，需要同时具备共享的本机发送权限
+/// 和已认证的 Cookie。
 #[derive(Debug, Serialize)]
 pub struct DouyuDanmakuSendStatus {
     pub send_enabled: bool,
@@ -34,10 +34,9 @@ pub struct DouyuDanmakuSendStatus {
     pub message: String,
 }
 
-/// Availability of the locally stored Huya web session for one explicit
-/// ordinary text message. The websocket verifies the Cookie before every
-/// write, so this status is only a local preflight, not an authentication
-/// assertion.
+/// 本地保存的虎牙 Web 会话对一条明确的普通文本消息是否可用。
+/// websocket 在每次写入前都会校验 Cookie，
+/// 因此这个状态只是本地预检，并不是认证结论。
 #[derive(Debug, Serialize)]
 pub struct HuyaDanmakuSendStatus {
     pub send_enabled: bool,
@@ -46,10 +45,9 @@ pub struct HuyaDanmakuSendStatus {
     pub message: String,
 }
 
-/// Complete all deterministic local validation before reserving the short
-/// manual-send cooldown. This keeps an invalid draft from behaving like a
-/// network attempt while still reserving every request that reaches the
-/// remote API (including ambiguous failures).
+/// 在占用短暂的手动发送冷却之前，先完成所有确定性的本地校验。这样既能让
+/// 无效草稿不表现为一次网络尝试，又能为每个真正到达远端 API 的请求
+/// （包括结果不明的失败）都占用冷却。
 fn validate_and_reserve_bilibili_send(
     limiter: &BilibiliDanmakuSendLimiter,
     room_id: &str,
@@ -69,9 +67,8 @@ fn validate_and_reserve_bilibili_send(
     Ok((room_id.to_string(), message))
 }
 
-/// Complete deterministic local validation before reserving the manual-send
-/// cooldown. In particular, an invalid draft must not consume the cooldown
-/// for the next valid user action.
+/// 在占用手动发送冷却之前先完成确定性的本地校验。特别是无效草稿
+/// 不得消耗掉下一次有效用户操作的冷却额度。
 fn validate_and_reserve_douyu_send(
     limiter: &DouyuDanmakuSendLimiter,
     room_id: &str,
@@ -102,9 +99,9 @@ fn validate_huya_send_room(room_id: &str) -> AppResult<String> {
     Ok(room_id.to_owned())
 }
 
-/// Reserve only after the room lookup has completed. A malformed draft or a
-/// room whose metadata cannot be resolved never reaches the authenticated
-/// signal write and therefore should not make the next valid action wait.
+/// 只有在房间信息查询完成之后才占用冷却。格式错误的草稿，或元数据无法解析的
+/// 房间，都不会走到已认证的信令写入，
+/// 因此不应让下一次有效操作等待。
 fn validate_and_reserve_huya_send(
     limiter: &HuyaDanmakuSendLimiter,
     room_id: &str,
@@ -116,14 +113,13 @@ fn validate_and_reserve_huya_send(
     Ok((room_id, message))
 }
 
-/// A successful platform write is the only point at which an outgoing message
-/// becomes reusable history. History is convenience data, so a local database
-/// failure must never turn an already accepted platform write into a false
-/// failure in the UI.
+/// 只有平台写入成功，发出的消息才会成为可复用的历史记录。历史属于便利数据，
+/// 因此本地数据库失败绝不能把平台已接受的写入
+/// 在 UI 上变成一次假失败。
 ///
-/// Room metadata is best-effort. The active player supplies the detail it
-/// already rendered; watch history fills any missing field without adding a
-/// network request to the successful send path.
+/// 房间元数据尽力而为。当前播放器提供它已渲染出的详情；
+/// 观看历史补齐缺失字段，
+/// 不会在成功发送路径上增加网络请求。
 fn record_successful_danmaku_send(
     state: &AppState,
     site_id: SiteId,
@@ -162,8 +158,8 @@ fn record_successful_danmaku_send(
             )
         });
     if let Err(error) = result {
-        // Do not include the outgoing content in logs. It can be personal,
-        // while the app's release log is intentionally failure-only.
+        // 不要把发出的内容写入日志。它可能涉及个人信息，
+        // 而应用的发布版日志刻意只记录失败。
         tracing::warn!(site = site_id.as_str(), error_code = %error.code, "could not save danmaku send history");
     }
 }
@@ -190,9 +186,8 @@ pub async fn danmaku_connect(
     {
         return Ok(());
     }
-    // Close the finish-vs-route race: if the recording completed after the
-    // first check but before the connection was detached, its finish callback
-    // could not see a background task yet.
+    // 消除"完成与路由清理"的竞争：如果录制在第一次检查之后、
+    // 连接被分离之前完成，它的完成回调此时还看不到后台任务。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     if let Some(source_key) = retained_source
         && !state
@@ -201,9 +196,9 @@ pub async fn danmaku_connect(
     {
         state.danmaku.disconnect_background_for_source(&source_key);
     }
-    // Read account state and settings in one short DB lock.  A site instance
-    // owns its own transient web session afterwards, so no lock spans HTTP or
-    // WebSocket work.
+    // 在一次短暂的数据库加锁中读完账号状态与设置。之后站点实例自行持有
+    // 临时的 Web 会话，因此没有任何锁会跨越 HTTP 或
+    // WebSocket 操作。
     let (cookie, settings) = {
         let conn = state
             .db
@@ -214,15 +209,14 @@ pub async fn danmaku_connect(
             crate::settings::get(&conn)?,
         )
     };
-    // The room-detail request is also needed before a websocket can join. Use
-    // the same proxy setting as ordinary browsing so Twitch rooms do not fail
-    // before their anonymous IRC connection is started.
+    // websocket 加入房间前同样需要房间详情请求。这里使用与普通浏览相同的
+    // 代理设置，避免 Twitch 房间在匿名 IRC 连接启动前就失败。
     let site = sites::site_with_proxy(&site_id, cookie.clone(), settings.proxy.as_deref())?;
-    // Bilibili danmaku works without a session. When the saved Cookie is
-    // expired, the room detail is still fetched, but the chat connection must
-    // fall back to the anonymous mode instead of silently using a dead uid.
-    // Probe the session concurrently with the detail request so the room
-    // entry latency is unchanged.
+    // Bilibili 弹幕在没有会话时也能工作。当保存的 Cookie 已过期时，房间详情
+    // 仍会被拉取，但聊天连接必须回退到匿名模式，
+    // 而不是悄悄使用一个失效的 uid。
+    // 会话探测与详情请求并发进行，
+    // 使进入房间的耗时保持不变。
     let (detail, cookie_status) = tokio::join!(site.get_room_detail(&room_id), async {
         match (&site_id, &cookie) {
             (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
@@ -244,9 +238,8 @@ pub async fn danmaku_connect(
         identity_cookie = None;
         notice = Some("B站 Cookie 已失效，弹幕已切换为匿名模式。请在设置中重新登录。".to_string());
     }
-    // Douyin may derive an anonymous `ttwid` / `msToken` while resolving the
-    // room. The WSS handshake needs that same in-memory browser session, but
-    // transient values must neither reach the frontend nor be persisted.
+    // 抖音在解析房间时可能派生出匿名的 `ttwid` / `msToken`。WSS 握手需要同一份
+    // 内存中的浏览器会话，但这些临时值既不能到达前端也不能被持久化。
     let danmaku_cookie = site
         .danmaku_session_cookie()?
         .unwrap_or_else(|| cookie.clone().unwrap_or_default());
@@ -267,8 +260,8 @@ pub async fn danmaku_connect(
     .await
 }
 
-/// Remove the account Cookie and viewer identity from cached room detail so a
-/// Bilibili chat connection joins anonymously (`uid = 0`, no session cookie).
+/// 从缓存的房间详情中移除账号 Cookie 与观众身份，
+/// 使 Bilibili 聊天连接以匿名方式加入（`uid = 0`，不带 session cookie）。
 fn strip_bilibili_danmaku_cookie(raw: &mut serde_json::Value) {
     if let Some(danmaku) = raw
         .get_mut("danmaku")
@@ -298,8 +291,8 @@ pub fn danmaku_disconnect(
                 .has_background_danmaku_recording(&source_key)
         {
             let detached = state.danmaku.detach_for_generation(epoch);
-            // Recheck after detaching for the same reason as `danmaku_connect`:
-            // recording finalization and route cleanup run concurrently.
+            // 分离后重新检查，原因与 `danmaku_connect` 相同：
+            // 录制收尾与路由清理会并发执行。
             if detached
                 && !state
                     .recording
@@ -377,9 +370,8 @@ pub async fn bilibili_danmaku_send(
     }
     let (room_id, message) =
         validate_and_reserve_bilibili_send(&state.bilibili_send_limiter, &room_id, &message)?;
-    // This request carries the user's browser Cookie. A redirect target must
-    // never receive it, so the write path deliberately opts out of redirect
-    // following for both proxied and direct requests.
+    // 该请求携带用户的浏览器 Cookie。重定向目标绝不能收到它，
+    // 因此写入路径对代理请求和直连请求都刻意关闭了重定向跟随。
     let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
     danmu_rs::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
     record_successful_danmaku_send(
@@ -544,8 +536,8 @@ pub async fn huya_danmaku_send(
         )
         .with_site("huya"));
     }
-    // Resolve the canonical top/sub/presenter ids instead of using a short
-    // public room id directly in the TARS request.
+    // 解析出规范的 top/sub/presenter id，
+    // 而不是把短公开房间号直接用于 TARS 请求。
     let room_id = validate_huya_send_room(&room_id)?;
     let site = sites::site_with_proxy(&SiteId::Huya, Some(cookie.clone()), proxy.as_deref())?;
     let detail = site.get_room_detail(&room_id).await?;
@@ -587,8 +579,8 @@ mod tests {
         let limiter = BilibiliDanmakuSendLimiter::new();
 
         assert!(validate_and_reserve_bilibili_send(&limiter, "123", "\n").is_err());
-        // The following valid attempt has no reason to wait: no upstream send
-        // was attempted for the invalid draft above.
+        // 随后的有效尝试没有理由等待：
+        // 上面那份无效草稿并没有向上游发起任何发送。
         assert!(validate_and_reserve_bilibili_send(&limiter, "123", "你好").is_ok());
         assert!(validate_and_reserve_bilibili_send(&limiter, "123", "第二条").is_err());
     }
@@ -608,8 +600,8 @@ mod tests {
 
         assert_eq!(raw["danmaku"]["cookie"], "");
         assert_eq!(raw["danmaku"]["viewer_uid"], 0);
-        // The connection metadata is untouched: only the session identity is
-        // removed, so the anonymous join keeps the shared token and hosts.
+        // 连接元数据保持不变：只移除会话身份，
+        // 因此匿名加入仍沿用共享的 token 与主机列表。
         assert_eq!(raw["danmaku"]["token"], "token");
         assert_eq!(raw["danmaku"]["server_hosts"][0], "host-a.example");
     }

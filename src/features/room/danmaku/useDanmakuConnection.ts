@@ -15,15 +15,14 @@ function errMessage(e: unknown): string {
 }
 
 /**
- * Connects the room danmaku WS while mounted; surfaces status text.
- * Site loops own their protocol-specific reconnect behavior (Bilibili
- * refreshes its token and rotates gateways); this hook only fences route
- * changes so an old room can never revive after a direct switch.
+ * 挂载期间连接房间弹幕 WS；对外暴露状态文本。站点循环拥有各自的协议相关重连
+ * 行为（Bilibili 刷新 token 并轮换网关）；本 hook 只做路由变更围栏，
+ * 保证直接切换后旧房间绝不可能复活。
  */
 export function useDanmakuConnection(opts: {
   siteId: SiteId | undefined;
   roomId: string | undefined;
-  /** Room detail room_id — reconnect when it changes. */
+  /** 房间详情 room_id —— 变化时重连。 */
   detailRoomId?: string;
   enabled?: boolean;
 }): { statusText: string | null; active: boolean } {
@@ -31,14 +30,13 @@ export function useDanmakuConnection(opts: {
   const [statusText, setStatusText] = useState<string | null>(null);
   const [active, setActive] = useState(false);
   const connectionEpochRef = useRef(0);
-  // The revision carries no Cookie data. Reconnecting is enough for Rust to
-  // rebuild the backend-only identity matcher from the newly saved account.
+  // revision 不携带 Cookie 数据。重连足以让 Rust 根据新保存的账号重建
+  // 仅存于后端的身份匹配器。
   const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
 
-  // Fence every route change before waiting for the next room-detail query.
-  // The stop and the replacement connection deliberately use *different*
-  // epochs: Tauri IPC is asynchronous, so a delayed same-epoch stop could
-  // otherwise arrive after the new websocket was installed and abort it.
+  // 在等待下一个房间详情查询之前先为每次路由变更设围栏。停止与替代连接刻意使用
+  // *不同* 的 epoch：Tauri IPC 是异步的，同 epoch 的延迟 stop 可能
+  // 在新 websocket 安装后才到达并将其中止。
   useLayoutEffect(() => {
     const { disconnectEpoch, connectionEpoch } = nextDanmakuConnectionFence();
     connectionEpochRef.current = connectionEpoch;
@@ -48,9 +46,8 @@ export function useDanmakuConnection(opts: {
     void invokeCmd("danmaku_disconnect", { connectionEpoch: disconnectEpoch }).catch(() => {});
     return () => {
       clearExpectedDanmakuConnectionEpoch(connectionEpoch);
-      // A layout cleanup runs before a replacement RoomPage's layout effect.
-      // Its newer epoch also fences an in-flight room-detail fetch on final
-      // unmount, without ever sharing the replacement connection's epoch.
+      // 布局清理先于替代 RoomPage 的布局副作用运行。其更新的 epoch 同时在最终卸载时
+      // 围住在途的房间详情抓取，且绝不与替代连接共用 epoch。
       const closingEpoch = nextDanmakuConnectionEpoch();
       connectionEpochRef.current = closingEpoch;
       void invokeCmd("danmaku_disconnect", { connectionEpoch: closingEpoch }).catch(() => {});

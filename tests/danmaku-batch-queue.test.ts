@@ -12,8 +12,8 @@ describe("batched danmaku queue", () => {
     queue.pushAll([1, 2, 3]);
     expect(queue.take(2)).toEqual([1, 2]);
 
-    // The queue currently holds 3. Adding three more must evict the oldest
-    // values without changing the order of the retained messages.
+    // 队列当前持有 3 条。再追加三条必须淘汰最旧的取值，
+    // 且不改变保留消息的顺序。
     queue.pushAll([4, 5, 6]);
     expect(queue.length).toBe(3);
     expect(queue.take(2)).toEqual([4, 5]);

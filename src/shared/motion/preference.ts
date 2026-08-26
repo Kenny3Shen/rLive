@@ -1,15 +1,14 @@
 export const FULL_MOTION_MODE = "full" as const;
 
-/** Apply the complete motion profile before React paints. */
+/** 在 React 绘制之前应用完整的动态效果配置。 */
 export function applyFullMotion() {
   if (typeof document === "undefined") return;
   document.documentElement.dataset.motion = FULL_MOTION_MODE;
 }
 
 /**
- * The app no longer exposes a motion selector, but the operating system's
- * accessibility preference still needs to be honored without changing the
- * persisted full-motion default.
+ * 应用不再暴露动态效果选择器，但仍需尊重操作系统的无障碍偏好，
+ * 同时不改持久化的完整动态默认值。
  */
 export function prefersReducedMotion(): boolean {
   return (

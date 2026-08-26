@@ -97,7 +97,7 @@ function PreferenceSliderField({
           {description && <FieldTip>{description}</FieldTip>}
         </FieldTitle>
       </FieldContent>
-      {/* Shares the row with the title on narrow screens; caps at 13rem on wide layouts. */}
+      {/* 窄屏上与标题共享一行；宽屏布局下上限 13rem。 */}
       <div
         className={cn(
           "flex items-center gap-3",
@@ -499,7 +499,7 @@ export function DanmakuAppearanceSettingsFields({
   );
 }
 
-/** Resets danmaku track/text/filter settings; shield words stay. */
+/** 重置弹幕轨道/文本/过滤设置；屏蔽词保留。 */
 export function resetDanmakuAppearanceSettings() {
   useSettingsStore.setState(DANMAKU_APPEARANCE_DEFAULTS);
   persist({

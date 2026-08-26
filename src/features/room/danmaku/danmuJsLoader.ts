@@ -9,9 +9,9 @@ function asRecord(value: unknown): ModuleRecord | null {
 }
 
 /**
- * danmu.js 1.2.1 is published as UMD/CJS without an `exports` map. Depending
- * on the runtime and Vite's interop pass, its constructor can appear at any of
- * these equivalent locations. Keep that compatibility knowledge in one place.
+ * danmu.js 1.2.1 以 UMD/CJS 发布且没有 `exports` map。取决于运行时和 Vite 的
+ * 互操作处理，其构造函数可能出现在这些等价位置中的任何一个。
+ * 把这份兼容性知识集中在一处。
  */
 export function resolveDanmuJsConstructor(moduleValue: unknown): DanmuJsConstructor | null {
   const root = asRecord(moduleValue);
@@ -32,7 +32,7 @@ export function resolveDanmuJsConstructor(moduleValue: unknown): DanmuJsConstruc
 
 let constructorPromise: Promise<DanmuJsConstructor> | null = null;
 
-/** Load the browser-only renderer without evaluating its CSS-injecting UMD in SSR tests. */
+/** 加载仅限浏览器的渲染器，避免 SSR 测试中求值其注入 CSS 的 UMD。 */
 export function loadDanmuJs(): Promise<DanmuJsConstructor> {
   if (constructorPromise) return constructorPromise;
 

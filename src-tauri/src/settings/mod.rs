@@ -36,10 +36,10 @@ const RECORDING_ASS_FONT_NAME_MAX_CHARS: usize = 80;
 const RECORDING_ASS_SHIELD_RULE_MAX_CHARS: usize = 200;
 const RECORDING_ASS_SHIELD_RULE_MAX_COUNT: usize = 100;
 
-/// Repairs platform visibility preferences from hand-edited or future settings
-/// records. The UI prevents this state already, but settings are imported and
-/// written through more than one path, so the persisted representation also
-/// guarantees one visible platform and an enabled default selection.
+/// 修复手工编辑或来自未来版本的设置记录中的平台可见性偏好。UI 已经阻止了
+/// 这种情况，但设置的导入和写入路径不止一条，
+/// 因此持久化表示也要保证至少一个平台可见
+/// 且默认选项处于启用状态。
 fn normalize_site_preferences(settings: &mut AppSettings) {
     let known_site_ids: Vec<&str> = crate::sites::registry::all_meta()
         .into_iter()
@@ -55,9 +55,8 @@ fn normalize_site_preferences(settings: &mut AppSettings) {
         .map(String::as_str)
         .collect();
 
-    // A malformed settings file may opt out of every bundled platform. Keep
-    // the stable first platform as a safe recovery path instead of making the
-    // application impossible to navigate.
+    // 畸形的设置文件可能关掉所有内置平台。保留稳定的首个平台作为安全恢复路径，
+    // 而不是让应用变得无法导航。
     if known_site_ids
         .iter()
         .all(|site_id| disabled_site_ids.contains(*site_id))
@@ -261,7 +260,7 @@ fn normalize_ass_style_width(value: f32) -> f32 {
     (value.clamp(0.0, RECORDING_ASS_STYLE_WIDTH_MAX) * 2.0).round() / 2.0
 }
 
-/// Load app settings from `settings_kv`, or return defaults only when no record exists.
+/// 从 `settings_kv` 加载应用设置，仅在记录不存在时返回默认值。
 pub fn get(conn: &Connection) -> AppResult<AppSettings> {
     Ok(get_with_status(conn)?.0)
 }
@@ -305,10 +304,10 @@ fn decode_saved_settings(json: &str) -> AppResult<AppSettings> {
     })
 }
 
-/// Load settings along with whether a valid saved settings record exists.
+/// 加载设置，并附带是否存在有效的已保存设置记录。
 ///
-/// The distinction lets the frontend choose device-specific first-run defaults
-/// without treating them as an already saved preference.
+/// 这一区分让前端可以选择设备专属的首启默认值，
+/// 而不把它们当作已保存的偏好。
 pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     let mut stmt = conn
         .prepare("SELECT value FROM settings_kv WHERE key = ?1")
@@ -329,7 +328,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     Ok((settings, true))
 }
 
-/// Persist full app settings under key `app_settings`.
+/// 在 key `app_settings` 下持久化完整的应用设置。
 pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
     normalize_site_preferences(&mut normalized);
@@ -415,7 +414,7 @@ mod tests {
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 1);
 
-        // Zero is the explicit "merge off" value and must survive the boundary.
+        // 零是显式的"关闭合并"取值，必须原样通过这一边界。
         settings.danmaku_merge_window_seconds = 0;
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 0);

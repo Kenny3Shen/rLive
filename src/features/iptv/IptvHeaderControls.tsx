@@ -31,9 +31,8 @@ type IptvSourceSwitcherProps = {
 };
 
 /**
- * Source tabs for the same application-bar slot used by live platforms. The
- * strip stays a tablist on every viewport — on mobile it expands to fill the
- * header row, mirroring the history page's view switcher.
+ * 与直播平台共用同一应用栏槽位的来源页签。该条带在所有视口下都是 tablist ——
+ * 移动端它会扩展填满头部行，与历史页的视图切换器一致。
  */
 export function IptvSourceSwitcher({
   sources,
@@ -90,17 +89,15 @@ type IptvSearchInputProps = {
 };
 
 /**
- * Channel search with a short debounce: the keyword lives in the address bar,
- * and writing it per keystroke would re-filter thousands of channels while the
- * user is still typing.
+ * 频道搜索带短防抖：关键字保存在地址栏里，
+ * 逐键写入会在用户还在输入时反复过滤数千个频道。
  */
 export function IptvSearchInput({ keyword, onChange, className }: IptvSearchInputProps) {
   const [draft, setDraft] = useState(keyword);
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
-  // Adopt external changes (a cleared filter, a restored URL) without
-  // clobbering what the user is currently typing.
+  // 采纳外部变更（清除过滤、恢复 URL），同时不覆盖用户正在输入的内容。
   useEffect(() => {
     if (keyword !== draftRef.current) setDraft(keyword);
   }, [keyword]);
@@ -164,11 +161,11 @@ function availabilityFilterLabel(filter: IptvAvailabilityFilter): string {
 
 type IptvAvailabilitySelectProps = {
   className?: string;
-  /** Collapse to an icon-only touch button, as used by the mobile toolbar. */
+  /** 收起为纯图标的触摸按钮，与移动端工具栏一致。 */
   iconOnly?: boolean;
 };
 
-/** Availability filter shared by the desktop rail and the mobile toolbar. */
+/** 桌面侧栏与移动端工具栏共享的可看性过滤器。 */
 export function IptvAvailabilitySelect({
   className,
   iconOnly = false,
@@ -213,7 +210,7 @@ type IptvRailControlsProps = {
   className?: string;
 };
 
-/** Search and availability filter stacked at the top of the desktop page rail. */
+/** 搜索与可看性过滤器堆叠在桌面页面侧栏顶部。 */
 export function IptvRailControls({ className }: IptvRailControlsProps) {
   const { keyword, navigateHome, hasFilters, clearFilters } = useIptvController();
 
@@ -242,9 +239,8 @@ type IptvContentToolbarProps = {
 };
 
 /**
- * Mobile toolbar above the channel grid: the search box plus icon-only group
- * and availability filters in one row, mirroring the history page. Desktop
- * carries these controls in the page rail instead.
+ * 频道网格上方的移动端工具栏：搜索框加图标按钮组和可看性过滤器排成一行，
+ * 与历史页一致。桌面端把这些控件放在页面侧栏中。
  */
 export function IptvContentToolbar({ className }: IptvContentToolbarProps) {
   const { keyword, groupOptions, selectedGroup, navigateHome, hasFilters, clearFilters } =
@@ -307,7 +303,7 @@ export function IptvContentToolbar({ className }: IptvContentToolbarProps) {
   );
 }
 
-/** Manual IPTV availability probe, kept in the content corner so the Shell rail stays compact. */
+/** 手动 IPTV 可看性探测放在内容区角落，保持 Shell 侧栏紧凑。 */
 export function IptvAvailabilityFab() {
   const {
     matchingChannels,

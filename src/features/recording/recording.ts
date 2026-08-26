@@ -62,15 +62,14 @@ export type RecordingContext = {
   cover?: string;
   userAvatar?: string;
   /**
-   * Supplies a play URL for the recording alone, replacing `source` at start.
+   * 仅为录制单独提供播放地址，在开始时替换 `source`。
    *
-   * Set this wherever `source` is the URL an on-screen player is already
-   * pulling. The player streams through the Rust `stream_proxy` while the
-   * recording connects upstream directly, so one address means two independent
-   * connections; a site that signs per request and permits a single consumer per
-   * signature drops the second, and the recording fails moments after starting.
+   * 凡 `source` 是屏幕上播放器正在拉取的 URL，都应设置此项。播放器经 Rust
+   * `stream_proxy` 推流而录制直连上游，同一个地址意味着两条独立连接；
+   * 按请求签名且每个签名只允许一个消费者的站点会掐断第二条，
+   * 录制会在开始后不久失败。
    *
-   * Callers that already fetched a URL nobody else is using leave this unset.
+   * 已经拿到了无人共用的 URL 的调用方不必设置此项。
    */
   resolveRecordingSource?: () => Promise<PlayUrl>;
 };
@@ -94,9 +93,11 @@ export function recordingsForPlatform(
   return platform === "all" ? items : items.filter((item) => item.site_id === platform);
 }
 
-/** Split the library by the header scope. "已录制" covers every finished task,
- * including interrupted and failed ones, because those are equally no longer
- * running and still have media on disk. */
+/**
+ * 按头部作用域拆分库。"已录制"覆盖所有已结束的任务，
+ * 包括被打断和失败的：它们同样不再运行，
+ * 且磁盘上仍有媒体。
+ */
 export function recordingsForView(
   items: readonly RecordingItem[],
   view: RecordingView,
@@ -161,14 +162,14 @@ export function formatRecordingDuration(durationMs: number): string {
   return minutes + ":" + String(remainder).padStart(2, "0");
 }
 
-/** Keep media progress inside the duration exposed by the recording metadata. */
+/** 把媒体进度限制在录制元数据暴露的时长之内。 */
 export function clampRecordingPlaybackTime(currentTime: number, duration: number): number {
   const time = Number.isFinite(currentTime) ? Math.max(0, currentTime) : 0;
   if (!Number.isFinite(duration) || duration <= 0) return time;
   return Math.min(time, duration);
 }
 
-/** Snap a real EOF to metadata duration without hiding an earlier media stop. */
+/** 把真实的 EOF 吸附到元数据时长，同时不掩盖更早发生的媒体停止。 */
 export function recordingEndedPlaybackTime(
   currentTime: number,
   duration: number,
@@ -180,7 +181,7 @@ export function recordingEndedPlaybackTime(
   return duration - bounded <= tolerance ? duration : bounded;
 }
 
-/** A seek may complete on EOF only when it was explicitly aimed at the end. */
+/** 只有明确瞄准结尾的 seek 才允许在 EOF 上完成。 */
 export function recordingSeekReached(
   currentTime: number,
   target: number,
@@ -293,7 +294,7 @@ export function createSharedRecordingChangeSubscription<T>(
     try {
       unlisten();
     } catch {
-      // Polling remains available even if native listener cleanup fails.
+      // 即使原生监听器清理失败，轮询仍保持可用。
     }
   }
 
@@ -308,7 +309,7 @@ export function createSharedRecordingChangeSubscription<T>(
             try {
               notifySubscriber(subscriber, progress);
             } catch {
-              // One query client must not prevent the others from refreshing.
+              // 一个查询客户端不得阻止其他客户端刷新。
             }
           }
         }),
@@ -325,8 +326,8 @@ export function createSharedRecordingChangeSubscription<T>(
         },
         () => {
           listenerPromise = null;
-          // A remount while the stale registration was pending needs a fresh
-          // attempt. Otherwise the active-recording poll remains the fallback.
+          // 过期注册尚未完成时发生的重挂载需要一次全新尝试。
+          // 否则活动录制轮询仍是兜底。
           if (subscriberCounts.size > 0 && generation !== listenerGeneration) {
             ensureNativeListener();
           }
@@ -415,8 +416,8 @@ export async function startRecording(
   context: RecordingContext,
   { includeDanmaku, continueOnLeave }: RecordingStartOptions = {},
 ): Promise<RecordingItem> {
-  // A dedicated URL is preferred but never required: if the site cannot hand out
-  // another line, recording the shared one is better than not recording at all.
+  // 专用地址优先但绝非必需：如果站点无法再给一条线路，
+  // 录制共享线路总比完全不录制好。
   let source = context.source;
   if (context.resolveRecordingSource) {
     try {
@@ -533,7 +534,7 @@ export async function stopRecording(id: string): Promise<RecordingItem> {
   return invokeCmd<RecordingItem>("recording_stop", { id });
 }
 
-/** Keeps an active recording alive after its player page closes. */
+/** 在其播放器页关闭后保持进行中的录制继续存活。 */
 export async function setRecordingContinueOnLeave(
   id: string,
   continueOnLeave: boolean,
@@ -553,22 +554,21 @@ export async function recordingStorageInfo(): Promise<RecordingStorageInfo> {
 }
 
 /**
- * Number of recordings the backend is currently capturing.
+ * 后端当前正在采集的录制数量。
  *
- * The library query is event-driven with a slow poll behind it, so its cached
- * list can lag a task that just started or just ended. The exit dialog asks the
- * backend directly instead, because it decides whether to ask the user at all.
+ * 库查询是事件驱动、背后带慢速轮询的，其缓存列表可能落后于刚开始或刚结束的
+ * 任务。退出对话框改为直接询问后端，
+ * 因为它要决定是否向用户提问。
  */
 export async function fetchActiveRecordingCount(): Promise<number> {
   return await invokeCmd<number>("recording_active_count");
 }
 
 /**
- * Stops every recording and exits the application.
+ * 停止所有录制并退出应用。
  *
- * The window close handler prevented its own close and asked the user, so this
- * is the confirmed answer. It never resolves on success: the process is gone
- * before the reply can be delivered.
+ * 窗口关闭处理器阻止了自己的关闭并向用户提问，这里是确认后的回答。
+ * 它成功时永不 resolve：应答送达之前进程已经消失。
  */
 export async function confirmAppExit(): Promise<void> {
   await invokeCmd<void>("app_confirm_exit");
@@ -583,8 +583,8 @@ export async function recordingDanmakuUrl(id: string): Promise<string | null> {
 }
 
 /**
- * Writes an ASS subtitle next to the recorded media and resolves with its
- * absolute path. External players load it by the shared file name.
+ * 在录制的媒体旁写出 ASS 字幕并以绝对路径 resolve。
+ * 外部播放器按共享文件名加载它。
  */
 export async function exportRecordingDanmakuAss(id: string): Promise<string> {
   return invokeCmd<string>("recording_danmaku_export_ass", { id });

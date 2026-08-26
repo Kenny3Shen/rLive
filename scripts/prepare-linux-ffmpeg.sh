@@ -1,31 +1,27 @@
 #!/usr/bin/env bash
-# Build the static FFmpeg libraries `ffmpeg-next` links against on Linux.
+# 构建 Linux 上 `ffmpeg-next` 所链接的静态 FFmpeg 库。
 #
-# The distribution's `libav*-dev` packages cannot be used for a release: their
-# version is whatever the build machine happens to ship, they are unpinned and
-# unchecksummed, and the resulting binary depends on `libavformat.so.60` and
-# friends being present on the user's machine with a compatible soname. Linking
-# static archives built from the pinned official source keeps the packages
-# self-contained, makes the artifact reproducible, and bounds the license audit
-# to FFmpeg itself.
+# 发行版的 `libav*-dev` 包不能用于发布：版本取决于构建机自带什么，
+# 既没有固定版本也没有校验和，且产物会依赖用户机器上存在
+# soname 兼容的 `libavformat.so.60` 等库。链接由固定版本官方源码
+# 构建出的静态库，可让安装包自包含、产物可复现，
+# 并把许可审计范围限定在 FFmpeg 自身。
 #
-# Only what `recording_ffmpeg.rs` actually exercises is enabled: it demuxes
-# FLV/HLS/MPEG-TS and remuxes into FLV or MPEG-TS without ever decoding or
-# encoding. `configure` pulls in the parsers and bitstream filters those
-# muxers/demuxers select on its own, so they are not listed here.
+# 只启用 `recording_ffmpeg.rs` 实际用到的能力：它解复用 FLV/HLS/MPEG-TS
+# 并重新封装为 FLV 或 MPEG-TS，从不解码或编码。`configure` 会自行拉入
+# 这些封装/解封装器所需的解析器和比特流过滤器，故此处不再列出。
 #
-# The build is LGPL: `--enable-gpl` is deliberately not passed. OpenSSL is the
-# TLS backend rather than GnuTLS on purpose — see the configure call below.
+# 构建结果为 LGPL：刻意不传 `--enable-gpl`。TLS 后端有意选择 OpenSSL
+# 而非 GnuTLS —— 原因见下面的 configure 调用。
 set -euo pipefail
 
 FFMPEG_VERSION="9.0.1"
 FFMPEG_ARCHIVE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_ARCHIVE}"
-# Measured from the official tarball after verifying its detached signature
-# against the FFmpeg release signing key
-# FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>.
-# Identical to the pin in prepare-macos-ffmpeg.sh: both platforms build the
-# same upstream release.
+# 校验官方 tarball 的分离签名后计算得出，签名对应 FFmpeg 发布签名密钥
+# FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>。
+# 与 prepare-macos-ffmpeg.sh 中固定的版本一致：
+# 两个平台构建同一个上游发布版本。
 FFMPEG_SHA256="cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
 
 usage() {
@@ -66,9 +62,8 @@ emit_environment() {
   echo "FFMPEG_PREFIX=$prefix"
   echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
   if [[ -n "${GITHUB_ENV:-}" ]]; then
-    # `ffmpeg-sys-next` resolves the libraries through pkg-config, and its
-    # `static` feature makes pkg-config emit the `Libs.private` transitive
-    # dependencies the archives need.
+    # `ffmpeg-sys-next` 通过 pkg-config 解析库位置，它的 `static` feature
+    # 会让 pkg-config 输出静态库所需的 `Libs.private` 传递依赖。
     {
       echo "FFMPEG_PREFIX=$prefix"
       echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
@@ -89,15 +84,14 @@ verify_prefix() {
       exit 1
     fi
   done
-  # A shared build here would defeat the point: the packages would again depend
-  # on libraries that are not inside them.
+  # 在这里做共享构建会失去意义：安装包又会依赖不在包内的库。
   if compgen -G "$prefix/lib/*.so*" > /dev/null; then
     echo "构建产物包含共享库，静态构建配置有误: $prefix/lib" >&2
     exit 1
   fi
 }
 
-# A complete prefix is reused as-is so a warm cache skips the whole build.
+# 完整的 prefix 会被原样复用，因此缓存命中时可跳过整个构建。
 if [[ -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/pkgconfig/libavformat.pc" ]]; then
   echo "复用已构建的静态 FFmpeg: $prefix"
   verify_prefix
@@ -105,12 +99,10 @@ if [[ -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/pkgconfig/libavformat.pc
   exit 0
 fi
 
-# `ffmpeg-sys-next` locates the libraries through pkg-config, and the x86_64
-# build needs a nasm-compatible assembler: `configure` treats a missing one as a
-# fatal error rather than quietly dropping the hand-written assembly. The
-# release workflow installs both through apt, so here only report what is
-# missing instead of trying to install it — this script must stay usable by a
-# developer who is not running as root.
+# `ffmpeg-sys-next` 通过 pkg-config 定位库，且 x86_64 构建需要与 nasm
+# 兼容的汇编器：`configure` 会把缺失汇编器视为致命错误，而不是安静地
+# 丢掉手写汇编。发布流程会通过 apt 安装这两者，所以这里只报告缺什么，
+# 不尝试自动安装 —— 本脚本必须对非 root 开发者仍然可用。
 missing_tools=()
 command -v pkg-config > /dev/null || missing_tools+=("pkg-config")
 command -v nasm > /dev/null || missing_tools+=("nasm")
@@ -121,15 +113,14 @@ if [[ "${#missing_tools[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-# The TLS backend is a licensing decision, not just a dependency choice.
-# `configure` puts `gnutls` in the plain EXTERNAL_LIBRARY_LIST and only rejects
-# `openssl` when `--enable-gpl` is also set (configure:7552), so both are
-# available to this LGPL build. OpenSSL wins on two counts: Debian's
-# `gnutls.pc` declares `Libs.private: -lgmp …` plus nettle/hogweed/libtasn1/
-# libidn2/p11-kit, which drags LGPLv3 GMP into a static link and needs every
-# one of those archives present, while `libssl.pc` needs only libcrypto; and
-# the application already links OpenSSL through reqwest's native-tls, so this
-# reuses that backend instead of adding a second TLS implementation.
+# TLS 后端是许可决策，不只是依赖选择。`configure` 把 `gnutls` 放在普通的
+# EXTERNAL_LIBRARY_LIST 中，只有同时设置 `--enable-gpl` 时才拒绝
+# `openssl`（configure:7552），因此两者对这个 LGPL 构建都可用。
+# OpenSSL 在两点上更优：Debian 的 `gnutls.pc` 声明了
+# `Libs.private: -lgmp …` 以及 nettle/hogweed/libtasn1/libidn2/p11-kit，
+# 会把 LGPLv3 的 GMP 拖进静态链接，并要求所有这些静态库都存在，
+# 而 `libssl.pc` 只需要 libcrypto；同时应用本身已通过 reqwest 的
+# native-tls 链接 OpenSSL，这样是复用现有后端而非引入第二套 TLS 实现。
 if ! pkg-config --exists openssl; then
   echo "缺少 OpenSSL 开发包，静态 FFmpeg 需要它作为 TLS 后端" >&2
   echo "请先安装，例如: sudo apt-get install --yes libssl-dev" >&2
@@ -158,11 +149,10 @@ test -f "$source_dir/configure"
 echo "编译静态 FFmpeg ${FFMPEG_VERSION} -> $prefix"
 (
   cd "$source_dir"
-  # `--disable-autodetect` pins the feature set to exactly what is listed here
-  # instead of whatever happens to be installed on the runner, which is what
-  # makes the artifact reproducible. It also switches off zlib and every TLS
-  # backend, both of which are required — mov/matroska probing wants zlib and a
-  # direct HTTPS recording needs TLS — so both are re-enabled explicitly.
+  # `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
+  # 运行器上恰好安装了什么，这正是产物可复现的原因。它同时会关掉 zlib 和
+  # 所有 TLS 后端，而这两者都是必需的 —— mov/matroska 探测需要 zlib，
+  # 直连 HTTPS 录制需要 TLS —— 所以都显式重新启用。
   ./configure \
     --prefix="$prefix" \
     --enable-static \
@@ -183,11 +173,10 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} -> $prefix"
     --enable-protocol=file,http,https,tls,tcp,crypto \
     --pkg-config-flags=--static
 
-  # `configure` downgrades a component whose dependencies are unmet to a warning
-  # and still exits 0 — a TLS backend it cannot find turns
-  # `--enable-protocol=https` into `CONFIG_HTTPS_PROTOCOL 0`, and the loss would
-  # then surface only at runtime, as a failed HTTPS recording on a user's
-  # machine. Assert the generated header instead of trusting the exit status.
+  # `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
+  # 后端会把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
+  # 而这种缺失只会在运行时暴露，表现为用户机器上 HTTPS 录制失败。
+  # 因此断言生成的头文件，而不是相信退出码。
   for component in \
     HTTPS_PROTOCOL TLS_PROTOCOL HTTP_PROTOCOL FILE_PROTOCOL CRYPTO_PROTOCOL \
     FLV_DEMUXER LIVE_FLV_DEMUXER HLS_DEMUXER MPEGTS_DEMUXER MOV_DEMUXER \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# From WSL: sync to the configured Windows mirror then start Tauri development.
+# 在 WSL 中执行：先同步到配置好的 Windows 镜像目录，再启动 Tauri 开发模式。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,8 +22,8 @@ echo "  log:  $LOG_WIN"
 
 mkdir -p "$LOG_MNT" "$TEMP_MNT"
 
-# Direct PowerShell interop avoids /init's optional preset-file integration;
-# callers can still opt into an alternate launcher with INIT explicitly.
+# 直接调用 PowerShell 互操作可以绕开 /init 可选的 preset 文件集成；
+# 调用方仍可通过显式设置 INIT 选择其他启动器。
 INIT="${INIT:-}"
 PS_EXE="${PS_EXE:-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe}"
 
@@ -36,8 +36,8 @@ if [[ ! -x "$PS_EXE" && ! -f "$PS_EXE" ]]; then
   fi
 fi
 
-# Wrapper keeps the Windows toolchain setup and the long-running dev process
-# in one PowerShell process, while teeing native output into a WSL-readable log.
+# 包装脚本让 Windows 工具链初始化和长时间运行的 dev 进程处于同一个
+# PowerShell 进程中，同时把原生输出复制到 WSL 可读的日志里。
 WRAPPER="$DEST_PARENT_MNT/run-rlive-dev.ps1"
 WRAPPER_WIN="$(wslpath -w -- "$WRAPPER")"
 cat > "$WRAPPER" << 'EOF'
@@ -110,7 +110,7 @@ fi
 code=$?
 if [[ $code -ne 0 ]]; then
   echo "error: windows tauri dev failed (exit $code). See $LOG_WIN" >&2
-  # Best-effort tail for WSL logs
+  # 尽力而为地 tail WSL 日志
   if [[ -f "$LOG_MNT/build-windows-dev.txt" ]]; then
     tail -c 6000 "$LOG_MNT/build-windows-dev.txt" | tr -d '\000' | tail -40 || true
   fi

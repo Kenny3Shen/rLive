@@ -18,10 +18,9 @@ if (getClientPlatform() === "android") {
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Browsing data changes far less frequently than video state. Keep it
-      // warm across route switches and do not fan out background IPC/network
-      // requests merely because the desktop window regained focus. Playback
-      // metadata overrides this with its own short-lived policy.
+      // 浏览数据的变化频率远低于视频状态。让它跨路由切换保持热缓存，
+      // 也不要仅因为桌面窗口重新获得焦点就扇出后台 IPC/网络请求。
+      // 播放元数据以自己的短时效策略覆盖这一默认值。
       staleTime: 30_000,
       refetchOnWindowFocus: false,
     },
@@ -37,8 +36,8 @@ void useSettingsStore
   .getState()
   .loadFromBackend()
   .catch(() => {});
-// Start the loopback image proxy as early as possible so first-paint covers
-// and avatars route through it instead of being hotlink-rejected.
+// 尽早启动回环图片代理，使首屏绘制的封面与头像经由它路由，
+// 而不是被防盗链拒绝。
 void preloadImageProxy();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

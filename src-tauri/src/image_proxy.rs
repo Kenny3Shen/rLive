@@ -1,13 +1,10 @@
-//! Localhost HTTP proxy that attaches CDN Referer / UA headers to WebView
-//! image loads.
+//! 本机 HTTP 代理，为 WebView 的图片加载附加 CDN 所需的 Referer / UA 请求头。
 //!
-//! Bilibili / Douyu / Huya / Douyin image CDNs reject requests that lack a
-//! platform Referer, and the WebView cannot attach one to an `<img>` tag. The
-//! frontend routes remote image URLs through this loopback server, which
-//! forwards with the appropriate headers and returns the full body with an
-//! explicit `Content-Length` (the Windows WebView mis-handles chunked
-//! responses for small image bodies). Started lazily on first use and kept
-//! for the app lifetime.
+//! Bilibili / 斗鱼 / 虎牙 / 抖音的图片 CDN 会拒绝缺少平台 Referer 的请求，
+//! 而 WebView 无法为 `<img>` 标签附加它。前端把远程图片 URL 经这个回环服务器
+//! 转发，由其带上相应请求头，并以显式 `Content-Length` 返回完整 body
+//! （Windows WebView 对小图片的分块响应处理有误）。
+//! 首次使用时惰性启动并存活整个应用生命周期。
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -22,9 +19,9 @@ use tokio::sync::watch;
 use crate::error::{AppError, AppResult};
 use crate::image_cache::{ImageCache, MAX_IMAGE_BYTES, sniff_image_type};
 
-/// Hosts the proxy is willing to fetch. The frontend rewrites only these CDNs
-/// (`shouldProxyHost` in `src/shared/api/imageProxy.ts`), so this allowlist
-/// keeps the loopback server from becoming a general-purpose open proxy.
+/// 代理愿意抓取的主机。前端只改写这些 CDN
+/// （见 `src/shared/api/imageProxy.ts` 的 `shouldProxyHost`），
+/// 这份白名单可防止回环服务器沦为通用开放代理。
 const ALLOWED_IMAGE_HOSTS: &[&str] = &[
     "douyucdn.cn",
     "douyu.com",
@@ -43,12 +40,12 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
 
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// WebView cache lifetime for disk-cached images (avatars, category icons):
-/// their URL changes when the picture does, so a long lifetime is safe.
+/// 磁盘缓存图片（头像、分类图标）的 WebView 缓存生存期：
+/// URL 随图片变化而变化，因此较长的生存期是安全的。
 const CACHED_IMAGE_MAX_AGE: u32 = 24 * 60 * 60;
-/// Live room covers keep only a short WebView lifetime — long enough that
-/// scrolling a grid back and forth does not refetch, short enough that a
-/// stable-URL preview (Twitch `previews-ttv`) still refreshes while browsing.
+/// 直播房间封面只保留较短的 WebView 生存期 —— 足够让网格来回滚动时不重复
+/// 抓取，又足够短，使 URL 稳定的预览图（Twitch `previews-ttv`）
+/// 在浏览时仍能刷新。
 const COVER_MAX_AGE: u32 = 120;
 
 pub struct ImageProxy {
@@ -72,8 +69,8 @@ impl ImageProxy {
     }
 
     pub async fn cache_usage(&self) -> crate::image_cache::CacheUsage {
-        // The settings page offers to open the reported directory, so make
-        // sure it exists even before the first image has been cached.
+        // 设置页提供打开所报告目录的功能，
+        // 因此即使第一张图片尚未缓存，也要确保目录存在。
         self.cache.ensure_root().await;
         self.cache.usage().await
     }
@@ -92,20 +89,20 @@ impl ImageProxy {
         self.port.store(0, Ordering::Release);
     }
 
-    /// Idempotent: returns the existing loopback origin when already running.
+    /// 幂等：已在运行时返回现有的回环 origin。
     pub async fn start(&self) -> AppResult<String> {
         self.start_with_allowlist(ALLOWED_IMAGE_HOSTS).await
     }
 
-    /// `start` with an explicit upstream allowlist (tests use loopback hosts).
+    /// 以显式的上游白名单启动 `start`（测试使用回环主机）。
     async fn start_with_allowlist(&self, hosts: &'static [&'static str]) -> AppResult<String> {
         let port = self.port.load(Ordering::Acquire);
         if port != 0 {
             return Ok(Self::base_url(port));
         }
 
-        // Bind outside the lock so a concurrent second call merely drops its
-        // uninstalled listener instead of waiting on a held mutex.
+        // 在锁外完成绑定，使并发的第二次调用只是丢弃自己未安装的监听器，
+        // 而不必等待被持有的互斥锁。
         let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
             AppError::new("image_proxy_bind", format!("bind localhost failed: {e}")).retryable()
         })?;
@@ -116,7 +113,7 @@ impl ImageProxy {
 
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.is_some() {
-            // Another call won the race; drop this listener and reuse it.
+            // 另一次调用赢得了竞争；丢弃该监听器并复用现有实例。
             let port = self.port.load(Ordering::Acquire);
             return Ok(Self::base_url(port));
         }
@@ -277,9 +274,8 @@ async fn handle_image_request(
         .split('&')
         .find_map(|pair| pair.strip_prefix("url="))
         .unwrap_or_default();
-    // Live room covers opt out of the disk cache: their URLs either carry a
-    // capture timestamp (a new key per refresh, never read again) or stay
-    // stable while the picture behind them rotates.
+    // 直播房间封面选择不进入磁盘缓存：其 URL 要么携带采集时间戳
+    // （每次刷新都是新键，且不会再被读取），要么在画面轮换时保持不变。
     let use_cache = !query.split('&').any(|pair| pair == "nocache=1");
 
     let upstream_url = match parse_image_url(raw_url) {
@@ -378,8 +374,8 @@ async fn handle_image_request(
         .await;
     }
 
-    // Full-body write with explicit Content-Length: the Windows WebView can
-    // cut off chunked responses when a small image arrives fast.
+    // 以显式 Content-Length 写出完整 body：
+    // 小图片快速到达时，Windows WebView 可能截断分块响应。
     let freshness = if use_cache {
         ImageFreshness::Seconds(CACHED_IMAGE_MAX_AGE)
     } else {
@@ -415,8 +411,8 @@ fn parse_image_url(raw: &str) -> Option<Url> {
     matches!(url.scheme(), "http" | "https").then_some(url)
 }
 
-/// Decode `%XX` escapes (the same set the frontend `encodeURIComponent`
-/// produces). The URL parser below rejects any control byte it must not see.
+/// 解码 `%XX` 转义（与前端 `encodeURIComponent` 产生的集合一致）。
+/// 下方的 URL 解析器会拒绝任何不该出现的控制字节。
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -446,8 +442,8 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-/// WebView cache lifetime for a proxied image. Only successful image bodies
-/// get one; errors and empty bodies must not be remembered.
+/// 代理图片的 WebView 缓存生存期。只有成功的图片 body 才会获得；
+/// 错误与空 body 绝不能被记住。
 #[derive(Clone, Copy)]
 enum ImageFreshness {
     NoStore,
@@ -510,7 +506,7 @@ mod tests {
     fn allowed_host_matching_uses_suffixes() {
         assert!(host_is_allowed("rpic.douyucdn.cn", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("i0.hdslb.com", ALLOWED_IMAGE_HOSTS));
-        // Danmaku image emotes may be hosted here; keep it cacheable.
+        // 弹幕图片表情可能托管在这里；保持可缓存。
         assert!(host_is_allowed("i0.biliimg.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("huyaimg.msstatic.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed(
@@ -556,7 +552,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        // Upstream image server: records the request, serves a binary body.
+        // 上游图片服务器：记录请求并返回二进制 body。
         let upstream = StdTcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
         let headers_seen = Arc::new(Mutex::new(String::new()));
@@ -586,7 +582,7 @@ mod tests {
         ));
         let proxy = ImageProxy::new(cache_root.clone());
         let base = proxy.start_with_allowlist(&["127.0.0.1"]).await.unwrap();
-        // Explicitly build the URL-encoded form to exercise percent decoding.
+        // 显式构造 URL 编码形式以检验百分号解码。
         let encoded_upstream = format!("http://{upstream_addr}/pic.png")
             .as_bytes()
             .iter()
@@ -602,7 +598,7 @@ mod tests {
         let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
             .await
             .unwrap();
-        // Origin-form request target (`/img?url=…`) like the WebView sends.
+        // origin 形式的请求目标（`/img?url=…`），与 WebView 发送的一致。
         let path = target.trim_start_matches(&base);
         local
             .write_all(
@@ -626,8 +622,8 @@ mod tests {
         assert!(response_text.contains("Content-Type: image/png"));
         assert!(response_text.contains("Content-Length: 18"));
         assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nfake-image"));
-        // Unknown hosts are allowed only under the test allowlist and receive
-        // no platform Referer (see `referer_for`).
+        // 未知主机仅在测试白名单下被允许，
+        // 且不会获得平台 Referer（参见 `referer_for`）。
         {
             let upstream_request = headers_seen.lock().unwrap();
             assert!(!upstream_request.contains("referer:"));
@@ -645,8 +641,8 @@ mod tests {
         .await;
         assert!(cache_ready.is_ok(), "proxy did not persist the image");
 
-        // The one-shot upstream listener is closed now. A second request must
-        // still succeed, proving the response came from the disk cache.
+        // 一次性上游监听器现已关闭。第二个请求仍须成功，
+        // 以此证明响应来自磁盘缓存。
         let mut cached_local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
             .await
             .unwrap();
@@ -672,9 +668,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(cache_root);
     }
 
-    /// Live room covers pass `nocache=1`: the body must still be proxied (the
-    /// Referer is the whole point) but never reach the disk cache, and the
-    /// WebView must only hold it briefly.
+    /// 直播房间封面传入 `nocache=1`：body 仍必须经代理转发（Referer 才是关键），
+    /// 但绝不进入磁盘缓存，WebView 也只能短暂持有它。
     #[tokio::test]
     async fn nocache_requests_are_proxied_without_touching_the_disk_cache() {
         use std::io::{Read, Write};
@@ -747,8 +742,8 @@ mod tests {
             assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nlive-cover"));
         }
 
-        // Both requests reached the (two-shot) upstream, so neither was served
-        // from disk, and nothing was written either.
+        // 两个请求都到达了（两次额度的）上游，因此没有一个来自磁盘，
+        // 也没有写入任何缓存。
         server.join().unwrap();
         assert_eq!(proxy.cache_usage().await.files, 0);
 

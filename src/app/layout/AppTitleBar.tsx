@@ -11,8 +11,8 @@ function hasTauriWindow(): boolean {
 }
 
 /**
- * A deliberately quiet desktop title bar. It gives the player a real window
- * frame without spending vertical space on a second application header.
+ * 刻意保持低调的桌面标题栏。它为播放器提供真实的窗口边框，
+ * 却不为第二个应用头部消耗纵向空间。
  */
 export function AppTitleBar() {
   return isMobileClient() ? null : <DesktopAppTitleBar />;
@@ -26,8 +26,8 @@ function DesktopAppTitleBar() {
     try {
       setMaximized(await getCurrentWindow().isMaximized());
     } catch {
-      // Keep browser/Vite preview usable too. Native window controls are a
-      // progressive enhancement rather than a requirement to render Shell.
+      // 保持浏览器/Vite 预览同样可用。原生窗口控制是渐进增强，
+      // 而不是渲染 Shell 的前提。
     }
   }, []);
 
@@ -45,7 +45,7 @@ function DesktopAppTitleBar() {
           void refreshMaximizedState();
         });
       } catch {
-        // The same component is used by browser-based previews and tests.
+        // 基于浏览器的预览与测试复用同一个组件。
       }
     })();
 
@@ -62,8 +62,8 @@ function DesktopAppTitleBar() {
         await getCurrentWindow()[action]();
         if (action === "toggleMaximize") await refreshMaximizedState();
       } catch {
-        // Do not surface an application error for a platform that does not
-        // expose a native frame action (for example a browser preview).
+        // 对不提供原生窗口操作的平台（例如浏览器预览），
+        // 不要抛出应用层错误。
       }
     },
     [refreshMaximizedState],
@@ -73,9 +73,9 @@ function DesktopAppTitleBar() {
     void performWindowAction("toggleMaximize");
   }, [performWindowAction]);
 
-  // Tauri 2 only treats a bare drag-region attribute as draggable when the
-  // exact element is clicked. Most of this bar is made of descendants, so use
-  // `deep` and explicitly opt the window buttons out below.
+  // Tauri 2 只在点击的正是带拖拽区域属性的那个元素时才把它当作可拖拽。
+  // 标题栏大部分由后代元素构成，因此使用 `deep`，
+  // 并在下方显式让窗口按钮退出拖拽。
   return (
     <header
       data-tauri-drag-region="deep"

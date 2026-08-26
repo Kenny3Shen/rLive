@@ -14,11 +14,10 @@ pub trait LiveSite: Send + Sync {
         page: u32,
     ) -> AppResult<RoomListPage>;
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage>;
-    /// Fetch only the data needed to refresh a followed room's live state.
+    /// 只拉取刷新关注房间直播状态所需的数据。
     ///
-    /// Implementations must not call `get_room_detail`: the latter may resolve
-    /// playback metadata or danmaku session information that a follow list
-    /// neither displays nor needs.
+    /// 实现不得调用 `get_room_detail`：后者可能解析播放元数据或弹幕会话信息，
+    /// 而关注列表既不展示也不需要它们。
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus>;
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail>;
     async fn get_play_qualities(&self, detail: &LiveRoomDetail) -> AppResult<Vec<LivePlayQuality>>;
@@ -27,14 +26,12 @@ pub trait LiveSite: Send + Sync {
         detail: &LiveRoomDetail,
         quality: &LivePlayQuality,
     ) -> AppResult<Vec<PlayUrl>>;
-    /// Returns an in-memory session Cookie suitable for a site-owned danmaku
-    /// connection, when the site has one.
+    /// 当站点拥有自己的弹幕连接时，返回适合它的内存态会话 Cookie。
     ///
-    /// Most platforms do not need this. Douyin may obtain transient browser
-    /// cookies such as `ttwid` while resolving the room; the WSS handshake
-    /// needs that same session on the Cookie header.
-    /// Callers must keep this value inside the backend; it is never part of a
-    /// serialised room detail or persisted account record.
+    /// 大多数平台不需要这一步。抖音在解析房间时可能获得 `ttwid` 等临时浏览器
+    /// cookie；WSS 握手需要在 Cookie 头里带上同一份会话。
+    /// 调用方必须把这个值留在后端内部；
+    /// 它绝不会出现在序列化的房间详情或持久化的账号记录中。
     fn danmaku_session_cookie(&self) -> AppResult<Option<String>> {
         Ok(None)
     }

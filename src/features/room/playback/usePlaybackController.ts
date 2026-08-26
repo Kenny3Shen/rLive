@@ -106,8 +106,7 @@ export function usePlaybackController(opts: {
         },
         { metadata },
       ),
-    // A route change creates a new isolated recovery session. Detail refreshes
-    // for the same canonical room update the existing session below.
+    // 路由变更会创建新的独立恢复会话。同一规范房间的详情刷新在下方更新既有会话。
     [detailRoomId, metadata, roomId, siteId],
   );
 
@@ -127,8 +126,8 @@ export function usePlaybackController(opts: {
     mountedSessionRef.current = session;
     return () => {
       if (mountedSessionRef.current === session) mountedSessionRef.current = null;
-      // Strict Mode immediately remounts effects for the same session. Wait
-      // until that probe finishes before deciding whether this instance left.
+      // Strict Mode 会为同一会话立即重新挂载副作用。先等那次探测结束，
+      // 再判断是否是本实例离开。
       queueMicrotask(() => {
         if (mountedSessionRef.current !== session) session.dispose();
       });

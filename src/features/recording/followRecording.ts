@@ -139,8 +139,8 @@ async function retainRecordingDanmaku(target: FollowRecordingTarget): Promise<vo
       connectionEpoch,
     });
   } finally {
-    // Reuse this connection's generation. If navigation has already installed a
-    // newer room, the native fence makes this detach a no-op instead of touching it.
+    // 复用这条连接的 generation。若导航已经安装了更新的房间，
+    // 原生围栏会让这次 detach 变成无操作而不影响它。
     await invokeCmd("danmaku_disconnect", {
       connectionEpoch,
     });
@@ -156,7 +156,7 @@ async function startFollowRecording(
   const context = await resolveFollowRecordingContext(queryClient, target, qualityLevel);
   const item = await startRecording(context, {
     includeDanmaku,
-    // Follow recordings always start outside the owning player page.
+    // 关注录制的启动总是发生在所属播放器页之外。
     continueOnLeave: true,
   });
   queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) => [
@@ -209,9 +209,8 @@ export function useFollowRecordingController() {
 }
 
 /**
- * Keeps automatic follow recordings alive independently of the current route.
- * Only follows with their own auto-record switch enabled are polled. The first
- * refresh is immediate; subsequent refreshes use the shared status cadence.
+ * 让自动关注录制独立于当前路由存活。只轮询开启了各自自动录制开关的关注项。
+ * 首次刷新立即执行；后续刷新使用共享的状态节奏。
  */
 export function useFollowAutoRecording() {
   const queryClient = useQueryClient();

@@ -19,9 +19,8 @@ export function withFollowView(searchParams: URLSearchParams, view: FollowView):
 }
 
 /**
- * Keeps the follow-page platform selection valid when a URL is opened or
- * edited outside the app. Unknown and disabled values deliberately fall back
- * to the all-platform view instead of producing an impossible filter.
+ * 在应用外打开或手工编辑 URL 时，保持关注页的平台选择有效。未知和已停用的
+ * 取值刻意回退到全部平台视图，而不是产生不可能成立的过滤器。
  */
 export function followPlatformFromSearch(
   value: string | null,
@@ -30,7 +29,7 @@ export function followPlatformFromSearch(
   return isSiteEnabled(value, disabledSiteIds) ? value : "all";
 }
 
-/** Preserve unrelated follow-page query parameters while changing its platform filter. */
+/** 更改平台过滤时保留关注页其他无关的 query 参数。 */
 export function withFollowPlatform(
   searchParams: URLSearchParams,
   platform: FollowPlatformFilter,
@@ -45,9 +44,9 @@ export function withFollowPlatform(
 }
 
 /**
- * Converts a verified live-session start timestamp into compact Chinese copy
- * for the follow list. Unknown, invalid, and future values deliberately
- * render nothing rather than implying a duration the platform did not supply.
+ * 把校验过的开播时间戳转换为关注列表使用的紧凑中文文案。未知、非法和未来
+ * 的时间刻意渲染为空，
+ * 而不暗示平台并未提供的时长。
  */
 export function formatFollowLiveDuration(
   liveStartedAt: number | null | undefined,

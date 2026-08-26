@@ -58,9 +58,8 @@ declare module "danmu.js" {
 
   export type DanmuJsEventMap = {
     /**
-     * Native hover selection. Declared for completeness only — the app pins with
-     * its own press delegate and creates instances with `mouseControl: false`,
-     * so nothing subscribes to this.
+     * danmu.js 原生 hover 选择。仅为类型完整性声明 —— 应用用自己的按压委托钉住、
+     * 并以 `mouseControl: false` 创建实例，因此没有任何地方订阅它。
      */
     bullet_hover: { bullet: DanmuJsBullet; event: Event };
     bullet_attached: unknown;

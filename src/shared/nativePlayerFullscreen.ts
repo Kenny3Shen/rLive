@@ -29,7 +29,7 @@ async function waitForWindowState(
   return false;
 }
 
-/** Restore the pre-fullscreen maximized state after an external native exit. */
+/** 外部原生退出后恢复全屏前的最大化状态。 */
 export async function restoreNativePlayerMaximizedState(
   appWindow: NativePlayerWindow,
   session: NativeFullscreenSession,
@@ -47,9 +47,9 @@ export async function restoreNativePlayerMaximizedState(
 }
 
 /**
- * Windows constrains a maximized undecorated window to the taskbar work area,
- * even after Tauri applies borderless fullscreen. Clear that state first, then
- * restore it when playback leaves fullscreen.
+ * Windows 会把最大化的无边框窗口限制在任务栏工作区内，
+ * 即使 Tauri 已应用无边框全屏。先清除该状态，
+ * 播放退出全屏时再恢复。
  */
 export async function setNativePlayerFullscreen(
   appWindow: NativePlayerWindow,
@@ -82,7 +82,7 @@ export async function setNativePlayerFullscreen(
           try {
             await appWindow.maximize();
           } catch {
-            // Preserve the original fullscreen failure.
+            // 保留最初的全屏失败原因。
           }
         }
         throw cause;

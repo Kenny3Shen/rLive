@@ -81,7 +81,7 @@ describe("danmaku display filter", () => {
       key: "other\u0000你好",
       count: 1,
     });
-    // The unrelated line must not break a content-specific grouping window.
+    // 无关的行不得破坏按内容分组的窗口。
     expect(aggregator.aggregate(event({ content: "别的内容", ts: 1_500 })).count).toBe(1);
     expect(aggregator.aggregate(event({ user: "观众乙", ts: 2_000 }))).toEqual({
       key: "other\u0000你好",

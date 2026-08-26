@@ -39,8 +39,7 @@ function locationTarget(location: { pathname: string; search: string; hash: stri
   return location.pathname + location.search + location.hash;
 }
 
-/** Blocks every in-app navigation path while the current recording has not
- * explicitly opted into background continuation. */
+/** 当前录制尚未显式选择后台延续时，拦截所有应用内导航路径。 */
 export function RecordingLeaveGuard({ context }: { context: RecordingContext | null }) {
   const queryClient = useQueryClient();
   const recordings = useRecordings();
@@ -71,9 +70,8 @@ export function RecordingLeaveGuard({ context }: { context: RecordingContext | n
     const item = active;
     setStopping(true);
     try {
-      // Opt the session into background continuation before navigation, so
-      // the room unmount detaches its danmaku websocket to the recording
-      // instead of tearing it down. Media keeps recording either way.
+      // 导航之前先把会话加入后台延续，使房间卸载时弹幕 websocket 被移交到录制
+      // 而不是被拆除。无论哪种选择媒体都会继续录制。
       const updated = await setRecordingContinueOnLeave(item.id, true);
       queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) =>
         (current ?? []).map((entry) => (entry.id === updated.id ? updated : entry)),

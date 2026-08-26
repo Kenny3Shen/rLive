@@ -389,15 +389,13 @@ describe("danmu.js repeat aggregation", () => {
   test("balances the counter slot only on the centered fixed bullets", () => {
     const key = "self 你好";
 
-    // A fixed bullet is centered on its full width, so the trailing counter slot
-    // must be mirrored by a leading spacer to keep the text on center.
+    // 固定 bullet 以全宽居中，因此尾部的计数槽位必须有等宽前导垫片来保持文本居中。
     expect(danmuReservesLeadingCountSpacer(chat({ is_self: true }), key)).toBe(true);
-    // Scrolling bullets are anchored on their left edge: a spacer would only
-    // indent them.
+    // 滚动 bullet 锚定左边缘：垫片只会造成缩进。
     expect(danmuReservesLeadingCountSpacer(chat(), key)).toBe(false);
-    // No counter slot, nothing to balance.
+    // 没有计数槽位，就没有需要平衡的东西。
     expect(danmuReservesLeadingCountSpacer(chat({ is_self: true }), undefined)).toBe(false);
-    // SC is fixed too, but never carries an aggregation key.
+    // SC 也是固定弹幕，但从不携带聚合 key。
     expect(danmuReservesLeadingCountSpacer(chat({ kind: "super_chat" }), undefined)).toBe(false);
   });
 });
@@ -428,16 +426,16 @@ describe("danmu.js active budget under heavy traffic", () => {
     const laneHeight = danmuLaneHeight(18);
     expect(laneHeight).toBe(25);
 
-    // 1080p stage, quarter area: floor(270 / 25) = 10 lanes.
+    // 1080p 舞台、四分之一区域：floor(270 / 25) = 10 条车道。
     expect(danmuMaxActiveComments(1080, laneHeight, 0.25)).toBe(
       Math.max(DANMU_JS_MIN_ACTIVE_COMMENTS, 10 * DANMU_JS_LANE_ACTIVE_COMMENTS),
     );
-    // Same stage with the full area keeps far more bullets in flight than the
-    // old fixed cap of 80 allowed, which is what used to cut them off midway.
+    // 同一舞台用完整区域时同时在途的 bullet 远超旧的 80 上限，
+    // 这正是过去评论中途被切断的原因。
     expect(danmuMaxActiveComments(1080, laneHeight, 1)).toBe(43 * DANMU_JS_LANE_ACTIVE_COMMENTS);
     expect(danmuMaxActiveComments(1080, laneHeight, 1)).toBeGreaterThan(80);
 
-    // Tiny stages still get a workable floor, and the ceiling stays bounded.
+    // 极小的舞台仍有可用的下限，上限也保持有界。
     expect(danmuMaxActiveComments(120, laneHeight, 0.25)).toBe(DANMU_JS_MIN_ACTIVE_COMMENTS);
     expect(danmuMaxActiveComments(Number.NaN, laneHeight, 0.25)).toBe(
       DANMU_JS_MIN_ACTIVE_COMMENTS,

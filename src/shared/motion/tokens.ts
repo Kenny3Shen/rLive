@@ -4,86 +4,76 @@ import { isMobileClient } from "@/shared/clientPlatform";
 export { prefersReducedMotion } from "./preference";
 
 /**
- * Shared motion vocabulary, on GSAP.
+ * 建立在 GSAP 之上的共享动效词汇表。
  *
- * Two rules keep this affordable on a busy live-player frame:
+ * 两条规则使它在繁忙的直播播放器帧上也负担得起：
  *
- * 1. Only transforms and opacity are ever animated, so every sequence stays on
- *    the compositor. No width/height/color/filter tweens.
- * 2. Durations stay short. Touch clients get a faster settle so the next view is
- *    readable sooner under the thumb.
+ * 1. 只对 transform 和 opacity 做动画，所有序列都留在合成器上。不用
+ * width/height/color/filter 补间。
+ * 2. 时长保持很短。触摸客户端获得更快的收尾，让下一个视图在拇指下更早可读。
  *
- * Page transitions use short duration-based easing; pointer-driven swipes write
- * the transform directly while a finger is down and only tween on release, so a
- * gesture never allocates a tween per frame.
+ * 页面过渡使用短时长的缓动；指针驱动的滑动在手指按下时直接写 transform、
+ * 只在释放时补间，因此一个手势绝不会每帧分配一个补间。
  */
 
-// `useGSAP` is a plugin as far as the core is concerned; registering it here —
-// the one module every animated surface imports — guarantees registration runs
-// before any hook does, which is the ordering the official React skill requires.
+// 对核心而言 `useGSAP` 是个插件；在这个所有动效表面都会导入的唯一模块注册
+// 它，保证注册先于任何 hook 运行 —— 这正是官方 React 技能要求的顺序。
 gsap.registerPlugin(useGSAP);
 
-// Project-wide tween defaults. Individual tweens still override where they mean
-// something different, but this keeps one-off `gsap.to` calls on-brand.
+// 项目级补间默认值。单个补间仍可在语义不同的地方覆盖，
+// 但这让一次性的 `gsap.to` 调用保持风格统一。
 gsap.defaults({ duration: 0.22, ease: "power2.out" });
 
 /**
- * Decelerate curve for entrances — the closest built-in to the previous
- * `cubic-bezier(0.2, 0.8, 0.2, 1)` token. Built-in eases are preferred over
- * CustomEase so no extra plugin has to be registered or shipped.
+ * 入场减速曲线 —— 最接近先前 `cubic-bezier(0.2, 0.8, 0.2, 1)` token 的内建曲线。
+ * 优先使用内建 ease 而不是 CustomEase，
+ * 免得额外注册或打包插件。
  */
 export const EASE_OUT = "power2.out";
 /**
- * CSS equivalent of `power2.out`-family deceleration, for the surfaces that
- * animate through Web Animations rather than GSAP.
+ * `power2.out` 族减速的 CSS 等价物，供经 Web Animations 而非 GSAP 做动画的
+ * 表面使用。
  *
- * Web Animations can advance a transform on Chromium's compositor while the
- * main thread is busy committing React work, which GSAP's rAF ticker cannot.
- * Page pans and pointer-driven page settles both need that property, so they
- * share one curve instead of each picking a bezier.
+ * Web Animations 能在主线程忙于提交 React 工作时由 Chromium 合成器推进 transform，
+ * GSAP 的 rAF ticker 做不到。页面平移与指针驱动的页面收尾都需要这个性质，
+ * 因此共享一条曲线而不是各挑一条 bezier。
  */
 export const EASE_OUT_CSS = "cubic-bezier(0.215, 0.61, 0.355, 1)";
 /**
- * Easing for the release phase of a pointer-driven page swipe.
+ * 指针驱动页面滑动的释放阶段缓动。
  *
- * A settle continues motion the finger already started, so the curve has to
- * leave the release point fast and decelerate into rest. Its duration is not a
- * constant: `horizontalSwipeSettleDuration` derives it from the distance still
- * to cover and the speed at which the finger let go, so a flick finishes
- * quickly while a slow drag eases out over a longer ramp.
+ * 收尾延续手指已经开始的运动，因此曲线要在释放点快速离开、减速进入静止。
+ * 它的时长不是常量：`horizontalSwipeSettleDuration` 由剩余距离和松手速度推导，
+ * 快甩迅速完成，慢拖在更长坡道上缓缓停下。
  */
 export const SWIPE_SETTLE_EASING = EASE_OUT_CSS;
 
 /**
- * Extra travel applied to every full-page pan, as a share of its active axis.
+ * 施加到每次整页平移的额外行程，以其活动轴的比例计。
  *
- * Deliberately just over 100%. The animated element is the padded content box
- * inside the scroller, so its own size can be smaller than the clipped viewport
- * because of padding. Translating exactly 100% can therefore leave a thin band
- * of the outgoing page visible along the edge until it unmounts. The extra 10%
- * clears that gutter on any realistic viewport.
+ * 刻意略超 100%。动画元素是滚动容器内带内边距的内容盒，
+ * 其自身尺寸可能因 padding 小于被裁剪的视口。正好平移 100% 可能在边缘留下一线
+ * 离场页直到卸载。额外的 10% 在任何现实视口下都能清掉这条沟槽。
  */
 export const PAGE_PAN_PERCENT = 110;
 
 export type MotionProfile = {
-  /** Page-pan travel as a percentage of the page's size on the active axis. */
+  /** 页面平移行程占页面活动轴尺寸的百分比。 */
   tabTravel: number;
   enter: { duration: number; ease: string };
   exit: { duration: number; ease: string };
   /**
-   * Immersive-player zoom, used by `PageZoom` for both directions.
+   * 沉浸播放器缩放，`PageZoom` 两个方向共用。
    *
-   * One duration rather than an enter/exit pair: entering a room and leaving it
-   * are the same crossfade played in opposite directions, and giving them
-   * different lengths made the round trip feel lopsided. Slightly longer than a
-   * page pan because two full-viewport surfaces dissolve through each other, and
-   * a room additionally has a player to bring up behind it.
+   * 用一个时长而不是进/出配对：进入房间与离开它是同一段交叉淡化的正反播放，
+   * 给它们不同长度会让往返显得失衡。比页面平移略长，
+   * 因为是两块全视口表面相互溶解，且房间背后还要带起一个播放器。
    */
   roomZoom: { duration: number; ease: string };
 };
 
 const DESKTOP_PROFILE: MotionProfile = {
-  // Full-surface pan: both pages move together as one continuous viewport.
+  // 整面平移：两页作为一个连续视口一起移动。
   tabTravel: PAGE_PAN_PERCENT,
   enter: { duration: 0.22, ease: EASE_OUT },
   exit: { duration: 0.22, ease: EASE_OUT },
@@ -91,8 +81,8 @@ const DESKTOP_PROFILE: MotionProfile = {
 };
 
 const TOUCH_PROFILE: MotionProfile = {
-  // Touch navigation reads as an extension of the finger: the whole page tracks
-  // across the viewport, settling a touch faster than desktop.
+  // 触摸导航读作手指的延伸：整页跟随穿过视口，
+  // 收尾比桌面稍快一点。
   tabTravel: PAGE_PAN_PERCENT,
   enter: { duration: 0.2, ease: EASE_OUT },
   exit: { duration: 0.2, ease: EASE_OUT },

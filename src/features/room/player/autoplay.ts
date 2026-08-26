@@ -3,9 +3,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Request playback without holding the proxy lifecycle queue open. Some
- * WebViews reject an unmuted request after route navigation, so retry once
- * muted and restore audio after playback has started.
+ * 请求播放但不让代理生命周期队列被占住。部分 WebView 会在路由导航后拒绝非静音
+ * 请求，因此静音重试一次，播放开始后再恢复声音。
  */
 export function requestPlayerAutoplay(
   player: { play: () => Promise<void> | null },
@@ -30,7 +29,7 @@ export function requestPlayerAutoplay(
         if (shouldRestoreAudio) video.muted = false;
         onAutoplayStarted?.();
       } catch {
-        // The player error event reports the actionable playback failure.
+        // 播放器错误事件上报可操作的播放失败信息。
       }
     }
   })();

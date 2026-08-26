@@ -230,9 +230,8 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             <Hash aria-hidden />
             复制房间号
           </ContextMenuItem>
-          {/* Multi-view is desktop-only (see MultiRoomPage), and long-press is
-              the only way to reach this menu on touch. Offering the item there
-              would add a room to a surface the client cannot open. */}
+          {/* 多视图仅限桌面（见 MultiRoomPage），触摸设备上长按是进入此菜单的唯一方式。
+              在那里提供该项会把房间加进客户端打不开的表面。 */}
           {!isMobileClient() && (
             <ContextMenuItem onClick={addToMultiRoom}>
               <PanelsTopLeft aria-hidden />

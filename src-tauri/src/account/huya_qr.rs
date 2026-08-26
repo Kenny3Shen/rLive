@@ -1,15 +1,14 @@
-//! User-operated Huya web QR login.
+//! 用户扫码的虎牙 Web 登录。
 //!
-//! Mirrors the public UDB flow used by `www.huya.com`:
-//! - `POST /qrLgn/getQrId` allocates a short-lived QR id
-//! - `GET  /qrLgn/getQrImg?k=` serves the PNG the mobile app scans
-//! - `POST /qrLgn/tryQrLogin` reports scan/confirm progress
+//! 对齐 `www.huya.com` 使用的公开 UDB 流程：
+//! - `POST /qrLgn/getQrId` 分配一个短时效的 QR id
+//! - `GET  /qrLgn/getQrImg?k=` 提供手机 App 扫描的 PNG
+//! - `POST /qrLgn/tryQrLogin` 上报扫码/确认进度
 //!
-//! On success the response may include `domainUrlList` cookie-seed URLs. Those
-//! are fetched with a process-local cookie jar so the final Cookie header can
-//! be saved for danmaku send. The upstream QR id never leaves this process as
-//! a separate value; the UI only receives a local opaque handle plus the image
-//! URL needed to render the code.
+//! 成功时响应可能包含 `domainUrlList` 这类用于播种 cookie 的 URL。这些 URL
+//! 用进程内的 cookie jar 抓取，以便保存最终的 Cookie header 供发送弹幕使用。
+//! 上游 QR id 绝不会作为单独的值离开本进程；UI 只拿到本地的不透明句柄
+//! 以及渲染二维码所需的图片 URL。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -29,7 +28,7 @@ const GET_QR_ID_URL: &str = "https://udblgn.huya.com/qrLgn/getQrId";
 const TRY_QR_LOGIN_URL: &str = "https://udblgn.huya.com/qrLgn/tryQrLogin";
 const GET_QR_IMG_PATH: &str = "https://udblgn.huya.com/qrLgn/getQrImg";
 const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-/// Huya's public web UDB app id (from HyUDBWebSDK defaults).
+/// 虎牙公开的 Web UDB app id。
 const APP_ID: &str = "5002";
 const UDB_VERSION: &str = "1.0";
 const LCID: &str = "2052";
@@ -44,15 +43,15 @@ const MAX_QR_ID_LEN: usize = 128;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 const MAX_DOMAIN_URLS: usize = 16;
 
-/// Data needed to render a Huya login QR code in the client.
+/// 客户端渲染虎牙登录二维码所需的数据。
 pub struct QrLoginStart {
-    /// HTTPS image URL for the PNG QR. The settings UI renders this as `<img>`.
+    /// 二维码 PNG 的 HTTPS 图片地址。设置界面用 `<img>` 渲染它。
     pub qr_code_url: String,
-    /// Opaque, process-local handle rather than Huya's actual `qrId`.
+    /// 不透明的进程内句柄，而不是虎牙真正的 `qrId`。
     pub qr_key: String,
 }
 
-/// A QR polling result. Cookie material never crosses the webview boundary.
+/// 一次扫码轮询结果。Cookie 内容绝不跨出 webview 边界。
 pub enum QrLoginPoll {
     Pending,
     Scanned,
@@ -74,7 +73,7 @@ fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
     ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Start the public Huya web QR flow.
+/// 启动虎牙公开的 Web 扫码流程。
 pub async fn start() -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
     let client = build_login_client(Arc::clone(&jar))?;
@@ -118,7 +117,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
     })
 }
 
-/// Poll a previously-started QR login flow.
+/// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
         return Err(
@@ -179,8 +178,7 @@ fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
     Client::builder()
         .use_native_tls()
         .cookie_provider(jar)
-        // QR authentication carries a temporary login session. Do not route it
-        // through the app browsing proxy.
+        // 扫码认证携带的是临时登录会话。不要让它走应用的浏览代理。
         .no_proxy()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
@@ -247,8 +245,8 @@ enum PollState {
 }
 
 fn parse_poll_response(response: &Value) -> AppResult<PollState> {
-    // Confirmed against HyUDBWebSDK:
-    // stage 0/4 = waiting, 1 = scanned, 2/3 = confirmed, 5/6/7 = dead QR.
+    // 已对照官方 Web 客户端确认：
+    // stage 0/4 = 等待，1 = 已扫码，2/3 = 已确认，5/6/7 = 二维码失效。
     ensure_api_success(response, "huya_qr_poll")?;
     let data = response
         .get("data")
@@ -296,8 +294,8 @@ fn domain_url_list(data: &Value) -> Vec<String> {
 }
 
 async fn finish_login(session: &QrSession, domain_urls: &[String]) -> AppResult<()> {
-    // Visiting UDB cookie-seed URLs is how the browser materializes yyuid /
-    // udb_* fields after a confirmed scan. Restrict hosts and schemes first.
+    // 浏览器正是通过访问 UDB 的 cookie 播种 URL，才在确认扫码后拿到
+    // yyuid / udb_* 字段。这里先限制主机与协议。
     for raw in domain_urls {
         let url = parse_trusted_huya_url(raw).ok_or_else(|| {
             AppError::new(
@@ -328,7 +326,7 @@ async fn finish_login(session: &QrSession, domain_urls: &[String]) -> AppResult<
             .send()
             .await
             .map_err(|_| qr_network_error("huya_qr_complete"))?;
-        // Body is intentionally discarded; only Set-Cookie side effects matter.
+        // 刻意丢弃响应 body，只有 Set-Cookie 的副作用有意义。
         let _ = response.bytes().await;
     }
     Ok(())
@@ -366,8 +364,8 @@ fn optional_text(data: &Value, keys: &[&str], max_len: usize) -> Option<String> 
 }
 
 fn cookie_from_jar(jar: &Arc<Jar>) -> Option<String> {
-    // Prefer the main site jar view; UDB login also writes on udblgn/lgn hosts
-    // and reqwest's jar merges host cookies when queried for a related URL.
+    // 优先使用主站视角的 jar；UDB 登录也会在 udblgn/lgn 主机上写 cookie，
+    // 而 reqwest 的 jar 在查询相关 URL 时会合并这些主机的 cookie。
     let candidates = [WEB_ORIGIN, LOGIN_ORIGIN, "https://lgn.huya.com/"];
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -403,8 +401,8 @@ fn cookie_from_jar(jar: &Arc<Jar>) -> Option<String> {
         return None;
     }
 
-    // Match the send-path credential gate so a "successful" QR login can
-    // actually authorize danmaku later.
+    // 与发送路径的凭据校验保持一致，这样"成功"的扫码登录
+    // 之后确实能授权发送弹幕。
     has_send_credentials(&value).then_some(value)
 }
 

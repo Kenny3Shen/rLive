@@ -1,83 +1,75 @@
 /**
- * Shared horizontal tab / platform swipe helpers.
+ * 共享的横向页签/平台滑动助手。
  *
- * Simple Live uses TabBarView for site and room panels. rLive keeps the same
- * left/right navigation contract on touch clients without requiring a full
- * page-view carousel.
+ * 触摸客户端上保持相同的左右导航契约，
+ * 而不必引入完整的页面轮播组件。
  */
 
 export const HORIZONTAL_SWIPE_DIRECTION_RATIO = 1.25;
 export const HORIZONTAL_SWIPE_LOCK_DISTANCE_PX = 10;
 export const HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS = 420;
 /**
- * Hard ceiling for the follow-the-finger drag, in px. Sits above any realistic
- * viewport width so the phone-style pan is bounded by the surface width (below),
- * not by a fixed nudge — the page can track the finger all the way across.
+ * 跟手拖拽的硬上限（px）。位于任何现实视口宽度之上，
+ * 使手机式平移受表面宽度（见下）约束而非固定推力 ——
+ * 页面可以一路跟随手指横穿整个宽度。
  */
 export const HORIZONTAL_SWIPE_MAX_DRAG_PX = 4096;
 /**
- * Share of the surface the committed page starts from before settling in. `1`
- * means the incoming page begins a full width off-screen, so the release plays
- * as one continuous edge-to-edge pan rather than a short catch-up nudge.
+ * 提交的页面在收尾前起始位置占表面的比例。`1` 表示进入页从整整一屏宽之外
+ * 开始，释放呈现为一次连续的贴边平移，而不是短促的追赶推挤。
  */
 export const HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO = 1;
 const HORIZONTAL_SWIPE_MAX_DRAG_SURFACE_RATIO = 1;
 const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
 
 /**
- * Share of the surface a slow drag must cover before the release changes page.
+ * 慢速拖拽在改变页面之前必须覆盖的表面比例。
  *
- * This is the interactive half of the paging contract: what decides the commit
- * is how far the page actually travelled, not how many pixels the finger moved.
- * A quarter of the surface: the neighbouring page is painted and tracking the
- * finger by then, so a drag carried that far already reads as committed. Near
- * the midpoint it did not — a deliberate third-of-a-screen drag sprang back.
+ * 这是翻页契约的交互半边：决定提交的是页面实际走了多远，
+ * 而不是手指移动了多少像素。四分之一表面：此时相邻页已经绘制完成并在跟手，
+ * 拖到这里已经读作要翻页。中点附近则不算 —— 刻意的三分之一屏拖拽会弹回。
  */
 export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.1;
 /**
- * Release speed, in px/ms, above which a flick pages regardless of progress.
+ * 释放速度阈值（px/ms），超过则无论进度如何都翻页。
  *
- * ~0.32 px/ms is a brisk but unremarkable flick (roughly 320 px/s). Below it the
- * gesture is treated as a positional drag and judged by progress alone.
+ * 约 0.32 px/ms 是利落但不夸张的一甩（约 320 px/s）。低于它视为位移拖拽，
+ * 只按进度判断。
  */
 export const HORIZONTAL_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
-/** Bounds for the release settle, in ms. */
+/** 释放收尾时长的边界（ms）。 */
 export const HORIZONTAL_SWIPE_SETTLE_MIN_MS = 170;
 export const HORIZONTAL_SWIPE_SETTLE_MAX_MS = 400;
 /**
- * Speed window, px/ms, the settle duration is derived within.
+ * 收尾时长在其间推导的速度窗口（px/ms）。
  *
- * The settle continues motion the finger started, so its duration comes from
- * the distance still to cover divided by the release speed. Clamping that speed
- * keeps a near-stationary release from producing a multi-second crawl and a
- * violent flick from snapping in a single frame.
+ * 收尾延续手指已经开始的运动，因此时长来自剩余距离除以释放速度。钳制速度避免
+ * 近乎原地松手产生数秒的蠕动，也避免猛烈一甩在一帧内瞬间到位。
  */
 export const HORIZONTAL_SWIPE_SETTLE_MIN_SPEED = 0.7;
 export const HORIZONTAL_SWIPE_SETTLE_MAX_SPEED = 3;
 /**
- * Sampling window for release velocity, in ms.
+ * 释放速度的采样窗口（ms）。
  *
- * Pointer samples arrive one per compositor frame, so a single pair of events is
- * noisy. Smoothing over roughly two frames keeps a steady drag from reading as a
- * flick while still reacting within the same gesture.
+ * 指针样本每个合成帧至多一个，单对事件噪声很大。在约两帧上平滑既能防止稳定的
+ * 拖拽被误判为一甩，又能在同一手势内及时反应。
  */
 export const HORIZONTAL_SWIPE_VELOCITY_WINDOW_MS = 32;
 
 export type HorizontalSwipeSample = {
-  /** Pointer position along the gesture axis, in px. */
+  /** 手势轴上的指针位置（px）。 */
   x: number;
-  /** `performance.now()` at the time of the sample. */
+  /** 采样时刻的 `performance.now()`。 */
   time: number;
 };
 
 /**
- * Release speed along the gesture axis, in px/ms, from a tail of samples.
+ * 由样本尾部计算的沿手势轴释放速度（px/ms）。
  *
- * Pointer moves arrive roughly one per compositor frame, so differentiating the
- * last two events alone is noisy enough to read a steady drag as a flick.
- * Averaging over the samples inside `windowMs` smooths that out, and because the
- * window is measured back from the newest sample, a finger that paused before
- * lifting reports ~0 instead of inheriting the speed it had before the pause.
+ * pointermove 大约每个合成帧一个，只对最后两个事件求差分足以把稳定的拖拽误读成
+ * 一甩。对 `windowMs` 窗口内的样本取平均可以平滑掉这一点；由于窗口从最新样本
+ * 往回量，抬起前停顿过的手指上报约 0，
+ * 而不是继承停顿前的速度。
  */
 export function horizontalSwipeVelocity(
   samples: readonly HorizontalSwipeSample[],
@@ -97,10 +89,9 @@ export function horizontalSwipeVelocity(
 }
 
 /**
- * Signed share of a surface the live drag currently covers.
+ * 实时拖拽当前覆盖的带符号表面比例。
  *
- * This is the value a paging transition interpolates against: at ±1 the
- * neighbouring page has fully replaced the current one.
+ * 翻页过渡正是对这个值插值：±1 时相邻页已完全取代当前页。
  */
 export function horizontalSwipeProgress(dragOffset: number, surfaceWidth: number): number {
   if (!(surfaceWidth > 0)) return 0;
@@ -108,17 +99,14 @@ export function horizontalSwipeProgress(dragOffset: number, surfaceWidth: number
 }
 
 /**
- * Whether releasing here should land on the neighbour the drag was heading for.
+ * 在此释放是否应落在拖拽所指向的相邻页上。
  *
- * The drag's own sign picks the candidate page; this only decides commit versus
- * return, the way a phone pager does:
+ * 拖拽自身的符号挑选候选页；这里只决定提交还是回弹，与手机翻页器一致：
  *
- * - a flick that agrees with the drag commits at any distance, so a quick flick
- *   pages without having to cross the screen;
- * - a flick back toward the start cancels at any distance, so a drag pulled back
- *   past the midpoint does not page against the user's last intent;
- * - otherwise the decision is positional — how much of the surface the page
- *   actually travelled.
+ * - 与拖拽方向一致的一甩在任何距离上都提交，快速轻甩不必划过整屏也能翻页；
+ * - 朝起点方向甩回则在任何距离上取消，拖过中点又拉回去不会违背用户最后意图地
+ * 翻页；
+ * - 否则按位置决定 —— 页面实际走过了多少表面。
  */
 export function horizontalSwipeShouldCommit(
   dragOffset: number,
@@ -135,10 +123,7 @@ export function horizontalSwipeShouldCommit(
   );
 }
 
-/**
- * Index the strip lands on when the pointer is released, or null to stay put.
- * A negative offset (finger moved left) advances; positive goes back.
- */
+/** 指针释放时条带落点的下标；null 保持原位。负偏移（手指左移）前进；正值后退。 */
 export function horizontalSwipeTargetIndex(
   currentIndex: number,
   length: number,
@@ -172,13 +157,11 @@ export function horizontalSwipeTargetItem<T>(
 }
 
 /**
- * How long the release should take to cover the remaining distance, in ms.
+ * 释放覆盖剩余距离所需的时长（ms）。
  *
- * A settle continues the gesture rather than playing a canned transition, so its
- * duration follows from the distance left and the speed the finger let go at.
- * The speed is clamped so a near-stationary release does not crawl and a hard
- * flick does not snap within a single frame; the result is clamped again so the
- * total time stays inside the range that reads as one continuous movement.
+ * 收尾延续手势而不是播放一段固定动画，因此时长取决于剩余距离与松手速度。
+ * 速度经过钳制，近原地松手不会蠕动、猛甩也不会在一帧内瞬移；结果再次钳制，
+ * 使总时长保持在读作一次连续运动的范围内。
  */
 export function horizontalSwipeSettleDuration(distance: number, velocity: number): number {
   const remaining = Math.abs(distance);
@@ -196,12 +179,11 @@ export function horizontalSwipeSettleDuration(distance: number, velocity: number
 }
 
 /**
- * Horizontal offset used while a page follows the pointer.
+ * 页面跟手时使用的横向偏移。
  *
- * A valid direction follows the finger up to a full surface width, so the page
- * can pan edge to edge like phone navigation. At the first/last page the same
- * movement is heavily damped, making the boundary visible without suggesting
- * that the strip wraps around.
+ * 有效方向上跟手最多一整个表面宽度，页面可以像手机导航那样贴边平移。
+ * 在第一/最后一页同样的移动被大幅阻尼，
+ * 既让边界可见又不暗示条带可以环绕。
  */
 export function horizontalSwipeDragOffset(
   currentIndex: number,
@@ -221,7 +203,7 @@ export function horizontalSwipeDragOffset(
   return atBoundary ? boundedOffset * HORIZONTAL_SWIPE_EDGE_RESISTANCE : boundedOffset;
 }
 
-/** Position a full-width paging track at the requested item. */
+/** 把全宽翻页 track 定位到指定项。 */
 export function horizontalSwipeTrackOffset(index: number, surfaceWidth: number): number {
   const normalizedIndex = Math.max(0, index);
   const width = Math.max(0, surfaceWidth);
@@ -229,9 +211,8 @@ export function horizontalSwipeTrackOffset(index: number, surfaceWidth: number):
 }
 
 /**
- * Rebase a committed drag around the newly selected page without changing the
- * pixels currently under the finger. The new page becomes the track origin,
- * so one page width is added in the navigation direction before settling to 0.
+ * 围绕新选中的页面重建已提交拖拽的基准，但不改变手指下方当前的像素。
+ * 新页面成为 track 原点，因此在收尾归零之前沿导航方向加上一个页宽。
  */
 export function horizontalSwipeCommitOffset(
   dragOffset: number,
@@ -243,10 +224,9 @@ export function horizontalSwipeCommitOffset(
 }
 
 /**
- * Continuous horizontal gestures (sliders, text fields) and explicit drag
- * handles own the pointer.
- * Ordinary buttons and list rows stay swipeable; a recognised swipe suppresses
- * the synthetic click that Android WebView may still emit.
+ * 连续横向手势（滑杆、文本框）和显式拖拽把手拥有指针。
+ * 普通按钮和列表行保持可滑动；识别出的滑动会抑制 Android WebView
+ * 可能仍会发出的合成 click。
  */
 export function isHorizontalSwipeIgnoredTarget(target: EventTarget | null): boolean {
   if (!target || typeof Element === "undefined" || typeof Node === "undefined") return false;

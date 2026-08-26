@@ -20,17 +20,15 @@ export function homeRecommendationsQueryOptions(siteId: SiteId) {
   };
 }
 
-/** Start a platform feed before the tab click needs it. QueryClient deduplicates in-flight calls. */
+/** 在页签点击需要之前启动平台信息流。QueryClient 会合并在途调用。 */
 export function prefetchHomeRecommendations(queryClient: QueryClient, siteId: SiteId): void {
   void queryClient.prefetchInfiniteQuery(homeRecommendationsQueryOptions(siteId));
 }
 
 /**
- * Sites whose recommendation pages are rotating batches rather than stable
- * offsets: refreshing every stored page would pay N sequential round trips to
- * re-derive content that a single fresh batch supersedes anyway. Refreshing
- * such a feed trims the query to its first page, so `refetch` issues exactly
- * one request and the whole grid rotates.
+ * 推荐页是轮换批次而非稳定偏移的站点：逐页刷新要用 N 次串行往返才能重新推导
+ * 出本来就会被单批新数据取代的内容。刷新这类信息流时先把 query 裁剪到第一页，
+ * 使 `refetch` 恰好发出一次请求，整个网格随之轮换。
  */
 const ROTATING_RECOMMEND_SITES: readonly SiteId[] = ["douyin"];
 

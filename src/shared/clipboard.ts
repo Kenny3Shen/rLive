@@ -1,7 +1,6 @@
 /**
- * Copy plain text across Tauri WebView, browser previews, and older WebViews.
- * The modern Clipboard API is preferred, with a selection-preserving fallback
- * for environments where the permission is missing or rejected.
+ * 跨 Tauri WebView、浏览器预览和较旧 WebView 复制纯文本。优先使用现代
+ * Clipboard API，并为缺少或拒绝权限的环境提供保留选区的兜底方案。
  */
 export async function copyText(text: string): Promise<boolean> {
   if (!text || typeof document === "undefined") return false;
@@ -12,7 +11,7 @@ export async function copyText(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // A rejected native request can still succeed through execCommand below.
+    // 被拒绝的原生请求仍可能通过下方 execCommand 成功。
   }
 
   const selection = document.getSelection();
@@ -45,7 +44,7 @@ export async function copyText(text: string): Promise<boolean> {
     try {
       textarea.remove();
     } catch {
-      // Cleanup is best-effort only.
+      // 清理尽力而为。
     }
     try {
       if (selection) {
@@ -53,7 +52,7 @@ export async function copyText(text: string): Promise<boolean> {
         for (const range of ranges) selection.addRange(range);
       }
     } catch {
-      // A selection can become detached while the clipboard request is open.
+      // 剪贴板请求进行期间选区可能已经分离。
     }
     try {
       if (activeElement?.isConnected) activeElement.focus({ preventScroll: true });
@@ -61,7 +60,7 @@ export async function copyText(text: string): Promise<boolean> {
       try {
         activeElement?.focus();
       } catch {
-        // Older WebViews may not support focus options.
+        // 较旧 WebView 可能不支持 focus 选项。
       }
     }
   }

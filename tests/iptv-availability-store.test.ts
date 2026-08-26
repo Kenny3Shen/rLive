@@ -18,7 +18,7 @@ describe("IPTV availability session store", () => {
     expect(useIptvAvailabilityStore.getState().progress).toEqual({ completed: 1, total: 1 });
 
     useIptvAvailabilityStore.getState().resetForSource("https://a.example/list.m3u");
-    // Same source keeps the cached results, so a page re-mount does not lose them.
+    // 同一来源保留缓存结果，页面重新挂载不会丢失。
     expect(useIptvAvailabilityStore.getState().byUrl.size).toBe(1);
 
     useIptvAvailabilityStore.getState().resetForSource("https://b.example/list/index.m3u");
@@ -33,7 +33,7 @@ describe("IPTV availability session store", () => {
     store.markChecked("https://a.example/list/index.m3u", 1_000);
     expect(useIptvAvailabilityStore.getState().lastCheckedAt).toBe(1_000);
 
-    // A stale page finishing after the user switched sources must not move the timestamp.
+    // 用户切换来源之后完成的过期页面不得拨动时间戳。
     store.markChecked("https://a.example/list/index.m3u", 2_000);
     expect(useIptvAvailabilityStore.getState().sourceUrl).toBe("https://a.example/list/index.m3u");
   });

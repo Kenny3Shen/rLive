@@ -5,7 +5,7 @@ export type RoomNavigationState = {
   roomBackTarget?: "home" | "follow";
 };
 
-/** State carried by an in-room follow-list switch. */
+/** 房间内关注列表切换所携带的状态。 */
 export const FOLLOW_ROOM_SWITCH_STATE: Readonly<RoomNavigationState> = {
   roomSideTab: "follow",
   roomBackTarget: "follow",

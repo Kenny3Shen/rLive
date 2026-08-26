@@ -255,7 +255,7 @@ describe("xgplayer transport selection", () => {
     expect(requestedPlugin).toBe("HlsJsPlugin");
     wrapper?.startLoad(12);
     expect(startedFrom).toBe(12);
-    // The program clock is what multi-view alignment reads for an exact sync.
+    // 节目时钟是多视图对齐实现精确同步所读取的内容。
     expect(wrapper?.programDateMs()).toBe(1_700_000_000_000);
   });
 

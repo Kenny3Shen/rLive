@@ -1,40 +1,37 @@
 /**
- * Single source of truth for the frosted materials used by player chrome and
- * room surfaces.
+ * 播放器 chrome 与房间表面所用毛玻璃材质的唯一事实来源。
  *
- * Two materials exist, defined as `@utility` classes in `src/styles.css`:
- * - `glass-surface` — app context. Tinted from `--popover`, heavier blur.
- * - `glass-surface-overlay` — over video. Darker fill and a deliberately
- *   lighter blur, because every decoded frame changes the backdrop.
+ * 有两种材质，以 `@utility` 类定义在 `src/styles.css`：
+ * - `glass-surface` —— 应用上下文。由 `--popover` 调色，模糊更重。
+ * - `glass-surface-overlay` —— 视频之上。填充更深、模糊刻意更轻，
+ * 因为每一帧解码都会改变背景。
  *
- * Callers pass their context instead of re-deriving the class pair plus the
- * border/text/shadow trim at each popover and drawer.
+ * 调用方传入自己的上下文即可，
+ * 而不必在每个 popover 和抽屉处重新推导类组合加边框/文字/阴影修饰。
  */
 
-/** `true` when the surface floats over video and needs the darker material. */
+/** 表面悬浮于视频之上、需要更深材质时为 true。 */
 export type GlassSurfaceContext = { overlay?: boolean };
 
 /**
- * Material class for a glass panel.
+ * 玻璃面板的材质类。
  *
- * The `glass` prop on `PopoverContent`/`DrawerContent`/`SelectContent` only
- * drops the opaque `bg-popover` default; the material itself comes from here,
- * so both must be set together.
+ * `PopoverContent`/`DrawerContent`/`SelectContent` 上的 `glass` 属性只去掉不透明
+ * 的 `bg-popover` 默认背景；材质本身来自这里，因此两者必须一起设置。
  */
 export function glassSurfaceClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "glass-surface-overlay" : "glass-surface";
 }
 
 /**
- * Trim that rides along with the over-video material: hairline border, white
- * text and a deeper shadow. Empty in the app context, where the shared
- * popover/drawer tokens already read correctly against `--popover`.
+ * 随视频之上材质附带的修饰：细边框、白色文字和更深的阴影。应用上下文中为空
+ * —— 共享 popover/drawer token 相对 `--popover` 本来就正确。
  */
 export function glassSurfaceTrimClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "border border-white/10 text-white shadow-xl" : "";
 }
 
-/** Material plus trim, for panels that want the whole treatment in one class. */
+/** 材质加修饰，想让面板一次性拿到整套处理的场合使用。 */
 export function glassPanelClass(context: GlassSurfaceContext = {}): string {
   const trim = glassSurfaceTrimClass(context);
   const material = glassSurfaceClass(context);
@@ -42,9 +39,8 @@ export function glassPanelClass(context: GlassSurfaceContext = {}): string {
 }
 
 /**
- * Interactive row inside an over-video glass panel. Selected state is carried
- * by an explicit fill rather than the `secondary` button variant, whose opaque
- * token would punch a hole in the material.
+ * 视频之上玻璃面板内的交互行。选中态用显式填充承载而不是 `secondary` 按钮
+ * 变体 —— 后者的不透明 token 会在材质上凿出一个洞。
  */
 export function glassOptionClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay
@@ -52,12 +48,12 @@ export function glassOptionClass({ overlay = false }: GlassSurfaceContext = {}):
     : "";
 }
 
-/** Selected fill for a row inside an over-video glass panel. */
+/** 视频之上玻璃面板中某一行的选中填充。 */
 export function glassOptionSelectedClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "bg-white/18 text-white" : "";
 }
 
-/** Separators and muted labels need lifting against the darker overlay fill. */
+/** 分隔线与弱化标签需要在更深的叠加填充上提亮。 */
 export function glassSeparatorClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "bg-white/10" : "";
 }
@@ -67,8 +63,8 @@ export function glassMutedTextClass({ overlay = false }: GlassSurfaceContext = {
 }
 
 /**
- * Section title inside a glass popover/drawer (播放设置、字幕设置、定时关闭…).
- * Compact main heading — keeps player chrome titles consistent.
+ * 玻璃 popover/抽屉中的分组标题（播放设置、字幕设置、定时关闭…）。
+ * 紧凑的主标题 —— 保持播放器 chrome 标题一致。
  */
 export function glassTitleClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "text-sm font-semibold text-white" : "text-sm font-semibold text-foreground";

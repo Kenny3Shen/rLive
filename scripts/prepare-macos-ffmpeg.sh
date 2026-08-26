@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
-# Build the static FFmpeg libraries `ffmpeg-next` links against on macOS.
+# 构建 macOS 上 `ffmpeg-next` 所链接的静态 FFmpeg 库。
 #
-# Homebrew's FFmpeg cannot be used for a release: it is a shared build whose
-# libavcodec recursively depends on dozens of further Homebrew dylibs, so a DMG
-# linked against it fails to launch on a Mac without Homebrew. Linking static
-# archives built from the pinned official source keeps the app self-contained
-# (no `Frameworks` dylib copying, no install-name rewriting), makes the artifact
-# reproducible, and bounds the license audit to FFmpeg itself.
+# Homebrew 的 FFmpeg 不能用于发布：它是共享构建，其 libavcodec 递归依赖
+# 数十个 Homebrew dylib，因此链接它的 DMG 在没有 Homebrew 的 Mac 上无法启动。
+# 链接由固定版本官方源码构建的静态库可让应用自包含
+# （无需复制 `Frameworks` dylib，也无需重写 install name），
+# 产物可复现，并把许可审计范围限定在 FFmpeg 自身。
 #
-# Only what `recording_ffmpeg.rs` actually exercises is enabled: it demuxes
-# FLV/HLS/MPEG-TS and remuxes into FLV or MPEG-TS without ever decoding or
-# encoding. `configure` pulls in the parsers and bitstream filters those
-# muxers/demuxers select on its own, so they are not listed here.
+# 只启用 `recording_ffmpeg.rs` 实际用到的能力：它解复用 FLV/HLS/MPEG-TS
+# 并重新封装为 FLV 或 MPEG-TS，从不解码或编码。`configure` 会自行拉入
+# 这些封装/解封装器所需的解析器和比特流过滤器，故此处不再列出。
 #
-# The build is LGPL: `--enable-gpl` is deliberately not passed, and no external
-# codec library is enabled.
+# 构建结果为 LGPL：刻意不传 `--enable-gpl`，也不启用任何外部编解码库。
 set -euo pipefail
 
 FFMPEG_VERSION="9.0.1"
 FFMPEG_ARCHIVE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_ARCHIVE}"
-# Measured from the official tarball after verifying its detached signature
-# against the FFmpeg release signing key
-# FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>.
+# 校验官方 tarball 的分离签名后计算得出，签名对应 FFmpeg 发布签名密钥
+# FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>。
 FFMPEG_SHA256="cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
 
 usage() {
@@ -53,12 +49,11 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-# These must not be newer than what the app itself is built against, or the
-# linker warns that the archives target a newer macOS than the binary. Tauri
-# writes `bundle.macOS.minimumSystemVersion` into `MACOSX_DEPLOYMENT_TARGET`
-# and defaults it to 10.13, which is below both values here — so the app is
-# built against whichever of the two is newer, and these stay compatible.
-# Apple Silicon never shipped before 11.0, so an arm64 slice cannot target less.
+# 这些值不能高于应用自身的构建目标，否则链接器会警告静态库面向的 macOS
+# 版本比二进制更新。Tauri 会把 `bundle.macOS.minimumSystemVersion` 写入
+# `MACOSX_DEPLOYMENT_TARGET`，默认为 10.13，低于这里的两个值 —— 因此应用
+# 按两者中较新的版本构建，二者保持兼容。Apple Silicon 从未在 11.0 之前
+# 发布，所以 arm64 切片不可能面向更低版本。
 case "$arch" in
   arm64)
     deployment_target="11.0"
@@ -88,9 +83,8 @@ emit_environment() {
   echo "FFMPEG_PREFIX=$prefix"
   echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
   if [[ -n "${GITHUB_ENV:-}" ]]; then
-    # `ffmpeg-sys-next` resolves the libraries through pkg-config, and its
-    # `static` feature makes pkg-config emit the `Libs.private` transitive
-    # dependencies the archives need.
+    # `ffmpeg-sys-next` 通过 pkg-config 解析库位置，它的 `static` feature
+    # 会让 pkg-config 输出静态库所需的 `Libs.private` 传递依赖。
     {
       echo "FFMPEG_PREFIX=$prefix"
       echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
@@ -112,15 +106,14 @@ verify_prefix() {
       exit 1
     fi
   done
-  # A shared build here would defeat the point: the DMG would again depend on
-  # libraries that are not inside it.
+  # 在这里做共享构建会失去意义：DMG 又会依赖不在包内的库。
   if compgen -G "$prefix/lib/*.dylib" > /dev/null; then
     echo "构建产物包含 dylib，静态构建配置有误: $prefix/lib" >&2
     exit 1
   fi
 }
 
-# A complete prefix is reused as-is so a warm cache skips the whole build.
+# 完整的 prefix 会被原样复用，因此缓存命中时可跳过整个构建。
 if [[ -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/pkgconfig/libavformat.pc" ]]; then
   echo "复用已构建的静态 FFmpeg: $prefix"
   verify_prefix
@@ -128,13 +121,12 @@ if [[ -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/pkgconfig/libavformat.pc
   exit 0
 fi
 
-# `ffmpeg-sys-next` locates the libraries through pkg-config, and the x86_64
-# build needs a nasm-compatible assembler: `configure` treats a missing one as a
-# fatal error rather than quietly dropping the hand-written assembly. Neither is
-# guaranteed to be preinstalled on a runner, so install what is missing instead
-# of failing halfway through.
-# Collected as a string rather than an array: macOS ships bash 3.2, where
-# expanding an empty array under `set -u` aborts the script.
+# `ffmpeg-sys-next` 通过 pkg-config 定位库，且 x86_64 构建需要与 nasm
+# 兼容的汇编器：`configure` 会把缺失汇编器视为致命错误，而不是安静地
+# 丢掉手写汇编。运行器上不保证预装这两者，所以缺什么就装什么，
+# 而不是在构建中途失败。
+# 以字符串而非数组收集：macOS 自带 bash 3.2，在 `set -u` 下展开空数组
+# 会中止脚本。
 missing_tools=""
 command -v pkg-config > /dev/null || missing_tools="$missing_tools pkg-config"
 if [[ "$configure_arch" == "x86_64" ]]; then
@@ -146,8 +138,7 @@ if [[ -n "$missing_tools" ]]; then
     exit 1
   fi
   echo "安装缺失的构建工具:${missing_tools}"
-  # Intentionally unquoted: the list is a space-separated set of literal
-  # formula names assembled just above.
+  # 故意不加引号：这个列表是上面拼好的、以空格分隔的字面 formula 名集合。
   # shellcheck disable=SC2086
   brew install $missing_tools
 fi
@@ -174,11 +165,10 @@ test -f "$source_dir/configure"
 echo "编译静态 FFmpeg ${FFMPEG_VERSION} ($configure_arch) -> $prefix"
 (
   cd "$source_dir"
-  # `--disable-autodetect` pins the feature set to exactly what is listed here
-  # instead of whatever happens to be installed on the runner, which is what
-  # makes the artifact reproducible. It also switches off zlib and Secure
-  # Transport, both of which are required — mov/matroska probing wants zlib and
-  # a direct HTTPS recording needs TLS — so both are re-enabled explicitly.
+  # `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
+  # 运行器上恰好安装了什么，这正是产物可复现的原因。它同时会关掉 zlib 和
+  # Secure Transport，而这两者都是必需的 —— mov/matroska 探测需要 zlib，
+  # 直连 HTTPS 录制需要 TLS —— 所以都显式重新启用。
   ./configure \
     --prefix="$prefix" \
     --arch="$configure_arch" \
@@ -201,11 +191,10 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} ($configure_arch) -> $prefix"
     --enable-protocol=file,http,https,tls,tcp,crypto \
     --pkg-config-flags=--static
 
-  # `configure` downgrades a component whose dependencies are unmet to a warning
-  # and still exits 0 — a TLS backend it cannot find turns
-  # `--enable-protocol=https` into `CONFIG_HTTPS_PROTOCOL 0`, and the loss would
-  # then surface only at runtime, as a failed HTTPS recording on a user's Mac.
-  # Assert the generated header instead of trusting the exit status.
+  # `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
+  # 后端会把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
+  # 而这种缺失只会在运行时暴露，表现为用户 Mac 上 HTTPS 录制失败。
+  # 因此断言生成的头文件，而不是相信退出码。
   for component in \
     HTTPS_PROTOCOL TLS_PROTOCOL HTTP_PROTOCOL FILE_PROTOCOL CRYPTO_PROTOCOL \
     FLV_DEMUXER LIVE_FLV_DEMUXER HLS_DEMUXER MPEGTS_DEMUXER MOV_DEMUXER \

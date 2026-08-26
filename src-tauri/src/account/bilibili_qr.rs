@@ -1,11 +1,10 @@
-//! Bilibili's user-operated QR login flow.
+//! Bilibili 的用户扫码登录流程。
 //!
-//! The desktop app only displays the QR URL returned by Bilibili and polls the
-//! matching public status endpoint.  Bilibili delivers the web session through
-//! `Set-Cookie` response headers on the poll request, and repeats some of the
-//! same fields in the callback URL query.  Both sources are collected with a
-//! process-local cookie jar so a confirmed scan is not rejected when the
-//! callback URL omits them; neither the QR key nor the cookie is logged.
+//! 桌面端只展示 Bilibili 返回的二维码 URL，并轮询对应的公开状态接口。
+//! Bilibili 通过轮询请求的 `Set-Cookie` 响应头下发 Web 会话，并在回调 URL
+//! 的 query 中重复其中部分字段。两个来源都用进程内的 cookie jar 收集，
+//! 这样即使回调 URL 缺少这些字段，也不会把已确认的扫码判为失败；
+//! 二维码 key 与 cookie 都不会写入日志。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,7 +30,7 @@ const MAX_REDIRECTS: usize = 8;
 const MAX_QR_KEY_LEN: usize = 512;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 
-/// Cookie fields Bilibili's web APIs rely on, in stored header order.
+/// Bilibili Web API 依赖的 Cookie 字段，按存储的 header 顺序排列。
 const COOKIE_KEYS: &[&str] = &[
     "SESSDATA",
     "bili_jct",
@@ -42,15 +41,15 @@ const COOKIE_KEYS: &[&str] = &[
     "buvid4",
 ];
 
-/// Data required to render a Bilibili login QR code in the client.
+/// 客户端渲染 Bilibili 登录二维码所需的数据。
 pub struct QrLoginStart {
     pub qr_code_url: String,
-    /// Opaque, process-local handle rather than Bilibili's actual `qrcode_key`.
+    /// 不透明的进程内句柄，而不是 Bilibili 真正的 `qrcode_key`。
     pub qr_key: String,
 }
 
-/// A poll result.  Cookie material is returned only inside the Rust process so
-/// the command can persist it directly into the local SQLite account store.
+/// 一次轮询结果。Cookie 内容只在 Rust 进程内返回，
+/// 以便命令层直接把它持久化到本地 SQLite 账号存储。
 pub enum QrLoginPoll {
     Pending,
     Scanned,
@@ -170,9 +169,9 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
         .await
         .map_err(|_| qr_network_error("bilibili_qr_poll"))?;
 
-    // Reading the body consumes the response, so the jar must already hold the
-    // `Set-Cookie` fields; reqwest's cookie store is populated before this
-    // point precisely because the client was built with a cookie provider.
+    // 读取 body 会消费掉响应，所以此时 jar 中必须已经持有 `Set-Cookie` 字段；
+    // reqwest 的 cookie store 之所以能在此之前填充完毕，
+    // 正是因为客户端在构建时带上了 cookie provider。
     let response: ApiResponse<PollData> = response.json().await.map_err(|_| {
         AppError::new("bilibili_qr_poll", "二维码状态服务返回了无法识别的数据")
             .with_site("bilibili")
@@ -218,16 +217,16 @@ fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
     Client::builder()
         .use_native_tls()
         .cookie_provider(jar)
-        // QR authentication carries a temporary login session. Do not route it
-        // through a process-level HTTP(S) proxy or the app browsing proxy.
+        // 扫码认证携带的是临时登录会话。不要让它走进程级 HTTP(S) 代理
+        // 或应用的浏览代理。
         .no_proxy()
         .gzip(true)
         .brotli(true)
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
-        // Login completion may only traverse Bilibili-owned HTTPS hosts so a
-        // server-supplied URL cannot turn this client into an authenticated
-        // request to an arbitrary destination.
+        // 登录完成过程只允许在 Bilibili 自有的 HTTPS 主机之间跳转，
+        // 这样服务端返回的 URL 就无法把该客户端变成
+        // 指向任意目标的已认证请求。
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if can_follow_redirect(attempt.url(), attempt.previous().len()) {
                 attempt.follow()
@@ -259,20 +258,19 @@ fn qr_api_error(code: &str, message: &str) -> AppError {
         .retryable()
 }
 
-/// Merge the confirmed login Cookie from both sources Bilibili uses.
+/// 合并 Bilibili 两种下发途径中已确认登录的 Cookie。
 ///
-/// The poll response's `Set-Cookie` headers are the primary source; the
-/// callback URL query repeats a subset and is kept as a fallback for the case
-/// where a field arrives only there.  Jar values win on conflict because they
-/// are what the browser itself would store.
+/// 轮询响应的 `Set-Cookie` 头是主要来源；回调 URL 的 query 只重复其中一部分，
+/// 作为字段仅出现在那里时的兜底。冲突时以 jar 中的值为准，
+/// 因为那才是浏览器自身会存储的内容。
 fn login_cookie(jar: &Arc<Jar>, callback_url: &str) -> Option<String> {
     let mut values = cookies_from_jar(jar);
     for (key, value) in cookies_from_callback_url(callback_url) {
         values.entry(key).or_insert(value);
     }
 
-    // `SESSDATA` is the minimum credential needed by the Bilibili APIs used
-    // in this application.  Do not write a partial successful-looking login.
+    // `SESSDATA` 是本应用所用 Bilibili API 需要的最小凭据。
+    // 不要写入看似成功却不完整的登录结果。
     if !values.contains_key("SESSDATA") {
         return None;
     }
@@ -288,11 +286,11 @@ fn login_cookie(jar: &Arc<Jar>, callback_url: &str) -> Option<String> {
     Some(cookie)
 }
 
-/// Read the known login fields the poll request stored in the cookie jar.
+/// 读取轮询请求存入 cookie jar 的已知登录字段。
 ///
-/// Values are stored exactly as Bilibili sent them.  reqwest's jar does not
-/// percent-decode a cookie value, and `SESSDATA` must reach the web APIs in its
-/// original encoded form, so re-encoding here would corrupt it.
+/// 取值完全按 Bilibili 下发的原样保存。reqwest 的 jar 不会对 cookie 值做
+/// 百分号解码，而 `SESSDATA` 必须以原始编码形式送达 Web API，
+/// 所以在这里重新编码会破坏它。
 fn cookies_from_jar(jar: &Arc<Jar>) -> HashMap<&'static str, String> {
     let mut values = HashMap::new();
     for origin in [PASSPORT_ORIGIN, WEB_ORIGIN] {
@@ -328,11 +326,10 @@ fn cookies_from_jar(jar: &Arc<Jar>) -> HashMap<&'static str, String> {
     values
 }
 
-/// Read the known login fields carried by Bilibili's QR callback URL.
+/// 读取 Bilibili 扫码回调 URL 携带的已知登录字段。
 ///
-/// Values deliberately remain percent-encoded: Bilibili cookie values such as
-/// `SESSDATA` commonly use `%2C`, and decoding/re-encoding them can change the
-/// opaque value accepted by the web APIs.
+/// 取值刻意保持百分号编码状态：Bilibili 的 cookie 值（如 `SESSDATA`）
+/// 常包含 `%2C`，解码再编码可能改变 Web API 认可的那个不透明取值。
 fn cookies_from_callback_url(callback_url: &str) -> HashMap<&'static str, String> {
     let mut values = HashMap::new();
     let Some(query) = callback_url
@@ -355,11 +352,11 @@ fn cookies_from_callback_url(callback_url: &str) -> HashMap<&'static str, String
     values
 }
 
-/// Accept only a non-empty value that can be sent verbatim in a Cookie header.
+/// 只接受可以原样写入 Cookie 请求头的非空取值。
 ///
-/// Bilibili's values are already percent-encoded ASCII; anything carrying a
-/// separator or control byte would let a crafted response inject a second
-/// cookie field, so it is dropped instead of escaped.
+/// Bilibili 的取值已经是百分号编码的 ASCII；任何包含分隔符或控制字节的内容
+/// 都可能让被构造的响应注入第二个 cookie 字段，
+/// 因此直接丢弃而不是转义。
 fn is_safe_cookie_value(value: &str) -> bool {
     !value.is_empty()
         && value.is_ascii()
@@ -448,8 +445,8 @@ mod tests {
         is_trusted_bilibili_url, is_valid_session_key, login_cookie,
     };
 
-    /// The fix depends on reqwest storing `Set-Cookie` in the jar before the
-    /// body is consumed. Prove it against a real response rather than assuming.
+    /// 这个修复依赖 reqwest 在 body 被消费之前就把 `Set-Cookie` 存入 jar。
+    /// 用真实响应验证这一点，而不是假定它成立。
     #[tokio::test]
     async fn the_jar_is_populated_before_the_json_body_is_read() {
         use std::io::{Read, Write};
@@ -480,7 +477,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        // Consume the body exactly as `poll` does.
+        // 与 `poll` 完全一致地消费响应 body。
         let _ = response.text().await.unwrap();
 
         let url = Url::parse(&format!("http://{address}/")).unwrap();
@@ -490,8 +487,8 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// Read the jar for an arbitrary origin; `cookies_from_jar` is pinned to
-    /// Bilibili's own hosts, which a loopback test server cannot use.
+    /// 按任意 origin 读取 jar；`cookies_from_jar` 被限定在 Bilibili 自有主机上，
+    /// 而回环测试服务器无法使用那些主机。
     fn cookies_from_jar_at(jar: &Arc<Jar>, url: &Url) -> String {
         use reqwest::cookie::CookieStore;
         jar.cookies(url)
@@ -501,7 +498,7 @@ mod tests {
 
     #[test]
     fn only_bilibili_origins_are_read_from_the_jar() {
-        // A cookie set by an unrelated host must never enter the stored header.
+        // 由无关主机设置的 cookie 绝不能进入存储的 header。
         let jar = Arc::new(Jar::default());
         jar.add_cookie_str(
             "SESSDATA=evil; Path=/",
@@ -521,8 +518,8 @@ mod tests {
 
     #[test]
     fn poll_set_cookie_headers_alone_complete_the_login() {
-        // The regression: Bilibili confirmed the scan but returned a callback
-        // URL without credentials, so only `Set-Cookie` carried the session.
+        // 回归场景：Bilibili 确认了扫码，但返回的回调 URL 不带凭据，
+        // 此时只有 `Set-Cookie` 携带会话信息。
         let jar = jar_with(&[
             "SESSDATA=abc%2Cdef%2Cghi; Domain=.bilibili.com; Path=/",
             "bili_jct=csrf; Domain=.bilibili.com; Path=/",
@@ -583,8 +580,8 @@ mod tests {
 
     #[test]
     fn jar_values_are_stored_without_re_encoding() {
-        // reqwest's jar does not decode a cookie value, so `SESSDATA` must be
-        // passed through verbatim; encoding it again would yield `%252C`.
+        // reqwest 的 jar 不会解码 cookie 值，因此 `SESSDATA` 必须原样透传；
+        // 再编码一次会得到 `%252C`。
         let jar = jar_with(&["SESSDATA=abc%2Cdef%2Cghi; Domain=.bilibili.com; Path=/"]);
 
         assert_eq!(
@@ -600,11 +597,10 @@ mod tests {
         assert!(!is_safe_cookie_value("abc; DedeUserID=1"));
         assert!(!is_safe_cookie_value("abc\r\nSet-Cookie: x=y"));
 
-        // An already-encoded value stays usable.
+        // 已经编码过的取值仍然可用。
         assert!(is_safe_cookie_value("a%20b"));
 
-        // A crafted callback URL must not smuggle an extra field into the
-        // stored header.
+        // 被构造的回调 URL 不得把额外字段偷偷塞进存储的 header。
         let jar = jar_with(&["SESSDATA=abc; Domain=.bilibili.com; Path=/"]);
         let cookie = login_cookie(&jar, "https://passport.bilibili.com/?bili_jct=a b").unwrap();
         assert_eq!(cookie, "SESSDATA=abc");
@@ -627,7 +623,7 @@ mod tests {
     #[test]
     fn session_keys_are_local_uuid_handles() {
         assert!(is_valid_session_key("0123456789abcdef0123456789abcdef"));
-        // Bilibili's own `qrcode_key` must no longer be accepted as a handle.
+        // Bilibili 自身的 `qrcode_key` 不再被接受作为句柄。
         assert!(!is_valid_session_key("short"));
         assert!(!is_valid_session_key("0123456789abcdef0123456789abcdeZ"));
     }

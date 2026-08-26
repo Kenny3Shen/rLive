@@ -13,14 +13,14 @@ function isDependency(id: string, packages: readonly string[]) {
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
-  // Release builds keep warnings/errors but omit the generated chunk table.
+  // 发布构建保留警告与错误，但不输出生成的 chunk 清单表。
   logLevel: command === "build" ? "warn" : "info",
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
     },
   },
-  // Vite 8 + Rolldown: keep dependency prebundle tight for Tauri desktop.
+  // Vite 8 + Rolldown：为 Tauri 桌面端保持依赖预打包范围收敛。
   optimizeDeps: {
     include: [
       "react",
@@ -34,16 +34,16 @@ export default defineConfig(({ command }) => ({
     ],
   },
   build: {
-    // WebView2 is Chromium-based; modern target shrinks shipped JS.
+    // WebView2 基于 Chromium，指定较新的目标可减小产物体积。
     target: "chrome120",
-    // Rolldown (Vite 8) default minify is high-quality; keep source maps off in release.
+    // Rolldown（Vite 8）默认压缩质量足够，发布构建不生成 source map。
     sourcemap: false,
     cssCodeSplit: true,
     reportCompressedSize: false,
     chunkSizeWarningLimit: 900,
-    // Keep long-lived framework code stable when feature chunks change.
-    // This is Rolldown's current manual-chunk API. Priorities prevent a UI or
-    // data package from recursively absorbing the React runtime it depends on.
+    // 特性 chunk 变化时保持长期稳定的框架代码不受影响。
+    // 这是 Rolldown 当前的 manual-chunk API，通过优先级避免 UI 或
+    // 数据类依赖包递归吞掉它自身依赖的 React 运行时。
     rolldownOptions: {
       output: {
         codeSplitting: {
@@ -77,7 +77,7 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
-  // Tauri expects a fixed port and quiet CLI noise.
+  // Tauri 需要固定端口，并尽量减少 CLI 输出噪音。
   clearScreen: false,
   server: {
     port: 1420,

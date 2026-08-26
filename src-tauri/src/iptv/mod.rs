@@ -1,8 +1,8 @@
-//! IPTV playlist loading and conservative M3U parsing.
+//! IPTV 播放列表加载与保守的 M3U 解析。
 //!
-//! Playlist URLs are supplied by the user or by the public IPTV-org presets in
-//! the UI.  We load them in Rust so remote playlists are not constrained by
-//! WebView CORS, then return only display metadata and the stream URL.
+//! 播放列表 URL 由用户提供，或来自 UI 内置的公开 IPTV-org 预设。在 Rust 中
+//! 加载它们，使远程播放列表不受 WebView CORS 限制，
+//! 随后只返回展示元数据与流地址。
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -34,9 +34,9 @@ pub struct IptvChannel {
     pub logo: Option<String>,
     pub url: String,
     pub protocol: PlaybackProtocol,
-    /// The small allowlist of playback headers embedded in an M3U entry.
-    /// These are forwarded by the localhost proxy to the stream and any HLS
-    /// sub-resources, not persisted as account credentials.
+    /// M3U 条目中内嵌的少量播放头字段白名单。
+    /// 它们由本机代理转发给流及其 HLS 子资源，
+    /// 不作为账号凭据持久化。
     pub headers: HashMap<String, String>,
 }
 
@@ -65,9 +65,9 @@ struct PendingEntry {
     headers: HashMap<String, String>,
 }
 
-/// Download a public or user-provided M3U playlist and return playable HTTP(S)
-/// channel entries.  The source is intentionally capped to protect the desktop
-/// process from malformed or unexpectedly huge lists.
+/// 下载公开或用户提供的 M3U 播放列表，返回可播放的 HTTP(S) 频道条目。
+/// 来源大小刻意设置上限，
+/// 保护桌面进程免受畸形或异常巨大的列表影响。
 pub async fn load_playlist(source_url: &str, proxy: Option<&str>) -> AppResult<Vec<IptvChannel>> {
     let source = parse_http_url(source_url, "iptv_invalid_playlist_url")?;
     let response = crate::http_client::client_for_proxy(proxy)?
@@ -122,9 +122,9 @@ pub async fn load_playlist(source_url: &str, proxy: Option<&str>) -> AppResult<V
     Ok(channels)
 }
 
-/// Check a bounded set of stream URLs without mounting a player or claiming the
-/// application-global media proxy. Successful HTTP headers alone are not
-/// enough: each probe waits for media bytes and validates HLS manifests.
+/// 在有界集合内检测流地址，不挂载播放器，也不占用应用级媒体代理。
+/// 仅有成功的 HTTP 响应头并不足够：
+/// 每个探测都会等待媒体字节并校验 HLS 清单。
 pub async fn check_channels(
     checks: Vec<IptvChannelCheck>,
     proxy: Option<&str>,
@@ -363,8 +363,8 @@ fn parse_m3u(playlist: &str, base_url: &Url) -> Vec<IptvChannel> {
         if !matches!(stream_url.scheme(), "http" | "https") {
             continue;
         }
-        // MPEG-DASH needs a separate player and manifest rewriter. Do not
-        // expose a known DASH URL as a playable HLS/MSE entry.
+        // MPEG-DASH 需要单独的播放器和清单改写器。
+        // 不要把已知的 DASH 地址暴露为可播放的 HLS/MSE 条目。
         if stream_url.path().to_ascii_lowercase().ends_with(".mpd") {
             continue;
         }

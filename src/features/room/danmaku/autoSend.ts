@@ -1,15 +1,15 @@
-/** A user-visible text unit, not a UTF-16 code unit. */
+/** 用户可见的文本单位，而不是 UTF-16 码元。 */
 export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 20;
 
-/** Session-only automatic-send interval bounds, in whole seconds. */
+/** 仅限会话的自动发送间隔上下界，整秒计。 */
 export const AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS = 10;
 export const AUTO_DANMAKU_SEND_MAX_INTERVAL_SECONDS = 3_600;
 export const AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS = 20;
 
-/** The default interval between two automatic-send request starts. */
+/** 两次自动发送请求开始之间的默认间隔。 */
 export const AUTO_DANMAKU_SEND_INTERVAL_MS = AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS * 1_000;
 
-/** Clamp an editable interval to the supported whole-second session range. */
+/** 把可编辑的间隔钳制到受支持的整秒会话范围。 */
 export function normalizeAutoDanmakuSendIntervalSeconds(value: number): number {
   if (!Number.isFinite(value)) return AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS;
   return Math.min(
@@ -19,9 +19,8 @@ export function normalizeAutoDanmakuSendIntervalSeconds(value: number): number {
 }
 
 /**
- * Calculate a safe wait from a monotonic clock reading. A clock value that
- * moves backwards is treated as no elapsed time, never as permission to send
- * early.
+ * 基于单调时钟读数计算安全等待。倒退的时钟取值视为没有经过时间，
+ * 绝不能被视为提前发送的许可。
  */
 export function remainingAutoDanmakuSendDelay(
   lastStartedAt: number | null,
@@ -34,11 +33,11 @@ export function remainingAutoDanmakuSendDelay(
 }
 
 export type AutoDanmakuText = {
-  /** Input after whitespace has been made safe for single-line send commands. */
+  /** 经过空白字符安全化处理、可用于单行发送命令的输入。 */
   normalized: string;
-  /** Ordered messages that are individually valid for the selected platform. */
+  /** 各自通过所选平台校验的有序消息列表。 */
   segments: string[];
-  /** A local validation error that prevents automatic sending. */
+  /** 阻止自动发送的本地校验错误。 */
   error: string | null;
 };
 
@@ -56,18 +55,17 @@ function hasControlCharacter(value: string): boolean {
 }
 
 /**
- * The send commands only accept a single line. Treat all user-entered
- * whitespace consistently, including pasted newlines and tab-separated text.
+ * 发送命令只接受单行。一致地处理所有用户输入的空白字符，
+ * 包括粘贴的换行和制表符分隔的文本。
  */
 export function normalizeAutoDanmakuText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
 /**
- * `Intl.Segmenter` follows Unicode grapheme-cluster boundaries, so a family
- * emoji, a flag, or a letter plus combining marks is never split between two
- * outgoing messages. If the embedded browser lacks it, automatic sending is
- * disabled rather than silently falling back to code-point splitting.
+ * `Intl.Segmenter` 遵循 Unicode 字素簇边界，家族 emoji、旗帜或字母加组合符号
+ * 绝不会跨两条消息被拆开。若内嵌浏览器缺少它，则禁用自动发送，
+ * 而不是静默回退到码点切分。
  */
 export function splitGraphemes(
   value: string,
@@ -81,16 +79,15 @@ export function splitGraphemes(
   return Array.from(segmenter.segment(value), ({ segment }) => segment);
 }
 
-/** JavaScript String.length is the same UTF-16 metric enforced by the send commands. */
+/** JavaScript String.length 正是发送命令执行的同一套 UTF-16 度量。 */
 export function utf16Units(value: string): number {
   return value.length;
 }
 
 /**
- * Split one session draft into sendable messages. A segment can contain at
- * most twenty user-visible characters and must also stay under the platform
- * UTF-16 bound. A single over-limit grapheme cannot be safely split, so it is
- * reported to the user instead of creating an invalid request.
+ * 把一份会话草稿拆分为可发送的消息。每个分段至多包含二十个用户可见字符，
+ * 且必须同时低于平台的 UTF-16 上限。单个超限字素无法安全切分，
+ * 因此上报给用户，而不是构造非法请求。
  */
 export function splitAutoDanmakuText(value: string, maxUtf16Units: number): AutoDanmakuText {
   const normalized = normalizeAutoDanmakuText(value);
@@ -149,7 +146,7 @@ export function splitAutoDanmakuText(value: string, maxUtf16Units: number): Auto
   return { normalized, segments, error: null };
 }
 
-/** Return the next ordered segment, wrapping after the last one. */
+/** 返回下一个有序分段，越过最后一个后从头循环。 */
 export function nextAutoDanmakuSegmentIndex(currentIndex: number, segmentCount: number): number {
   if (segmentCount <= 0) return 0;
   return (Math.max(0, currentIndex) + 1) % segmentCount;

@@ -111,8 +111,8 @@ function RouteOutlet({
   useEffect(() => {
     if (!defer) return;
 
-    // Let the compositor start the page pan before React mounts the new route.
-    // A transition render can yield when the destination contains a large list.
+    // 让合成器在 React 挂载新路由之前就开始页面平移。
+    // 目标页包含大列表时，过渡渲染可能发生让步。
     const frame = window.requestAnimationFrame(() => {
       startTransition(() => setReady(true));
     });
@@ -141,8 +141,8 @@ export function Shell() {
   const isSearch = pathname === "/search";
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
-  // Recording is desktop-only, so a deep link on mobile keeps the plain header
-  // above the page's own "仅支持桌面端" state instead of empty scope tabs.
+  // 录制仅限桌面端，因此移动端深链接保持普通头部加上页面自己的
+  // "仅支持桌面端"状态，而不是空白的作用域页签。
   const isRecordings = pathname === "/recordings" && recordingSupported();
   const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
@@ -150,10 +150,9 @@ export function Shell() {
   const followHeader = useFollowHeaderSnapshot();
   const recordingHeader = useRecordingHeaderSnapshot();
 
-  // React Router records each pushState entry with an incrementing `idx`.
-  // Comparing it across renders tells the tab transition which way the user
-  // moved through history so the incoming page can slide in from that side.
-  // Written idempotently during render, the refs only mirror the last view.
+  // React Router 用递增的 `idx` 记录每条 pushState 历史。跨渲染比较它可以告诉
+  // 页签切换用户在历史中向哪个方向移动，从而让新页面从相应的一侧滑入。
+  // 在渲染期间幂等地写入，refs 只是镜像最后一次视图。
   const historyIndex =
     typeof window !== "undefined"
       ? ((window.history.state as { idx?: number } | null)?.idx ?? 0)
@@ -207,13 +206,13 @@ export function Shell() {
   const isIptvFollow = isFollow && followView === "iptv";
   const hasIptvSourceShell = isIptv;
   const iptvFollowGroup = isIptvFollow ? searchParams.get(FOLLOW_IPTV_GROUP_PARAM) : null;
-  // Routes carrying the live-platform strip. Follow owns a separate top-level
-  // live/IPTV tab and keeps platform filtering inside the page rail.
+  // 携带直播平台条的各路由。关注拥有独立的顶层 直播/IPTV 页签，
+  // 并把平台过滤保留在页面侧栏内部。
   const showSiteSwitcher =
     pathname === "/" || pathname.startsWith("/category") || pathname.startsWith("/search");
-  // Keep both follow views in the same content container so changing the
-  // live/IPTV tab does not remount FollowPage and discard its transition state.
-  // IPTV follow groups animate inside IptvFollowView rather than in this layer.
+  // 两个关注视图共用同一个内容容器，切换 直播/IPTV 页签时不会重新挂载
+  // FollowPage、丢失其过渡状态。IPTV 关注分组的动画
+  // 发生在 IptvFollowView 内部而不是这一层。
   const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv;
   const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
@@ -235,9 +234,9 @@ export function Shell() {
     disabledSiteIds,
   );
   const platformForMotion = isFollow ? followPlatform : activeSiteId;
-  // The grouping a page pans between. Live routes travel between platforms;
-  // IPTV travels between playlist sources. Both are the same gesture and the
-  // same header slot, so they share one pan rather than each owning a scheme.
+  // 页面平移所跨越的分组。直播路由在平台之间移动；
+  // IPTV 在播放列表来源之间移动。两者是同一种手势、同一个头部槽位，
+  // 因此共享一次平移，而不是各自维护一套方案。
   const groupForMotion: string = isIptv ? iptvSource.id : String(platformForMotion);
   const previousGroupRef = useRef({ pathname, group: groupForMotion });
   const previousGroup = routeScopedPreviousGroup(
@@ -247,15 +246,14 @@ export function Shell() {
     groupForMotion,
   );
   previousGroupRef.current = { pathname, group: groupForMotion };
-  // Keyed on the route alone, deliberately. Including the platform here would
-  // unmount and rebuild the entire scroller subtree — the grid, the scroll
-  // container, everything — during a site switch. Keeping the shell alive lets
-  // the query cache replace only the route content.
+  // 刻意只按路由作为 key。如果在这里加入平台，站点切换时会卸载并重建整个
+  // 滚动子树 —— 网格、滚动容器，全部。保持外壳存活，
+  // 查询缓存就能只替换路由内容。
   const pageMotionKey = pathname;
   const categoryHomePath = categoryHomePathAfterSiteChange(pathname);
   const platformStrip: readonly PlatformScopeValue[] = sitePlatforms;
-  // One ordered strip per surface, compared as strings so platforms and IPTV
-  // source ids share the same direction rule.
+  // 每个表面一条有序条带，按字符串比较，
+  // 使平台 id 与 IPTV 来源 id 共用同一个方向规则。
   const groupStrip: readonly string[] = isIptv
     ? iptvSourceOptions
     : isFollow
@@ -306,14 +304,13 @@ export function Shell() {
     navigate("/", { replace: true });
   }, [navigate]);
 
-  // Home/category/search use a horizontal content swipe to change platforms.
-  // Follow and History own their nested tab strips, so Shell does not compete
-  // for those routes' horizontal gestures.
+  // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
+  // Shell 不与这些路由争夺横向手势。
   const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
-  // `track` is the layout `liveSwipePage` below renders: every mounted platform
-  // sits at its own absolute index, so the gesture pans a layer whose
-  // neighbouring pages are already painted and selecting one moves none of them.
-  // Every other surface binds these hooks to the single-page `swipePage` instead.
+  // `track` 就是下面 `liveSwipePage` 渲染的布局：每个已挂载的平台都位于各自的
+  // 绝对下标处，手势平移的这一层的相邻页面已经绘制完成，
+  // 选中任何一个都不会带动其他页面移动。
+  // 其余表面把这些 hooks 绑定到单页版的 `swipePage` 上。
   const platformSwipeLayout = platformSwipeEnabled ? "track" : "page";
   const sitePlatformSwipe = useHorizontalSwipe({
     items: sitePlatforms,
@@ -330,40 +327,38 @@ export function Shell() {
     enabled: isIptv && mobileClient,
   });
   const contentSwipe = isIptv ? iptvSourceSwipe : sitePlatformSwipe;
-  // `PagePan` is keyed on the pathname, so returning to a swipeable route hands
-  // the hook a brand new track. Binding through `bindPage` is what re-parks it
-  // at the active platform's offset — assigning `pageRef` directly would leave
-  // the fresh track untransformed and push every panel past the first off
-  // screen, taking the page's scroller with it.
+  // `PagePan` 以 pathname 为 key，回到可滑动路由时 hook 会拿到全新的 track。
+  // 通过 `bindPage` 绑定才能把它重新停靠到活动平台的偏移处 ——
+  // 直接赋值 `pageRef` 会让新 track 保持未变换状态，
+  // 把第一个之后的所有面板推到屏幕外，
+  // 连页面的滚动容器一起带走。
   const bindContentSwipePageRef = contentSwipe.bindPage;
 
-  // The scroller used to be keyed by platform, so a site switch reset scrollTop
-  // as a side effect of being rebuilt. Now that it persists, the position is
-  // managed explicitly: a switch to different content still starts at the top,
-  // while returning to a page the user already scrolled replays where they were.
+  // 滚动容器过去以 platform 为 key，站点切换会因为重建而顺带重置 scrollTop。
+  // 既然现在它能存活，位置就改为显式管理：
+  // 切到不同内容仍从顶部开始，
+  // 而回到用户已经滚动过的页面则回放其离开时的位置。
   //
-  // `location.key` is stable per history entry, so a remembered position
-  // survives the room visit that unmounts this scroller entirely. The rest of
-  // the key covers what the old reset watched: two platforms, or two IPTV
-  // sources, are different content under one entry.
+  // `location.key` 对每条历史记录稳定，因此记住的位置能挺过完全卸载此滚动器的
+  // 房间访问。key 的其余部分覆盖旧重置逻辑观察的内容：
+  // 同一历史下，两个平台或两个 IPTV 来源属于不同内容。
   const surfaceKey = pageScrollKey(
     location.key,
     `${pathname}|${platformForMotion}|${iptvSource.id}`,
     iptvFollowGroup,
   );
-  // Read by the scroll listener below, which outlives any one render. Written
-  // idempotently during render so it can never lag the committed surface.
+  // 由下方的 scroll 监听读取，监听器的寿命超过任何单次渲染。
+  // 在渲染期间幂等写入，使其永远不会落后于已提交的表面。
   const surfaceKeyRef = useRef(surfaceKey);
   surfaceKeyRef.current = surfaceKey;
   const pageScrollRef = useRef<HTMLDivElement | null>(null);
   const bindPageScrollRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
     pageScrollRef.current = node;
-    // Recorded synchronously on every scroll rather than flushed on unmount.
-    // A cleanup-time read would run *after* the layout effect below has already
-    // reset the outgoing surface to 0, storing that reset instead of the
-    // position the user left. Writing a Map entry per scroll event is cheap,
-    // and `scrollTop` is already resolved inside a scroll handler.
+    // 每次滚动同步记录，而不是在卸载时统一冲刷。清理阶段的读取会运行在下方布局
+    // 副作用*之后* —— 那时离开表面已被重置为 0，存下的将是这次重置而非用户
+    // 停留的位置。每个 scroll 事件写一个 Map 条目开销很低，
+    // 且 `scrollTop` 本来就要在滚动处理器内解析。
     const onScroll = () => rememberPageScroll(surfaceKeyRef.current, node.scrollTop);
     const onClick = (event: MouseEvent) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -408,26 +403,22 @@ export function Shell() {
       return;
     }
 
-    // An infinite list is restored before its rows have laid out, so the first
-    // assignment clamps to whatever height exists. Re-apply across frames until
-    // the content is tall enough to hold the offset. `target` is captured here,
-    // so the clamped positions these writes record cannot shorten the goal.
+    // 无限列表在其行完成布局之前就被恢复，第一次赋值会被钳制到当前存在的高度。
+    // 跨帧重复应用，直到内容高到足以容纳偏移量。`target` 在这里捕获，
+    // 因此这些写入记录的被钳制位置不会缩短最终目标。
     //
-    // Those writes still fire `scroll`, and the listener above would store the
-    // clamped offset over the position being replayed. Suppressing this surface
-    // for the length of the restore keeps the memory intact when the list takes
-    // longer than the frame budget to reach full height, so a later visit to the
-    // same entry replays where the user actually was rather than how far the
-    // previous attempt got.
+    // 那些写入仍会触发 `scroll`，上方监听器会把被钳制的偏移盖过正在回放的位置。
+    // 在恢复持续期间抑制对该表面的记录：当列表花掉超过一帧预算才达到完整高度时，
+    // 记忆得以保全，之后再访问同一历史仍从用户真实所在处回放，
+    // 而不是上次尝试到达的距离。
     const endRestore = beginPageScrollRestore(surfaceKey);
     let frame: number | null = null;
     let remaining = PAGE_SCROLL_RESTORE_MAX_FRAMES;
     let anchorElement: HTMLElement | null = null;
     let anchorStableFrames = 0;
     let previousAnchorScrollHeight: number | null = null;
-    // `scroll` is dispatched after the assignment that caused it, so the guard
-    // outlives the final write by a frame. Releasing it synchronously would let
-    // the last clamped event through — exactly the case the guard exists for.
+    // `scroll` 在引发它的赋值之后派发，所以守卫要比最后一次写入多活一帧。
+    // 同步释放会让最后一个被钳制的事件漏过去 —— 这恰是守卫要防的情况。
     const finish = () => {
       frame = window.requestAnimationFrame(() => {
         frame = null;
@@ -488,9 +479,8 @@ export function Shell() {
     };
   }, [location.key, navigationType, surfaceKey]);
 
-  // Mobile bottom navigation swaps pages atomically. Retaining the outgoing
-  // ReactNode made its last selected platform visible for one compositor frame
-  // when the exit layer was removed. Desktop keeps the directional page pan.
+  // 移动端底部导航原子式换页。保留离场的 ReactNode 曾让它最后选中的平台在退出
+  // 层移除时多显示一个合成帧。桌面端保留方向性页面平移。
   const deferRouteOutlet = isDirectSidebarNavigation && !mobileClient;
   const routeOutlet = (
     <RouteOutlet
@@ -502,8 +492,8 @@ export function Shell() {
   );
   const pageScrollerClassName = cn(
     "relative h-full min-h-0",
-    // The scroller stays inside the compositor-only page wrapper so translated
-    // content cannot enlarge the main pane or flash a second scrollbar.
+    // 滚动容器留在仅合成的页面包装层内部，
+    // 使被位移的内容无法撑大主面板或闪出第二条滚动条。
     "overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(4.25rem+env(safe-area-inset-bottom))] touch-pan-y md:p-5 md:pb-5",
   );
   const swipePage = (
@@ -544,17 +534,15 @@ export function Shell() {
   liveSwipePanels.sort((left, right) => platformStrip.indexOf(left) - platformStrip.indexOf(right));
 
   const liveSwipePage = (
-    // The rendered window is the active platform plus its neighbours. The track
-    // holds them side by side and travels as one layer, so the incoming page is
-    // already painted and enters continuously under the finger instead of
-    // appearing only once the gesture is released. Each panel keeps its own
-    // scroller, so they are positioned rather than laid out in a flex row.
+    // 渲染窗口是活动平台加其邻居。track 让它们并排存在并作为一个整体移动，
+    // 因此进入的页面已经绘制完成，能在手指之下连续进入，
+    // 而不是在手势释放后才出现。每个面板保留自己的滚动容器，
+    // 它们是被定位的，不是 flex 行内布局。
     //
-    // Each panel sits at its *absolute* strip index and the track is translated
-    // to -activeIndex * width. Positioning them relative to the active index
-    // instead would shift every panel by a full width the moment a swipe
-    // commits, forcing the release to be rebased around that jump — the extra
-    // step that made a committed swipe read as a switch followed by a slide.
+    // 每个面板位于其*绝对*条带下标处，track 平移 -activeIndex * width。
+    // 若改为相对活动下标定位，滑动提交的那一刻所有面板都会整体移动一个宽度，
+    // 迫使释放动作围绕这次跳变重新基准化 —— 正是这个多余步骤让已提交的滑动
+    // 看起来像先切换了一次再滑了一段。
     <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
       <div
         ref={bindContentSwipePageRef}
@@ -610,9 +598,9 @@ export function Shell() {
     <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
       <AppTitleBar />
       <PageZoom
-        // Both immersive players zoom, each keyed on its own pathname so a
-        // room and the IPTV player are never collapsed into one page — that
-        // shared key, not the zoom itself, was the thing to avoid.
+        // 两个沉浸播放器各自缩放，且都以自己的 pathname 为 key，
+        // 使房间与 IPTV 播放器绝不会被合并成同一页 ——
+        // 需要避免的是那个共享 key，而不是缩放本身。
         zoomKey={isImmersivePlayer ? pathname : "standard-shell"}
         enabled={isImmersivePlayer}
         className="flex-1 overflow-hidden"
@@ -718,13 +706,11 @@ export function Shell() {
                 data-immersive={isImmersivePlayer ? "true" : undefined}
                 className={cn(
                   "relative min-h-0 min-w-0 flex-1",
-                  // The scroller lives on the animated page wrapper below, not here.
-                  // A transform contributes to its container's scrollable overflow,
-                  // so animating a child of an `overflow-auto` element would flash a
-                  // scrollbar for the length of every transition. Clipping here and
-                  // scrolling one level down keeps the travel invisible to layout.
-                  // `relative` gives popLayout a positioning context for the
-                  // outgoing page, so it cannot displace the incoming one.
+                  // 滚动容器位于下方带动画的页面包装层上，而不是这里。transform 会参与其容器
+                  // 的可滚动溢出计算，因此对 `overflow-auto` 元素的子元素做动画，
+                  // 会在每次过渡期间闪出滚动条。在这一层裁剪、下一层滚动，
+                  // 让移动过程对布局不可见。`relative` 为 popLayout 提供离场页面的定位上下文，
+                  // 使其无法挤动进入的页面。
                   isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
                 )}
                 data-horizontal-swipe-surface
@@ -735,9 +721,8 @@ export function Shell() {
                 onClickCapture={contentSwipe.onClickCapture}
               >
                 {isImmersivePlayer ? (
-                  // PageZoom clears its compositor hints after entering. The
-                  // settled player therefore has no transformed ancestor that
-                  // could interfere with its fullscreen containing block.
+                  // PageZoom 进入后会清除它的合成提示。稳定下来的播放器因此没有
+                  // 可能干扰其全屏包含块的已变换祖先。
                   <div className="relative h-full min-h-0 overflow-hidden">{routeOutlet}</div>
                 ) : (
                   <PagePan

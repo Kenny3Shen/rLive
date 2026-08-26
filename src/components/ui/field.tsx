@@ -52,11 +52,10 @@ function FieldGroup({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 /**
- * `items-start` keeps the control pinned to the first line when FieldContent
- * stacks a description or error under the title. When the content is only the
- * title, that top-edge alignment instead drops taller controls (h-8 inputs and
- * selects, h-7/h-8 buttons) a few pixels below the label's optical center, so
- * those rows opt back into `items-center`.
+ * `items-start` 使控件在 FieldContent 于标题下方堆叠描述或错误时固定在第一行。
+ * 而当内容只有标题时，这种顶部对齐反而会让较高的控件
+ * （h-8 输入框和下拉、h-7/h-8 按钮）落到标签视觉中心以下几个像素，
+ * 因此这类行改回 `items-center`。
  */
 const fieldVariants = cva("group/field flex w-full gap-2 data-[invalid=true]:text-destructive", {
   variants: {

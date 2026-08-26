@@ -10,15 +10,14 @@ import type { DanmakuContentSpan } from "@/shared/types/live";
 import type { RecordedDanmakuEntry } from "./recordedDanmaku";
 
 /**
- * Image emotes for the recorded-playback canvas.
+ * 供录制回放 canvas 使用的图片表情。
  *
- * The live floating layer paints spans as DOM `<img>` children, which a canvas
- * cannot reuse. This module turns the same validated span list into measured
- * segments so lane layout reserves the real width, and keeps the decoded images
- * around so a scrolling bullet does not re-request an emote every frame.
+ * 直播悬浮层把片段画成 DOM `<img>` 子元素，canvas 无法复用。本模块把同一份
+ * 校验过的片段列表转换为测量后的分段，使车道布局预留真实宽度，
+ * 并把解码后的图片保留下来，避免滚动中的弹幕每帧都重新请求表情。
  */
 
-/** Emote images kept decoded at once; recordings reuse very few distinct URLs. */
+/** 同时保持解码状态的表情图片数量；录制只会用到极少数不同的 URL。 */
 const MAX_RECORDED_DANMAKU_IMAGES = 256;
 
 export type RecordedDanmakuSegment =
@@ -26,14 +25,14 @@ export type RecordedDanmakuSegment =
   | {
       readonly type: "image";
       readonly url: string;
-      /** Painted edge length, matching the DOM layer's `1.35em` box. */
+      /** 绘制的边长，对应 DOM 层的 `1.35em` 盒子。 */
       readonly size: number;
       readonly width: number;
     };
 
 /**
- * Repeat-counter tail matching `aggregatedDanmakuText`, so the text and rich
- * paths reserve the same width for the same count.
+ * 与 `aggregatedDanmakuText` 一致的重复计数尾巴，
+ * 使文本路径与富文本路径为相同计数预留相同宽度。
  */
 function aggregationSuffix(count: number): string {
   const safeCount = Math.floor(count);
@@ -41,9 +40,8 @@ function aggregationSuffix(count: number): string {
 }
 
 /**
- * Rich spans for one recorded bullet, or null when it is plain text. `count` is
- * the number of folded messages already shown, so the counter lands after the
- * last fragment instead of disturbing image order.
+ * 单条录制弹幕的富文本片段；纯文本时为 null。`count` 是已展示的折叠消息数，
+ * 因此计数落在最后一个片段之后，不打乱图片顺序。
  */
 export function recordedDanmakuSpans(
   entry: RecordedDanmakuEntry,
@@ -55,8 +53,8 @@ export function recordedDanmakuSpans(
 }
 
 /**
- * Split spans into paintable segments. `measureText` must use the same font the
- * painter will apply, or reserved and painted widths drift apart.
+ * 把片段拆分为可绘制的分段。`measureText` 必须使用与绘制器相同的字体，
+ * 否则预留宽度与实际绘制宽度会产生漂移。
  */
 export function recordedDanmakuSegments(
   spans: readonly DanmakuContentSpan[],
@@ -88,9 +86,9 @@ export function recordedDanmakuSegmentsWidth(segments: readonly RecordedDanmakuS
 }
 
 export type RecordedDanmakuImageCache = {
-  /** Decoded image, or null while the request is in flight or after it failed. */
+  /** 已解码的图片；请求在途或失败时为 null。 */
   resolve: (url: string) => HTMLImageElement | null;
-  /** True once the request failed, so the painter can substitute text. */
+  /** 请求失败后为 true，绘制器以此改用文本替代。 */
   hasFailed: (url: string) => boolean;
   dispose: () => void;
 };
@@ -98,8 +96,8 @@ export type RecordedDanmakuImageCache = {
 type CacheEntry = { image: HTMLImageElement; status: "loading" | "ready" | "failed" };
 
 /**
- * Loads emote images once per URL and reports settled requests through
- * `onSettled`, which lets a paused overlay repaint when an emote arrives.
+ * 每个 URL 只加载一次表情图片，并通过 `onSettled` 上报已完成的请求，
+ * 使暂停中的叠加层在表情到达时得以重绘。
  */
 export function createRecordedDanmakuImageCache(onSettled: () => void): RecordedDanmakuImageCache {
   const entries = new Map<string, CacheEntry>();
@@ -118,8 +116,8 @@ export function createRecordedDanmakuImageCache(onSettled: () => void): Recorded
 
       const image = new Image();
       const entry: CacheEntry = { image, status: "loading" };
-      // Insertion order doubles as an eviction queue: a long recording with many
-      // distinct emotes cannot grow the cache without bound.
+      // 插入顺序兼作淘汰队列：包含大量不同表情的长录像
+      // 不能让缓存无限增长。
       while (entries.size >= MAX_RECORDED_DANMAKU_IMAGES) {
         const oldest = entries.keys().next().value;
         if (oldest === undefined) break;
@@ -128,21 +126,20 @@ export function createRecordedDanmakuImageCache(onSettled: () => void): Recorded
       entries.set(url, entry);
       image.addEventListener("load", () => settle(entry, "ready"), { once: true });
       image.addEventListener("error", () => {
-        // A proxy that is down must not cost the emote its picture: retry once
-        // against the CDN before the bullet falls back to its text marker.
+        // 代理宕机不应让表情失去图片：在弹幕退回文本标记前，
+        // 先对 CDN 重试一次。
         if (image.src !== url) {
           image.src = url;
           return;
         }
         settle(entry, "failed");
       });
-      // Bilibili's CDN rejects the webview's `tauri://…` Referer, and the policy
-      // only applies to a request that has not started yet.
+      // Bilibili 的 CDN 会拒绝 webview 的 `tauri://…` Referer，
+      // 而且策略只对尚未发出的请求生效。
       image.referrerPolicy = BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY;
       image.decoding = "async";
-      // Prefer the localhost proxy so a repeat playback reads the emote from the
-      // disk cache instead of the CDN. The policy above still covers the direct
-      // fallback used before the proxy has started.
+      // 优先使用本机代理，使重复回放从磁盘缓存读取表情而不是 CDN。
+      // 上面的策略仍然覆盖代理启动前的直连兜底。
       image.src = danmakuImageRequestUrl(url);
       return null;
     },

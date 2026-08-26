@@ -26,10 +26,9 @@ import {
 import { formatDanmakuClipboardText, useDanmakuActions } from "./danmaku/useDanmakuActions";
 import { cn } from "@/lib/utils";
 
-// Keep the rendered DOM deliberately small even when a room is producing
-// thousands of comments per minute. The bounded queue preserves recent
-// traffic without asking React to retain an ever-growing chat tree. The
-// rendered window itself depends on the pin state; see `listWindow.ts`.
+// 即使房间每分钟产生上千条评论，也把渲染的 DOM 保持得很小。有界队列保留近期
+// 流量，而不要求 React 维护无限增长的聊天树。渲染窗口本身取决于钉住状态；
+// 参见 `listWindow.ts`。
 const MAX_BUFFERED = 200;
 const MAX_PER_FLUSH = 32;
 const MIN_FLUSH_INTERVAL_MS = 32;
@@ -41,9 +40,8 @@ function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
   const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
   if (!viewport) return;
   const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-  // Assigning `scrollTop` even when it is already pinned can dispatch extra
-  // scroll work in the primitive. Avoid that synchronous write on every
-  // batched React commit.
+  // 即使在已钉住时赋值 `scrollTop` 也可能在原语内派发额外的滚动工作。
+  // 避免在每次批量 React 提交上都做这次同步写入。
   if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
 }
 
@@ -58,8 +56,8 @@ function DanmakuSender({
   user: string;
   surface: DanmakuListSurface;
 }) {
-  // Platform colours target the video overlay. On the light list surface the
-  // common white default has no contrast, so fall back to `text-primary`.
+  // 平台色面向视频叠加层。在浅色列表表面上常见的白色默认值没有对比度，
+  // 因此回退到 `text-primary`。
   const userColor = resolveDanmakuListUserColor(event.color, surface);
 
   return (
@@ -72,9 +70,8 @@ function DanmakuSender({
 }
 
 /**
- * Appending a batch keeps prior `DanmakuLine` references intact. Memoizing a
- * row therefore avoids reconciling up to 300 already-rendered messages for
- * each animation-frame flush in a busy room.
+ * 追加批次会保持既有 `DanmakuLine` 引用不变。因此记忆化一行可以避免繁忙房间
+ * 里每次动画帧冲刷都重新协调最多 300 条已渲染消息。
  */
 const DanmakuRow = memo(function DanmakuRow({
   line,
@@ -113,9 +110,8 @@ const DanmakuRow = memo(function DanmakuRow({
 });
 
 /**
- * This state intentionally lives below the memoized list row. Opening one
- * action menu therefore never invalidates the high-frequency parent list or
- * its other 299 rendered messages.
+ * 这个状态刻意放在记忆化列表行之下。打开一个操作菜单
+ * 绝不会使高频父列表或其余 299 条已渲染消息失效。
  */
 const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   event,
@@ -244,7 +240,7 @@ type DanmakuPanelProps = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
-  /** Keep collecting while another room-side tab is open, without repainting it. */
+  /** 另一个房间侧页签打开时继续收集，但不重绘该面板。 */
   visible?: boolean;
   className?: string;
   statusText?: string | null;
@@ -267,7 +263,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   const [atBottom, setAtBottom] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
   const pendingRef = useRef(new BoundedQueue<DanmakuLine>(MAX_BUFFERED));
-  // Set when a scrolled-up trim is committed, consumed once its layout lands.
+  // 一次向上滚动裁剪被提交时设置，其布局落定后消费一次。
   const pendingTrimRef = useRef<{ viewport: HTMLElement; heightBeforeTrim: number } | null>(null);
   const flushFrameRef = useRef<number | null>(null);
   const flushTimerRef = useRef<number | null>(null);
@@ -300,8 +296,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     return () => query.removeEventListener("change", onChange);
   }, []);
 
-  // Keep the event subscription stable while a filter setting changes so the
-  // bounded hidden-tab queue does not lose messages in a listener gap.
+  // 过滤设置变化期间保持事件订阅稳定，
+  // 使隐藏页签的有界队列不会在监听空档丢失消息。
   useLayoutEffect(() => {
     matchersRef.current = { shieldMatcher, filterGifts };
   }, [shieldMatcher, filterGifts]);
@@ -347,31 +343,27 @@ export const DanmakuPanel = memo(function DanmakuPanel({
 
     const flush = () => {
       flushFrameRef.current = null;
-      // `keepMounted` makes tab changes preserve the current message list.
-      // Hold new events in the bounded queue while this panel is hidden so
-      // chat traffic cannot reconcile hundreds of invisible React nodes.
+      // `keepMounted` 让页签切换保留当前消息列表。本面板隐藏期间把新事件扣在有界
+      // 队列里，使聊天流量无法协调数百个不可见的 React 节点。
       if (!activeRef.current || !visibleRef.current) return;
       const batch = pending.take(MAX_PER_FLUSH);
       if (batch.length === 0) return;
       lastFlushAtRef.current = performance.now();
 
       if (!autoScroll.current) {
-        // The feed is intentionally pinned up in history: keep a count of
-        // what arrived since, shown on the jump-back control.
+        // 信息流在历史浏览中被刻意钉住：记录此后到达的数量，
+        // 显示在跳回控件上。
         unreadCountRef.current += batch.length;
         setUnreadCount(unreadCountRef.current);
       }
 
-      // Evicting the oldest rows shifts the remaining ones up, which the
-      // reader only fails to notice while the feed is pinned to the newest
-      // message. Keep a wider window while they are reading history; the
-      // pinned window is restored by `scrollToBottom`.
+      // 淘汰最旧的行会把剩余行上移，只有当信息流钉在最新消息上时读者才察觉不到。
+      // 读者翻看历史时保持更宽的窗口；钉住窗口由 `scrollToBottom` 恢复。
       const capacity = danmakuListAppendCapacity(autoScroll.current);
       setItems((previous) => appendWithinDanmakuListWindow(previous, batch, capacity));
 
-      // A burst should not make every animation frame reconcile hundreds of
-      // nodes. The native source already coalesces messages; retain a local
-      // cadence cap for a hidden-tab backlog or a very large native batch.
+      // 突发流量不应让每个动画帧都协调数百个节点。原生源已经合并了消息；
+      // 为隐藏页签积压或超大原生批次保留本地节奏上限。
       if (pending.length > 0) scheduleFlush();
     };
 
@@ -386,9 +378,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
         return;
       }
 
-      // A fast list is useful at normal traffic, but a sustained burst does
-      // not need 31 React commits per second. Drain a larger bounded backlog
-      // at a calmer cadence and return to the low-latency path once caught up.
+      // 正常流量下快速列表有用，但持续突发不需要每秒 31 次 React 提交。
+      // 以更从容的节奏排空更大的有界积压，追平后回到低延迟路径。
       const minInterval =
         pending.length >= BACKPRESSURE_PENDING_THRESHOLD
           ? BACKPRESSURE_FLUSH_INTERVAL_MS
@@ -432,36 +423,33 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     if (!visible) return;
 
     if (autoScroll.current) {
-      // Pinned: give back any rows retained while the reader was in history,
-      // then pin. Trimming while pinned is invisible, because the bottom of
-      // the content stays put and the browser clamps the offset for us.
+      // 已钉住：先归还读者翻历史期间保留的行，再钉住。钉住状态下裁剪不可见，
+      // 因为内容底部不动，偏移由浏览器代为钳制。
       if (items.length > DANMAKU_LIST_MAX_PINNED) {
         setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_PINNED));
       }
-      // Base UI owns a nested viewport, so scrolling a sentinel with
-      // `scrollIntoView` can select an outer ancestor instead of the chat
-      // viewport. Set only the actual viewport, once per committed batch.
+      // Base UI 拥有嵌套视口，用 `scrollIntoView` 滚动哨兵元素可能选中外层祖先而非
+      // 聊天视口。只设置真正的视口，每批提交一次。
       scrollDanmakuViewportToBottom(scrollRootRef.current);
       return;
     }
 
-    // The reader is parked in history, so `flush` appended without trimming.
-    // Enforce the larger window here instead, where the removed rows can be
-    // measured: dropping them shifts everything below up by their height, and
-    // taking that off `scrollTop` in the same frame holds the reading position
-    // still. Anything the browser then clamps was below the content anyway.
+    // 读者停在历史里，`flush` 在未裁剪的情况下追加了行。在这里执行更大的窗口限制，
+    // 因为此时被移除的行可以被测量：移除它们会让下方所有内容上移其高度，
+    // 在同一帧内从 `scrollTop` 扣掉即可保持阅读位置不动。浏览器随后钳制掉的
+    // 本来就在内容之外。
     if (items.length <= DANMAKU_LIST_MAX_SCROLLED_UP) return;
     const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
     const heightBeforeTrim = viewport?.scrollHeight ?? 0;
     setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_SCROLLED_UP));
     pendingTrimRef.current = viewport ? { viewport, heightBeforeTrim } : null;
-    // `atBottom` is a dependency so re-pinning re-runs this effect even when no
-    // new batch arrived, which is what gives the retained history rows back.
+    // `atBottom` 是依赖项，因此重新钉住会重跑本副作用，即使没有新批次到达 ——
+    // 这正是归还保留历史行的机制。
   }, [items, visible, atBottom]);
 
-  // Runs after the trim above has committed, so `scrollHeight` reflects the
-  // removed rows. Compensating here rather than in the trim's own commit keeps
-  // the measurement out of the flush path for the common pinned case.
+  // 在上面的裁剪提交之后运行，因此 `scrollHeight` 已反映被移除的行。
+  // 补偿放在这里而不是裁剪自身的提交里，
+  // 可以把测量排除出常见钉住场景的冲刷路径。
   useLayoutEffect(() => {
     const pendingTrim = pendingTrimRef.current;
     if (!pendingTrim) return;
@@ -480,9 +468,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
     if (!viewport) return;
 
-    // A tab switch or a side-panel/window resize can change the viewport
-    // after React's message-batch layout effect has run. Keep a live feed
-    // pinned in that case too; manual upward scrolling disables this path.
+    // 页签切换或侧栏/窗口缩放可能改变视口，发生在 React 的消息批次布局副作用
+    // 之后。这种情况下直播信息流也要保持钉住；手动向上滚动会关闭这条路径。
     let frame: number | null = null;
     const scrollIfPinned = () => {
       if (!autoScroll.current || frame !== null) return;
@@ -505,19 +492,17 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
     if (!viewport) return;
 
-    // React's delegated scroll handler runs for every programmatic pin as
-    // well as user scrolling. This listener mutates only refs on the hot
-    // path and reports the pin state only when it flips, so attach it
-    // directly and passively to the actual nested viewport instead.
+    // React 的委托 scroll 处理器对每次程序化钉住和用户滚动都会运行。本监听器在
+    // 热路径上只修改 refs，仅在钉住状态翻转时上报，因此直接以 passive 方式
+    // 挂到真正的嵌套视口上。
     const updateAutoScroll = () => {
       const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       const next = distanceToBottom < 48;
       const repinned = next && !autoScroll.current;
       autoScroll.current = next;
       setAtBottom((previous) => (previous === next ? previous : next));
-      // Scrolling back down by hand re-pins the feed just like the jump-back
-      // control. Clearing the unread count re-renders, which lets the layout
-      // effect above give back the rows retained for reading history.
+      // 手动向下滚回会像跳回控件一样重新钉住信息流。清除未读计数触发重渲染，
+      // 让上方布局副作用归还为阅读历史而保留的行。
       if (repinned) {
         unreadCountRef.current = 0;
         setUnreadCount(0);
@@ -531,8 +516,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     autoScroll.current = true;
     unreadCountRef.current = 0;
     setUnreadCount(0);
-    // Pin now; the layout effect above gives back the retained history rows
-    // once `atBottom` flips, so the eviction shift lands while pinned.
+    // 现在就钉住；`atBottom` 翻转后上方布局副作用归还保留的历史行，
+    // 使淘汰造成的位移落在钉住状态下。
     setAtBottom(true);
     scrollDanmakuViewportToBottom(scrollRootRef.current);
   }, []);
@@ -543,7 +528,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
         <ScrollArea className="h-full min-h-0">
           <div
             className="flex flex-col gap-0.5 px-2.5 py-2 text-sm"
-            // Keep the side list independent from the inherited floating-danmaku outline.
+            // 让侧列表独立于继承来的悬浮弹幕描边样式。
             style={{ WebkitTextStroke: "0px", paintOrder: "normal" }}
           >
             {statusText && (

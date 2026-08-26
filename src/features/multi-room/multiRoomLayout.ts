@@ -5,7 +5,7 @@ import {
   type MultiRoomLayout,
 } from "./multiRoomStore";
 
-/** Slot placement for the 3x3 six-screen director grid. */
+/** 3x3 六屏导演网格的槽位布局。 */
 export const MULTI_ROOM_SLOT_CLASSES = [
   "col-start-1 col-span-2 row-start-2 row-span-2",
   "col-start-1 row-start-1",
@@ -29,7 +29,7 @@ export const MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES = [
   "col-start-2 row-start-2",
 ] as const;
 
-/** Two feeds share the width evenly on a single row. */
+/** 两条流在同一行内平分宽度。 */
 export const MULTI_ROOM_TWO_SLOT_CLASSES = [
   "col-start-1 row-start-1",
   "col-start-2 row-start-1",

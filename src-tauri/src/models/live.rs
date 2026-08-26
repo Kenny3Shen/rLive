@@ -69,37 +69,34 @@ pub struct LiveRoomDetail {
     pub user_avatar: String,
     pub online: i64,
     pub status: bool,
-    /// Unix timestamp in milliseconds when the current live session started.
-    /// Platforms do not all expose this value, so callers must handle `None`.
+    /// 当前直播场次开始的 Unix 时间戳（毫秒）。并非所有平台都暴露该值，
+    /// 调用方必须处理 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_started_at: Option<i64>,
     pub notice: String,
     pub url: String,
-    /// Opaque site-specific payload needed for play-url requests (JSON string ok).
+    /// 播放地址请求所需的、站点特有的不透明负载（JSON 字符串即可）。
     pub raw: serde_json::Value,
 }
 
-/// The small, refresh-safe subset of room metadata used by follow lists.
+/// 关注列表使用的房间元数据中一小部分可安全刷新的字段。
 ///
-/// A follow refresh needs neither playback URLs nor danmaku connection data.
-/// Keeping this as a separate model makes that boundary explicit in site
-/// clients and prevents an innocuous status update from growing into a full
-/// room-detail request again.
+/// 关注刷新既不需要播放地址，也不需要弹幕连接数据。把它独立成模型，
+/// 可在站点客户端中让这条边界显式可见，
+/// 避免一次无害的状态更新又膨胀成完整的房间详情请求。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveRoomStatus {
     pub status: bool,
-    /// When a platform exposes it on its lightweight status endpoint, retain
-    /// the live-session start time for the follow-list duration display.
+    /// 当平台在轻量状态接口上提供该值时，保留直播场次开始时间，
+    /// 供关注列表展示直播时长。
     pub live_started_at: Option<i64>,
 }
 
-/// Convert the varied start-time representations used by live platforms into
-/// a safe Unix timestamp in milliseconds.
+/// 把各直播平台五花八门的开播时间表示转换为安全的 Unix 毫秒时间戳。
 ///
-/// Chinese platforms commonly send a China Standard Time string while other
-/// services send an epoch timestamp or RFC3339 value. Values outside a
-/// plausible live-service range are intentionally discarded instead of
-/// displaying a misleading duration.
+/// 国内平台通常发送中国标准时间字符串，其他服务则发送 epoch 时间戳或
+/// RFC3339 值。超出合理直播时间范围的取值会被刻意丢弃，
+/// 而不是显示一个误导性的时长。
 pub fn parse_live_started_at(value: Option<&serde_json::Value>) -> Option<i64> {
     let value = value?;
     let parsed = match value {
@@ -115,7 +112,7 @@ fn normalize_epoch_millis(value: i64) -> Option<i64> {
         return None;
     }
     match value {
-        // Nanoseconds, microseconds, milliseconds, then seconds.
+        // 依次尝试纳秒、微秒、毫秒，最后是秒。
         value if value >= 1_000_000_000_000_000_000 => value.checked_div(1_000_000),
         value if value >= 1_000_000_000_000_000 => value.checked_div(1_000),
         value if value >= 1_000_000_000_000 => Some(value),
@@ -136,8 +133,8 @@ fn parse_live_started_at_string(raw: &str) -> Option<i64> {
         return Some(datetime.timestamp_millis());
     }
 
-    // Bilibili and Douyu use wall-clock strings without an explicit offset.
-    // Their public APIs define these as China Standard Time (UTC+08:00).
+    // Bilibili 与斗鱼使用不带显式时区的挂钟时间字符串。
+    // 它们的公开 API 将其定义为中国标准时间（UTC+08:00）。
     let china_standard_time = FixedOffset::east_opt(8 * 60 * 60)?;
     ["%Y-%m-%d %H:%M:%S%.f", "%Y/%m/%d %H:%M:%S%.f"]
         .iter()
@@ -150,7 +147,7 @@ fn parse_live_started_at_string(raw: &str) -> Option<i64> {
 }
 
 fn is_plausible_live_started_at(value: i64) -> bool {
-    const EARLIEST_PLAUSIBLE_TIMESTAMP: i64 = 946_684_800_000; // 2000-01-01 UTC
+    const EARLIEST_PLAUSIBLE_TIMESTAMP: i64 = 946_684_800_000; // 9 后端代理是否会抓取该主机。导出它便于测试断言弹幕片段校验器信任的每个 CDN 都可缓存。
     const FUTURE_GRACE_MILLIS: i64 = 5 * 60 * 1_000;
     value >= EARLIEST_PLAUSIBLE_TIMESTAMP
         && value
@@ -172,8 +169,8 @@ pub enum PlaybackProtocol {
 }
 
 impl PlaybackProtocol {
-    /// Infer a transport when the upstream response does not expose explicit
-    /// metadata. Site adapters should prefer explicit metadata when available.
+    /// 在上游响应未给出显式元数据时推断传输方式。
+    /// 站点适配器应优先使用显式元数据。
     pub fn infer_from_url(url: &str) -> Self {
         let lower = url.to_ascii_lowercase();
         if lower.contains(".m3u8")
@@ -205,11 +202,11 @@ impl PlaybackProtocol {
     }
 }
 
-/// A playback candidate with stable, non-secret routing metadata.
+/// 携带稳定且非机密路由信息的播放候选。
 ///
-/// `source_id` is stable within a quality payload and deliberately excludes
-/// signed URLs. `priority` preserves the upstream platform's preferred order;
-/// runtime proxy probes may refine that order without mutating this contract.
+/// `source_id` 在同一份画质数据内保持稳定，且刻意不包含签名 URL。
+/// `priority` 保留上游平台偏好的顺序；
+/// 运行时代理探测可以在不改动此契约的前提下细化顺序。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TwitchAdRecovery {
     pub login: String,
@@ -280,7 +277,7 @@ impl PlayUrl {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LivePlayQuality {
     pub quality: String,
-    /// Data needed later for get_play_urls (site-specific); also list of ready urls if known.
+    /// 后续 get_play_urls 所需的数据（因站点而异）；已知时就绪 URL 列表也放这里。
     pub data: serde_json::Value,
 }
 
@@ -298,43 +295,42 @@ pub enum DanmakuKind {
     Enter,
     /// Platform-generated social notices (e.g. “user followed the host”).
     ///
-    /// Consumers filter these like service join notices; the distinct kind
-    /// keeps the intent explicit and leaves room for a later visibility
-    /// setting.
+    /// 消费方可以像过滤服务进房通知一样过滤它们；独立的事件类型
+    /// 让意图显式可见，
+    /// 也为将来的可见性设置留出空间。
     Social,
     SuperChat,
     System,
 }
 
-/// Optional metadata carried by a Bilibili Super Chat event.
+/// Bilibili Super Chat 事件携带的可选元数据。
 ///
-/// The websocket payload is not fully stable across Bilibili clients, so each
-/// field is independently optional. Values are validated while decoding before
-/// they enter this model.
+/// websocket 负载在不同 Bilibili 客户端间并非完全稳定，因此每个字段都独立可选。
+/// 取值在解码进入本模型之前完成校验。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SuperChatInfo {
-    /// Bilibili's message id, used by clients to de-duplicate reconnects.
+    /// Bilibili 的消息 id，客户端用它对重连做去重。
     pub id: Option<String>,
-    /// Price paid for the Super Chat.
+    /// Super Chat 的付费金额。
     pub price: Option<f64>,
-    /// ISO-style currency code when supplied by the upstream payload.
+    /// 上游负载提供时的 ISO 风格货币代码。
     pub currency: Option<String>,
-    /// Safe CSS hexadecimal primary background colour.
+    /// 安全的 CSS 十六进制主背景色。
     pub background_color: Option<String>,
-    /// Safe CSS hexadecimal secondary background colour, if supplied.
+    /// 安全的 CSS 十六进制次背景色（若提供）。
     pub background_bottom_color: Option<String>,
-    /// Validated Bilibili CDN avatar URL for the Super Chat sender.
+    /// 经校验的 Super Chat 发送者 Bilibili CDN 头像 URL。
     pub avatar_url: Option<String>,
-    /// Highlight duration in seconds.
+    /// 高亮时长，单位为秒。
     pub duration: Option<u32>,
 }
 
-/// A validated, ordered fragment of a rich danmaku message.
+/// 经过校验的富文本弹幕消息有序片段。
 ///
-/// At present this is emitted only for Bilibili image emotes. Image URLs are
-/// accepted by the decoder only after enforcing HTTPS and a Bilibili-owned CDN
-/// host, so consumers can pass them to their image loader without interpreting
-/// arbitrary protocol content as markup.
+/// 目前仅针对 Bilibili 图片表情发出。图片 URL 只有在强制 HTTPS 且主机属于
+/// Bilibili 自有 CDN 之后才会被解码器接受，
+/// 因此消费方可直接交给图片加载器，
+/// 而不必把任意协议内容当作标记解析。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DanmakuContentSpan {
@@ -346,17 +342,17 @@ pub enum DanmakuContentSpan {
 pub struct DanmakuEvent {
     pub kind: DanmakuKind,
     pub user: String,
-    /// True when this event was sent by the account in the locally saved Cookie.
-    /// This is the only account-identity signal exposed over IPC.
+    /// 该事件是否由本地保存 Cookie 中的账号发出。
+    /// 这是 IPC 上唯一暴露的账号身份信号。
     #[serde(default)]
     pub is_self: bool,
-    /// Protocol-level sender ID used only by the Rust-side account matcher.
-    /// It must never leave the backend with a danmaku event.
+    /// 协议层发送者 ID，仅供 Rust 侧账号匹配器使用。
+    /// 它绝不能随弹幕事件离开后端。
     #[serde(skip)]
     pub user_id: Option<String>,
     pub content: String,
     pub color: Option<String>,
-    /// Optional text/image fragments for platform-provided rich danmaku.
+    /// 平台提供的富文本弹幕的可选文本/图片片段。
     #[serde(default)]
     pub spans: Option<Vec<DanmakuContentSpan>>,
     #[serde(default)]

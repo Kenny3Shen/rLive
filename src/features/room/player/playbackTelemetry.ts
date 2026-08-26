@@ -144,7 +144,7 @@ export function samplePlaybackTelemetry(input: {
   return snapshot;
 }
 
-/** Read-only diagnostic access for local developer tooling and future UI. */
+/** 供本地开发工具和未来 UI 使用的只读诊断访问。 */
 export function playbackTelemetrySnapshots(): readonly PlaybackTelemetrySnapshot[] {
   return snapshots;
 }

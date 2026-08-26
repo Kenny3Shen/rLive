@@ -1,5 +1,4 @@
-//! Huya live site — ported from simple_live_core `huya_site.dart`
-//! (mobile page + classic anticode; no TARS dependency).
+//! 虎牙直播站点客户端（移动页 + 传统 anticode，无 TARS 依赖）。
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,10 +20,9 @@ const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 pub struct HuyaSite {
     client: Client,
-    /// A manually saved web session is needed when resolving the canonical
-    /// room/channel relationship for an authenticated send.  It stays inside
-    /// this short-lived backend site instance and is never serialised into a
-    /// room detail.
+    /// 解析经过认证发送所需的规范房间/频道关系时，
+    /// 需要手动保存的 Web 会话。它只留在这个短时效的后端站点实例内，
+    /// 绝不会序列化进房间详情。
     cookie: String,
 }
 
@@ -58,9 +56,8 @@ impl HuyaSite {
 
     async fn get_text(&self, url: &str, ua: &str) -> AppResult<String> {
         let mut request = self.client.get(url).header("user-agent", ua);
-        // Room bootstrap pages may need the browser session to expose the
-        // canonical internal channel relationship.  Do not replay a private
-        // Cookie to public CDN/list/search hosts.
+        // 房间引导页面可能需要浏览器会话才能暴露规范的内部频道关系。
+        // 不要把私有 Cookie 重放到公开的 CDN/列表/搜索主机。
         if !self.cookie.is_empty() && is_room_page_url(url) {
             request = request.header("cookie", self.cookie.as_str());
         }
@@ -97,7 +94,7 @@ impl HuyaSite {
         let obj_src = &rest[brace..];
         let end = find_matching_brace(obj_src).ok_or_else(|| Self::err("unbalanced JSON"))?;
         let mut json_text = obj_src[..=end].to_string();
-        // Strip function bodies that break JSON.parse
+        // 剥离会破坏 JSON.parse 的函数体
         json_text = strip_js_functions(&json_text);
 
         let mut obj: Value =
@@ -116,10 +113,10 @@ impl HuyaSite {
         .find(|value| *value > 0)
         .unwrap_or(0);
 
-        // Offline rooms do not always expose lChannelId/lSubChannelId in the
-        // mobile bootstrap.  The desktop room payload still has the profile
-        // uid used by the first-party player as its signal channel fallback.
-        // Never fall back to the public short room id: it is not lTid/lSid.
+        // 下播房间的移动端引导不一定暴露 lChannelId/lSubChannelId。
+        // 桌面端房间负载仍带有第一方播放器所用的资料 uid，
+        // 可作为信令频道的兜底。绝不能回退到公开短房间号：
+        // 它不是 lTid/lSid。
         let mut desktop_presenter = 0;
         let mut desktop_ayyuid = 0;
         if (top == 0 || sub == 0)
@@ -160,10 +157,9 @@ fn is_room_page_url(url: &str) -> bool {
     url.starts_with("https://m.huya.com/") || url.starts_with("https://www.huya.com/")
 }
 
-/// Extract the only desktop fields that are meaningful to the signal layer.
-/// The public profile room number is deliberately absent: it is not a TARS
-/// channel ID. Offline pages commonly set both desktop channel fields to zero
-/// and use the broadcaster (`lp`) as the web-player fallback instead.
+/// 只提取对信令层有意义的桌面字段。公开资料页房间号被刻意排除：
+/// 它不是 TARS 频道 id。下播页面常把两个桌面频道字段都置零，
+/// 改用主播（`lp`）作为 Web 播放器的兜底。
 fn desktop_room_ids(
     room_data: Option<&Value>,
     profile_data: Option<&Value>,
@@ -204,15 +200,15 @@ fn find_matching_brace(s: &str) -> Option<usize> {
 }
 
 fn strip_js_functions(s: &str) -> String {
-    // Replace `function (...) { ... }` with `""` (brace-matched).
-    // IMPORTANT: never slice `str` at non-char boundaries — Huya pages contain
-    // Chinese UTF-8; a byte-index walk + `s[i..]` panics and aborts the app.
+    // 把 `function (...) { ... }` 替换为 `""`（按花括号配对）。
+    // 重要：绝不能在非字符边界切片 `str` —— 虎牙页面包含中文 UTF-8；
+    // 按字节下标遍历加 `s[i..]` 会 panic 并中止应用。
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i..].starts_with(b"function") {
-            // Find opening brace from byte offset (ASCII `{` is a single byte).
+            // 从字节偏移处查找起始花括号（ASCII `{` 是单字节）。
             if let Some(rel) = bytes[i..].iter().position(|&b| b == b'{') {
                 let start_brace = i + rel;
                 if let Some(end) = find_matching_brace_bytes(&bytes[start_brace..]) {
@@ -222,7 +218,7 @@ fn strip_js_functions(s: &str) -> String {
                 }
             }
         }
-        // Copy one UTF-8 character safely.
+        // 安全地复制一个 UTF-8 字符。
         let ch = s[i..].chars().next().unwrap_or('\u{FFFD}');
         let len = ch.len_utf8();
         out.push(ch);
@@ -274,10 +270,10 @@ fn extract_i64_near(html: &str, key: &str) -> Option<i64> {
     num.parse().ok()
 }
 
-/// Parse a static desktop room assignment such as
-/// `var TT_PROFILE_INFO = {"uid": ...};`.  Only the structured JSON object
-/// is returned, so callers can select the few public room identifiers they
-/// need without retaining the document or a user session.
+/// 解析静态桌面房间赋值，例如
+/// `var TT_PROFILE_INFO = {"uid": ...};`。只返回结构化的 JSON 对象，
+/// 调用方即可挑选所需的少量公开房间标识符，
+/// 而不必保留整个文档或用户会话。
 fn parse_js_json_assignment(html: &str, marker: &str) -> Option<Value> {
     let start = html.find(marker)?;
     let after = &html[start + marker.len()..];
@@ -458,10 +454,9 @@ fn parse_huya_room_list(v: &Value) -> AppResult<RoomListPage> {
     })
 }
 
-/// Extract the small status payload needed by a follow refresh from Huya's
-/// room bootstrap response.  The stream lines and TARS/channel identifiers in
-/// that response are deliberately ignored here; they are only needed after a
-/// user enters a room to play it or connect danmaku.
+/// 从虎牙房间引导响应中提取关注刷新所需的少量状态负载。
+/// 其中的线路和 TARS/频道标识符在这里刻意忽略；
+/// 它们只在用户进入房间播放或连接弹幕之后才需要。
 fn live_status_from_room_info(info: &Value) -> LiveRoomStatus {
     let live_info = info.pointer("/roomInfo/tLiveInfo").unwrap_or(&Value::Null);
     let status = info.pointer("/roomInfo/eLiveStatus").map(json_i64) == Some(2);
@@ -579,8 +574,8 @@ impl LiveSite for HuyaSite {
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
-        // The mobile room bootstrap already contains eLiveStatus.  Avoid the
-        // later play-url/danmaku work performed by get_room_detail.
+        // 移动端房间引导已包含 eLiveStatus。
+        // 避免 get_room_detail 中后续的播放地址/弹幕工作。
         let room = self.room_info(room_id).await?;
         Ok(live_status_from_room_info(&room))
     }
@@ -597,7 +592,7 @@ impl LiveSite for HuyaSite {
             .unwrap_or(Value::Null);
         let mut top_sid = json_i64(info.get("topSid").unwrap_or(&Value::Null));
         let mut sub_sid = json_i64(info.get("subSid").unwrap_or(&Value::Null));
-        // Prefer channel ids from first stream line when HTML scrape missed them.
+        // HTML 抓取遗漏时，优先使用首条线路的频道 id。
         if let Some(first) = live_info
             .pointer("/tLiveStreamInfo/vStreamInfo/value")
             .and_then(|v| v.as_array())
@@ -619,9 +614,8 @@ impl LiveSite for HuyaSite {
         if sub_sid == 0 {
             sub_sid = top_sid;
         }
-        // Channel ids identify a room's message stream, whereas `lPid` for a
-        // chat send identifies the presenter. Keep both rather than silently
-        // substituting one for the other when a channel happens to work.
+        // 频道 id 标识房间的消息流，而聊天发送用的 `lPid` 标识主播。
+        // 两者都保留，而不是在某个频道碰巧可用时就静默互换。
         let presenter = [
             json_i64(info.get("presenterUid").unwrap_or(&Value::Null)),
             json_i64(profile.get("lUid").unwrap_or(&Value::Null)),
@@ -741,7 +735,7 @@ impl LiveSite for HuyaSite {
                 "subSid": sub_sid,
                 "presenterUid": presenter,
                 "lp": presenter,
-                // Danmaku join needs yyuid + channel sids (simple_live HuyaDanmakuArgs).
+                // 弹幕加入需要 yyuid + 频道 sid。
                 "ayyuid": ayyuid,
                 "lYyid": ayyuid,
             }),
@@ -826,9 +820,9 @@ impl LiveSite for HuyaSite {
                 continue;
             }
             let q = process_anticode(&anti, &uid, &stream);
-            // The signed Huya FLV endpoints currently returned by the room
-            // bootstrap are HTTP-only. Rewriting the scheme invalidates some
-            // CDN lines and surfaces as an immediate 403/connection close.
+            // 房间引导当前返回的带签名虎牙 FLV 接口只有 HTTP。
+            // 改写协议会使部分 CDN 线路失效，
+            // 表现为立即 403 或连接被关闭。
             let mut url = format!("{}/{stream}.flv?{q}", base.trim_end_matches('/'));
             if bit_rate > 0 {
                 url.push_str(&format!("&ratio={bit_rate}"));
@@ -859,7 +853,7 @@ mod tests {
 
     #[test]
     fn strip_js_functions_handles_chinese_utf8() {
-        // Must not panic on multi-byte UTF-8 (old byte-index walk aborted the app).
+        // 遇到多字节 UTF-8 时不得 panic（旧的字节下标遍历曾导致应用中止）。
         let src = r#"{"sNick":"虎牙英雄联盟赛事","cb":function(x){return x;},"ok":1}"#;
         let out = strip_js_functions(src);
         assert!(out.contains("虎牙英雄联盟赛事"), "{out}");
@@ -930,7 +924,7 @@ mod tests {
     #[test]
     fn process_anticode_builds_query() {
         let anti = "wsSecret=abc&wsTime=1&fm=UkZkeE9FSmpTak5vTmtSS2REWlVXVjhrTUY4a01WOGtNbDhrTXclM0QlM0Q%3D&ctype=tars_mobile&fs=bgct&t=103";
-        // fm base64 decodes to something with underscores for prefix extraction.
+        // fm base64 解码后带有下划线，便于提取前缀。
         let q = process_anticode(anti, "1234567890", "stream-name");
         assert!(q.contains("wsSecret="), "{q}");
         assert!(q.contains("uid=1234567890"), "{q}");

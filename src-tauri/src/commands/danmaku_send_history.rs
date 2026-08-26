@@ -12,9 +12,8 @@ fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Co
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
 }
 
-/// Returns the most recently confirmed messages for one platform. The
-/// outgoing content remains device-local and is deliberately not part of
-/// profile export/import.
+/// 返回某平台最近确认发送的消息。发出的内容仅存于本机，
+/// 且刻意不纳入配置的导出/导入。
 #[tauri::command]
 pub fn danmaku_send_history_list(
     state: State<'_, AppState>,
@@ -24,8 +23,8 @@ pub fn danmaku_send_history_list(
     danmaku_send_history::list(&conn, site_id.as_str())
 }
 
-/// Returns outgoing danmaku across all supported platforms for the history
-/// screen. The data is local-only and does not leave this device.
+/// 为历史界面返回所有受支持平台的发送弹幕。
+/// 数据仅存于本地，不会离开本设备。
 #[tauri::command]
 pub fn danmaku_send_history_list_all(
     state: State<'_, AppState>,

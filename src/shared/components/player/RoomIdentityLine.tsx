@@ -30,7 +30,7 @@ type RoomIdentityLineProps = {
   className?: string;
 };
 
-/** One unbroken HUD identity line that pans only when fixed controls leave too little room. */
+/** 一条不间断的 HUD 身份行，仅在固定控件空间不足时平移。 */
 export function RoomIdentityLine({
   siteId,
   roomId,

@@ -8,13 +8,12 @@ import { useDanmakuActions } from "../danmaku/useDanmakuActions";
 import { cn } from "@/lib/utils";
 
 /**
- * Comment under the pointer on the live video stage. The renderer hands over
- * the element-relative CSS box (including border padding) and this menu
- * anchors itself to it.
+ * 直播视频舞台上指针所指的评论。渲染器移交元素相对的 CSS 盒（含边框内边距），
+ * 菜单锚定到它上面。
  */
 export type DanmakuHoverTarget = {
   hoverKey: string;
-  /** Raw comment body, without the aggregation suffix. */
+  /** 原始评论正文，不含聚合后缀。 */
   content: string;
   user: string;
   eventKind: DanmakuEvent["kind"];
@@ -25,33 +24,30 @@ export type DanmakuHoverTarget = {
 };
 
 /**
- * Horizontal room the pill needs on either side of its anchor, used by the CSS
- * `clamp` that keeps it on screen.
+ * 胶囊在其锚点两侧需要的横向空间，供把它保持在屏内的 CSS `clamp` 使用。
  *
- * Kept close to the real half-width: `clamp` stops centering once the anchor is
- * within this distance of an edge, so an inflated value visibly detaches the pill
- * from the comment it belongs to. Compact is three 36px buttons with 6px gaps
- * and padding (~72px); large is three 44px buttons with 8px gaps and padding
- * (~88px).
+ * 数值贴近真实半宽：一旦锚点距离边缘不足此值，`clamp` 就停止居中，
+ * 夸大的取值会让胶囊明显脱离其所属评论。紧凑版是三个 36px 按钮加 6px 间距
+ * 和内边距（约 72px）；大号版是三个 44px 按钮加 8px 间距和内边距
+ * （约 88px）。
  */
 const MENU_HALF_WIDTH_PX = 72;
 const MENU_HALF_WIDTH_LARGE_PX = 88;
 /**
- * Marks the menu so the stage renderer can tell a press that landed on it apart
- * from a press elsewhere, which dismisses the pinned comment. Declared here,
- * where the attribute is actually applied, so the pointer delegate imports it in
- * the same direction as the component itself.
+ * 给菜单打上标记，使舞台渲染器能把落在菜单上的按压与落在别处的按压区分开 ——
+ * 后者会取消钉住的评论。在这里声明、也在这里应用该属性，
+ * 使指针委托以与组件相同的方向导入它。
  */
 export const DANMAKU_MENU_ATTR = "data-danmaku-menu";
 /**
- * Visual distance between the comment and the pill.
+ * 评论与胶囊之间的视觉距离。
  *
- * Rendered as transparent padding rather than a positioning offset so the gap
- * stays inside the element: a press that lands slightly short of a button still
- * counts as a press on the menu and does not dismiss the pin.
+ * 用透明内边距而不是定位偏移实现，让间隙留在元素内部：
+ * 稍微没点到按钮的按压仍算按在菜单上，
+ * 不会取消钉住。
  */
 const MENU_GAP_PX = 6;
-/** Below this the pill would clip the top edge, so it flips under the comment. */
+/** 低于此值胶囊会裁掉顶边，因此翻转到评论下方。 */
 const MENU_FLIP_THRESHOLD_PX = 56;
 
 type DanmakuActionMenuProps = {
@@ -60,7 +56,7 @@ type DanmakuActionMenuProps = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
-  /** Larger aiming targets for a fullscreen desktop stage. */
+  /** 为全屏桌面舞台提供的更大瞄准目标。 */
   large?: boolean;
 };
 
@@ -86,29 +82,26 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   const halfWidth = large ? MENU_HALF_WIDTH_LARGE_PX : MENU_HALF_WIDTH_PX;
   const buttonClass = large
     ? "size-11"
-    : // The shared Button keeps 44px coarse-pointer targets by default. This
-      // transient three-action pill needs the regular 36px icon-button density
-      // on phones so it does not obscure a large part of the video.
+    : // 共享 Button 组件默认提供 44px 粗指针目标。这个
+      // 一次性的三按钮胶囊在手机上需要常规 36px 图标按钮密度，
+      // 避免遮挡过大的视频区域。
       "[@media(pointer:coarse)]:size-9 [@media(pointer:coarse)]:min-h-9 [@media(pointer:coarse)]:min-w-9";
   const iconClass = large ? "size-6" : "size-5";
 
   return (
     <div
-      // The player stage treats bare pointer presses as video gestures. Mark
-      // this as chrome and swallow the press so acting on a comment cannot also
-      // toggle playback or fullscreen. `pointermove` still bubbles, keeping the
-      // controls awake while the pointer rests here.
+      // 播放器舞台把裸指针按压当作视频手势。把它标记为 chrome 并吞掉按压，
+      // 使对评论的操作不会同时切换播放或全屏。`pointermove` 仍会冒泡，
+      // 指针停留期间控制条保持唤醒。
       data-player-hud
-      // Lets the outside-press delegate recognise this element, so pressing the
-      // menu never counts as the press that dismisses the pinned comment.
+      // 让外部按压委托识别本元素，使按菜单绝不构成取消钉住的那次按压。
       {...{ [DANMAKU_MENU_ATTR]: "" }}
       role="group"
       aria-label={`${target.user || "匿名"} 的弹幕操作`}
       className={cn(
         "pointer-events-auto absolute z-10 flex -translate-x-1/2 flex-col items-center",
-        // Padding on the comment-facing edge rather than a positioning offset:
-        // it renders as the same visual gap but stays inside the element's hit
-        // area, so the pointer never crosses dead space on its way to a button.
+        // 朝向评论一侧的内边距而非定位偏移：呈现为同样的视觉间隙但保持在元素命中
+        // 区域内，指针通往按钮的路上不会穿过死区。
         flipBelow ? "translate-y-0 pt-1.5" : "-translate-y-full pb-1.5",
         large ? "gap-1.5" : "gap-1",
       )}
@@ -128,9 +121,8 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
       )}
       <div
         className={cn(
-          // Buttons sit apart rather than flush: they are round targets on a
-          // moving picture, and a mis-hit here sends a comment or writes the
-          // clipboard, so the gap is deliberate rather than cosmetic.
+          // 按钮之间留出间隔而不是贴紧：它们是移动画面上的圆形目标，
+          // 误触会发出评论或写入剪贴板，因此间隙是刻意设计而非装饰。
           "flex items-center rounded-full",
           large ? "gap-2 p-2" : "gap-1.5 p-1.5",
           glassPanelClass({ overlay: true }),
@@ -173,10 +165,9 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
           title={actions.repeatLabel}
           onClick={() => void actions.repeat()}
         >
-          {/* A bubble with a plus reads as "add one more comment", which is what
-              +1 does. `SendHorizontal` read as "send what I typed" — there is no
-              composer here. Square bubbles are already the danmaku symbol in the
-              player chrome (`MessageSquareText` / `MessageSquareOff`). */}
+          {/* 带加号的气泡读作"再发一条"，正是 +1 的含义。`SendHorizontal` 读作
+              "发送我输入的内容" —— 这里没有输入框。方形气泡已是播放器 chrome 中
+              弹幕的符号（`MessageSquareText` / `MessageSquareOff`）。 */}
           <MessageSquarePlus aria-hidden className={iconClass} />
         </Button>
       </div>

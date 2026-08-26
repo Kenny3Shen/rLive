@@ -10,12 +10,12 @@ export type DanmakuSendStatus = {
 };
 
 export type DanmakuSendConfig = {
-  /** Tauri command that reports the local account / consent state. */
+  /** 报告本地账号/授权状态的 Tauri 命令。 */
   statusCommand: string;
-  /** Tauri command that submits one user-initiated ordinary text message. */
+  /** 提交一条用户发起的普通文本消息的 Tauri 命令。 */
   sendCommand: string;
   siteLabel: string;
-  /** Browser-compatible upper bound; the Rust endpoint validates again. */
+  /** 浏览器兼容的上限；Rust 接口会再次校验。 */
   maxLength: number;
   supportsNativeBilibiliEmoji?: boolean;
 };

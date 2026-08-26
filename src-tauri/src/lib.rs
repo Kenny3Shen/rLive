@@ -83,7 +83,7 @@ use commands::stream_proxy::{
     stream_proxy_probe_sources, stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry,
 };
 use state::AppState;
-// Only the desktop close handler emits an event; Android has no exit prompt.
+// 只有桌面端的关闭处理器会发出事件；Android 没有退出确认框。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use tauri::Emitter;
 use tauri::Manager;
@@ -92,21 +92,21 @@ use tracing_subscriber::fmt::MakeWriter;
 
 const MAX_LOG_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Emitted instead of closing the window while recordings are still running.
-/// The frontend answers with `app_confirm_exit` or by dismissing its dialog.
+/// 录制仍在进行时发出该事件而不是关闭窗口。
+/// 前端以 `app_confirm_exit` 回应，或关闭自己的对话框。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const APP_EXIT_REQUESTED_EVENT: &str = "app-exit-requested";
 
 /**
- * Registers the narrow Android bridge used by the live-player edge gestures.
- * The Kotlin implementation changes the Activity brightness and Android media
- * stream; desktop builds retain their existing web controls.
+ * 注册直播播放器边缘手势所用的窄接口 Android 桥。Kotlin 实现负责修改
+ * Activity 亮度与 Android 媒体音量流；
+ * 桌面端构建保留现有的 Web 控制。
  *
- * The `PluginHandle` returned here is the *only* way into the Kotlin
- * `@Command` methods, so it is stored in managed state for the
- * `android_player_controls_*` app commands to use. Without it the webview's
- * `plugin:player-controls|…` invokes would land on this plugin's own (empty)
- * Rust invoke handler and be rejected before Kotlin ever ran.
+ * 这里返回的 `PluginHandle` 是进入 Kotlin `@Command` 方法的*唯一*途径，
+ * 因此把它存入受管状态，供 `android_player_controls_*` 应用命令使用。
+ * 没有它，webview 发出的 `plugin:player-controls|…` invoke 会落到本插件
+ * 自己的（空的）Rust invoke handler 上，
+ * 在 Kotlin 运行之前就被拒绝。
  */
 #[cfg(target_os = "android")]
 fn android_player_controls_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
@@ -120,9 +120,8 @@ fn android_player_controls_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-/// A synchronized append-only writer for the app log. A poisoned log mutex
-/// must never interrupt playback or a user-initiated chat send, so writes are
-/// safely discarded in that exceptional case.
+/// 应用日志的同步追加写入器。日志互斥锁中毒时绝不能打断播放或用户发起的
+/// 聊天发送，因此在这种异常情况下写入会被安全地丢弃。
 #[derive(Clone)]
 struct AppLogWriter(Arc<Mutex<File>>);
 
@@ -152,10 +151,9 @@ impl<'a> MakeWriter<'a> for AppLogWriter {
     }
 }
 
-/// Persist failure diagnostics locally because release Windows builds have no
-/// console window. Deliberately log structured error state only: Cookie
-/// values, tokens, outgoing chat text, and successful operation progress must
-/// never be written to disk.
+/// 把失败诊断持久化到本地，因为 Windows 发布版没有控制台窗口。
+/// 刻意只记录结构化的错误状态：Cookie 值、token、发出的聊天文本
+/// 以及成功操作的进度都绝不能写盘。
 fn init_logging(directory: &std::path::Path) {
     if let Err(error) = fs::create_dir_all(directory) {
         eprintln!("rLive log directory unavailable: {error}");
@@ -179,9 +177,8 @@ fn init_logging(directory: &std::path::Path) {
         }
     };
 
-    // Keep the persistent release log failure-only. In particular, do not
-    // honor `RUST_LOG` here: it could turn successful authentication or
-    // connection progress into durable local records.
+    // 保持发布版持久日志只记录失败。特别是不要响应 `RUST_LOG`：
+    // 它可能把成功的认证或连接进度变成持久的本地记录。
     let filter = EnvFilter::new("rlive_lib=warn");
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -199,16 +196,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
-    // Android-only: window brightness, STREAM_MUSIC volume, and fullscreen
-    // orientation for player edge gestures. Desktop keeps web-player volume.
+    // 仅限 Android：为播放器边缘手势提供窗口亮度、STREAM_MUSIC 音量
+    // 和全屏方向控制。桌面端沿用 Web 播放器的音量控制。
     #[cfg(target_os = "android")]
     let builder = builder.plugin(android_player_controls_plugin());
 
     builder
         .setup(|app| {
-            // `dirs` has no Android app-sandbox resolver and can resolve to
-            // an unwritable relative path there. Ask the Tauri mobile host
-            // for Android's private data directory before any startup I/O.
+            // `dirs` 没有 Android 应用沙箱解析器，在该平台上可能解析出不可写的相对
+            // 路径。在任何启动 I/O 之前，先向 Tauri 移动宿主请求
+            // Android 的私有数据目录。
             #[cfg(target_os = "android")]
             let app_data_dir = app.path().app_data_dir().map_err(|error| {
                 error::AppError::new(
@@ -353,18 +350,17 @@ pub fn run() {
                 event: tauri::WindowEvent::CloseRequested { api, .. },
                 ..
             } if label == "main" => {
-                // The close is always prevented first: exiting from inside this
-                // handler is what lets the shutdown path finalize its work, and
-                // an active recording additionally needs the user's answer.
+                // 总是先阻止关闭：从处理器内部发起退出正是让关机路径完成收尾工作的方式，
+                // 而活动中的录制还需要用户的答复。
                 api.prevent_close();
                 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
                 if let Some(state) = app_handle.try_state::<AppState>()
                     && state.inner().recording.active_count() > 0
                     && app_handle.emit(APP_EXIT_REQUESTED_EVENT, ()).is_ok()
                 {
-                    // The frontend owns the decision from here: it either calls
-                    // `app_confirm_exit` or leaves the window open. A failed
-                    // emit means no webview can ask, so fall through and exit.
+                    // 从这里开始决定权在前端：它要么调用 `app_confirm_exit`，
+                    // 要么让窗口保持打开。事件发送失败意味着没有任何 webview 能回应，
+                    // 于是直接落回并退出。
                     return;
                 }
                 if let Some(state) = app_handle.try_state::<AppState>() {

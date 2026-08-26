@@ -70,8 +70,8 @@ function SyncFeedField({ room, mainSlot }: { room: MultiRoomEntry; mainSlot: boo
           {offset.toFixed(1)}s
         </Badge>
       </div>
-      {/* Only shown once the feed reports numbers: four "waiting" lines would
-          just push the sliders apart while the players are still starting. */}
+      {/* 只在流上报出数值之后显示：四行"等待中"
+          只会在播放器尚未启动时把滑杆彼此推开。 */}
       {status?.holdSeconds != null && (
         <FieldDescription className="text-xs">{liveSyncFeedStatusText(status)}</FieldDescription>
       )}
@@ -79,7 +79,7 @@ function SyncFeedField({ room, mainSlot }: { room: MultiRoomEntry; mainSlot: boo
   );
 }
 
-/** Grid-wide control panel for the live clock alignment. */
+/** 覆盖整个网格的直播时钟对齐控制面板。 */
 export function MultiRoomSyncControl({
   rooms,
   mainKey,

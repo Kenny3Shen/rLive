@@ -16,14 +16,14 @@ const EMOTE_URL = "//i0.hdslb.com/bfs/emote/question.png";
 const NORMALIZED_EMOTE_URL = "https://i0.hdslb.com/bfs/emote/question.png";
 const FONT_SIZE = 24;
 
-/** Stand-in for canvas metrics: a fixed advance per code point. */
+/** canvas 度量的替身：每个码点固定步进。 */
 function measureText(text: string): number {
   return [...text].length * FONT_SIZE;
 }
 
 /**
- * Build entries the way playback does, through the sidecar parser, so the test
- * exercises the same validation the real payload passes through.
+ * 按回放的方式、经由伴生解析器构建条目，
+ * 使测试经历真实负载所经过的同一条校验链路。
  */
 function sidecarEntries(events: readonly Partial<DanmakuEvent>[]) {
   return parseRecordedDanmakuSidecar(
@@ -72,7 +72,7 @@ describe("recorded danmaku spans", () => {
   test("puts the repeat counter after the last fragment", () => {
     const [entry] = sidecarEntries([{ spans: [{ type: "image", image_url: EMOTE_URL }] }]);
 
-    // A count of 1 is the un-merged case and must not add a suffix.
+    // 计数为 1 是未合并的情况，不得添加后缀。
     expect(recordedDanmakuSpans(entry!, 1)).toEqual([
       { type: "image", image_url: NORMALIZED_EMOTE_URL },
     ]);
@@ -127,9 +127,8 @@ describe("recorded danmaku segments", () => {
     const segments = recordedDanmakuSegments(spans, FONT_SIZE, measureText);
     const width = recordedDanmakuSegmentsWidth(segments);
 
-    // The lane layout charges the emote its painted box instead of the width of
-    // whatever text the token happened to be, which is what stops a rich bullet
-    // from being granted a lane slot narrower than it paints.
+    // 车道布局按表情绘制的盒子计费，而不是 token 文本碰巧有多宽 ——
+    // 这正是防止富文本弹幕获批的车道槽位窄于其实际绘制宽度的机制。
     expect(width).toBe(
       5 * FONT_SIZE + FONT_SIZE * DANMAKU_IMAGE_SCALE + DANMAKU_IMAGE_HORIZONTAL_GAP,
     );
@@ -190,12 +189,12 @@ describe("recorded danmaku image cache", () => {
       settled += 1;
     });
 
-    // The first frame only starts the request; nothing can be painted yet.
+    // 第一帧只是发起请求；还画不出任何东西。
     expect(cache.resolve(NORMALIZED_EMOTE_URL)).toBeNull();
     expect(cache.resolve(NORMALIZED_EMOTE_URL)).toBeNull();
     expect(created).toHaveLength(1);
-    // The policy must be set before `src`, or the request carries the webview's
-    // `tauri://…` Referer and Bilibili's CDN answers 403.
+    // 策略必须在 `src` 之前设置，否则请求携带 webview 的 `tauri://…` Referer、
+    // Bilibili CDN 回以 403。
     expect(created[0]!.referrerPolicy).toBe("no-referrer");
     expect(created[0]!.src).toBe(NORMALIZED_EMOTE_URL);
 
@@ -216,7 +215,7 @@ describe("recorded danmaku image cache", () => {
 
     expect(cache.hasFailed(NORMALIZED_EMOTE_URL)).toBe(true);
     expect(cache.resolve(NORMALIZED_EMOTE_URL)).toBeNull();
-    // A failed URL is remembered rather than retried on every frame.
+    // 失败的 URL 会被记住，而不是每帧重试。
     expect(created).toHaveLength(1);
   });
 

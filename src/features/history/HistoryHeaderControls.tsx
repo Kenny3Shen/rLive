@@ -36,9 +36,8 @@ const VIEW_ICONS = {
 } as const;
 
 /**
- * The timeline switcher that replaces the platform strip in the application
- * header on `/history`. It is a `tablist` for the same reason the platform
- * strip is: the two panels live side by side on one swipeable track.
+ * 时间线切换器，在 `/history` 上取代应用头部的平台条。它与平台条一样是
+ * `tablist`：两个面板并排位于同一条可滑动的 track 上。
  */
 export function HistoryViewSwitcher({
   value,
@@ -87,12 +86,11 @@ export function HistoryViewSwitcher({
 }
 
 /**
- * Free-text search over the active timeline.
+ * 对活动时间线的自由文本搜索。
  *
- * The field keeps its own draft state and pushes it upward on a short debounce:
- * the value lives in the address bar, and writing a search param on every
- * keystroke would both spam router updates and re-run the grouping pass while
- * the user is still typing.
+ * 输入框维护自己的草稿状态并以短防抖向上推送：真正的取值在地址栏里，
+ * 每次击键都写 search 参数既会刷屏路由更新，
+ * 也会在用户还在输入时反复执行分组计算。
  */
 export function HistorySearchInput({
   keyword,
@@ -108,8 +106,7 @@ export function HistorySearchInput({
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
-  // Adopt external changes (a cleared filter, a restored URL) without
-  // clobbering what the user is currently typing.
+  // 采纳外部变更（清除过滤、恢复 URL），同时不覆盖用户正在输入的内容。
   useEffect(() => {
     if (keyword !== draftRef.current) setDraft(keyword);
   }, [keyword]);
@@ -165,10 +162,9 @@ export function HistorySearchInput({
 }
 
 /**
- * Date filter: relative presets plus one exact day. The native date input is
- * deliberate — it is the control every platform already renders a familiar
- * picker for, and the value it produces is the local `YYYY-MM-DD` the filter
- * already speaks.
+ * 日期过滤：相对预设加单个精确日期。使用原生 date 输入是刻意的 ——
+ * 它是各平台都已为其渲染熟悉选择器的控件，
+ * 且其产出的本地 `YYYY-MM-DD` 正是过滤器已经使用的格式。
  */
 export function HistoryDateFilterControl({
   value,
@@ -256,7 +252,7 @@ export function HistoryDateFilterControl({
   );
 }
 
-/** Destructive clear for whichever timeline is on screen. */
+/** 针对当前屏幕上时间线的破坏性清空。 */
 export function HistoryClearButton({
   view,
   canClear,

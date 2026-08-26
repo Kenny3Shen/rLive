@@ -26,17 +26,16 @@ type RecordingControlProps = {
 };
 
 /**
- * The single title-bar recording affordance shared by live rooms and IPTV.
- * Starting opens the same glass option box used by the room tools (定时关闭);
- * stopping remains a one-click save action.
+ * 直播房间与 IPTV 共享的唯一标题栏录制入口。开始时打开与房间工具（定时关闭）
+ * 相同的玻璃选项盒；停止保持一键保存动作。
  */
 export function RecordingControl({ context, className, disabled = false }: RecordingControlProps) {
   const controller = useRecordingController(context);
   const defaultIncludeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
   const [open, setOpen] = useState(false);
   const [overrides, setOverrides] = useState<RecordingStartOptions>({});
-  // Background continuation is always on for a new task; the switch below only
-  // opts this one session out of it, and is not backed by a stored preference.
+  // 新任务的后台延续始终开启；下方的开关只是让这一次会话退出后台延续，
+  // 背后没有存储的偏好设置。
   const { includeDanmaku, continueOnLeave } = resolveRecordingControlOptions(
     {
       includeDanmaku: defaultIncludeDanmaku,
@@ -51,8 +50,8 @@ export function RecordingControl({ context, className, disabled = false }: Recor
   const active = Boolean(controller.active);
   const busy = controller.busy;
 
-  // A recording started from this box (or elsewhere) collapses the option box
-  // back into the active one-click stop trigger.
+  // 从这个盒子（或其他地方）开始录制后，选项盒收回为
+  // 活动状态的一键停止按钮。
   useEffect(() => {
     if (active) setOpen(false);
   }, [active]);

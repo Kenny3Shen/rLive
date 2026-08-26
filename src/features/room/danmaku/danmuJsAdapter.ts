@@ -12,31 +12,26 @@ import { floatingDanmakuText } from "./filter";
 import { superChatDurationMs } from "../superChat";
 
 /**
- * Hard ceiling for locally tracked bullets, and the floor the adaptive budget
- * never drops below.
+ * 本地跟踪 bullet 的硬上限，也是自适应预算的下限。
  *
- * The budget only bounds our own bookkeeping: how many bullets actually reach
- * the screen is decided by danmu.js' lane logic, which rejects a comment when no
- * lane is free. A tall stage with a full display area legitimately carries
- * several hundred scrolling bullets at once, so a budget below that would start
- * discarding comments danmu.js still had room for.
+ * 预算只约束我们自己的记账：实际有多少 bullet 上屏由 danmu.js 的车道逻辑决定，
+ * 没有空闲车道时它会拒绝评论。占满整个显示区域的高舞台合法地同时承载数百颗
+ * 滚动 bullet，低于此值的预算会开始丢弃 danmu.js 本来还装得下的评论。
  */
 export const DANMU_JS_MAX_ACTIVE_COMMENTS = 800;
 export const DANMU_JS_MIN_ACTIVE_COMMENTS = 120;
 /**
- * Bullets one scrolling lane can hold at the same time. A lane accepts the next
- * comment once its head has fully entered the stage, so with the default 100
- * px/s it keeps roughly a dozen bullets in flight on a wide stage.
+ * 单条滚动车道同时可容纳的 bullet 数。当前一颗弹幕头部完全进入舞台后车道才
+ * 接受下一条，因此在默认 100 px/s 下，宽舞台上大约同时保持十几颗在途。
  */
 export const DANMU_JS_LANE_ACTIVE_COMMENTS = 12;
 /**
- * How long a sent comment may stay unattached before it counts as dropped.
+ * 一条已发送评论在被判为丢弃前可以保持未挂载的时长。
  *
- * `Main.readData` takes a real-time comment off its data pool and discards it
- * without constructing a Bullet when every lane is busy, and that path fires
- * neither `bullet_remove` nor the detach hook. Attaching otherwise happens
- * synchronously inside `sendComment`, so anything still unattached after this
- * window can only be one of those silent drops.
+ * `Main.readData` 在所有车道都忙时会把实时评论从其数据池取走并直接丢弃，
+ * 不构建 Bullet，该路径既不触发 `bullet_remove` 也不触发 detach 钩子。
+ * 除此之外挂载都在 `sendComment` 内同步完成，
+ * 因此超过这个窗口仍未挂载的只能是那些静默丢弃。
  */
 export const DANMU_JS_ATTACH_TIMEOUT_MS = 1_000;
 export const DANMU_JS_MAX_PENDING_COMMENTS = 80;
@@ -45,11 +40,11 @@ export const DANMU_JS_PENDING_MAX_AGE_MS = 5_000;
 export const DANMU_JS_DEFAULT_DURATION_MS = 15_000;
 export const DANMU_JS_DEFAULT_MOVE_V = 100;
 /**
- * Reserved width for the repeat counter, wide enough for the longest suffix
- * (` ×9999+`) so a count appearing or growing never reflows the text beside it.
+ * 重复计数器的预留宽度，足以容纳最长的后缀（` ×9999+`），
+ * 使计数出现或增长时绝不会让旁边的文本回流。
  */
 const DANMU_JS_COUNT_SLOT_WIDTH = "5.25ch";
-/** Bilibili live player's default `bold: true` mapped to CSS numeric weight. */
+/** Bilibili 直播播放器默认的 `bold: true` 对应的 CSS 数字字重。 */
 export const DANMU_JS_FONT_WEIGHT = 700;
 export const DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 
@@ -58,7 +53,7 @@ export type DanmuJsPendingEvent = {
   queuedAt: number;
 };
 
-/** Add a batch to the bounded zero-size queue, retaining the newest events. */
+/** 加入有界的零尺寸队列一批数据，保留最新的事件。 */
 export function enqueueDanmuJsPending(
   queue: DanmuJsPendingEvent[],
   events: readonly DanmakuEvent[],
@@ -73,7 +68,7 @@ export function enqueueDanmuJsPending(
   if (overflow > 0) queue.splice(0, overflow);
 }
 
-/** Remove and return only pending events that have not exceeded their age. */
+/** 仅取出并返回尚未超过时限的待处理事件。 */
 export function flushDanmuJsPending(
   queue: DanmuJsPendingEvent[],
   now = Date.now(),
@@ -132,17 +127,17 @@ export function clampDanmuArea(value: number, fallback = 0.25): number {
   return Math.max(0.1, Math.min(1, next));
 }
 
-/** Keep danmu.js' virtual channel height aligned with the rendered line box. */
+/** 让 danmu.js 的虚拟通道高度与渲染出的行盒保持一致。 */
 export function danmuLaneHeight(fontSize: number): number {
   return Math.max(16, Math.round(clampDanmuFontSize(fontSize) * 1.4));
 }
 
 /**
- * How many bullets may be tracked at once for the current stage.
+ * 当前舞台允许同时跟踪的 bullet 数量。
  *
- * Mirrors danmu.js' own lane count (`floor(stageHeight * area / channelSize)`)
- * so the budget scales with the display area instead of cutting comments off on
- * a large player.
+ * 对齐 danmu.js 自身的车道数（`floor(stageHeight * area / channelSize)`），
+ * 使预算随显示面积伸缩，
+ * 而不是在大播放器上截断评论。
  */
 export function danmuMaxActiveComments(
   stageHeight: number,
@@ -162,10 +157,10 @@ export type DanmuJsAttachState = {
 };
 
 /**
- * Ids of comments danmu.js accepted but never rendered.
+ * danmu.js 接受却从未渲染的评论 id。
  *
- * See {@link DANMU_JS_ATTACH_TIMEOUT_MS}: these records have no bullet behind
- * them, so dropping them frees budget without taking anything off the screen.
+ * 见 {@link DANMU_JS_ATTACH_TIMEOUT_MS}：这些记录背后没有 bullet，
+ * 丢弃它们释放预算且不带走屏幕上的任何东西。
  */
 export function danmuGhostRecordIds(
   order: readonly string[],
@@ -183,29 +178,28 @@ export function danmuGhostRecordIds(
   return ghosts;
 }
 
-/** Convert the requested px/s into danmu.js' multiplier for the 100 px/s base moveV. */
+/** 把请求的 px/s 转换为 danmu.js 相对 100 px/s 基准 moveV 的倍率。 */
 export function danmuMoveVPlayRate(moveV: number): number {
   const safeMoveV = Number.isFinite(moveV) && moveV > 0 ? moveV : DANMU_JS_DEFAULT_MOVE_V;
   return safeMoveV / DANMU_JS_DEFAULT_MOVE_V;
 }
 
-/** Use danmu.js' native proportional area without overriding it with `lines`. */
+/** 使用 danmu.js 原生的比例式 area，不用 `lines` 覆盖它。 */
 export function danmuAreaConfig(area: number): { start: number; end: number } {
   return { start: 0, end: clampDanmuArea(area) };
 }
 
 /**
- * Whether an event is rendered as a fixed comment on the top layer.
+ * 事件是否作为顶层固定弹幕渲染。
  *
- * Those never compete for a scrolling lane and are bounded on their own (super
- * chats by their own cap, own messages by the top lanes), so the active budget
- * does not apply to them.
+ * 它们从不竞争滚动车道且有自身上限（SC 有各自上限，自己发送的受顶部车道限制），
+ * 因此活动预算不适用于它们。
  */
 export function isPinnedDanmakuEvent(event: DanmakuEvent): boolean {
   return event.kind === "super_chat" || event.is_self === true;
 }
 
-/** Keep fixed comments independent from the configured scrolling area. */
+/** 固定弹幕与配置的滚动区域相互独立。 */
 export function danmuRenderLayer(comment: Pick<DanmuJsComment, "mode">): DanmuJsRenderLayer {
   return comment.mode === "top" ? "top" : "scroll";
 }
@@ -217,7 +211,7 @@ export function danmuLayerAreaConfig(
   return layer === "top" ? { start: 0, end: 1 } : danmuAreaConfig(scrollArea);
 }
 
-/** Accept only compact color values before native payloads reach inline CSS. */
+/** 原生负载进入内联 CSS 之前只接受紧凑的颜色值。 */
 export function safeDanmuColor(value: unknown, fallback = "#ffffff"): string {
   if (typeof value !== "string") return fallback;
   const color = value.trim();
@@ -282,19 +276,19 @@ export function danmuStyleForEvent(
   };
 
   if (fontStroke > 0) {
-    // danmu.js converts camelCase keys to CSS text itself. The capital W is
-    // required so this becomes `-webkit-text-stroke` instead of the invalid
-    // unprefixed `webkit-text-stroke`.
+    // danmu.js 自己把 camelCase 键转成 CSS 文本。大写 W 是必须的，
+    // 这样才能生成 `-webkit-text-stroke` 而不是非法的无前缀
+    // `webkit-text-stroke`。
     style.WebkitTextStroke = `${fontStroke}px rgba(0,0,0,.92)`;
-    // Paint the glyph fill after the outline so small text keeps its full
-    // interior instead of losing thin strokes to the centered CSS outline.
+    // 先画填充再画描边顺序相反：小字号文本才能保住完整的内部笔画，
+    // 不被居中式 CSS 描边吃掉细线。
     style.paintOrder = "stroke fill";
   }
 
   return style;
 }
 
-/** Map one validated live event without importing its Unix timestamp into the media timeline. */
+/** 映射一条已校验的直播事件，但不把其 Unix 时间戳引入媒体时间轴。 */
 export function danmuCommentFromEvent(
   event: DanmakuEvent,
   options: DanmuJsMappingOptions,
@@ -356,9 +350,8 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
     image.loading = "eager";
     image.decoding = "async";
     image.referrerPolicy = BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY;
-    // Assigned after the policy, which only applies to a request that has not
-    // started yet, and which still matters when the proxy is not up and the
-    // direct CDN URL is used.
+    // 放在策略之后设置：策略只对尚未发出的请求生效，
+    // 且在代理未启动、使用直连 CDN URL 时仍然重要。
     image.src = danmakuImageRequestUrl(imageUrl);
     image.className = "rlive-danmu-image";
     image.style.width = `${DANMAKU_IMAGE_SCALE}em`;
@@ -369,8 +362,7 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
     image.addEventListener(
       "error",
       () => {
-        // A proxy that is down must not cost the emote its picture: retry once
-        // against the CDN before falling back to the text marker.
+        // 代理宕机不应让表情失去图片：退回文本标记前先对 CDN 重试一次。
         if (image.src !== imageUrl) {
           image.src = imageUrl;
           return;
@@ -384,13 +376,12 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
 }
 
 /**
- * Whether a bullet needs a leading spacer matching its repeat-counter slot.
+ * bullet 是否需要一个与其重复计数槽位等宽的前导垫片。
  *
- * danmu.js centers a fixed comment by offsetting the whole bullet by half its
- * measured width (`left: 50%` + `margin-left: -width/2` in `Bullet.startMove`),
- * so the reserved trailing counter slot would push the visible text left of
- * center by half a slot. An equally wide leading spacer restores the balance.
- * Scrolling bullets are anchored on their left edge, so they need none.
+ * danmu.js 通过整体偏移测量宽度的一半来居中固定弹幕（`Bullet.startMove` 中
+ * `left: 50%` + `margin-left: -width/2`），因此尾部预留的计数槽位会把可见文本
+ * 推到中心左侧半个槽位处。等宽的前导垫片恢复平衡。滚动 bullet 锚定左边缘，
+ * 不需要。
  */
 export function danmuReservesLeadingCountSpacer(
   event: DanmakuEvent,
@@ -399,7 +390,7 @@ export function danmuReservesLeadingCountSpacer(
   return Boolean(aggregationKey) && isPinnedDanmakuEvent(event);
 }
 
-/** Build a safe custom element for danmu.js' `bulletCreateEl` hook. */
+/** 为 danmu.js 的 `bulletCreateEl` 钩子构建安全的自定义元素。 */
 export function createDanmuBulletElement(
   comment: DanmuJsComment & { __rliveMeta?: DanmuJsBulletMeta },
 ): HTMLElement {

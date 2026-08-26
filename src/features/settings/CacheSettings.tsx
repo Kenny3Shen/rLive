@@ -43,7 +43,7 @@ export function ImageCacheField() {
   const [clearStatus, setClearStatus] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [revealing, setRevealing] = useState(false);
-  // The cache directory only exists as a browsable folder on desktop shells.
+  // 缓存目录只在桌面外壳中以可浏览文件夹的形式存在。
   const canReveal = getClientPlatform() === "desktop";
   const usage = useQuery({
     queryKey: CACHE_USAGE_QUERY_KEY,

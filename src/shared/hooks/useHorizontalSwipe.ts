@@ -32,27 +32,23 @@ type SwipeState = {
   itemCount: number;
   reducedMotion: boolean;
   horizontal: boolean;
-  /** Recent pointer positions, used to derive the release velocity. */
+  /** 最近的指针位置序列，用于推导释放速度。 */
   samples: HorizontalSwipeSample[];
 };
 
 type HorizontalSwipeLayout = "page" | "track";
 
 const HORIZONTAL_SWIPE_SURFACE_SELECTOR = "[data-horizontal-swipe-surface]";
-/** Enough samples to cover the velocity window at any realistic pointer rate. */
+/** 足以在任何现实指针频率下覆盖速度窗口的样本数。 */
 const HORIZONTAL_SWIPE_MAX_SAMPLES = 8;
 /**
- * Grace period for a committed value to arrive, in ms.
+ * 等待提交值到达的宽限期（ms）。
  *
- * A caller may legitimately not apply the change on the next frame. React
- * Router's `BrowserRouter` wraps every location update in `startTransition`, so
- * a swipe that navigates — the platform and follow-filter strips both do, via
- * search params — commits one or more frames later, and on a heavy route the
- * concurrent render can take longer still. Only a caller that never applies the
- * value at all should see the page returned to where it started, so the window
- * is generous: an unnecessary rollback is a visible snap backwards, while
- * waiting a little too long is invisible — the page is already sitting at its
- * destination.
+ * 调用方合法地可能不在下一帧应用变更。React Router 的 `BrowserRouter` 把每次
+ * location 更新包在 `startTransition` 里，触发导航的滑动 —— 平台条与关注过滤条
+ * 都是，经由 search 参数 —— 会在一帧或多帧之后才提交，重量级路由上并发渲染
+ * 可能更久。只有完全不应用该值的调用方才应该看到页面回到起点，所以窗口放宽：
+ * 不必要的回滚是一次可见的向后跳动，而稍等片刻不可见 —— 页面本来就停在目的地上。
  */
 const HORIZONTAL_SWIPE_COMMIT_GRACE_MS = 600;
 
@@ -64,46 +60,37 @@ export type UseHorizontalSwipeOptions<T> = {
   items: readonly T[];
   value: T;
   onChange: (value: T) => void;
-  /** Enables touch swipe gestures. Defaults to true. */
+  /** 启用触摸滑动手势。默认 true。 */
   enabled?: boolean;
-  /** Animates value changes regardless of gesture availability. Defaults to true. */
+  /** 无论手势是否可用都对取值变化做动画。默认 true。 */
   animate?: boolean;
   /**
-   * `track` moves a layer whose pages are all laid out side by side at
-   * `index * width`, so the neighbours are already painted and the gesture pans
-   * between real pages. `page` moves the single rendered page and relies on the
-   * value change to bring the next one in, for strips whose neighbours are not
-   * mounted.
+   * `track` 移动的是一个所有页面按 `index * width` 并排布局的层，
+   * 邻居已经绘制完成，手势在真实页面之间平移。`page` 移动单个渲染页并依赖取值变化
+   * 带入下一页，适用于邻居未挂载的条带。
    */
   layout?: HorizontalSwipeLayout;
   isEqual?: (left: T, right: T) => boolean;
 };
 
 /**
- * Interactive paging for an ordered tab/platform strip.
+ * 有序页签/平台条的交互式翻页。
  *
- * Capture-phase pointer handlers are required on Android WebView: scrollable
- * children (ScrollArea, overflow lists) otherwise claim the gesture and the
- * parent never sees pointermove. `touch-action: pan-y` on the surface keeps
- * vertical scrolling native while leaving horizontal motion to this hook.
+ * Android WebView 上必须在捕获阶段处理指针事件：否则可滚动的子元素
+ * （ScrollArea、overflow 列表）会认领手势，父级永远看不到 pointermove。
+ * 表面上的 `touch-action: pan-y` 保持原生纵向滚动，横向运动交给本 hook。
  *
- * Attach `pageRef` to the element that should travel. Two properties make the
- * transition read as one continuous movement rather than a page switch followed
- * by an animation:
+ * 把 `pageRef` 附着到应当移动的元素上。两个性质让过渡读作一次连续运动，
+ * 而不是一次页面切换接一段动画：
  *
- * 1. While a finger is down the transform is written straight from the
- *    pointermove handler. Coalescing those writes into a rAF callback would
- *    always paint the pointer position of the previous frame, which is exactly
- *    what "not following the finger" looks like.
- * 2. The release is a Web Animations transform, so Chromium advances it on the
- *    compositor. GSAP (and any rAF ticker) has to share the main thread with the
- *    React commit that the page change triggers — on a heavy route that commit
- *    is long enough to swallow most of the settle's frames, which is what made a
- *    committed swipe look like an instant switch followed by a slide.
+ * 1. 手指按下期间 transform 直接由 pointermove 处理器写入。把这些写入合并进
+ * rAF 回调总会画出上一帧的指针位置，那正是"不跟手"的样子。
+ * 2. 释放是 Web Animations transform，Chromium 在合成器上推进它。GSAP（以及任何
+ * rAF ticker）必须与页面变更触发的 React 提交共享主线程 —— 重量级路由上那次提交
+ * 长到能吞掉收尾的大部分帧，这正是已提交滑动曾看起来像瞬间切换接一段滑动的原因。
  *
- * Its duration and the commit decision both come from the gesture itself: how
- * much of the surface the page travelled, and how fast the finger was moving
- * when it lifted.
+ * 其时长与提交决策都来自手势本身：
+ * 页面走过了多少表面，以及松手时手指有多快。
  */
 export function useHorizontalSwipe<T>({
   items,
@@ -123,16 +110,16 @@ export function useHorizontalSwipe<T>({
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const isEqualRef = useRef(isEqual);
-  // Last observed surface width, so a released swipe knows how far a full-width
-  // page travel actually is. Also the cap for the follow-the-finger drag.
+  // 最近观测到的表面宽度，使释放的滑动知道整页行程到底多远。
+  // 也是跟手拖拽的上限。
   const surfaceWidthRef = useRef(0);
   const offsetRef = useRef(0);
   const animationRef = useRef<Animation | null>(null);
   const commitDeliveryFrameRef = useRef<number | null>(null);
-  /** Set between a gesture commit and the value change it asked for. */
+  /** 在手势提交与其请求的取值变化之间设置。 */
   const pendingCommitRef = useRef<{ value: T; direction: 1 | -1; velocity: number } | null>(null);
   const commitRollbackTimerRef = useRef<number | null>(null);
-  /** Watches the track's viewport. One per attached node, replaced on rebind. */
+  /** 监视 track 的视口。每个附着节点一个，重绑时替换。 */
   const trackResizeObserverRef = useRef<ResizeObserver | null>(null);
   itemsRef.current = items;
   valueRef.current = value;
@@ -159,11 +146,9 @@ export function useHorizontalSwipe<T>({
         return;
       }
 
-      // The first rAF returns without React work, guaranteeing the compositor
-      // can paint the release motion once. The value change runs in the next
-      // frame; even if mounting the new platform is expensive, the already
-      // running Web Animation keeps advancing instead of pausing under the
-      // finger's release point.
+      // 第一次 rAF 不含 React 工作，保证合成器能把释放动画画出来一次。取值变化在
+      // 下一帧运行；即使挂载新平台开销很大，已经在跑的 Web Animation
+      // 也会继续前进，而不是停在手指松开的位置。
       commitDeliveryFrameRef.current = window.requestAnimationFrame(() => {
         commitDeliveryFrameRef.current = window.requestAnimationFrame(() => {
           commitDeliveryFrameRef.current = null;
@@ -176,11 +161,9 @@ export function useHorizontalSwipe<T>({
 
   const surfaceWidth = useCallback(() => {
     const el = pageRef.current;
-    // A track is wider than the viewport it travels inside, so it measures the
-    // clipping parent. A standalone page sits inside a padded scroller and is
-    // therefore narrower than the surface it pans across — measure the gesture
-    // surface itself, or a page would enter from its own width and leave a band
-    // of the outgoing page along the edge.
+    // track 比它所处的视口更宽，因此测量的是裁剪它的父级。独立 page 位于带内边距
+    // 的滚动容器内、比它平移经过的表面窄 —— 要测量手势表面本身，
+    // 否则页面会以自身宽度进场并在边缘留下一条离场页的残影。
     const measured =
       (isTrackLayout
         ? el?.parentElement?.clientWidth
@@ -206,7 +189,7 @@ export function useHorizontalSwipe<T>({
     [isTrackLayout, restOffsetForIndex],
   );
 
-  /** Offset actually on screen, including a settle still in flight. */
+  /** 实际在屏上的偏移，包括仍在途中的收尾。 */
   const liveOffset = useCallback(() => {
     const el = pageRef.current;
     if (!el || !animationRef.current) return offsetRef.current;
@@ -225,7 +208,7 @@ export function useHorizontalSwipe<T>({
     if (el) el.style.transform = transformFor(offset);
   }, []);
 
-  /** Stop a settle where it currently is, leaving that offset as inline style. */
+  /** 在当前位置停止收尾，把该偏移留下作为内联样式。 */
   const cancelSettle = useCallback(() => {
     const animation = animationRef.current;
     if (!animation) return;
@@ -236,11 +219,10 @@ export function useHorizontalSwipe<T>({
   }, [liveOffset, writeOffset]);
 
   /**
-   * Hand the remaining travel to the compositor.
+   * 把剩余行程交给合成器。
    *
-   * `fill: both` makes the first keyframe apply as soon as the animation starts,
-   * so the layer never paints an untransformed frame between the inline write and
-   * the animation taking over.
+   * `fill: both` 使第一个关键帧在动画开始时立即生效，
+   * 层在内联写入与动画接管之间绝不会绘制出未变换的帧。
    */
   const settle = useCallback(
     (target: number, duration: number) => {
@@ -248,9 +230,8 @@ export function useHorizontalSwipe<T>({
       if (!el) return;
       cancelSettle();
       const from = offsetRef.current;
-      // A standalone page rests at 0, which is also its natural layout position:
-      // landing there drops the transform entirely rather than leaving the page
-      // on a permanent compositor layer. A track's rest position is a transform.
+      // 独立 page 静止在 0，这也是它的自然布局位置：落到那里会整体去掉 transform，
+      // 而不是让页面留在永久合成层上。track 的静止位置本身就是 transform。
       const restsUntransformed = !isTrackLayout && target === 0;
       if (duration <= 0 || from === target || prefersReducedMotion()) {
         offsetRef.current = target;
@@ -269,20 +250,20 @@ export function useHorizontalSwipe<T>({
         .then(() => {
           if (animationRef.current !== animation) return;
           animationRef.current = null;
-          // Inline style first, then drop the effect: reversing the order lets
-          // some Android compositors paint the untransformed layer for a frame.
+          // 先写内联样式再移除动画效果：顺序颠倒会让部分 Android 合成器
+          // 把未变换的层画出一帧。
           el.style.transform = restsUntransformed ? "" : transformFor(target);
           animation.cancel();
           el.style.willChange = "";
         })
         .catch(() => {
-          // Cancellation is expected when a new gesture or value interrupts.
+          // 新手势或新取值打断时预期会发生取消。
         });
     },
     [cancelSettle, isTrackLayout],
   );
 
-  /** Park the layer at the offset its current value implies, without motion. */
+  /** 把层停靠在其当前取值对应的偏移处，不做运动。 */
   const restAtValue = useCallback(() => {
     cancelSettle();
     const el = pageRef.current;
@@ -290,13 +271,13 @@ export function useHorizontalSwipe<T>({
     offsetRef.current = target;
     if (!el) return;
     el.style.willChange = "";
-    // A settled standalone page returns to normal painting instead of keeping a
-    // permanent compositor layer; a track's rest position *is* a transform.
+    // 收尾完成的独立 page 回到常规绘制，
+    // 而不是保留一个永久合成层；track 的静止位置*就是* transform。
     if (isTrackLayout) el.style.transform = transformFor(target);
     else el.style.transform = "";
   }, [cancelSettle, isTrackLayout, restOffsetForValue]);
 
-  /** Return whatever offset the finger left behind to the current page. */
+  /** 把手指留下的偏移归还给当前页面。 */
   const settleAtRest = useCallback(
     (velocity = 0) => {
       const target = restOffsetForValue(valueRef.current);
@@ -317,9 +298,8 @@ export function useHorizontalSwipe<T>({
     const el = pageRef.current;
     if (!el) return;
 
-    // A track's pages are laid out by absolute index, so committing a swipe does
-    // not move any of them: the settle started at release is already travelling
-    // to this value's rest offset and must be left alone.
+    // track 的页面按绝对下标定位，提交滑动不会移动其中任何一个：释放时开始的
+    // 收尾正在驶向该取值的静止偏移，不要打扰它。
     if (isTrackLayout && committedByGesture) return;
 
     const previousIndex = items.findIndex((item) => isEqual(item, previousValue));
@@ -340,8 +320,7 @@ export function useHorizontalSwipe<T>({
 
     if (isTrackLayout) {
       cancelSettle();
-      // Only the immediate neighbours are mounted, so a multi-step jump would
-      // sweep across pages that are not there. Land on it instead.
+      // 只挂载了紧邻的页面，跨多步跳转会扫过不存在的页面。改为直接落位。
       if (Math.abs(nextIndex - previousIndex) !== 1) {
         restAtValue();
         return;
@@ -350,10 +329,8 @@ export function useHorizontalSwipe<T>({
       return;
     }
 
-    // `page`: the old page followed the finger out and the incoming one only
-    // exists now. Place it a full surface width across the opposite edge and
-    // settle it in, so the release plays as one continuous pan rather than a
-    // short catch-up nudge.
+    // `page`：旧页跟着手指出去了，进入页此刻才存在。把它放到对面边缘之外一整个
+    // 表面宽度处再收尾进来，使释放呈现为一次连续平移而不是短促追赶。
     const direction: 1 | -1 = pendingCommit?.direction ?? (nextIndex > previousIndex ? 1 : -1);
     cancelSettle();
     const startOffset = horizontalSwipeCommitOffset(
@@ -391,25 +368,20 @@ export function useHorizontalSwipe<T>({
   }, []);
 
   /**
-   * Park the track at the offset its current value implies, and keep measuring
-   * the viewport it travels inside.
+   * 把 track 停靠在其当前取值对应的偏移处，并持续测量它所在的视口。
    *
-   * Positioning a track is layout rather than gesture, so this also runs on
-   * clients without touch: the strip must show the selected page even when no
-   * pointer will ever reach it.
+   * 定位 track 属于布局而不是手势，因此在没有触摸的客户端上也会运行：
+   * 即使指针永远不会到来，条带也必须显示选中的页面。
    *
-   * Runs on mount *and* on every rebind, because a caller may replace the track
-   * while this hook stays mounted. The Shell's `PagePan` is keyed on the
-   * pathname, so leaving a swipeable route and coming back rebuilds the whole
-   * viewport/track/panel subtree — and assigning a ref does not re-run layout
-   * effects, so parking only on mount left the fresh track untransformed while
-   * `offsetRef` still held `-index * width`. Panels sit at their *absolute*
-   * strip index, so for any page past the first that pushes the active panel
-   * entirely off screen: nothing scrollable under the finger, and a horizontal
-   * gesture whose commit only remounts pages.
+   * 挂载时*和*每次重绑时都运行，因为 hook 保持挂载期间调用方可能替换 track。
+   * Shell 的 `PagePan` 以 pathname 为 key，离开可滑动路由再回来会重建整个
+   * 视口/track/面板子树 —— 而赋值 ref 不会重跑布局副作用，
+   * 只在挂载时停靠的话新 track 保持未变换，而 `offsetRef` 还握着 `-index * width`。
+   * 面板位于其*绝对*条带下标，于是第一页之后的任何页面都会把活动面板整个推出
+   * 屏幕：手指下方没有任何可滚动内容，而一次横向手势的提交只会重新挂载页面。
    *
-   * A standalone `page` needs none of this: it rests untransformed at offset 0,
-   * which is where a freshly mounted node already sits.
+   * 独立的 `page` 完全不需要这些：它未变换地停在偏移 0，
+   * 新挂载的节点本来就在那里。
    */
   const parkTrack = useCallback(() => {
     disconnectTrackResize();
@@ -420,8 +392,8 @@ export function useHorizontalSwipe<T>({
 
     const applyWidth = () => {
       const width = viewport.clientWidth;
-      // Mid-gesture the finger owns the offset; a resize then is a keyboard or
-      // system bar appearing, and rebasing under the pointer would jump.
+      // 手势中途偏移归手指所有；此时的 resize 是键盘或系统栏出现，
+      // 在指针下方重建基准会跳动。
       if (width <= 0 || swipeRef.current?.horizontal) return;
       surfaceWidthRef.current = width;
       const index = itemsRef.current.findIndex((item) =>
@@ -432,9 +404,8 @@ export function useHorizontalSwipe<T>({
       writeOffset(horizontalSwipeTrackOffset(index, width));
     };
 
-    // Observing happens even mid-gesture — `applyWidth` decides for itself
-    // whether it may move the layer — so a track bound while a finger is down
-    // is not left permanently unmeasured.
+    // 观察即使在手势中途也会发生 —— `applyWidth` 自行判断是否可以移动层 ——
+    // 因此手指按下时绑定的 track 不会被永久留在未测量状态。
     applyWidth();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(applyWidth);
@@ -443,14 +414,12 @@ export function useHorizontalSwipe<T>({
   }, [cancelSettle, disconnectTrackResize, isTrackLayout, writeOffset]);
 
   /**
-   * Attach the element that should travel. The only way in: this is a callback
-   * ref rather than a ref object precisely so that replacing the surface cannot
-   * go unnoticed.
+   * 附着应当移动的元素。这是唯一入口：特意用回调 ref 而不是 ref 对象，
+   * 正是为了替换表面不可能不被察觉。
    *
-   * Its identity changes with `layout`, so React re-invokes it — and `parkTrack`
-   * runs again — whenever either the node or the layout changes, and at no other
-   * time. A gesture commit leaves the node alone, so the settle it started is
-   * never interrupted.
+   * 它的身份随 `layout` 变化，因此节点或布局任一变化时 React 都会重新调用它 ——
+   * `parkTrack` 随之再跑 —— 且仅在这些时刻。手势提交不动节点，
+   * 它开始的收尾绝不会被中断。
    */
   const bindPage = useCallback(
     (node: HTMLElement | null) => {
@@ -458,9 +427,8 @@ export function useHorizontalSwipe<T>({
       pageRef.current = node;
       parkTrack();
       return () => {
-        // A retained exit animation (PagePan keeps the outgoing page alive) means
-        // this cleanup can run while a newer surface is already bound and
-        // observed. Only the node still in charge may tear anything down.
+        // 被保留的离场动画（PagePan 让离场页继续存活）意味着本次清理可能在更新的
+        // 表面已经绑定并被观察时运行。只有仍在负责的节点才能拆除任何东西。
         if (pageRef.current !== node) return;
         disconnectTrackResize();
         pageRef.current = null;
@@ -478,8 +446,8 @@ export function useHorizontalSwipe<T>({
     restAtValue();
   }, [clearCommitDelivery, clearCommitRollback, enabled, restAtValue]);
 
-  // Drop anything still in flight when the surface goes away, so no animation
-  // ticks against a detached node and no timer fires into an unmounted hook.
+  // 表面消失时丢弃一切仍在途的东西，
+  // 使没有动画对着已分离的节点 tick、没有计时器打进已卸载的 hook。
   useLayoutEffect(
     () => () => {
       clearCommitDelivery();
@@ -502,7 +470,7 @@ export function useHorizontalSwipe<T>({
 
   const onPointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      // Some Android WebViews report an empty pointerType for finger input.
+      // 部分 Android WebView 对手指输入上报空的 pointerType。
       const pointerType = event.pointerType as string;
       const target = event.target instanceof Element ? event.target : null;
       const nearestSwipeSurface = target?.closest(HORIZONTAL_SWIPE_SURFACE_SELECTOR);
@@ -522,8 +490,7 @@ export function useHorizontalSwipe<T>({
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        // Provisional: a settle may still be running, and the offset it has
-        // reached is only read once the gesture locks horizontal.
+        // 临时值：收尾可能仍在运行，其达到的偏移只到手势锁定为横向时才读取。
         startOffset: offsetRef.current,
         surfaceWidth: nextSurfaceWidth,
         itemIndex: currentItems.findIndex((item) => isEqualRef.current(item, valueRef.current)),
@@ -552,7 +519,7 @@ export function useHorizontalSwipe<T>({
           verticalDistance >= HORIZONTAL_SWIPE_LOCK_DISTANCE_PX &&
           verticalDistance >= horizontalDistance
         ) {
-          // Vertical list scroll owns this pointer.
+          // 纵向列表滚动拥有这个指针。
           swipeRef.current = null;
           return;
         }
@@ -565,17 +532,15 @@ export function useHorizontalSwipe<T>({
         swipe.horizontal = true;
         const el = pageRef.current;
         if (el) {
-          // Take over from a settle at the exact pixel it reached, so grabbing a
-          // page mid-transition continues from there instead of snapping.
+          // 从收尾到达的精确像素接管，使过渡中途抓住页面从那里继续而不是跳变。
           cancelSettle();
           swipe.startOffset = offsetRef.current;
-          // Only promote the layer once the gesture is known to be horizontal; a
-          // vertical scroll must never promote the whole scrolling page.
+          // 只有在确认手势为横向后才提升层；
+          // 纵向滚动绝不能提升整个滚动页面。
           el.style.willChange = "transform";
         }
         event.currentTarget.setPointerCapture(event.pointerId);
-        // Restart sampling from the lock point: the pre-lock samples describe a
-        // gesture that had not yet been recognised as paging.
+        // 从锁定点重启采样：锁定前的样本描述的是尚未被识别为翻页的手势。
         swipe.samples = [];
       }
 
@@ -592,10 +557,9 @@ export function useHorizontalSwipe<T>({
         );
         const nextOffset = swipe.startOffset + dragOffset;
         if (isTrackLayout) {
-          // Track offsets accumulate one full width per page. Clamping the
-          // absolute offset to one width would freeze every page past the
-          // second. `horizontalSwipeDragOffset` already bounds this gesture's
-          // own delta and damps it at the first and last page.
+          // track 的偏移每页累积一整个宽度。把绝对偏移钳制到一个宽度会让第二页之后的
+          // 所有页面冻住。`horizontalSwipeDragOffset` 已经限制了本手势自身的增量
+          // 并在首尾页阻尼。
           writeOffset(nextOffset);
         } else {
           const bound = width > 0 ? width : HORIZONTAL_SWIPE_MAX_DRAG_PX;
@@ -603,7 +567,7 @@ export function useHorizontalSwipe<T>({
         }
       }
 
-      // Stop children (ScrollArea, buttons) from treating this as a drag/scroll.
+      // 阻止子元素（ScrollArea、按钮）把这当作拖拽/滚动。
       event.preventDefault();
       event.stopPropagation();
     },
@@ -648,22 +612,18 @@ export function useHorizontalSwipe<T>({
         velocity,
       };
 
-      // Start the settle before telling React, and in that order. A track's
-      // pages are positioned by absolute index, so the commit moves nothing the
-      // animation cares about — while waiting for the value change first would
-      // put the whole React commit between the finger lifting and the first
-      // animated frame.
+      // 先开始收尾再通知 React，保持这个顺序。track 的页面按绝对下标定位，
+      // 提交不会移动动画关心的任何东西 —— 若反过来等取值变化先行，
+      // 整个 React 提交就会插在手指抬起与第一个动画帧之间。
       if (isTrackLayout) {
         const target = restOffsetForIndex(nextIndex);
         settle(target, horizontalSwipeSettleDuration(target - offsetRef.current, velocity));
       }
       deliverCommittedChange(next);
 
-      // Last resort for a caller that rejects the change outright, so the page
-      // is not left parked between two pages. Deliberately a timer rather than
-      // the next frame: a value delivered through a transition legitimately
-      // takes several frames, and rolling back before it lands would undo the
-      // settle that is already running.
+      // 彻底拒绝变更的调用方的最后兜底，使页面不会停在两页之间。刻意用计时器而不是
+      // 下一帧：经由过渡送达的取值合法地需要好几帧，
+      // 在它落地前回滚会撤销已经在运行的收尾。
       clearCommitRollback();
       commitRollbackTimerRef.current = window.setTimeout(() => {
         commitRollbackTimerRef.current = null;

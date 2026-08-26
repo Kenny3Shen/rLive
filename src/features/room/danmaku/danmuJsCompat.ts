@@ -15,9 +15,9 @@ type InternalInstance = DanmuJsInstance & {
 };
 
 /**
- * danmu.js 1.2.1 rejects an unbooked `prior` fixed bullet before it can select
- * a top/bottom track. Keep priority on the public comment and Bullet, but bypass
- * that broken guard only while the pinned real-time bullet enters a track.
+ * danmu.js 1.2.1 会在未预约的 `prior` 固定弹幕选择上/下车道之前就拒绝它。
+ * 公开 comment 与 Bullet 上保留优先级字段，
+ * 但仅在钉住的实时弹幕进入车道时绕过那道损坏的守卫。
  */
 export function installDanmuJsFixedPriorCompat(instance: DanmuJsInstance): () => void {
   const channel = (instance as InternalInstance).main?.channel;

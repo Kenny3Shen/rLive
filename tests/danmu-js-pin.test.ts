@@ -13,16 +13,15 @@ type FakeBullet = DanmuJsBullet & {
 };
 
 /**
- * Mirrors the parts of danmu.js 1.2.1 a pin actually touches: the single global
- * freeze slot, the render queue, and `restartComment`'s refusal to act once the
- * main loop is closed.
+ * 镜像钉住真正触碰到的 danmu.js 1.2.1 部分：唯一的全局冻结槽位、渲染队列，
+ * 以及 `restartComment` 在主循环关闭后拒绝行动的行为。
  */
 function fakeInstance(
   options: {
     mainStatus?: "idle" | "paused" | "playing" | "closed";
-    /** Whether `restartComment` manages to leave `forcedPause` on its own. */
+    /** `restartComment` 是否能靠自身离开 `forcedPause`。 */
     restartWorks?: boolean;
-    /** Whether a forced `startMove` leaves `forcedPause`. */
+    /** 强制的 `startMove` 是否能离开 `forcedPause`。 */
     forceWorks?: boolean;
   } = {},
 ) {
@@ -48,8 +47,8 @@ function fakeInstance(
       restarted.push(id);
       instance.freezeId = null;
       instance.mouseControl = false;
-      // danmu.js only marks a bullet `paused` while its main loop is paused; the
-      // next `play()` is what actually moves it again.
+      // danmu.js 只在主循环暂停时把 bullet 标记为 `paused`；
+      // 真正让它重新移动的是下一次 `play()`。
       if (mainStatus === "paused") bullet.status = "paused";
       else if (restartWorks) bullet.status = "start";
     },
@@ -112,8 +111,8 @@ describe("danmu.js pin lifecycle", () => {
   });
 
   test("reports failure when the bullet stays parked, so the caller removes it", () => {
-    // A bullet whose element is gone never leaves `paused`, and a running main
-    // loop will not come back to it.
+    // 元素已消失的 bullet 永远不会离开 `paused`，
+    // 运行中的主循环也不会再回到它身上。
     const { instance, bullet } = fakeInstance({ forceWorks: false });
 
     expect(resumeDanmuJsPin(instance, "pinned")).toBe(false);
@@ -126,7 +125,7 @@ describe("danmu.js pin lifecycle", () => {
     expect(resumeDanmuJsPin(instance, "pinned")).toBe(false);
     expect(restarted).toEqual([]);
     expect(forcedMoves).toEqual([]);
-    // The freeze slot is released even though the bullet cannot be resumed.
+    // 即使无法恢复 bullet，冻结槽位也要被释放。
     expect(instance.freezeId).toBeNull();
   });
 
@@ -161,7 +160,7 @@ describe("danmu.js pin lifecycle", () => {
   });
 
   test("stays inert on a destroyed instance", () => {
-    // `DanmuJs.destroy()` deletes every own property, methods included.
+    // `DanmuJs.destroy()` 会删除包括方法在内的所有自身属性。
     const destroyed = {} as DanmuJsInstance;
 
     expect(() => releaseDanmuJsFreezeLock(destroyed, "pinned")).not.toThrow();

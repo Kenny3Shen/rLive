@@ -1,4 +1,4 @@
-/** Pull-to-refresh thresholds tuned for phone touch targets. */
+/** 针对手机触摸目标调校的下拉刷新阈值。 */
 export const PULL_TO_REFRESH_THRESHOLD_PX = 64;
 export const PULL_TO_REFRESH_MAX_PX = 96;
 export const PULL_TO_REFRESH_DIRECTION_RATIO = 1.2;
@@ -9,14 +9,14 @@ export type PullToRefreshProgress = {
   armed: boolean;
 };
 
-/** Only start a pull when the scroll container is already at the top. */
+/** 只有滚动容器已在顶部时才开始下拉。 */
 export function canStartPullToRefresh(scrollTop: number): boolean {
   return scrollTop <= 0;
 }
 
 export function isPullToRefreshGesture(deltaX: number, deltaY: number): boolean {
-  // Finger moves down → positive deltaY in screen coords when using clientY
-  // start-to-current subtraction inverted: we pass (currentY - startY).
+  // 手指下移 → 使用 clientY 起止相减取反后在屏幕坐标中为正 deltaY：我们传
+  // (currentY - startY)。
   return (
     deltaY >= PULL_TO_REFRESH_LOCK_DISTANCE_PX &&
     deltaY > Math.abs(deltaX) * PULL_TO_REFRESH_DIRECTION_RATIO
@@ -25,7 +25,7 @@ export function isPullToRefreshGesture(deltaX: number, deltaY: number): boolean 
 
 export function pullToRefreshDistance(deltaY: number): number {
   if (deltaY <= 0) return 0;
-  // Rubber-band: full tracking for the first half of the threshold, then ease.
+  // 橡皮筋效果：阈值的前半程完全跟随，之后放缓。
   const damped =
     deltaY < PULL_TO_REFRESH_THRESHOLD_PX
       ? deltaY
@@ -37,7 +37,7 @@ export function isPullToRefreshArmed(distance: number): boolean {
   return distance >= PULL_TO_REFRESH_THRESHOLD_PX;
 }
 
-/** Resolve the nearest vertically scrollable ancestor, including the element itself. */
+/** 解析最近的纵向可滚动祖先，包括元素自身。 */
 export function findVerticalScrollParent(start: Element | null): HTMLElement | null {
   let node: Element | null = start;
   while (node) {
@@ -48,9 +48,8 @@ export function findVerticalScrollParent(start: Element | null): HTMLElement | n
         (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
         node.scrollHeight > node.clientHeight + 1;
       if (canScroll) return node;
-      // The animated page wrapper is the primary page scroller. ScrollArea
-      // viewports need the same treatment for empty/error states; otherwise a
-      // follow panel with no rows would have no pull target.
+      // 带动画的页面包装层是主页面滚动容器。ScrollArea 视口在空态/错误态也需要同样
+      // 处理；否则没有行的关注面板就没有下拉目标。
       if (node.dataset.slot === "app-page" || node.dataset.slot === "scroll-area-viewport") {
         return node;
       }

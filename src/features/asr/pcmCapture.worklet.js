@@ -36,8 +36,8 @@ class RLivePcmCaptureProcessor extends AudioWorkletProcessor {
     const input = inputs[0] ?? [];
     const output = outputs[0] ?? [];
 
-    // MediaElementAudioSourceNode reroutes playback through this node. Keep a
-    // transparent pass-through so ASR never mutes or alters live audio.
+    // MediaElementAudioSourceNode 把播放重路由经过本节点。保持透明直通，
+    // 使 ASR 绝不静音或改变直播音频。
     for (let channel = 0; channel < output.length; channel += 1) {
       const target = output[channel];
       const source = input.length > 0 ? input[Math.min(channel, input.length - 1)] : null;

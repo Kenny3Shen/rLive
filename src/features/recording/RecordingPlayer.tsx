@@ -194,8 +194,8 @@ export function RecordingPlayer({
       setError(null);
       setWaiting(true);
 
-      // The progress bar can be used before mpegts.js has attached its seek
-      // handler. Preserve that target until the protocol player is ready.
+      // 进度条可能在 mpegts.js 挂载 seek 处理器之前就被使用。
+      // 保留该目标直到协议播放器就绪。
       if (!playerRef.current && playbackKind !== "native") {
         recoverySeekRef.current = target;
         return;
@@ -255,8 +255,8 @@ export function RecordingPlayer({
     function syncTime() {
       if (cancelled) return;
       const actualTime = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
-      // Recorder metadata is authoritative. An FLV MediaSource can expose a
-      // transient duration of 0 or 1 second while its buffer is being rebuilt.
+      // 录制元数据具有权威性。FLV MediaSource 在重建缓冲期间可能短暂暴露 0 或 1 秒
+      // 的时长。
       const nextDuration = recordedDuration > 0 ? recordedDuration : finiteDuration(media);
       setCurrentTime((previousTime) =>
         clampRecordingPlaybackTime(
@@ -321,8 +321,8 @@ export function RecordingPlayer({
       setWaiting(true);
     }
     function onEnded() {
-      // A queued `ended` event can arrive after replay or seek has already
-      // cleared the media's terminal state. Ignore that stale event.
+      // 排队中的 `ended` 事件可能在重播或 seek 已经清除媒体终态之后才到达。
+      // 忽略那个过期事件。
       if (cancelled || !media.ended) return;
       const endDuration =
         recordedDuration > 0
@@ -334,8 +334,8 @@ export function RecordingPlayer({
         RECORDING_SEEK_TOLERANCE_SECONDS,
       );
       const target = seekTargetRef.current;
-      // Keep the existing seek timeout/rebuild path for a media gap reported
-      // before a non-terminal seek has reached its target.
+      // 非终态 seek 尚未到达目标时报告的媒体空洞，
+      // 继续沿用现有的 seek 超时/重建路径。
       if (
         target !== null &&
         !recordingSeekReached(
@@ -473,7 +473,7 @@ export function RecordingPlayer({
         player?.pause();
         player?.destroy();
       } catch {
-        // The protocol plugin may already have released its MediaSource.
+        // 协议插件可能已经释放了它的 MediaSource。
       }
     };
   }, [

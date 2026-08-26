@@ -1,4 +1,4 @@
-//! Tauri commands for the independent IPTV channel browser.
+//! 独立 IPTV 频道浏览器的 Tauri 命令。
 
 use tauri::State;
 

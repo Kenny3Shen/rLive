@@ -17,9 +17,9 @@ const VIEW_ICONS = {
 } as const;
 
 /**
- * The recording-library scope switcher that replaces the platform strip in the
- * application header on `/recordings`. It is a `tablist` for the same reason
- * the history switcher is: the scopes are alternative views of one page.
+ * 录制库作用域切换器，在 `/recordings` 上取代应用头部的平台条。它与历史切换器
+ * 一样是 `tablist`：
+ * 各作用域是同一个页面的不同视图。
  */
 export function RecordingViewSwitcher({
   value,
@@ -79,7 +79,7 @@ export function RecordingViewSwitcher({
   );
 }
 
-/** Opens the storage dialog the recordings page owns. */
+/** 打开录制页拥有的存储位置对话框。 */
 export function RecordingStorageButton({
   onRequestStorage,
   className,

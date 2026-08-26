@@ -91,9 +91,8 @@ export function RoomPage() {
     [],
   );
 
-  // A regular room navigation starts at chat, while a navigation initiated by
-  // FollowPanel keeps the follow picker open. This also covers a router setup
-  // that reuses RoomPage instead of remounting it for param-only changes.
+  // 普通房间导航从聊天开始，而由 FollowPanel 发起的导航保持关注选择器打开。
+  // 这也覆盖了参数变化时复用 RoomPage 而不重新挂载的路由配置。
   useEffect(() => {
     setSideTab(requestedSideTab);
   }, [location.key, requestedSideTab]);
@@ -118,9 +117,8 @@ export function RoomPage() {
     const detail = detailQuery.data;
     if (!detail) return;
     const roomKey = `${detail.site_id}\u0000${detail.room_id}`;
-    // Detail queries can refresh after reconnects or cache invalidations. A
-    // revisit should update history once, not write SQLite on every payload
-    // replacement while the same room remains open.
+    // 详情查询可能在重连或缓存失效后刷新。回访应当更新一次历史，
+    // 而不是在同一房间保持打开期间、每次负载替换都写 SQLite。
     if (recordedHistoryRoomRef.current === roomKey) return;
     recordedHistoryRoomRef.current = roomKey;
     const item: HistoryItem = {
@@ -181,8 +179,8 @@ export function RoomPage() {
             userName: detail?.user_name ?? "",
             cover: detail?.cover || detail?.user_avatar || "",
             userAvatar: detail?.user_avatar || "",
-            // `playback.playUrl` is the address this page's player is streaming,
-            // so the recording asks the site for one of its own instead.
+            // `playback.playUrl` 是本页播放器正在推流的地址，
+            // 录制因此向站点另行申请一条自己的线路。
             resolveRecordingSource:
               siteId && detail && activeQuality
                 ? () =>
@@ -197,8 +195,8 @@ export function RoomPage() {
         : null,
     [activeQuality, detail, playback.playUrl, roomId, siteId],
   );
-  // These controls belong to the room session rather than the settings tab,
-  // so title-bar and fullscreen surfaces keep the same live controller.
+  // 这些控制属于房间会话而不是设置页签，
+  // 因此标题栏与全屏表面使用同一个实时控制器。
   const autoDanmakuSend = useAutoDanmakuSend({
     siteId,
     roomId: detail?.room_id,
@@ -319,10 +317,9 @@ export function RoomPage() {
 
   if (!detail) return null;
 
-  // The fullscreen stage covers the app chrome, so the room-level actions that
-  // normally live in the top bar and the bottom action row are republished into
-  // the player's own overflow menu. Follow and multi-room answer through a
-  // dialog or a route change, which only exist outside fullscreen.
+  // 全屏舞台盖住了应用 chrome，因此通常位于顶栏和底部操作行的房间级操作被重新
+  // 发布到播放器自己的溢出菜单。关注与多房间要经对话框或路由变更应答，
+  // 而这些只存在于非全屏状态。
   const fullscreenRoomActions: readonly PlayerHudRoomAction[] = [
     {
       id: "copy-room-url",
@@ -626,7 +623,7 @@ function RoomToolPopover({
   icon: LucideIcon;
   label: string;
   wide?: boolean;
-  /** Whether the tool is currently switched on; renders the on-state icon. */
+  /** 工具当前是否开启；渲染开启状态的图标。 */
   active?: boolean;
   children: ReactNode;
 }) {
@@ -729,8 +726,8 @@ function RoomMobileActions({
         className={`max-h-[calc(100dvh-1rem)] overflow-y-auto space-y-4 ${glassSurfaceClass()}`}
       >
         <DrawerTitle>房间操作</DrawerTitle>
-        {/* Top row: link/copy actions. Bottom row: player feature toggles.
-           Both are icon-over-label tiles so touch targets stay large. */}
+        {/* 顶行：链接/复制操作。底行：播放器功能开关。
+           两者都是图标在上文字在下的磁贴，保证足够大的触摸目标。 */}
         <div className="grid grid-cols-4 gap-2">
           <Button
             type="button"

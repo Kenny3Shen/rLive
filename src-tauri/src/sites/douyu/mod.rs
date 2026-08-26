@@ -1,4 +1,4 @@
-//! Douyu live site — ported from simple_live_core `douyu_site.dart`.
+//! 斗鱼直播站点客户端。
 
 mod sign;
 
@@ -21,8 +21,8 @@ const DIRECTORY_PAGE_SIZE: usize = 20;
 
 pub struct DouyuSite {
     client: Client,
-    /// User-supplied account Cookie. It is passed to each applicable Douyu
-    /// request but never logged or persisted by this site client.
+    /// 用户提供的账号 Cookie。它会传给每个适用的斗鱼请求，
+    /// 但本站点客户端绝不记录或持久化它。
     cookie: String,
 }
 
@@ -90,12 +90,12 @@ impl DouyuSite {
     }
 
     async fn room_info(&self, room_id: &str) -> AppResult<Value> {
-        // betard API returns room dict
+        // betard API 返回房间字典
         let url = format!("https://www.douyu.com/betard/{room_id}");
         let v = self
             .get_json(&url, &format!("https://www.douyu.com/{room_id}"))
             .await?;
-        // Sometimes wrapped
+        // 有时被包了一层
         if v.get("room").is_some() || v.get("data").is_some() {
             Ok(v)
         } else {
@@ -103,8 +103,8 @@ impl DouyuSite {
         }
     }
 
-    /// Search requires Douyu's anonymous device identifiers. Preserve any
-    /// saved account values and add stable fallbacks only when they are absent.
+    /// 搜索需要斗鱼的匿名设备标识符。保留任何已保存的账号取值，
+    /// 只在缺失时补充稳定的兜底值。
     fn search_cookie(&self) -> String {
         let did = "10000000000000000000000000001501";
         merge_cookie_values(&format!("dy_did={did}; acf_did={did}"), &self.cookie)
@@ -118,9 +118,9 @@ fn normalize_cookie(value: &str) -> String {
     )
 }
 
-/// Account Cookies are scoped to Douyu's HTTPS web hosts. Keeping this
-/// explicit prevents a future call site from replaying a saved Cookie to an
-/// arbitrary URL merely because it reuses the JSON helper.
+/// 账号 Cookie 的作用域限定在斗鱼的 HTTPS Web 主机。保持显式声明，
+/// 可避免未来的调用点仅因为复用了 JSON 辅助函数，
+/// 就把保存的 Cookie 重放到任意 URL。
 fn is_douyu_cookie_url(value: &str) -> bool {
     let Ok(url) = Url::parse(value) else {
         return false;
@@ -219,16 +219,15 @@ fn parse_mix_list(v: &Value) -> AppResult<RoomListPage> {
         }
     }
     Ok(RoomListPage {
-        // The endpoint-specific caller supplies a reliable pagination policy.
+        // 接口专属的调用方自行提供可靠的分页策略。
         has_more: false,
         items,
     })
 }
 
-/// Parse the mobile recommendation API (`hgapi/live/cate/newRecList`) list.
-/// It uses flat field names (`roomName`/`nickname`/`roomSrc`) and reports an
-/// authoritative `total` for pagination; `hn` is a localized viewer label
-/// such as `101.8万` rather than a raw number.
+/// 解析移动端推荐接口（`hgapi/live/cate/newRecList`)的列表。它使用扁平的字段名
+/// （`roomName`/`nickname`/`roomSrc`），并为分页提供权威的 `total`；
+/// `hn` 是本地化的人气标签（如 `101.8万`），不是原始数字。
 fn parse_mobile_recommend_list(v: &Value, page: u32, page_size: usize) -> AppResult<RoomListPage> {
     if json_i64(v.get("error").unwrap_or(&Value::Null)) != 0 {
         return Err(AppError::new("douyu_api_error", "mobile list error")
@@ -278,8 +277,8 @@ fn parse_mobile_recommend_list(v: &Value, page: u32, page_size: usize) -> AppRes
     Ok(RoomListPage { has_more, items })
 }
 
-/// Recover an approximate viewer count from a localized label (`101.8万`,
-/// `5.6k`) that the mobile API uses in place of a raw number.
+/// 从本地化标签（`101.8万`、`5.6k`）还原近似人气值，
+/// 移动端 API 用它代替原始数字。
 fn parse_online_label(value: String) -> i64 {
     let value = value.trim();
     if let Some(num) = value.strip_suffix('万') {
@@ -291,8 +290,8 @@ fn parse_online_label(value: String) -> i64 {
     value.parse().unwrap_or(0)
 }
 
-/// Select the room object returned by Douyu's lightweight `betard` endpoint
-/// and extract only fields useful to a follow-list refresh.
+/// 选取斗鱼轻量 `betard` 接口返回的房间对象，
+/// 只提取关注列表刷新有用的字段。
 fn live_status_from_room_info(root: &Value) -> LiveRoomStatus {
     let room = root
         .get("room")
@@ -368,9 +367,9 @@ impl LiveSite for DouyuSite {
         let v = self.get_json(&url, "https://www.douyu.com/").await?;
         let mut page_data = parse_mix_list(&v)?;
         let pgcnt = json_i64(v.pointer("/data/pgcnt").unwrap_or(&Value::Null));
-        // This public endpoint currently reports `pgcnt: 0` even while it
-        // returns full 40-room pages. Fall back to its documented page size;
-        // the frontend also stops if a later page adds no new rooms.
+        // 该公开接口即使返回完整的 40 条分页，目前也上报 `pgcnt: 0`。
+        // 回退到其文档记载的分页大小；
+        // 若后续页面没有新增房间，前端也会停止翻页。
         page_data.has_more = has_more_page(page, pgcnt, page_data.items.len(), RECOMMEND_PAGE_SIZE);
         Ok(page_data)
     }
@@ -381,10 +380,9 @@ impl LiveSite for DouyuSite {
         page: u32,
     ) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        // The mobile API is the first-party app source: it returns an explicit
-        // `total`, needs only an iPhone UA, and is generally less guarded than
-        // the desktop web directory. Region-restricted networks reject it with
-        // `error: 1`; fall back to the web `mixList` endpoint in that case.
+        // 移动端 API 是第一方 App 来源：它返回明确的 `total`，只需 iPhone UA，
+        // 且通常比桌面 Web 目录的限制更少。地区受限网络会以 `error: 1` 拒绝它，
+        // 此时回退到 Web 端的 `mixList` 接口。
         let offset = (page - 1) * DIRECTORY_PAGE_SIZE as u32;
         let mobile_url = format!(
             "https://m.douyu.com/hgapi/live/cate/newRecList?offset={offset}&cate2={}&limit={DIRECTORY_PAGE_SIZE}",
@@ -479,9 +477,9 @@ impl LiveSite for DouyuSite {
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
-        // `betard` has the opening state in its first response.  Do not call
-        // h5room/homeH5Enc/getH5Play here: those endpoints exist only to
-        // resolve playback metadata for an entered room.
+        // `betard` 在第一个响应中就带有开播状态。
+        // 不要在这里调用 h5room/homeH5Enc/getH5Play：
+        // 那些接口只为进入房间后的播放元数据而存在。
         let room = self.room_info(room_id).await?;
         Ok(live_status_from_room_info(&room))
     }
@@ -490,10 +488,9 @@ impl LiveSite for DouyuSite {
         let root = self.room_info(room_id).await?;
         let room = root.get("room").cloned().unwrap_or_else(|| root.clone());
 
-        // `betard` is sufficient for playback metadata but does not reliably
-        // keep the live-session start time. The lightweight H5 room endpoint
-        // exposes `data.show_time`; treat it as optional so a transient
-        // auxiliary failure never prevents entering the room.
+        // `betard` 足以提供播放元数据，但不可靠地保留直播开始时间。
+        // 轻量的 H5 房间接口暴露 `data.show_time`；
+        // 把它视为可选，使一次辅助接口的瞬时失败绝不会阻止进入房间。
         let live_started_at = self
             .get_json(
                 &format!("https://www.douyu.com/swf_api/h5room/{room_id}"),

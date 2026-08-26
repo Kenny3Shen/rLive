@@ -7,9 +7,8 @@ import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/l
 import { getDanmakuSendConfig } from "./sending";
 
 /**
- * Shared copy / favourite / repeat behaviour for one comment. The side list and
- * the floating DOM overlay both present the same three actions, so they must
- * agree on availability rules, optimistic cache updates and status wording.
+ * 单条评论共享的复制/收藏/+1 行为。侧栏列表与悬浮 DOM 层呈现同样三个操作，
+ * 必须在可用性规则、乐观缓存更新和状态文案上保持一致。
  */
 
 export type DanmakuActionStatus =
@@ -22,18 +21,16 @@ export type DanmakuActionStatus =
   | null;
 
 /**
- * Normalise text before it enters the clipboard or a user-triggered repeat
- * request. The repeat action transmits this exact content; it does not append
- * a literal “+1”.
+ * 在文本进入剪贴板或用户触发的 +1 请求之前先归一化。+1 操作发送的就是这份
+ * 确切内容；它不会附加字面的"+1"。
  */
 export function formatDanmakuClipboardText(content: string): string {
   return content.trim();
 }
 
 /**
- * The async Clipboard API can be unavailable in older WebViews, in insecure
- * origins, or when its permission is denied. Fall back to the legacy command
- * while preserving the user's active selection and focus as much as possible.
+ * 异步 Clipboard API 在较旧 WebView、非安全源或权限被拒时可能不可用。
+ * 回退到传统命令，同时尽可能保留用户的选区与焦点。
  */
 export async function copyDanmakuText(text: string): Promise<boolean> {
   return copyText(text);
@@ -63,9 +60,9 @@ export function isDanmakuActionFailure(status: DanmakuActionStatus): boolean {
 }
 
 export type DanmakuActionsParams = {
-  /** Already-trimmed comment body. Empty disables every action. */
+  /** 已去除首尾空白的评论正文。为空时禁用全部操作。 */
   message: string;
-  /** Favourite and repeat are offered for ordinary chat only. */
+  /** 收藏与 +1 只对普通聊天提供。 */
   eventKind: DanmakuEvent["kind"];
   siteId?: SiteId;
   roomId?: string;

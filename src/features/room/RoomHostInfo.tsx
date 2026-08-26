@@ -13,7 +13,7 @@ type RoomHostInfoProps = {
   onToggleFollow?: () => void;
 };
 
-/** Compact, always-visible identity for the room host above the side tabs. */
+/** 侧页签上方的主播紧凑常驻身份标识。 */
 export function RoomHostInfo({
   detail,
   isFollowed = false,

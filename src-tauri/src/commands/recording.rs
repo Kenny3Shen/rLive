@@ -1,4 +1,4 @@
-//! Tauri commands for desktop recording and the local recording library.
+//! 桌面端录制与本地录制库的 Tauri 命令。
 
 #![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 
@@ -44,9 +44,9 @@ pub async fn recording_start(
     state: State<'_, AppState>,
     input: RecordingStartInput,
 ) -> AppResult<RecordingItem> {
-    // Register background danmaku ownership before settings lookup and storage
-    // setup, so a concurrent route cleanup cannot tear down the room connection
-    // while this start request is still preparing its session.
+    // 在查询设置和准备存储之前先登记后台弹幕的归属，
+    // 这样并发的路由清理就不会在本次启动请求仍在准备会话时
+    // 拆掉房间连接。
     let _danmaku_start_reservation = state.recording.reserve_background_danmaku_start(
         input.source_key.trim(),
         input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
@@ -65,10 +65,9 @@ pub async fn recording_stop(state: State<'_, AppState>, id: String) -> AppResult
     state.recording.stop(id.trim()).await
 }
 
-/// Flips the continue-after-leave flag of an active recording while the user
-/// is still on the room page. The leave guard calls this for its
-/// "继续录制并离开" action so the danmaku sidecar keeps collecting after the
-/// player page unmounts instead of losing the room connection.
+/// 在用户仍处于房间页时，切换进行中录制的"离开后继续"标记。离开拦截会为它的
+/// "继续录制并离开"操作调用该命令，使弹幕伴生任务在播放器页卸载后
+/// 继续收集，而不是丢掉房间连接。
 #[tauri::command]
 pub fn recording_set_continue_on_leave(
     state: State<'_, AppState>,
@@ -111,9 +110,8 @@ pub async fn recording_danmaku_url(
     state.recording.danmaku_url(id.trim()).await
 }
 
-/// Writes an ASS subtitle beside the recorded media so external players can
-/// load the recorded danmaku. Appearance, layout, and filtering use the
-/// independent recording ASS settings.
+/// 在录制的媒体文件旁写出 ASS 字幕，使外部播放器能加载录制的弹幕。
+/// 外观、排版和过滤使用独立的录制 ASS 设置。
 #[tauri::command(async)]
 pub async fn recording_danmaku_export_ass(
     state: State<'_, AppState>,

@@ -54,11 +54,11 @@ function statusBadge(user: FollowUser) {
 }
 
 /**
- * Compact follow list for the room sidebar.
+ * 房间侧栏的紧凑关注列表。
  *
- * It shares the follow page's status-refresh cadence and cache entry, so live
- * badges keep updating while a room stays open. `refreshFollows` deduplicates
- * the remote call, meaning having both views mounted never doubles the work.
+ * 它与关注页共享状态刷新节奏和缓存条目，房间保持打开时直播角标持续更新。
+ * `refreshFollows` 会对远程调用去重，
+ * 两个视图同时挂载也不会让工作量翻倍。
  */
 export const FollowPanel = memo(function FollowPanel({ className }: { className?: string }) {
   const navigate = useNavigate();
@@ -75,8 +75,7 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
-    // RoomPage already observes this query for the follow button. Reuse its
-    // short-lived cache while rooms are switched from this panel.
+    // RoomPage 已经为关注按钮订阅了这个查询。从本面板切换房间时复用其短时效缓存。
     staleTime: 15_000,
   });
 
@@ -123,8 +122,8 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
     const isCurrentRoom = user.site_id === routeSiteId && user.room_id === currentRoomId;
     if (isCurrentRoom) return;
     const roomPath = `/room/${user.site_id}/${encodeURIComponent(user.room_id)}`;
-    // Replacing avoids stacking rooms in history. The explicit target sends
-    // Back to the follow grid instead of bouncing through previous rooms.
+    // 替换而不是压栈，避免房间堆满历史。显式目标让 Back 回到关注网格，
+    // 而不是在之前的房间之间来回弹跳。
     navigate(roomPath, {
       replace: true,
       state: FOLLOW_ROOM_SWITCH_STATE,

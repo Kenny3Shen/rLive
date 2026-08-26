@@ -1,8 +1,8 @@
 /**
- * The native shell only needs a small, stable distinction: Android, iOS, or
- * a desktop-class client. Prefer User-Agent Client Hints when a WebView
- * exposes them, then retain conservative fallbacks for current Tauri mobile
- * WebViews and iPads that identify as Macintosh.
+ * 原生外壳只需要一个稳定的小区分：Android、iOS 或桌面级客户端。优先使用
+ * WebView 暴露的 User-Agent Client Hints，
+ * 再为当前 Tauri 移动 WebView 和自报为 Macintosh 的 iPad
+ * 保留保守兜底。
  */
 export type ClientPlatform = "android" | "ios" | "desktop";
 
@@ -46,7 +46,7 @@ export function isMobileClient(
   return getClientPlatform(navigatorRef) !== "desktop";
 }
 
-/** Multi-room playback is intentionally limited to desktop-class clients. */
+/** 多视图播放刻意限定在桌面级客户端。 */
 export function supportsMultiRoom(
   navigatorRef: ClientNavigator | null | undefined = browserNavigator(),
 ): boolean {

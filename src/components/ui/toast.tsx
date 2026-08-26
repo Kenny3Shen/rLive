@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils";
 export type ToastType = "success" | "error" | "info";
 
 /**
- * A single app-level manager keeps command feedback available to mutations
- * initiated from any route, including context menus and portalled controls.
+ * 唯一的应用级管理器，使命令反馈对所有路由发起的变更可用，
+ * 包括上下文菜单和经过 portal 的控件。
  */
 export const toast = ToastPrimitive.createToastManager();
 
@@ -18,17 +18,16 @@ type ToastPortalStore = {
 };
 
 /**
- * A fullscreen surface owns the browser top layer (and outranks the app chrome
- * even on the desktop native-window path), so the default `<body>` portal is
- * painted underneath it and command feedback disappears silently. Whichever
- * surface is currently fullscreen publishes itself here; the viewport follows.
+ * 全屏表面拥有浏览器 top layer（即使在桌面原生窗口路径上也高于应用 chrome），
+ * 默认的 `<body>` portal 会被画在它下面，命令反馈就静默消失了。
+ * 当前处于全屏的表面把自己发布到这里；viewport 随之跟随。
  */
 const useToastPortalStore = create<ToastPortalStore>((set) => ({
   container: null,
   setContainer: (container) => set({ container }),
 }));
 
-/** Route toasts into a fullscreen surface; pass `null` to restore `<body>`. */
+/** 把 toast 路由进全屏表面；传 `null` 恢复 `<body>`。 */
 export function setToastPortalContainer(container: HTMLElement | null): void {
   useToastPortalStore.getState().setContainer(container);
 }
@@ -73,12 +72,11 @@ export function Toaster({ children }: { children: React.ReactNode }) {
   return (
     <ToastPrimitive.Provider toastManager={toast} limit={3} timeout={4_000}>
       {children}
-      {/* Base UI treats an explicit `null` container as "not yet resolved" and
-         never creates the portal node, so omit the prop entirely to fall back
-         to `<body>` while a fullscreen surface still overrides it. */}
+      {/* Base UI 把显式的 `null` 容器视为"尚未解析"，从不创建 portal 节点，因此完全
+         省略该属性即可回退到 `<body>`，同时仍允许全屏表面覆盖它。 */}
       <ToastPrimitive.Portal container={container ?? undefined}>
-        {/* Inside a fullscreen player the bottom edge belongs to the control
-           bar, so lift the stack clear of it instead of stacking on top. */}
+        {/* 在全屏播放器内部，底边属于控制栏，
+           因此把整组 toast 抬离它，而不是叠在上面。 */}
         <ToastPrimitive.Viewport
           data-fullscreen={container ? "true" : undefined}
           className="pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto flex w-auto max-w-sm flex-col gap-2 outline-none data-[fullscreen=true]:bottom-24 sm:right-4 sm:left-auto sm:mx-0 sm:w-full"

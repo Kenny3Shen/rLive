@@ -1,16 +1,14 @@
-//! Local streaming ASR model lifecycle and transcription service (sherpa-onnx).
+//! 本地流式 ASR 模型生命周期与转写服务（sherpa-onnx）。
 //!
-//! The model is deliberately neither downloaded nor loaded at application
-//! startup. A user must opt in through Settings before `enable` starts its
-//! background task. Audio is supplied by the web player as 16 kHz mono f32 PCM.
+//! 模型刻意不在应用启动时下载或加载。用户必须在设置中主动开启，
+//! `enable` 才会启动后台任务。音频由 Web 播放器以 16 kHz 单声道
+//! f32 PCM 提供。
 //!
-//! This uses a streaming zipformer transducer through `OnlineRecognizer`. One
-//! long-lived stream accumulates state across IPC windows, so every window
-//! returns the evolving hypothesis for the current utterance plus any
-//! utterances that endpointing just finalized. Silero VAD is not needed:
-//! endpoint rules already decide where an utterance ends. When optional speaker
-//! differentiation is enabled, each finalized utterance is classified from its
-//! cached PCM with a CAMPPlus speaker embedding model.
+//! 这里通过 `OnlineRecognizer` 使用流式 zipformer transducer。一条长期存活的
+//! stream 跨 IPC 窗口累积状态，因此每个窗口都会返回当前语句不断演进的假设，
+//! 以及端点检测刚刚定稿的语句。不需要 Silero VAD：端点规则已经决定语句在哪里
+//! 结束。启用可选的说话人区分时，每条定稿语句都会用缓存的 PCM 经 CAMPPlus
+//! 说话人嵌入模型分类。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -68,8 +66,7 @@ const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
 #[cfg(any(windows, test))]
 const ASR_PROVIDER_CUDA: &str = "cuda";
-// The Windows v1.13.4 CUDA archive supports Pascal (sm_61) and newer NVIDIA
-// architectures.
+// Windows 版 v1.13.4 CUDA 压缩包支持 Pascal（sm_61）及更新的 NVIDIA 架构。
 #[cfg(windows)]
 const CUDA_MIN_COMPUTE_CAPABILITY: (i32, i32) = (6, 1);
 
@@ -89,10 +86,10 @@ const SPEAKER_MIN_UTTERANCE_SAMPLES: usize = 9_600;
 const MAX_SPEAKER_CLUSTERS: usize = 8;
 const SPEAKER_CENTROID_HISTORY: u32 = 8;
 
-// Endpoint rules. `OnlineRecognizerConfig::default()` leaves these at 0.0,
-// which disables endpointing entirely, so they must be set explicitly.
-// rule1 fires on trailing silence with no decoded text, rule2 on trailing
-// silence after text, rule3 on a maximum utterance length.
+// 端点规则。`OnlineRecognizerConfig::default()` 会把它们留在 0.0，
+// 这会完全关闭端点检测，因此必须显式设置。
+// rule1 在尾部静音且未解码出文本时触发，rule2 在有文本后的尾部静音时触发，
+// rule3 在语句达到最大长度时触发。
 const ENDPOINT_RULE1_MIN_TRAILING_SILENCE: f32 = 2.4;
 const ENDPOINT_RULE2_MIN_TRAILING_SILENCE: f32 = 0.8;
 const ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH: f32 = 20.0;
@@ -126,8 +123,7 @@ pub struct AsrModelStatus {
     pub speaker_model_downloaded: bool,
     pub speaker_model_size_bytes: u64,
     pub threads: i32,
-    /// Provider used by the loaded ASR, punctuation and speaker models:
-    /// `cpu` or `cuda`.
+    /// 已加载的 ASR、标点和说话人模型所使用的 provider：`cpu` 或 `cuda`。
     pub provider: String,
     pub message: Option<String>,
 }
@@ -159,8 +155,8 @@ impl AsrModelStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRuntimeOptions {
-    /// `auto` selects CUDA on Windows when the staged runtime and NVIDIA driver
-    /// are loadable; Linux and macOS always use CPU.
+    /// `auto` 在 Windows 上当暂存的运行时与 NVIDIA 驱动可加载时选择 CUDA；
+    /// Linux 与 macOS 始终使用 CPU。
     pub provider: String,
     pub vad_enabled: bool,
     pub punctuation_enabled: bool,
@@ -188,16 +184,16 @@ pub struct AsrCaptionSegment {
     pub speaker_id: Option<u32>,
 }
 
-/// One window's worth of streaming output: utterances that endpointing just
-/// finalized, plus the still-evolving hypothesis for the current utterance.
+/// 一个窗口产生的流式输出：端点检测刚刚定稿的语句，
+/// 以及当前语句仍在演进的假设。
 #[derive(Debug, Clone, Serialize)]
 pub struct AsrTranscribeResult {
     pub segments: Vec<AsrCaptionSegment>,
     pub partial: Option<String>,
 }
 
-/// Paths to every asset the recognizer needs. Kept together so readiness is a
-/// single check rather than four independent ones scattered across the file.
+/// 识别器所需的全部资源路径。放在一起是为了让"是否就绪"成为一次检查，
+/// 而不是散落在文件各处的四次独立检查。
 #[derive(Clone)]
 struct ModelAssets {
     root: PathBuf,
@@ -230,10 +226,9 @@ impl ModelAssets {
         }
     }
 
-    /// Every recognizer asset and the token table must be a non-empty file.
-    /// The archive carries no per-file manifest, so presence plus
-    /// non-emptiness is the strongest cheap check available; a corrupt graph
-    /// surfaces at load.
+    /// 每个识别器资源文件和 token 表都必须是非空文件。压缩包没有逐文件的
+    /// 清单，因此"存在且非空"是能以低成本做到的最强校验；
+    /// 图结构损坏会在加载时暴露。
     fn is_complete(&self, punctuation_enabled: bool) -> bool {
         self.recognizer_is_complete() && (!punctuation_enabled || self.punctuation_is_complete())
     }
@@ -318,10 +313,9 @@ impl SpeakerClusters {
             && score >= SPEAKER_MATCH_THRESHOLD
         {
             let candidate_id = index as u32 + 1;
-            // Keep the previous label when an embedding is near the cluster
-            // boundary. A second, clearly separated voice can still switch
-            // immediately, while noisy short endpoints no longer make the
-            // visible number oscillate between two speakers.
+            // 当嵌入向量接近聚类边界时保留上一次的标签。第二个明显区分开的声音
+            // 仍可立即切换，而带噪的短端点不再让界面上的编号
+            // 在两个说话人之间来回跳动。
             let selected_id = self
                 .last_assignment
                 .filter(|previous| *previous != candidate_id && score < SPEAKER_SWITCH_THRESHOLD)
@@ -402,25 +396,23 @@ impl NativeSpeakerSession {
     }
 }
 
-/// Owns the recognizer plus the single long-lived stream that carries decoder
-/// state across IPC windows.
+/// 持有识别器，以及那条跨 IPC 窗口携带解码器状态的长期 stream。
 ///
-/// A streaming transducer only produces incremental text if one stream is fed
-/// continuously, so the stream is created once at load and reset only at an
-/// endpoint or when the player switches sources.
+/// 流式 transducer 只有在持续喂入同一条 stream 时才会产出增量文本，
+/// 因此 stream 在加载时创建一次，仅在端点处或播放器切换源时重置。
 struct NativeAsrSession {
     recognizer: OnlineRecognizer,
     stream: OnlineStream,
     provider: String,
     punctuation: Option<OfflinePunctuation>,
     speaker: Option<NativeSpeakerSession>,
-    /// Total samples accepted since the last reset, used to place captions on a
-    /// timeline relative to the start of the current stream.
+    /// 自上次重置以来累计接收的采样数，用于把字幕放到相对于
+    /// 当前 stream 起点的时间轴上。
     accepted_samples: u64,
-    /// Sample position where the current utterance began.
+    /// 当前语句开始时的采样位置。
     utterance_start_samples: u64,
-    /// PCM since the last endpoint. It is bounded by endpoint rule 3 and is
-    /// consumed only after a final sentence exists.
+    /// 自上个端点以来的 PCM。其长度受端点规则 3 约束，
+    /// 且只有在出现定稿句子后才会被消费。
     utterance_pcm: Vec<f32>,
 }
 
@@ -441,18 +433,16 @@ impl NativeAsrSession {
         config.model_config.num_threads = threads;
         config.model_config.debug = false;
         config.model_config.provider = Some(provider.to_string());
-        // Contextual hotwords are supported by sherpa-onnx only in modified
-        // beam search. Keep the cheaper greedy path when no local domain terms
-        // are configured, and use a small beam when they are present.
+        // sherpa-onnx 仅在 modified beam search 下支持上下文热词。未配置本地领域词
+        // 时保持更省资源的 greedy 路径，配置了热词时使用较小的 beam。
         config.decoding_method = Some(if options.hotwords.is_empty() {
             "greedy_search".to_string()
         } else {
             config.max_active_paths = 4;
             "modified_beam_search".to_string()
         });
-        // The wrapper defaults endpointing itself to disabled. The C API treats
-        // a zero rule value as "use the native default", so VAD-off uses an
-        // intentionally unreachable silence duration while preserving rule 3.
+        // 封装库本身默认关闭端点检测。C API 把规则值 0 视为"使用原生默认值"，
+        // 因此关闭 VAD 时使用一个刻意不可能达到的静音时长，同时保留规则 3。
         config.enable_endpoint = true;
         config.rule1_min_trailing_silence = if options.vad_enabled {
             ENDPOINT_RULE1_MIN_TRAILING_SILENCE
@@ -466,10 +456,9 @@ impl NativeAsrSession {
         };
         config.rule3_min_utterance_length = ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH;
         if !options.hotwords.is_empty() {
-            // This bilingual model uses CJK characters plus SentencePiece BPE
-            // pieces for Latin text. Without the BPE vocabulary, an English
-            // hotword such as "ft" is treated as one CJK token and sherpa-onnx
-            // logs an OOV warning.
+            // 这个双语模型对中文使用 CJK 字符，对拉丁文本使用 SentencePiece BPE
+            // 片段。缺少 BPE 词表时，像 "ft" 这样的英文热词会被当成一个 CJK token，
+            // sherpa-onnx 会输出 OOV 警告。
             config.model_config.modeling_unit = Some("cjkchar+bpe".to_string());
             config.model_config.bpe_vocab = Some(ModelAssets::as_string(&assets.bpe_vocab));
             config.hotwords_file = Some(ModelAssets::as_string(&assets.hotwords));
@@ -517,8 +506,7 @@ impl NativeAsrSession {
         })
     }
 
-    /// Drop decoder state so a new playback session never continues the
-    /// previous stream's utterance.
+    /// 丢弃解码器状态，使新的播放会话绝不会延续上一条 stream 的语句。
     fn reset_stream(&mut self) {
         self.recognizer.reset(&self.stream);
         self.accepted_samples = 0;
@@ -529,10 +517,10 @@ impl NativeAsrSession {
         }
     }
 
-    /// Feed one window and drain whatever the recognizer can decode from it.
+    /// 喂入一个窗口，并取出识别器能从中解码出的全部内容。
     ///
-    /// Returns any utterance finalized by endpointing during this window along
-    /// with the current hypothesis, which the UI renders as provisional text.
+    /// 返回本窗口内被端点检测定稿的语句，以及当前的假设文本，
+    /// 后者由 UI 作为临时文本渲染。
     fn transcribe(&mut self, pcm: &[f32]) -> Result<AsrTranscribeResult, String> {
         if pcm.is_empty() {
             return Ok(AsrTranscribeResult {
@@ -546,8 +534,8 @@ impl NativeAsrSession {
         self.utterance_pcm.extend_from_slice(pcm);
 
         let mut segments = Vec::new();
-        // Decode everything currently buffered. A single window can cross an
-        // endpoint, so the boundary check happens inside the loop.
+        // 解码当前缓冲的全部内容。单个窗口可能跨越端点，
+        // 因此边界判断放在循环内部。
         while self.recognizer.is_ready(&self.stream) {
             self.recognizer.decode(&self.stream);
 
@@ -798,8 +786,8 @@ impl AsrManager {
                 .session
                 .lock()
                 .map_err(|_| AppError::new("asr_session_lock", "语音字幕模型暂不可用"))?;
-            // Dropping the session releases the model's resident memory while
-            // leaving verified on-disk assets available for the next enable.
+            // 销毁会话会释放模型占用的常驻内存，
+            // 同时保留已校验的磁盘资源供下次启用使用。
             *session = None;
             Ok::<(), AppError>(())
         })
@@ -817,9 +805,8 @@ impl AsrManager {
         self.status()
     }
 
-    /// Drop buffered detector audio without unloading the model. Called when
-    /// the player switches rooms or streams so captions never splice audio
-    /// from two different sessions into one segment.
+    /// 丢弃检测器缓冲的音频但不卸载模型。播放器切换房间或线路时调用，
+    /// 使字幕绝不会把两个不同会话的音频拼进同一段。
     pub fn reset_stream(&self) -> AppResult<()> {
         let mut session = self
             .inner
@@ -1090,7 +1077,7 @@ impl AsrManager {
     ) -> AppResult<bool> {
         let archive_path = self.inner.model_dir.join(archive_name);
         remove_file_if_present(&archive_path).await?;
-        // Never mix files from an interrupted extraction with a fresh archive.
+        // 绝不把中断的解压残留文件与新压缩包的内容混在一起。
         remove_dir_if_present(extracted_root).await?;
 
         let result = self
@@ -1481,7 +1468,7 @@ impl AsrManager {
     }
 }
 
-/// Decode bounded little-endian f32 PCM transported over Tauri IPC.
+/// 解码经 Tauri IPC 传输的、长度受限的小端 f32 PCM。
 pub fn decode_base64_pcm(encoded: &str) -> AppResult<Vec<f32>> {
     use base64::Engine;
 
@@ -1691,8 +1678,8 @@ fn cuda_runtime_available() -> bool {
         return false;
     }
 
-    // The on-demand runtime is staged under the user data directory, which is
-    // where `AsrManager` downloads and loads it from.
+    // 按需运行时被暂存到用户数据目录下，`AsrManager` 也正是从那里
+    // 下载并加载它。
     let runtime_dir = crate::app_paths::application_data_root()
         .map(|directory| directory.join(WINDOWS_RUNTIME_DIR_NAME));
     let provider_is_staged = runtime_dir.as_ref().is_some_and(|directory| {
@@ -1720,9 +1707,8 @@ fn cuda_runtime_available() -> bool {
             .any(|candidate| unsafe { Library::new(candidate).is_ok() })
     }
 
-    // CUDA provider DLLs are initialized by ONNX Runtime and cannot be
-    // probed with LoadLibrary in isolation. Validate the staged provider
-    // files and the independently loadable driver/runtime dependencies.
+    // CUDA provider 的 DLL 由 ONNX Runtime 初始化，无法单独用 LoadLibrary 探测。
+    // 这里校验已暂存的 provider 文件，以及可独立加载的驱动/运行时依赖。
     [
         "nvcuda.dll",
         "cublasLt64_11.dll",
@@ -1827,8 +1813,8 @@ fn asr_download_client(proxy: Option<&str>) -> AppResult<reqwest::Client> {
         reqwest::Client::builder()
             .use_native_tls()
             .connect_timeout(Duration::from_secs(15))
-            // Reqwest has no total timeout by default. A per-read timeout still
-            // catches stalled links during the roughly 550 MiB model transfer.
+            // Reqwest 默认没有总超时。在约 550 MiB 的模型传输过程中，
+            // 按读取设置的超时仍能捕捉到卡死的连接。
             .read_timeout(Duration::from_secs(60))
             .user_agent("rLive ASR model downloader"),
         proxy,
@@ -1868,8 +1854,8 @@ mod tests {
     #[test]
     fn decodes_little_endian_pcm() {
         let input = base64::engine::general_purpose::STANDARD.encode([
-            0_u8, 0, 128, 63, // 1.0f32 LE
-            0, 0, 0, 191, // -0.5f32 LE
+            0_u8, 0, 128, 63, // 1.0f32 小端
+            0, 0, 0, 191, // -0.5f32 小端
         ]);
         assert_eq!(decode_base64_pcm(&input).unwrap(), vec![1.0, -0.5]);
     }

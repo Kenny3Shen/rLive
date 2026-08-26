@@ -23,9 +23,8 @@ type RecordingPlaybackSettingsProps = {
 };
 
 /**
- * Settings mounted in the shared player menu for local VOD playback.
- * Danmaku fields deliberately reuse the room settings fields so a recording
- * responds to the same preferences as a live room immediately.
+ * 挂载在共享播放器菜单中、用于本地 VOD 回放的设置项。弹幕字段刻意复用房间
+ * 设置字段，使录制立即响应与直播间相同的偏好。
  */
 export function RecordingPlaybackSettings({
   playbackRate,

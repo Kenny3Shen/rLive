@@ -11,8 +11,7 @@ pub struct HistoryRecord {
     pub room_id: String,
     pub title: String,
     pub user_name: String,
-    /// Room cover captured when the room was opened. Empty for platforms
-    /// without a cover.
+    /// 打开房间时捕获的封面。无封面的平台为空。
     pub cover: String,
     pub watched_at: i64,
 }
@@ -71,9 +70,9 @@ pub fn list_for_site(conn: &Connection, site_id: &str) -> AppResult<Vec<HistoryR
     Ok(out)
 }
 
-/// Best-effort room identity from local watch history. Returns `None` when the
-/// room was never recorded, so callers can fall back to the metadata supplied
-/// by the active player or show the room id alone.
+/// 基于本地观看历史尽力还原房间身份。房间从未被记录时返回 `None`，
+/// 调用方可回退到活动播放器提供的元数据，
+/// 或仅展示房间号。
 pub fn metadata_for_room(
     conn: &Connection,
     site_id: &str,
@@ -88,7 +87,7 @@ pub fn metadata_for_room(
     .map_err(map_db_err)
 }
 
-/// Replace row for (site_id, room_id) and keep the latest `watched_at`.
+/// 替换 (site_id, room_id) 对应行并保留最新的 `watched_at`。
 pub fn upsert(conn: &Connection, record: HistoryRecord) -> AppResult<()> {
     conn.execute(
         "INSERT INTO history (site_id, room_id, title, user_name, cover, watched_at)
@@ -119,8 +118,8 @@ pub fn clear(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-/// Delete one room's local watch record. History is unique per site/room, so
-/// the current timestamp is intentionally not part of the command contract.
+/// 删除某房间的本地观看记录。历史按站点/房间唯一，
+/// 因此当前时间戳刻意不属于命令契约的一部分。
 pub fn remove(conn: &Connection, site_id: &str, room_id: &str) -> AppResult<()> {
     conn.execute(
         "DELETE FROM history WHERE site_id = ?1 AND room_id = ?2",
@@ -172,7 +171,7 @@ mod tests {
             Some(("t2".into(), "u2".into()))
         );
 
-        // older watched_at must not clobber newer
+        // 较早的 watched_at 不得覆盖较新的值
         upsert(
             &conn,
             HistoryRecord {

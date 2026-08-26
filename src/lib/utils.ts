@@ -26,32 +26,28 @@ export function formatByteSize(bytes: number): string {
 }
 
 /**
- * Make remote avatar URLs safe for WebView loading.
+ * 让远程头像地址对 WebView 加载安全。
  *
- * Live APIs often return protocol-relative image addresses (`//…`). Those work
- * on a normal https webpage, but resolve against Tauri's custom page protocol
- * in the desktop app. Upgrading plain http URLs also avoids mixed-content
- * failures in the WebView.
+ * 直播 API 常返回协议相对图片地址（`//…`）。它们在普通 https 网页上可用，
+ * 但在桌面应用里会相对 Tauri 自定义页面协议解析。升级纯 http 地址也避免了
+ * WebView 的混合内容失败。
  *
- * Hotlink-protected CDN hosts (Bilibili / Douyu / Huya / Douyin / Twitch) are
- * additionally routed through the localhost image proxy, which attaches the
- * platform Referer the WebView cannot send. URLs that predate the proxy's
- * startup or belong to unknown hosts are returned untouched.
+ * 有防盗链的 CDN 主机（Bilibili / 斗鱼 / 虎牙 / 抖音 / Twitch）额外经本机图片代理
+ * 路由，由其附加 WebView 无法发送的平台 Referer。代理启动之前的地址或未知主机的
+ * 地址原样返回。
  *
- * Use this for avatars and other artwork that keeps one URL across sessions.
- * Live room covers belong to `normalizeCoverUrl`.
+ * 用于头像和其他跨会话保持同一地址的图片素材。
+ * 直播房间封面属于 `normalizeCoverUrl`。
  */
 export function normalizeImageUrl(value: string | null | undefined): string | undefined {
   return normalizeRemoteImage(value);
 }
 
 /**
- * `normalizeImageUrl` for live room covers, which are excluded from the disk
- * cache. Cover artwork is either re-minted per capture (Huya bakes a
- * second-precision timestamp into the filename, Douyu does the same in
- * `asrpic`) or served from a stable URL whose content rotates every few minutes
- * (Twitch `previews-ttv`). Caching the first kind fills the budget with entries
- * that are never read again; caching the second kind shows a frozen preview.
+ * `normalizeImageUrl` 的封面版本，封面被排除在磁盘缓存之外。封面素材要么每次采集
+ * 重新生成（虎牙把秒级时间戳写进文件名，斗鱼的 `asrpic` 同理），
+ * 要么来自内容每几分钟轮换的稳定 URL（Twitch `previews-ttv`）。缓存前者会用永不
+ * 再读的条目填满预算；缓存后者则显示冻结的预览。
  */
 export function normalizeCoverUrl(value: string | null | undefined): string | undefined {
   return normalizeRemoteImage(value, { cache: false });

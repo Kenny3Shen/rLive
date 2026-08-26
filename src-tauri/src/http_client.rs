@@ -1,4 +1,4 @@
-//! Shared HTTP client builder for live-site backends.
+//! 直播站点后端共享的 HTTP 客户端构建器。
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -9,11 +9,11 @@ use crate::error::{AppError, AppResult};
 
 static DEFAULT_CLIENT: OnceLock<Client> = OnceLock::new();
 
-/// Apply the user-selected HTTP(S) proxy to a client builder.
+/// 把用户选择的 HTTP(S) 代理应用到客户端构建器上。
 ///
-/// Keeping this in one place is important because live-site metadata and the
-/// localhost media relay use different timeout policies, but both must take
-/// the same route to a region-restricted service such as Twitch.
+/// 集中在一处很重要：直播站点元数据请求与本机媒体中继采用不同的超时策略，
+/// 但访问 Twitch 这类有地区限制的服务时，
+/// 两者必须走同一条路由。
 pub(crate) fn with_proxy(
     mut builder: ClientBuilder,
     proxy: Option<&str>,
@@ -27,7 +27,7 @@ pub(crate) fn with_proxy(
     Ok(builder)
 }
 
-/// Shared client policy with native-tls, compression, and an optional HTTP proxy.
+/// 共享客户端策略：native-tls、压缩，以及可选的 HTTP 代理。
 fn client_builder(proxy: Option<&str>) -> AppResult<ClientBuilder> {
     let builder = Client::builder()
         .use_native_tls()
@@ -41,18 +41,17 @@ fn client_builder(proxy: Option<&str>) -> AppResult<ClientBuilder> {
     with_proxy(builder, proxy)
 }
 
-/// Build a reqwest client with native-tls, gzip/brotli, and optional HTTP proxy.
+/// 构建带 native-tls、gzip/brotli 与可选 HTTP 代理的 reqwest 客户端。
 pub fn build_client(proxy: Option<&str>) -> AppResult<Client> {
     client_builder(proxy)?
         .build()
         .map_err(|_| AppError::new("http_client_build", "网络客户端初始化失败"))
 }
 
-/// Select the shared direct client or a fresh client bound to a saved proxy.
+/// 在共享直连客户端与绑定已保存代理的新客户端之间做选择。
 ///
-/// A reqwest client contains its own proxy policy, so a proxy-enabled request
-/// must never reuse the process-wide direct client. Empty values deliberately
-/// retain the direct client's connection pool.
+/// reqwest 客户端自带代理策略，因此启用代理的请求绝不能复用进程级
+/// 直连客户端。空取值刻意保留直连客户端的连接池。
 pub fn client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
     let proxy = proxy.map(str::trim).filter(|value| !value.is_empty());
     match proxy {
@@ -61,12 +60,12 @@ pub fn client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
     }
 }
 
-/// Build the raw HTTP/1.1 client used by long-running live-stream recordings.
+/// 构建长时间运行的直播录制所用的原始 HTTP/1.1 客户端。
 ///
-/// Unlike API requests, a healthy live response can remain open indefinitely,
-/// so this client deliberately has no total request timeout. Automatic content
-/// decoding is disabled as well: media bytes must be written exactly as the CDN
-/// sends them, even when a CDN incorrectly attaches a Content-Encoding header.
+/// 与 API 请求不同，健康的直播响应可以无限期保持打开，
+/// 因此该客户端刻意不设总超时。自动内容解码同样关闭：
+/// 媒体字节必须按 CDN 发送的原样写入，
+/// 即使 CDN 错误地附加了 Content-Encoding 头。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub fn recording_stream_client_for_proxy(proxy: Option<&str>) -> AppResult<Client> {
     with_proxy(
@@ -85,8 +84,8 @@ pub fn recording_stream_client_for_proxy(proxy: Option<&str>) -> AppResult<Clien
     .map_err(|_| AppError::new("http_client_build", "录制网络客户端初始化失败"))
 }
 
-/// Build a client for requests that carry a secret and must not follow a
-/// server-selected destination (for example a Cookie-bearing signer request).
+/// 用于携带机密且绝不跟随服务端选定目标的请求
+/// （例如带 Cookie 的签名请求）的客户端。
 pub fn build_no_redirect_client(proxy: Option<&str>) -> AppResult<Client> {
     client_builder(proxy)?
         .redirect(reqwest::redirect::Policy::none())
@@ -94,7 +93,7 @@ pub fn build_no_redirect_client(proxy: Option<&str>) -> AppResult<Client> {
         .map_err(|_| AppError::new("http_client_build", "网络客户端初始化失败"))
 }
 
-/// Shared default client (no proxy). Cheap to clone (internally Arc).
+/// 共享默认客户端（无代理）。克隆开销低（内部为 Arc）。
 pub fn default_client() -> Client {
     DEFAULT_CLIENT
         .get_or_init(|| {
@@ -151,8 +150,8 @@ mod tests {
             let mut request = [0_u8; 2048];
             let length = stream.read(&mut request).unwrap();
             let request = String::from_utf8_lossy(&request[..length]);
-            // HTTP proxies receive an absolute URL. If the client had made a
-            // direct request, this loopback listener would never see it.
+            // HTTP 代理收到的是绝对 URL。如果客户端发起的是直连请求，
+            // 这个回环监听器将永远看不到它。
             assert!(request.starts_with("GET http://twitch.invalid/gql HTTP/1.1"));
             stream
                 .write_all(

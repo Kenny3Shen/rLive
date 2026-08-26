@@ -37,7 +37,7 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-/** Publish page-owned actions for controls rendered by the parent Shell. */
+/** 发布页面自有操作，供父级 Shell 渲染的控件使用。 */
 export function useRecordingHeaderState(state: RecordingHeaderState) {
   const ownerRef = useRef<symbol | undefined>(undefined);
   if (!ownerRef.current) ownerRef.current = Symbol("recording-header");
@@ -52,7 +52,7 @@ export function useRecordingHeaderState(state: RecordingHeaderState) {
   }, []);
 }
 
-/** Subscribe from Shell without coupling it to the lazy recordings page module. */
+/** 由 Shell 订阅，同时不与懒加载的录制页模块耦合。 */
 export function useRecordingHeaderSnapshot(): RecordingHeaderState {
   return useSyncExternalStore(
     subscribe,

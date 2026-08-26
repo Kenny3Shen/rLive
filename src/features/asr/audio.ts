@@ -241,8 +241,8 @@ class AudioCapturePipeline {
     const output = event.outputBuffer;
     const inputChannels = input.numberOfChannels;
 
-    // A MediaElementAudioSourceNode reroutes playback through this graph. Copy
-    // every channel so enabling ASR never changes or silences the live audio.
+    // MediaElementAudioSourceNode 会把播放重路由经过本图。复制所有声道，
+    // 确保启用 ASR 永远不会改变或静音直播音频。
     for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
       const target = output.getChannelData(channel);
       if (inputChannels === 0) {
@@ -335,8 +335,8 @@ async function createAudioCapturePipeline(video: HTMLVideoElement): Promise<Audi
         }),
       };
     } catch {
-      // Older or policy-restricted WebViews can expose AudioWorklet but fail
-      // to load its module. Preserve local captions through the legacy path.
+      // 较旧或受策略限制的 WebView 可能暴露 AudioWorklet 却加载不了其模块。
+      // 通过传统路径保留本地字幕。
     }
   }
 

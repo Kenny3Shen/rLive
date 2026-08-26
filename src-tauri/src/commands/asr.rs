@@ -9,8 +9,8 @@ pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
     state.asr.status()
 }
 
-/// Start an idempotent background download/load operation. The command returns
-/// immediately so selecting the setting never blocks the UI thread.
+/// 启动幂等的后台下载/加载操作。命令立即返回，
+/// 因此选择该设置绝不会阻塞 UI 线程。
 #[tauri::command]
 pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
     let (proxy, options) = {
@@ -38,9 +38,8 @@ pub async fn asr_disable(state: State<'_, AppState>) -> AppResult<AsrModelStatus
     state.asr.disable().await
 }
 
-/// Drop streaming decoder state without unloading the model. The player calls
-/// this when switching rooms or streams so one caption never continues an
-/// utterance that belongs to a previous session.
+/// 丢弃流式解码器状态但不卸载模型。播放器切换房间或线路时调用，
+/// 使一条字幕绝不会延续属于上一个会话的语句。
 #[tauri::command]
 pub fn asr_reset_stream(state: State<'_, AppState>) -> AppResult<()> {
     state.asr.reset_stream()

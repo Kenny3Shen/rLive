@@ -3,19 +3,18 @@ import { useEffect } from "react";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { supportsAndroidNativePlayerControls } from "./androidPlayerControls";
 
-/** Orientation lock requested from the Android Activity. */
+/** 向 Android Activity 请求的方向锁。 */
 export type PlayerOrientation = "landscape" | "portrait" | "auto";
 
 type NativeOrientationInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**
- * Orientation lock for a video, decided from the stream's real aspect ratio.
+ * 根据流的实际宽高比决定视频的方向锁。
  *
- * The Android WebView reports a `requestedOrientation` hint when a page enters
- * fullscreen, but rLive ignores it: many rooms stream portrait video and
- * honouring the hint turns those on their side. Deciding from the decoded frame
- * size instead auto-rotates 16:9 streams while leaving vertical ones upright.
- * An unknown ratio releases the lock rather than guessing.
+ * Android WebView 在页面进入全屏时会上报 `requestedOrientation` 提示，
+ * 但 rLive 忽略它：很多房间直播竖屏视频，
+ * 遵循提示会把它们横过来。改为从解码后的帧尺寸判断，
+ * 16:9 的流自动旋转而竖屏流保持直立。未知比例时释放锁而不去猜。
  */
 export function fullscreenPlayerOrientation(
   fullscreen: boolean,
@@ -26,7 +25,7 @@ export function fullscreenPlayerOrientation(
   return aspectRatio > 1 ? "landscape" : "auto";
 }
 
-/** Aspect ratio of the decoded stream, or null before metadata arrives. */
+/** 解码后流的宽高比；元数据到达前为 null。 */
 export function videoAspectRatio(
   video: { videoWidth?: number; videoHeight?: number } | null | undefined,
 ): number | null {
@@ -43,7 +42,7 @@ function runningOnAndroidTauri(): boolean {
   });
 }
 
-/** Ask the Android Activity to lock, or release, the player orientation. */
+/** 请求 Android Activity 锁定或释放播放器方向。 */
 export async function setAndroidPlayerOrientation(
   orientation: PlayerOrientation,
   nativeInvoke: NativeOrientationInvoke = invoke,
@@ -52,12 +51,10 @@ export async function setAndroidPlayerOrientation(
 }
 
 /**
- * Auto-rotate Android fullscreen playback for landscape streams.
+ * 横屏流的 Android 全屏自动旋转。
  *
- * `MainActivity` declares `orientation|screenSize` in its `configChanges`, so
- * the rotation neither recreates the Activity nor restarts the media session.
- * The lock is always released on exit and on unmount, including when the room
- * route is left straight from fullscreen.
+ * `MainActivity` 在 `configChanges` 中声明了 `orientation|screenSize`，
+ * 因此旋转既不会重建 Activity 也不会重启媒体会话。
  */
 export function useAndroidFullscreenOrientation({
   enabled,
@@ -73,7 +70,7 @@ export function useAndroidFullscreenOrientation({
 
     const orientation = fullscreenPlayerOrientation(fullscreen, aspectRatio);
     void setAndroidPlayerOrientation(orientation).catch(() => {
-      // An older build without the native command must not break fullscreen.
+      // 没有该原生命令的旧版本不得破坏全屏功能。
     });
 
     return () => {

@@ -6,9 +6,8 @@ type SiteLogoProps = {
 };
 
 /**
- * Small, local platform marks for the site switcher. Keeping them inline makes
- * the navigation dependable when the desktop client is offline and avoids
- * treating a remote favicon as product UI.
+ * 供站点切换器使用的小型本地平台标识。保持内联使导航在桌面客户端离线时依然
+ * 可靠，也避免把远程 favicon 当作产品 UI。
  */
 export function SiteLogo({ siteId, className }: SiteLogoProps) {
   const svgClassName = cn("size-5 shrink-0", className);

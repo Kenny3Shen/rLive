@@ -37,7 +37,7 @@ export function playbackProtocolLabel(protocol: PlaybackProtocol): string {
   }
 }
 
-/** Use stable, human-readable names rather than exposing CDN host names. */
+/** 使用稳定、人类可读的名称，而不是暴露 CDN 主机名。 */
 export function lineName(source: string | PlaybackSourceLike, index: number): string {
   const suppliedLabel = typeof source === "string" ? "" : source.label.trim();
   const displayLabel = suppliedLabel
@@ -46,7 +46,7 @@ export function lineName(source: string | PlaybackSourceLike, index: number): st
   return displayLabel || `线路${index + 1}`;
 }
 
-/** Diagnostic label with transport information for logs and technical views. */
+/** 带传输信息的诊断标签，供日志与技术视图使用。 */
 export function lineLabel(source: string | PlaybackSourceLike, index: number): string {
   return `${lineName(source, index)}（${playbackProtocolLabel(playbackProtocol(source))}）`;
 }

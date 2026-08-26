@@ -136,7 +136,7 @@ describe("Android fullscreen orientation", () => {
   test("rotates only landscape streams, and only while fullscreen", () => {
     expect(fullscreenPlayerOrientation(true, 16 / 9)).toBe("landscape");
     expect(fullscreenPlayerOrientation(false, 16 / 9)).toBe("auto");
-    // Portrait rooms must stay upright instead of being turned on their side.
+    // 竖屏房间必须保持直立，不能被横过来。
     expect(fullscreenPlayerOrientation(true, 9 / 16)).toBe("auto");
     expect(fullscreenPlayerOrientation(true, 1)).toBe("auto");
   });
@@ -158,13 +158,13 @@ describe("Android fullscreen orientation", () => {
 
 describe("Android in-page fullscreen", () => {
   test("only the Android Tauri client skips the browser Fullscreen API", () => {
-    // The HTML Fullscreen API triggers onShowCustomView, whose render surface
-    // handoff is the black flicker. Android Tauri must never take that path.
+    // HTML Fullscreen API 会触发 onShowCustomView，其渲染表面交接正是黑屏闪烁。
+    // Android Tauri 绝不能走那条路径。
     expect(usesInPageFullscreen({ tauriRuntime: true, platform: "android" })).toBe(true);
-    // A mobile browser has no native bridge and cannot hide its own chrome with
-    // a fixed layer, so it keeps the real Fullscreen API.
+    // 移动浏览器没有原生桥、无法用固定层藏起自身 chrome，
+    // 因此保留真正的 Fullscreen API。
     expect(usesInPageFullscreen({ tauriRuntime: false, platform: "android" })).toBe(false);
-    // Desktop and iOS keep their existing paths.
+    // 桌面与 iOS 保持既有路径。
     expect(usesInPageFullscreen({ tauriRuntime: true, platform: "desktop" })).toBe(false);
     expect(usesInPageFullscreen({ tauriRuntime: true, platform: "ios" })).toBe(false);
   });
@@ -186,12 +186,10 @@ describe("Android in-page fullscreen", () => {
   });
 
   test("the Activity leaves Back to the page while immersive", async () => {
-    // Our OnBackPressedCallbacks are registered from `onWebViewCreate`, which
-    // runs after Tauri's AppPlugin registered its own — and the dispatcher is
-    // LIFO, so ours run first. Consuming Back there for the in-page fullscreen
-    // would preempt `rlive:android-back` entirely, and with it the HUD menu and
-    // volume panel listeners that expect to close first. Only the native custom
-    // view, which the page cannot dismiss, may be handled natively.
+    // 我们的 OnBackPressedCallbacks 从 `onWebViewCreate` 注册，晚于 Tauri AppPlugin
+    // 注册自己的回调 —— 分发是 LIFO 的，所以我们的先执行。在那里为页面内全屏消费
+    // Back 会完全抢占 `rlive:android-back`，连带期望先关闭的 HUD 菜单与音量面板
+    // 监听器。只有页面无法自行关闭的原生 custom view 才允许原生处理。
     const mainActivity = await Bun.file(
       new URL(
         "../src-tauri/gen/android/app/src/main/java/com/shenss/rlive/MainActivity.kt",
@@ -201,8 +199,8 @@ describe("Android in-page fullscreen", () => {
 
     const backHandlers = mainActivity.match(/handleOnBackPressed\(\)/g);
     expect(backHandlers).toHaveLength(2);
-    // Both Back handlers consult the custom view and nothing else. The immersive
-    // flag stays readable for `onResume`, which must keep the bars hidden.
+    // 两个 Back 处理器都只查询 custom view。沉浸标志保持可读供 `onResume` 使用，
+    // 它必须继续隐藏系统栏。
     expect(mainActivity.match(/fullscreenChromeClient\?\.exitFullscreen\(\) == true/g))
       .toHaveLength(2);
     const backHandlerBodies = mainActivity
@@ -217,9 +215,8 @@ describe("Android in-page fullscreen", () => {
   });
 
   test("the immersive command is registered end to end", async () => {
-    // An unregistered command rejects at runtime, which this path deliberately
-    // swallows so fullscreen still works — so a missing registration would only
-    // show up as the status bar never hiding on a device. Check the chain here.
+    // 未注册的命令在运行时被拒绝，而这条路径刻意吞掉拒绝以保证全屏可用 ——
+    // 缺失注册只会表现为设备上状态栏永不隐藏。在这里检查整条链路。
     const [rust, lib, kotlin] = await Promise.all(
       [
         "../src-tauri/src/commands/android_player_controls.rs",
@@ -228,12 +225,12 @@ describe("Android in-page fullscreen", () => {
       ].map((path) => Bun.file(new URL(path, import.meta.url)).text()),
     );
 
-    // Both cfg branches define it, and the Android one forwards to Kotlin.
+    // 两个 cfg 分支都定义了它，Android 分支转发给 Kotlin。
     expect(rust.match(/fn android_player_controls_set_immersive/g)).toHaveLength(2);
     expect(rust).toContain('run(controls, "setImmersive"');
-    // Registered in the handler list, or the webview cannot reach it at all.
+    // 已注册进 handler 列表，否则 webview 完全触达不了它。
     expect(lib).toContain("android_player_controls_set_immersive,");
-    // And the Kotlin @Command it resolves to actually exists.
+    // 并且它解析到的 Kotlin @Command 确实存在。
     expect(kotlin).toContain("fun setImmersive(invoke: Invoke)");
   });
 });

@@ -23,11 +23,10 @@ const IDLE_SUMMARY: LiveSyncSummary = { mode: "off", targetLatencySeconds: null,
 const noopSubscribe = () => () => {};
 
 /**
- * Owns the correction loop for one visit to the director grid.
+ * 管理导演网格单次访问的校正循环。
  *
- * The timer reads the store imperatively so a slider change takes effect on the
- * next tick without restarting the loop, and stops entirely while the alignment
- * is off — the players then behave exactly as they did before the feature.
+ * 计时器以命令式方式读取 store，滑杆变更在下一个 tick 生效而无需重启循环；
+ * 对齐关闭时循环完全停止 —— 播放器的行为与没有此功能时完全一致。
  */
 export function MultiRoomLiveSyncProvider({ children }: { children: ReactNode }) {
   const registryRef = useRef<MultiRoomLiveSyncRegistry | null>(null);
@@ -63,7 +62,7 @@ export function useMultiRoomLiveSyncRegistry(): MultiRoomLiveSyncRegistry | null
   return useContext(MultiRoomLiveSyncContext);
 }
 
-/** Register one feed's player handle without subscribing to its status. */
+/** 注册一条流的播放器句柄，但不订阅其状态。 */
 export function useMultiRoomLiveSyncRegistration(input: {
   key: string;
   main: boolean;
@@ -71,13 +70,13 @@ export function useMultiRoomLiveSyncRegistration(input: {
 }): void {
   const { key, main, sync } = input;
   const registry = useContext(MultiRoomLiveSyncContext);
-  // Deliberately no status subscription here: the tile hosts the whole player,
-  // and re-rendering it on every correction tick would cost more than the
-  // alignment itself. Only the small status children follow the numbers.
+  // 这里刻意不订阅状态：磁贴承载整个播放器，
+  // 每次校正 tick 都重渲染它的开销比对齐本身还大。
+  // 只有小的状态子组件跟随数值变化。
   useEffect(() => registry?.registerFeed(key, { main, sync }), [key, main, registry, sync]);
 }
 
-/** Follow a feed's status without registering a player for it. */
+/** 跟随一条流的状态，但不为它注册播放器。 */
 export function useMultiRoomLiveSyncStatus(key: string): LiveSyncFeedStatus | null {
   const registry = useContext(MultiRoomLiveSyncContext);
   const subscribe = useCallback(

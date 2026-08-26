@@ -20,9 +20,9 @@ export function buildTranslationFetchOptions(
 }
 
 /**
- * Browser-compatible transport used only by google-translate-api-x. Tauri's
- * scoped Rust HTTP client reaches Google Translate without weakening WebView
- * CORS and explicitly inherits rLive's configured HTTP(S) proxy.
+ * 仅供 google-translate-api-x 使用的浏览器兼容传输层。Tauri 受限的 Rust HTTP
+ * 客户端无需削弱 WebView CORS 即可到达 Google 翻译，
+ * 并显式继承 rLive 配置的 HTTP(S) 代理。
  */
 export default async function fetchThroughTauri(
   input: string | URL | Request,

@@ -1,17 +1,17 @@
-# Build rLive on Windows. Run this script from the project directory, or pass
-# -ProjectRoot explicitly.
+# 在 Windows 上构建 rLive。请在项目目录下运行本脚本，
+# 或显式传入 -ProjectRoot。
 #
-# Prerequisites:
-#   - VS Build Tools: D:\VS\BuildTools (vcvars64.bat)
-#   - Rust: D:\dev\rust\{cargo,rustup}  (or CARGO_HOME / RUSTUP_HOME)
-#   - bun and/or Node.js
-#   - MSVC-compatible LLVM/Clang + libclang (auto-detected, or set LIBCLANG_PATH)
-#   - Network access on the first build (downloads the pinned shared FFmpeg SDK)
-#   - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x runtime and a compatible NVIDIA driver
+# 前置条件：
+# - VS Build Tools：D:\VS\BuildTools（vcvars64.bat）
+# - Rust：D:\dev\rust\{cargo,rustup}（或 CARGO_HOME / RUSTUP_HOME）
+# - bun 和/或 Node.js
+# - 与 MSVC 兼容的 LLVM/Clang + libclang（自动探测，或设置 LIBCLANG_PATH）
+# - 首次构建需要网络（下载已固定版本的共享 FFmpeg SDK）
+# - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x 运行时，以及兼容的 NVIDIA 驱动
 #
-# Usage:
-#   cd <rLive project directory>
-#   .\scripts\build-windows.ps1
+# 用法：
+# cd <rLive 项目目录>
+# .\scripts\build-windows.ps1
 
 param(
     [string]$ProjectRoot = (Get-Location).Path
@@ -31,14 +31,14 @@ if (-not (Test-Path $ProjectRoot)) {
     throw "Project root not found: $ProjectRoot"
 }
 
-# --- D: defaults for toolchain / caches ---
+# --- 工具链 / 缓存的 D: 盘默认路径 ---
 $env:CARGO_HOME  = if ($env:CARGO_HOME)  { $env:CARGO_HOME }  else { "D:\dev\rust\cargo" }
 $env:RUSTUP_HOME = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { "D:\dev\rust\rustup" }
 $env:TEMP = "D:\Temp\build"
 $env:TMP  = "D:\Temp\build"
 New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 
-# Ensure bun/cargo/node are findable (new shells + winget locations)
+# 确保能找到 bun/cargo/node（新开的 shell 与 winget 安装位置）
 $extraPath = @(
     "D:\dev\bun\bin",
     "$env:CARGO_HOME\bin",
@@ -51,7 +51,7 @@ $env:Path = $extraPath + ";" +
     [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
     [Environment]::GetEnvironmentVariable("Path", "User")
 
-# Resolve bun.exe (winget may not install bunx as a real binary)
+# 定位 bun.exe（winget 安装的 bunx 可能不是真正的可执行文件）
 $bunCmd = Get-Command bun -ErrorAction SilentlyContinue
 if (-not $bunCmd) {
     $candidates = @(
@@ -82,9 +82,9 @@ if (-not $vcvars) {
 
 $rustc = Get-Command rustc -ErrorAction SilentlyContinue
 if ($rustc) {
-    # rustup can emit first-install progress on stderr. Treat this as a
-    # diagnostic query only: a transient version-report failure must not stop
-    # the actual Tauri build before cargo has a chance to run.
+    # rustup 首次安装时会把进度输出到 stderr。这里只把它当作诊断查询：
+    # 版本查询的偶发失败不应在 cargo 有机会运行之前，
+    # 就中断真正的 Tauri 构建。
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $rustcInfo = & rustc -vV 2>&1
@@ -104,11 +104,10 @@ if ($rustc) {
 
 Set-Location $ProjectRoot
 
-# A previous `tauri dev` or manual launch may still have the target executable
-# (and its sherpa-onnx/ONNX Runtime DLLs) mapped. Windows cannot replace loaded binaries, so
-# stop only rLive instances built from this checkout before Cargo stages the
-# new runtime files. Installed copies outside this target directory are left
-# untouched.
+# 之前的 `tauri dev` 或手动启动可能仍映射着目标可执行文件
+# （以及它的 sherpa-onnx/ONNX Runtime DLL）。Windows 无法替换已加载的二进制，
+# 因此在 Cargo 暂存新的运行时文件之前，只结束由当前检出目录构建出的
+# rLive 实例；target 目录之外已安装的副本不受影响。
 $projectTargetRoot = [IO.Path]::GetFullPath((Join-Path $ProjectRoot "src-tauri\target"))
 $projectProcesses = @(Get-Process -Name "rlive" -ErrorAction SilentlyContinue | Where-Object {
     try {
@@ -162,15 +161,15 @@ if ($env:SHERPA_ONNX_GPU -eq "0") {
     Write-Host "ASR native backend: CUDA-capable shared runtime (provider auto-selects CUDA/CPU)"
 }
 
-# Prefer local CLI via package.json script: "tauri": "tauri"
-# (winget bun often has no bunx.exe; `bun x tauri` may not resolve the binary either)
+# 优先使用 package.json 脚本提供的本地 CLI："tauri": "tauri"
+# （winget 版 bun 通常没有 bunx.exe，`bun x tauri` 也可能定位不到该二进制）
 $tauriArgs = "build --no-bundle"
 
 if ($bunCmd) {
     Write-Step "bun install"
-    # Bun writes normal dependency-resolution progress to stderr. With this
-    # script's default Stop policy, PowerShell otherwise turns that output
-    # into a terminating NativeCommandError before Bun can finish.
+    # Bun 会把正常的依赖解析进度写入 stderr。在本脚本默认的 Stop 策略下，
+    # PowerShell 会把这些输出变成终止性的 NativeCommandError，
+    # 让 Bun 无法跑完。
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & bun install
@@ -178,7 +177,8 @@ if ($bunCmd) {
     $ErrorActionPreference = $prevEap
     if ($installCode -ne 0) { throw "bun install failed: $installCode" }
 
-    # bun run <script> -- <args>
+    # 6
+    # 快照原生可用性，使延迟到来的桥失败无法改变滑动路由。
     $buildInner = "bun run tauri -- $tauriArgs"
     Write-Host "Using: $buildInner"
 } else {
@@ -198,13 +198,13 @@ if ($bunCmd) {
 Write-Step "tauri build (via vcvars64)"
 $cmd = "call `"$vcvars`" && cd /d `"$ProjectRoot`" && set CARGO_HOME=$env:CARGO_HOME&& set RUSTUP_HOME=$env:RUSTUP_HOME&& set TEMP=$env:TEMP&& set TMP=$env:TMP&& $buildInner"
 Write-Host $cmd
-# bun/cargo write progress to stderr; with $ErrorActionPreference=Stop that becomes
-# a terminating NativeCommandError and aborts before the build finishes.
+# bun/cargo 把进度写入 stderr；在 $ErrorActionPreference=Stop 下这会变成
+# 终止性的 NativeCommandError，在构建完成前中止流程。
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-# Tauri, Bun, and Cargo use stderr for normal progress. Let cmd.exe merge the
-# streams before PowerShell sees them; a PowerShell-side `2>&1` still creates
-# a NativeCommandError record in Windows PowerShell 5.
+# Tauri、Bun 和 Cargo 都用 stderr 输出正常进度。让 cmd.exe 在 PowerShell
+# 看到之前先合并两个流；在 PowerShell 侧写 `2>&1` 在 Windows PowerShell 5
+# 中仍会产生 NativeCommandError 记录。
 $cmdWithMergedStderr = "$cmd 2>&1"
 cmd.exe /c $cmdWithMergedStderr
 $buildCode = $LASTEXITCODE

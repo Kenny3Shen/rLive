@@ -22,7 +22,7 @@ function fullscreenErrorMessage(error: unknown): string {
   return message || "全屏切换失败";
 }
 
-/** Desktop-native/browser fullscreen adapter shared with the live player's UI contract. */
+/** 与直播播放器 UI 契约共享的桌面原生/浏览器全屏适配器。 */
 export function useRecordingPlayerFullscreen(stageRef: RefObject<HTMLElement | null>) {
   const nativeSessionRef = useRef(createNativeFullscreenSession());
   const fullscreenRef = useRef(false);
@@ -61,13 +61,13 @@ export function useRecordingPlayerFullscreen(stageRef: RefObject<HTMLElement | n
             }
             if (!disposed) setFullscreen(active);
           } catch {
-            // The native window can already be closing during route teardown.
+            // 路由拆除期间原生窗口可能已经在关闭。
           }
         };
         await sync();
         unlisten = await appWindow.onResized(() => void sync());
       } catch {
-        // Browser previews use the HTML fullscreen effect above.
+        // 浏览器预览使用上方的 HTML 全屏方案。
       }
     })();
     return () => {

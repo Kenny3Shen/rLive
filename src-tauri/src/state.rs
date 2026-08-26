@@ -34,9 +34,9 @@ pub struct AppState {
     pub lan_sync: LanSyncManager,
 }
 
-/// Conservative per-room write gate for the Bilibili sender.
-/// It is deliberately process-local: this is a UX/safety cooldown, not an
-/// attempt to bypass or mirror Bilibili's own authoritative rate limits.
+/// Bilibili 发送方的保守房间级写入闸门。它刻意只作用于进程内部：
+/// 这是 UX/安全层面的冷却，
+/// 不是为了绕过或镜像 Bilibili 自身权威的频率限制。
 pub struct BilibiliDanmakuSendLimiter {
     sent_at: Mutex<HashMap<String, Instant>>,
 }
@@ -50,9 +50,8 @@ impl BilibiliDanmakuSendLimiter {
         }
     }
 
-    /// Reserve one manual send before any network call. A failed or ambiguous
-    /// request is still held briefly so the app never automatically retries a
-    /// message the remote service may have accepted.
+    /// 在任何网络调用之前先占用一次手动发送额度。失败或结果不明的请求也会短暂
+    /// 持有冷却，使应用绝不会自动重试一条远端服务可能已接受的消息。
     pub fn reserve(&self, room_id: &str) -> AppResult<()> {
         let now = Instant::now();
         let mut sent_at = self
@@ -77,12 +76,11 @@ impl BilibiliDanmakuSendLimiter {
     }
 }
 
-/// Conservative per-room write gate for the Douyu sender.
+/// 斗鱼发送方的保守房间级写入闸门。
 ///
-/// This is deliberately a local UX/safety cooldown, not a replacement for
-/// Douyu's authoritative room and account rate limits. Each reservation is
-/// made before the network write because a timeout can still mean the remote
-/// service accepted the message.
+/// 这刻意只是本地 UX/安全冷却，不能替代斗鱼权威的房间与账号频率限制。
+/// 每次占用都发生在网络写入之前，
+/// 因为超时仍可能意味着远端服务已接受该消息。
 pub struct DouyuDanmakuSendLimiter {
     sent_at: Mutex<HashMap<String, Instant>>,
 }
@@ -120,9 +118,8 @@ impl DouyuDanmakuSendLimiter {
     }
 }
 
-/// Conservative per-room write gate for the Huya sender. It only protects the
-/// explicit local UI from accidental rapid repeats; the platform remains the
-/// authority for account/room limits and moderation.
+/// 虎牙发送方的保守房间级写入闸门。它只保护显式的本地 UI 免受意外的快速
+/// 重复发送；账号/房间限制与内容审核的权威始终在平台一侧。
 pub struct HuyaDanmakuSendLimiter {
     sent_at: Mutex<HashMap<String, Instant>>,
 }

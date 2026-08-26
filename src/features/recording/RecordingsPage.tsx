@@ -127,20 +127,17 @@ function recordingUserAvatar(item: RecordingItem): string {
 }
 
 /**
- * Thumbnail for one recording: the room cover it was captured with, falling
- * back to the owner avatar and then the platform mark.
+ * 单场录制的缩略图：优先用捕获时的房间封面，其次主播头像，最后平台标识。
  *
- * The cover is what the card should show — it is the picture of that specific
- * broadcast. But a recording stores the URL it was started with, and several
- * platforms mint a cover address per capture, so a stored one can stop
- * resolving. Rather than give up on covers, this steps down only when one
- * actually fails to load: cover, then avatar, then the icon that sits
- * underneath. Without that step the WebView draws its broken-image glyph.
+ * 封面才是卡片应当展示的内容 —— 那是这一场直播的画面。但录制存储的是开播时
+ * 的 URL，多个平台会为每次采集生成新的封面地址，旧地址可能不再可解析。
+ * 这里不是放弃封面，而是只在真正加载失败时逐级降级：封面、头像、再到底层的
+ * 图标。缺少这一步时 WebView 会画出破图占位符。
  */
 function RecordingArtwork({ item }: { item: RecordingItem }) {
   const cover = normalizeImageUrl(item.cover);
   const avatar = normalizeImageUrl(item.user_avatar);
-  // Distinct keys so switching source remounts the img and retries the load.
+  // 不同的 key 使切换来源时重新挂载 img 并重试加载。
   const [failed, setFailed] = useState<string[]>([]);
   const artwork = [cover, avatar].find((candidate) => candidate && !failed.includes(candidate));
   const SourceIcon = item.source_kind === "iptv" ? Tv : Radio;
@@ -204,7 +201,7 @@ function RecordingCard({
 }) {
   const playable = item.status !== "recording" && Boolean(onOpen);
   const playbackPath = recordingPlaybackPath(item.id);
-  // The sidecar only exists once the task finished writing it.
+  // 伴生文件只有任务完成写入后才存在。
   const exportable = item.status !== "recording" && item.include_danmaku && item.danmaku_count > 0;
 
   return (
@@ -559,8 +556,8 @@ export function RecordingsPage() {
   const requestedPlatform = searchParams.get("platform");
   const platformFilter: PlatformFilter = recordingPlatformFromSearch(requestedPlatform);
   const view = recordingViewFromSearch(searchParams.get(RECORDING_VIEW_PARAM));
-  // The header tabs count the whole library rather than the active platform, so
-  // switching to a scope never shows a tab labelled with rows it cannot list.
+  // 头部页签统计的是整个库而不是活动平台，
+  // 因此切到某个作用域绝不会看到标注着它列不出的行数的页签。
   const activeCount = activeRecordingCount(items);
   const viewCounts = useMemo(
     () => ({
@@ -585,8 +582,8 @@ export function RecordingsPage() {
       setSearchParams(
         (current) => {
           const next = withRecordingView(current, nextView);
-          // The selected user rarely exists in both scopes, so let the new
-          // scope pick its own first group instead of falling back silently.
+          // 所选用户很少同时存在于两个作用域中，因此让新作用域自己选第一个分组，
+          // 而不是静默回退。
           next.delete("user");
           return next;
         },

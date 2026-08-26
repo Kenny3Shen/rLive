@@ -1,4 +1,4 @@
-//! Douyu play-sign via embedded CryptoJS + room JS (simple_live DouyuSign).
+//! 经内嵌 CryptoJS 与房间 JS 完成斗鱼播放签名。
 
 use quickjs_rusty::Context;
 
@@ -6,8 +6,8 @@ use crate::error::{AppError, AppResult};
 
 const CRYPTO_JS: &str = include_str!("../../../assets/crypto-js.min.js");
 
-/// QuickJS provides the legacy browser helpers natively; these aliases keep
-/// dynamically delivered room scripts compatible with browser globals.
+/// QuickJS 原生提供旧版浏览器辅助对象；
+/// 这些别名让动态下发的房间脚本兼容浏览器全局变量。
 const BROWSER_ALIASES: &str = r#"
 var global = globalThis;
 var window = globalThis;
@@ -23,7 +23,7 @@ fn eval_js(ctx: &Context, src: &str, stage: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Run `ub98484234(rid, did, tt)` after evaluating the room encrypt script.
+/// 执行房间加密脚本后运行 `ub98484234(rid, did, tt)`。
 pub fn get_sign(html_js: &str, rid: &str) -> AppResult<String> {
     let ctx = Context::builder().build().map_err(|e| {
         AppError::new("douyu_sign", format!("JS 运行时创建失败: {e}")).with_site("douyu")

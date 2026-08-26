@@ -35,13 +35,13 @@ function PopoverContent({
     | "sticky"
   > & {
     /**
-     * Portal target. Defaults to <body>. Render inside the fullscreen element
-     * (e.g. the player stage) when the popover must stay above the top layer
-     * while a `:fullscreen` ancestor owns the stacking context.
+     * Portal 目标。默认 <body>。当 popover 必须保持在 top layer 之上、而某个
+     * `:fullscreen` 祖先持有堆叠上下文时，渲染进全屏元素内部
+     * （例如播放器舞台）。
      */
     container?: HTMLElement | React.RefObject<HTMLElement | null> | null;
-    /* Opt into the frosted material. When set, the default `bg-popover` is
-       dropped so the glass `::before` fill shows the blurred backdrop through. */
+    /* 选择毛玻璃材质。启用后放弃默认的 `bg-popover`，
+       让玻璃质感的 `::before` 填充透过模糊背景显现。 */
     glass?: boolean;
   }) {
   return (

@@ -1,13 +1,11 @@
-//! Read-only access to the local app log for the About settings pane.
+//! 为"关于"设置面板提供本地应用日志的只读访问。
 //!
-//! Release Windows builds have no console, so `rlive.log` is the only record of
-//! a failure a user can report. These commands let the About pane show the tail
-//! of that log and reveal its folder, without the frontend needing filesystem
-//! permissions of its own.
+//! Windows 发布版没有控制台，因此 `rlive.log` 是用户能提交的唯一失败记录。
+//! 这些命令让"关于"面板可以展示该日志的尾部并打开其所在目录，
+//! 而无需前端自己获得文件系统权限。
 //!
-//! The log is failure-only by construction (see `init_logging`): Cookie values,
-//! tokens, and outgoing chat text are never written to it, so surfacing it in
-//! the UI does not expose credentials.
+//! 该日志在设计上只记录失败（参见 `init_logging`）：Cookie 值、token 和
+//! 发出的聊天文本都不会写入其中，因此把它展示在 UI 上不会泄露凭据。
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,44 +15,44 @@ use serde::Serialize;
 use crate::app_paths::AppDirectories;
 use crate::error::{AppError, AppResult};
 
-/// Bytes read from the end of a log file. The log itself rotates at 2 MiB, but
-/// a webview should not receive that much text at once: recent warnings are
-/// what a report needs, and the folder is one click away for the full file.
+/// 从日志文件末尾读取的字节数。日志本身在 2 MiB 时轮转，但 webview 不应
+/// 一次收到那么多文本：反馈问题需要的是最近的警告，
+/// 而完整文件只需一次点击即可在目录中打开。
 const TAIL_BYTES: u64 = 256 * 1024;
 
-/// One log file's tail plus the metadata the pane displays.
+/// 一个日志文件的尾部内容，以及面板要展示的元数据。
 #[derive(Debug, Serialize)]
 pub struct LogFileContent {
-    /// Absolute path, shown so a user can find the file after closing the app.
+    /// 绝对路径，展示出来便于用户在关闭应用后找到该文件。
     pub path: String,
-    /// Whether the file exists yet. A clean install has no log at all.
+    /// 文件是否已存在。全新安装完全没有日志。
     pub exists: bool,
-    /// Full size on disk, so the pane can say the view is partial.
+    /// 磁盘上的完整大小，便于面板说明当前视图是截断的。
     pub size_bytes: u64,
-    /// True when `size_bytes` exceeded the tail window and text was clipped.
+    /// 当 `size_bytes` 超过尾部窗口、文本被截断时为 true。
     pub truncated: bool,
-    /// The tail itself, oldest line first.
+    /// 尾部内容本身，最旧的一行在前。
     pub text: String,
 }
 
-/// The app log directory and the tails of its current and rotated files.
+/// 应用日志目录，以及当前文件与轮转文件的尾部内容。
 #[derive(Debug, Serialize)]
 pub struct AppLogSnapshot {
-    /// Directory holding both files, for "open folder".
+    /// 同时存放两个文件的目录，供"打开目录"使用。
     pub directory: String,
     pub current: LogFileContent,
-    /// The file `init_logging` rotates to once the current one passes its cap.
+    /// 当前文件超过上限后，`init_logging` 轮转到的那个文件。
     pub previous: LogFileContent,
 }
 
-/// Read the last `TAIL_BYTES` of one log file.
+/// 读取某个日志文件最后 `TAIL_BYTES` 字节。
 ///
-/// A missing file is a normal state, not an error: nothing has gone wrong yet.
-/// Seeking rather than reading the whole file keeps a rotated 2 MiB log cheap.
+/// 文件不存在属于正常状态而不是错误：说明还没有出过问题。
+/// 用 seek 而不是整文件读取，可让 2 MiB 的轮转日志开销保持很低。
 fn read_tail(path: &std::path::Path) -> LogFileContent {
-    // `AppDirectories::resolve` canonicalizes, which on Windows yields a
-    // verbatim `\\?\D:\…` path. That prefix is an API detail no user should be
-    // shown or asked to retype, so every path leaving over IPC is normalized.
+    // `AppDirectories::resolve` 会做规范化，在 Windows 上得到 verbatim 形式的
+    // `\\?\D:\…` 路径。该前缀属于 API 细节，不应展示给用户或让其手动输入，
+    // 因此所有经 IPC 传出的路径都会被规范化。
     let display = crate::app_paths::path_to_string(path);
     let Ok(metadata) = path.metadata() else {
         return LogFileContent {
@@ -80,7 +78,7 @@ fn read_tail(path: &std::path::Path) -> LogFileContent {
     };
     let truncated = size > TAIL_BYTES;
     if truncated {
-        // Ignore a seek failure: reading from the start is still useful.
+        // 忽略 seek 失败：从头开始读取仍然有用。
         let _ = file.seek(SeekFrom::Start(size - TAIL_BYTES));
     }
     let mut buffer = Vec::new();
@@ -93,8 +91,8 @@ fn read_tail(path: &std::path::Path) -> LogFileContent {
             text: format!("无法读取日志文件：{error}"),
         };
     }
-    // The tail can begin mid-line, and a multi-byte character can straddle the
-    // seek offset, so decode lossily and drop the first partial line.
+    // 尾部可能从某一行的中间开始，且多字节字符可能横跨 seek 偏移，
+    // 因此采用有损解码并丢弃第一行不完整内容。
     let mut text = String::from_utf8_lossy(&buffer).into_owned();
     if truncated && let Some(newline) = text.find('\n') {
         text = text[newline + 1..].to_owned();
@@ -108,7 +106,7 @@ fn read_tail(path: &std::path::Path) -> LogFileContent {
     }
 }
 
-/// Current and rotated app log tails, for the About pane's log viewer.
+/// 当前与轮转的应用日志尾部内容，供"关于"面板的日志查看器使用。
 #[tauri::command(async)]
 pub async fn app_log_snapshot() -> AppResult<AppLogSnapshot> {
     let directories = AppDirectories::resolve(None)?;
@@ -120,11 +118,11 @@ pub async fn app_log_snapshot() -> AppResult<AppLogSnapshot> {
     })
 }
 
-/// Delete both log files.
+/// 删除两个日志文件。
 ///
-/// Offered next to the viewer so a user can clear old noise before reproducing
-/// an issue, which makes the resulting log far easier to read in a report. A
-/// missing file counts as already cleared.
+/// 它就放在查看器旁边，便于用户在复现问题前清掉旧的噪音，
+/// 这会让最终日志在反馈中易读得多。
+/// 文件不存在视为已清空。
 #[tauri::command(async)]
 pub async fn app_log_clear() -> AppResult<()> {
     let logs = AppDirectories::resolve(None)?.logs;

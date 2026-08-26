@@ -1,8 +1,8 @@
-//! In-process FFmpeg live-stream recorder.
+//! 进程内 FFmpeg 直播录制器。
 //!
-//! Keep every libav context inside one blocking worker. FFmpeg's APIs are
-//! synchronous, and moving a context across an `.await` would make both
-//! cancellation and ownership substantially harder to reason about.
+//! 把所有 libav 上下文都留在同一个阻塞 worker 内。FFmpeg 的 API 是同步的，
+//! 让上下文跨越 `.await` 移动会显著增加取消与所有权
+//! 两方面的推理难度。
 
 use std::sync::Arc;
 
@@ -25,20 +25,18 @@ use ffmpeg_next as ffmpeg;
 static FFMPEG_INIT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static FFMPEG_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const TIMESTAMP_TIME_BASE: Rational = Rational(1, 1_000_000);
-/// Consecutive packets a live stream may fail to write before the recording
-/// gives up. A single transient timestamp/muxer anomaly must not end the task.
+/// 直播流在录制放弃之前允许的连续写入失败数据包数。
+/// 一次瞬态的时间戳/封装异常不应结束任务。
 const MAX_INVALID_WRITE_FAILURES: u32 = 12;
-/// Consecutive undecodable reads a live stream may produce before the recording
-/// gives up. Transient corruption is normal on a live CDN; a source that never
-/// recovers is not.
+/// 直播流在录制放弃之前允许产生的连续不可解码读取次数。直播 CDN 上出现
+/// 瞬时损坏很正常；但始终无法恢复的源不是。
 const MAX_INVALID_READS: u32 = 100;
-/// How long a started recording may go without writing a single media packet
-/// before it is treated as a dead stream.
+/// 已开始的录制在不写出任何媒体数据包的情况下，最多可以持续多久才被视为
+/// 死流。
 ///
-/// `rw_timeout` only covers a socket that stops delivering bytes. A CDN can
-/// keep the connection alive while serving nothing usable — the read succeeds,
-/// the packets are all discarded, and the file silently stops growing. This is
-/// the bound on that case, so the task ends and reports instead of hanging.
+/// `rw_timeout` 只覆盖停止交付字节的套接字。CDN 可能保持连接存活却不提供
+/// 任何可用内容 —— 读取成功、数据包全被丢弃、文件静默停止增长。
+/// 这个上限就是针对该情况：任务结束并报告原因，而不是一直挂着。
 const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) async fn run(
@@ -54,11 +52,10 @@ pub(super) async fn run(
         Ok(outcome) => outcome,
         Err(error) => {
             let message = format!("Rust FFmpeg 录制任务意外终止: {error}");
-            // A panic is reported only after the blocking worker has stopped,
-            // so its part file is no longer being written. Preserve it now,
-            // but let the outer task flush danmaku before finalizing metadata.
-            // Cancellation is different: an unstarted blocking task may still
-            // be cancelled, while an already-running one can outlive this future.
+            // panic 只在阻塞 worker 停止之后才被上报，因此它的分片文件已不再被写入。
+            // 现在先保留它，让外层任务先冲刷弹幕再收尾元数据。
+            // 取消则不同：尚未启动的阻塞任务仍可被取消，
+            // 而已经在运行的任务可能比这个 future 活得更久。
             if !error.is_cancelled() {
                 super::salvage_temporary_media_after_worker_failure(&recovery_state);
             }
@@ -202,8 +199,8 @@ fn remux(
             }
         };
         output_stream.set_parameters(stream.parameters());
-        // Container-specific codec tags from the input are not necessarily
-        // valid in a fresh output context, even when the container is the same.
+        // 来自输入的容器特定 codec tag 不一定能直接用于新建的输出上下文，
+        // 即使容器类型相同。
         unsafe {
             (*output_stream.parameters().as_mut_ptr()).codec_tag = 0;
         }
@@ -216,8 +213,8 @@ fn remux(
     }
     let write_header = if output_protocol == super::PlaybackProtocol::Flv {
         let mut output_options = Dictionary::new();
-        // mpegts.js can turn an unbuffered VOD seek into an HTTP Range request
-        // only when the FLV metadata contains keyframe byte positions.
+        // 只有当 FLV 元数据包含关键帧字节位置时，mpegts.js 才能把无缓冲的 VOD seek
+        // 转换为 HTTP Range 请求。
         output_options.set("flvflags", "add_keyframe_index");
         output.write_header_with(output_options).map(|_| ())
     } else {
@@ -246,8 +243,8 @@ fn remux(
         {
             break StopReason::SplitLimit;
         }
-        // Only meaningful once the stream has proven itself: before the first
-        // packet the elapsed time is startup probing, not a stall.
+        // 只有在流证明了自己之后才有意义：首个数据包之前的耗时属于启动探测，
+        // 而不是停滞。
         if wrote_packet && last_written_packet.elapsed() >= STREAM_STALL_TIMEOUT {
             break StopReason::Stalled;
         }
@@ -281,17 +278,16 @@ fn remux(
         }
 
         let input_index = packet.stream();
-        // A packet on a stream index that did not exist when the mapping was
-        // built means the source started a different program mid-recording.
-        // Some CDNs do this after a broadcast ends, serving an unrelated filler
-        // stream on the same URL; continuing would append it to the recording.
+        // 数据包所属的流索引在构建映射时尚不存在，说明源在录制中途切换了节目。
+        // 部分 CDN 在直播结束后会这样做，在同一 URL 上提供无关的填充流；
+        // 继续录制会把它追加进文件。
         let Some(&mapped_index) = stream_mapping.get(input_index) else {
             if wrote_packet {
                 break StopReason::SourceChanged;
             }
             continue;
         };
-        // A deliberately unselected stream (an unused HLS variant) stays silent.
+        // 刻意未选择的流（未使用的 HLS 变体）保持安静。
         if mapped_index < 0 {
             continue;
         }
@@ -307,11 +303,9 @@ fn remux(
         let packet_size = packet.size() as u64;
         let first_packet = !wrote_packet;
         if let Err(error) = packet.write_interleaved(&mut output) {
-            // Counted per track. A single stream can be persistently
-            // unwritable — a CDN serving FLV audio that is not valid ADTS is the
-            // known case — while the other keeps succeeding. A shared counter
-            // would be reset by the healthy track and never reach the limit, so
-            // the recording would run on silently dropping every audio packet.
+            // 按轨道计数。单一轨道可能持续不可写 —— 已知案例是 CDN 下发的 FLV 音频
+            // 不是合法 ADTS —— 而另一条轨道持续成功。共享计数器会被健康轨道重置、
+            // 永远达不到上限，录制就会一边静默丢弃所有音频包一边继续运行。
             let failures = consecutive_write_failures
                 .get_mut(mapped_index as usize)
                 .expect("每个输出轨在建表时都分配了失败计数");
@@ -349,8 +343,8 @@ fn remux(
 
     if !wrote_packet {
         remove_part(&part);
-        // Nothing was recorded, so a stop cause other than the two intentional
-        // ones is a failure rather than a short recording.
+        // 没有记录到任何内容，因此除两种有意为之的情况之外的任何停止原因
+        // 都属于失败，而不是短录制。
         return match stop_reason {
             StopReason::Cancelled => interrupted("停止前尚未收到媒体数据".into()),
             StopReason::SplitLimit => interrupted("自动分割前尚未收到媒体数据".into()),
@@ -361,8 +355,8 @@ fn remux(
         };
     }
 
-    // Media was written, so the file stands on its own. Every unintentional stop
-    // cause keeps what was recorded and reports why it ended early.
+    // 已经写入了媒体内容，因此文件可以独立成立。每个非预期的停止原因都会保留
+    // 已录制的部分，并报告提前结束的原因。
     let mut outcome = match stop_reason {
         StopReason::Cancelled if trailer_error.is_none() => TaskOutcome {
             status: RecordingStatus::Completed,
@@ -394,10 +388,10 @@ fn remux(
     outcome
 }
 
-/// Builds the demuxer options for one recording, as ordered key/value pairs.
+/// 为一场录制构建解复用器选项，以有序键值对的形式返回。
 ///
-/// Returned as pairs rather than written into a `Dictionary` so the protocol
-/// branches below stay directly testable; `Dictionary` exposes no reader.
+/// 以键值对返回而不是写入 `Dictionary`，使下方的协议分支保持可直接测试；
+/// `Dictionary` 不提供读取接口。
 fn build_input_options(
     source: &PlayUrl,
     proxy: Option<&str>,
@@ -413,9 +407,9 @@ fn build_input_options(
     if let Some(proxy) = proxy.map(str::trim).filter(|value| !value.is_empty()) {
         set("http_proxy", proxy.to_string());
     }
-    // A continuous stream announces its codecs in the very first tag, so a tiny
-    // probe keeps startup fast and blocking reads inside the manager's 15 second
-    // graceful-shutdown window. Segmented sources get a larger budget below.
+    // 连续流会在第一个 tag 中就声明其编解码器，因此很小的探测值既能保证启动
+    // 迅速，又把阻塞读取限制在 manager 15 秒优雅关机窗口之内。
+    // 分片源在下方获得更大的预算。
     if source.protocol != super::PlaybackProtocol::Hls {
         set("probesize", "32768".into());
         set("analyzeduration", "1000000".into());
@@ -429,21 +423,19 @@ fn build_input_options(
             .saturating_mul(1_000_000)
             .to_string(),
     );
-    // A corrupt packet is dropped instead of being remuxed into the recording.
-    // Without this the demuxer hands truncated slices straight to the muxer and
-    // the damage only surfaces later, inside the viewer's decoder.
+    // 损坏的数据包被丢弃，而不是重新封装进录制。没有这一步，解复用器会把截断
+    // 的切片直接交给封装器，损伤只会在稍后于观看者的解码器中暴露。
     set("fflags", "+discardcorrupt".into());
 
     if source.protocol == super::PlaybackProtocol::Hls {
-        // HLS parsing, playlist refreshes, AES-128 keys and byte ranges all
-        // stay inside libavformat. Start at the live edge and retry transient
-        // segment failures without maintaining a second playlist parser here.
+        // HLS 解析、播放列表刷新、AES-128 密钥和字节范围全部留在 libavformat 内部。
+        // 从直播边缘开始，对瞬态分片失败自动重试，
+        // 无需在这里维护第二套播放列表解析器。
         set("live_start_index", "-1".into());
-        // Probing must span the fMP4 init segment plus a whole media segment, or
-        // libavformat can open the playlist and still fail to describe the
-        // streams. Twitch segments run ~2 MB each, so a 32 KB probe routinely
-        // ends inside the init segment. Cancellation is unaffected: the
-        // interrupt callback is polled during I/O, not after the probe.
+        // 探测必须覆盖 fMP4 init 分片加上完整的媒体分片，否则 libavformat 可能打开
+        // 了播放列表却仍然无法描述各个流。Twitch 的分片约 2 MB 一个，
+        // 32 KB 探测经常停在 init 分片内部。取消不受影响：
+        // 中断回调在 I/O 期间轮询，而不是在探测之后。
         set("probesize", "8000000".into());
         set("analyzeduration", "10000000".into());
         set("fpsprobesize", "10".into());
@@ -454,17 +446,13 @@ fn build_input_options(
         );
         set("http_persistent", "1".into());
         set("http_multiple", "1".into());
-        // Reconnecting is only safe on a segmented protocol, where a retry
-        // resumes at a segment boundary.
+        // 只有分段协议上重连才是安全的，重试可以从分片边界恢复。
         //
-        // A continuous stream such as FLV must not get these options: on
-        // reconnect libavformat resumes at the byte level with no notion of
-        // container framing, so the new response — its fresh FLV header and
-        // `onMetaData` tag included — lands in the middle of whatever tag was
-        // being written. That yields a structurally intact file whose H.264
-        // slices contain foreign bytes, which fails only at playback time as
-        // `PIPELINE_ERROR_DECODE`. A dropped continuous stream ends the task
-        // instead, and the manager records the rest into a new session.
+        // FLV 这类连续流绝不能拿到这些选项：重连时 libavformat 从字节层面恢复，
+        // 完全不了解容器分帧，于是新响应 —— 包括全新的 FLV 头和 `onMetaData`
+        // tag —— 会落进上一个正在写入的 tag 中间。结果是结构完整、H.264 切片中却
+        // 混入外来字节的文件，只在播放时以 `PIPELINE_ERROR_DECODE` 失败。
+        // 连续流断开时直接结束任务，剩余内容由 manager 记入新会话。
         set("reconnect", "1".into());
         set("reconnect_streamed", "1".into());
         set("reconnect_on_network_error", "1".into());
@@ -478,24 +466,22 @@ fn build_input_options(
     options
 }
 
-/// What a failed demuxer read means for the recording.
+/// 一次失败的解复用器读取对录制意味着什么。
 #[derive(Debug, PartialEq, Eq)]
 enum ReadFailure {
-    /// A recoverable corrupt packet: read again rather than end the recording.
+    /// 可恢复的损坏数据包：再次读取，而不是结束录制。
     Retry,
     Stop(StopReason),
 }
 
-/// Maps one demuxer read error to the reason the recording stops.
+/// 把一次解复用器读取错误映射为录制停止的原因。
 ///
-/// `cancelled` and `split_due` are exactly the two conditions the interrupt
-/// callback reports, and they are checked before the error itself. Once the
-/// callback has asked libavformat to abort, whichever error surfaces describes
-/// the aborted I/O and says nothing about the stream: FFmpeg's HLS demuxer
-/// reports an interrupted segment fetch as `AVERROR_EOF`, not `AVERROR_EXIT`.
-/// Reading that as a real end of stream finished a perfectly good recording as
-/// `interrupted` with 「直播流已结束」 even though the user had pressed stop and
-/// the file on disk was complete.
+/// `cancelled` 和 `split_due` 正是中断回调上报的两类条件，且它们先于错误本身
+/// 被检查。一旦回调要求 libavformat 中止，随后出现的任何错误描述的都是这次
+/// 被中止的 I/O，与流本身无关：FFmpeg 的 HLS 解复用器把被打断的分片抓取
+/// 报告为 `AVERROR_EOF` 而不是 `AVERROR_EXIT`。把它当成真正的流结束，
+/// 曾让一场完好的录制以 `interrupted` 和「直播流已结束」收场，
+/// 尽管用户按下的是停止键、磁盘上的文件也是完整的。
 fn classify_read_failure(
     error: Error,
     cancelled: bool,
@@ -522,12 +508,11 @@ enum StopReason {
     Cancelled,
     SplitLimit,
     StorageLow(u64),
-    /// The connection stayed open but stopped yielding writable media packets.
+    /// 连接保持打开，但不再产出可写的媒体数据包。
     Stalled,
-    /// The source began a different program than the one being recorded.
+    /// 源开始了一个不同于正在录制内容的节目。
     SourceChanged,
-    /// One output track could not accept packets for long enough that the rest
-    /// of the recording would be missing it entirely.
+    /// 某条输出轨道长时间无法接受数据包，导致录制剩余部分完全缺失它。
     TrackUnwritable {
         stream: i32,
         error: String,
@@ -535,8 +520,8 @@ enum StopReason {
     Failed(String),
 }
 
-/// Reported when a stream goes quiet without closing, so the recording ends with
-/// a cause the user can act on rather than an open task that never grows.
+/// 在流静默但未关闭时上报，使录制以用户可以采取行动的原因结束，
+/// 而不是留下一个永不增长的任务。
 fn stall_error() -> String {
     format!(
         "直播流 {} 秒内没有新的媒体数据，已停止录制",
@@ -545,7 +530,7 @@ fn stall_error() -> String {
 }
 
 impl StopReason {
-    /// The user-facing reason a recording stopped, for the reasons that carry one.
+    /// 录制停止的用户可见原因（仅限带有原因的那些情况）。
     fn error_message(&self) -> Option<String> {
         match self {
             Self::Cancelled | Self::SplitLimit => None,
@@ -582,9 +567,8 @@ pub(super) fn probe_media_duration(path: &Path) -> Result<u64, String> {
     Ok((duration_us as u128 / 1_000).min(u64::MAX as u128) as u64)
 }
 
-/// Keep one output epoch for every selected stream. DTS is the decode clock and
-/// stays monotonic even when video PTS is reordered by B-frames; shifting both
-/// timestamps by the same amount preserves their composition-time difference.
+/// 为每条选中的流维护独立的输出纪元。DTS 是解码时钟，即使视频 PTS 因
+/// B 帧而乱序也保持单调；两个时间戳平移相同量即可保持它们的组合时间差。
 struct PacketTimeline {
     epoch_offset_us: Option<i64>,
     last_input_clock_us: Vec<Option<i64>>,
@@ -599,18 +583,17 @@ struct PreviousEpoch {
     cutoff_us: i64,
 }
 
-/// Upper bound (in microseconds) for a credible live-stream packet clock.
-/// Values beyond this are produced by `AV_NOPTS_VALUE`, by overflow inside
-/// libav's rescale, or by truly corrupt source timestamps (常见于斗鱼等 FLV
-/// 流在 CDN 切换/重连后发生的跳变). Such packets are rewritten onto a
-/// synthetic monotonic clock instead of failing the whole recording.
+/// 可信直播数据包时钟的上限（微秒）。超过该值的取值来自 `AV_NOPTS_VALUE`、
+/// libav 重缩放中的溢出，或真正损坏的源时间戳（常见于斗鱼等 FLV 流在 CDN
+/// 切换/重连后发生的跳变）。这类数据包会被改写到合成的单调时钟上，
+/// 而不是让整场录制失败。
 const MAX_SANE_TIMESTAMP_US: i64 = 1_i64 << 47;
-/// Upper bound (in source time-base ticks) for a normalized output timestamp.
+/// 归一化输出时间戳的上限（以源 time-base tick 计）。
 const MAX_SANE_TIMESTAMP_TICKS: i64 = 1_i64 << 56;
-/// FFmpeg's "no timestamp" sentinel.
+/// FFmpeg 的"无时间戳"哨兵值。
 const AV_NOPTS_VALUE: i64 = i64::MIN;
 
-/// Treats `AV_NOPTS_VALUE` as an absent timestamp rather than a real value.
+/// 把 `AV_NOPTS_VALUE` 视为缺失的时间戳，而不是真实取值。
 fn usable_timestamp(value: Option<i64>) -> Option<i64> {
     value.filter(|value| *value != AV_NOPTS_VALUE)
 }
@@ -654,10 +637,9 @@ impl PacketTimeline {
         self.last_input_clock_us[stream_index] = None;
     }
 
-    /// Rewrites a packet whose source timestamps are absent or unrepresentable
-    /// onto a monotonic clock that continues right after the last written
-    /// packet, so the muxer never sees `NOPTS` or absurd values while the
-    /// recording keeps running.
+    /// 当源时间戳缺失或无法表示时，把数据包改写到紧接最后一个已写入数据包的
+    /// 单调时钟上，使封装器既看不到 `NOPTS` 也看不到荒谬取值，
+    /// 同时录制继续保持运行。
     fn synthesize_timestamps(
         &mut self,
         packet: &mut Packet,
@@ -689,9 +671,8 @@ impl PacketTimeline {
         let Some(mut last_input) = self.last_input_clock_us.get(stream_index).copied() else {
             return Err("Rust FFmpeg 时间轴轨道索引失效".into());
         };
-        // `AV_NOPTS_VALUE` must not be treated as a real clock value, or the
-        // rescale can overflow and previously aborted the recording with a
-        // "时间轴溢出" error. Strip it and fall through to a usable sibling.
+        // 不能把 `AV_NOPTS_VALUE` 当作真实时钟值，否则重缩放可能溢出，
+        // 此前曾以"时间轴溢出"错误中止录制。剥离它并落到可用的同侧取值上。
         let dts = usable_timestamp(packet.dts());
         let pts = usable_timestamp(packet.pts());
         if packet.dts().is_some() && dts.is_none() {
@@ -739,9 +720,8 @@ impl PacketTimeline {
         } else if previous_epoch_offset.is_none()
             && last_input.is_some_and(|previous| input_clock_us < previous)
         {
-            // Saturated arithmetic keeps a discontinuous stream alive instead
-            // of aborting the recording on an extreme PTS/DTS jump; final
-            // outputs are re-validated below before they reach the muxer.
+            // 饱和运算让不连续的流得以存活，而不是在极端 PTS/DTS 跳变上中止录制；
+            // 最终输出在下方向封装器提交前还会重新校验。
             self.start_new_epoch(stream_index, input_clock_us, time_base);
         }
 
@@ -861,8 +841,8 @@ fn update_progress(state: &SessionState, part: &Path, started: Instant) {
 }
 
 fn publish_part(part: &Path, final_path: &Path) -> std::io::Result<u64> {
-    // Windows requires a write-capable handle for FlushFileBuffers, which is
-    // what std::fs::File::sync_all uses under the hood.
+    // Windows 要求 FlushFileBuffers 使用可写句柄，
+    // std::fs::File::sync_all 底层正是调用它。
     let file = fs::OpenOptions::new().read(true).write(true).open(part)?;
     file.sync_all()?;
     drop(file);
@@ -912,11 +892,10 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
-    /// Opens the warmed recording proxy through the *in-process* libavformat
-    /// binding with the real `build_input_options` dictionary — the exact call
-    /// the recording performs. The CLI smoke test in `stream_proxy` proves the
-    /// proxy serves media; this one proves the option set the recording itself
-    /// passes can also describe those streams.
+    /// 通过*进程内* libavformat 绑定、携带真实 `build_input_options` 字典来打开
+    /// 预热过的录制代理 —— 与录制执行的是同一个调用。`stream_proxy` 里的 CLI
+    /// 冒烟测试证明代理能提供媒体；
+    /// 而这个测试证明录制自身传入的选项集也能描述这些流。
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "live Twitch in-process demux; requires TWITCH_VARIANT_URL and external network"]
     async fn live_twitch_recording_options_open_the_warmed_proxy_in_process() {
@@ -1027,8 +1006,8 @@ mod tests {
         options.iter().map(|(key, _)| key.as_str()).collect()
     }
 
-    /// The reconnect options splice a reconnected response into the middle of an
-    /// FLV tag, so a continuous stream must never receive them.
+    /// 重连选项会把重连后的响应拼接进某个 FLV tag 的中间，
+    /// 因此连续流绝不能收到这些选项。
     #[test]
     fn reconnect_options_are_limited_to_segmented_sources() {
         let recording_options = FfmpegRecordingOptions::default();
@@ -1060,10 +1039,9 @@ mod tests {
         assert!(keys.contains(&"seg_max_retry"));
     }
 
-    /// A 32 KB probe routinely ends inside a Twitch fMP4 init segment, so the
-    /// demuxer opens the playlist and still cannot describe the streams. HLS
-    /// therefore probes far past one segment, while a continuous stream keeps the
-    /// tiny budget its first tag already satisfies.
+    /// 32 KB 探测经常停在 Twitch fMP4 init 分片内部，解复用器打开了播放列表却
+    /// 仍无法描述各流。因此 HLS 的探测远超一个分片，
+    /// 而连续流保持极小的预算 —— 它的第一个 tag 已经满足。
     #[test]
     fn hls_probes_past_one_segment_while_continuous_streams_stay_small() {
         let recording_options = FfmpegRecordingOptions::default();
@@ -1100,8 +1078,8 @@ mod tests {
         }
     }
 
-    /// A corrupt packet must be dropped by the demuxer on every protocol rather
-    /// than remuxed into the recording.
+    /// 无论何种协议，损坏的数据包都必须由解复用器丢弃，
+    /// 而不是重新封装进录制。
     #[test]
     fn corrupt_packets_are_discarded_on_every_protocol() {
         let recording_options = FfmpegRecordingOptions::default();
@@ -1152,9 +1130,9 @@ mod tests {
 
     #[test]
     fn a_read_error_after_a_stop_request_is_a_cancellation_not_an_ended_stream() {
-        // FFmpeg's HLS demuxer aborts a segment fetch with `AVERROR_EOF`, so the
-        // error alone cannot distinguish "the user pressed stop" from "the
-        // broadcast ended". The interrupt conditions decide first.
+        // FFmpeg 的 HLS 解复用器以 `AVERROR_EOF` 中止分片抓取，
+        // 因此仅凭错误无法区分"用户按下停止"和"直播已结束"。
+        // 先由中断条件决定。
         for error in [Error::Eof, Error::Exit, Error::InvalidData, Error::Unknown] {
             assert!(
                 matches!(
@@ -1179,7 +1157,7 @@ mod tests {
             classify_read_failure(Error::Eof, false, false, 0),
             ReadFailure::Stop(StopReason::Failed("直播流已结束".into()))
         );
-        // Corrupt packets are retried up to the budget, then reported.
+        // 损坏数据包按预算重试，超过后上报。
         assert_eq!(
             classify_read_failure(Error::InvalidData, false, false, 0),
             ReadFailure::Retry
@@ -1203,8 +1181,8 @@ mod tests {
         );
     }
 
-    /// The two intentional stops carry no error; every other cause must explain
-    /// itself, or a recording would end with a blank reason.
+    /// 两种有意为之的停止不携带错误；其余每种原因都必须说明自己，
+    /// 否则录制会以空白原因收场。
     #[test]
     fn only_intentional_stops_have_no_error_message() {
         assert_eq!(StopReason::Cancelled.error_message(), None);
@@ -1322,8 +1300,8 @@ mod tests {
 
         timeline.normalize(&mut packet, time_base).unwrap();
 
-        // AV_NOPTS_VALUE dts is cleared instead of overflowing the offset;
-        // the packet keeps its usable pts on the normalized timeline.
+        // AV_NOPTS_VALUE 的 dts 被清除而不是令偏移溢出；
+        // 数据包在归一化时间轴上保留可用的 pts。
         assert_eq!(packet.dts(), None);
         assert_eq!(packet.pts(), Some(0));
     }
@@ -1341,8 +1319,8 @@ mod tests {
             timeline.normalize(packet, time_base).unwrap();
         }
 
-        // Every output timestamp stays inside a sane envelope and remains
-        // monotonic across the synthetic-to-real transition.
+        // 所有输出时间戳保持在合理范围内，
+        // 并在合成时钟到真实时钟的切换处保持单调。
         let dts: Vec<Option<i64>> = packets.iter().map(|packet| packet.dts()).collect();
         assert!(dts[0].is_some());
         assert!(dts[1].is_some());

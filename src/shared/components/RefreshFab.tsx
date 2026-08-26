@@ -9,7 +9,7 @@ import { isMobileClient } from "@/shared/clientPlatform";
 
 type RefreshFabProps = {
   onRefresh: () => void | Promise<unknown>;
-  /** Disables the control and shows a spinner while a refresh is in flight. */
+  /** 刷新在途时禁用控件并显示转圈。 */
   pending?: boolean;
   label?: string;
   className?: string;
@@ -32,15 +32,13 @@ export function RefreshFabVisibilityProvider({
 }
 
 /**
- * Desktop manual-refresh control for list pages.
+ * 列表页的桌面手动刷新控件。
  *
- * List queries deliberately never refetch on their own after the first visit,
- * so desktop clients use this button while mobile clients use pull-to-refresh.
+ * 列表查询刻意在首次访问后绝不自行重新抓取，
+ * 因此桌面客户端用这个按钮、移动客户端用下拉刷新。
  *
- * It renders into `document.body`: the page wrapper in Shell keeps a composited
- * transform from its entrance animation, which would otherwise turn into the
- * containing block for a fixed child and make the button scroll away with the
- * content.
+ * 它渲染进 `document.body`：Shell 的页面包装层因入场动画持有合成 transform,
+ * 否则会成为 fixed 子元素的包含块，使按钮随内容滚走。
  */
 export function RefreshFab({
   onRefresh,
@@ -63,7 +61,7 @@ export function RefreshFab({
             onClick={() => void onRefresh()}
             className={cn(
               "fixed right-4 bottom-4 z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:right-5 md:bottom-5",
-              // Clear the mobile bottom navigation bar and the device inset.
+              // 清除移动端底部导航栏与设备 inset。
               "max-md:bottom-[calc(5rem+env(safe-area-inset-bottom))]",
               className,
             )}

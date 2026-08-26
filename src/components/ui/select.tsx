@@ -61,9 +61,9 @@ function SelectContent({
   sideOffset = 4,
   align = "center",
   alignOffset = 0,
-  // Base UI defaults to native-select geometry, which lifts the popup so the
-  // selected option covers the trigger. Filters need the trigger to stay
-  // visible, so anchor below it unless a caller opts back in.
+  // Base UI 默认使用原生 select 的几何形态，会把弹层抬起、让选中项盖住触发器。
+  // 过滤器需要触发器保持可见，因此默认锚定在其下方，
+  // 调用方可显式选择退回原行为。
   alignItemWithTrigger = false,
   container,
   glass = false,
@@ -73,9 +73,9 @@ function SelectContent({
     SelectPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger"
   > & {
-    /** Portal target used by controls rendered inside a fullscreen element. */
+    /** 供渲染在全屏元素内部的控件使用的 Portal 目标。 */
     container?: HTMLElement | React.RefObject<HTMLElement | null> | null;
-    /** Use a project glass material supplied through className. */
+    /** 使用经 className 注入的项目玻璃材质。 */
     glass?: boolean;
   }) {
   return (

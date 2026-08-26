@@ -41,8 +41,7 @@ describe("rich danmaku content", () => {
     expect(normalizeDanmakuImageUrl("http://i0.hdslb.com/bfs/emote/legacy.png")).toBe(
       "https://i0.hdslb.com/bfs/emote/legacy.png",
     );
-    // Bilibili live's one-off emotes use this same CDN with `/bfs/live/`
-    // paths rather than `/bfs/emote/`.
+    // Bilibili 直播的一次性表情使用同一个 CDN 的 `/bfs/live/` 路径而非 `/bfs/emote/`。
     expect(
       normalizeDanmakuImageUrl(
         "http://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png",
@@ -86,8 +85,7 @@ describe("rich danmaku content", () => {
   });
 
   test("appends an aggregation suffix as its own fragment after a trailing emote", () => {
-    // The live layer and the recorded canvas both rely on this: a counter must
-    // never be folded into an image fragment.
+    // 直播层与录制 canvas 都依赖这一点：计数绝不能折叠进图片片段。
     expect(withDanmakuContentSuffix([{ type: "image", image_url: EMOTE_URL }], " ×3")).toEqual([
       { type: "image", image_url: EMOTE_URL },
       { type: "text", text: " ×3" },
@@ -138,8 +136,7 @@ describe("floating rich spans", () => {
 
 describe("danmaku emote request urls", () => {
   test("falls back to the direct CDN url when the image proxy is not running", () => {
-    // Outside Tauri the proxy never resolves, so the emote must still load
-    // directly instead of losing its picture.
+    // Tauri 之外代理永远不会就绪，表情必须仍能直接加载而不丢失图片。
     expect(danmakuImageRequestUrl(NORMALIZED_EMOTE_URL)).toBe(NORMALIZED_EMOTE_URL);
   });
 

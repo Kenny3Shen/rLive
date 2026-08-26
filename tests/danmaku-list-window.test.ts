@@ -21,8 +21,8 @@ describe("danmaku list retention window", () => {
 
     expect(next.length).toBe(DANMAKU_LIST_MAX_PINNED);
     expect(next.at(-1)).toBe(1_001);
-    // The two oldest rows were the ones evicted; the shift they cause is
-    // invisible only because the reader is pinned to the bottom.
+    // 被淘汰的正是最旧的两行；它们造成的位移之所以不可见，
+    // 只是因为读者钉在底部。
     expect(next[0]).toBe(2);
   });
 
@@ -33,8 +33,8 @@ describe("danmaku list retention window", () => {
     const full = range(0, DANMAKU_LIST_MAX_PINNED);
     const next = appendWithinDanmakuListWindow(full, [1_000, 1_001], capacity);
 
-    // Nothing is dropped from the top, so the rows the reader is looking at
-    // keep their offset and the list cannot jitter under them.
+    // 顶部没有丢弃任何东西，读者正在看的行保持偏移不变，
+    // 列表不会在脚下抖动。
     expect(next.length).toBe(DANMAKU_LIST_MAX_PINNED + 2);
     expect(next[0]).toBe(0);
     expect(next.at(-1)).toBe(1_001);
@@ -75,7 +75,7 @@ describe("danmaku list retention window", () => {
 
 describe("scroll compensation for a scrolled-up trim", () => {
   test("subtracts the removed height so the reading position holds", () => {
-    // 900px of rows came off the top of a 40_000px list while parked at 5_000.
+    // 停在 5_000 时，40_000px 列表顶部移走了 900px 的行。
     expect(scrollTopAfterDanmakuListTrim(5_000, 40_000, 39_100)).toBe(4_100);
   });
 
@@ -84,8 +84,8 @@ describe("scroll compensation for a scrolled-up trim", () => {
   });
 
   test("holds the top of the list still at scrollTop 0", () => {
-    // The reported bug: at the very top the offset cannot absorb the shift, so
-    // compensation must not invent movement of its own.
+    // 报告的 bug：在最顶部偏移无法吸收位移，
+    // 补偿绝不能自行编造移动量。
     expect(scrollTopAfterDanmakuListTrim(0, 40_000, 39_100)).toBe(0);
   });
 

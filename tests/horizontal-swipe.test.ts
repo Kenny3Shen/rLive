@@ -25,13 +25,13 @@ describe("horizontal tab swipe", () => {
   test("reports drag progress as a signed share of the surface", () => {
     expect(horizontalSwipeProgress(-180, 360)).toBe(-0.5);
     expect(horizontalSwipeProgress(90, 360)).toBe(0.25);
-    // The page never travels further than one surface, so neither does progress.
+    // 页面行程不会超过一个表面宽度，进度也是如此。
     expect(horizontalSwipeProgress(-720, 360)).toBe(-1);
     expect(horizontalSwipeProgress(-180, 0)).toBe(0);
   });
 
   test("averages release velocity over a window rather than the last two events", () => {
-    // A steady 0.5 px/ms drag reads as exactly that, whichever pair is sampled.
+    // 稳定的 0.5 px/ms 拖拽读出来就是它本身，无论采样到哪一对。
     const steady = [
       { x: 0, time: 0 },
       { x: 8, time: 16 },
@@ -39,9 +39,8 @@ describe("horizontal tab swipe", () => {
       { x: 24, time: 48 },
     ];
     expect(horizontalSwipeVelocity(steady, 32)).toBeCloseTo(0.5);
-    // A finger that stopped before lifting reports 0 instead of inheriting the
-    // speed it had before the pause: every earlier sample is outside the window
-    // measured back from the newest one, so a parked drag is judged on position.
+    // 抬起前停顿过的手指上报 0 而不是继承停顿前的速度：
+    // 从最新样本往回量的窗口不含更早样本，停驻的拖拽只按位置判断。
     expect(
       horizontalSwipeVelocity(
         [
@@ -59,20 +58,20 @@ describe("horizontal tab swipe", () => {
   test("commits on progress past the threshold or on a flick in the same direction", () => {
     const width = 360;
     const threshold = width * HORIZONTAL_SWIPE_COMMIT_PROGRESS;
-    // Positional: only a drag that carried the page far enough pages on release.
-    // Stated against the constant so the boundary cases stay meaningful if the
-    // threshold is retuned, rather than silently becoming both-sides-of-it.
+    // 按位置判定：只有把页面带得足够远的拖拽才在释放时翻页。相对常量表述，
+    // 使阈值重新调校后边界情况仍然有意义，
+    // 而不是悄悄变成"恰好两侧都不算"。
     expect(horizontalSwipeShouldCommit(-(threshold + 20), 0, width)).toBe(true);
     expect(horizontalSwipeShouldCommit(-threshold, 0, width)).toBe(true);
     expect(horizontalSwipeShouldCommit(-(threshold - 20), 0, width)).toBe(false);
     expect(horizontalSwipeShouldCommit(threshold + 20, 0, width)).toBe(true);
-    // A third of the surface is a deliberate drag and must page: near the
-    // midpoint it sprang back, which read as the gesture being ignored.
+    // 三分之一表面是刻意的拖拽，必须翻页：在中点附近它会弹回，
+    // 读起来像手势被忽略了。
     expect(horizontalSwipeShouldCommit(-width / 3, 0, width)).toBe(true);
-    // A flick pages from a short drag — the old 48px absolute rule could not.
+    // 一甩可以从短拖拽翻页 —— 过去的 48px 绝对规则做不到。
     expect(horizontalSwipeShouldCommit(-24, -0.9, width)).toBe(true);
     expect(horizontalSwipeShouldCommit(24, 0.9, width)).toBe(true);
-    // Pulling back past the midpoint cancels: the last intent wins over distance.
+    // 拉回越过中点即取消：最后的意图胜过距离。
     expect(horizontalSwipeShouldCommit(-300, 1.2, width)).toBe(false);
     expect(horizontalSwipeShouldCommit(300, -1.2, width)).toBe(false);
     expect(horizontalSwipeShouldCommit(0, -2, width)).toBe(false);
@@ -85,7 +84,7 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeTargetIndex(3, 4, -200, 0, 360)).toBeNull();
     expect(horizontalSwipeTargetItem(["a", "b", "c"], "b", -200, 0, 360)).toBe("c");
     expect(horizontalSwipeTargetItem(["a", "b", "c"], "a", 200, 0, 360)).toBeNull();
-    // Below the configured commit threshold the strip stays where it is.
+    // 低于配置的提交阈值时条带保持原位。
     expect(
       horizontalSwipeTargetItem(
         ["a", "b", "c"],
@@ -98,16 +97,16 @@ describe("horizontal tab swipe", () => {
   });
 
   test("derives the settle duration from remaining distance and release speed", () => {
-    // A flick covers its remaining travel quickly; a slow release eases out.
+    // 一甩快速覆盖剩余行程；慢速释放则缓缓减速。
     const fast = horizontalSwipeSettleDuration(240, 2.4);
     const slow = horizontalSwipeSettleDuration(240, 0.2);
     expect(fast).toBeLessThan(slow);
-    // Both stay inside the window that still reads as one continuous movement.
+    // 两者都保持在仍读作一次连续运动的窗口内。
     for (const duration of [fast, slow]) {
       expect(duration).toBeGreaterThanOrEqual(HORIZONTAL_SWIPE_SETTLE_MIN_MS);
       expect(duration).toBeLessThanOrEqual(HORIZONTAL_SWIPE_SETTLE_MAX_MS);
     }
-    // Already at rest: nothing to animate.
+    // 已在静止状态：没有可动画的东西。
     expect(horizontalSwipeSettleDuration(0, 1)).toBe(0);
     expect(horizontalSwipeSettleDuration(-240, -2.4)).toBe(fast);
   });
@@ -124,8 +123,7 @@ describe("horizontal tab swipe", () => {
   });
 
   test("caps page travel at a full surface width for the phone-style pan", () => {
-    // A full-width pan lets the page track the finger all the way across, so the
-    // surface width is the cap — not a fixed nudge.
+    // 整宽平移让页面一路跟手横穿，因此表面宽度才是上限 —— 不是固定推力。
     expect(horizontalSwipeDragOffset(1, 3, -500, 300)).toBe(-300);
     expect(horizontalSwipeDragOffset(1, 3, 500, 1_000)).toBe(500);
     expect(horizontalSwipeDragOffset(1, 3, 1_500, 1_000)).toBe(1_000);
@@ -145,11 +143,9 @@ describe("horizontal tab swipe", () => {
   });
 
   test("keeps the pixels under the finger when a single page is replaced", () => {
-    // In the `page` layout the element that followed the finger is reused for
-    // the incoming page, which renders at rest. Starting it one width across the
-    // travel direction leaves the pixels where the drag left them: subtracting
-    // that width recovers exactly the live drag, so settling to 0 continues the
-    // gesture instead of restarting it.
+    // `page` 布局中跟随手指的元素被进入页复用并以静止态渲染。让它从行程方向之外
+    // 一个宽度处开始，像素留在拖拽留下的位置：减去那个宽度正好还原实时拖拽，
+    // 收尾到 0 就是延续手势而不是重启它。
     const width = 360;
     for (const [drag, direction] of [
       [-140, 1],

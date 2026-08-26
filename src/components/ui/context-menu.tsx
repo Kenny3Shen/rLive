@@ -39,14 +39,12 @@ function ContextMenuContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
-        // A context menu anchors to a fixed virtual rect at the pointer, not to
-        // the trigger, so there is no anchor movement worth following. Leaving
-        // tracking on is actively harmful: Floating UI's `layoutShift` watcher
-        // rebuilds its IntersectionObserver whenever the anchor's rect differs
-        // from the one it captured, and on surfaces whose cards ride an
-        // animated `translate3d` track (home platform strip, history tab strip)
-        // that comparison keeps failing. The menu then churns observers for as
-        // long as it stays open until the main thread stops responding.
+        // 上下文菜单锚定在指针处的固定虚拟矩形，而不是触发元素，
+        // 因此不存在值得跟随的锚点移动。开启跟踪反而有害：
+        // Floating UI 的 `layoutShift` 监视器只要发现锚点矩形与其捕获值不同就会重建
+        // IntersectionObserver，而在卡片随动画 `translate3d` track 移动的表面上
+        // （首页平台条、历史页签条），这个比较会一直失败。菜单只要开着
+        // 就会不停重建 observer，直到主线程失去响应。
         disableAnchorTracking
       >
         <ContextMenuPrimitive.Popup

@@ -1,10 +1,9 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { SiteId } from "@/shared/types/live";
 
-// Every browser-facing query that can change with an authenticated platform
-// session keeps the site id in its second key slot. Keep credentials out of
-// query keys: a successful Cookie mutation merely marks the affected cache
-// entries stale, so active views refresh and future views fetch anew.
+// 每个可能随已认证平台会话变化的浏览器侧查询都把站点 id 放在第二个 key 槽位。
+// 凭据不进入 query key：成功的 Cookie 变更只是把受影响的缓存条目标记为过期，
+// 活动视图随之刷新、后续视图重新抓取。
 const COOKIE_DEPENDENT_QUERY_SCOPES = new Set([
   "recommend",
   "categories",
@@ -24,9 +23,9 @@ export function isCookieDependentSiteQuery(queryKey: QueryKey, siteId: SiteId): 
 }
 
 /**
- * Refresh browser and playback metadata after an account Cookie changes.
- * `invalidateQueries` immediately marks inactive entries stale and refetches
- * active ones, without ever putting Cookie values into the query cache.
+ * 账号 Cookie 变化后刷新浏览器与播放元数据。`invalidateQueries` 立即把非活动
+ * 条目标记为过期并重新抓取活动条目，
+ * 同时绝不把 Cookie 值放进查询缓存。
  */
 export function invalidateCookieDependentSiteQueries(
   queryClient: QueryClient,

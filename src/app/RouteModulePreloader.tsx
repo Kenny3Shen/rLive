@@ -78,7 +78,7 @@ function startIdleRoutePreloading(loaders: readonly RouteModuleLoader[]): () => 
   };
 }
 
-/** Preload code only, after the first screen and only when the connection allows it. */
+/** 只预加载代码：在首屏之后、且网络条件允许时才进行。 */
 export function RouteModulePreloader() {
   useEffect(() => {
     const connection = (navigator as Navigator & { connection?: RoutePreloadConnection })

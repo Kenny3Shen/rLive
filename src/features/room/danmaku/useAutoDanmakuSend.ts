@@ -14,7 +14,7 @@ import { getDanmakuSendConfig, type DanmakuSendStatus } from "./sending";
 
 export type AutoDanmakuSendPhase = "off" | "waiting" | "sending" | "paused";
 
-/** Session-only state shared by the room title bar and player action menus. */
+/** 房间标题栏与播放器操作菜单共享的仅会话状态。 */
 export type AutoDanmakuSendController = {
   text: string;
   intervalSeconds: number;
@@ -36,7 +36,7 @@ type UseAutoDanmakuSendOptions = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
-  /** Changes for a direct room switch even when the component stays mounted. */
+  /** 组件保持挂载时对直接切换房间的情况做出变更。 */
   roomSessionKey?: string;
 };
 
@@ -62,7 +62,7 @@ function waitingMessage(index: number, count: number, intervalMs: number): strin
   return `正在等待第 ${index + 1}/${count} 段；发送起始至少相隔 ${intervalSeconds} 秒。`;
 }
 
-/** `performance.now()` is monotonic, unlike wall-clock time after a system sync. */
+/** `performance.now()` 是单调的，不像系统对时之后的挂钟时间。 */
 function monotonicNow(): number {
   return performance.now();
 }
@@ -76,10 +76,9 @@ function createInFlightCompletion(): { done: Promise<void>; finish: () => void }
 }
 
 /**
- * Schedule a deliberate, session-scoped sequence of normal danmaku sends.
- * This hook belongs above the collapsible right panel so closing that panel
- * cannot silently stop a running sequence. It intentionally never persists
- * its draft or enabled state.
+ * 安排一段刻意的、仅限会话的普通弹幕发送序列。本 hook 位于可折叠右侧面板之上，
+ * 关闭该面板不会悄悄停止运行中的序列。
+ * 它刻意从不持久化草稿或启用状态。
  */
 export function useAutoDanmakuSend({
   siteId,
@@ -127,10 +126,9 @@ export function useAutoDanmakuSend({
     () => splitAutoDanmakuText(text, sendConfig?.maxLength ?? Number.MAX_SAFE_INTEGER),
     [sendConfig?.maxLength, text],
   );
-  // Effects clean timers after a render, but a due timer can otherwise sneak
-  // in between a room/text/permission update and that cleanup. Keep a render
-  // synchronous fence as well, so only the current session input may start a
-  // request.
+  // 副作用会在渲染后清理计时器，但到期的计时器可能趁房间/文本/权限更新与那次
+  // 清理之间溜进来。再保留一道渲染期同步围栏，
+  // 使只有当前会话的输入才能发起请求。
   const runKey = [
     roomKey,
     availabilityKey,
@@ -193,8 +191,7 @@ export function useAutoDanmakuSend({
     !validation.error,
   );
 
-  // A route change can reuse PlayerPane. Keep a direct-room-switch from
-  // carrying a session toggle into the newly mounted room.
+  // 路由切换可能复用 PlayerPane。防止直接切换房间把会话开关带进新挂载的房间。
   const previousRoomKeyRef = useRef(roomKey);
   useEffect(() => {
     if (previousRoomKeyRef.current === roomKey) return;
@@ -208,9 +205,8 @@ export function useAutoDanmakuSend({
     setStatusMessage("已暂停：已切换直播间。");
   }, [roomKey]);
 
-  // Credentials, the shared consent switch, and local text validation are
-  // live prerequisites. Losing any one stops the sequence instead of letting
-  // a stale timer submit a request after the next render.
+  // 凭据、共享授权开关与本地文本校验都是实时前提条件。失去任何一项就停止序列，
+  // 而不是让过期计时器在下一次渲染之后仍提交请求。
   useEffect(() => {
     if (!enabled || canEnable) return;
     setEnabled(false);
@@ -272,9 +268,8 @@ export function useAutoDanmakuSend({
         return;
       }
 
-      // A user can turn the feature off and back on while an old command is
-      // finishing. Wait for its completion rather than polling or overlapping
-      // write requests across room/session generations.
+      // 旧命令收尾期间用户可能关掉又重新打开功能。等待其完成，
+      // 而不是轮询或跨房间/会话代际重叠写入请求。
       if (inFlightRef.current) {
         setPhase("waiting");
         setCurrentSegmentIndex(segmentIndex);
@@ -423,8 +418,8 @@ export function useAutoDanmakuSend({
         return;
       }
 
-      // A deliberate re-enable starts a fresh sequence. The first message is
-      // not held behind the previous sequence's configured interval.
+      // 刻意的重新启用开始全新序列。第一条消息不会
+      // 被上一序列配置的间隔拖住。
       lastSendStartedAtRef.current = null;
       setEnabled(true);
       setPhase("waiting");

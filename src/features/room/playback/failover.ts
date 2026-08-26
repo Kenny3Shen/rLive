@@ -1,18 +1,18 @@
 /**
- * Pure failover policy ported from Simple Live `mediaError` / `mediaEnd`.
+ * 纯函数的播放失败切换策略。
  *
- * - Retry the current line up to `maxRetries` times (default 2).
- * - Then advance to the next line.
- * - When lines are exhausted, report failure.
+ * - 当前线路最多重试 `maxRetries` 次（默认 2）。
+ * - 随后切换到下一条线路。
+ * - 线路耗尽时报告失败。
  */
 
 export type FailoverInput = {
   retryCount: number;
   lineIndex: number;
   lineCount: number;
-  /** Max retries of the *current* line before advancing (Simple Live uses 2). */
+  /** 切换之前*当前*线路的最大重试次数。 */
   maxRetries?: number;
-  /** Ranked replacement chosen by health policy. `null` means exhausted. */
+  /** 由健康策略选出的有序替代线路。`null` 表示已耗尽。 */
   nextLineIndex?: number | null;
 };
 
@@ -32,7 +32,7 @@ export function nextFailoverAction(input: FailoverInput): FailoverAction {
 
   if (input.retryCount < maxRetries) {
     const nextRetry = input.retryCount + 1;
-    // First retry immediate; second waits 1s (Simple Live).
+    // 第一次立即重试；第二次等待 1s。
     const delayMs = nextRetry === 1 ? 0 : 1000;
     return {
       type: "retry",

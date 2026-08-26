@@ -36,10 +36,8 @@ export function HomePage() {
 
   const query = useInfiniteQuery({
     ...homeRecommendationsQueryOptions(siteId),
-    // Keep the current grid visible while a never-visited platform's first
-    // page is fetched. This avoids replacing usable content with a blank
-    // surface during a tab switch; the query cache still stores each platform
-    // separately under ["recommend", siteId].
+    // 在从未访问过的平台拉取首页时保持当前网格可见。避免页签切换期间用空白表面
+    // 替换可用内容；查询缓存仍按 ["recommend", siteId] 分别存储各平台。
     placeholderData: keepPreviousData,
   });
   const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = query;
@@ -58,18 +56,14 @@ export function HomePage() {
   const refreshing = query.isRefetching && !query.isFetchingNextPage;
 
   const refresh = () => {
-    // Rotating feeds (e.g. Douyin) only need one fresh batch; trimming first
-    // turns a sequential refetch of every stored page into a single request.
+    // 轮换型信息流（如抖音）只需要一批新数据；先裁剪可以把对所有已存页面的串行
+    // 重新抓取变成单次请求。
     trimRotatingRecommendPages(queryClient, siteId);
     void query.refetch();
   };
 
   return (
-    <PullToRefresh
-      onRefresh={refresh}
-      refreshing={refreshing}
-      className="mx-auto max-w-[1600px]"
-    >
+    <PullToRefresh onRefresh={refresh} refreshing={refreshing} className="mx-auto max-w-[1600px]">
       <RefreshFab
         onRefresh={refresh}
         pending={refreshing || query.isLoading}

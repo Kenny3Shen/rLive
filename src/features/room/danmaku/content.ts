@@ -1,16 +1,16 @@
 import { proxyImageUrl } from "@/shared/api/imageProxy";
 import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 
-/** Simple Live renders protocol image emotes at 1.35× the chat font size. */
+/** 协议图片表情以聊天字号的 1.35 倍渲染。 */
 export const DANMAKU_IMAGE_SCALE = 1.35;
-/** Total inline breathing room around one image emote, in CSS pixels. */
+/** 单个图片表情周围的内联呼吸空间总量，CSS 像素。 */
 export const DANMAKU_IMAGE_HORIZONTAL_GAP = 2;
-/** Shown in place of an emote whose URL is rejected or whose request fails. */
+/** URL 被拒绝或请求失败的表情的替代显示。 */
 export const DANMAKU_IMAGE_FALLBACK_TEXT = "[表情]";
 /**
- * Bilibili's CDN rejects the desktop webview's `tauri://…` Referer with 403.
- * Explicitly omitting it keeps DOM image requests compatible
- * with the same CDN URLs that normal Bilibili pages use.
+ * 桌面 webview 的 `tauri://…` Referer 会被 Bilibili CDN 以 403 拒绝。
+ * 显式省略它可使 DOM 图片请求与普通 Bilibili 页面使用的
+ * 同一批 CDN URL 保持兼容。
  */
 export const BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY = "no-referrer" as const;
 
@@ -30,9 +30,8 @@ function isTrustedBilibiliImageHost(hostname: string): boolean {
 }
 
 /**
- * Bilibili's danmaku payload may use a protocol-relative CDN URL. Convert it
- * to HTTPS and keep only the platform's image CDNs before it reaches an img
- * tag.
+ * Bilibili 弹幕负载可能使用协议相对的 CDN URL。在它进入 img 标签前转换为
+ * HTTPS，且只保留平台自有图片 CDN。
  */
 export function normalizeDanmakuImageUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -49,9 +48,8 @@ export function normalizeDanmakuImageUrl(value: unknown): string | null {
     ) {
       return null;
     }
-    // The native decoder performs the same upgrade. Retaining it here makes
-    // the browser-side guard resilient to legacy payloads and avoids a mixed
-    // content request if a future backend event reaches the WebView directly.
+    // 原生解码器执行同样的升级。这里保留一份使浏览器侧守卫能应对旧格式负载，
+    // 也避免未来后端事件直达 WebView 时产生混合内容请求。
     url.protocol = "https:";
     return url.href;
   } catch {
@@ -60,15 +58,14 @@ export function normalizeDanmakuImageUrl(value: unknown): string | null {
 }
 
 /**
- * Request URL for one already normalized emote address.
+ * 为已归一化的表情地址构造请求 URL。
  *
- * Emotes are the most repeated images in the app: a room draws from a few dozen
- * distinct ones, each appearing thousands of times across a session and again in
- * every recording of it. Routing them through the localhost image proxy puts
- * them in the same disk cache as avatars and category icons, so a repeat costs a
- * local read instead of a CDN round trip. Before the proxy has started the
- * direct CDN URL is returned, which still loads (see
- * `BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY`) but is not cached across restarts.
+ * 表情是应用中重复度最高的图片：一个房间只用到几十个不同的表情，
+ * 每个在会话中出现数千次，在其每场录制中还会再次出现。经本机图片代理路由后，
+ * 它们与头像、分类图标共用磁盘缓存，
+ * 重复出现只需本地读取而不是一次 CDN 往返。代理启动之前返回直连 CDN URL ——
+ * 仍可加载（见 `BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY`），
+ * 但不会跨重启缓存。
  */
 export function danmakuImageRequestUrl(imageUrl: string): string {
   return proxyImageUrl(imageUrl) ?? imageUrl;
@@ -90,10 +87,7 @@ export function hasValidDanmakuContentSpans(value: unknown): value is DanmakuCon
   );
 }
 
-/**
- * Returns rich fragments only when there is an actual image to substitute.
- * Text-only arrays use the regular allocation-free text path.
- */
+/** 只有确实存在图片需要替换时才返回富片段。纯文本数组走常规的无分配文本路径。 */
 export function richDanmakuContent(spans: unknown): readonly DanmakuContentSpan[] | null {
   if (!hasValidDanmakuContentSpans(spans) || !spans.some((span) => span.type === "image")) {
     return null;
@@ -112,10 +106,9 @@ export function richDanmakuContent(spans: unknown): readonly DanmakuContentSpan[
 }
 
 /**
- * Rich fragments for a floating bullet, with the `【SC】` marker restored when
- * the payload only carries the raw message. Both the live DOM renderer and the
- * recorded-playback canvas read spans through here so the two paths cannot
- * drift apart.
+ * 悬浮 bullet 的富文本片段；当负载只携带原始消息时补回 `【SC】` 标记。
+ * 直播 DOM 渲染器与录制回放 canvas 都从这里读取片段，
+ * 使两条路径无法产生偏差。
  */
 export function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentSpan[] | undefined {
   const spans = richDanmakuContent(event.spans);
@@ -129,7 +122,7 @@ export function floatingRichSpans(event: DanmakuEvent): readonly DanmakuContentS
   return spans;
 }
 
-/** Add an aggregation suffix after the last rich fragment without changing image order. */
+/** 在最后一个富片段之后追加聚合后缀，不改变图片顺序。 */
 export function withDanmakuContentSuffix(
   spans: readonly DanmakuContentSpan[],
   suffix: string,

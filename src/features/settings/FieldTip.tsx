@@ -4,9 +4,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { isMobileClient } from "@/shared/clientPlatform";
 
 /**
- * Inline info icon that replaces static FieldDescription copy in settings
- * pages; keep the trigger outside labelled elements so aria-labelledby
- * targets stay clean.
+ * 设置页中的内联信息图标，取代静态的 FieldDescription 文案；
+ * 把触发器放在带标签的元素之外，保持 aria-labelledby 目标干净。
  */
 export function FieldTip({ children }: { children: ReactNode }) {
   const mobile = isMobileClient();

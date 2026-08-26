@@ -69,14 +69,12 @@ function formatLatency(latencyMs: number): string {
 }
 
 /**
- * IPTV discovery deliberately does not render a player. Selecting a card is
- * the only path to the separate playback route, so simply entering /iptv can
- * never start a stream or claim a proxy session.
+ * IPTV 发现页刻意不渲染播放器。选择卡片是进入独立播放路由的唯一路径，
+ * 因此仅仅进入 /iptv 绝不会启动流或占用代理会话。
  *
- * Entrance motion is deliberately absent, matching the other card-grid pages
- * (home, category, search, follow): route-level travel is `PagePan`'s job, and
- * a second in-page stagger on top of it would read as two transitions for one
- * navigation.
+ * 入场动画刻意省略，与其他卡片网格页（首页、分类、搜索、关注）一致：
+ * 路由级移动是 `PagePan` 的职责，
+ * 在其之上再来一次页内交错会被读成一次导航两段过渡。
  */
 export function IptvPage() {
   const {
@@ -235,7 +233,7 @@ function IptvChannelGridSkeleton() {
   );
 }
 
-/** Compact card-corner status: icon plus latency, no textual verdict. */
+/** 紧凑的卡片角落状态：图标加延迟数值，没有文字结论。 */
 function IptvCardAvailability({
   availability,
 }: {

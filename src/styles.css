@@ -2,9 +2,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* The published package version has no `latin.css` entry point. Declare its
-   single Latin variable face directly so CJK chrome continues to use the
-   system fallback fonts instead of shipping unused regional Geist subsets. */
+/* 发布的包版本没有 `latin.css` 入口。直接声明其唯一的拉丁可变字面，
+   使中日韩界面继续使用系统兜底字体，而不打包用不到的区域 Geist 子集。 */
 @font-face {
   font-family: "Geist Variable";
   font-style: normal;
@@ -17,27 +16,26 @@
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* Class-based dark mode so applyTheme() can toggle html.dark */
+/* 基于类的暗色模式，供 applyTheme() 切换 html.dark */
 @custom-variant dark (&:where(.dark, .dark *));
 @custom-variant motion-reduced (&:where([data-motion="reduced"], [data-motion="reduced"] *));
 
 /*
-  Simple Live–inspired dark stage for rLive.
-  shadcn tokens live in :root / .dark; @theme maps them for Tailwind.
+  rLive 的深色舞台，风格源自 Simple Live。
+  shadcn token 位于 :root / .dark；@theme 把它们映射给 Tailwind。
 */
 :root {
   color-scheme: light;
   --radius: 0.75rem;
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
-  /* Keyboard focus is drawn as a neutral outline rather than in the blue accent.
-     The ring has to stay legible on primary, destructive and platform-tinted
-     surfaces alike, and an accent-colored one reads as a selected/active state
-     on exactly those controls that are already blue. */
+  /* 键盘焦点以中性描边呈现而不是蓝色强调色。ring 必须在 primary、destructive 与
+     平台色调表面上同样清晰；而强调色的 ring 恰恰在那些本就是蓝色的控件上
+     会被读成选中/激活状态。 */
   --focus-ring-color: color-mix(in oklab, var(--foreground) 72%, transparent);
   --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
-  /* light (rarely used — app defaults to dark) */
+  /* 浅色（很少使用 —— 应用默认深色） */
   --background: oklch(0.985 0.002 260);
   --foreground: oklch(0.18 0.02 260);
   --card: oklch(1 0 0);
@@ -75,28 +73,28 @@
   --settings-account: oklch(0.65 0.16 55);
   --settings-data: oklch(0.58 0.16 205);
   --settings-about: oklch(0.6 0.15 305);
-  /* A physical dimming layer: it stays neutral while every surface beneath it
-     continues to come from the active light/dark token set. */
+  /* 物理调光层：它保持中性，
+     其下每个表面继续来自活动的明/暗 token 集。 */
   --overlay: oklch(0 0 0 / 0.44);
 }
 
 .dark {
   color-scheme: dark;
-  /* charcoal stage #0b0c10 */
+  /* 炭黑舞台 #0b0c10 */
   --background: oklch(0.145 0.012 265);
   --foreground: oklch(0.96 0.005 260);
   --card: oklch(0.19 0.015 265);
   --card-foreground: oklch(0.96 0.005 260);
   --popover: oklch(0.2 0.015 265);
   --popover-foreground: oklch(0.96 0.005 260);
-  /* cool blue primary */
+  /* 冷蓝主色 */
   --primary: oklch(0.68 0.14 265);
   --primary-foreground: oklch(0.99 0 0);
   --secondary: oklch(0.25 0.015 265);
   --secondary-foreground: oklch(0.95 0.005 260);
   --muted: oklch(0.24 0.015 265);
   --muted-foreground: oklch(0.68 0.02 265);
-  /* bilibili pink accent */
+  /* bilibili 粉强调色 */
   --accent: oklch(0.7 0.16 10);
   --accent-foreground: oklch(0.99 0 0);
   --destructive: oklch(0.68 0.18 22);
@@ -136,9 +134,9 @@
   }
 }
 
-/* One View Transition animation owns the complete theme change. Disable the
-   browser's 250ms root-group interpolation and old-snapshot crossfade, then
-   reveal the settled new snapshot with a single CSS timeline. */
+/* 一个 View Transition 动画负责完整的主题切换。禁用浏览器 250ms 的根组插值与
+   旧快照交叉淡化，
+   再用单条 CSS 时间轴揭示稳定后的新快照。 */
 :root[data-theme-reveal="true"]::view-transition-group(root),
 :root[data-theme-reveal="true"]::view-transition-old(root) {
   animation: none;
@@ -158,9 +156,9 @@
   z-index: 2;
 }
 
-/* Theme-token changes must already be settled in the new snapshot. Components
-   with transition-colors/transition-all would otherwise keep interpolating
-   behind the circular reveal and become visible as a second animation. */
+/* 主题 token 变化必须已在新快照中稳定。带 transition-colors/transition-all 的组件
+   否则会继续在圆形揭示后面插值，
+   表现为第二段动画。 */
 :root[data-theme-reveal="true"] *,
 :root[data-theme-reveal="true"] *::before,
 :root[data-theme-reveal="true"] *::after {
@@ -230,9 +228,9 @@ body {
   font-family: var(--font-sans);
 }
 
-/* Direct-manipulation feedback starts on pointer down. The scale is restrained
-   enough for dense controls, and only explicit surfaces opt in so player video,
-   gesture tracks and drag transforms never compete with it. */
+/* 直接操作的反馈从指针按下开始。缩放幅度对密集控件足够克制；
+   只有显式表面选择加入，
+   播放器视频、手势 track 和拖拽 transform 绝不会与它竞争。 */
 [data-motion-press],
 .motion-card {
   transform-origin: center;
@@ -287,9 +285,9 @@ body {
   transition-property: background-color, border-color, color, box-shadow, opacity;
 }
 
-/* Settings uses a padded back-button slot instead of a negative-margin icon.
-   The slot keeps the hover/focus surface inside the page-pan clip while still
-   aligning the title with the content column. */
+/* 设置页使用带内边距的返回按钮槽位而不是负外边距图标。槽位让悬停/聚焦表面留在
+   页面平移裁剪之内，
+   同时标题仍与内容列对齐。 */
 .settings-detail-header {
   min-height: 3.25rem;
 }
@@ -320,8 +318,8 @@ body {
   transition-timing-function: var(--motion-ease-out);
 }
 
-/* Focus no longer adds an accent border or shadow: keyboard focus is expressed
-   by the one app-wide outline, while pointer focus needs no separate glow. */
+/* 聚焦不再添加强调色边框或阴影：键盘焦点由全局唯一的描边表达，
+   指针焦点不需要单独的光晕。 */
 .settings-search:focus-within {
   border-color: var(--border);
   box-shadow: none;
@@ -332,16 +330,12 @@ body {
   transition-property: background-color, border-color, color, box-shadow;
 }
 
-/* Keyboard focus is intentionally one app-wide treatment. Components may
-   still use focus-visible utilities for their interaction logic, but the
-   visible indicator itself must not vary between controls.
+/* 键盘焦点刻意只有一种全局处理。组件仍可用 focus-visible 工具类做交互逻辑，
+   但可见指示本身不得因控件而异。
 
-   The shadcn-derived primitives previously added accent-colored border/ring
-   utilities individually. Those declarations are kept out of the primitives
-   now, leaving this rule as the single source of the keyboard outline. The
-   zero-specificity `:where()` selector also lets a deliberately specialized
-   control opt into a different geometry without changing the app-wide color
-   token. */
+   源自 shadcn 的原语过去各自添加强调色边框/ring 工具类。现在这些声明被移出原语，
+   让这条规则成为键盘描边的唯一来源。零优先级的 `:where()` 选择器也让刻意特化的
+   控件可以在不改动全局颜色 token 的前提下选择不同几何形态。 */
 :where(
   a[href],
   area[href],
@@ -369,19 +363,18 @@ body {
   box-shadow: none;
 }
 
-/* Composite controls paint their focus treatment on a wrapper while the real
-   focus target is a nested input, so `:focus-visible` never matches the painted
-   element and the rule above cannot reach them. Give the wrapper the same
-   outline instead, so addons and inline buttons stay inside the ring. Only the
-   outline is set here: the wrapper's own resting box-shadow (elevation) has to
-   survive, and the accent glow is removed at its source in the components. */
+/* 复合控件把焦点绘制在包装层上而真正的焦点目标是内嵌输入框，`:focus-visible`
+   匹配不到绘制的元素、上面的规则够不着它们。改为给包装层同样的描边，
+   使附加件与内联按钮留在 ring 之内。这里只设 outline：
+   包装层自身的静态 box-shadow（海拔）必须幸存，
+   强调色光晕已在组件源头移除。 */
 [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
 }
 
-/* Full motion is the product default. OS-level reduced motion is an implicit
-   accessibility override, so it does not reintroduce a user-facing setting. */
+/* 完整动态是产品默认值。OS 级减少动态是隐式的无障碍覆盖，
+   不再重新引入用户可见的设置项。 */
 @media (prefers-reduced-motion: reduce) {
   :root[data-motion="full"] [data-motion-press],
   :root[data-motion="full"] .motion-card,
@@ -398,9 +391,8 @@ body {
   }
 }
 
-/* Base UI keeps popup nodes mounted through their exit state. Transitions can
-   therefore reverse from the current frame when a control is toggled rapidly,
-   unlike keyframes which restart the whole entrance or exit sequence. */
+/* Base UI 让弹层节点在退出状态期间保持挂载。因此过渡可以在当前帧上反向进行，
+   即使控件被快速切换 —— 关键帧则会重启整段进出场序列。 */
 .motion-popup,
 .motion-tooltip {
   transform: translate3d(0, 0, 0) scale(1);
@@ -414,11 +406,10 @@ body {
   transition-duration: 140ms;
 }
 
-/* Layer promotion lives only on the starting/ending styles, never at rest: a
-   persistent will-change keeps the popup composited for its whole lifetime,
-   which rasterizes text on the GPU and blurs it at fractional device pixel
-   ratios (e.g. Windows 125%/150% scaling). The state is applied one frame
-   before the transition runs, so the layer is still promoted in time. */
+/* 层的提升只存在于起止样式，静止时绝不保留：持久的 will-change 会让弹层整个
+   生命周期都被合成，文字在 GPU 上栅格化，
+   在小数设备像素比（如 Windows 125%/150% 缩放）下发虚。
+   该状态在过渡运行前一帧应用，层仍能及时提升。 */
 :is(.motion-popup, .motion-tooltip)[data-starting-style],
 :is(.motion-popup, .motion-tooltip)[data-ending-style] {
   opacity: 0;
@@ -458,8 +449,8 @@ body {
   transition-duration: 0ms;
 }
 
-/* Item-aligned selects reposition the popup so the current option sits over
-   the trigger. Scaling that geometry makes the option drift under the cursor. */
+/* 与选项对齐的下拉会把弹层重定位到当前选项盖住触发器的位置。
+   缩放这套几何会让选项在光标下漂移。 */
 .motion-popup[data-align-trigger="true"] {
   transition-duration: 0ms;
 }
@@ -494,7 +485,7 @@ body {
 .motion-dialog:is([data-starting-style], [data-ending-style]) {
   scale: 0.96;
   opacity: 0;
-  /* Same at-rest-promotion hazard as the popup classes above. */
+  /* 与上面弹层类相同的静止期提升隐患。 */
   will-change: scale, opacity;
 }
 
@@ -507,7 +498,7 @@ body {
   transition: transform 240ms var(--motion-ease-drawer);
 }
 
-/* Same at-rest-promotion hazard as the popup classes above. */
+/* 与上面弹层类相同的静止期提升隐患。 */
 .motion-drawer:is([data-starting-style], [data-ending-style]) {
   will-change: transform;
 }
@@ -576,11 +567,9 @@ body {
   transition-property: opacity;
 }
 
-/* On touch-first devices, browser tap flashes and accidental text selection
-   make card- and control-heavy pages feel like desktop web content. Scope the
-   treatment to interactive UI so normal article text and form values remain
-   selectable. `manipulation` retains pan and pinch zoom while removing the
-   legacy double-tap delay. */
+/* 触摸优先设备上，浏览器的点按闪烁与误选文本会让卡片和控件密集的页面读起来像
+   桌面网页。把这套处理限定在交互 UI 上，普通文章文本与表单取值仍可选择。
+   `manipulation` 保留平移与双指缩放并移除遗留的双击延迟。 */
 @media (pointer: coarse) {
   :where(
     a[href],
@@ -602,9 +591,8 @@ body {
   }
 }
 
-/* A short landscape phone is primarily a viewing surface. Keep its bottom
-   navigation reachable but compact: icons retain a 44px target while labels
-   and excess shell padding no longer consume a fifth of the viewport. */
+/* 较矮的横屏手机首先是观看表面。保持底部导航可达但紧凑：图标保留 44px 目标，
+   标签与多余的外壳内边距不再吃掉五分之一的视口。 */
 @media (max-height: 540px) and (orientation: landscape) and (pointer: coarse) {
   .app-shell [data-slot="app-sidebar"] {
     position: fixed;
@@ -671,8 +659,8 @@ body {
     display: none;
   }
 
-  /* Padding lives on the scrolling page wrapper, not the clipped main pane, so
-     the entrance transform cannot enlarge an ancestor's scrollable area. */
+  /* 内边距放在滚动页面包装层上而非被裁剪的主面板，
+     入场 transform 就无法扩大祖先的可滚动区域。 */
   .app-shell [data-slot="app-page"] {
     padding: 0.75rem;
     padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
@@ -683,49 +671,43 @@ body {
   }
 }
 
-/* Android uses edge-to-edge activity content. Keep the app below the system
-   status area on tablets too, where the compact Tailwind breakpoint does not
-   apply, while mobile bottom chrome accounts for the navigation gesture area. */
+/* Android 使用 edge-to-edge 的 Activity 内容。在紧凑 Tailwind 断点不适用的平板上
+   也把应用保持在系统状态区之下，
+   同时移动端底部 chrome 为导航手势区留出余量。 */
 html[data-platform="android"] .app-shell {
   padding-top: env(safe-area-inset-top);
 }
 
-/* Hold that padding still while a player enters fullscreen.
+/* 播放器进入全屏期间保持这份内边距不动。
 
-   Entering fullscreen hides the system bars (and may lock orientation), which
-   animates `env(safe-area-inset-top)` down over several frames. The stage only
-   leaves normal flow once `:fullscreen` applies, so until then each intermediate
-   inset reflowed the windowed room: the top bar and the fixed-ratio video slid
-   up while the `flex-1` danmaku panel stretched to absorb the freed height —
-   visible as the chat growing taller just before the picture takes over.
+   进入全屏会隐藏系统栏（并可能锁定方向），`env(safe-area-inset-top)` 会经过数帧
+   动画降下来。舞台要等 `:fullscreen` 生效才离开常规文档流，
+   在那之前每个中间 inset 都会重排窗口化的房间：顶栏和固定比例的视频上滑、
+   `flex-1` 弹幕面板拉伸吸收腾出的高度 —— 表现为画面接管前聊天突然变高。
 
-   `beginFullscreenTransition` records the pre-transition padding in the custom
-   property below, so this pins the shell to exactly the height it already had
-   rather than to a guess. `!important` is required: the shell also carries a
-   Tailwind `max-md:pt-[env(safe-area-inset-top)]` utility, which this rule
-   cannot outrank on specificity alone. */
+   `beginFullscreenTransition` 把过渡前的内边距记入下方自定义属性，
+   因此这里钉住的正是外壳已有的高度而不是猜测。需要 `!important`：
+   外壳还带着 Tailwind 的 `max-md:pt-[env(safe-area-inset-top)]` 工具类，
+   这条规则无法仅凭优先级胜过它。 */
 html[data-fullscreen-transition="true"] .app-shell {
   padding-top: var(--fullscreen-transition-safe-area-top) !important;
 }
 
-/* Fullscreen player stage.
+/* 全屏播放器舞台。
 
-   Two mechanisms feed this one rule:
-   - Mobile web uses the HTML Fullscreen API, matched by the `:fullscreen`
-     pseudo-classes, and the browser promotes the element to the top layer.
-   - Both Tauri clients instead lift this flex-child stage out of flow with
-     `data-fullscreen="true"`, so it overlays the app chrome as a fixed,
-     full-window layer. Desktop pairs that with a NATIVE window fullscreen,
-     because WebView2 will not grow a maximized window past the work area for
-     HTML fullscreen — an HTML `:fullscreen` element renders at screen height
-     while the viewport is still work-area height, the taskbar-height black band
-     at the bottom. Android pairs it with native immersive system bars, because
-     `WebChromeClient.onShowCustomView` reparents the rendered content into a new
-     View and that surface handoff shows several fully black frames before the
-     new View draws (see androidImmersive.ts).
+   两条机制汇入这一条规则：
+   - 移动 Web 使用 HTML Fullscreen API，由 `:fullscreen` 伪类匹配，
+   浏览器把元素提升到 top layer。
+   - 两个 Tauri 客户端改用 `data-fullscreen="true"` 把这个 flex 子级舞台移出文档流，
+   作为固定全窗口层覆盖应用 chrome。桌面端配合原生窗口全屏，
+   因为 WebView2 不允许 HTML 全屏把最大化窗口撑过工作区 —— HTML `:fullscreen`
+   元素按屏幕高度渲染而视口仍是工作区高度，底部出现任务栏高的黑条。
+   Android 配合原生沉浸式系统栏，因为 `WebChromeClient.onShowCustomView`
+   会把渲染内容重新挂到新 View 上，那次表面交接会在新 View 绘制前黑掉数帧
+   （见 androidImmersive.ts）。
 
-   `inset: 0` fills whichever surface applies. The z-index sits above the app
-   title bar and the room's bottom action bar so no chrome shows through. */
+   `inset: 0` 铺满生效的那条路径。z-index 高于应用标题栏与房间底部的操作栏，
+   任何 chrome 都不会透出来。 */
 [data-player-stage]:fullscreen,
 [data-player-stage]:-webkit-full-screen,
 [data-player-stage][data-fullscreen="true"] {
@@ -739,18 +721,15 @@ html[data-fullscreen-transition="true"] .app-shell {
   max-height: none;
 }
 
-/* Let the picture fill that stage in the SAME frame it becomes fullscreen.
+/* 让画面在变为全屏的同一帧铺满该舞台。
 
-   The browser applies `:fullscreen` synchronously, but the matching React
-   layout (`portraitStackedPlayer`) only flips after fullscreenchange dispatches
-   a state update. For the frame in between, the stage already covers the screen
-   while the video surface still carries the portrait-stack sizing
-   (`aspect-video` + `shrink-0`) — the picture stays a 16:9 band at the top with
-   black below it. That one frame is the flash users still saw after the
-   safe-area freeze removed the reflow.
+   浏览器同步应用 `:fullscreen`，但对应的 React 布局（`portraitStackedPlayer`）要等
+   fullscreenchange 派发状态更新后才翻转。中间那一帧里舞台已经盖住屏幕而视频表面
+   还带着竖屏堆叠尺寸（`aspect-video` + `shrink-0`）—— 画面停在顶部一条 16:9 带、
+   下方全黑。这一帧正是安全区冻结消除回流后用户仍看到的闪烁。
 
-   Restating the fullscreen geometry in CSS makes both halves land together, so
-   the React re-render that follows is a no-op rather than a correction. */
+   在 CSS 中复述全屏几何让两半同时落位，
+   随后的 React 重渲染变成无操作而不是一次修正。 */
 [data-player-stage]:fullscreen > [data-player-video-surface],
 [data-player-stage]:-webkit-full-screen > [data-player-video-surface],
 [data-player-stage][data-fullscreen="true"] > [data-player-video-surface] {
@@ -759,16 +738,14 @@ html[data-fullscreen-transition="true"] .app-shell {
   aspect-ratio: auto;
 }
 
-/* The same gap exists on the way out, in the opposite direction.
+/* 退出方向存在同样的间隙，只是方向相反。
 
-   Leaving fullscreen drops `:fullscreen` synchronously while the React classes
-   are still the fullscreen variant, so for one frame the stage is back in flow
-   with the picture stretched by `flex-1` instead of held at 16:9 — the video
-   reads as jumping taller before snapping back.
+   离开全屏时 `:fullscreen` 被同步移除而 React 类还是全屏变体，
+   有一帧舞台回到文档流、画面被 `flex-1` 拉伸而不是保持 16:9 ——
+   视频看起来先跳高再弹回。
 
-   `data-portrait-stack` is derived without `player.mode`, so it is already true
-   at that moment and restores the ratio in the same frame. The `:not()` guard
-   hands control back to the rule above while fullscreen actually applies. */
+   `data-portrait-stack` 的推导不依赖 `player.mode`，所以那一刻它已经为 true，
+   在同一帧恢复比例。`:not()` 守卫在全屏真正生效时把控制权交还给上面的规则。 */
 [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"])
   > [data-player-video-surface] {
   flex: none;
@@ -776,9 +753,8 @@ html[data-fullscreen-transition="true"] .app-shell {
   width: 100%;
 }
 
-/* The stage and its wrapper shed their own fullscreen sizing on the same frame,
-   so the ratio above has a parent that hugs it instead of one still filling the
-   column. */
+/* 舞台与其包装层在同一帧脱掉各自的全屏尺寸，
+   使上面的比例有一个贴合它的父级，而不是仍在填满列的父级。 */
 [data-room-player-frame]:has(
   > [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"])
 ),
@@ -788,30 +764,27 @@ html[data-fullscreen-transition="true"] .app-shell {
   min-height: 0;
 }
 
-/* The chrome inset belongs to the same frame.
+/* chrome inset 属于同一帧。
 
-   Portrait stacking sets it to 0 because the controls float over the video's
-   bottom edge rather than the window's; fullscreen owns the window again and
-   must reserve the gesture bar. It is written as an inline style, so `!important`
-   is the only way a rule can win — without it the overlays anchored to this
-   variable (super chat, captions) would shift once React catches up. */
+   竖屏堆叠把它设为 0，因为控件悬浮于视频底边而非窗口底边；全屏重新拥有窗口，
+   必须为手势栏预留。它以内联样式写入，因此 `!important` 是规则获胜的唯一方式 ——
+   否则锚定在这个变量上的浮层（超级留言、字幕）会在 React 追上来时移动一次。 */
 [data-player-stage]:fullscreen,
 [data-player-stage]:-webkit-full-screen,
 [data-player-stage][data-fullscreen="true"] {
   --player-chrome-inset: env(safe-area-inset-bottom) !important;
 }
 
-/* Room and IPTV channel grids can retain many cards after infinite scrolling or
-   a "show more" page. Chromium can skip offscreen layout/paint for each complete
-   card while preserving a stable placeholder size for scrolling. */
+/* 房间与 IPTV 频道网格在无限滚动或"加载更多"后可能保留大量卡片。Chromium 可以
+   对每张完整卡片跳过屏外布局/绘制，
+   同时保持稳定的占位尺寸用于滚动。 */
 .room-card {
   content-visibility: auto;
   contain-intrinsic-size: auto 13rem;
 }
 
-/* Adjacent mobile platform pages remain mounted for the finger-following
-   preview. Isolate their layout/paint work and stop fully offscreen loaders
-   from consuming animation frames until that panel becomes active. */
+/* 相邻的移动端平台页面保持挂载以便跟手预览。隔离它们的布局/绘制工作，
+   并在面板激活之前阻止完全屏外的加载器消耗动画帧。 */
 [data-slot="app-swipe-panel"] {
   contain: layout paint style;
 }
@@ -822,8 +795,8 @@ html[data-fullscreen-transition="true"] .app-shell {
   animation-play-state: paused !important;
 }
 
-/* The native danmaku window is transparent. Keep its top-level surface clear
-   rather than inheriting the regular application background. */
+/* 原生弹幕窗口是透明的。保持其顶层表面干净，
+   不继承常规的应用背景。 */
 html.overlay-window,
 html.overlay-window body,
 html.overlay-window #root {
@@ -836,10 +809,9 @@ html.overlay-window #root {
   scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent) transparent;
 }
 
-/* Compact player chrome is intentionally denser than the app-wide 44px touch
-   floor. It sits on a video edge and contains only familiar media actions;
-   limiting this override to the marked player bar keeps regular mobile forms
-   and navigation comfortably sized. */
+/* 紧凑播放器 chrome 刻意比全局 44px 触摸下限更密。它贴着视频边缘且只包含熟悉的
+   媒体操作；把这个覆盖限制在被标记的播放器控制条上，
+   普通移动表单与导航保持舒适的尺寸。 */
 [data-slot="player-controls-bar"][data-compact="true"] [data-slot="button"] {
   width: 2rem !important;
   min-width: 2rem !important;
@@ -875,9 +847,9 @@ html.overlay-window #root {
   height: 1rem;
 }
 
-/* Kept as an explicit opt-in for elements that are not in the app-wide focus
-   selector list (custom roles, wrappers). It now draws the same neutral outline
-   as that rule instead of an accent-colored ring, so the two cannot diverge. */
+/* 保留为不在全局焦点选择器列表中的元素（自定义角色、包装层）提供的显式选择
+   入口。它现在绘制与那条规则相同的中性描边而不是强调色 ring，
+   两者不可能产生分歧。 */
 @utility focus-ring {
   outline: none;
 
@@ -887,11 +859,10 @@ html.overlay-window #root {
   }
 }
 
-/* Player chrome sits directly on video, where the app's foreground-derived ring
-   has no reliable contrast: the backdrop is whatever frame is on screen. These
-   controls keep a white outline, and the geometry is shared with the app-wide
-   ring so only the color differs. Inset, because an outward ring on a control
-   flush against the video edge would be clipped. */
+/* 播放器 chrome 直接位于视频上，应用以前景色派生的 ring 在这里没有可靠对比度：
+   背景就是屏幕上的任意一帧。这些控件保留白色描边，
+   几何与全局 ring 共享，只有颜色不同。用 inset：紧贴视频边缘的控件向外 ring
+   会被裁剪。 */
 @utility focus-ring-overlay {
   outline: none;
 
@@ -901,20 +872,18 @@ html.overlay-window #root {
   }
 }
 
-/* Glassmorphism control surface.
+/*
+ * 毛玻璃控制表面。
  *
- * The panel itself carries no background: the fill lives on a `::before` layer
- * that is mostly transparent, so what you actually see is the blurred page or
- * video behind it. That is the whole point of the material -- a flat opaque
- * fill with a gradient painted on top reads as a gradient, not as glass.
+ * 面板本身不带背景：填充位于一层基本透明的 `::before` 上，
+ * 真正看到的是其后被模糊的页面或视频。这正是这种材质的意义 ——
+ * 一块画着渐变的不透明填充读出来的是渐变而不是玻璃。
  *
- * Backgrounds go on the pseudo-element rather than the panel so a caller can
- * keep using `bg-transparent` to strip a component's default `bg-popover`
- * without also erasing this material.
+ * 背景放在伪元素而不是面板上，调用方就能继续用 `bg-transparent` 去掉组件默认的
+ * `bg-popover` 而不抹掉这层材质。
  *
- * `backdrop-filter` is doing the real work, so a browser without it would show
- * unreadable text over the raw backdrop. The @supports fallback below swaps in
- * a nearly-solid fill for that case.
+ * 真正干活的是 `backdrop-filter`，没有它的浏览器会在原始背景上显示无法阅读的文字。
+ * 下方的 @supports 兜底在这种情况换入近乎实心的填充。
  */
 @utility glass-surface {
   position: relative;
@@ -935,7 +904,7 @@ html.overlay-window #root {
     z-index: -1;
     pointer-events: none;
     border-radius: inherit;
-    /* Low alpha: the backdrop must remain visible through the panel. */
+    /* 低透明度：背景必须能透过面板看见。 */
     background-color: color-mix(in oklab, var(--popover) 32%, transparent);
   }
 
@@ -946,9 +915,8 @@ html.overlay-window #root {
   }
 }
 
-/* Same material over video. Keep the blur deliberately lighter than app glass:
-   every decoded frame changes the backdrop, so a large radius would make an
-   open player popover repeatedly sample a costly moving surface. */
+/* 视频之上的同种材质。模糊刻意比应用玻璃轻：每一帧解码都会改变背景，
+   大半径会让打开的播放器弹窗反复采样一块昂贵的变化表面。 */
 @utility glass-surface-overlay {
   position: relative;
   isolation: isolate;
@@ -978,27 +946,25 @@ html.overlay-window #root {
   }
 }
 
-/* Bottom player chrome, the way ordinary video players draw it: a scrim that
- * fades from a dark bottom edge up into the picture, with no top border and no
- * blur. The controls read as part of the video rather than as a panel sitting
- * on top of it, and the picture stays fully visible right up to the buttons.
+/*
+ * 底部播放器 chrome，普通视频播放器的画法：从深色底边向上渐隐入画面的遮罩，
+ * 无顶边框、无模糊。控件读作视频的一部分而不是叠在其上的面板，
+ * 画面一直完整可见直到按钮处。
  *
- * Why a scrim instead of the glass material: glass needs a hard edge to read as
- * a surface, and that edge is exactly what makes the bar look like a separate
- * strip bolted to the bottom of the frame. It also means `backdrop-filter`
- * resampling a new decoded frame on every paint, for a bar that spans the whole
- * width of the video.
+ * 为什么用遮罩而不是玻璃材质：玻璃需要一条硬边才能读作表面，而那条边恰恰让控制
+ * 条看起来像一条铆在画面底部的独立板条。这也意味着 `backdrop-filter`
+ * 要在每次绘制时对一块横跨整个视频宽度的条重新采样新解码的帧。
  *
- * The gradient goes on a `::before` layer so callers keep using `bg-transparent`
- * to strip a component default, matching the glass utilities. It extends above
- * the bar's own box (`inset: auto 0 0`, taller than 100%) so the fade starts
- * well before the first control and no banding edge lands on a glyph.
+ * 渐变放在 `::before` 层上，调用方继续用 `bg-transparent` 去掉组件默认值，
+ * 与玻璃工具类一致。它延伸超出控制条自身盒子（`inset: auto 0 0`，高于 100%），
+ * 使渐隐在第一个控件之前很早就开始，
+ * 色带边缘不会落在字形上。
  *
- * Stops are plain sRGB with explicit alpha rather than `in oklab`: that syntax
- * needs a recent Chromium, and an Android WebView too old to parse it would
- * drop the whole declaration and leave white glyphs on raw video. A
- * black-to-transparent-black ramp interpolates cleanly in sRGB anyway — the
- * midpoint graying that motivates oklab affects light-to-transparent ramps. */
+ * 色标使用带显式 alpha 的普通 sRGB 而不是 `in oklab`：那个语法需要较新的 Chromium，
+ * 解析不了的过老 Android WebView 会丢弃整条声明，留下白色字形压在原始视频上。
+ * 黑到透明黑的渐变本来就在 sRGB 中插值良好 —— 促使人们用 oklab 的中点灰化问题
+ * 影响的是亮色到透明的渐变。
+ */
 @utility player-scrim-overlay {
   position: relative;
   isolation: isolate;
@@ -1007,7 +973,7 @@ html.overlay-window #root {
     content: "";
     position: absolute;
     inset: auto 0 0;
-    /* Reach past the control row so the fade is gradual, not a visible band. */
+    /* 越过控制行使渐变更平缓，而不是一条可见色带。 */
     height: 220%;
     z-index: -1;
     pointer-events: none;
@@ -1021,12 +987,12 @@ html.overlay-window #root {
   }
 }
 
-/* Fullscreen top chrome (room title, host, overflow menu). Same material and
- * reasoning as the bottom scrim above, mirrored to fade down from the top edge:
- * `inset: 0 0 auto` anchors the layer to the top of the bar's box and the extra
- * height lets the ramp resolve below the last line of text. Slightly lighter
- * stops than the bottom bar because this layer only carries text, so it needs
- * less cover than a row of glyph-sized controls. */
+/*
+ * 全屏顶部 chrome（房间标题、主播、溢出菜单）。与上方底部遮罩同样的材质与理由，
+ * 镜像为从顶边向下渐隐：`inset: 0 0 auto` 把层锚定在控制条盒子顶部，
+ * 额外高度让渐变在最后一行文字之下化解完成。色标比底部控制条略浅，
+ * 因为这层只承载文字，比一排按钮大小的控件需要的遮盖更少。
+ */
 @utility player-scrim-overlay-top {
   position: relative;
   isolation: isolate;
@@ -1048,9 +1014,8 @@ html.overlay-window #root {
   }
 }
 
-/* Mobile WebViews share the GPU with video decode, Canvas danmaku and image-list
-   scrolling. Use a static translucent fill instead of sampling and blurring a
-   changing backdrop on every frame. Desktop keeps the full glass treatment. */
+/* 移动端 WebView 与视频解码、Canvas 弹幕和图片列表滚动共享 GPU。改用静态半透明
+   填充，而不是每帧采样并模糊变化的背景。桌面保留完整玻璃处理。 */
 @media (pointer: coarse), (update: slow) {
   .glass-surface,
   .glass-surface-overlay,
@@ -1086,8 +1051,7 @@ html.overlay-window #root {
   animation: spin-soft 0.85s linear infinite;
 }
 
-/* Discovery lists render directly. The only route-level motion left is the
-   directional history transition in Shell. */
+/* 发现列表直接渲染。剩下的唯一路由级运动就是 Shell 里的历史方向过渡。 */
 
 :root[data-motion="reduced"] .animate-spin-soft {
   animation: none;

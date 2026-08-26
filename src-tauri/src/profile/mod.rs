@@ -52,9 +52,9 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "asr_translation_from",
     "asr_translation_to",
     "iptv_custom_m3u_url",
-    // Accepted from packages written before background recording became
-    // unconditional, then dropped rather than applied. It is deliberately not
-    // in the portable (required) list, so current exports may omit it.
+    // 接受自后台录制成为无条件行为之前写出的配置包，随后丢弃而不是应用。
+    // 它刻意不在便携（必填）字段列表中，
+    // 因此当前的导出可以省略它。
     "recording_continue_after_leave",
     "recording_include_danmaku",
     "recording_auto_split_minutes",
@@ -102,10 +102,10 @@ const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "iptv_custom_m3u_url",
 ];
 
-/// Profile packages contain structured settings and history, but are never
-/// expected to carry media or model data. Bound the read before JSON parsing
-/// so a malformed Android content URI (or an accidental video selection)
-/// cannot make an import allocate without limit.
+/// 配置包只应包含结构化的设置与历史，绝不应携带媒体或模型数据。
+/// 在 JSON 解析之前先限制读取大小，
+/// 使畸形的 Android content URI（或误选的视频文件）
+/// 无法让导入进行无界分配。
 pub(crate) const MAX_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,11 +138,11 @@ impl ProfilePackage {
     }
 }
 
-/// These controls intentionally never leave the current device with a profile.
+/// 这些控件刻意不随配置离开当前设备。
 ///
-/// The danmaku-send toggle is an explicit consent for a write action, and a
-/// custom M3U URL can identify a private playlist or carry an access token.
-/// An imported profile must not be able to choose either of them.
+/// 弹幕发送开关是对一次写入操作的明确授权，而自定义 M3U 地址可能标识私有
+/// 播放列表或携带访问 token。
+/// 导入的配置不得替用户决定其中任何一项。
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.danmaku_send_enabled = false;
     settings.asr_enabled = false;
@@ -158,11 +158,11 @@ fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.iptv_custom_m3u_url = None;
 }
 
-/// Convert a package into the portable on-disk representation.
+/// 把配置包转换为便携的磁盘表示。
 ///
-/// Keep the defensive stripping here as well as in [`export_package`]: callers
-/// of [`encode_package`] should not accidentally export local-only controls
-/// when they construct a `ProfilePackage` themselves.
+/// 除了 [`export_package`]，这里也要保留防御性剥离：
+/// 自行构造 `ProfilePackage` 的 [`encode_package`] 调用方，
+/// 不应意外导出仅限本地的控件。
 fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Value> {
     let mut portable = package.clone();
     clear_local_only_settings(&mut portable.settings);
@@ -176,8 +176,8 @@ fn portable_profile_value(package: &ProfilePackage) -> AppResult<serde_json::Val
         .get_mut("settings")
         .and_then(|value| value.as_object_mut())
     {
-        // Omit rather than serialize safe-looking defaults so future import
-        // changes cannot mistake these device-local choices for portable data.
+        // 省略而非序列化看似安全的默认值，
+        // 使将来导入逻辑的变化不会把这些仅限本机的选择误当成便携数据。
         for field in LOCAL_ONLY_PROFILE_SETTINGS_FIELDS {
             settings.remove(*field);
         }
@@ -209,14 +209,13 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
     })
 }
 
-/// Serialize a profile into its portable representation.
+/// 把配置序列化为便携表示。
 ///
-/// The caller controls where the bytes are written. The Tauri command routes
-/// the output through its filesystem plugin so Android `content://` document
-/// URIs work just as reliably as desktop filesystem paths.
+/// 字节写到哪里由调用方控制。Tauri 命令经由其文件系统插件路由输出，
+/// 使 Android 的 `content://` 文档 URI 与桌面文件系统路径同样可靠。
 pub fn encode_package(package: &ProfilePackage) -> AppResult<String> {
-    // Ensure cookies and local-only controls never appear even if someone
-    // extends the model or invokes this helper with a hand-built package.
+    // 即使有人扩展了模型或用手工构造的包调用这个辅助函数，
+    // 也要确保 cookie 和仅限本机的控件绝不会出现。
     let value = portable_profile_value(package)?;
     if value.get("cookies").is_some() {
         return Err(AppError::new(
@@ -238,11 +237,10 @@ pub struct ProfileImportResult {
     pub settings: bool,
 }
 
-/// Imports a profile from any readable source, including Android's temporary
-/// document-provider file descriptor. The file picker grants the app access to
-/// a `content://` URI but it is not a path Rust's standard filesystem can
-/// open, so commands route it through Tauri's filesystem plugin and into this
-/// shared parser.
+/// 从任意可读来源导入配置，包括 Android 临时文档提供器的文件描述符。
+/// 文件选择器授予应用访问某个 `content://` URI 的权限，但它不是 Rust 标准
+/// 文件系统能打开的路径，因此命令先经 Tauri 的文件系统插件路由，
+/// 再进入这个共享解析器。
 pub fn import_package_reader<R: Read>(
     conn: &mut Connection,
     reader: R,
@@ -385,9 +383,9 @@ pub fn merge_into_db(
     conn: &mut Connection,
     package: &ProfilePackage,
 ) -> AppResult<ProfileImportResult> {
-    // A portable profile spans seven logical data groups. Apply all of them in
-    // one SQLite transaction so a duplicate tag or disk error cannot leave
-    // follows/history partially imported while the settings remain old.
+    // 一份便携配置覆盖七个逻辑数据组。把它们放进同一个 SQLite 事务中应用，
+    // 使重复的标签或磁盘错误不会留下"关注/历史导入了一半、
+    // 设置却还是旧的"这种状态。
     let transaction = conn.transaction().map_err(map_db_err)?;
     for tag in &package.tags {
         follow::upsert_tag(&transaction, tag.clone())?;
@@ -410,7 +408,7 @@ pub fn merge_into_db(
     }
 
     let mut settings = settings::get(&transaction)?;
-    // Merge non-secret settings fields from package
+    // 从配置包合并非机密的设置字段
     settings.theme = package.settings.theme.clone();
     settings.default_site = package.settings.default_site.clone();
     settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
@@ -426,14 +424,13 @@ pub fn merge_into_db(
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();
-    // Do not copy `danmaku_send_enabled`, `asr_enabled`, `asr_provider`,
-    // `asr_vad_enabled`, `asr_punctuation_enabled`,
-    // `asr_speaker_diarization_enabled`, `asr_hotwords`,
-    // `asr_window_seconds`, `asr_translation_*`, or `iptv_custom_m3u_url`.
-    // A profile is portable/untrusted input; importing it must not grant
-    // sending consent, enable this device's local ASR model, or replace this
-    // device's private playlist address.
-    // Existing local values are kept.
+    // 不要复制 `danmaku_send_enabled`、`asr_enabled`、`asr_provider`、
+    // `asr_vad_enabled`、`asr_punctuation_enabled`、
+    // `asr_speaker_diarization_enabled`、`asr_hotwords`、
+    // `asr_window_seconds`、`asr_translation_*` 或 `iptv_custom_m3u_url`。
+    // 配置属于便携的不可信输入；导入它不得授出发送授权、
+    // 启用本设备的本地 ASR 模型，也不得替换本设备的私有播放列表地址。
+    // 现有的本地取值保持不变。
 
     let mut words: HashSet<String> = settings.danmaku_shield_words.into_iter().collect();
     for w in &package.danmaku_shield_words {

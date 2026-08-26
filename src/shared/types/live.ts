@@ -1,7 +1,7 @@
-/** Mirrors Rust `SiteId` serde snake_case values. */
+/** 镜像 Rust `SiteId` 的 serde snake_case 取值。 */
 export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "twitch";
 
-/** Mirrors Rust `commands::site::SiteInfo`. */
+/** 镜像 Rust `commands::site::SiteInfo`。 */
 export type SiteInfo = {
   id: SiteId;
   name: string;
@@ -39,11 +39,11 @@ export type LiveRoomDetail = {
   user_avatar: string;
   online: number;
   status: boolean;
-  /** Unix timestamp in milliseconds for the current session, when supplied by the platform. */
+  /** 平台提供时，当前直播场次开始的 Unix 毫秒时间戳。 */
   live_started_at?: number | null;
   notice: string;
   url: string;
-  /** Opaque site-specific payload needed for play-url requests. */
+  /** 播放地址请求所需的、站点特有的不透明负载。 */
   raw: unknown;
 };
 
@@ -57,25 +57,25 @@ export type TwitchAdRecovery = {
   target_frame_rate_milli: number;
 };
 
-/** Structured playback candidate returned by the native site adapter. */
+/** 原生站点适配器返回的结构化播放候选。 */
 export type PlayUrl = {
-  /** Stable within a quality payload; never contains a signed URL or request headers. */
+  /** 在同一份画质数据内稳定；绝不包含签名 URL 或请求头。 */
   source_id: string;
-  /** Safe user-facing name supplied by the site adapter. */
+  /** 站点适配器提供的、面向用户的安全名称。 */
   label: string;
-  /** Explicit transport selected by the native site adapter. */
+  /** 原生站点适配器显式选择的传输方式。 */
   protocol: PlaybackProtocol;
-  /** Lower values retain the platform's preferred ordering. */
+  /** 数值越小越保留平台偏好的排序。 */
   priority: number;
   url: string;
   headers: Record<string, string>;
-  /** Native-only context used to replace Twitch ad playlists behind the local proxy. */
+  /** 仅原生使用的上下文，用于在本机代理后面替换 Twitch 广告清单。 */
   twitch_ad_recovery?: TwitchAdRecovery;
 };
 
 export type LivePlayQuality = {
   quality: string;
-  /** Data needed later for get_play_urls (site-specific); also list of ready urls if known. */
+  /** 后续 get_play_urls 所需的数据（因站点而异）；已知时就绪 URL 列表也放这里。 */
   data: unknown;
 };
 
@@ -86,7 +86,7 @@ export type RoomListPage = {
 
 export type DanmakuKind = "chat" | "gift" | "enter" | "social" | "super_chat" | "system";
 
-/** Optional Bilibili Super Chat metadata emitted with `super_chat` events. */
+/** 随 `super_chat` 事件一起发出的可选 Bilibili Super Chat 元数据。 */
 export type SuperChatInfo = {
   id?: string | null;
   price?: number | null;
@@ -98,8 +98,8 @@ export type SuperChatInfo = {
 };
 
 /**
- * A safe, ordered rich-content fragment supplied by a live-chat protocol.
- * Bilibili uses this for image emotes embedded in an otherwise text message.
+ * 直播聊天协议提供的、安全且有序的富文本片段。Bilibili 用它在文本消息中嵌入
+ * 图片表情。
  */
 export type DanmakuContentSpan =
   | { type: "text"; text: string }
@@ -108,11 +108,11 @@ export type DanmakuContentSpan =
 export type DanmakuEvent = {
   kind: DanmakuKind;
   user: string;
-  /** Set by the backend after matching the locally saved account Cookie. */
+  /** 后端匹配本地保存的账号 Cookie 之后设置。 */
   is_self?: boolean;
   content: string;
   color: string | null;
-  /** Optional ordered text/image fragments for platform-hosted image emotes. */
+  /** 平台托管图片表情的可选有序文本/图片片段。 */
   spans?: DanmakuContentSpan[] | null;
   super_chat?: SuperChatInfo | null;
   ts: number;
@@ -124,10 +124,10 @@ export type FollowUser = {
   user_name: string;
   face: string;
   tag_ids: string[];
-  /** Start a background recording when this followed room goes live. */
+  /** 该关注房间开播时自动开始后台录制。 */
   auto_record: boolean;
   live_status: boolean | null;
-  /** Unix timestamp in milliseconds for the current live session, if known. */
+  /** 已知时，当前直播场次的 Unix 毫秒时间戳。 */
   live_started_at: number | null;
   updated_at: number;
 };
@@ -137,25 +137,25 @@ export type HistoryItem = {
   room_id: string;
   title: string;
   user_name: string;
-  /** Room cover captured when the room was opened; empty when unavailable. */
+  /** 打开房间时捕获的封面；不可得时为空。 */
   cover: string;
   watched_at: number;
 };
 
-/** A confirmed, reusable outgoing message stored only on this device. */
+/** 经确认、可复用、仅存于本设备的发送消息。 */
 export type DanmakuSendHistoryItem = {
   site_id: SiteId;
   content: string;
-  /** Room the message was sent to; empty when unavailable. */
+  /** 消息发往的房间；不可得时为空。 */
   room_id: string;
-  /** Room title captured at send time; empty when it could not be resolved. */
+  /** 发送时捕获的房间标题；未能解析时为空。 */
   room_title: string;
-  /** Streamer name captured at send time; empty when unavailable. */
+  /** 发送时捕获的主播名；不可得时为空。 */
   room_user_name: string;
   sent_at: number;
 };
 
-/** An outgoing message intentionally saved for reuse on one platform. */
+/** 刻意保存、供某平台复用的发出消息。 */
 export type DanmakuFavoriteItem = {
   site_id: SiteId;
   content: string;
@@ -189,8 +189,8 @@ export type CaptionTranslationLanguage =
 export type CaptionTranslationSourceLanguage = CaptionTranslationLanguage;
 
 /**
- * Lane exhaustion strategy used by the ASS exporter: keep every danmaku and
- * allow overlap, discard, or shift the start time inside a delay budget.
+ * ASS 导出器使用的车道耗尽策略：保留全部弹幕允许重叠、丢弃，
+ * 或在延迟预算内平移开始时间。
  */
 export type RecordingAssOverflowPolicy = "overlap" | "drop" | "delay";
 
@@ -206,7 +206,7 @@ export type RecordingAssSettings = {
   scroll_duration_seconds: number;
   display_area_percent: number;
   overflow_policy: RecordingAssOverflowPolicy;
-  /** Upper bound of the shift applied by the `delay` policy, in seconds. */
+  /** `delay` 策略应用的平移上限，单位秒。 */
   max_delay_seconds: number;
   merge_window_seconds: number;
   filter_gifts: boolean;
@@ -220,61 +220,61 @@ export type AppSettings = {
   default_site: string;
   proxy: string | null;
   danmaku_opacity: number;
-  /** Player danmaku text outline width in CSS pixels, 0.5..=2.5. */
+  /** 播放器弹幕描边宽度，CSS 像素，0.5..=2.5。 */
   danmaku_font_stroke: number;
   danmaku_font_size: number;
-  /** Scrolling danmaku speed in CSS pixels per second, 50..=200. */
+  /** 滚动弹幕速度，CSS 像素每秒，50..=200。 */
   danmaku_speed: number;
   danmaku_area: number;
   danmaku_filter_gifts: boolean;
-  /** Merge window for duplicate chat in seconds, 0..=30; 0 disables merging. */
+  /** 重复聊天的合并窗口秒数，0..=30；0 关闭合并。 */
   danmaku_merge_window_seconds: number;
-  /** Show supported-platform Super Chat cards over the player. */
+  /** 在播放器上方显示受支持平台的 Super Chat 卡片。 */
   super_chat_enabled: boolean;
   danmaku_shield_words: string[];
-  /** Preferred starting clarity: high | mid | low (Simple Live qualityLevel). */
+  /** 偏好的起始清晰度：high | mid | low。 */
   quality_level: "high" | "mid" | "low";
-  /** Same-protocol xgplayer switchURL path; hard reload remains the fallback. */
+  /** 同协议 xgplayer switchURL 路径；硬刷新仍是兜底。 */
   playback_soft_switch_enabled: boolean;
-  /** Device-local permission for user-operated single-message senders. */
+  /** 用户手动发送单条消息功能的设备本地权限开关。 */
   danmaku_send_enabled: boolean;
-  /** Device-local consent for downloading and loading the optional ASR model. */
+  /** 下载并加载可选 ASR 模型的设备本地同意开关。 */
   asr_enabled: boolean;
-  /** Device-local Zipformer provider: auto, cpu, or cuda (Windows CUDA build). */
+  /** 设备本地 Zipformer provider：auto、cpu 或 cuda（Windows CUDA 构建）。 */
   asr_provider: AsrProvider;
-  /** Enable silence-based endpoint/VAD rules; defaults to true. */
+  /** 启用基于静音的端点/VAD 规则；默认 true。 */
   asr_vad_enabled: boolean;
-  /** Enable the optional local CT-Transformer punctuation model; defaults to true. */
+  /** 启用可选的本地 CT-Transformer 标点模型；默认 true。 */
   asr_punctuation_enabled: boolean;
-  /** Device-local endpoint-level anonymous speaker differentiation. */
+  /** 设备本地的端点级匿名说话人区分。 */
   asr_speaker_diarization_enabled: boolean;
-  /** Device-local domain phrases used by Zipformer hotword biasing. */
+  /** Zipformer 热词偏置使用的设备本地领域短语。 */
   asr_hotwords: string[];
-  /** Zipformer PCM chunk interval in seconds. */
+  /** Zipformer PCM 分片间隔（秒）。 */
   asr_window_seconds: number;
-  /** Player subtitle font size in CSS pixels. */
+  /** 播放器字幕字号（CSS 像素）。 */
   asr_font_size: number;
-  /** Device-local consent for sending committed ASR captions to Google Translate. */
+  /** 把定稿 ASR 字幕发送至 Google 翻译的设备本地同意开关。 */
   asr_translation_enabled: boolean;
-  /** Google Translate source language, or auto detection. */
+  /** Google 翻译源语言，auto 表示自动检测。 */
   asr_translation_from: CaptionTranslationSourceLanguage;
-  /** Google Translate target language, or automatic selection. */
+  /** Google 翻译目标语言，或自动选择。 */
   asr_translation_to: CaptionTranslationLanguage;
-  /** Device-local custom IPTV M3U address; excluded from profile import/export. */
+  /** 设备本地自定义 IPTV M3U 地址；排除在配置导入/导出之外。 */
   iptv_custom_m3u_url: string | null;
-  /** Include the live-room danmaku sidecar by default when opening recording options. */
+  /** 打开录制选项时默认包含直播间弹幕伴生文件。 */
   recording_include_danmaku: boolean;
-  /** Automatically finish and continue FFmpeg recordings in minute-sized bundles; 0 disables. */
+  /** FFmpeg 录制按分钟大小分卷自动收尾并继续；0 关闭。 */
   recording_auto_split_minutes: number;
-  /** FFmpeg network read/write timeout in seconds, 3..=60. */
+  /** FFmpeg 网络读写超时秒数，3..=60。 */
   ffmpeg_rw_timeout_seconds: number;
-  /** Maximum FFmpeg reconnect delay in seconds, 1..=60. */
+  /** FFmpeg 重连最大延迟秒数，1..=60。 */
   ffmpeg_reconnect_delay_max_seconds: number;
-  /** Number of retries for a failed HLS segment, 0..=20. */
+  /** 失败 HLS 分片的重试次数，0..=20。 */
   ffmpeg_hls_segment_retry_count: number;
-  /** Independent layout, appearance, and filtering for recorded ASS exports. */
+  /** 录制 ASS 导出的独立排版、外观与过滤设置。 */
   recording_ass: RecordingAssSettings;
-  /** Platforms hidden from discovery and room navigation. */
+  /** 从发现页与房间导航隐藏的平台。 */
   disabled_site_ids: SiteId[];
 };
 

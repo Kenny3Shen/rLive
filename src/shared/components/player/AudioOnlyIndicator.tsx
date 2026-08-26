@@ -1,6 +1,6 @@
 import { Headphones } from "lucide-react";
 
-/** Quiet stage state shared by live-room and IPTV playback. */
+/** 直播房间与 IPTV 播放共享的安静舞台状态。 */
 export function AudioOnlyIndicator() {
   return (
     <div
