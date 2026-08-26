@@ -11,7 +11,7 @@
 
 mod a_bogus;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use reqwest::header::{COOKIE, HeaderMap, REFERER, SET_COOKIE, USER_AGENT};
@@ -41,6 +41,12 @@ const PARTITION_ROOMS_URL: &str = "https://live.douyin.com/webcast/web/partition
 /// recommendation list pageable at all.
 const RECOMMEND_PARTITION_ID: &str = "720";
 const RECOMMEND_PARTITION_TYPE: &str = "1";
+/// The web home feed endpoint. Unlike a category browse, each call returns one
+/// rotating batch of recommended rooms and carries no offset: consecutive
+/// calls overlap only partially, so repeated requests surface fresh rooms.
+/// The saved account Cookie rides along automatically; anonymous sessions
+/// (fresh `ttwid` only) are served as well.
+const RECOMMEND_FEED_URL: &str = "https://live.douyin.com/webcast/feed/";
 /// Rooms requested per list page. Douyin advances its own `offset` by exactly
 /// this amount, so a page number maps onto a stable offset.
 const LIST_PAGE_SIZE: u32 = 15;
@@ -427,6 +433,30 @@ impl DouyinSite {
         let root = self.get_reflow_room(room_id).await?;
         parse_reflow_room_live_status(&root)
     }
+
+    /// One rotating batch from the web home feed. Requires no request
+    /// signature; the transient `ttwid` obtained by `ensure_web_session` is
+    /// enough for anonymous access, and a saved account Cookie is sent when
+    /// present.
+    async fn get_recommend_feed(&self) -> AppResult<RoomListPage> {
+        self.ensure_web_session().await?;
+        let params = vec![
+            ("aid".into(), "6383".into()),
+            ("app_name".into(), "douyin_web".into()),
+            ("need_map".into(), "1".into()),
+            ("is_draw".into(), "1".into()),
+            ("inner_from_drawer".into(), "0".into()),
+            (
+                "enter_source".into(),
+                "web_homepage_hot_web_live_card".into(),
+            ),
+            ("source_key".into(), "web_homepage_hot_web_live_card".into()),
+        ];
+        let value = self
+            .get_json(RECOMMEND_FEED_URL, &params, &format!("{LIVE_ROOT}hot_live"))
+            .await?;
+        parse_recommend_feed(&value)
+    }
 }
 
 #[async_trait::async_trait]
@@ -443,11 +473,19 @@ impl LiveSite for DouyinSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
-        // The hot feed is served by the same paginated browse endpoint as a
-        // category, under a synthetic partition. Its first page matches the
-        // `hot_live` SSR payload, so the SSR path is only a fallback for when
-        // the signed request is rejected on the very first page.
+        // Prefer the web home feed: every call yields a partially rotated
+        // batch, which pairs with the frontend's cross-page de-duplication to
+        // surface new rooms on each refresh or load-more. The feed has no
+        // pagination cursor, so every page number simply requests another
+        // batch. When the feed is unavailable (risk control, empty payload),
+        // fall back to the hot partition browse, which paginates stably via a
+        // synthetic partition id; its first page matches the `hot_live` SSR
+        // payload, kept as a last-resort fallback for that page only.
         let page = page.max(1);
+        match self.get_recommend_feed().await {
+            Ok(rooms) if !rooms.items.is_empty() => return Ok(rooms),
+            Ok(_) | Err(_) => {}
+        }
         match self
             .get_partition_rooms(
                 RECOMMEND_PARTITION_ID,
@@ -787,6 +825,68 @@ fn parse_partition_rooms(value: &Value, requested_offset: u32) -> AppResult<Room
     };
 
     Ok(RoomListPage { has_more, items })
+}
+
+/// Parses one rotating batch of the web home feed.
+///
+/// The payload is a list of envelopes, each wrapping a room either as an
+/// object or as an embedded JSON string (both shapes have been observed).
+/// Advertisement cards and entries without a usable room id are dropped;
+/// duplicate room ids within a batch are collapsed.
+fn parse_recommend_feed(value: &Value) -> AppResult<RoomListPage> {
+    let envelopes = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DouyinSite::parse_err("抖音推荐流缺少 data 数组"))?;
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    for envelope in envelopes {
+        let Some(item) = feed_room_item(envelope) else {
+            continue;
+        };
+        if seen.insert(item.room_id.clone()) {
+            items.push(item);
+        }
+    }
+    // A non-empty batch means the feed keeps offering more: the next request
+    // returns another partially rotated selection. An empty batch ends it.
+    Ok(RoomListPage {
+        has_more: !items.is_empty(),
+        items,
+    })
+}
+
+/// Extracts a room item from one feed envelope.
+fn feed_room_item(envelope: &Value) -> Option<LiveRoomItem> {
+    if envelope
+        .get("is_ad")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let owned;
+    let room = match envelope.get("data") {
+        Some(value) if value.is_object() => value,
+        Some(Value::String(text)) if text.trim_start().starts_with('{') => {
+            owned = serde_json::from_str(text).ok()?;
+            &owned
+        }
+        // Some envelope generations carry the room fields directly.
+        _ => envelope,
+    };
+    let mut item = room_item_from_value(room)?;
+    // The public short web_rid rides on the envelope; prefer it over the
+    // internal long id so detail/playback requests keep using the fast SSR
+    // path instead of reflow.
+    let web_rid = first_non_empty([
+        json_str(envelope.get("web_rid").unwrap_or(&Value::Null)),
+        json_str(room.pointer("/owner/web_rid").unwrap_or(&Value::Null)),
+    ]);
+    if !web_rid.is_empty() {
+        item.room_id = web_rid;
+    }
+    Some(item)
 }
 
 fn json_i64_opt(value: &Value) -> Option<i64> {
@@ -1853,6 +1953,83 @@ mod tests {
         value["data"]["has_more"] = Value::Bool(false);
 
         assert!(!parse_partition_rooms(&value, 15).unwrap().has_more);
+    }
+
+    fn feed_envelope(web_rid: &str, title: &str) -> Value {
+        serde_json::json!({
+            "type": 1,
+            "web_rid": web_rid,
+            "is_ad": false,
+            "data": {
+                "id_str": format!("760000000000000000{i}", i = &web_rid[web_rid.len() - 2..]),
+                "title": title,
+                "user_count": 88,
+                "cover": {"url_list": ["https://img.example/cover.jpg"]},
+                "owner": {"nickname": format!("{title} 主播")}
+            }
+        })
+    }
+
+    #[test]
+    fn feed_batch_prefers_the_envelope_web_rid() {
+        let payload = serde_json::json!({
+            "status_code": 0,
+            "data": [feed_envelope("33233584288", "推荐房间")],
+        });
+
+        let page = parse_recommend_feed(&payload).expect("feed page");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].room_id, "33233584288");
+        assert_eq!(page.items[0].title, "推荐房间");
+        assert_eq!(page.items[0].user_name, "推荐房间 主播");
+        assert_eq!(page.items[0].online, 88);
+        assert!(page.has_more);
+    }
+
+    /// Both envelope shapes have been observed in the wild: the room as an
+    /// embedded JSON string (post-2026 responses) and as a plain object.
+    #[test]
+    fn feed_batch_decodes_embedded_json_string_rooms() {
+        let mut envelope = feed_envelope("50828500437", "字符串房间");
+        let room = envelope["data"].clone();
+        envelope["data"] = Value::String(room.to_string());
+        let payload = serde_json::json!({"status_code": 0, "data": [envelope]});
+
+        let page = parse_recommend_feed(&payload).expect("feed page");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].room_id, "50828500437");
+        assert_eq!(page.items[0].title, "字符串房间");
+    }
+
+    #[test]
+    fn feed_batch_drops_ads_and_duplicate_rooms() {
+        let mut ad = feed_envelope("44444444444", "广告房间");
+        ad["is_ad"] = Value::Bool(true);
+        let payload = serde_json::json!({
+            "status_code": 0,
+            "data": [
+                feed_envelope("33233584288", "第一次出现"),
+                feed_envelope("33233584288", "重复出现"),
+                ad,
+            ],
+        });
+
+        let page = parse_recommend_feed(&payload).expect("feed page");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].title, "第一次出现");
+    }
+
+    #[test]
+    fn empty_feed_batch_ends_pagination() {
+        let payload = serde_json::json!({"status_code": 0, "data": []});
+
+        let page = parse_recommend_feed(&payload).expect("feed page");
+
+        assert!(page.items.is_empty());
+        assert!(!page.has_more);
     }
 
     #[test]
