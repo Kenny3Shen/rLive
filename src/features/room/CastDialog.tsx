@@ -29,6 +29,8 @@ type CastDialogProps = {
   castUrl: string | null;
   headers: Record<string, string>;
   title: string;
+  /** 投屏会话建立或断开时上报设备名（null 表示无会话），供控制条展示状态。 */
+  onCastingDeviceChange?: (deviceName: string | null) => void;
 };
 
 /**
@@ -37,7 +39,14 @@ type CastDialogProps = {
  * 投屏成功后展示连接状态与断开入口；重新搜索或关闭对话框不会中断已建立
  * 的投屏会话，只有显式断开才会停止。
  */
-export function CastDialog({ open, onOpenChange, castUrl, headers, title }: CastDialogProps) {
+export function CastDialog({
+  open,
+  onOpenChange,
+  castUrl,
+  headers,
+  title,
+  onCastingDeviceChange,
+}: CastDialogProps) {
   const [devices, setDevices] = useState<DlnaDevice[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<unknown>(null);
@@ -66,11 +75,14 @@ export function CastDialog({ open, onOpenChange, castUrl, headers, title }: Cast
     if (!open) return;
     void invokeCmd<DlnaCastStatus | null>("dlna_status").then((status) => {
       setCastingName(status?.device_name ?? null);
+      onCastingDeviceChange?.(status?.device_name ?? null);
     });
     void search();
     return () => {
       searchEpochRef.current += 1;
     };
+    // onCastingDeviceChange 由父级用 setState 稳定引用，无需列入依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const cast = async (device: DlnaDevice) => {
@@ -85,6 +97,7 @@ export function CastDialog({ open, onOpenChange, castUrl, headers, title }: Cast
         title,
       });
       setCastingName(status.device_name);
+      onCastingDeviceChange?.(status.device_name);
     } catch (error) {
       setCastError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -97,6 +110,7 @@ export function CastDialog({ open, onOpenChange, castUrl, headers, title }: Cast
       await invokeCmd("dlna_stop");
     } finally {
       setCastingName(null);
+      onCastingDeviceChange?.(null);
     }
   };
 

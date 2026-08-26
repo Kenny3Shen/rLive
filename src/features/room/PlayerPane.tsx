@@ -459,6 +459,7 @@ export function PlayerPane({
   // lets a touch gesture select a tab without depending on Base UI internals.
   const [uncontrolledSideTab, setUncontrolledSideTab] = useState<RoomSideTab>("chat");
   const [castOpen, setCastOpen] = useState(false);
+  const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const activeSideTab = sideTab ?? uncontrolledSideTab;
   const [sidePanelRetained, setSidePanelRetained] = useState(
     () => sidePanelOpen || !compactViewport,
@@ -1884,6 +1885,11 @@ export function PlayerPane({
               onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
               onQualityChange={onQualityChange ?? (() => {})}
               onLineChange={onLineChange ?? (() => {})}
+              cast={{
+                active: castingDevice != null,
+                disabled: !playUrl,
+                onClick: () => setCastOpen(true),
+              }}
               onTogglePictureInPicture={handleTogglePictureInPicture}
               onToggleFullscreen={() => void player.toggleFullscreen()}
             />
@@ -1897,6 +1903,7 @@ export function PlayerPane({
         castUrl={playUrl?.url ?? null}
         headers={playUrl?.headers ?? {}}
         title={roomTitle || roomUserName || "rLive 直播"}
+        onCastingDeviceChange={setCastingDevice}
       />
 
       {mobileDrawerOpen && (
