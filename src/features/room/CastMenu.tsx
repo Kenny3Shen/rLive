@@ -211,15 +211,20 @@ export function CastMenu({
       {castError && <p className="text-sm text-destructive">{castError}</p>}
 
       {castUrl && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn("self-start", overlay && glassOptionClass({ overlay }))}
-          disabled={searching}
-          onClick={() => void search()}
-        >
-          重新搜索
-        </Button>
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            size="sm"
+            className="shrink-0"
+            disabled={searching}
+            onClick={() => void search()}
+          >
+            {searching && (
+              <Loader2 className="animate-spin-soft" data-icon="inline-start" aria-hidden />
+            )}
+            重新搜索
+          </Button>
+        </div>
       )}
     </div>
   );
