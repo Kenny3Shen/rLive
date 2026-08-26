@@ -28,6 +28,11 @@ export type XgPlayerModules = {
 
 export type XgHlsCore = {
   startLoad: (startPosition?: number) => void;
+  /**
+   * Wall clock of the frame at `media.currentTime`, taken from the playlist's
+   * `EXT-X-PROGRAM-DATE-TIME`. Null when the playlist carries no program clock.
+   */
+  programDateMs: () => number | null;
 };
 
 export type XgMpegtsCore = {
@@ -191,16 +196,21 @@ export async function switchXgPlaybackSource(
 
 export function getXgHlsCore(player: XgPlayerInstance): XgHlsCore | null {
   const plugin = player.getPlugin("HlsJsPlugin") as {
-    hls?: XgHlsCore | null;
+    hls?: { startLoad: (startPosition?: number) => void; playingDate?: Date | null } | null;
   } | null;
   if (!plugin) return null;
-  if (plugin.hls) return plugin.hls;
 
-  // xgplayer starts protocol plugins from Player.start(). Keep recovery calls
-  // valid when this helper runs before the hls.js instance has been attached.
+  // xgplayer starts protocol plugins from Player.start(), and the plugin
+  // replaces its hls.js instance on a URL change. Always read through the
+  // plugin so recovery calls and clock reads stay valid across both.
   return {
     startLoad: (startPosition?: number) => {
       plugin.hls?.startLoad(startPosition);
+    },
+    programDateMs: () => {
+      const date = plugin.hls?.playingDate ?? null;
+      const epoch = date instanceof Date ? date.getTime() : Number.NaN;
+      return Number.isFinite(epoch) ? epoch : null;
     },
   };
 }

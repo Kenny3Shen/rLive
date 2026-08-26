@@ -222,6 +222,36 @@ export function playerOwnsFullscreen(fullscreenOwner: boolean | undefined): bool
   return fullscreenOwner !== false;
 }
 
+/** How a feed's media timeline maps onto wall-clock time, if at all. */
+export type LivePlayerClockKind = "program-date" | "stream-anchor" | "none";
+
+export type LivePlayerTimeline = {
+  /** Playing, with at least one buffered range: safe to correct. */
+  ready: boolean;
+  mediaTime: number;
+  bufferStart: number;
+  /** Live edge on this feed's own media timeline. */
+  bufferEnd: number;
+  clockKind: LivePlayerClockKind;
+  /** Epoch (ms) matching `mediaTime === 0`; null without a clock. */
+  epochAtMediaZeroMs: number | null;
+  playbackRate: number;
+  paused: boolean;
+};
+
+/**
+ * Imperative handle used by the multi-view clock alignment.
+ *
+ * Sampling and correcting several feeds once per second must not re-render
+ * anything, so this is a stable object read through refs rather than state.
+ */
+export type LivePlayerSyncApi = {
+  readTimeline: () => LivePlayerTimeline;
+  /** Jump inside the retained buffer; no-op when the media is gone. */
+  seekMediaTime: (seconds: number) => void;
+  setPlaybackRate: (rate: number) => void;
+};
+
 export type WebPlayerApi = {
   mode: PlayerUiMode;
   paused: boolean;
@@ -254,6 +284,8 @@ export type WebPlayerApi = {
   toggleFullscreen: () => Promise<void>;
   /** Leave fullscreen without toggling back in; safe to call when windowed. */
   exitFullscreen: () => Promise<void>;
+  /** Live clock sampling / correction used by the multi-view alignment. */
+  sync: LivePlayerSyncApi;
 };
 
 export type MediaLifecycleProfile = Readonly<{
@@ -261,7 +293,7 @@ export type MediaLifecycleProfile = Readonly<{
   resetAudioOnSessionChange: boolean;
   softSwitch: "settings" | "disabled";
   telemetry: boolean;
-  flvOptions(mobileClient: boolean): Record<string, unknown>;
+  flvOptions(mobileClient: boolean, syncHold: boolean): Record<string, unknown>;
 }>;
 
 function clampWebPlayerVolume(value: number): number {
@@ -430,8 +462,16 @@ export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPl
 /**
  * Keep a modest latency and cleanup window for continuous FLV. Mobile receives
  * a wider live window for its tighter decode and scheduling budget.
+ *
+ * `syncHold` is the multi-view clock-alignment profile: the built-in latency
+ * chasing would jump the feed back to the live edge as soon as the alignment
+ * holds it further behind, so it is turned off and the backward window is
+ * widened to the range an alignment offset may use.
  */
-export function liveFlvPlaybackOptions(mobileClient: boolean): Record<string, unknown> {
+export function liveFlvPlaybackOptions(
+  mobileClient: boolean,
+  syncHold = false,
+): Record<string, unknown> {
   return {
     mediaDataSource: {
       type: "flv",
@@ -443,12 +483,69 @@ export function liveFlvPlaybackOptions(mobileClient: boolean): Record<string, un
       enableWorker: false,
       enableStashBuffer: true,
       stashInitialSize: 384,
-      liveBufferLatencyChasing: true,
+      liveBufferLatencyChasing: !syncHold,
       liveBufferLatencyMaxLatency: mobileClient ? 6 : 5,
       liveBufferLatencyMinRemain: mobileClient ? 1.5 : 1,
       autoCleanupSourceBuffer: true,
-      autoCleanupMaxBackwardDuration: mobileClient ? 20 : 15,
-      autoCleanupMinBackwardDuration: mobileClient ? 10 : 8,
+      autoCleanupMaxBackwardDuration: syncHold
+        ? LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS
+        : mobileClient
+          ? 20
+          : 15,
+      autoCleanupMinBackwardDuration: syncHold
+        ? LIVE_SYNC_HOLD_MIN_BACKWARD_SECONDS
+        : mobileClient
+          ? 10
+          : 8,
+    },
+  };
+}
+
+/**
+ * hls.js options for one live feed.
+ *
+ * Under `syncHold` the alignment owns the distance to the live edge, so hls.js
+ * must neither force a jump forward once that distance grows nor discard the
+ * back buffer the alignment seeks into.
+ */
+export function liveHlsPlaybackOptions(syncHold = false): Record<string, unknown> {
+  return {
+    lowLatencyMode: false,
+    backBufferLength: syncHold ? LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS : 30,
+    maxBufferLength: syncHold ? 45 : 30,
+    liveSyncDurationCount: 3,
+    liveMaxLatencyDurationCount: syncHold ? 90 : 6,
+    // Any hls.js rate correction would fight the alignment's own rate trim.
+    maxLiveSyncPlaybackRate: 1,
+    manifestLoadingMaxRetry: 3,
+    levelLoadingMaxRetry: 3,
+    fragLoadingMaxRetry: 3,
+  };
+}
+
+/** MPEG-TS (IPTV-style) live options, mirroring the FLV sync-hold rules. */
+export function liveMpegtsPlaybackOptions(syncHold = false): Record<string, unknown> {
+  return {
+    mediaDataSource: {
+      type: "mpegts",
+      isLive: true,
+      hasAudio: true,
+      hasVideo: true,
+    },
+    mpegtsConfig: {
+      enableWorker: false,
+      enableStashBuffer: true,
+      stashInitialSize: 384,
+      liveBufferLatencyChasing: !syncHold,
+      liveBufferLatencyMaxLatency: 3,
+      liveBufferLatencyMinRemain: 0.5,
+      autoCleanupSourceBuffer: true,
+      ...(syncHold
+        ? {
+            autoCleanupMaxBackwardDuration: LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS,
+            autoCleanupMinBackwardDuration: LIVE_SYNC_HOLD_MIN_BACKWARD_SECONDS,
+          }
+        : {}),
     },
   };
 }
@@ -488,6 +585,30 @@ export const IPTV_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
   telemetry: false,
   flvOptions: () => iptvFlvPlaybackOptions(),
 };
+
+/**
+ * Backward buffer retained per feed while a multi-view alignment is active.
+ *
+ * The alignment only ever delays a feed by seeking into media it has already
+ * buffered, so this window bounds the offset it can apply. It is deliberately
+ * finite: six feeds each retaining a minute of video would cost far more memory
+ * than the alignment is worth.
+ */
+export const LIVE_SYNC_HOLD_MIN_BACKWARD_SECONDS = 30;
+export const LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS = 42;
+/** Rate bounds a sync correction may request on a muted secondary feed. */
+export const LIVE_SYNC_MIN_PLAYBACK_RATE = 0.9;
+export const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.1;
+/**
+ * Longest buffered span that may still be treated as "freshly started".
+ *
+ * The stream anchor pairs the proxy's first media byte with the media position
+ * that byte produced, which is only knowable while the transport has just
+ * started. After a soft switch the element can still hold a long retained
+ * buffer, and its start no longer marks where the replacement stream began, so
+ * that feed keeps no estimated clock instead of an invented one.
+ */
+export const LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS = 20;
 
 export function shouldUsePlaybackSoftSwitch(
   configured: boolean,
@@ -600,6 +721,12 @@ export type MediaLifecycleOptions = {
   fullscreenOwner?: boolean;
   /** Semantic rebuild key; changing it recreates the transport for the same source. */
   reloadToken?: number | string;
+  /**
+   * Configure the transport for multi-view clock alignment: no built-in latency
+   * chasing and a wider backward buffer. Changing it rebuilds the transport,
+   * because both protocol plugins read these options only at creation.
+   */
+  liveSyncHold?: boolean;
   onMediaFailure?: (event: PlayerEvent) => void;
   onReady?: () => void;
   onWaiting?: () => void;
@@ -620,6 +747,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     initialMuted = false,
     fullscreenOwner = true,
     reloadToken = 0,
+    liveSyncHold = false,
     onMediaFailure,
     onReady,
     onWaiting,
@@ -644,6 +772,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const activeSourceKeyRef = useRef("");
   const activePlaybackKindRef = useRef<XgPlaybackKind | null>(null);
   const telemetrySessionRef = useRef<PlaybackTelemetrySession | null>(null);
+  const hlsCoreRef = useRef<ReturnType<typeof getXgHlsCore>>(null);
+  const mpegtsCoreRef = useRef<ReturnType<typeof getXgMpegtsCore>>(null);
+  /** Identity of the current media timeline; every anchor below belongs to it. */
+  const syncTimelineTokenRef = useRef("");
+  const syncStreamAnchorRef = useRef<{ token: string; epochAtMediaZeroMs: number } | null>(null);
+  const syncMediaTimeOriginRef = useRef<{ token: string; mediaTime: number } | null>(null);
   const softSwitchSequenceRef = useRef(0);
   const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
   const qualityRef = useRef<string | null>(quality);
@@ -753,6 +887,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     activeSourceKeyRef.current = "";
     setActiveSourceKey("");
     activePlaybackKindRef.current = null;
+    hlsCoreRef.current = null;
+    mpegtsCoreRef.current = null;
+    syncTimelineTokenRef.current = "";
+    syncStreamAnchorRef.current = null;
+    syncMediaTimeOriginRef.current = null;
     softSwitchInFlightRef.current = null;
     telemetrySessionRef.current = null;
     setMediaAvailable(false);
@@ -807,8 +946,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const effectivePlaybackSourceRef = useRef<PlayUrl | null>(effectivePlaybackSource);
   effectivePlaybackSourceRef.current = effectivePlaybackSource;
   const hardStreamKey = softSwitchEnabled
-    ? `${sessionKey}::${effectivePlaybackKind ?? "none"}::${softFallbackToken}`
-    : `${streamKey}::${softFallbackToken}`;
+    ? `${sessionKey}::${effectivePlaybackKind ?? "none"}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`
+    : `${streamKey}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`;
 
   // Open / replace stream whenever the logical stream identity changes.
   useEffect(() => {
@@ -973,35 +1112,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             kind: playbackKind,
             isLive: playbackKind !== "native",
             hls: {
-              hlsOpts: {
-                lowLatencyMode: false,
-                backBufferLength: 30,
-                maxBufferLength: 30,
-                liveSyncDurationCount: 3,
-                liveMaxLatencyDurationCount: 6,
-                manifestLoadingMaxRetry: 3,
-                levelLoadingMaxRetry: 3,
-                fragLoadingMaxRetry: 3,
-              },
+              hlsOpts: liveHlsPlaybackOptions(liveSyncHold),
             },
-            flv: profile.flvOptions(mobileClient),
-            mpegts: {
-              mediaDataSource: {
-                type: "mpegts",
-                isLive: true,
-                hasAudio: true,
-                hasVideo: true,
-              },
-              mpegtsConfig: {
-                enableWorker: false,
-                enableStashBuffer: true,
-                stashInitialSize: 384,
-                liveBufferLatencyChasing: true,
-                liveBufferLatencyMaxLatency: 3,
-                liveBufferLatencyMinRemain: 0.5,
-                autoCleanupSourceBuffer: true,
-              },
-            },
+            flv: profile.flvOptions(mobileClient, liveSyncHold),
+            mpegts: liveMpegtsPlaybackOptions(liveSyncHold),
           });
 
           // Register ownership before autoplay: play() can remain pending until
@@ -1016,6 +1130,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           const hlsCore = playbackKind === "hls" ? getXgHlsCore(player) : null;
           const mpegtsCore =
             playbackKind === "flv" || playbackKind === "mpegts" ? getXgMpegtsCore(player) : null;
+          hlsCoreRef.current = hlsCore;
+          mpegtsCoreRef.current = mpegtsCore;
+          // A fresh transport means a fresh media timeline: the wall-clock
+          // anchors derived below must never survive it.
+          syncTimelineTokenRef.current = proxySessionId;
+          syncStreamAnchorRef.current = null;
+          syncMediaTimeOriginRef.current = null;
 
           if (mpegtsCore) {
             mpegtsCore.on("loading_complete", () => {
@@ -1293,7 +1414,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [hardStreamKey, reloadToken, destroyPlayer, mobileClient, profile, siteId]);
+  }, [hardStreamKey, reloadToken, destroyPlayer, liveSyncHold, mobileClient, profile, siteId]);
 
   // Same-protocol source changes can retain the media element and MSE state.
   // Live CDN timestamp continuity is not uniform, so any setup/switch failure
@@ -1375,6 +1496,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           activeSourceKeyRef.current = targetKey;
           setActiveSourceKey(targetKey);
           activePlaybackKindRef.current = targetKind;
+          // The plugin rebuilt its transport, so the clock anchors have to be
+          // derived again from the replacement stream.
+          syncTimelineTokenRef.current = `${proxySessionId}:soft:${sequence}`;
+          syncStreamAnchorRef.current = null;
+          syncMediaTimeOriginRef.current = null;
           setLoadError(null);
         } finally {
           if (softSwitchInFlightRef.current === inFlight) {
@@ -1580,6 +1706,160 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     fullscreenInsetFreezeRef.current?.();
     fullscreenInsetFreezeRef.current = null;
   }, []);
+
+  /**
+   * Derive the wall-clock anchor for containers without a program clock.
+   *
+   * FLV and MPEG-TS timestamps start near zero, so the only absolute reference
+   * available is the epoch at which the proxy received this session's first
+   * media byte. Pairing it with the media position that byte produced turns
+   * `currentTime` into an estimated capture time. The CDN's edge burst is part
+   * of that estimate, which is why it is only comparable between feeds.
+   */
+  useEffect(() => {
+    if (!liveSyncHold) {
+      syncStreamAnchorRef.current = null;
+      syncMediaTimeOriginRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    let sampling = false;
+
+    const captureMediaTimeOrigin = () => {
+      const token = syncTimelineTokenRef.current;
+      const video = videoRef.current;
+      if (!token || !video || video.readyState < 2 || video.buffered.length === 0) return null;
+      const existing = syncMediaTimeOriginRef.current;
+      if (existing?.token === token) return existing.mediaTime;
+      const bufferStart = video.buffered.start(0);
+      const bufferEnd = video.buffered.end(video.buffered.length - 1);
+      if (bufferEnd - bufferStart > LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS) return null;
+      // The first retained sample is the closest stand-in for the media
+      // position of the session's first byte.
+      const mediaTime = Math.min(bufferStart, video.currentTime);
+      if (!Number.isFinite(mediaTime)) return null;
+      syncMediaTimeOriginRef.current = { token, mediaTime };
+      return mediaTime;
+    };
+
+    const deriveAnchor = async () => {
+      if (cancelled || sampling) return;
+      const token = syncTimelineTokenRef.current;
+      const proxySessionId = activeProxySessionIdRef.current;
+      if (!token || !proxySessionId) return;
+      if (syncStreamAnchorRef.current?.token === token) return;
+      const mediaTimeOrigin = captureMediaTimeOrigin();
+      if (mediaTimeOrigin == null) return;
+      sampling = true;
+      let proxy: StreamProxyTelemetry | null = null;
+      try {
+        proxy = await invokeCmd<StreamProxyTelemetry | null>("stream_proxy_telemetry", {
+          sessionId: proxySessionId,
+        });
+      } catch {
+        // A browser preview has no native proxy; those feeds simply stay on the
+        // manual hold instead of the estimated clock.
+      } finally {
+        sampling = false;
+      }
+      const firstMediaAtMs = proxy?.first_media_at_ms ?? null;
+      if (cancelled || !firstMediaAtMs || syncTimelineTokenRef.current !== token) return;
+      syncStreamAnchorRef.current = {
+        token,
+        epochAtMediaZeroMs: firstMediaAtMs - mediaTimeOrigin * 1_000,
+      };
+    };
+
+    void deriveAnchor();
+    const interval = window.setInterval(() => void deriveAnchor(), 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [hardStreamKey, liveSyncHold, mediaKey]);
+
+  const readSyncTimeline = useCallback((): LivePlayerTimeline => {
+    const video = videoRef.current;
+    const idle: LivePlayerTimeline = {
+      ready: false,
+      mediaTime: 0,
+      bufferStart: 0,
+      bufferEnd: 0,
+      clockKind: "none",
+      epochAtMediaZeroMs: null,
+      playbackRate: video?.playbackRate ?? 1,
+      paused: video?.paused ?? true,
+    };
+    if (!video || video.buffered.length === 0) return idle;
+
+    const mediaTime = video.currentTime;
+    const bufferStart = video.buffered.start(0);
+    const bufferEnd = video.buffered.end(video.buffered.length - 1);
+    if (![mediaTime, bufferStart, bufferEnd].every(Number.isFinite)) return idle;
+
+    const programDateMs = hlsCoreRef.current?.programDateMs() ?? null;
+    const anchor =
+      syncStreamAnchorRef.current?.token === syncTimelineTokenRef.current
+        ? syncStreamAnchorRef.current
+        : null;
+    const clock: Pick<LivePlayerTimeline, "clockKind" | "epochAtMediaZeroMs"> =
+      programDateMs != null
+        ? {
+            clockKind: "program-date",
+            epochAtMediaZeroMs: programDateMs - mediaTime * 1_000,
+          }
+        : anchor
+          ? { clockKind: "stream-anchor", epochAtMediaZeroMs: anchor.epochAtMediaZeroMs }
+          : { clockKind: "none", epochAtMediaZeroMs: null };
+
+    return {
+      ready: video.readyState >= 2 && !video.paused,
+      mediaTime,
+      bufferStart,
+      bufferEnd,
+      playbackRate: video.playbackRate,
+      paused: video.paused,
+      ...clock,
+    };
+  }, []);
+
+  const seekSyncMediaTime = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(seconds)) return;
+    const target = Math.max(0, seconds);
+    // mpegts.js owns its own seek path: writing the element directly would let
+    // its seeking handler treat the jump as an unbuffered seek and flush MSE.
+    if (mpegtsCoreRef.current?.seek?.(target)) return;
+    try {
+      video.currentTime = target;
+    } catch {
+      /* A mid-teardown element rejects the assignment; the next tick retries. */
+    }
+  }, []);
+
+  const setSyncPlaybackRate = useCallback((rate: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(rate)) return;
+    const next = Math.min(LIVE_SYNC_MAX_PLAYBACK_RATE, Math.max(LIVE_SYNC_MIN_PLAYBACK_RATE, rate));
+    if (Math.abs(video.playbackRate - next) < 0.001) return;
+    video.playbackRate = next;
+  }, []);
+
+  const sync = useMemo<LivePlayerSyncApi>(
+    () => ({
+      readTimeline: readSyncTimeline,
+      seekMediaTime: seekSyncMediaTime,
+      setPlaybackRate: setSyncPlaybackRate,
+    }),
+    [readSyncTimeline, seekSyncMediaTime, setSyncPlaybackRate],
+  );
+
+  // Leaving the alignment (or the page) must not leave a trimmed rate behind.
+  useEffect(() => {
+    if (liveSyncHold) return;
+    const video = videoRef.current;
+    if (video && video.playbackRate !== 1) video.playbackRate = 1;
+  }, [liveSyncHold, mediaKey]);
 
   const freezeFullscreenInsets = useCallback(() => {
     if (typeof document === "undefined") return;
@@ -1940,6 +2220,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     exitPictureInPicture,
     toggleFullscreen,
     exitFullscreen,
+    sync,
   };
 }
 

@@ -52,8 +52,10 @@ import {
   PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
+import { MultiRoomLiveSyncProvider } from "./MultiRoomLiveSyncProvider";
 import { MultiRoomPickerDialog } from "./MultiRoomPickerDialog";
 import { MultiRoomPlayer } from "./MultiRoomPlayer";
+import { MultiRoomSyncControl } from "./MultiRoomSyncControl";
 import {
   isMultiRoomMainSlot,
   multiRoomGridClassName,
@@ -219,6 +221,10 @@ export function MultiRoomPage() {
   );
   const roomCount = useMemo(() => slots.filter(Boolean).length, [slots]);
   const visibleSlots = useMemo(() => slots.slice(0, layout), [layout, slots]);
+  const visibleRooms = useMemo(
+    () => visibleSlots.filter((room): room is MultiRoomEntry => room != null),
+    [visibleSlots],
+  );
 
   function goBack() {
     const historyState = window.history.state as { idx?: number } | null;
@@ -261,185 +267,194 @@ export function MultiRoomPage() {
   }
 
   return (
-    <div data-multi-room-page className="flex h-full min-h-0 flex-col bg-background">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/80 bg-sidebar/90 px-3">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="返回上一页"
-                onClick={goBack}
-              />
-            }
-          >
-            <ChevronLeft data-icon="inline-start" aria-hidden />
-          </TooltipTrigger>
-          <TooltipContent>返回上一页</TooltipContent>
-        </Tooltip>
-        <RadioTower className="size-4 text-primary" aria-hidden />
-        <strong className="text-sm font-medium">多画面</strong>
-        <Badge variant="secondary" className="tabular-nums">
-          {roomCount}/{layout}
-        </Badge>
-        <ToggleGroup
-          value={[String(layout)]}
-          spacing={0}
-          variant="outline"
-          size="sm"
-          aria-label="多画面布局"
-          onValueChange={(value) => {
-            const next = Number(value[0]);
-            if (MULTI_ROOM_LAYOUT_OPTIONS.includes(next as MultiRoomLayout)) {
-              setLayout(next as MultiRoomLayout);
-            }
-          }}
-        >
-          {MULTI_ROOM_LAYOUT_OPTIONS.map((option) => (
-            <ToggleGroupItem
-              key={option}
-              value={String(option)}
-              aria-label={option === 2 ? "2 画面左右等分布局" : `${option} 画面布局`}
-              disabled={roomCount > option}
-              title={roomCount > option ? `请先将直播间减少到 ${option} 路` : undefined}
+    <MultiRoomLiveSyncProvider>
+      <div data-multi-room-page className="flex h-full min-h-0 flex-col bg-background">
+        <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/80 bg-sidebar/90 px-3">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="返回上一页"
+                  onClick={goBack}
+                />
+              }
             >
-              {option}画面
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        {layout === 4 && (
+              <ChevronLeft data-icon="inline-start" aria-hidden />
+            </TooltipTrigger>
+            <TooltipContent>返回上一页</TooltipContent>
+          </Tooltip>
+          <RadioTower className="size-4 text-primary" aria-hidden />
+          <strong className="text-sm font-medium">多画面</strong>
+          <Badge variant="secondary" className="tabular-nums">
+            {roomCount}/{layout}
+          </Badge>
           <ToggleGroup
-            value={[fourLayout]}
+            value={[String(layout)]}
             spacing={0}
             variant="outline"
             size="sm"
-            aria-label="四画面排列"
+            aria-label="多画面布局"
             onValueChange={(value) => {
-              const next = value[0];
-              if (MULTI_ROOM_FOUR_LAYOUT_OPTIONS.includes(next as MultiRoomFourLayout)) {
-                setFourLayout(next as MultiRoomFourLayout);
+              const next = Number(value[0]);
+              if (MULTI_ROOM_LAYOUT_OPTIONS.includes(next as MultiRoomLayout)) {
+                setLayout(next as MultiRoomLayout);
               }
             }}
           >
-            <Tooltip>
-              <TooltipTrigger
-                render={<ToggleGroupItem value="main-left" aria-label="主画面靠左排列" />}
+            {MULTI_ROOM_LAYOUT_OPTIONS.map((option) => (
+              <ToggleGroupItem
+                key={option}
+                value={String(option)}
+                aria-label={option === 2 ? "2 画面左右等分布局" : `${option} 画面布局`}
+                disabled={roomCount > option}
+                title={roomCount > option ? `请先将直播间减少到 ${option} 路` : undefined}
               >
-                <LayoutPanelLeft aria-hidden />
-              </TooltipTrigger>
-              <TooltipContent>主画面靠左</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={<ToggleGroupItem value="equal" aria-label="四画面均分排列" />}
-              >
-                <LayoutGrid aria-hidden />
-              </TooltipTrigger>
-              <TooltipContent>四画面均分</TooltipContent>
-            </Tooltip>
+                {option}画面
+              </ToggleGroupItem>
+            ))}
           </ToggleGroup>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="添加直播间"
-                  disabled={roomCount >= layout}
-                  onClick={() => setPickerOpen(true)}
-                />
-              }
-            >
-              <Plus data-icon="inline-start" aria-hidden />
-            </TooltipTrigger>
-            <TooltipContent>添加直播间</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="清空多画面"
-                  disabled={roomCount === 0}
-                  onClick={() => setClearOpen(true)}
-                />
-              }
-            >
-              <Trash2 data-icon="inline-start" aria-hidden />
-            </TooltipTrigger>
-            <TooltipContent>清空多画面</TooltipContent>
-          </Tooltip>
-        </div>
-      </header>
-
-      <DndContext
-        sensors={sensors}
-        collisionDetection={rectIntersection}
-        accessibility={{ screenReaderInstructions: MULTI_ROOM_DND_INSTRUCTIONS }}
-        onDragEnd={handleDragEnd}
-      >
-        <div
-          data-multi-room-grid
-          data-multi-room-layout={layout === 2 ? "two-equal" : layout === 4 ? fourLayout : "six"}
-          className={cn(
-            "grid min-h-0 flex-1 gap-px overflow-hidden bg-border/60",
-            multiRoomGridClassName(layout, fourLayout),
-          )}
-        >
-          {visibleSlots.map((room, index) =>
-            room ? (
-              <OccupiedSlot
-                key={room.key}
-                index={index}
-                fourLayout={fourLayout}
-                layout={layout}
-                room={room}
-              />
-            ) : (
-              <EmptySlot
-                key={`empty:${index}`}
-                index={index}
-                fourLayout={fourLayout}
-                layout={layout}
-                onAdd={() => setPickerOpen(true)}
-              />
-            ),
-          )}
-        </div>
-      </DndContext>
-
-      <MultiRoomPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} />
-
-      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <Trash2 aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>清空多画面</AlertDialogTitle>
-            <AlertDialogDescription>将关闭全部 {roomCount} 路直播流。</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                clear();
-                setClearOpen(false);
+          {layout === 4 && (
+            <ToggleGroup
+              value={[fourLayout]}
+              spacing={0}
+              variant="outline"
+              size="sm"
+              aria-label="四画面排列"
+              onValueChange={(value) => {
+                const next = value[0];
+                if (MULTI_ROOM_FOUR_LAYOUT_OPTIONS.includes(next as MultiRoomFourLayout)) {
+                  setFourLayout(next as MultiRoomFourLayout);
+                }
               }}
             >
-              清空
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<ToggleGroupItem value="main-left" aria-label="主画面靠左排列" />}
+                >
+                  <LayoutPanelLeft aria-hidden />
+                </TooltipTrigger>
+                <TooltipContent>主画面靠左</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<ToggleGroupItem value="equal" aria-label="四画面均分排列" />}
+                >
+                  <LayoutGrid aria-hidden />
+                </TooltipTrigger>
+                <TooltipContent>四画面均分</TooltipContent>
+              </Tooltip>
+            </ToggleGroup>
+          )}
+          <div className="ml-auto flex items-center gap-1">
+            <MultiRoomSyncControl
+              rooms={visibleRooms}
+              mainKey={
+                visibleSlots.find((room, index) => room != null && isMultiRoomMainSlot(index))
+                  ?.key ?? null
+              }
+            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="添加直播间"
+                    disabled={roomCount >= layout}
+                    onClick={() => setPickerOpen(true)}
+                  />
+                }
+              >
+                <Plus data-icon="inline-start" aria-hidden />
+              </TooltipTrigger>
+              <TooltipContent>添加直播间</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="清空多画面"
+                    disabled={roomCount === 0}
+                    onClick={() => setClearOpen(true)}
+                  />
+                }
+              >
+                <Trash2 data-icon="inline-start" aria-hidden />
+              </TooltipTrigger>
+              <TooltipContent>清空多画面</TooltipContent>
+            </Tooltip>
+          </div>
+        </header>
+
+        <DndContext
+          sensors={sensors}
+          collisionDetection={rectIntersection}
+          accessibility={{ screenReaderInstructions: MULTI_ROOM_DND_INSTRUCTIONS }}
+          onDragEnd={handleDragEnd}
+        >
+          <div
+            data-multi-room-grid
+            data-multi-room-layout={layout === 2 ? "two-equal" : layout === 4 ? fourLayout : "six"}
+            className={cn(
+              "grid min-h-0 flex-1 gap-px overflow-hidden bg-border/60",
+              multiRoomGridClassName(layout, fourLayout),
+            )}
+          >
+            {visibleSlots.map((room, index) =>
+              room ? (
+                <OccupiedSlot
+                  key={room.key}
+                  index={index}
+                  fourLayout={fourLayout}
+                  layout={layout}
+                  room={room}
+                />
+              ) : (
+                <EmptySlot
+                  key={`empty:${index}`}
+                  index={index}
+                  fourLayout={fourLayout}
+                  layout={layout}
+                  onAdd={() => setPickerOpen(true)}
+                />
+              ),
+            )}
+          </div>
+        </DndContext>
+
+        <MultiRoomPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} />
+
+        <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
+          <AlertDialogContent size="sm">
+            <AlertDialogHeader>
+              <AlertDialogMedia className="bg-destructive/10 text-destructive">
+                <Trash2 aria-hidden />
+              </AlertDialogMedia>
+              <AlertDialogTitle>清空多画面</AlertDialogTitle>
+              <AlertDialogDescription>将关闭全部 {roomCount} 路直播流。</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  clear();
+                  setClearOpen(false);
+                }}
+              >
+                清空
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    </MultiRoomLiveSyncProvider>
   );
 }

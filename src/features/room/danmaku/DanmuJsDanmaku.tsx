@@ -131,6 +131,14 @@ type DanmuJsDanmakuProps = {
   roomTitle?: string;
   roomUserName?: string;
   large?: boolean;
+  /**
+   * Hold incoming comments back by this many milliseconds.
+   *
+   * The multi-view clock alignment can play a feed several seconds behind its
+   * live edge; comments arrive from the server in real time, so without the
+   * same delay they would describe a moment the picture has not reached yet.
+   */
+  delayMs?: number;
 };
 
 type RuntimeConfig = {
@@ -269,6 +277,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   roomTitle,
   roomUserName,
   large = false,
+  delayMs = 0,
 }: DanmuJsDanmakuProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -655,9 +664,32 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     aggregationTargetsRef.current.clear();
   }, [mergeWindowSeconds, sessionKey]);
 
+  const delayMsRef = useRef(delayMs);
+  useLayoutEffect(() => {
+    // Kept in a ref so a changing hold never resubscribes the batch stream.
+    delayMsRef.current = Number.isFinite(delayMs) ? Math.max(0, Math.min(60_000, delayMs)) : 0;
+  }, [delayMs]);
+
   useEffect(() => {
     if (!active || reducedMotion || !pageVisible) return;
-    return subscribeDanmakuBatches((events) => processBatchRef.current(events));
+    const pendingTimers = new Set<number>();
+    const unsubscribe = subscribeDanmakuBatches((events) => {
+      const delay = delayMsRef.current;
+      if (delay <= 0) {
+        processBatchRef.current(events);
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        pendingTimers.delete(timer);
+        processBatchRef.current(events);
+      }, delay);
+      pendingTimers.add(timer);
+    });
+    return () => {
+      unsubscribe();
+      for (const timer of pendingTimers) window.clearTimeout(timer);
+      pendingTimers.clear();
+    };
   }, [active, pageVisible, reducedMotion, sessionKey]);
 
   // Pending messages belong to a room session, not to one renderer instance.
