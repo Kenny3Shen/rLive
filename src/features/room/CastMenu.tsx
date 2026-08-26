@@ -4,10 +4,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { invokeCmd } from "@/shared/api/tauri";
 import { cn } from "@/lib/utils";
-import {
-  glassOptionClass,
-  glassTitleClass,
-} from "@/shared/components/player/glassSurface";
+import { glassOptionClass, glassTitleClass } from "@/shared/components/player/glassSurface";
 
 export type DlnaDevice = {
   usn: string;
@@ -132,7 +129,9 @@ export function CastMenu({
       {showHeader && (
         <div className="flex min-w-0 items-center gap-2">
           <Tv aria-hidden className="size-4 shrink-0" />
-          <span className={cn("min-w-0 truncate text-sm font-medium", glassTitleClass({ overlay }))}>
+          <span
+            className={cn("min-w-0 truncate text-sm font-medium", glassTitleClass({ overlay }))}
+          >
             投屏到电视
           </span>
         </div>
@@ -165,7 +164,10 @@ export function CastMenu({
         <div className="flex min-h-32 flex-col gap-1.5" aria-live="polite">
           {searching && (
             <p
-              className={cn("flex items-center gap-2 py-4 text-sm", overlay ? "text-white/65" : "text-muted-foreground")}
+              className={cn(
+                "flex items-center gap-2 py-4 text-sm",
+                overlay ? "text-white/65" : "text-muted-foreground",
+              )}
               role="status"
             >
               <Loader2 className="animate-spin-soft" data-icon="inline-start" />
@@ -176,7 +178,12 @@ export function CastMenu({
             <ErrorState error={searchError} title="设备搜索失败" onRetry={() => void search()} />
           ) : null}
           {!searching && !searchError && devices && devices.length === 0 && (
-            <p className={cn("py-4 text-center text-sm", overlay ? "text-white/65" : "text-muted-foreground")}>
+            <p
+              className={cn(
+                "py-4 text-center text-sm",
+                overlay ? "text-white/65" : "text-muted-foreground",
+              )}
+            >
               未发现可投屏设备，请确认电视已开启 DLNA 并接入同一网络。
             </p>
           )}
