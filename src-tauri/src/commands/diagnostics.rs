@@ -9,11 +9,13 @@
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 use serde::Serialize;
+use tauri::State;
 
-use crate::app_paths::AppDirectories;
 use crate::error::{AppError, AppResult};
+use crate::state::AppState;
 
 /// 从日志文件末尾读取的字节数。日志本身在 2 MiB 时轮转，但 webview 不应
 /// 一次收到那么多文本：反馈问题需要的是最近的警告，
@@ -106,16 +108,21 @@ fn read_tail(path: &std::path::Path) -> LogFileContent {
     }
 }
 
-/// 当前与轮转的应用日志尾部内容，供"关于"面板的日志查看器使用。
-#[tauri::command(async)]
-pub async fn app_log_snapshot() -> AppResult<AppLogSnapshot> {
-    let directories = AppDirectories::resolve(None)?;
-    let logs = directories.logs;
-    Ok(AppLogSnapshot {
-        directory: crate::app_paths::path_to_string(&logs),
+fn snapshot_logs(logs: &Path) -> AppLogSnapshot {
+    AppLogSnapshot {
+        directory: crate::app_paths::path_to_string(logs),
         current: read_tail(&logs.join("rlive.log")),
         previous: read_tail(&logs.join("rlive.previous.log")),
-    })
+    }
+}
+
+/// 当前与轮转的应用日志尾部内容，供“关于”面板的日志查看器使用。
+///
+/// 日志目录在启动时解析并保存在 `AppState` 中：Android 上移动宿主的
+/// 数据目录仅在启动期间可得，事后无法重新解析。
+#[tauri::command(async)]
+pub async fn app_log_snapshot(state: State<'_, AppState>) -> AppResult<AppLogSnapshot> {
+    Ok(snapshot_logs(&state.directories.logs))
 }
 
 /// 删除两个日志文件。
@@ -124,8 +131,8 @@ pub async fn app_log_snapshot() -> AppResult<AppLogSnapshot> {
 /// 这会让最终日志在反馈中易读得多。
 /// 文件不存在视为已清空。
 #[tauri::command(async)]
-pub async fn app_log_clear() -> AppResult<()> {
-    let logs = AppDirectories::resolve(None)?.logs;
+pub async fn app_log_clear(state: State<'_, AppState>) -> AppResult<()> {
+    let logs = state.directories.logs.clone();
     for name in ["rlive.log", "rlive.previous.log"] {
         match fs::remove_file(logs.join(name)) {
             Ok(()) => {}
@@ -139,4 +146,54 @@ pub async fn app_log_clear() -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshot_logs;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use uuid::Uuid;
+
+    fn temp_directory(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rlive-app-log-{label}-{}",
+            Uuid::new_v4().simple()
+        ))
+    }
+
+    #[test]
+    fn snapshot_reports_missing_log_files() {
+        let directory = temp_directory("missing");
+
+        let snapshot = snapshot_logs(&directory);
+
+        assert_eq!(snapshot.directory, directory.to_string_lossy());
+        assert!(!snapshot.current.exists);
+        assert!(!snapshot.previous.exists);
+        assert_eq!(snapshot.current.text, "");
+        assert_eq!(snapshot.current.size_bytes, 0);
+    }
+
+    #[test]
+    fn snapshot_reads_current_and_previous_files() {
+        let directory = temp_directory("tails");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("rlive.log"), "current log").unwrap();
+        fs::write(directory.join("rlive.previous.log"), "previous log").unwrap();
+
+        let snapshot = snapshot_logs(&directory);
+
+        assert!(snapshot.current.exists);
+        assert!(snapshot.previous.exists);
+        assert_eq!(snapshot.current.text, "current log");
+        assert_eq!(
+            snapshot.current.size_bytes,
+            "current log".len() as u64
+        );
+        assert_eq!(snapshot.previous.text, "previous log");
+
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
