@@ -15,7 +15,6 @@ import {
   Play,
   RefreshCw,
   Settings,
-  Cast as CastIcon,
   VideoOff,
   Volume2,
   VolumeX,
@@ -214,15 +213,6 @@ export type PlayerControlsProps = {
   onToggleMute: () => void;
   onToggleAudioOnly?: () => void;
   onToggleSidePanel?: () => void;
-  /**
-   * DLNA 投屏入口。提供时在侧栏切换按钮前渲染；`active` 表示已建立投屏
-   * 会话，点击后由父级打开管理对话框。
-   */
-  cast?: {
-    active: boolean;
-    disabled?: boolean;
-    onClick: () => void;
-  };
   onToggleOsd?: () => void;
   onToggleAsr?: () => void;
   onAsrTranslationEnabledChange?: (enabled: boolean) => void;
@@ -346,7 +336,6 @@ export function PlayerControls({
   onToggleMute,
   onToggleAudioOnly,
   onToggleSidePanel,
-  cast,
   onToggleOsd,
   onToggleAsr,
   onAsrTranslationEnabledChange,
@@ -972,19 +961,6 @@ export function PlayerControls({
                 {captionSettingsBody}
               </PopoverContent>
             </Popover>
-          )}
-          {cast && (
-            <ControlButton
-              label={cast.active ? "投屏中：管理投屏" : "投屏到电视"}
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              disabled={cast.disabled}
-              aria-pressed={cast.active}
-              onClick={cast.onClick}
-              tooltip={!compact}
-            >
-              <CastIcon />
-            </ControlButton>
           )}
           {showSidePanelControl && onToggleSidePanel && (
             <ControlButton

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Car, Ellipsis, Timer, type LucideIcon } from "lucide-react";
+import { Car, Cast, Ellipsis, Timer, type LucideIcon } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -27,6 +27,7 @@ import type { SiteId } from "@/shared/types/live";
 import { cn, formatOnline } from "@/lib/utils";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
+import { CastMenu } from "./CastMenu";
 import type { SleepTimerController } from "./useSleepTimer";
 
 export { roomIdentityOverflowDistance };
@@ -64,6 +65,14 @@ export type PlayerFullscreenHudProps = {
   autoSend?: AutoDanmakuSendController;
   /** Room-scoped countdown exposed from the overflow menu. */
   sleepTimer?: SleepTimerController;
+  /** DLNA 投屏入口；提供时在全屏 HUD 的工具磁贴中出现。 */
+  cast?: {
+    url: string | null;
+    headers: Record<string, string>;
+    title: string;
+    device: string | null;
+    onDeviceChange: (deviceName: string | null) => void;
+  };
   /** Compact viewport (portrait phone or short landscape). */
   compact?: boolean;
   /** Portal target — a `:fullscreen` ancestor owns the top layer. */
@@ -115,6 +124,7 @@ export function PlayerFullscreenHud({
   playerActions = [],
   autoSend,
   sleepTimer,
+  cast,
   compact = false,
   portalContainer,
   onOverlayInteractionChange,
@@ -123,6 +133,7 @@ export function PlayerFullscreenHud({
   const [menuOpen, setMenuOpen] = useState(false);
   const [autoSendExpanded, setAutoSendExpanded] = useState(false);
   const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
+  const [castExpanded, setCastExpanded] = useState(false);
   const portrait = usePortraitOrientation();
 
   useEffect(() => {
@@ -191,6 +202,7 @@ export function PlayerFullscreenHud({
               onClick={() => {
                 setAutoSendExpanded((expanded) => !expanded);
                 setSleepTimerExpanded(false);
+                setCastExpanded(false);
               }}
             />
           )}
@@ -203,6 +215,21 @@ export function PlayerFullscreenHud({
               onClick={() => {
                 setSleepTimerExpanded((expanded) => !expanded);
                 setAutoSendExpanded(false);
+                setCastExpanded(false);
+              }}
+            />
+          )}
+          {cast && (
+            <RoomToolTile
+              icon={Cast}
+              label={cast.device ? "投屏中" : "投屏"}
+              pressed={castExpanded || cast.device != null}
+              active={cast.device != null}
+              disabled={cast.url == null}
+              onClick={() => {
+                setCastExpanded((expanded) => !expanded);
+                setAutoSendExpanded(false);
+                setSleepTimerExpanded(false);
               }}
             />
           )}
@@ -220,6 +247,17 @@ export function PlayerFullscreenHud({
       {sleepTimer && sleepTimerExpanded && (
         <RoomToolPanel>
           <SleepTimerMenu timer={sleepTimer} showTrigger={false} variant="overlay" showHeader />
+        </RoomToolPanel>
+      )}
+      {cast && castExpanded && (
+        <RoomToolPanel>
+          <CastMenu
+            castUrl={cast.url}
+            headers={cast.headers}
+            title={cast.title}
+            variant="overlay"
+            onCastingDeviceChange={cast.onDeviceChange}
+          />
         </RoomToolPanel>
       )}
     </>
@@ -341,18 +379,21 @@ function RoomToolTile({
   label,
   pressed,
   active,
+  disabled,
   onClick,
 }: {
   icon: LucideIcon;
   label: string;
   pressed?: boolean;
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <Button
       type="button"
       variant="ghost"
+      disabled={disabled}
       className={cn(
         "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
         glassOptionClass({ overlay: true }),
