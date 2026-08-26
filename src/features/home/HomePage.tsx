@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
@@ -11,7 +11,7 @@ import type { LiveRoomItem } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SITE_LABELS } from "@/lib/utils";
-import { homeRecommendationsQueryOptions } from "./homeQuery";
+import { homeRecommendationsQueryOptions, trimRotatingRecommendPages } from "./homeQuery";
 import { mergeRoomPages } from "./pagination";
 
 type RoomGridProps = {
@@ -32,6 +32,7 @@ const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
 
 export function HomePage() {
   const siteId = useSiteId();
+  const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     ...homeRecommendationsQueryOptions(siteId),
@@ -56,14 +57,21 @@ export function HomePage() {
 
   const refreshing = query.isRefetching && !query.isFetchingNextPage;
 
+  const refresh = () => {
+    // Rotating feeds (e.g. Douyin) only need one fresh batch; trimming first
+    // turns a sequential refetch of every stored page into a single request.
+    trimRotatingRecommendPages(queryClient, siteId);
+    void query.refetch();
+  };
+
   return (
     <PullToRefresh
-      onRefresh={() => query.refetch()}
+      onRefresh={refresh}
       refreshing={refreshing}
       className="mx-auto max-w-[1600px]"
     >
       <RefreshFab
-        onRefresh={() => query.refetch()}
+        onRefresh={refresh}
         pending={refreshing || query.isLoading}
         label="刷新推荐直播"
       />

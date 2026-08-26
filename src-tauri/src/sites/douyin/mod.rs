@@ -13,6 +13,7 @@ mod a_bogus;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use reqwest::header::{COOKIE, HeaderMap, REFERER, SET_COOKIE, USER_AGENT};
 use reqwest::{Client, Url};
@@ -53,6 +54,47 @@ const LIST_PAGE_SIZE: u32 = 15;
 /// Length of the `msToken` sent by the web client on list requests.
 const MS_TOKEN_LENGTH: usize = 107;
 const MS_TOKEN_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+/// How long the anonymous live-home bootstrap cookies stay valid process-wide.
+/// `ttwid` itself lives far longer; the TTL only bounds staleness.
+const WEB_SESSION_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+/// Feed batches fetched concurrently per recommend page. Consecutive batches
+/// overlap heavily (roughly 15 of 20 rooms), so a single batch yields only a
+/// handful of new rooms per round trip; two concurrent batches double the
+/// unique-room yield without extra wall-clock latency.
+const RECOMMEND_FEED_BATCHES: usize = 2;
+
+/// Process-wide cache of the anonymous bootstrap cookies (`ttwid`, ...) that
+/// the live home hands out. Site instances are created per IPC command, so
+/// without this every list request would re-download the roughly 1 MB home
+/// page just to restart the same anonymous session. Only the cookies the home
+/// response contributes are cached, never the saved account Cookie.
+struct CachedWebSession {
+    cookie_pairs: Vec<(String, String)>,
+    expires_at: Instant,
+}
+
+static WEB_SESSION_CACHE: Mutex<Option<CachedWebSession>> = Mutex::new(None);
+
+fn cached_web_session_pairs() -> Option<Vec<(String, String)>> {
+    let cache = WEB_SESSION_CACHE.lock().ok()?;
+    let session = cache.as_ref()?;
+    if Instant::now() >= session.expires_at {
+        return None;
+    }
+    Some(session.cookie_pairs.clone())
+}
+
+fn store_web_session_pairs(pairs: &[(String, String)]) {
+    if pairs.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = WEB_SESSION_CACHE.lock() {
+        *cache = Some(CachedWebSession {
+            cookie_pairs: pairs.to_vec(),
+            expires_at: Instant::now() + WEB_SESSION_CACHE_TTL,
+        });
+    }
+}
 
 /// A Douyin site instance owns only transient, read-only request state.  The
 /// initial cookie comes from the account store; response cookies such as
@@ -60,9 +102,9 @@ const MS_TOKEN_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 pub struct DouyinSite {
     client: Client,
     cookie: Mutex<String>,
-    /// Each site instance starts by visiting the public live home once, even
-    /// when a saved Cookie already contains `ttwid`. This refreshes the
-    /// transient browser session for the requests made by that instance.
+    /// Whether this instance already holds a usable transient web session.
+    /// Instances are created per command invocation, so the first use is
+    /// normally seeded from [`WEB_SESSION_CACHE`] instead of the live home.
     web_session_initialized: Mutex<bool>,
 }
 
@@ -274,12 +316,35 @@ impl DouyinSite {
     }
 
     /// Fetches the live home once to obtain the anonymous `ttwid` cookie.
+    /// A fresh process-wide cache of a previous bootstrap short-circuits the
+    /// visit; saved account Cookie values always win over cached ones.
     async fn ensure_web_session(&self) -> AppResult<()> {
         if self.web_session_is_initialized()? {
             return Ok(());
         }
+        if let Some(cached) = cached_web_session_pairs() {
+            let mut cookie = self.cookie.lock().map_err(|_| {
+                AppError::new("douyin_lock", "Douyin session mutex poisoned").with_site("douyin")
+            })?;
+            // Cached values fill the gaps; values already held (saved login
+            // identity, earlier response cookies) keep precedence.
+            *cookie = merge_cookie_values(
+                &cached
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                &cookie,
+            );
+            drop(cookie);
+            self.mark_web_session_initialized()?;
+            return Ok(());
+        }
+        let before = self.cookie()?;
         let _ = self.get_text(LIVE_ROOT, &[], LIVE_ROOT, false).await?;
         if self.has_cookie("ttwid")? {
+            let gained = changed_cookie_pairs(&before, &self.cookie()?);
+            store_web_session_pairs(&gained);
             self.mark_web_session_initialized()?;
             Ok(())
         } else {
@@ -477,14 +542,19 @@ impl LiveSite for DouyinSite {
         // batch, which pairs with the frontend's cross-page de-duplication to
         // surface new rooms on each refresh or load-more. The feed has no
         // pagination cursor, so every page number simply requests another
-        // batch. When the feed is unavailable (risk control, empty payload),
-        // fall back to the hot partition browse, which paginates stably via a
-        // synthetic partition id; its first page matches the `hot_live` SSR
-        // payload, kept as a last-resort fallback for that page only.
+        // batch; several are fetched concurrently because consecutive batches
+        // overlap heavily. When the feed is unavailable (risk control, empty
+        // payload), fall back to the hot partition browse, which paginates
+        // stably via a synthetic partition id; its first page matches the
+        // `hot_live` SSR payload, kept as a last-resort fallback for that
+        // page only.
         let page = page.max(1);
-        match self.get_recommend_feed().await {
-            Ok(rooms) if !rooms.items.is_empty() => return Ok(rooms),
-            Ok(_) | Err(_) => {}
+        let requests = (0..RECOMMEND_FEED_BATCHES).map(|_| self.get_recommend_feed());
+        let results = futures_util::future::join_all(requests).await;
+        let batches = results.into_iter().flatten().collect::<Vec<_>>();
+        let combined = combine_feed_batches(batches);
+        if !combined.items.is_empty() {
+            return Ok(combined);
         }
         match self
             .get_partition_rooms(
@@ -696,6 +766,21 @@ fn cookie_pairs(value: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Cookie pairs the live-home bootstrap added or refreshed, relative to the
+/// cookie held before the visit. Only these anonymous session values are
+/// shared through the process-wide cache; saved account values never enter it.
+fn changed_cookie_pairs(before: &str, after: &str) -> Vec<(String, String)> {
+    let previous = cookie_pairs(before);
+    cookie_pairs(after)
+        .into_iter()
+        .filter(|(key, value)| {
+            !previous
+                .iter()
+                .any(|(old_key, old_value)| old_key.eq_ignore_ascii_case(key) && old_value == value)
+        })
+        .collect()
+}
+
 fn merge_cookie_values(base: &str, updates: &str) -> String {
     let mut merged = cookie_pairs(base);
     for (key, value) in cookie_pairs(updates) {
@@ -854,6 +939,24 @@ fn parse_recommend_feed(value: &Value) -> AppResult<RoomListPage> {
         has_more: !items.is_empty(),
         items,
     })
+}
+
+/// Merges concurrent feed batches into one page, keeping the first occurrence
+/// of every room and preserving batch order.
+fn combine_feed_batches(batches: Vec<RoomListPage>) -> RoomListPage {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    for batch in batches {
+        for item in batch.items {
+            if seen.insert(item.room_id.clone()) {
+                items.push(item);
+            }
+        }
+    }
+    RoomListPage {
+        has_more: !items.is_empty(),
+        items,
+    }
 }
 
 /// Extracts a room item from one feed envelope.
@@ -2030,6 +2133,83 @@ mod tests {
 
         assert!(page.items.is_empty());
         assert!(!page.has_more);
+    }
+
+    #[test]
+    fn combine_feed_batches_dedupes_across_batches() {
+        let batch = |ids: &[&str]| RoomListPage {
+            has_more: true,
+            items: ids
+                .iter()
+                .map(|id| LiveRoomItem {
+                    site_id: SiteId::Douyin,
+                    room_id: (*id).to_string(),
+                    title: "标题".into(),
+                    cover: String::new(),
+                    user_name: "主播".into(),
+                    online: 1,
+                })
+                .collect(),
+        };
+
+        let combined = combine_feed_batches(vec![batch(&["a", "b", "c"]), batch(&["b", "d"])]);
+
+        let ids = combined
+            .items
+            .iter()
+            .map(|item| item.room_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b", "c", "d"]);
+        assert!(combined.has_more);
+    }
+
+    /// The bootstrap cache must only ever hold the anonymous values the home
+    /// response contributed; saved account cookies never enter it.
+    #[test]
+    fn changed_cookie_pairs_reports_only_new_or_refreshed_values() {
+        let before = "sessionid=secret; ttwid=old";
+        let after = "sessionid=secret; ttwid=fresh; UIFID_TEMP=abc";
+
+        let gained = changed_cookie_pairs(before, after);
+
+        let pairs = gained
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(pairs, vec![("ttwid", "fresh"), ("UIFID_TEMP", "abc")]);
+    }
+
+    /// Both behaviors share one test because they rely on the same
+    /// process-wide session cache; parallel tests would overwrite it.
+    #[tokio::test]
+    async fn cached_web_session_seeds_instances_and_yields_to_saved_login() {
+        store_web_session_pairs(&[
+            ("ttwid".into(), "cached".into()),
+            ("UIFID_TEMP".into(), "fill".into()),
+        ]);
+
+        // Anonymous instance: the cached pairs seed a usable session without
+        // visiting the live home.
+        let anonymous = DouyinSite::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            String::new(),
+        );
+        anonymous.ensure_web_session().await.unwrap();
+        assert_eq!(anonymous.cookie().unwrap(), "ttwid=cached; UIFID_TEMP=fill");
+        assert!(anonymous.web_session_is_initialized().unwrap());
+
+        // Saved-login instance: cached values fill the gaps, but the saved
+        // identity always wins over its cached counterpart.
+        let saved = DouyinSite::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            "sessionid=secret; ttwid=saved".into(),
+        );
+        saved.ensure_web_session().await.unwrap();
+
+        let cookie = saved.cookie().unwrap();
+        assert!(cookie.contains("sessionid=secret"));
+        assert!(cookie.contains("ttwid=saved"));
+        assert!(cookie.contains("UIFID_TEMP=fill"));
     }
 
     #[test]

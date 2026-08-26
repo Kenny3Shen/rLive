@@ -19,7 +19,8 @@
 
 推荐与分区列表的主通道都来自网页端接口。
 
-- 推荐（主页）：优先调用网页端首页 feed 接口 `GET https://live.douyin.com/webcast/feed/`（`enter_source=web_homepage_hot_web_live_card`）。该接口不需要 `a_bogus` 验签，匿名会话（临时 `ttwid`）即可访问；已保存的账号 Cookie 会随请求自动附带，但上游是否因登录态下发个性化内容未经上游承诺，rLive 不作保证。它没有翻页游标：每次调用返回约二十个房间的轮换批次，连续请求仅部分重叠；rLive 把每一页映射为一次新批次请求，由前端跨页去重并在新房间耗尽时自然终止「加载更多」。feed 请求失败或返回空时回退到下述合成分区接口，首屏再回退 `hot_live` SSR。
+- 推荐（主页）：优先调用网页端首页 feed 接口 `GET https://live.douyin.com/webcast/feed/`（`enter_source=web_homepage_hot_web_live_card`）。该接口不需要 `a_bogus` 验签，匿名会话（临时 `ttwid`）即可访问；已保存的账号 Cookie 会随请求自动附带，但上游是否因登录态下发个性化内容未经上游承诺，rLive 不作保证。它没有翻页游标：每次调用返回约二十个房间的轮换批次，连续请求仅部分重叠；rLive 每页并发拉取两批合并去重（单次加载产出更多新房间且不增加等待），由前端跨页去重并在新房间耗尽时自然终止「加载更多」；刷新只重取第一页，一次请求即可整体换一批。feed 请求失败或返回空时回退到下述合成分区接口，首屏再回退 `hot_live` SSR。
+- 性能：匿名 `ttwid` 引导结果在进程内缓存（30 分钟 TTL），站点实例按命令创建时直接复用，避免每个列表请求重新下载约 1 MB 的直播首页；缓存只保存首页响应新增的匿名 Cookie，绝不缓存账号 Cookie，且已保存的登录值始终优先于缓存值。
 - 分区列表来自网页端的分页接口 `GET https://live.douyin.com/webcast/web/partition/detail/room/v2/`，每页 `count=15`，`offset` 按页递增。该接口要求浏览器验签参数 `a_bogus`；rLive 在本机用纯 Rust 实现（SM3 + RC4，见下文）计算，不依赖 JS 运行时或外部签名服务，因此「加载更多」对分区页真实可用。
 - 抖音网页端的热门推荐并非真实分区，而是以合成分区 `partition=720&partition_type=1` 从同一接口读取，rLive 沿用该约定作为推荐 feed 的回退通道。
 - 分区：分类树把分区标识保存为 `id,type`（例如 `1010032,1`），请求时拆成 `partition` 与 `partition_type` 两个参数；两者都必须为数字，避免向已验签的查询串注入额外参数。分类页中「全部 X」条目的 id 为 `0`，它不是真实分区，会回退到父分区。
