@@ -63,6 +63,9 @@ export function CastMenu({
 
   useEffect(() => {
     void invokeStatus();
+    // 打开菜单即开始搜索：入口（Popover/抽屉/HUD）均为条件挂载，
+    // 每次展开都会重新触发。
+    void search();
     return () => {
       searchEpochRef.current += 1;
     };
