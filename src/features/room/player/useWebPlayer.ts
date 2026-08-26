@@ -45,13 +45,8 @@ import {
 } from "./playbackTelemetry";
 
 /**
- * Desktop Tauri (Windows/macOS/Linux) drives fullscreen through the native OS
- * window rather than the HTML Fullscreen API. WebView2 does not grow the
- * native window past the work area when the window is maximized, so an HTML
- * `:fullscreen` element renders at screen height while the viewport is still
- * only work-area height — the taskbar-height black band users hit at the
- * bottom. A real window fullscreen covers the taskbar and the stage overlays
- * the room chrome as an in-page fixed layer.
+ * 位于 `media.currentTime` 处那一帧的挂钟时间，取自播放列表的
+ * `EXT-X-PROGRAM-DATE-TIME`。清单不带节目时钟时为 null。
  */
 export function isTauriDesktop(): boolean {
   return (
@@ -77,10 +72,7 @@ export type PictureInPictureDocument = {
   exitPictureInPicture?: () => Promise<void>;
 };
 
-/**
- * Keep the capability check separate from the DOM lifecycle so the control
- * can disappear cleanly in WebViews that do not expose native video PiP.
- */
+/** 协议内核挂载时直接使用 mpegts.js 的 seek 路径。 */
 export function canUsePictureInPicture(
   documentRef: Pick<PictureInPictureDocument, "pictureInPictureEnabled"> | null | undefined,
   video:
@@ -116,14 +108,13 @@ export async function exitPictureInPictureForVideo(
   try {
     await documentRef.exitPictureInPicture();
   } catch {
-    // The native window can already be closing while a route is changing.
+    // 按所选直播源惰性加载所需的唯一协议插件。
   }
 }
 
 /**
- * Toggle native video PiP without assuming the embedding WebView implements
- * it. Kept DOM-argument driven so the compatibility behavior stays unit-testable
- * without a browser DOM.
+ * 插件在每次 URL 变化时销毁并重建其 mpegts.js 实例。即使调用本助手时第一个
+ * 内核已经存在，也要把订阅挂在当前实例上。
  */
 export async function toggleVideoPictureInPicture(
   documentRef: PictureInPictureDocument | null | undefined,
@@ -144,8 +135,8 @@ export async function toggleVideoPictureInPicture(
     if (documentRef.pictureInPictureElement) {
       if (typeof documentRef.exitPictureInPicture !== "function") return false;
       await documentRef.exitPictureInPicture();
-      // A different native PiP window still owns the document, so asking the
-      // browser to open ours would just fail and produce a noisy rejection.
+      // xgplayer-mpegts.js 在 URL_CHANGE 时重建自己的 transmuxer/MSE 状态。保留外层
+      // 播放器与媒体元素，但不要求跨相互独立的 FLV CDN 保持时间戳无缝。
       if (documentRef.pictureInPictureElement) return false;
     }
 
@@ -157,10 +148,8 @@ export async function toggleVideoPictureInPicture(
 }
 
 /**
- * Android WebView versions in the wild expose either the standard Fullscreen
- * API or its older WebKit-prefixed counterpart. Keep the compatibility layer
- * DOM-argument driven, just like PiP above, so it stays testable without a
- * browser runtime.
+ * xgplayer 从 Player.start() 启动协议插件，且插件在 URL 变化时替换 hls.js 实例。
+ * 始终经由插件读取，使恢复调用与时钟读取对两者都保持有效。
  */
 export type FullscreenDocument = {
   fullscreenElement?: Element | null;
@@ -182,7 +171,10 @@ export function fullscreenElementFor(
   return documentRef?.fullscreenElement ?? documentRef?.webkitFullscreenElement ?? null;
 }
 
-/** Returns false only when this WebView exposes no usable fullscreen API. */
+/** Chromium 经多层上报 HLS/MSE 解码失败：原生媒体错误用 code 3，而 xgplayer 协议
+插件可能给出 code 5103 或只保留浏览器的 pipeline message。检查保持结构化，
+使 Twitch 能降级不兼容的渲染档，
+而不把网络失败当成编解码问题。 */
 export async function toggleElementFullscreen(
   documentRef: FullscreenDocument | null | undefined,
   target: FullscreenTarget | null | undefined,
@@ -212,42 +204,41 @@ export function getFullscreenDocument(): FullscreenDocument | null {
 }
 
 /**
- * Native window fullscreen is a property of the window, not of one player, so
- * several players mounted in the same window all observe the same state. Only
- * the player that owns the fullscreen control may report or drive it; the rest
- * stay windowed so multi-room secondaries keep their normal grid chrome while
- * the main feed is the surface that fills the screen.
+ * 原生窗口全屏属于窗口而不属于某个播放器，同一窗口中挂载的多个播放器观察到的
+ * 都是同一状态。只有拥有全屏控制权的播放器可以上报或驱动它；其余保持窗口化，
+ * 使多房间的次要流保留常规网格 chrome，
+ * 而主流是铺满屏幕的那个表面。
  */
 export function playerOwnsFullscreen(fullscreenOwner: boolean | undefined): boolean {
   return fullscreenOwner !== false;
 }
 
-/** How a feed's media timeline maps onto wall-clock time, if at all. */
+/** 一条流的媒体时间轴如何映射到挂钟时间（若有）。 */
 export type LivePlayerClockKind = "program-date" | "stream-anchor" | "none";
 
 export type LivePlayerTimeline = {
-  /** Playing, with at least one buffered range: safe to correct. */
+  /** 正在播放且至少有一个已缓冲区段：可以安全校正。 */
   ready: boolean;
   mediaTime: number;
   bufferStart: number;
-  /** Live edge on this feed's own media timeline. */
+  /** 该流自身媒体时间轴上的直播边缘。 */
   bufferEnd: number;
   clockKind: LivePlayerClockKind;
-  /** Epoch (ms) matching `mediaTime === 0`; null without a clock. */
+  /** 与 `mediaTime === 0` 对应的纪元（毫秒）；无时钟时为 null。 */
   epochAtMediaZeroMs: number | null;
   playbackRate: number;
   paused: boolean;
 };
 
 /**
- * Imperative handle used by the multi-view clock alignment.
+ * 多视图时钟对齐使用的命令式句柄。
  *
- * Sampling and correcting several feeds once per second must not re-render
- * anything, so this is a stable object read through refs rather than state.
+ * 每秒采样并校正多条流绝不能触发任何重渲染，
+ * 因此这是一个稳定的对象、通过 refs 读取而不是 state。
  */
 export type LivePlayerSyncApi = {
   readTimeline: () => LivePlayerTimeline;
-  /** Jump inside the retained buffer; no-op when the media is gone. */
+  /** 在保留缓冲区内跳转；媒体不存在时为无操作。 */
   seekMediaTime: (seconds: number) => void;
   setPlaybackRate: (rate: number) => void;
 };
@@ -262,19 +253,19 @@ export type WebPlayerApi = {
   pictureInPictureSupported: boolean;
   pictureInPictureActive: boolean;
   loadError: string | null;
-  /** A non-fatal fullscreen failure that must never replace the media view. */
+  /** 非致命的全屏失败，绝不能替换媒体视图。 */
   fullscreenError: string | null;
   setLoadError: (msg: string | null) => void;
-  /** Bump forces a brand-new <video> node (clears stuck MediaSource). */
+  /** 自增强制全新的 <video> 节点（清除卡死的 MediaSource）。 */
   mediaKey: number;
-  /** Decoded frame ratio, or null until the first metadata arrives. */
+  /** 解码帧宽高比；首个元数据到达前为 null。 */
   aspectRatio: number | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  /** Exclusive DOM root managed by xgplayer; overlays remain outside it. */
+  /** 由 xgplayer 管理的独占 DOM 根；浮层留在其外部。 */
   playerRootRef: React.RefObject<HTMLDivElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   togglePause: () => void;
-  /** Apply a gesture frame directly without reconciling the player tree. */
+  /** 直接应用手势帧，不协调播放器树。 */
   previewVolume: (v: number) => void;
   changeVolume: (v: number) => void;
   setAudio: (volume: number, muted: boolean) => void;
@@ -282,9 +273,9 @@ export type WebPlayerApi = {
   togglePictureInPicture: () => Promise<void>;
   exitPictureInPicture: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
-  /** Leave fullscreen without toggling back in; safe to call when windowed. */
+  /** 退出全屏且不再切回；窗口化状态下调用是安全的。 */
   exitFullscreen: () => Promise<void>;
-  /** Live clock sampling / correction used by the multi-view alignment. */
+  /** 多视图对齐使用的直播时钟采样/校正。 */
   sync: LivePlayerSyncApi;
 };
 
@@ -313,7 +304,7 @@ export function normalizeWebPlayerAudio(
   };
 }
 
-/** Apply one normalized audio snapshot to the active room's media element. */
+/** 把一份归一化的音频快照应用到活动房间的媒体元素上。 */
 export function applyWebPlayerAudio(
   video: Pick<HTMLMediaElement, "volume" | "muted">,
   volume: number,
@@ -326,15 +317,15 @@ export function applyWebPlayerAudio(
   return { volume: normalizedVolume, muted: normalizedMuted };
 }
 
-/** Whether a live URL requires xgplayer's HLS plugin rather than its FLV plugin. */
+/** 直播地址是否需要 xgplayer 的 HLS 插件而非 FLV 插件。 */
 export function isHlsStream(url: string): boolean {
   return /\.m3u8(?:[?#]|$)/i.test(url) || /[/?&=_-]hls(?:[/?&=_-]|$)/i.test(url);
 }
 
 /**
- * `HTMLMediaElement.play()` clears `paused` before the first frame is ready.
- * Treating that intermediate state as healthy resets the Twitch renewal budget
- * while the stream is still loading and can create an endless reload loop.
+ * `HTMLMediaElement.play()` 在首帧就绪之前就清除 `paused`。把这个中间状态当作
+ * 健康会在流仍在加载时重置 Twitch 续期预算，
+ * 并可能造成无限重载循环。
  */
 export function hasStartedPlayback(
   video: Pick<HTMLMediaElement, "paused" | "readyState">,
@@ -358,17 +349,16 @@ export function shouldEscalateNonTwitchHlsFatal(input: {
 export type HlsFatalRecoveryAction = { type: "restart" } | { type: "recovery_exhausted" };
 
 /**
- * hls.js has already attempted its built-in recovery before the player error
- * reaches this boundary. Retry once, then report that transport recovery is
- * exhausted so the playback session can choose the next domain action.
+ * 播放器错误到达这一边界之前 hls.js 已经尝试过其内建恢复。再重试一次，
+ * 然后报告传输恢复已耗尽，让播放会话选择下一个领域动作。
  */
 export function nextHlsFatalRecoveryAction(
   failureCount: number,
   commercialBreak = false,
   authorizationFailed = false,
 ): HlsFatalRecoveryAction {
-  // A 401/403 on a Twitch media playlist is normally a short-lived signed
-  // URL expiring. Replaying against the same URL only repeats the failure.
+  // Twitch 媒体清单上的 401/403 通常只是短时效签名 URL 过期。
+  // 对着同一 URL 重放只会重复失败。
   if (authorizationFailed && !commercialBreak) {
     return { type: "recovery_exhausted" };
   }
@@ -377,9 +367,8 @@ export function nextHlsFatalRecoveryAction(
 }
 
 /**
- * A commercial break is platform-delivered content, not an error to bypass.
- * Some transient playlist responses include this text instead of a manifest;
- * recognizing it lets us wait and refresh normally once the break changes.
+ * 广告插播是平台下发的内容，不是要绕过的错误。部分瞬态清单响应以此文本代替
+ * 清单；识别它可以等待并在插播结束后正常刷新。
  */
 export function isTwitchCommercialBreak(error: unknown): boolean {
   if (typeof error === "string") {
@@ -433,9 +422,8 @@ export function hlsResponseStatus(error: unknown): number | null {
 
 export function playUrlKey(playUrl: PlayUrl | null): string {
   if (!playUrl) return "";
-  // Include a stable header fingerprint so cookie/referer changes also reload.
-  // JSON keeps separators in URLs/header values unambiguous and can be
-  // reconstructed into an immutable playback snapshot below.
+  // 包含稳定的头部指纹，使 cookie/referer 变化也会触发重载。JSON 使 URL 与请求头
+  // 取值中的分隔符无歧义，并可在下方重建为不可变的播放快照。
   return JSON.stringify([
     playUrl.url,
     Object.entries(playUrl.headers).sort(([a], [b]) => a.localeCompare(b)),
@@ -460,13 +448,11 @@ export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPl
 }
 
 /**
- * Keep a modest latency and cleanup window for continuous FLV. Mobile receives
- * a wider live window for its tighter decode and scheduling budget.
+ * 为连续 FLV 保持适度的延迟与清理窗口。移动端解码和调度预算更紧，
+ * 获得更宽的直播窗口。
  *
- * `syncHold` is the multi-view clock-alignment profile: the built-in latency
- * chasing would jump the feed back to the live edge as soon as the alignment
- * holds it further behind, so it is turned off and the backward window is
- * widened to the range an alignment offset may use.
+ * `syncHold` 是多视图时钟对齐配置：内建的延迟追赶会在对齐把流拉得更靠后时立刻
+ * 跳回直播边缘，因此关闭它并把向后窗口拓宽到对齐偏移可能用到的范围。
  */
 export function liveFlvPlaybackOptions(
   mobileClient: boolean,
@@ -502,11 +488,10 @@ export function liveFlvPlaybackOptions(
 }
 
 /**
- * hls.js options for one live feed.
+ * 单场直播流的 hls.js 选项。
  *
- * Under `syncHold` the alignment owns the distance to the live edge, so hls.js
- * must neither force a jump forward once that distance grows nor discard the
- * back buffer the alignment seeks into.
+ * 在 `syncHold` 下与直播边缘的距离由对齐负责，hls.js 既不能在该距离增大时强行
+ * 前跳，也不能丢弃对齐要 seek 进去的后向缓冲。
  */
 export function liveHlsPlaybackOptions(syncHold = false): Record<string, unknown> {
   return {
@@ -515,7 +500,7 @@ export function liveHlsPlaybackOptions(syncHold = false): Record<string, unknown
     maxBufferLength: syncHold ? 45 : 30,
     liveSyncDurationCount: 3,
     liveMaxLatencyDurationCount: syncHold ? 90 : 6,
-    // Any hls.js rate correction would fight the alignment's own rate trim.
+    // 任何 hls.js 的速率校正都会与对齐自身的速率微调打架。
     maxLiveSyncPlaybackRate: 1,
     manifestLoadingMaxRetry: 3,
     levelLoadingMaxRetry: 3,
@@ -523,7 +508,7 @@ export function liveHlsPlaybackOptions(syncHold = false): Record<string, unknown
   };
 }
 
-/** MPEG-TS (IPTV-style) live options, mirroring the FLV sync-hold rules. */
+/** MPEG-TS（IPTV 风格）直播选项，对齐 FLV 的 sync-hold 规则。 */
 export function liveMpegtsPlaybackOptions(syncHold = false): Record<string, unknown> {
   return {
     mediaDataSource: {
@@ -587,26 +572,23 @@ export const IPTV_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
 };
 
 /**
- * Backward buffer retained per feed while a multi-view alignment is active.
+ * 多视图对齐激活期间每条流保留的后向缓冲。
  *
- * The alignment only ever delays a feed by seeking into media it has already
- * buffered, so this window bounds the offset it can apply. It is deliberately
- * finite: six feeds each retaining a minute of video would cost far more memory
- * than the alignment is worth.
+ * 对齐只会通过 seek 进已缓冲的媒体来延迟一条流，因此这个窗口限制它能施加的
+ * 偏移量。刻意设为有限：六条流各保留一分钟视频的内存代价
+ * 远高于对齐本身的价值。
  */
 export const LIVE_SYNC_HOLD_MIN_BACKWARD_SECONDS = 30;
 export const LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS = 42;
-/** Rate bounds a sync correction may request on a muted secondary feed. */
+/** 同步校正可以在静音次要流上请求的速率范围。 */
 export const LIVE_SYNC_MIN_PLAYBACK_RATE = 0.9;
 export const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.1;
 /**
- * Longest buffered span that may still be treated as "freshly started".
+ * 仍可视为"刚启动"的最长已缓冲跨度。
  *
- * The stream anchor pairs the proxy's first media byte with the media position
- * that byte produced, which is only knowable while the transport has just
- * started. After a soft switch the element can still hold a long retained
- * buffer, and its start no longer marks where the replacement stream began, so
- * that feed keeps no estimated clock instead of an invented one.
+ * 流锚点把代理的首媒体字节与该字节产生的媒体位置配对，而这只有在传输刚刚开始
+ * 时才可知。软切换之后元素可能仍持有很长的保留缓冲，其起点不再标记替代流的
+ * 起点，因此该流不携带估计时钟，而不是编造一个。
  */
 export const LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS = 20;
 
@@ -681,50 +663,47 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
   }
 }
 
-// Serialize frontend lifecycle commands so a teardown and a same-session soft
-// switch cannot cross. The native proxy keeps independent listeners per
-// session, so this queue does not transfer ownership between player instances.
+// 串行化前端生命周期命令，使销毁与同会话软切换无法交错。原生代理为每个会话
+// 维护独立监听器，此队列不在播放器实例之间转移所有权。
 const proxyLifecycleQueue = createSerialTaskQueue();
 
 let nextPlayerInstanceId = 0;
 
 function createPlayerInstanceId(): string {
   nextPlayerInstanceId = (nextPlayerInstanceId + 1) % Number.MAX_SAFE_INTEGER;
-  // Keep IDs unique across a WebView reload too: a delayed command from the
-  // prior JS context must not accidentally own a freshly opened proxy.
+  // ID 也要跨 WebView 重载保持唯一：来自先前 JS 上下文的延迟命令
+  // 不得意外接管新打开的代理。
   const entropy = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `web-player-${entropy}-${nextPlayerInstanceId}`;
 }
 
 /**
- * DOM live player (HLS / MSE, no mpv). Streams through the localhost proxy so
- * CDN headers and nested HLS resources work consistently.
+ * DOM 直播播放器（HLS / MSE，不用 mpv）。经本机代理推流，
+ * 使 CDN 请求头与嵌套 HLS 资源始终一致工作。
  *
- * Re-entry fix: each open bumps `mediaKey` (new <video>), stops proxy, waits a
- * tick, then starts a fresh proxy URL with cache-bust. Avoids black screen from
- * reused MediaSource / expired CDN URL / half-destroyed xgplayer instance.
+ * 重进修复：每次打开都自增 `mediaKey`（新 <video>）、停止代理、等待一个 tick、
+ * 再以缓存穿透参数启动全新代理 URL。避免复用的 MediaSource / 过期的 CDN URL /
+ * 半销毁的 xgplayer 实例导致的黑屏。
  */
 export type MediaLifecycleOptions = {
   playUrl: PlayUrl | null;
   siteId?: SiteId;
   quality?: string | null;
-  /** Rebuild even when two rooms happen to resolve to the same stream URL. */
+  /** 即使两个房间碰巧解析出同一个流地址也重建。 */
   sessionKey?: string;
-  /** Per-instance audio defaults; multi-room secondary players start silent. */
+  /** 实例各自的音频默认值；多房间次要播放器默认静音启动。 */
   initialVolume?: number;
   initialMuted?: boolean;
   /**
-   * Whether this player may drive and observe fullscreen. Multi-room mounts
-   * several players in one window, where fullscreen belongs to the main feed
-   * alone; pass false for the secondaries. Defaults to true.
+   * 该播放器是否可以驱动并观察全屏。多房间在一个窗口中挂载多个播放器，
+   * 全屏只属于主流；次要播放器传 false。默认 true。
    */
   fullscreenOwner?: boolean;
-  /** Semantic rebuild key; changing it recreates the transport for the same source. */
+  /** 语义重建 key；变化时为同一来源重建传输层。 */
   reloadToken?: number | string;
   /**
-   * Configure the transport for multi-view clock alignment: no built-in latency
-   * chasing and a wider backward buffer. Changing it rebuilds the transport,
-   * because both protocol plugins read these options only at creation.
+   * 为多视图时钟对齐配置传输层：关闭内建延迟追赶并加宽后向缓冲。变更它会重建
+   * 传输层，因为两个协议插件都只在创建时读取这些选项。
    */
   liveSyncHold?: boolean;
   onMediaFailure?: (event: PlayerEvent) => void;
@@ -774,7 +753,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const telemetrySessionRef = useRef<PlaybackTelemetrySession | null>(null);
   const hlsCoreRef = useRef<ReturnType<typeof getXgHlsCore>>(null);
   const mpegtsCoreRef = useRef<ReturnType<typeof getXgMpegtsCore>>(null);
-  /** Identity of the current media timeline; every anchor below belongs to it. */
+  /** 当前媒体时间轴的身份；下方所有锚点都属于它。 */
   const syncTimelineTokenRef = useRef("");
   const syncStreamAnchorRef = useRef<{ token: string; epochAtMediaZeroMs: number } | null>(null);
   const syncMediaTimeOriginRef = useRef<{ token: string; mediaTime: number } | null>(null);
@@ -782,11 +761,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
   const qualityRef = useRef<string | null>(quality);
   const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
-  // Releases the shell-padding freeze held across an entering fullscreen
-  // transition; null whenever no freeze is active.
+  // 释放在进入全屏过渡期间持有的 shell 内边距冻结；无冻结时为 null。
   const fullscreenInsetFreezeRef = useRef<(() => void) | null>(null);
   const fullscreenInsetFreezeTimerRef = useRef<number | null>(null);
-  /** Mirrors the in-page fullscreen state for teardown paths that have no `mode`. */
+  /** 为没有 `mode` 的销毁路径镜像页面内全屏状态。 */
   const inPageFullscreenRef = useRef(false);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
@@ -848,17 +826,15 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   onPlayingRef.current = onPlaying;
 
   const destroyPlayer = useCallback(() => {
-    // A PiP request is asynchronous. Bumping the version here lets its
-    // continuation detect a room switch and close any stale native window.
+    // PiP 请求是异步的。在这里自增版本使其续体检测到房间切换并关闭过期的原生窗口。
     mediaLifecycleVersionRef.current += 1;
 
     const video = videoRef.current;
     void exitPictureInPictureForVideo(getPictureInPictureDocument(), video);
     setPictureInPictureActive(false);
-    // `pictureInPictureSupported` is a device/document capability, not a
-    // per-stream state. Clearing it here made the control unmount on every
-    // teardown, so a stall's reconnect loop flickered the button in and out.
-    // Leave it sticky; `togglePictureInPicture` re-checks availability anyway.
+    // `pictureInPictureSupported` 是设备/文档能力，不是逐流状态。在这里清除它会让
+    // 控件在每次销毁时卸载，卡顿的重连循环会让按钮闪烁。
+    // 让它保持粘性；`togglePictureInPicture` 反正会重新检查可用性。
 
     const p = playerRef.current;
     playerRef.current = null;
@@ -866,12 +842,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       try {
         p.pause();
       } catch {
-        /* ignore */
+        /* 忽略 */
       }
       try {
         p.destroy();
       } catch {
-        /* ignore */
+        /* 忽略 */
       }
     }
     if (video) {
@@ -881,7 +857,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
         video.srcObject = null;
         video.load();
       } catch {
-        /* ignore */
+        /* 忽略 */
       }
     }
     activeSourceKeyRef.current = "";
@@ -900,10 +876,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
   const playbackSourceKey = playUrlKey(playUrl);
   const streamKey = `${sessionKey}::${playbackSourceKey}`;
-  // Query results can replace an equivalent PlayUrl object while the player
-  // is running. Snapshot the semantic source by `streamKey` so that harmless
-  // object-identity churn does not tear down MSE, recreate the <video>, and
-  // restart the process-global proxy.
+  // 查询结果可能在播放器运行期间替换等价的 PlayUrl 对象。按 `streamKey` 快照语义
+  // 来源，使无害的对象身份抖动不会拆掉 MSE、重建 <video>
+  // 并重启进程级代理。
   const playbackSource = useMemo(
     () => playbackSourceFromKey(playbackSourceKey),
     [playbackSourceKey],
@@ -925,9 +900,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   } else if (!profile.retainSourceDuringGap) {
     retainedPlaybackSourceRef.current = null;
   }
-  // During a quality query the controller can briefly have no URL. Keep the
-  // active source alive so soft switching does not introduce a black frame
-  // while the replacement metadata is loading.
+  // 画质查询期间控制器可能短暂没有地址。保持活动来源存活，
+  // 使软切换不会在替代元数据加载时引入黑帧。
   const effectivePlaybackSource =
     playbackSource ??
     (profile.retainSourceDuringGap ? retainedPlaybackSourceRef.current?.source : null) ??
@@ -949,7 +923,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     ? `${sessionKey}::${effectivePlaybackKind ?? "none"}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`
     : `${streamKey}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`;
 
-  // Open / replace stream whenever the logical stream identity changes.
+  // 逻辑流身份变化时打开/替换流。
   useEffect(() => {
     let cancelled = false;
     const gen = ++genRef.current;
@@ -961,7 +935,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       try {
         await invokeCmd("stream_proxy_stop", { sessionId: proxySessionId });
       } catch {
-        /* ignore */
+        /* 忽略 */
       }
       if (activeProxySessionIdRef.current === proxySessionId) {
         activeProxySessionIdRef.current = null;
@@ -984,40 +958,36 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     setPaused(false);
     const playbackKind = webPlaybackKind(playbackSource);
     const hlsSource = playbackKind === "hls";
-    // Start fetching xgplayer and only the selected protocol plugin while the
-    // serialized proxy queue tears down the previous session.
+    // 在串行化代理队列拆除上一会话的同时，开始抓取 xgplayer 与所选的唯一协议插件。
     const xgModulesPromise = loadXgPlayerModules(playbackKind);
-    // If a fast room switch cancels the queued setup before it reaches the
-    // await below, retain a rejection handler so the speculative preload never
-    // becomes an unhandled promise rejection.
+    // 快速房间切换可能在到达下方 await 之前取消排队中的初始化。
+    // 保留一个 rejection 处理器，使投机预加载永远不会变成未处理的 promise 拒绝。
     void xgModulesPromise.catch(() => {});
 
     void proxyLifecycleQueue
       .enqueue(async () => {
-        // An earlier route's queued setup may be reached only after a newer
-        // route has rendered. It must still stop its own stale proxy before
-        // allowing the replacement operation through the queue.
+        // 更早路由排队的初始化可能在更新的路由渲染之后才被处理。它仍必须先停掉自己
+        // 过期的代理，再允许替换操作通过队列。
         if (cancelled || genRef.current !== gen) {
           await stopProxy();
           return;
         }
 
         try {
-          // 1) Tear down the previous MSE completely. The upcoming proxy
-          // start atomically replaces any previous listener; cleanup only
-          // ever stops the listener it owns (see proxySessionId above).
+          // 1) 彻底拆除上一个 MSE。即将开始的代理启动会原子地替换任何先前的监听器；
+          // 清理只停止它自己拥有的监听器（见上方 proxySessionId）。
           destroyPlayer();
-          // Let the OS release the previous listen socket / MediaSource settle.
+          // 让操作系统释放上一个监听套接字 / MediaSource 并稳定下来。
           await sleep(50);
           if (cancelled || genRef.current !== gen) return;
 
-          // 2) Force a brand-new <video> node so MediaSource is never reused.
+          // 2) 强制全新的 <video> 节点，绝不复用 MediaSource。
           setMediaKey((k) => k + 1);
           await nextFrame();
           await nextFrame();
           if (cancelled || genRef.current !== gen) return;
 
-          // Wait until the new video element is mounted (ref attached).
+          // 等待新的 video 元素挂载完成（ref 已附着）。
           let video: HTMLVideoElement | null = null;
           for (let i = 0; i < 20; i += 1) {
             video = videoRef.current;
@@ -1034,9 +1004,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           }
           const activeVideo = video;
 
-          // The initial source can be superseded while modules are loading.
-          // Use the latest same-protocol candidate instead of briefly opening
-          // an obsolete line and immediately soft-switching it.
+          // 模块加载期间初始来源可能已被取代。使用最新的同协议候选，
+          // 而不是短暂打开一条过期线路又立即软切换。
           const latestSource = effectivePlaybackSourceRef.current;
           if (latestSource && (playbackProtocol(latestSource) === "hls") === hlsSource) {
             playbackSource = latestSource;
@@ -1057,14 +1026,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               })
             : null;
 
-          // 3) Fresh proxy (new port) + cache-bust query so the browser never
-          // reuses a closed keep-alive to the previous listener.
+          // 3) 全新代理（新端口）+ 缓存穿透 query，
+          // 使浏览器绝不会复用到上一个监听器的已关闭 keep-alive 连接。
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
             url: selectedSource.url,
             headers: selectedSource.headers,
             sessionId: proxySessionId,
-            // Twitch and other HLS sites need the proxy to rewrite child
-            // playlists, keys and segments to the same local session.
+            // Twitch 等 HLS 站点需要代理把子播放列表、密钥和分片改写到同一个本地会话。
             hls: hlsSource,
             twitchAdRecovery: selectedSource.twitch_ad_recovery,
           });
@@ -1075,8 +1043,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           const playLocal = `${localUrl}${localUrl.includes("?") ? "&" : "?"}t=${Date.now()}_${gen}`;
           activeProxySessionIdRef.current = proxySessionId;
 
-          // Hard-reset the element before either MSE player attaches. This is
-          // also required for native HLS fallback after a previous MSE room.
+          // 在任一 MSE 播放器附着之前硬复位元素。在上一个 MSE 房间之后的原生 HLS 兜底
+          // 也需要这一步。
           video.pause();
           video.removeAttribute("src");
           video.srcObject = null;
@@ -1118,8 +1086,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             mpegts: liveMpegtsPlaybackOptions(liveSyncHold),
           });
 
-          // Register ownership before autoplay: play() can remain pending until
-          // the first live segment, while route cleanup must stay immediate.
+          // 在自动播放之前登记所有权：play() 可能挂起直到首个直播分片到达，
+          // 而路由清理必须保持即时。
           playerRef.current = player;
           setMediaAvailable(true);
           activeSourceKeyRef.current = sourceKey;
@@ -1132,8 +1100,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             playbackKind === "flv" || playbackKind === "mpegts" ? getXgMpegtsCore(player) : null;
           hlsCoreRef.current = hlsCore;
           mpegtsCoreRef.current = mpegtsCore;
-          // A fresh transport means a fresh media timeline: the wall-clock
-          // anchors derived below must never survive it.
+          // 全新传输意味着全新媒体时间轴：
+          // 下方派生的挂钟锚点绝不能延续到它上面。
           syncTimelineTokenRef.current = proxySessionId;
           syncStreamAnchorRef.current = null;
           syncMediaTimeOriginRef.current = null;
@@ -1155,8 +1123,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             });
           }
 
-          // HLS fatal events use their protocol-specific recovery below.
-          // Non-HLS errors continue through xgplayer's standard event path.
+          // HLS 致命事件走下方协议专属恢复。非 HLS 错误继续经过 xgplayer 的标准事件路径。
           if (!hlsCore) {
             const reportPlayerError = (error: unknown) => {
               if (!isCurrentPlayer()) return;
@@ -1194,7 +1161,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 try {
                   player.destroy();
                 } catch {
-                  /* A fatal HLS error can already have released internals. */
+                  /* 致命 HLS 错误可能已经释放了内部状态。 */
                 }
                 setLoadError(null);
               } else {
@@ -1218,9 +1185,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               if (event.errorFatal !== true) return;
               const type = String(event.errorType ?? "").toLowerCase();
               if (type !== "networkerror" && type !== "mediaerror") return;
-              // HlsJsPlugin immediately calls startLoad/recoverMediaError for
-              // the first fatal event. Escalate only when that recovery also
-              // fails, then obtain fresh site metadata and rebuild the player.
+              // HlsJsPlugin 会为第一个致命事件立即调用 startLoad/recoverMediaError。
+              // 只有那次恢复也失败时才升级，
+              // 然后获取新的站点元数据并重建播放器。
               hlsFatalFailureCount += 1;
               const now = Date.now();
               firstHlsFatalFailureAt ??= now;
@@ -1254,14 +1221,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               if (decoderFailureReported || !isCurrentPlayer()) return;
               decoderFailureReported = true;
               activeVideo.removeEventListener("error", onNativeMediaError);
-              // Replaying or renewing the same rendition cannot change a
-              // browser codec decision. Let the controller move to a lower
-              // Twitch video variant instead of burning the URL retry budget.
+              // 重放或续期同一渲染档无法改变浏览器的编解码决定。让控制器切换到更低的
+              // Twitch 视频变体，而不是烧掉 URL 重试预算。
               playerRef.current = null;
               try {
                 player.destroy();
               } catch {
-                /* A fatal decoder error can already have released internals. */
+                /* 致命解码错误可能已经释放了内部状态。 */
               }
               setLoadError(null);
               setRunning(false);
@@ -1309,7 +1275,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                   try {
                     twitchHlsCore.startLoad();
                   } catch {
-                    // A subsequent hls.js fatal event advances to URL renewal.
+                    // 后续的 hls.js 致命事件推进到 URL 续期。
                   }
                 }
                 return;
@@ -1323,7 +1289,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               try {
                 player.destroy();
               } catch {
-                /* A fatal HLS error can already have released internals. */
+                /* 致命 HLS 错误可能已经释放了内部状态。 */
               }
               setLoadError(null);
               setRunning(false);
@@ -1351,9 +1317,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               if (event.errorFatal !== true) return;
               const type = String(event.errorType ?? "").toLowerCase();
               if (type !== "networkerror" && type !== "mediaerror") return;
-              // The plugin starts its built-in recovery immediately after
-              // emitting HLS_ERROR. Defer our retry accounting so destroying
-              // a failed player cannot invalidate that synchronous callback.
+              // 插件在发出 HLS_ERROR 后立即启动其内建恢复。推迟我们的重试记账，
+              // 使销毁失败的播放器不会使那个同步回调失效。
               window.setTimeout(() => handleFatalHlsFailure(event, true), 0);
             });
             player.on("error", (cause) => {
@@ -1361,20 +1326,18 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             });
           }
 
-          // Do not await this promise in `proxyLifecycleQueue`: it can stay
-          // pending until the first live media segment arrives. The queue must
-          // remain free so route cleanup can stop this proxy and a re-entered
-          // room can start its replacement session right away.
+          // 不要在 `proxyLifecycleQueue` 中 await 这个 promise：它可能一直挂起直到第一个
+          // 直播媒体分片到达。队列必须保持空闲，路由清理才能停止本代理，
+          // 重进的房间才能立刻启动替代会话。
           requestPlayerAutoplay(player, video, isCurrentPlayer, recoverMutedAutoplay);
 
-          // If we already have frames, mark running; otherwise wait for play event.
+          // 已有帧则标记运行中；否则等待 play 事件。
           if (hasStartedPlayback(video)) {
             setRunning(true);
             setLoadError(null);
             onPlayingRef.current?.();
           } else {
-            // Give the protocol plugin a moment; do not clear retry budgets
-            // until the element has decoded at least one frame.
+            // 给协议插件一点时间；元素至少解码出一帧之前不清零重试预算。
             window.setTimeout(() => {
               if (cancelled || genRef.current !== gen) return;
               if (playerRef.current === player && hasStartedPlayback(video)) {
@@ -1404,9 +1367,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
         }
       })
       .catch(() => {
-        // The setup body reports recoverable failures to the controller. This
-        // catch only prevents an unexpected queue failure from becoming an
-        // unhandled promise rejection.
+        // 初始化主体会向控制器上报可恢复失败。这里的 catch 只是防止意外的队列失败
+        // 变成未处理的 promise 拒绝。
       });
 
     return () => {
@@ -1416,9 +1378,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
   }, [hardStreamKey, reloadToken, destroyPlayer, liveSyncHold, mobileClient, profile, siteId]);
 
-  // Same-protocol source changes can retain the media element and MSE state.
-  // Live CDN timestamp continuity is not uniform, so any setup/switch failure
-  // increments the hard key and rebuilds cleanly.
+  // 同协议的来源变化可以保留媒体元素与 MSE 状态。各直播 CDN 的时间戳连续性并不
+  // 统一，任何初始化/切换失败都会自增硬 key 并干净重建。
   useEffect(() => {
     if (!effectivePlaybackSource || !effectivePlaybackKind) return;
     if (
@@ -1496,8 +1457,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           activeSourceKeyRef.current = targetKey;
           setActiveSourceKey(targetKey);
           activePlaybackKindRef.current = targetKind;
-          // The plugin rebuilt its transport, so the clock anchors have to be
-          // derived again from the replacement stream.
+          // 插件重建了它的传输层，
+          // 时钟锚点必须从替代流重新推导。
           syncTimelineTokenRef.current = `${proxySessionId}:soft:${sequence}`;
           syncStreamAnchorRef.current = null;
           syncMediaTimeOriginRef.current = null;
@@ -1527,7 +1488,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     softSwitchEnabled,
   ]);
 
-  // Reflect transport controls onto the element.
+  // 把传输控制反映到元素上。
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -1537,8 +1498,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) {
-      // A momentary null (mid mediaKey swap) is not a loss of the device
-      // capability. Only the active flag, which is element-specific, resets.
+      // 短暂的 null（mediaKey 交换中途）不代表设备能力丢失。只有随元素走的 active
+      // 标志被重置。
       setPictureInPictureActive(false);
       return;
     }
@@ -1551,11 +1512,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       genRef.current === generation &&
       playerRef.current?.media === video;
     const syncPictureInPicture = () => {
-      // A leave event from the <video> that was just replaced must never
-      // overwrite the state of the new MediaSource node.
+      // 来自刚被替换的 <video> 的 leave 事件
+      // 绝不能覆盖新 MediaSource 节点的状态。
       if (videoRef.current !== video) return;
-      // Support is monotonic: latch it on once so a reconnect loop cannot
-      // unmount the control. `canUsePictureInPicture` gates the actual toggle.
+      // 支持性是单调的：锁存一次即可，重连循环不会卸载控件。
+      // `canUsePictureInPicture` 把关实际切换。
       if (canUsePictureInPicture(pictureInPictureDocument, video)) {
         setPictureInPictureSupported(true);
       }
@@ -1591,9 +1552,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryStalled(telemetry, performance.now());
     };
-    // Android fullscreen auto-rotation is decided from the decoded frame size,
-    // so the ratio has to follow both the first metadata and later resolution
-    // switches an adaptive ladder makes mid-stream.
+    // Android 全屏自动旋转依据解码后的帧尺寸决定，
+    // 因此比例既要跟随首个元数据，也要跟随自适应阶梯在流中进行的后续分辨率切换。
     const syncAspectRatio = () => {
       if (videoRef.current !== video) return;
       setAspectRatio(videoAspectRatio(video));
@@ -1681,8 +1641,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           sessionId: proxySessionId,
         });
       } catch {
-        // Browser previews and an already-closing native session still produce
-        // useful media-element metrics without proxy counters.
+        // 浏览器预览和正在关闭的原生会话在没有代理计数器的情况下
+        // 也能产出有用的媒体元素指标。
       } finally {
         sampling = false;
       }
@@ -1708,13 +1668,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, []);
 
   /**
-   * Derive the wall-clock anchor for containers without a program clock.
+   * 为没有节目时钟的容器推导挂钟锚点。
    *
-   * FLV and MPEG-TS timestamps start near zero, so the only absolute reference
-   * available is the epoch at which the proxy received this session's first
-   * media byte. Pairing it with the media position that byte produced turns
-   * `currentTime` into an estimated capture time. The CDN's edge burst is part
-   * of that estimate, which is why it is only comparable between feeds.
+   * FLV 和 MPEG-TS 时间戳从接近零开始，唯一可用的绝对参照就是代理收到本会话
+   * 首个媒体字节的纪元。把它与该字节产生的媒体位置配对，
+   * 即可把 `currentTime` 变成估计的采集时刻。CDN 边缘突发是该估计的一部分，
+   * 这正是它只在多条流之间可比的原因。
    */
   useEffect(() => {
     if (!liveSyncHold) {
@@ -1734,8 +1693,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       const bufferStart = video.buffered.start(0);
       const bufferEnd = video.buffered.end(video.buffered.length - 1);
       if (bufferEnd - bufferStart > LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS) return null;
-      // The first retained sample is the closest stand-in for the media
-      // position of the session's first byte.
+      // 第一条保留样本是会话首字节媒体位置最接近的替身。
       const mediaTime = Math.min(bufferStart, video.currentTime);
       if (!Number.isFinite(mediaTime)) return null;
       syncMediaTimeOriginRef.current = { token, mediaTime };
@@ -1757,8 +1715,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           sessionId: proxySessionId,
         });
       } catch {
-        // A browser preview has no native proxy; those feeds simply stay on the
-        // manual hold instead of the estimated clock.
+        // 浏览器预览没有原生代理；那些流保持在手动滞留模式，
+        // 而不使用估计时钟。
       } finally {
         sampling = false;
       }
@@ -1827,13 +1785,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const video = videoRef.current;
     if (!video || !Number.isFinite(seconds)) return;
     const target = Math.max(0, seconds);
-    // mpegts.js owns its own seek path: writing the element directly would let
-    // its seeking handler treat the jump as an unbuffered seek and flush MSE.
+    // mpegts.js 拥有自己的 seek 路径：直接写元素会让它的 seeking 处理器把这次跳转
+    // 当作无缓冲 seek 并冲刷 MSE。
     if (mpegtsCoreRef.current?.seek?.(target)) return;
     try {
       video.currentTime = target;
     } catch {
-      /* A mid-teardown element rejects the assignment; the next tick retries. */
+      /* 销毁中途的元素会拒绝赋值；下一个 tick 重试。 */
     }
   }, []);
 
@@ -1854,7 +1812,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     [readSyncTimeline, seekSyncMediaTime, setSyncPlaybackRate],
   );
 
-  // Leaving the alignment (or the page) must not leave a trimmed rate behind.
+  // 离开对齐（或页面）时不能留下被调过的速率。
   useEffect(() => {
     if (liveSyncHold) return;
     const video = videoRef.current;
@@ -1864,43 +1822,42 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const freezeFullscreenInsets = useCallback(() => {
     if (typeof document === "undefined") return;
     if (!shouldFreezeFullscreenInsets(getClientPlatform())) return;
-    // A previous freeze can still be open if the user toggles twice in quick
-    // succession. Release it first so only one is ever outstanding.
+    // 用户快速连续切换两次时上一次冻结可能仍然打开。先释放它，
+    // 保证始终至多一个未决冻结。
     releaseFullscreenInsets();
     const shell = document.querySelector<HTMLElement>(".app-shell");
     const root = document.documentElement;
     if (!shell || !root) return;
-    // Pin the padding the shell already has rather than a guess, so the freeze
-    // is a true hold: the layout must not move at the moment it is installed.
+    // 钉住外壳已有的内边距而不是猜测值，使冻结成为真正的保持：
+    // 安装的那一刻布局不得移动。
     const frozen = frozenSafeAreaTopValue(window.getComputedStyle(shell).paddingTop);
     if (!frozen) return;
     fullscreenInsetFreezeRef.current = beginFullscreenTransition(root, frozen);
-    // Backstop for a WebView that resolves the request without ever firing
-    // fullscreenchange, so a freeze can never outlive the interaction.
+    // 兜底 WebView 不触发 fullscreenchange 就 resolve 请求的情况，
+    // 使冻结绝不能比这次交互活得更久。
     fullscreenInsetFreezeTimerRef.current = window.setTimeout(
       releaseFullscreenInsets,
       FULLSCREEN_TRANSITION_TIMEOUT_MS,
     );
   }, [releaseFullscreenInsets]);
 
-  // Nothing may outlive the player: a route change mid-transition would
-  // otherwise leave the shell pinned to a stale padding.
+  // 没有任何东西可以比播放器活得更久：过渡中途的路由变更否则会把外壳
+  // 钉在过期的内边距上。
   useEffect(() => releaseFullscreenInsets, [releaseFullscreenInsets]);
 
   useEffect(() => {
     if (!ownsFullscreen) {
       setMode("windowed");
-      // Losing ownership mid-fullscreen (a secondary player taking over) drops
-      // the in-page layer, so the bars it hid have to come back with it.
+      // 全屏中途失去所有权（次要播放器接管）会撤掉页面内固定层，
+      // 它隐藏的系统栏必须随之恢复。
       if (inPageFullscreenRef.current) {
         inPageFullscreenRef.current = false;
         void setAndroidImmersive(false).catch(() => {});
       }
       return;
     }
-    // Android Tauri and desktop Tauri both own `mode` themselves. Syncing from
-    // the fullscreen element there would immediately force `windowed`, since
-    // neither path ever produces one.
+    // Android Tauri 与桌面 Tauri 都自行持有 `mode`。在那里从全屏元素同步
+    // 会立刻强制 `windowed`，因为两条路径都不会产生全屏元素。
     if (isTauriDesktop() || runningOnAndroidTauri()) return;
     const syncMode = () => {
       const el = stageRef.current;
@@ -1909,9 +1866,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
     const onFs = () => {
       syncMode();
-      // The stage now owns the screen, so any further inset change reflows only
-      // what it already covers. Ending the freeze here keeps it as short as the
-      // transition itself instead of leaning on the timeout backstop.
+      // 舞台此刻拥有整个屏幕，后续任何 inset 变化只回流它已覆盖的内容。
+      // 在这里结束冻结使其与过渡一样短，
+      // 而不必依赖超时兜底。
       releaseFullscreenInsets();
     };
     syncMode();
@@ -1923,13 +1880,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
   }, [ownsFullscreen, releaseFullscreenInsets]);
 
-  // Desktop Tauri drives fullscreen through the native window, so the OS (F11,
-  // a window manager shortcut, or exiting via the title bar) can change it
-  // without an HTML fullscreenchange event. Reconcile `mode` from the window's
-  // own resize stream so the stage overlay and the control icon stay correct.
+  // 桌面 Tauri 经原生窗口驱动全屏，没有可退出的 HTML 全屏元素。保持 OS 窗口全屏，
+  // 让随之而来的 resize 把 `mode` 移回窗口化。
   useEffect(() => {
-    // Secondary players share this window, so its fullscreen state says nothing
-    // about them. Reading it here would mark all of them fullscreen at once.
+    // 次要播放器共享这个窗口，其全屏状态说明不了它们各自的情况。
+    // 在这里读取它会把所有次要播放器同时标记为全屏。
     if (!ownsFullscreen || !isTauriDesktop()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -1947,13 +1902,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             }
             if (!disposed) setMode(fullscreen ? "fullscreen" : "windowed");
           } catch {
-            /* The window may be mid-teardown during a route change. */
+            /* 路由变更期间窗口可能正在拆除。 */
           }
         };
         await sync();
         unlisten = await appWindow.onResized(() => void sync());
       } catch {
-        // A browser preview without a native window keeps the HTML path above.
+        // 没有原生窗口的浏览器预览继续使用上方的 HTML 路径。
       }
     })();
     return () => {
@@ -1990,7 +1945,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     if (video) applyWebPlayerAudio(video, vol, nextMuted);
     setVolume(vol);
     setMuted(nextMuted);
-    // Nudge playback if the protocol plugin is up but playback stayed paused.
+    // 协议插件已就绪但播放仍未开始时，轻推一次播放。
     if (video && video.paused && playerRef.current) {
       void video.play().catch(() => {});
     }
@@ -2031,8 +1986,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const lifecycleVersion = mediaLifecycleVersionRef.current;
     const changed = await toggleVideoPictureInPicture(pictureInPictureDocument, video);
 
-    // A request can resolve after a quality/line/room switch has replaced the
-    // video node. Do not leave that detached source in a native PiP window.
+    // 请求可能在画质/线路/房间切换替换了 video 节点之后才 resolve。
+    // 不要把那个已分离的源留在原生画中画窗口里。
     if (
       changed &&
       (lifecycleVersion !== mediaLifecycleVersionRef.current || videoRef.current !== video)
@@ -2046,20 +2001,17 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, []);
 
   /**
-   * Enters or leaves the in-page fullscreen layer used by Android Tauri.
+   * 进入或离开 Android Tauri 使用的页面内全屏固定层。
    *
-   * `mode` is the whole layout switch here — no browser fullscreen element is
-   * involved — so it is set first and the native bars follow. A failed or
-   * missing native command still leaves a working fullscreen (just with the
-   * status bar visible), which is why the invoke never blocks the mode change.
+   * 这里 `mode` 就是整个布局切换 —— 不涉及浏览器全屏元素 —— 因此先设置它，
+   * 原生系统栏随之跟进。原生命令失败或缺失时仍然能得到可用的全屏
+   * （只是状态栏可见），这正是 invoke 绝不阻塞模式变更的原因。
    *
-   * The bar animation still moves `env(safe-area-inset-top)` over several
-   * frames, and `.app-shell` behind the layer consumes it as `padding-top`. The
-   * stage is already `position: fixed` by then so the picture itself cannot
-   * move, but the room chrome underneath would still reflow — visible around
-   * the edges before the layer settles. Freezing the shell padding across the
-   * transition holds it still; the timeout releases it, since no
-   * `fullscreenchange` is coming on this path.
+   * 系统栏动画仍会让 `env(safe-area-inset-top)` 经过数帧变化，
+   * 而固定层背后的 `.app-shell` 把它消费为 `padding-top`。那时舞台已经是
+   * `position: fixed`，画面本身动不了，但其下的房间 chrome 仍会回流 ——
+   * 在固定层稳定之前会在边缘周围显露。跨过渡冻结外壳内边距使其保持不动；
+   * 由于这条路径不会迎来 `fullscreenchange`，由超时负责释放。
    */
   const setInPageFullscreen = useCallback(
     (next: boolean) => {
@@ -2068,7 +2020,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       setMode(next ? "fullscreen" : "windowed");
       inPageFullscreenRef.current = next;
       void setAndroidImmersive(next).catch(() => {
-        // An older APK without the command must not break fullscreen.
+        // 缺少该命令的旧 APK 不得破坏全屏。
       });
     },
     [freezeFullscreenInsets, releaseFullscreenInsets],
@@ -2076,10 +2028,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
   const toggleFullscreen = useCallback(async () => {
     if (!ownsFullscreen) return;
-    // Desktop Tauri uses a real OS-window fullscreen. This covers the taskbar
-    // (unlike WebView2's HTML fullscreen from a maximized window) and drives
-    // `mode` through the resulting resize; the stage then overlays the room
-    // chrome as a fixed in-page layer (see the CSS rule for data-fullscreen).
+    // 桌面 Tauri 使用真正的 OS 窗口全屏。它会盖住任务栏
+    // （不同于 WebView2 在最大化窗口下的 HTML 全屏），并经随后的 resize 驱动
+    // `mode`；舞台随即作为页面内固定层覆盖房间 chrome
+    // （见 data-fullscreen 的 CSS 规则）。
     if (isTauriDesktop()) {
       try {
         const appWindow = getCurrentWindow();
@@ -2099,9 +2051,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       return;
     }
 
-    // Android Tauri reuses the same in-page layer. Requesting browser
-    // fullscreen there makes Chromium reparent the rendered content into a new
-    // View, and that surface handoff is the black flicker (see androidImmersive).
+    // Android Tauri 复用同一个页面内固定层。在那里请求浏览器全屏会让 Chromium
+    // 把渲染内容重新挂载到新 View，
+    // 那次表面交接正是黑屏闪烁（见 androidImmersive）。
     if (runningOnAndroidTauri()) {
       setInPageFullscreen(mode !== "fullscreen");
       setFullscreenError(null);
@@ -2110,10 +2062,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     const stage = stageRef.current;
     if (!stage) return;
-    // Entering fullscreen moves the system-bar insets before `:fullscreen`
-    // applies, which would reflow the still-windowed room for a few frames (see
-    // fullscreenTransition). Freeze the shell padding across the request; the
-    // fullscreenchange handler releases it once the stage owns the screen.
+    // 进入全屏会在 `:fullscreen` 生效之前移动系统栏 inset，
+    // 使仍在窗口化的房间回流数帧（见 fullscreenTransition）。
+    // 在请求期间冻结外壳内边距；舞台接管屏幕后
+    // 由 fullscreenchange 处理器释放。
     const entering = !fullscreenElementFor(getFullscreenDocument());
     if (entering) freezeFullscreenInsets();
     try {
@@ -2135,9 +2087,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, [freezeFullscreenInsets, mode, ownsFullscreen, releaseFullscreenInsets, setInPageFullscreen]);
 
   const exitFullscreen = useCallback(async () => {
-    // Desktop Tauri drives fullscreen through the native window, which has no
-    // HTML fullscreen element to exit. Leave the OS window fullscreen and let
-    // the resulting resize move `mode` back to windowed.
+    // 桌面 Tauri 经原生窗口驱动全屏，没有可退出的 HTML 全屏元素。保持 OS 窗口全屏，
+    // 让随之而来的 resize 把 `mode` 移回窗口化。
     if (isTauriDesktop()) {
       try {
         const appWindow = getCurrentWindow();
@@ -2146,13 +2097,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           setMode("windowed");
         }
       } catch {
-        /* A missing native window action must not trap the user. */
+        /* 缺少原生窗口操作时绝不能困住用户。 */
       }
       return;
     }
-    // Android's in-page layer is page state, so leaving it is a mode change
-    // plus restoring the system bars. Driven off the ref rather than `mode` so
-    // this callback keeps a stable identity for its many consumers.
+    // Android 的页面内固定层是页面状态，离开它是模式变更加上恢复系统栏。由 ref 驱动
+    // 而不是 `mode`，使这个回调为其众多消费者保持稳定身份。
     if (runningOnAndroidTauri()) {
       if (inPageFullscreenRef.current) setInPageFullscreen(false);
       return;
@@ -2169,11 +2119,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, [setInPageFullscreen]);
 
   /**
-   * The immersive bars belong to the fullscreen player, not to the Activity.
+   * 沉浸式系统栏属于全屏播放器而不属于 Activity。
    *
-   * Leaving the room straight from fullscreen (Back on the room, a route
-   * change, a room switch) unmounts this hook without any exit call, so restore
-   * the bars here or the next page would be laid out under hidden ones.
+   * 直接从全屏离开房间（在房间里按 Back、路由变更、切换房间）会在没有任何退出
+   * 调用的情况下卸载本 hook，因此在这里恢复系统栏，
+   * 否则下一页会被布局在隐藏的系统栏之下。
    */
   useEffect(
     () => () => {

@@ -1,13 +1,11 @@
-//! Douyin live site client.
+//! 抖音直播站点客户端。
 //!
-//! Douyin's public list APIs are protected by a browser challenge: every
-//! request carries an `a_bogus` signature derived from its own query string.
-//! That signature is computed locally (see [`a_bogus`]), so browse lists use
-//! the same paginated `partition/detail/room/v2` endpoint as the web client
-//! and can therefore load more than one page.  Room details and streams still
-//! come from the SSR room page and the official reflow endpoint.  A `ttwid`
-//! session is obtained from the live home page when the caller has not
-//! supplied one.
+//! 抖音的公开列表接口受浏览器挑战保护：每个请求都携带由其自身 query 字符串
+//! 派生的 `a_bogus` 签名。签名在本地计算（参见 [`a_bogus`]），
+//! 因此浏览列表可以与 Web 客户端一样使用可分页的
+//! `partition/detail/room/v2` 接口，从而加载多页。
+//! 房间详情与线路仍来自 SSR 房间页和官方回源接口。
+//! 调用方未提供 `ttwid` 会话时，从直播首页获取一份。
 
 mod a_bogus;
 
@@ -27,47 +25,43 @@ use crate::models::live::{
 };
 use crate::sites::traits::LiveSite;
 
-/// Browser UA used by Douyin's web live endpoints.  Keeping this stable is
-/// important: `ttwid` is bound to the browser family by some edge nodes.
+/// 抖音 Web 直播接口使用的浏览器 UA。保持稳定很重要：
+/// 部分边缘节点把 `ttwid` 绑定到浏览器家族上。
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 const LIVE_ROOT: &str = "https://live.douyin.com/";
 const ROOM_REFLOW_URL: &str = "https://webcast.amemv.com/webcast/room/reflow/info/";
 const LIVE_SEARCH_URL: &str = "https://www.douyin.com/aweme/v1/web/live/search/";
-/// Paginated browse endpoint used by the web client for both category lists
-/// and the home feed.
+/// Web 客户端用于分类列表和首页信息流的可分页浏览接口。
 const PARTITION_ROOMS_URL: &str = "https://live.douyin.com/webcast/web/partition/detail/room/v2/";
-/// The home feed is not a real category. Douyin's web client reads it from the
-/// partition endpoint using this synthetic partition, which is what makes the
-/// recommendation list pageable at all.
+/// 首页信息流并不是真实的分类。抖音 Web 客户端用这个合成分区从分区接口读取
+/// 它，这正是推荐列表能够翻页的原因。
 const RECOMMEND_PARTITION_ID: &str = "720";
 const RECOMMEND_PARTITION_TYPE: &str = "1";
-/// The web home feed endpoint. Unlike a category browse, each call returns one
-/// rotating batch of recommended rooms and carries no offset: consecutive
-/// calls overlap only partially, so repeated requests surface fresh rooms.
-/// The saved account Cookie rides along automatically; anonymous sessions
-/// (fresh `ttwid` only) are served as well.
+/// Web 首页信息流接口。与分类浏览不同，每次调用返回一批轮换的推荐房间，
+/// 且不带偏移量：相邻调用的结果只是部分重叠，
+/// 因此重复请求能带出新房间。已保存的账号 Cookie 自动随行；
+/// 匿名会话（仅新 `ttwid`）同样被服务。
 const RECOMMEND_FEED_URL: &str = "https://live.douyin.com/webcast/feed/";
-/// Rooms requested per list page. Douyin advances its own `offset` by exactly
-/// this amount, so a page number maps onto a stable offset.
+/// 每个列表页请求的房间数。抖音自己的 `offset` 正好按这个值推进，
+/// 因此页码可以映射到稳定的偏移量。
 const LIST_PAGE_SIZE: u32 = 15;
-/// Length of the `msToken` sent by the web client on list requests.
+/// Web 客户端在列表请求中发送的 `msToken` 长度。
 const MS_TOKEN_LENGTH: usize = 107;
 const MS_TOKEN_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-/// How long the anonymous live-home bootstrap cookies stay valid process-wide.
-/// `ttwid` itself lives far longer; the TTL only bounds staleness.
+/// 匿名直播首页引导 cookie 在进程内保持有效的时长。`ttwid` 本身的寿命长得多；
+/// 这个 TTL 只是限制陈旧程度。
 const WEB_SESSION_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
-/// Feed batches fetched concurrently per recommend page. Consecutive batches
-/// overlap heavily (roughly 15 of 20 rooms), so a single batch yields only a
-/// handful of new rooms per round trip; two concurrent batches double the
-/// unique-room yield without extra wall-clock latency.
+/// 每个推荐页并发抓取的信息流批次数。相邻批次高度重叠（20 个房间里约 15 个），
+/// 单次往返只能带来少量新房间；
+/// 两个并发批次让去重后的产出翻倍，
+/// 而不增加额外等待时间。
 const RECOMMEND_FEED_BATCHES: usize = 2;
 
-/// Process-wide cache of the anonymous bootstrap cookies (`ttwid`, ...) that
-/// the live home hands out. Site instances are created per IPC command, so
-/// without this every list request would re-download the roughly 1 MB home
-/// page just to restart the same anonymous session. Only the cookies the home
-/// response contributes are cached, never the saved account Cookie.
+/// 进程级缓存直播首页下发的匿名引导 cookie（`ttwid` 等）。站点实例按 IPC 命令
+/// 创建，没有这份缓存时，每个列表请求都要重新下载约 1 MB 的首页，
+/// 只为重启同一个匿名会话。只缓存首页响应贡献的 cookie，
+/// 已保存的账号 Cookie 绝不进入缓存。
 struct CachedWebSession {
     cookie_pairs: Vec<(String, String)>,
     expires_at: Instant,
@@ -96,15 +90,14 @@ fn store_web_session_pairs(pairs: &[(String, String)]) {
     }
 }
 
-/// A Douyin site instance owns only transient, read-only request state.  The
-/// initial cookie comes from the account store; response cookies such as
-/// `ttwid` and `msToken` stay in memory and are never written back to disk.
+/// 抖音站点实例只持有临时的、只读的请求状态。初始 cookie 来自账号存储；
+/// `ttwid`、`msToken` 等响应 cookie 留在内存中，绝不写回磁盘。
 pub struct DouyinSite {
     client: Client,
     cookie: Mutex<String>,
-    /// Whether this instance already holds a usable transient web session.
-    /// Instances are created per command invocation, so the first use is
-    /// normally seeded from [`WEB_SESSION_CACHE`] instead of the live home.
+    /// 该实例是否已持有一个可用的临时 Web 会话。实例按命令调用创建，
+    /// 因此首次使用通常从 [`WEB_SESSION_CACHE`] 播种，
+    /// 而不是访问直播首页。
     web_session_initialized: Mutex<bool>,
 }
 
@@ -185,11 +178,11 @@ impl DouyinSite {
                 received.push(first.to_string());
             }
         }
-        // The live home currently returns a short-lived `x-ms-token` header
-        // instead of (or in addition to) an `msToken` Set-Cookie. Keep it in
-        // the same in-memory session because room endpoints accept it as the
-        // `msToken` query parameter. Do not accept delimiters/control bytes:
-        // this value is later placed in a Cookie header for the local session.
+        // 直播首页目前返回短时效的 `x-ms-token` 头，而不是（或除了）
+        // `msToken` Set-Cookie。把它放进同一份内存会话，
+        // 因为房间接口接受它作为 `msToken` query 参数。
+        // 不接受分隔符/控制字节：
+        // 该值稍后会被放入本地会话的 Cookie 头中。
         if let Some(ms_token) = headers
             .get_all("x-ms-token")
             .iter()
@@ -232,8 +225,8 @@ impl DouyinSite {
                     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
                 },
             );
-        // A manually saved `.douyin.com` Cookie must never be replayed to a
-        // different registrable domain such as `webcast.amemv.com`.
+        // 手动保存的 `.douyin.com` Cookie 绝不能被重放到其他可注册域，
+        // 例如 `webcast.amemv.com`。
         let sends_douyin_cookie = is_douyin_cookie_url(url);
         if sends_douyin_cookie && !cookie.is_empty() {
             request = request.header(COOKIE, cookie);
@@ -245,9 +238,8 @@ impl DouyinSite {
         let response = request
             .send()
             .await
-            // `reqwest::Error` can include the complete request URL, including
-            // query parameters such as msToken. Keep that detail out of the
-            // user-facing error and tracing output.
+            // `reqwest::Error` 可能包含完整的请求 URL，包括 msToken 等 query 参数。
+            // 不要把这些细节带入面向用户的错误信息和 tracing 输出。
             .map_err(|_| Self::err("HTTP request failed"))?;
         let status = response.status();
         let headers = response.headers().clone();
@@ -260,8 +252,8 @@ impl DouyinSite {
         }
 
         if !status.is_success() {
-            // Response bodies may be edge-generated and can reflect request
-            // values. Status is sufficient for a safe diagnostic here.
+            // 响应 body 可能由边缘节点生成，并可能反映请求取值。
+            // 这里用状态码做诊断已经足够安全。
             return Err(Self::err(format!("HTTP {status}")));
         }
         if text.trim() == "blocked" {
@@ -310,14 +302,13 @@ impl DouyinSite {
             .with_site("douyin")
             .retryable());
         }
-        // Do not surface arbitrary server text: some gateways reflect query
-        // parameters, which could disclose a short-lived msToken.
+        // 不要展示任意服务器文本：部分网关会回显 query 参数，
+        // 可能泄露短时效的 msToken。
         Err(Self::err(format!("抖音接口错误 code={code}")))
     }
 
-    /// Fetches the live home once to obtain the anonymous `ttwid` cookie.
-    /// A fresh process-wide cache of a previous bootstrap short-circuits the
-    /// visit; saved account Cookie values always win over cached ones.
+    /// 抓取一次直播首页以获得匿名 `ttwid` cookie。此前引导的进程级缓存仍然新鲜时
+    /// 可直接短路这次访问；已保存的账号 Cookie 取值始终优先于缓存值。
     async fn ensure_web_session(&self) -> AppResult<()> {
         if self.web_session_is_initialized()? {
             return Ok(());
@@ -326,8 +317,8 @@ impl DouyinSite {
             let mut cookie = self.cookie.lock().map_err(|_| {
                 AppError::new("douyin_lock", "Douyin session mutex poisoned").with_site("douyin")
             })?;
-            // Cached values fill the gaps; values already held (saved login
-            // identity, earlier response cookies) keep precedence.
+            // 缓存值补齐缺口；已经持有的取值（保存的登录身份、更早的响应 cookie）
+            // 保持优先。
             *cookie = merge_cookie_values(
                 &cached
                     .iter()
@@ -360,11 +351,11 @@ impl DouyinSite {
         self.get_text(&url, &[], LIVE_ROOT, false).await
     }
 
-    /// GET a browser-signed Douyin web API.
+    /// GET 一个经浏览器签名的抖音 Web API。
     ///
-    /// `a_bogus` covers the exact query string that is sent, so the parameters
-    /// are encoded once here and the signature is appended to that same string
-    /// rather than handed to `reqwest` as a separate pair.
+    /// `a_bogus` 覆盖的是实际发送的那条 query 字符串，因此参数在这里编码一次，
+    /// 并把签名追加到同一条字符串上，
+    /// 而不是作为单独的键值对交给 `reqwest`。
     async fn get_signed_json(
         &self,
         url: &str,
@@ -374,15 +365,15 @@ impl DouyinSite {
         let query = encode_query(params);
         let signature = a_bogus::generate_a_bogus(&query, DEFAULT_USER_AGENT);
         let signed = format!("{url}?{query}&a_bogus={}", url_encode(&signature));
-        // `get_json` appends nothing further: the URL already carries the
-        // signed query, and adding a parameter here would invalidate it.
+        // `get_json` 不会追加任何内容：URL 已携带签名后的 query，
+        // 在这里再加参数会使签名失效。
         self.get_json(&signed, &[], referer).await
     }
 
-    /// Fetch one page of rooms from the paginated browse endpoint.
+    /// 从可分页浏览接口抓取一页房间。
     ///
-    /// `partition` is a Douyin partition id with its type; the home feed uses
-    /// the synthetic [`RECOMMEND_PARTITION_ID`].
+    /// `partition` 是抖音分区 id 及其类型；首页信息流使用合成的
+    /// [`RECOMMEND_PARTITION_ID`]。
     async fn get_partition_rooms(
         &self,
         partition: &str,
@@ -420,8 +411,8 @@ impl DouyinSite {
     }
 
     async fn get_reflow_room(&self, room_id: &str) -> AppResult<Value> {
-        // This official reflow endpoint works with the public room id and is
-        // intentionally requested without the `.douyin.com` Cookie/session.
+        // 这个官方回源接口使用公开房间号即可工作，
+        // 并且刻意不带 `.douyin.com` Cookie/会话请求。
         let params = vec![
             ("type_id".into(), "0".into()),
             ("live_id".into(), "1".into()),
@@ -455,9 +446,9 @@ impl DouyinSite {
             )
             .await?;
         let mut detail = parse_room_detail_html(&html, web_rid)?;
-        // The SSR payload carries the session's own web id. Attach it to the
-        // opaque raw payload so the danmaku WSS signs with the same
-        // fingerprint as the room page visit instead of a local random id.
+        // SSR 负载携带会话自身的 web id。把它附加到不透明的原始负载上，
+        // 使弹幕 WSS 用与访问房间页相同的指纹签名，
+        // 而不是本地随机 id。
         if let Some(web_id) = parse_render_data_web_id(&html)
             .or_else(|| session_web_id(&self.cookie().unwrap_or_default()))
             && let Some(obj) = detail.raw.as_object_mut()
@@ -467,42 +458,38 @@ impl DouyinSite {
         Ok(detail)
     }
 
-    /// Avoid the browser-signed web-enter endpoint for a public web room id.
-    /// The SSR page supplies the internal room id, and the official reflow
-    /// endpoint can provide stream metadata without replaying login Cookies.
+    /// 对公开 Web 房间号避免使用需浏览器签名的 web-enter 接口。
+    /// SSR 页面提供内部房间 id，
+    /// 官方回源接口无需重放登录 Cookie 即可提供线路元数据。
     async fn get_ssr_room_detail_or_reflow(&self, web_rid: &str) -> AppResult<LiveRoomDetail> {
         let ssr_detail = self.get_room_detail_from_html(web_rid).await?;
         if !ssr_detail.status || has_playable_stream(&ssr_detail) {
             return Ok(ssr_detail);
         }
 
-        // A live SSR payload without a stream cannot be played. Preserve the
-        // reflow failure instead of returning unusable metadata and later
-        // masking a useful diagnostic (for example browser verification) as
-        // a generic "no stream" error.
+        // 没有线路的直播 SSR 负载无法播放。保留回源失败原因，
+        // 而不是返回不可用的元数据，
+        // 把有用的诊断（如浏览器验证）掩盖成笼统的"无线路"错误。
         let internal_room_id = reflow_room_id(&ssr_detail)?;
         self.get_reflow_room_detail(&internal_room_id).await
     }
 
-    /// The web room page exposes the live state in its SSR payload.  Unlike
-    /// room-detail parsing, this deliberately does not inspect stream data or
-    /// resolve a reflow fallback for playback metadata.
+    /// Web 房间页在其 SSR 负载中暴露开播状态。与房间详情解析不同，
+    /// 这里刻意不检查线路数据，也不为播放元数据解析回源兜底。
     async fn get_ssr_room_live_status(&self, web_rid: &str) -> AppResult<LiveRoomStatus> {
         let html = self.get_ssr_page(web_rid).await?;
         parse_room_live_status_html(&html)
     }
 
-    /// Internal Douyin room IDs use the lightweight reflow room envelope.
-    /// Only its status and live start time are read by the follow refresher.
+    /// 抖音内部房间 id 使用轻量的回源房间信封。关注刷新只读取其状态与开播时间。
     async fn get_reflow_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
         let root = self.get_reflow_room(room_id).await?;
         parse_reflow_room_live_status(&root)
     }
 
-    /// One rotating batch from the web home feed. Requires no request
-    /// signature; the transient `ttwid` obtained by `ensure_web_session` is
-    /// enough for anonymous access, and a saved account Cookie is sent when
-    /// present.
+    /// 来自 Web 首页信息流的一批轮换数据。无需请求签名；
+    /// `ensure_web_session` 获得的临时 `ttwid` 足以匿名访问，
+    /// 存在已保存账号 Cookie 时会一并发送。
     async fn get_recommend_feed(&self) -> AppResult<RoomListPage> {
         self.ensure_web_session().await?;
         let params = vec![
@@ -538,16 +525,13 @@ impl LiveSite for DouyinSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
-        // Prefer the web home feed: every call yields a partially rotated
-        // batch, which pairs with the frontend's cross-page de-duplication to
-        // surface new rooms on each refresh or load-more. The feed has no
-        // pagination cursor, so every page number simply requests another
-        // batch; several are fetched concurrently because consecutive batches
-        // overlap heavily. When the feed is unavailable (risk control, empty
-        // payload), fall back to the hot partition browse, which paginates
-        // stably via a synthetic partition id; its first page matches the
-        // `hot_live` SSR payload, kept as a last-resort fallback for that
-        // page only.
+        // 优先使用 Web 首页信息流：每次调用都会产出一批部分轮换的结果，配合前端的
+        // 跨页去重，可在每次刷新或加载更多时呈现新房间。该信息流没有分页游标，
+        // 因此每个页码只是再请求一批；由于相邻批次高度重叠，
+        // 会并发抓取多批。信息流不可用时（风控、空负载），
+        // 回退到热门分区浏览 —— 它通过合成分区 id 稳定分页，
+        // 其第一页与 `hot_live` SSR 负载一致，
+        // 仅作为该页的最后兜底保留。
         let page = page.max(1);
         let requests = (0..RECOMMEND_FEED_BATCHES).map(|_| self.get_recommend_feed());
         let results = futures_util::future::join_all(requests).await;
@@ -566,8 +550,8 @@ impl LiveSite for DouyinSite {
             .await
         {
             Ok(rooms) => Ok(rooms),
-            // Keep the first screen working even when the signed endpoint is
-            // unavailable; a later page has no SSR equivalent to fall back to.
+            // 即使签名接口不可用也要保证首屏可用；
+            // 后续页面没有 SSR 等价物可供兜底。
             Err(error) if page == 1 => match self.get_ssr_page("hot_live").await {
                 Ok(html) => parse_ssr_rooms(&html),
                 Err(_) => Err(error),
@@ -641,9 +625,8 @@ impl LiveSite for DouyinSite {
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
         let room_id = normalize_room_id(room_id)?;
-        // Public web room IDs are short; the internal IDs returned by reflow
-        // are longer.  Keep the public path on the SSR page so refreshing a
-        // follow never builds playback metadata just to learn its status.
+        // 公开 Web 房间号较短，而回源返回的内部 id 更长。公开路径保持在 SSR 页面上，
+        // 使刷新关注绝不需要为了知道开播状态而去构建播放元数据。
         if room_id.len() <= 16 {
             self.get_ssr_room_live_status(&room_id).await
         } else {
@@ -742,8 +725,8 @@ fn normalize_cookie(value: &str) -> String {
     )
 }
 
-/// Saved account cookies are scoped to Douyin-owned web hosts. Keep that
-/// boundary explicit because the room reflow API is hosted on amemv.com.
+/// 保存的账号 cookie 的作用域限定为抖音自有 Web 主机。保持这条边界显式可见，
+/// 因为房间回源 API 托管在 amemv.com 上。
 fn is_douyin_cookie_url(value: &str) -> bool {
     Url::parse(value)
         .ok()
@@ -766,9 +749,9 @@ fn cookie_pairs(value: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Cookie pairs the live-home bootstrap added or refreshed, relative to the
-/// cookie held before the visit. Only these anonymous session values are
-/// shared through the process-wide cache; saved account values never enter it.
+/// 本次首页引导相对于访问前的 cookie 新增或刷新了哪些键值对。只有这些匿名
+/// 会话取值会进入进程级共享缓存；
+/// 已保存的账号取值绝不进入。
 fn changed_cookie_pairs(before: &str, after: &str) -> Vec<(String, String)> {
     let previous = cookie_pairs(before);
     cookie_pairs(after)
@@ -808,11 +791,10 @@ fn is_safe_session_value(value: &str) -> bool {
             .any(|byte| byte == b';' || byte.is_ascii_control())
 }
 
-/// Percent-encode one query component, keeping only the unreserved set.
+/// 对一个 query 组成部分做百分号编码，只保留 unreserved 集合。
 ///
-/// `a_bogus` signs the literal query string, so the value that is signed and
-/// the value that is sent have to be encoded identically. Doing it here keeps
-/// both sides on this single implementation.
+/// `a_bogus` 签的是字面 query 字符串，因此被签名的取值与实际发送的取值
+/// 必须采用完全相同的编码。放在这里可以让两侧共用同一个实现。
 fn url_encode(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
@@ -834,14 +816,14 @@ fn encode_query(params: &[(String, String)]) -> String {
         .join("&")
 }
 
-/// Build the throwaway `msToken` that Douyin's web client sends on list calls.
+/// 构造 Web 客户端在列表调用中发送的一次性 `msToken`。
 ///
-/// The upstream value is an opaque browser token. The endpoint only checks its
-/// shape, so a per-request random string of the expected length is enough; it
-/// is deliberately not persisted or reused as an identifier.
+/// 上游取值是不透明的浏览器 token。接口只检查其形态，
+/// 因此每个请求生成一条预期长度的随机字符串即可；
+/// 它被刻意设计为不持久化、也不作为标识符复用。
 fn generate_ms_token() -> String {
-    // uuid v4 is already a CSPRNG-backed source and is a dependency here, so
-    // this avoids pulling in `rand` just to fill a throwaway token.
+    // uuid v4 已经是 CSPRNG 支持的来源，而且本来就是依赖，
+    // 不必为了填充一次性 token 再引入 `rand`。
     let mut token = String::with_capacity(MS_TOKEN_LENGTH);
     while token.len() < MS_TOKEN_LENGTH {
         for byte in uuid::Uuid::new_v4().as_bytes() {
@@ -855,11 +837,11 @@ fn generate_ms_token() -> String {
     token
 }
 
-/// Split a stored category id into its Douyin `partition` and `partition_type`.
+/// 把存储的分类 id 拆分为抖音的 `partition` 与 `partition_type`。
 ///
-/// [`parse_categories_html`] stores these joined as `id,type`; the browse
-/// endpoint needs them as separate parameters. Both must be numeric so neither
-/// can inject an extra query parameter into the signed string.
+/// [`parse_categories_html`] 把它们以 `id,type` 形式拼接存储；
+/// 浏览接口需要它们作为独立参数。两者都必须是数字，
+/// 使任何一方都无法向签名后的字符串注入额外的 query 参数。
 fn split_partition(category_id: &str) -> AppResult<(&str, &str)> {
     let (partition, partition_type) = category_id
         .split_once(',')
@@ -870,10 +852,10 @@ fn split_partition(category_id: &str) -> AppResult<(&str, &str)> {
     ))
 }
 
-/// Resolve the `partition` / `partition_type` to browse for a category.
+/// 解析某个分类要浏览的 `partition` / `partition_type`。
 ///
-/// The category browser prepends a synthetic "全部<分区>" entry whose id is `0`
-/// rather than a real partition; browsing it means browsing its parent.
+/// 分类浏览器会在最前面放一个 id 为 `0` 的合成"全部<分区>"条目，
+/// 它不是真实分区；浏览它等于浏览其父分区。
 fn category_partition(category: &LiveSubCategory) -> AppResult<(&str, &str)> {
     let id = if category.id.trim() == "0" {
         category.parent_id.trim()
@@ -883,12 +865,11 @@ fn category_partition(category: &LiveSubCategory) -> AppResult<(&str, &str)> {
     split_partition(id)
 }
 
-/// Read one page of the paginated browse endpoint.
+/// 读取可分页浏览接口的一页。
 ///
-/// Douyin does not send `has_more` here, so a further page is assumed only
-/// while it returns a full page and its own `offset` keeps advancing past the
-/// one that was requested. That keeps the UI from offering a "load more" that
-/// would return the same rooms forever.
+/// 抖音在这里不发送 `has_more`，因此只有当返回的是整页、且其自身的 `offset`
+/// 持续越过所请求的值时才假设还有下一页。这可以避免 UI 提供一个
+/// 永远返回相同房间的"加载更多"。
 fn parse_partition_rooms(value: &Value, requested_offset: u32) -> AppResult<RoomListPage> {
     let data = value
         .get("data")
@@ -912,12 +893,11 @@ fn parse_partition_rooms(value: &Value, requested_offset: u32) -> AppResult<Room
     Ok(RoomListPage { has_more, items })
 }
 
-/// Parses one rotating batch of the web home feed.
+/// 解析 Web 首页信息流的一批轮换数据。
 ///
-/// The payload is a list of envelopes, each wrapping a room either as an
-/// object or as an embedded JSON string (both shapes have been observed).
-/// Advertisement cards and entries without a usable room id are dropped;
-/// duplicate room ids within a batch are collapsed.
+/// 负载是信封列表，每个信封把一个房间包装成对象或内嵌 JSON 字符串
+/// （两种形态都观测到过）。广告卡片与没有可用房间号的条目会被丢弃；
+/// 同一批次内的重复房间号会被合并。
 fn parse_recommend_feed(value: &Value) -> AppResult<RoomListPage> {
     let envelopes = value
         .get("data")
@@ -933,16 +913,15 @@ fn parse_recommend_feed(value: &Value) -> AppResult<RoomListPage> {
             items.push(item);
         }
     }
-    // A non-empty batch means the feed keeps offering more: the next request
-    // returns another partially rotated selection. An empty batch ends it.
+    // 非空批次说明信息流还有更多：下一次请求会返回另一份部分轮换的选择。
+    // 空批次则结束。
     Ok(RoomListPage {
         has_more: !items.is_empty(),
         items,
     })
 }
 
-/// Merges concurrent feed batches into one page, keeping the first occurrence
-/// of every room and preserving batch order.
+/// 把并发的信息流批次合并为一页，保留每个房间的首次出现并维持批次顺序。
 fn combine_feed_batches(batches: Vec<RoomListPage>) -> RoomListPage {
     let mut items = Vec::new();
     let mut seen = HashSet::new();
@@ -959,7 +938,7 @@ fn combine_feed_batches(batches: Vec<RoomListPage>) -> RoomListPage {
     }
 }
 
-/// Extracts a room item from one feed envelope.
+/// 从一个信息流信封中提取房间条目。
 fn feed_room_item(envelope: &Value) -> Option<LiveRoomItem> {
     if envelope
         .get("is_ad")
@@ -975,13 +954,12 @@ fn feed_room_item(envelope: &Value) -> Option<LiveRoomItem> {
             owned = serde_json::from_str(text).ok()?;
             &owned
         }
-        // Some envelope generations carry the room fields directly.
+        // 某些代次的信封直接携带房间字段。
         _ => envelope,
     };
     let mut item = room_item_from_value(room)?;
-    // The public short web_rid rides on the envelope; prefer it over the
-    // internal long id so detail/playback requests keep using the fast SSR
-    // path instead of reflow.
+    // 公开的短 web_rid 附着在信封上；优先使用它而不是内部长 id，
+    // 使详情/播放请求继续走快速的 SSR 路径而不是回源。
     let web_rid = first_non_empty([
         json_str(envelope.get("web_rid").unwrap_or(&Value::Null)),
         json_str(room.pointer("/owner/web_rid").unwrap_or(&Value::Null)),
@@ -1055,15 +1033,14 @@ fn first_image_url(value: &Value) -> String {
     }
 }
 
-/// Normalize one image address, discarding anything that is not fetchable.
+/// 归一化一个图片地址，丢弃任何无法抓取的内容。
 ///
-/// A Douyin image object carries both `url_list` (real CDN addresses) and `uri`
-/// (a bare storage key such as `aweme-avatar/tos-cn-i-0813_…`). The key search
-/// in [`first_image_url`] falls through to `uri` whenever `url_list` is missing
-/// or empty, and that value is not loadable by anything: the frontend drops it,
-/// so a recording that stored it keeps a permanently blank thumbnail. Rejecting
-/// it here lets the caller continue to the next candidate — in practice the
-/// owner avatar — instead of persisting an address that can never render.
+/// 抖音图片对象同时携带 `url_list`（真实 CDN 地址）和 `uri`
+/// （裸存储键，如 `aweme-avatar/tos-cn-i-0813_…`）。当 `url_list` 缺失或为空时，
+/// [`first_image_url`] 的键查找会落到 `uri` 上，而这个值什么也加载不了：
+/// 前端会丢弃它，存了它的录制会一直保持空白缩略图。在这里拒绝它，
+/// 让调用方继续处理下一个候选 —— 实践中就是主播头像 ——
+/// 而不是持久化一个永远无法渲染的地址。
 fn normalize_image_url(value: &str) -> String {
     let value = value.trim();
     let normalized = match value.strip_prefix("//") {
@@ -1081,11 +1058,12 @@ fn is_http_url(value: &str) -> bool {
     value.starts_with("https://") || value.starts_with("http://")
 }
 
-/// Decode one JSON value embedded inside Douyin's RSC JavaScript string.
+/// 解码嵌在抖音 RSC JavaScript 字符串中的一个 JSON 值。
 ///
-/// The page contains text such as `roomsData\":{\"count\":15,...}`.  A
-/// normal brace scan would be confused by braces in `stream_data`, so this
-/// scans after decoding the outer string escapes and honours JSON strings.
+/// 页面包含形如 `roomsData\":{\"count\":15,...}` 的文本。
+/// 普通的括号扫描会被 `stream_data` 中的花括号干扰，
+/// 因此在先解码外层字符串转义之后扫描，
+/// 并正确处理 JSON 字符串边界。
 fn decode_embedded_json_value(source: &str, opening: char) -> AppResult<String> {
     let closing = match opening {
         '{' => '}',
@@ -1132,8 +1110,8 @@ fn decode_embedded_json_value(source: &str, opening: char) -> AppResult<String> 
                         AppError::new("douyin_parse_error", "invalid embedded unicode escape")
                             .with_site("douyin")
                     })?;
-                    // Keep lone surrogate escapes valid for serde_json; valid
-                    // Unicode escapes can be decoded directly.
+                    // 让孤立代理项转义保持对 serde_json 合法；
+                    // 合法的 Unicode 转义可以直接解码。
                     if let Some(character) = char::from_u32(code) {
                         character
                     } else {
@@ -1181,9 +1159,8 @@ fn extract_embedded_json(source: &str, key: &str, opening: char) -> AppResult<St
         let Some(start) = tail.find(opening) else {
             continue;
         };
-        // A real object/array value follows the key immediately after the
-        // escaped colon.  This avoids accidentally scanning an unrelated JS
-        // identifier farther down a huge RSC payload.
+        // 真实的对象/数组值紧跟在转义冒号之后的键名后面。
+        // 这样可以避免在庞大的 RSC 负载中误扫到远处无关的 JS 标识符。
         if start > 96 {
             continue;
         }
@@ -1304,9 +1281,9 @@ fn parse_room_list_data(value: &Value) -> AppResult<RoomListPage> {
         .filter_map(|item| room_item_from_value(item.get("room").unwrap_or(item)))
         .collect::<Vec<_>>();
     Ok(RoomListPage {
-        // `roomsData.offset` is always the first SSR page's next offset even
-        // when a caller adds an `offset` query string.  Do not advertise a
-        // non-existent next page and feed duplicate rooms to the UI.
+        // `roomsData.offset` 始终是首个 SSR 页面的下一页偏移，
+        // 即使调用方附加了 `offset` query。不要向 UI 宣告不存在的下一页、
+        // 喂进重复房间。
         has_more: false,
         items,
     })
@@ -1420,9 +1397,9 @@ fn parse_room_live_status_html(html: &str) -> AppResult<LiveRoomStatus> {
     ))
 }
 
-/// Read just the fields rendered with a room's live state.  Keeping this
-/// separate from `parse_room_detail` makes it impossible for a follow refresh
-/// to accidentally retain stream URLs or invoke their parsing path.
+/// 只读取与房间直播状态一起渲染的字段。把它与 `parse_room_detail` 分开，
+/// 可以从结构上杜绝关注刷新意外保留线路地址
+/// 或触发其解析路径的可能。
 fn parse_room_live_status(room: &Value) -> AppResult<LiveRoomStatus> {
     if !room.is_object() {
         return Err(DouyinSite::parse_err("抖音房间状态数据格式异常"));
@@ -1471,10 +1448,10 @@ fn parse_room_detail_html(html: &str, requested_web_rid: &str) -> AppResult<Live
     ))
 }
 
-/// The room page's `RENDER_DATA` script carries the session's own web id
-/// (`app.odin.user_unique_id`).  Prefer it over a locally generated id so the
-/// WSS request fingerprint matches the cookies of the same browser session,
-/// which the webcast risk engine can correlate.
+/// 房间页的 `RENDER_DATA` 脚本携带会话自身的 web id
+/// （`app.odin.user_unique_id`）。优先使用它而不是本地生成的 id，
+/// 使 WSS 请求指纹与同一浏览器会话的 cookie 相互对应 ——
+/// webcast 风控引擎正是据此关联的。
 fn parse_render_data_web_id(html: &str) -> Option<String> {
     const MARKER: &str = r#"<script id="RENDER_DATA" type="application/json">"#;
     let start = html.find(MARKER)?;
@@ -1489,8 +1466,8 @@ fn parse_render_data_web_id(html: &str) -> Option<String> {
     }
 }
 
-/// Percent-decode without URL-form's `+` → space rule; `RENDER_DATA` uses
-/// percent escapes only, and a literal plus is valid JSON.
+/// 百分号解码但不套用 URL 表单的 `+` → 空格规则；`RENDER_DATA` 只用百分号
+/// 转义，而字面加号是合法 JSON。
 fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -1511,13 +1488,12 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-/// Fallback web id: the `s_v_web_id` cookie is a real browser fingerprint
-/// from the same session, used when `RENDER_DATA` lacks an explicit id.
+/// 兜底 web id：`s_v_web_id` cookie 是同一会话的真实浏览器指纹，
+/// 在 `RENDER_DATA` 缺少显式 id 时使用。
 ///
-/// Most cookies carry a `verify_…` fingerprint that the danmaku signature
-/// cannot consume (over-long, and `_` would forge fields in the delimited
-/// stub); those are dropped so the danmaku layer keeps its anonymous id
-/// instead of failing the handshake.
+/// 多数 cookie 携带的 `verify_…` 指纹无法被弹幕签名消费（过长，且 `_` 会在
+/// 带分隔符的 stub 中伪造字段）；这些会被丢弃，
+/// 使弹幕层保留其匿名 id 而不是让握手失败。
 fn session_web_id(cookie: &str) -> Option<String> {
     cookie
         .split(';')
@@ -1824,11 +1800,10 @@ mod tests {
 
     use super::*;
 
-    /// A Douyin image object always carries a bare `uri` storage key next to
-    /// `url_list`. When the CDN list is missing or empty the key search must not
-    /// hand that key back: nothing can fetch it, and a recording that stored it
-    /// would keep an unloadable thumbnail forever. The owner avatar is the
-    /// fallback a room detail then lands on.
+    /// 抖音图片对象总会在 `url_list` 旁附带裸的 `uri` 存储键。当 CDN 列表缺失或为
+    /// 空时，键查找绝不能把这个键交回去：没有任何东西能抓取它，
+    /// 存了它的录制将永远带着无法加载的缩略图。
+    /// 房间详情随后会落到主播头像这一兜底上。
     #[test]
     fn image_lookup_skips_bare_storage_keys() {
         let uri_only = serde_json::json!({
@@ -1837,7 +1812,7 @@ mod tests {
         });
         assert_eq!(first_image_url(&uri_only), "");
 
-        // A usable CDN address still wins, and a protocol-relative one is upgraded.
+        // 可用的 CDN 地址仍然胜出，协议相对地址会被升级。
         let with_urls = serde_json::json!({
             "url_list": ["//p11-webcast.douyinpic.com/img/cover.image"],
             "uri": "aweme-avatar/tos-cn-i-0813_owu79eqip",
@@ -1996,8 +1971,8 @@ mod tests {
         assert_eq!(page.items[0].online, 42);
     }
 
-    /// One page of the browse endpoint, shaped like the live response: the
-    /// public `web_rid` sits on the outer item and on `room.owner`.
+    /// 浏览接口的一页，形态与直播响应一致：公开的 `web_rid`
+    /// 位于外层条目和 `room.owner` 上。
     fn partition_page(count: usize, offset: i64) -> Value {
         let rooms = (0..count)
             .map(|index| {
@@ -2040,8 +2015,8 @@ mod tests {
         assert!(!page.has_more);
     }
 
-    /// A stalled cursor would otherwise let infinite scroll refetch the same
-    /// rooms forever, so a non-advancing offset must end pagination.
+    /// 停滞的游标会让无限滚动永远重新抓取相同的房间，
+    /// 因此不再前进的偏移必须结束分页。
     #[test]
     fn stalled_offset_ends_pagination_even_on_a_full_page() {
         let page = parse_partition_rooms(&partition_page(15, 15), 15).expect("partition page");
@@ -2090,8 +2065,8 @@ mod tests {
         assert!(page.has_more);
     }
 
-    /// Both envelope shapes have been observed in the wild: the room as an
-    /// embedded JSON string (post-2026 responses) and as a plain object.
+    /// 两种信封形态都在真实环境中出现过：房间作为内嵌 JSON 字符串
+    /// （2026 年之后的响应）或普通对象。
     #[test]
     fn feed_batch_decodes_embedded_json_string_rooms() {
         let mut envelope = feed_envelope("50828500437", "字符串房间");
@@ -2163,8 +2138,8 @@ mod tests {
         assert!(combined.has_more);
     }
 
-    /// The bootstrap cache must only ever hold the anonymous values the home
-    /// response contributed; saved account cookies never enter it.
+    /// 引导缓存只能保存首页响应贡献的匿名取值；
+    /// 已保存的账号 cookie 绝不进入。
     #[test]
     fn changed_cookie_pairs_reports_only_new_or_refreshed_values() {
         let before = "sessionid=secret; ttwid=old";
@@ -2179,8 +2154,8 @@ mod tests {
         assert_eq!(pairs, vec![("ttwid", "fresh"), ("UIFID_TEMP", "abc")]);
     }
 
-    /// Both behaviors share one test because they rely on the same
-    /// process-wide session cache; parallel tests would overwrite it.
+    /// 两个行为共用一个测试，因为它们依赖同一个进程级会话缓存；
+    /// 并行测试会互相覆盖。
     #[tokio::test]
     async fn cached_web_session_seeds_instances_and_yields_to_saved_login() {
         store_web_session_pairs(&[
@@ -2188,8 +2163,8 @@ mod tests {
             ("UIFID_TEMP".into(), "fill".into()),
         ]);
 
-        // Anonymous instance: the cached pairs seed a usable session without
-        // visiting the live home.
+        // 匿名实例：缓存的键值对直接播种出可用会话，
+        // 无需访问直播首页。
         let anonymous = DouyinSite::new(
             reqwest::Client::builder().no_proxy().build().unwrap(),
             String::new(),
@@ -2198,8 +2173,8 @@ mod tests {
         assert_eq!(anonymous.cookie().unwrap(), "ttwid=cached; UIFID_TEMP=fill");
         assert!(anonymous.web_session_is_initialized().unwrap());
 
-        // Saved-login instance: cached values fill the gaps, but the saved
-        // identity always wins over its cached counterpart.
+        // 已登录实例：缓存值补齐缺口，
+        // 但已保存的身份始终优先于其缓存对应值。
         let saved = DouyinSite::new(
             reqwest::Client::builder().no_proxy().build().unwrap(),
             "sessionid=secret; ttwid=saved".into(),
@@ -2232,7 +2207,7 @@ mod tests {
             Some("7392091211001140287")
         );
         assert_eq!(parse_render_data_web_id("<html></html>"), None);
-        // A missing odin block must not panic.
+        // 缺少 odin 块时不得 panic。
         let empty =
             r#"<script id="RENDER_DATA" type="application/json">%7B%22app%22%3A%7B%7D%7D</script>"#;
         assert_eq!(parse_render_data_web_id(empty), None);
@@ -2246,17 +2221,16 @@ mod tests {
         assert_eq!(session_web_id(""), None);
     }
 
-    /// A browser's real `s_v_web_id` is a `verify_…` fingerprint that the
-    /// danmaku signature cannot consume, so it must not be attached as the
-    /// room's `user_unique_id`.
+    /// 浏览器真实的 `s_v_web_id` 是弹幕签名无法消费的 `verify_…` 指纹，
+    /// 因此不能把它附加为房间的 `user_unique_id`。
     #[test]
     fn session_web_id_drops_unsignable_verify_fingerprints() {
         let cookie = "ttwid=1|abc; s_v_web_id=verify_m9x0k1a2_HqLpZzXk_8T1c_4Vd2_Wm5NpQrStUvW";
         assert_eq!(session_web_id(cookie), None);
     }
 
-    /// The category browser injects a synthetic "全部X" tile whose id is `0`.
-    /// That is not a Douyin partition, so the parent's partition must be used.
+    /// 分类浏览器注入 id 为 `0` 的合成"全部X"磁贴。
+    /// 它不是抖音分区，因此必须使用其父级分区。
     #[test]
     fn all_category_falls_back_to_its_parent_partition() {
         assert_eq!(
@@ -2289,8 +2263,8 @@ mod tests {
         assert_ne!(token, generate_ms_token());
     }
 
-    /// The signature covers the literal query string, so encoding has to be
-    /// applied before signing and never a second time by the HTTP client.
+    /// 签名覆盖的是字面 query 字符串，因此编码必须在签名之前完成，
+    /// 且 HTTP 客户端绝不能再编码第二次。
     #[test]
     fn query_encoding_escapes_values_once() {
         let query = encode_query(&[
@@ -2407,10 +2381,9 @@ mod tests {
         assert_eq!(detail.title, "SSR 直播");
     }
 
-    /// Exercises the signed browse endpoint for real: a locally computed
-    /// `a_bogus` that Douyin rejects would still parse as a valid (empty)
-    /// payload, so only a live request proves the signature is accepted and
-    /// that a second page returns different rooms.
+    /// 真实演练带签名的浏览接口：本地计算出的、被抖音拒绝的 `a_bogus`
+    /// 仍会被解析成合法（空）负载，只有真实请求才能证明签名被接受，
+    /// 且第二页返回的是不同房间。
     #[tokio::test]
     #[ignore = "live Douyin browse smoke; requires external network"]
     async fn live_signed_browse_pagination_smoke() {
@@ -2440,7 +2413,7 @@ mod tests {
             "recommend page 2 repeated page 1 exactly"
         );
 
-        // A real category id, as stored by `parse_categories_html`.
+        // 真实的分类 id，与 `parse_categories_html` 存储的一致。
         let category = LiveSubCategory {
             id: "1010032,1".into(),
             name: "和平精英".into(),

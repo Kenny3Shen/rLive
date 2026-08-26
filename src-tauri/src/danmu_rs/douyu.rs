@@ -1,11 +1,11 @@
-//! Douyu danmaku — STT text over binary framing (simple_live `DouyuDanmaku`).
+//! 斗鱼弹幕 —— 二进制分帧承载的 STT 文本。
 //!
-//! WS: `wss://danmuproxy.douyu.com:8501..=8506`
-//! Login / join / heartbeat are STT strings framed as little-endian packets.
+//! WS：`wss://danmuproxy.douyu.com:8501..=8506`
+//! 登录／加入／心跳都是被封装成小端数据包的 STT 字符串。
 //!
-//! Note: Douyu's danmaku proxy ports only offer static-RSA AES-GCM ciphers, so
-//! `None` here is always the native-tls connector (see
-//! [`ASSERT_NATIVE_TLS_ENABLED`]).
+//! 注意：斗鱼的弹幕代理端口只提供静态 RSA 的 AES-GCM 套件，因此这里的
+//! `None` 始终意味着 native-tls 连接器（参见
+//! [`ASSERT_NATIVE_TLS_ENABLED`]）。
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -34,21 +34,20 @@ use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 
-/// Fails to compile if tokio-tungstenite's `native-tls` feature is switched
-/// off. Douyu's danmaku proxy ports offer only static-RSA AES-GCM ciphers that
-/// rustls rejects, and with the feature disabled a `None` connector would
-/// quietly resolve to rustls and fail every handshake. Referenced below so the
-/// guard survives dead-code pruning.
+/// 如果 tokio-tungstenite 的 `native-tls` feature 被关闭，这里会编译失败。
+/// 斗鱼弹幕代理端口只提供 rustls 拒绝的静态 RSA AES-GCM 套件，而在该 feature
+/// 关闭时，`None` 连接器会悄悄解析为 rustls 并让每次握手都失败。
+/// 下方有引用它，以避免这道守卫被死代码裁剪掉。
 const ASSERT_NATIVE_TLS_ENABLED: fn(&Connector) -> bool =
     |connector| matches!(connector, Connector::NativeTls(_));
 
-/// Official proxy ports (simple_live uses 8506; rotate on failure).
+/// 官方代理端口（默认 8506，失败时轮换）。
 const SERVER_PORTS: &[u16] = &[8506, 8505, 8504, 8503, 8502, 8501];
 const CLIENT_TO_SERVER: u16 = 689;
 const SERVER_TO_CLIENT: u16 = 690;
 const HEARTBEAT_SECS: u64 = 45;
-/// Values observed from the current first-party web room client. They are
-/// protocol identifiers, not an rLive release version.
+/// 取自当前第一方 Web 房间客户端的观测值。它们是协议标识符，
+/// 不是 rLive 的发布版本号。
 const LOGIN_PROTOCOL_VERSION: &str = "20220825";
 const LOGIN_APP_VERSION: &str = "218101901";
 const LOGIN_VK_SALT: &str = r#"r5*^5;}2#${XF[h+;'./.Q'1;,-]f'p["#;
@@ -58,13 +57,12 @@ const SEND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PROXY_RESPONSE_BYTES: usize = 16 * 1024;
 const MAX_SEND_ENCRYPTION_TOKEN_BYTES: usize = 256;
 const MAX_SEND_ENCRYPTION_KEY_VERSION_BYTES: usize = 64;
-// The first-party client receives this number from a network response and
-// performs one MD5 operation for every value. Keep an ample ceiling for a
-// legitimate rotation while preventing a malformed response from turning an
-// explicit one-message send into an unbounded CPU task.
+// 第一方客户端从网络响应中收到这个数字，并为每个取值做一次 MD5 运算。
+// 这里为合法的轮换保留充足上限，同时防止格式错误的响应
+// 把一次明确的单条发送变成无界的 CPU 任务。
 const MAX_SEND_ENCRYPTION_ITERATIONS: u32 = 10_000;
-/// A room may impose a shorter account-level limit. This client-side bound is
-/// only a defensive ceiling for a manually composed plain-text message.
+/// 房间可能施加更短的账号级限制。这个客户端侧的上限
+/// 只是手工编写纯文本消息的防御性约束。
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 100;
 const SEND_PROXY_DISCOVERY_URL: &str = "https://www.douyu.com/swf_api/getProxyServer";
 const SEND_ENCRYPTION_URL: &str = "https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption";
@@ -72,19 +70,18 @@ const SEND_PROXY_HOST: &str = "wsproxy.douyu.com";
 const SEND_PROXY_PORTS: &[u16] = &[6671, 6672, 6673, 6674, 6675];
 const SEND_BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-// A Douyu packet has a four-byte outer length followed by this fixed header:
-// duplicate length (4), message type (2), encryption/reserved (2).  The
-// declared length also includes the one-byte NUL terminator after the body.
+// 斗鱼数据包由四字节外层长度加上如下固定头部组成：
+// 重复的长度（4）、消息类型（2）、加密/保留位（2）。
+// 声明的长度还包含 body 之后那个一字节的 NUL 结束符。
 const PACKET_HEADER_LEN: usize = 12;
 const PACKET_TRAILER_LEN: usize = 1;
 const MIN_PACKET_FULL_LEN: usize = 4 + 2 + 1 + 1 + PACKET_TRAILER_LEN;
-// Danmaku STT messages are normally tiny.  A finite upper bound keeps a
-// corrupt length field from making the hot path repeatedly inspect a giant
-// payload while still leaving ample space for a legitimate control packet.
+// 弹幕 STT 消息通常很小。设置有限上限可避免损坏的长度字段
+// 让热路径反复检查一个巨大的负载，
+// 同时仍为合法控制包留出充足空间。
 const MAX_PACKET_FULL_LEN: usize = 256 * 1024;
-// Recover a following valid packet after a local header corruption, but do
-// not turn an arbitrarily large invalid WebSocket binary frame into an
-// unbounded byte-by-byte CPU scan.
+// 在本地头部损坏后仍能恢复出后续的合法数据包，但不要把任意大的
+// 无效 WebSocket 二进制帧变成无界的逐字节 CPU 扫描。
 const MAX_PACKET_RESYNC_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone)]
@@ -92,15 +89,13 @@ pub struct DouyuDanmakuArgs {
     pub room_id: String,
 }
 
-/// The browser-cookie values that authenticate a current Douyu STT chat
-/// session. The web client supplies both its account identity and its device
-/// identity in the normal-chat packet; accepting only the historical login
-/// trio makes a local preflight look ready while producing a packet the
-/// gateway silently drops.
+/// 用于认证当前斗鱼 STT 聊天会话的浏览器 cookie 取值。Web 客户端会在普通聊天
+/// 数据包中同时提供账号身份和设备身份；只接受历史上那三个登录字段，
+/// 会让本地预检看起来就绪，
+/// 却产出一个被网关静默丢弃的数据包。
 ///
-/// Do not derive `Debug`: callers must never accidentally put these values in
-/// logs or a Tauri error payload. They are copied out of the local account
-/// store only for the lifetime of an explicitly user-initiated send.
+/// 不要派生 `Debug`：调用方绝不能无意间把这些值写进日志或 Tauri 错误负载。
+/// 它们只在用户明确发起的一次发送期间，从本地账号存储中复制出来。
 #[derive(Clone)]
 struct DouyuSendCredentials {
     username: String,
@@ -118,10 +113,9 @@ struct DouyuSendTimestamp {
     milliseconds: u128,
 }
 
-/// The documented public discovery response for the authenticated business
-/// websocket. It is deliberately separate from the danmaku read servers:
-/// sending a Cookie-derived STT login packet to the read gateway can neither
-/// authenticate correctly nor be safely retried.
+/// 经过认证的业务 websocket 的公开发现响应（有文档记载）。它刻意与弹幕读取
+/// 服务器区分开：把 Cookie 派生的 STT 登录包发给读取网关既无法正确认证，
+/// 也无法安全重试。
 #[derive(Debug, Deserialize)]
 struct SendProxyDiscoveryResponse {
     #[serde(default)]
@@ -136,10 +130,9 @@ struct SendProxyServer {
     port: SendProxyPort,
 }
 
-/// Public key material used only for the short-lived gateway challenge. It
-/// never contains the user's Cookie or JWT, but should still remain local:
-/// exposing it would make future protocol changes unnecessarily easy to
-/// fingerprint.
+/// 仅用于短时效网关挑战的公钥材料。它绝不包含用户的 Cookie 或 JWT，
+/// 但仍应保持在本地：暴露它会让将来的协议变更
+/// 过于容易被指纹识别。
 #[derive(Deserialize)]
 struct SendEncryptionResponse {
     #[serde(default)]
@@ -177,17 +170,17 @@ struct SendGatewayChallenge {
     iterations: u32,
 }
 
-/// Sanitised HTTP CONNECT configuration. Do not retain the source URL, which
-/// might include proxy credentials and must never reach tracing output.
+/// 已净化的 HTTP CONNECT 配置。不要保留源 URL，
+/// 它可能包含代理凭据，绝不能进入 tracing 输出。
 struct SendHttpProxy {
     host: String,
     port: u16,
     authorization: Option<String>,
 }
 
-/// The endpoint has returned both JSON numbers and decimal strings for ports.
-/// Accept both shapes, then constrain the final value to the fixed allowlist
-/// before opening a WebSocket.
+/// 该接口返回的端口既出现过 JSON 数字也出现过十进制字符串。
+/// 两种形态都接受，然后在打开 WebSocket 之前
+/// 把最终取值限制在固定白名单内。
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum SendProxyPort {
@@ -223,7 +216,7 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<DouyuDanmakuArgs> 
     Ok(DouyuDanmakuArgs { room_id: rid })
 }
 
-/// Read a named value from a browser-style Cookie header without logging it.
+/// 从浏览器风格的 Cookie header 中读取指定字段，且不记录其值。
 fn cookie_value<'a>(cookie: &'a str, key: &str) -> Option<&'a str> {
     let cookie = cookie
         .trim()
@@ -241,9 +234,9 @@ fn cookie_value<'a>(cookie: &'a str, key: &str) -> Option<&'a str> {
 fn cookie_value_any(cookie: &str, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         cookie_value(cookie, key)
-            // Cookie fields used by the STT gateway are short opaque tokens.
-            // Reject pathological manual input before it becomes a websocket
-            // frame, while keeping the actual value local.
+            // STT 网关使用的 Cookie 字段都是简短的不透明 token。
+            // 在它变成 websocket 帧之前先拒绝异常的手工输入，
+            // 同时把真实取值保留在本地。
             .filter(|value| value.len() <= 4_096)
             .map(str::to_owned)
     })
@@ -266,18 +259,17 @@ fn credentials_from_cookie(cookie: &str) -> Option<DouyuSendCredentials> {
         })
         .and_then(numeric_cookie_value)?;
     let stk = cookie_value_any(cookie, &["acf_stk"])?;
-    // Older browser sessions and some QR flows use an underscore-wrapped
-    // spelling. Accept both forms so users can paste their complete Cookie
-    // header without having to edit a token by hand.
+    // 较旧的浏览器会话和部分扫码流程使用带下划线包裹的写法。
+    // 两种形式都接受，使用户可以直接粘贴完整的 Cookie header，
+    // 而不必手工编辑 token。
     let ltkid = cookie_value_any(cookie, &["acf_ltkid", "_acf_ltkid_", "acf_ltkid_"])?;
-    // Do not invent a device id. It is used by both the login checksum and
-    // the outgoing `dy` field, and a per-request random value breaks the
-    // browser session binding. `acf_devid` appears in newer exported Cookies;
-    // `acf_did` / `dy_did` are produced by the web client itself.
+    // 不要自行编造设备 id。它同时用于登录校验和与发出的 `dy` 字段，
+    // 而每次请求随机生成会破坏浏览器会话绑定。`acf_devid` 出现在较新的
+    // 导出 Cookie 中；`acf_did` / `dy_did` 由 Web 客户端自己生成。
     let did = cookie_value_any(cookie, &["acf_did", "dy_did", "acf_devid"])?;
     let biz = cookie_value_any(cookie, &["acf_biz"])?;
-    // The normal chat session uses the DM-scoped token, not the general web
-    // JWT. Do not fall back to `acf_jwt_token`: its audience differs.
+    // 普通聊天会话使用 DM 作用域的 token，而不是通用的 Web JWT。
+    // 不要回退到 `acf_jwt_token`：它的受众不同。
     let dmjwt = cookie_value_any(cookie, &["acf_dmjwt_token", "dmjwt_token"])?;
     Some(DouyuSendCredentials {
         username,
@@ -290,15 +282,13 @@ fn credentials_from_cookie(cookie: &str) -> Option<DouyuSendCredentials> {
     })
 }
 
-/// Whether a saved browser Cookie has the session fields needed to authenticate
-/// a user-initiated normal chat submission.
+/// 保存的浏览器 Cookie 是否具备认证用户发起的普通聊天提交所需的会话字段。
 pub fn has_send_credentials(cookie: &str) -> bool {
     credentials_from_cookie(cookie).is_some()
 }
 
-/// Validate a manually composed regular chat message before the command
-/// reserves its short cooldown. Douyu applies account/room-specific limits on
-/// top of this conservative local safety bound.
+/// 在命令占用其短暂冷却之前，校验手工编写的普通聊天消息。
+/// 斗鱼会在这个保守的本地安全约束之上再施加账号／房间级限制。
 pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     let message = value.trim();
     if message.is_empty() {
@@ -320,9 +310,8 @@ pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     Ok(message.to_string())
 }
 
-/// Escape one STT field value. The protocol uses `@=` and `/` as structural
-/// separators, so outgoing user text and opaque Cookie values must be encoded
-/// before they are placed into a packet.
+/// 转义单个 STT 字段值。协议把 `@=` 和 `/` 用作结构分隔符，
+/// 因此发出的用户文本和不透明 Cookie 值在放入数据包之前必须先编码。
 fn escape_stt(value: &str) -> String {
     value.replace('@', "@A").replace('/', "@S")
 }
@@ -359,10 +348,9 @@ fn login_request_body(room_id: &str, credentials: &DouyuSendCredentials, now: u6
     let now = now.to_string();
     let vk_input = format!("{now}{LOGIN_VK_SALT}{}", credentials.did);
     let vk = hex::encode(Md5::digest(vk_input.as_bytes()));
-    // Field order mirrors the current browser room client. The gateway is
-    // tolerant of ordering in most cases, but preserving it keeps the
-    // captured protocol contract reviewable and avoids relying on legacy
-    // parser behaviour.
+    // 字段顺序对齐当前浏览器房间客户端。网关在多数情况下对顺序是宽容的，
+    // 但保持一致可让抓取到的协议契约便于复核，
+    // 也避免依赖旧解析器的行为。
     encode_stt_fields(&[
         ("type", "loginreq"),
         ("roomid", room_id),
@@ -383,8 +371,8 @@ fn login_request_body(room_id: &str, credentials: &DouyuSendCredentials, now: u6
         ("vk", vk.as_str()),
         ("ver", LOGIN_PROTOCOL_VERSION),
         ("aver", LOGIN_APP_VERSION),
-        // Keep the advertised browser fields coherent with the User-Agent
-        // header set below. They are not user-controlled fingerprint input.
+        // 让声明的浏览器字段与下面设置的 User-Agent 请求头保持一致。
+        // 它们不是用户可控的指纹输入。
         ("dmbt", "chrome"),
         ("dmbv", "126"),
     ])
@@ -395,10 +383,9 @@ fn chat_request_body(
     credentials: &DouyuSendCredentials,
     timestamp: DouyuSendTimestamp,
 ) -> String {
-    // This is the ordinary-text payload observed from the current web room
-    // client. In particular, `dy`, `sender`, `tts`, and `cst` are part of the
-    // account/device context for a normal message; the old receiver/scope/pid
-    // shape is accepted at the TCP layer but may be silently discarded.
+    // 这是从当前 Web 房间客户端观测到的普通文本负载。特别地，`dy`、`sender`、
+    // `tts` 和 `cst` 属于普通消息的账号／设备上下文；旧的
+    // receiver/scope/pid 形态在 TCP 层会被接受，但可能被静默丢弃。
     let seconds = timestamp.seconds.to_string();
     let milliseconds = timestamp.milliseconds.to_string();
     encode_stt_fields(&[
@@ -418,27 +405,27 @@ fn chat_request_body(
     ])
 }
 
-/// Frame a STT body for Douyu binary protocol.
+/// 按斗鱼二进制协议把 STT body 封装成帧。
 pub fn serialize_packet(body: &str) -> Vec<u8> {
     let body_bytes = body.as_bytes();
-    // length fields cover: second_len(4) + type(2) + enc(1) + rsv(1) + body + nul(1)
+    // 长度字段覆盖：second_len(4) + type(2) + enc(1) + rsv(1) + body + nul(1)
     let full_len = (4 + 2 + 1 + 1 + body_bytes.len() + 1) as u32;
     let mut out = Vec::with_capacity(4 + full_len as usize);
     out.extend_from_slice(&full_len.to_le_bytes());
     out.extend_from_slice(&full_len.to_le_bytes());
     out.extend_from_slice(&CLIENT_TO_SERVER.to_le_bytes());
-    out.push(0); // encrypted
-    out.push(0); // reserved
+    out.push(0); // 加密位
+    out.push(0); // 保留位
     out.extend_from_slice(body_bytes);
-    out.push(0); // trailing nul
+    out.push(0); // 末尾 NUL
     out
 }
 
-/// Return the body and total byte length of a well-formed packet at `offset`.
+/// 返回位于 `offset` 处、格式正确的数据包的 body 及总字节长度。
 ///
-/// The two length fields, known packet type, and trailing NUL are all cheap
-/// checks that sharply reduce false positives when recovering after a corrupt
-/// packet in an otherwise valid WebSocket frame.
+/// 两个长度字段、已知的数据包类型和末尾 NUL 都是低成本检查，
+/// 能在从合法 WebSocket 帧中损坏的数据包之后重新同步时
+/// 大幅减少误判。
 fn packet_at(data: &[u8], offset: usize) -> Option<(usize, &[u8])> {
     let header_end = offset.checked_add(PACKET_HEADER_LEN)?;
     if header_end > data.len() {
@@ -453,17 +440,17 @@ fn packet_at(data: &[u8], offset: usize) -> Option<(usize, &[u8])> {
     if full != duplicate_full
         || !(MIN_PACKET_FULL_LEN..=MAX_PACKET_FULL_LEN).contains(&full)
         || (packet_type != CLIENT_TO_SERVER && packet_type != SERVER_TO_CLIENT)
-        // This parser only understands plaintext STT. Rejecting non-zero
-        // flags also makes a false header during bounded resynchronisation
-        // substantially less likely.
+        // 这个解析器只理解明文 STT。拒绝非零标志位
+        // 也让有界重同步过程中出现伪头部的可能性
+        // 显著降低。
         || encryption != 0
         || reserved != 0
     {
         return None;
     }
 
-    // `full` excludes the first length field.  It includes the duplicate
-    // length/type/flags, body, and terminal NUL.
+    // `full` 不含第一个长度字段。它包含重复的长度／类型／标志位、
+    // body 以及末尾的 NUL。
     let total = 4usize.checked_add(full)?;
     let packet_end = offset.checked_add(total)?;
     if packet_end > data.len() || data[packet_end - 1] != 0 {
@@ -473,21 +460,20 @@ fn packet_at(data: &[u8], offset: usize) -> Option<(usize, &[u8])> {
     let body_len = full.checked_sub(MIN_PACKET_FULL_LEN)?;
     let body_start = header_end;
     let body_end = body_start.checked_add(body_len)?;
-    // The body must end immediately before the protocol's NUL terminator.
+    // body 必须正好在协议的 NUL 结束符之前结束。
     if body_end != packet_end - PACKET_TRAILER_LEN {
         return None;
     }
     Some((total, &data[body_start..body_end]))
 }
 
-/// Visit zero or more UTF-8 STT body strings from a binary buffer.
+/// 遍历二进制缓冲区中零个或多个 UTF-8 STT body 字符串。
 ///
-/// The Douyu proxy commonly bundles many protocol packets into a single WS
-/// frame. Keeping this as a borrowing iterator-style helper lets the live
-/// connection discard uninteresting packets (especially `uenter`) without
-/// first allocating a `String` for every body.  A malformed packet advances
-/// one byte and searches for the next validated header so it cannot hide a
-/// following valid chat packet in the same WebSocket frame.
+/// 斗鱼代理常把多个协议数据包合并进单个 WS 帧。把它保持为借用式的迭代器
+/// 风格辅助函数，可让实时连接在不为每个 body 分配 `String` 的前提下
+/// 丢弃无关数据包（尤其是 `uenter`）。遇到格式错误的数据包时前进一个字节
+/// 并搜索下一个校验通过的头部，因此它无法把同一个 WebSocket 帧中
+/// 后续的合法聊天包藏住。
 fn for_each_packet(data: &[u8], mut visit: impl FnMut(&str)) {
     let mut offset = 0usize;
     let mut resync_bytes = 0usize;
@@ -514,7 +500,7 @@ fn for_each_packet(data: &[u8], mut visit: impl FnMut(&str)) {
     }
 }
 
-/// Test-only convenience wrapper around the borrowing packet visitor.
+/// 仅供测试使用的便捷包装，内部是借用式数据包遍历器。
 #[cfg(test)]
 fn deserialize_packets(data: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
@@ -522,14 +508,14 @@ fn deserialize_packets(data: &[u8]) -> Vec<String> {
     out
 }
 
-/// Unescape Douyu STT `@S` / `@A` sequences.
+/// 反转义斗鱼 STT 的 `@S` / `@A` 序列。
 pub fn unescape_slash_at(s: &str) -> String {
     s.replace("@S", "/").replace("@A", "@")
 }
 
-/// Read the message type without constructing a map. Douyu sends `type` as
-/// the first field, but retain the generic fallback so malformed/reordered
-/// packets keep the former parser's behaviour.
+/// 在不构造 map 的前提下读取消息类型。斗鱼把 `type` 作为第一个字段发送，
+/// 但仍保留通用兜底，使格式错误／字段乱序的数据包
+/// 维持此前解析器的行为。
 fn stt_type(stt: &str) -> Option<&str> {
     if let Some(rest) = stt.strip_prefix("type@=")
         && let Some(value) = rest.split('/').next().filter(|value| !value.is_empty())
@@ -543,7 +529,7 @@ fn stt_type(stt: &str) -> Option<&str> {
     })
 }
 
-/// Decode a value only when the STT escape syntax is actually present.
+/// 只有确实存在 STT 转义语法时才对取值做解码。
 fn decode_value(value: &str) -> String {
     if value.contains("@S") || value.contains("@A") {
         unescape_slash_at(value)
@@ -552,11 +538,11 @@ fn decode_value(value: &str) -> String {
     }
 }
 
-/// Some upstream relay variants encode room-entry notices as `chatmsg`
-/// instead of the normal high-volume `uenter` packet.  They have no value in
-/// the chat UI and used to cross the IPC boundary as text such as
-/// "某某进入直播间".  Keep this check on the borrowed STT field, before escape
-/// decoding or allocating a [`DanmakuEvent`].
+/// 部分上游中继变体把进房通知编码为 `chatmsg`，而不是常规的高频 `uenter`
+/// 数据包。它们在聊天界面没有价值，此前会以
+/// "某某进入直播间"之类的文本跨越 IPC 边界。
+/// 这个检查放在借用的 STT 字段上，
+/// 先于转义解码和分配 [`DanmakuEvent`]。
 const ROOM_ENTER_SUFFIXES: [&str; 3] = ["进入直播间", "进入了直播间", "进入直播间了"];
 
 fn has_room_enter_suffix(content: &str) -> bool {
@@ -603,9 +589,9 @@ fn parse_chat_message(stt: &str) -> Option<DanmakuEvent> {
     let mut color = None;
     let mut has_dms = false;
 
-    // Only inspect fields required for a real chat event. The old generic
-    // HashMap parser allocated every field of every packet, including noisy
-    // enter/heartbeat/control packets in busy rooms.
+    // 只检查真正构成聊天事件所需的字段。旧的通用 HashMap 解析器会为每个数据包
+    // 的每个字段都做分配，包括繁忙房间里嘈杂的
+    // 进房／心跳／控制包。
     for field in stt.split('/') {
         let Some((key, value)) = field.split_once("@=") else {
             continue;
@@ -713,7 +699,7 @@ fn parse_gift_message(stt: &str) -> DanmakuEvent {
 }
 
 fn color_from_col(col: i64) -> Option<String> {
-    // simple_live DouyuDanmaku.getColor
+    // 读取弹幕颜色字段（getColor）
     let rgb = match col {
         1 => (255, 0, 0),
         2 => (30, 135, 240),
@@ -729,10 +715,9 @@ fn color_from_col(col: i64) -> Option<String> {
 pub fn parse_stt_message(stt: &str) -> Option<DanmakuEvent> {
     match stt_type(stt)? {
         "chatmsg" => parse_chat_message(stt),
-        // `uenter` is a high-volume room-presence notification, not a user
-        // chat. Suppressing it before JSON/IPC/UI work removes messages such
-        // as “xxx 进入直播间” while preserving the `Enter` event kind for other
-        // site implementations and normal chat/gift events for Douyu.
+        // `uenter` 是高频的房间在场通知，不是用户聊天。在 JSON/IPC/UI 处理之前
+        // 就抑制它，可以去掉诸如"xxx 进入直播间"的消息，同时为其他站点实现
+        // 保留 `Enter` 事件类型，也为斗鱼保留正常的聊天／礼物事件。
         "uenter" => None,
         "dgb" | "odfbc" | "rndp" => Some(parse_gift_message(stt)),
         _ => None,
@@ -754,10 +739,9 @@ fn decode_binary(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
-/// Keep the Cookie-derived login packet on the endpoint class that Douyu
-/// publishes for business websocket traffic. The discovery payload is treated
-/// as untrusted input even though it comes from a trusted HTTPS origin: only
-/// the expected host and small known port set can ever receive the packet.
+/// 让 Cookie 派生的登录包只发往斗鱼为业务 websocket 流量公布的那类端点。
+/// 发现接口的响应即使来自可信的 HTTPS 源，也被当作不可信输入：
+/// 只有预期的主机和已知的少量端口才可能收到该数据包。
 fn parse_send_proxy_urls(payload: SendProxyDiscoveryResponse) -> AppResult<Vec<String>> {
     if payload.error != 0 {
         return Err(AppError::new(
@@ -804,8 +788,8 @@ async fn discover_send_proxy_urls(
         .send()
         .await
         .map_err(|error| {
-            // The request URL is fixed and contains no account data. Do not
-            // include the configured proxy URL, Cookie, or raw response body.
+            // 请求 URL 是固定的且不含账号数据。不要包含配置的代理 URL、
+            // Cookie 或原始响应 body。
             tracing::warn!(
                 %attempt_id,
                 room_id,
@@ -902,10 +886,9 @@ fn encryption_key_from_response(response: SendEncryptionResponse) -> AppResult<S
             .retryable()
     })?;
 
-    // The first-party client primes its key cache by calculating a signature
-    // with these two values before sending `livreq`. The initial signature is
-    // not sent, but validating both values ensures this response has the same
-    // bounded shape before we use its `cpp.danmu` key in the server challenge.
+    // 第一方客户端在发送 `livreq` 之前，会用这两个值计算一次签名来预热其密钥
+    // 缓存。首次签名不会被发送，但校验这两个值可以确保在使用该响应的
+    // `cpp.danmu` 密钥参与服务器挑战之前，其结构与长度都在预期范围内。
     if encryption_token(&data.rand_str, MAX_SEND_ENCRYPTION_TOKEN_BYTES).is_none()
         || validate_encryption_iterations(data.enc_time).is_none()
     {
@@ -933,10 +916,9 @@ fn encryption_key_from_response(response: SendEncryptionResponse) -> AppResult<S
     Ok(SendEncryptionKey { key_version, key })
 }
 
-/// Obtain only the public, short-lived gateway challenge key. This endpoint
-/// is deliberately requested without the user's Cookie: the official web
-/// protocol derives it from the browser device id, while account
-/// authentication remains inside the STT `loginreq` packet.
+/// 只获取公开的、短时效的网关挑战密钥。这个接口刻意不带用户 Cookie 请求：
+/// 官方 Web 协议是从浏览器设备 id 派生它的，
+/// 而账号认证仍留在 STT `loginreq` 数据包内部。
 async fn fetch_send_encryption_key(
     proxy: Option<&str>,
     did: &str,
@@ -1079,9 +1061,8 @@ fn proxy_connection_error(message: impl Into<String>) -> AppError {
     proxy_error(message).retryable()
 }
 
-/// Decode URL user-info without treating `+` as a space. Proxy credentials
-/// belong to URL components rather than form data, and Basic authentication
-/// below safely re-encodes the resulting bytes.
+/// 解码 URL 的 user-info 部分且不把 `+` 当作空格。代理凭据属于 URL 组成部分
+/// 而非表单数据，下面的 Basic 认证会安全地对结果字节重新编码。
 fn percent_decode_proxy_credential(value: &str) -> AppResult<Vec<u8>> {
     fn hex(byte: u8) -> Option<u8> {
         match byte {
@@ -1128,10 +1109,9 @@ fn proxy_authorization(proxy: &Url) -> AppResult<Option<String>> {
     Ok(Some(STANDARD.encode(credential)))
 }
 
-/// Parse the same user-facing proxy setting as normal HTTP requests. The
-/// websocket transport is an HTTP CONNECT tunnel, so SOCKS and HTTPS proxy
-/// endpoints are rejected explicitly instead of silently bypassing the
-/// setting. A scheme-less legacy `127.0.0.1:7890` value remains HTTP.
+/// 解析与普通 HTTP 请求相同的、面向用户的代理设置。websocket 传输是
+/// HTTP CONNECT 隧道，因此 SOCKS 与 HTTPS 代理端点会被明确拒绝，
+/// 而不是静默绕过该设置。缺少 scheme 的旧式 `127.0.0.1:7890` 仍视为 HTTP。
 fn configured_http_proxy(proxy: Option<&str>) -> AppResult<Option<SendHttpProxy>> {
     let Some(raw) = proxy.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -1265,9 +1245,9 @@ async fn connect_via_http_proxy(
             break index + 4;
         }
     };
-    // A CONNECT peer cannot legitimately send tunneled TLS data before this
-    // client starts the TLS handshake. Refuse an ambiguous response instead
-    // of silently dropping bytes that TLS would need to inspect.
+    // 在本客户端开始 TLS 握手之前，CONNECT 对端不可能合法地发来隧道内的 TLS
+    // 数据。遇到含义不明的响应时直接拒绝，
+    // 而不是静默丢弃 TLS 之后需要检查的字节。
     if response.len() != header_end {
         return Err(proxy_connection_error("代理连接响应格式异常"));
     }
@@ -1365,16 +1345,16 @@ async fn connect_douyu_ws() -> AppResult<
             }
         };
         let headers = req.headers_mut();
-        // Browser-like headers improve acceptance on some edges.
+        // 类浏览器请求头能提高部分边缘节点的接受率。
         if let Ok(v) = HeaderValue::from_str("https://www.douyu.com/") {
             headers.insert("Origin", v);
         }
         if let Ok(v) = HeaderValue::from_str(SEND_BROWSER_USER_AGENT) {
             headers.insert("User-Agent", v);
         }
-        // Do NOT offer a `Sec-WebSocket-Protocol` subprotocol here: the danmaku
-        // proxy never echoes one back, and tungstenite (RFC 6455) then rejects
-        // the handshake with `SecWebSocketSubProtocolError::NoSubProtocol`.
+        // 这里绝不要提供 `Sec-WebSocket-Protocol` 子协议：弹幕代理从不回显它，
+        // 而 tungstenite（遵循 RFC 6455）随后会以
+        // `SecWebSocketSubProtocolError::NoSubProtocol` 拒绝握手。
         let _ = ASSERT_NATIVE_TLS_ENABLED;
         match connect_async(req).await {
             Ok((ws, _)) => return Ok(ws),
@@ -1410,9 +1390,9 @@ enum SendGatewayReply {
 }
 
 fn safe_gateway_code(stt: &str) -> Option<String> {
-    // `chatres` reports its result in `res`; `error` packets normally use
-    // `code`. Keep `res` first so a bundled rejection cannot be mistaken for
-    // a successful chat acknowledgement merely because it has no `code`.
+    // `chatres` 在 `res` 中报告结果；`error` 数据包通常使用 `code`。
+    // 把 `res` 放在前面，避免合并帧中的拒绝结果仅因为没有 `code`
+    // 就被误判为一次成功的聊天确认。
     ["res", "code", "ec", "err"]
         .iter()
         .find_map(|key| stt_field(stt, key))
@@ -1459,10 +1439,9 @@ fn send_gateway_reply_from_stt(stt: &str) -> Option<SendGatewayReply> {
                 .unwrap_or(SendGatewayReply::EncryptionChallengeInvalid),
         ),
         "error" => Some(SendGatewayReply::Rejected(safe_gateway_code(stt))),
-        // The business gateway confirms an ordinary-text submission with a
-        // `chatres` packet. Only `res=0` is a positive confirmation. A
-        // packet that omits `res` means the socket has seen a related update,
-        // not that the platform accepted the message.
+        // 业务网关用 `chatres` 数据包确认普通文本提交。只有 `res=0` 才是肯定确认。
+        // 缺少 `res` 的数据包只说明该套接字收到了相关更新，
+        // 并不表示平台已接受该消息。
         "chatres" => match stt_field(stt, "res").map(str::trim) {
             Some("0") => Some(SendGatewayReply::ChatAccepted),
             Some(_) => Some(SendGatewayReply::Rejected(safe_gateway_code(stt))),
@@ -1478,9 +1457,9 @@ fn send_gateway_reply_from_binary(data: &[u8]) -> Option<SendGatewayReply> {
         let Some(candidate) = send_gateway_reply_from_stt(stt) else {
             return;
         };
-        // The proxy can bundle several STT packets into one WebSocket frame.
-        // A terminal rejection must win over an earlier positive-looking
-        // packet in the same frame so the client never reports a false send.
+        // 代理可能把多个 STT 数据包合并进一个 WebSocket 帧。同一帧中，终态的拒绝
+        // 必须优先于更早出现的看似成功的数据包，
+        // 使客户端绝不会报告虚假的发送成功。
         let terminal = matches!(
             &candidate,
             SendGatewayReply::Rejected(_) | SendGatewayReply::EncryptionChallengeInvalid
@@ -1615,8 +1594,8 @@ fn authentication_rejected_error(stage: &'static str) -> AppError {
 }
 
 fn send_unknown_error() -> AppError {
-    // Do not mark this retryable. The WebSocket write may already have
-    // reached Douyu, so automatic or reflexive retry would risk duplicates.
+    // 不要把它标记为可重试。WebSocket 写入可能已经到达斗鱼，
+    // 因此自动或条件反射式的重试会带来重复发送的风险。
     AppError::new(
         "douyu_send_unknown",
         "发送请求已提交，但未收到斗鱼确认；请到直播间确认是否显示",
@@ -1624,13 +1603,12 @@ fn send_unknown_error() -> AppError {
     .with_site("douyu")
 }
 
-/// Authenticate a short-lived websocket session and submit one ordinary
-/// Douyu chat message.
+/// 认证一次短时效 websocket 会话，并提交一条普通的斗鱼聊天消息。
 ///
-/// There is intentionally no automatic retry and no optimistic local event.
-/// A write is only reported as successful after `chatres(res=0)`; after any
-/// post-write uncertainty the caller receives an explicit unknown state so it
-/// cannot accidentally duplicate a message by retrying in the background.
+/// 这里刻意不做自动重试，也不产生乐观的本地事件。只有收到
+/// `chatres(res=0)` 之后才报告写入成功；写入后出现任何不确定情况时，
+/// 调用方都会收到明确的未知状态，
+/// 使其不会因后台重试而意外重复发送消息。
 pub async fn send_chat(
     cookie: &str,
     room_id: &str,
@@ -1652,16 +1630,16 @@ pub async fn send_chat(
         )
         .with_site("douyu")
     })?;
-    // Failure diagnostics use this id to correlate stages. Neither Cookie
-    // fields nor outgoing text may reach the persistent log.
+    // 失败诊断用这个 id 关联各阶段。Cookie 字段与发出的文本
+    // 都不得进入持久化日志。
     let attempt_id = Uuid::new_v4();
     let login = login_request_body(room_id, &credentials, current_unix_seconds()?);
 
     let ws = match connect_douyu_send_ws(proxy, room_id, &attempt_id).await {
         Ok(ws) => ws,
         Err(error) => {
-            // `connect_douyu_ws` logs the individual port failures. Retain the
-            // final safe error code here to tie them to this send attempt.
+            // `connect_douyu_ws` 会记录各端口各自的失败。这里保留最终的安全错误码，
+            // 以便把它们与本次发送尝试关联起来。
             tracing::warn!(
                 %attempt_id,
                 room_id,
@@ -1754,9 +1732,8 @@ pub async fn send_chat(
         }
     }
 
-    // Current web rooms require this challenge after `loginres`. Fetching the
-    // public key intentionally omits Cookie headers; the account session has
-    // already been authenticated inside the STT login packet above.
+    // 当前 Web 房间在 `loginres` 之后要求这个挑战。获取公钥时刻意不带 Cookie
+    // 请求头；账号会话已在上面的 STT 登录包中完成认证。
     let encryption =
         fetch_send_encryption_key(proxy, &credentials.did, room_id, &attempt_id).await?;
     write
@@ -1863,9 +1840,8 @@ pub async fn send_chat(
                 .retryable()
         })?;
 
-    // `send` flushes the complete WebSocket frame. Do not automatically retry
-    // after this point: the platform may have accepted the message even if a
-    // later read fails.
+    // `send` 会刷出完整的 WebSocket 帧。此后不要自动重试：
+    // 即使后续读取失败，平台也可能已经接受了该消息。
     let chat_timestamp = current_send_timestamp()?;
     write
         .send(Message::Binary(
@@ -1964,8 +1940,8 @@ async fn run_connection_once(
 ) -> DisconnectReason {
     match connect_and_read(events, args).await {
         Ok(reason) => reason,
-        // Every read-path error here is a dial or transport failure, so it maps
-        // to a transient reason; the policy decides when the streak ends.
+        // 这里读取路径上的每个错误都是拨号或传输失败，因此都映射为临时性原因；
+        // 由策略决定这串失败何时结束。
         Err(error) => DisconnectReason::transient(error.message),
     }
 }
@@ -1992,7 +1968,7 @@ async fn connect_and_read(
     let ws = connect_douyu_ws().await?;
     let (mut write, mut read) = ws.split();
 
-    // login + join group
+    // 登录 + 加入弹幕组
     let login = format!("type@=loginreq/roomid@={}/", args.room_id);
     let join = format!("type@=joingroup/rid@={}/gid@=-9999/", args.room_id);
     write
@@ -2045,7 +2021,7 @@ async fn connect_and_read(
                         });
                     }
                     Some(Ok(Message::Text(text))) => {
-                        // Some proxies may deliver text; try STT parse directly.
+                        // 部分代理可能下发文本帧；直接尝试按 STT 解析。
                         if let Some(ev) = parse_stt_message(text.as_str()) {
                             msg_count += 1;
                             emit_event(events, ev);
@@ -2068,8 +2044,7 @@ async fn connect_and_read(
     Ok(DisconnectReason::Dropped {
         messages: msg_count,
         connected_for: connected_at.elapsed(),
-        // This loop breaks without keeping the transport cause; the policy
-        // falls back to its stable summary.
+        // 这个循环退出时不保留传输层原因；策略会退回到其稳定的概要描述。
         detail: None,
     })
 }
@@ -2418,8 +2393,8 @@ mod tests {
     #[test]
     fn packet_parser_accepts_server_packets_and_recovers_after_bad_header() {
         let mut corrupt = serialize_packet("type@=chatmsg/nn@=bad/txt@=bad/dms@=1/");
-        // Duplicate length mismatch: this packet must be ignored rather than
-        // allowing its body to be interpreted as a future header.
+        // 重复长度字段不匹配：必须忽略该数据包，
+        // 而不能让它的 body 被当作后续的头部来解释。
         corrupt[4] ^= 0x01;
 
         let mut valid = serialize_packet("type@=chatmsg/nn@=ok/txt@=仍可收到/dms@=1/");

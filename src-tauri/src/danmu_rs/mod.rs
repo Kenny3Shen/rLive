@@ -22,9 +22,8 @@ use tokio::time::{self, MissedTickBehavior};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind, SiteId};
 
-/// The frontend receives at most one danmaku event payload every 50ms.  A
-/// bounded ingress queue keeps a sudden busy-room burst from growing without
-/// limit while the webview is busy rendering a previous batch.
+/// 前端每 50ms 最多收到一个弹幕事件负载。有界的入队队列可避免在 webview
+/// 忙于渲染上一批时，繁忙房间的突发流量无限增长。
 const DANMAKU_EVENT_CHANNEL_CAPACITY: usize = 2_048;
 const DANMAKU_BATCH_MAX_EVENTS: usize = 512;
 const DANMAKU_BATCH_INTERVAL: Duration = Duration::from_millis(50);
@@ -33,11 +32,10 @@ const DANMAKU_FINAL_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ACCOUNT_ID_CHARS: usize = 128;
 const MAX_ACCOUNT_NAME_CHARS: usize = 128;
 
-/// Cookie-derived identity for one active site connection.
+/// 某个活动站点连接的、由 Cookie 派生的身份。
 ///
-/// This is intentionally backend-only: the event dispatcher turns it into a
-/// boolean `is_self` flag, while account IDs, usernames, and Cookie values
-/// never cross the Tauri IPC boundary.
+/// 这里刻意只保留在后端：事件分发器会把它转换成布尔的 `is_self` 标记，
+/// 而账号 ID、用户名和 Cookie 值都不会跨越 Tauri IPC 边界。
 #[derive(Clone, Default)]
 struct SelfDanmakuIdentity {
     user_ids: HashSet<String>,
@@ -47,17 +45,17 @@ struct SelfDanmakuIdentity {
 impl SelfDanmakuIdentity {
     fn from_cookie(site_id: &SiteId, cookie: &str) -> Self {
         let (id_keys, site_name_keys): (&[&str], &[&str]) = match site_id {
-            // Bilibili's browser Cookie has a stable account mid but normally
-            // does not contain a display name.
+            // Bilibili 的浏览器 Cookie 有稳定的账号 mid，
+            // 但通常不包含显示名。
             SiteId::Bilibili => (&["DedeUserID"], &["DedeUserName"]),
-            // Douyu's QR/browser Cookie carries both the account uid and
-            // display name, so names remain useful when a relay omits uid.
+            // 斗鱼的扫码／浏览器 Cookie 同时携带账号 uid 与显示名，
+            // 因此当中继省略 uid 时名称仍然有用。
             SiteId::Douyu => (&["acf_uid", "uid"], &["acf_username"]),
-            // Huya uses either uid key depending on the authentication flow;
-            // `udb_n` is its browser account-name field.
+            // 虎牙会根据认证流程使用两种 uid 字段之一；
+            // `udb_n` 是其浏览器账号名字段。
             SiteId::Huya => (&["yyuid", "udb_uid"], &["udb_n"]),
-            // Do not infer an identity from opaque Douyin/Twitch session
-            // tokens. A human-readable explicit name remains a safe fallback.
+            // 不要从抖音／Twitch 的不透明会话 token 推断身份。
+            // 可读的显式名称仍是安全的兜底。
             SiteId::Douyin | SiteId::Twitch => (&[], &[]),
         };
         const GENERIC_NAME_KEYS: &[&str] =
@@ -85,9 +83,8 @@ impl SelfDanmakuIdentity {
             return false;
         }
 
-        // An event ID is authoritative when the Cookie yielded an ID as well.
-        // Falling back to the display name in that case could highlight a
-        // different user whose visible nickname happens to match ours.
+        // 当 Cookie 也给出了 ID 时，事件中的 ID 具有权威性。此时若回退到显示名，
+        // 可能会高亮另一位昵称恰好与我们相同的用户。
         if let Some(event_id) = event.user_id.as_deref().and_then(normalize_user_id)
             && !self.user_ids.is_empty()
         {
@@ -127,8 +124,8 @@ fn cookie_values(cookie: &str, names: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// Cookie values encode a display name with percent escapes on several web
-/// login flows. Cookie encoding treats `+` literally, unlike URL forms.
+/// 在多个 Web 登录流程中，Cookie 值会用百分号转义编码显示名。
+/// 与 URL 表单不同，Cookie 编码把 `+` 当作字面字符。
 fn percent_decode_cookie_value(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -161,8 +158,8 @@ fn normalize_user_name(value: &str) -> Option<String> {
         .then(|| value.to_lowercase())
 }
 
-/// Non-blocking handle used by site websocket loops to forward decoded
-/// danmaku to the batched Tauri event dispatcher.
+/// 供站点 websocket 循环使用的非阻塞句柄，
+/// 用于把解码后的弹幕转发给批量 Tauri 事件分发器。
 #[derive(Clone)]
 pub struct DanmakuEventSender {
     sender: mpsc::Sender<DanmakuEvent>,
@@ -182,17 +179,15 @@ impl DanmakuEventSender {
 
     fn send(&self, mut event: DanmakuEvent) {
         self.identity.mark(&mut event);
-        // Receiving must never wait on the webview.  When an exceptional
-        // burst fills the bounded queue, keeping the live connection healthy
-        // matters more than retaining every already-stale chat message.
+        // 接收绝不能等待 webview。当异常突发填满有界队列时，
+        // 保持实时连接健康比留住每条已经过时的聊天消息更重要。
         let _ = self.sender.try_send(event);
     }
 }
 
-/// Manages the room page's active danmaku connection plus connections retained
-/// by background recordings. Background batches still carry their original
-/// generation, so the frontend ignores them while the recording sidecar keeps
-/// receiving events by `source_key`.
+/// 管理房间页当前的弹幕连接，以及被后台录制保留的连接。后台批次仍携带其
+/// 原始 generation，因此前端会忽略它们，而录制伴生任务继续按
+/// `source_key` 接收事件。
 pub struct DanmakuManager {
     inner: Mutex<DanmakuConnectionState>,
 }
@@ -201,9 +196,9 @@ pub struct DanmakuManager {
 struct DanmakuTasks {
     connection_handle: Option<JoinHandle<()>>,
     batch_handle: Option<JoinHandle<()>>,
-    // Only the desktop flush path reads this sender back, but every platform
-    // must keep it alive: dropping it closes the control channel, which makes
-    // `dispatch_batches` observe `None` and stop delivering danmaku at once.
+    // 只有桌面端的 flush 路径会回读这个 sender，但所有平台都必须让它存活：
+    // 丢弃它会关闭控制通道，从而让 `dispatch_batches` 观察到 `None`
+    // 并立即停止投递弹幕。
     #[cfg_attr(
         not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
         expect(dead_code)
@@ -221,8 +216,8 @@ impl DanmakuTasks {
         }
     }
 
-    /// Flushes the batch task before teardown so a recording sidecar keeps the
-    /// final queued events. Only the desktop recording path needs this.
+    /// 在拆除之前先 flush 批处理任务，使录制伴生任务能拿到最后排队的事件。
+    /// 只有桌面端录制路径需要这一步。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     async fn stop_and_flush(mut self) {
         if let Some(handle) = self.connection_handle.take() {
@@ -243,9 +238,8 @@ impl DanmakuTasks {
     }
 }
 
-// `dispatch_batches` matches both variants on every platform; only the desktop
-// recording path constructs them, so mobile builds keep the shape without the
-// dead-code warning.
+// `dispatch_batches` 在所有平台上都匹配这两个变体；只有桌面端录制路径会构造
+// 它们，因此移动端构建保留该结构却不会产生死代码警告。
 #[cfg_attr(
     not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
     expect(dead_code)
@@ -261,7 +255,7 @@ struct BackgroundDanmakuConnection {
 }
 
 struct DanmakuConnectionState {
-    /// The newest route-level connection request accepted by the backend.
+    /// 后端已接受的、最新的路由级连接请求。
     generation: u64,
     active_source_key: Option<String>,
     active_tasks: DanmakuTasks,
@@ -311,12 +305,11 @@ impl DanmakuManager {
         Some(source_key)
     }
 
-    /// Marks a route request as the only connection allowed to install a task.
+    /// 把某个路由请求标记为唯一允许安装任务的连接。
     ///
-    /// `danmaku_connect` has to fetch room metadata before it can open the
-    /// websocket. A slow request from a room that was already left must not
-    /// install itself after a newer route is active, hence the caller-provided
-    /// monotonically increasing generation.
+    /// `danmaku_connect` 必须先获取房间元数据才能打开 websocket。已经离开的房间
+    /// 发出的慢请求不得在更新的路由生效之后再安装自己，
+    /// 因此需要调用方提供单调递增的 generation。
     pub fn begin_connect(
         &self,
         generation: u64,
@@ -335,8 +328,8 @@ impl DanmakuManager {
             Self::clear_active(&mut state);
         }
         state.generation = generation;
-        // Revisiting a room replaces its retained connection instead of
-        // delivering duplicate websocket batches to the same sidecar.
+        // 重新进入某房间会替换它保留的连接，
+        // 而不是把重复的 websocket 批次投递给同一个伴生任务。
         if let Some(previous) = state.background_tasks.remove(&source_key) {
             previous.tasks.abort();
         }
@@ -352,8 +345,8 @@ impl DanmakuManager {
             .and_then(|state| state.active_source_key.clone())
     }
 
-    /// Returns the active source only when this cleanup is new enough to
-    /// affect it. The caller can then decide whether to stop or retain it.
+    /// 只有当本次清理足够新、确实会影响活动源时才返回它。
+    /// 随后由调用方决定是停止还是保留。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub fn source_key_for_generation(&self, generation: u64) -> Option<String> {
         self.inner.lock().ok().and_then(|state| {
@@ -384,8 +377,8 @@ impl DanmakuManager {
             .unwrap_or(false)
     }
 
-    /// Detaches the current page without stopping its websocket. The tasks
-    /// remain keyed by their recording source until that recording finishes.
+    /// 分离当前页面但不停止其 websocket。这些任务会继续以录制源为键保留，
+    /// 直到该录制结束。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
     pub fn detach_for_generation(&self, generation: u64) -> bool {
         let Ok(mut state) = self.inner.lock() else {
@@ -399,8 +392,8 @@ impl DanmakuManager {
         detached
     }
 
-    /// Stops only requests at or before `generation`; an older frontend
-    /// cleanup therefore cannot terminate a newer room's connection.
+    /// 只停止 generation 小于或等于给定值的请求；因此较旧的前端清理
+    /// 无法终止更新房间的连接。
     pub fn disconnect_for_generation(&self, generation: u64) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             return false;
@@ -413,8 +406,8 @@ impl DanmakuManager {
         true
     }
 
-    /// Stops a retained connection only. An identical room that is currently
-    /// open owns the active connection and must survive a recording stop.
+    /// 只停止被保留的连接。当前已打开的同一房间持有活动连接，
+    /// 它必须在录制停止后继续存活。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
     pub fn disconnect_background_for_source(&self, source_key: &str) -> bool {
         let Ok(mut state) = self.inner.lock() else {
@@ -427,9 +420,8 @@ impl DanmakuManager {
         true
     }
 
-    /// Stops a recording-owned connection after its receiver has emitted the
-    /// final queued batch. Pending connection slots are removed as well, so an
-    /// in-flight metadata request cannot install itself after recording ended.
+    /// 在接收方发出最后一批排队事件之后，停止由录制持有的连接。待处理的连接槽位
+    /// 也会被移除，因此在途的元数据请求无法在录制结束后再安装自己。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) async fn finish_recording_source(&self, source_key: &str) -> bool {
         let background = self
@@ -453,7 +445,7 @@ impl DanmakuManager {
             false
         };
 
-        // The page may have detached while the active flush was in flight.
+        // 在活动 flush 进行期间，页面可能已经分离。
         let background = self
             .inner
             .lock()
@@ -476,9 +468,8 @@ impl DanmakuManager {
         }
     }
 
-    /// Installs the task only when the request is still current. Returns false
-    /// and aborts the task if another room superseded it while its metadata was
-    /// loading.
+    /// 只有请求仍然是最新时才安装任务。若在其元数据加载期间已被另一个房间取代，
+    /// 则返回 false 并中止该任务。
     fn set_tasks_if_current(
         &self,
         generation: u64,
@@ -548,9 +539,9 @@ fn spawn_loop<F, Fut>(
         event_rx,
         batch_control_rx,
     ));
-    // Do not let the task run until its generation is installed. Without this
-    // gate a route switch in the tiny window between `spawn` and manager
-    // registration could still emit a stale room's first event.
+    // 在其 generation 被安装之前不要让任务开始运行。没有这道闸门，
+    // `spawn` 与 manager 注册之间的极短窗口内发生的路由切换，
+    // 仍可能发出过期房间的第一个事件。
     let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let sender = DanmakuEventSender::new(event_tx, identity);
     let error_sender = sender.clone();
@@ -558,8 +549,8 @@ fn spawn_loop<F, Fut>(
         if start_rx.await.is_err() {
             return;
         }
-        // An account-level notice (e.g. "Cookie expired, anonymous mode") is
-        // the first thing a fresh room sees, before any chat from the wire.
+        // 账号级通知（例如"Cookie 已过期，进入匿名模式"）是新房间最先看到的内容，
+        // 早于任何来自网络的聊天消息。
         if let Some(content) = notice {
             emit_event(
                 &sender,
@@ -608,9 +599,8 @@ async fn dispatch_batches(
 ) {
     let mut ticker = time::interval(DANMAKU_BATCH_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    // `interval` ticks immediately by design.  Wait one full period before
-    // the first delivery so several events from the same websocket frame are
-    // coalesced too.
+    // `interval` 按设计会立即触发一次。这里先等满一个周期再首次投递，
+    // 使同一个 websocket 帧中的多个事件也能被合并。
     ticker.tick().await;
 
     let mut batch = Vec::with_capacity(DANMAKU_BATCH_MAX_EVENTS);
@@ -618,9 +608,9 @@ async fn dispatch_batches(
         tokio::select! {
             event = receiver.recv() => match event {
                 Some(event) => {
-                    // Preserve the 20fps upper bound even for an extreme
-                    // burst.  Additional chat is intentionally shed rather
-                    // than creating a giant serialization/DOM workload.
+                    // 即使遇到极端突发也保持 20fps 的上限。
+                    // 多出的聊天会被刻意丢弃，
+                    // 而不是造成巨大的序列化／DOM 负担。
                     if batch.len() < DANMAKU_BATCH_MAX_EVENTS {
                         batch.push(event);
                     }
@@ -655,8 +645,8 @@ fn drain_ready_events(receiver: &mut mpsc::Receiver<DanmakuEvent>, batch: &mut V
     }
 }
 
-// `source_key` only feeds the desktop recording capture path, so mobile builds
-// compile it out instead of dropping the parameter from the shared signature.
+// `source_key` 只服务桌面端录制采集路径，因此移动端构建把它条件编译掉，
+// 而不是从共享签名中删掉这个参数。
 #[cfg_attr(
     not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
     expect(unused_variables)
@@ -669,10 +659,9 @@ fn emit_batch(app: &AppHandle, generation: u64, source_key: &str, batch: &mut Ve
     if let Some(state) = app.try_state::<crate::state::AppState>() {
         state.recording.capture_danmaku(source_key, batch);
     }
-    // The frontend owns retention and rendering policy. The tiny envelope
-    // retains the connection fence while carrying all events for this tick,
-    // so ordinary chat, Super Chat, and floating-layer listeners each process one
-    // native callback instead of one callback per message.
+    // 保留策略与渲染策略由前端负责。这个轻量信封既保留了连接围栏，
+    // 又携带本次 tick 的所有事件，因此普通聊天、Super Chat 和悬浮层监听器
+    // 各自只处理一次原生回调，而不是每条消息一次回调。
     let _ = app.emit(
         "danmaku-batch",
         DanmakuBatch {
@@ -781,8 +770,8 @@ pub async fn connect(
             Ok(())
         }
         SiteId::Douyin => {
-            // Local MSSDK signing is CPU-bound JS eval; keep it off the hot
-            // path relative to room transitions by checking generation after.
+            // 本地 MSSDK 签名是 CPU 密集的 JS 求值；通过在其之后再检查 generation，
+            // 把它从房间切换的关键路径上移开。
             let args = douyin::build_connection(room_id, detail_raw, cookie)?;
             if !manager.accepts_connection_generation(generation) {
                 return Ok(());
@@ -825,16 +814,16 @@ mod tests {
         assert!(!manager.begin_connect(100, "live:bilibili:100".into(), false));
         assert!(manager.is_current(101));
 
-        // A delayed cleanup from the old room must leave the newer room alive.
+        // 来自旧房间的延迟清理必须让更新的房间继续存活。
         assert!(!manager.disconnect_for_generation(100));
         assert!(manager.is_current(101));
 
         assert!(manager.disconnect_for_generation(102));
         assert!(manager.is_current(102));
 
-        // The frontend uses a lower stop fence followed by a higher connect
-        // epoch. If the stop IPC arrives late, it must not tear down the
-        // newer connection that has already claimed the manager.
+        // 前端会先使用较低的 stop 围栏，随后使用更高的 connect epoch。
+        // 如果 stop 的 IPC 到达较晚，它不能拆掉已经占据 manager 的
+        // 更新连接。
         assert!(manager.begin_connect(103, "live:bilibili:103".into(), false));
         assert!(!manager.disconnect_for_generation(102));
         assert!(manager.is_current(103));
@@ -865,8 +854,8 @@ mod tests {
         assert!(!manager.disconnect_background_for_source(source));
         assert!(manager.is_current(102));
 
-        // A replacement connect can arrive before the old page's cleanup IPC.
-        // It must retain the old room atomically when recording still owns it.
+        // 替换性的 connect 可能早于旧页面的清理 IPC 到达。
+        // 当录制仍持有旧房间时，它必须原子地保留旧房间。
         let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
         let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
         let (control, _receiver) = mpsc::unbounded_channel();
@@ -987,14 +976,13 @@ mod tests {
         identity.mark(&mut event);
         assert!(event.is_self);
 
-        // A same-name event with a conflicting authoritative UID is another
-        // viewer, not the local account.
+        // 同名但权威 UID 冲突的事件属于另一位观众，而不是本地账号。
         event.user_id = Some("99".into());
         identity.mark(&mut event);
         assert!(!event.is_self);
 
-        // Some relay payloads omit uid, so the decoded Cookie username is the
-        // deliberate safe fallback in that specific case.
+        // 部分中继负载会省略 uid，因此在那种特定情况下，
+        // 解码出的 Cookie 用户名是刻意保留的安全兜底。
         event.user_id = None;
         identity.mark(&mut event);
         assert!(event.is_self);

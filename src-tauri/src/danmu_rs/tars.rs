@@ -1,9 +1,8 @@
-//! Minimal TARS binary codec (subset used by Huya WS join / push decode).
-//! Ported from simple_live's `tars_dart` package.
+//! 最小化 TARS 二进制编解码器（仅虎牙 WS 加入／推送解码所用的子集）。
 
 #![allow(dead_code)]
 
-/// TARS type tags (enum ordinal).
+/// TARS 类型标签（枚举序号）。
 pub mod ty {
     pub const BYTE: u8 = 0;
     pub const SHORT: u8 = 1;
@@ -44,7 +43,7 @@ fn err(msg: impl Into<String>) -> TarsError {
     TarsError(msg.into())
 }
 
-// ─── Writer ───────────────────────────────────────────────────────────────────
+// ─── 写入器 ───────────────────────────────────────────────────────────────────
 
 #[derive(Default)]
 pub struct TarsWriter {
@@ -122,24 +121,23 @@ impl TarsWriter {
         self.buf.extend_from_slice(data);
     }
 
-    /// Write a nested TARS struct. The struct body owns the same writer so
-    /// callers can use the ordinary scalar helpers for its fields.
+    /// 写入嵌套的 TARS 结构体。结构体 body 共用同一个写入器，
+    /// 因此调用方可以用普通的标量辅助函数写它的字段。
     pub fn write_struct(&mut self, tag: u8, write_body: impl FnOnce(&mut Self)) {
         self.write_head(ty::STRUCT_BEGIN, tag);
         write_body(self);
         self.write_head(ty::STRUCT_END, 0);
     }
 
-    /// Write an empty vector. Huya's send request includes a couple of
-    /// optional vector fields which must still be present in the web client
-    /// packet, even when no one is mentioned or tagged.
+    /// 写入空向量。虎牙的发送请求包含若干可选向量字段，即使没有 @ 任何人
+    /// 或打任何标签，它们在 Web 客户端数据包中也必须存在。
     pub fn write_empty_list(&mut self, tag: u8) {
         self.write_head(ty::LIST, tag);
         self.write_i64(0, 0);
     }
 
-    /// Write `map<string, string>`, used by Huya websocket connection and
-    /// WUP envelopes. The entry key/value tags are prescribed by TARS.
+    /// 写入 `map<string, string>`，用于虎牙的 websocket 连接与 WUP 信封。
+    /// 条目的 key/value 标签由 TARS 规定。
     pub fn write_map_string_string(&mut self, tag: u8, entries: &[(&str, &str)]) {
         self.write_head(ty::MAP, tag);
         self.write_i64(entries.len() as i64, 0);
@@ -149,8 +147,8 @@ impl TarsWriter {
         }
     }
 
-    /// Write `map<string, bytes>`. WUP v3's `newdata` map stores every
-    /// request/response field as one independently serialized byte buffer.
+    /// 写入 `map<string, bytes>`。WUP v3 的 `newdata` map 把每个
+    /// 请求/响应字段都存为一个独立序列化的字节缓冲区。
     pub fn write_map_string_bytes(&mut self, tag: u8, entries: &[(&str, &[u8])]) {
         self.write_head(ty::MAP, tag);
         self.write_i64(entries.len() as i64, 0);
@@ -161,7 +159,7 @@ impl TarsWriter {
     }
 }
 
-// ─── Reader ───────────────────────────────────────────────────────────────────
+// ─── 读取器 ───────────────────────────────────────────────────────────────────
 
 pub struct TarsReader<'a> {
     data: &'a [u8],
@@ -358,12 +356,11 @@ impl<'a> TarsReader<'a> {
         Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
-    /// Read a byte list while borrowing the common TARS simple-list encoding.
+    /// 在借用通用 TARS simple-list 编码的同时读取字节列表。
     ///
-    /// Huya's websocket envelopes contain nested `simple list<byte>` fields.
-    /// Its live decoder only needs to inspect those fields synchronously, so
-    /// this avoids cloning both envelope layers into temporary `Vec`s. Generic
-    /// `list<byte>` remains supported as an owned fallback.
+    /// 虎牙的 websocket 信封包含嵌套的 `simple list<byte>` 字段。它的实时解码器
+    /// 只需同步检查这些字段，因此这样可以避免把两层信封都克隆进临时 `Vec`。
+    /// 通用的 `list<byte>` 仍作为持有所有权的兜底方案受支持。
     pub fn read_bytes_cow(
         &mut self,
         tag: u8,
@@ -453,9 +450,8 @@ impl<'a> TarsReader<'a> {
         Ok(out)
     }
 
-    /// Read a vector length and leave the reader positioned at its first
-    /// element. This is enough for callers that need to skip or validate an
-    /// empty optional vector before continuing with following struct fields.
+    /// 读取向量长度，并让读取器停在其第一个元素处。对于需要在继续读取后续
+    /// 结构体字段之前跳过或校验空可选向量的调用方，这已经足够。
     pub fn read_list_len(&mut self, tag: u8, required: bool) -> Result<usize> {
         if !self.skip_to_tag(tag)? {
             if required {
@@ -493,9 +489,8 @@ impl<'a> TarsReader<'a> {
     }
 }
 
-/// The small portion of a TARS WUP v3 response required by Huya's live-chat
-/// `sendMessage` endpoint. Keeping it here makes the protocol framing easy to
-/// test separately from the websocket transport.
+/// 虎牙直播聊天 `sendMessage` 接口所需的 TARS WUP v3 响应的一小部分。
+/// 把它放在这里，使协议分帧可以独立于 websocket 传输做测试。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WupV3Response {
     pub request_id: i64,
@@ -504,8 +499,8 @@ pub struct WupV3Response {
     pub data: Vec<(String, Vec<u8>)>,
 }
 
-/// Encode a WUP v3 packet. `fields` are already serialized TARS values (for
-/// example a `HUYA.SendMessageReq` struct at key `tReq`).
+/// 编码一个 WUP v3 数据包。`fields` 中已经是序列化好的 TARS 值
+/// （例如 key 为 `tReq` 的 `HUYA.SendMessageReq` 结构体）。
 pub fn encode_wup_v3(
     servant: &str,
     function: &str,
@@ -517,7 +512,7 @@ pub fn encode_wup_v3(
     let field_map = field_map.into_bytes();
 
     let mut envelope = TarsWriter::new();
-    // Tars WUP RequestPacket fields start at tag 1, not zero.
+    // Tars WUP RequestPacket 的字段从 tag 1 开始，而不是 0。
     envelope.write_i64(3, 1); // iVersion = WUP v3
     envelope.write_i64(0, 2); // cPacketType
     envelope.write_i64(0, 3); // iMessageType
@@ -525,8 +520,8 @@ pub fn encode_wup_v3(
     envelope.write_string(servant, 5);
     envelope.write_string(function, 6);
     envelope.write_bytes(&field_map, 7);
-    envelope.write_i64(0, 8); // iTimeout
-    envelope.write_map_string_string(9, &[]); // context
+    envelope.write_i64(0, 8); // 9 一个日志文件的尾部，对应 `commands::diagnostics::LogFileContent`。
+    envelope.write_map_string_string(9, &[]); // 1 "关于"面板的日志查看器。 Windows 发布版没有控制台，`rlive.log` 是用户反馈失败时唯一能引用的记录。 该日志在设计上只记录失败 —— `init_logging` 绝不写 Cookie 值、token 或聊天文本 —— 因此在这里展示它不会暴露凭据。
     envelope.write_map_string_string(10, &[]); // status
     let envelope = envelope.into_bytes();
 
@@ -537,7 +532,7 @@ pub fn encode_wup_v3(
     out
 }
 
-/// Decode a WUP v3 response packet received inside a Huya websocket command.
+/// 解码在虎牙 websocket 命令中收到的 WUP v3 响应包。
 pub fn decode_wup_v3(packet: &[u8]) -> Result<WupV3Response> {
     if packet.len() < 4 {
         return Err(err("wup packet shorter than length prefix"));
@@ -581,7 +576,7 @@ mod tests {
 
     #[test]
     fn write_read_join_shape() {
-        // Mirror Huya getJoinData inner + outer envelope.
+        // 对齐虎牙 getJoinData 的内层与外层信封。
         let mut inner = TarsWriter::new();
         inner.write_i64(1234567890, 0);
         inner.write_bool(true, 1);
@@ -645,7 +640,7 @@ mod tests {
 
     #[test]
     fn heartbeat_base64_decodes() {
-        // simple_live: base64 "ABQdAAwsNgBM"
+        // 心跳负载：base64 "ABQdAAwsNgBM"
         let raw = base64_decode_std("ABQdAAwsNgBM").unwrap();
         assert!(!raw.is_empty());
         assert_eq!(raw[0], 0x00);

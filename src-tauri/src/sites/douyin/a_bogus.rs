@@ -1,22 +1,19 @@
-//! Douyin `a_bogus` query-string signature.
+//! 抖音 `a_bogus` query 签名。
 //!
-//! Douyin's browser-authenticated list APIs (partition rooms, more_live) reject
-//! requests without a valid `a_bogus` parameter, itself derived from the URL
-//! query, the request UA, and a synthetic browser environment string.  The
-//! algorithm mirrors the one used by the Douyin web client, ported to pure
-//! Rust so we do not need a JS runtime on this hot path.
+//! 抖音需要浏览器认证的列表接口（分区房间、more_live）会拒绝缺少有效
+//! `a_bogus` 参数的请求，该参数由 URL query、请求 UA 和一个合成的浏览器环境
+//! 字符串派生。算法与抖音 Web 客户端一致，
+//! 移植为纯 Rust 实现，使这条热路径无需 JS 运行时。
 //!
-//! Notes on fidelity:
+//! 保真度说明：
 //!
-//! * The upstream algorithm operates on strings by their Unicode scalar
-//!   values truncated to a single byte.  We match that behaviour with
-//!   `char as u32 as u8` conversions.
-//! * The `window_env_str` is a fixed screen/window fingerprint; the value
-//!   below matches what Douyin's SDK emits from a 1920x1080 Chrome window.
-//! * `generate_random_str` uses fixed seeds instead of `rand::random()` so
-//!   the output is deterministic per input.  This is intentional and matches
-//!   Douyin's SDK, which seeds from `Math.random()` at page load and then
-//!   caches the value for the session.
+//! * 上游算法按 Unicode 标量值处理字符串并截断到单字节。
+//!   这里用 `char as u32 as u8` 转换来匹配该行为。
+//! * `window_env_str` 是固定的屏幕/窗口指纹；下面的取值
+//!   对应抖音 SDK 在 1920x1080 Chrome 窗口下产出的结果。
+//! * `generate_random_str` 使用固定种子而不是 `rand::random()`，
+//!   使输出对每个输入都是确定性的。这是刻意为之，并与抖音 SDK 一致：
+//!   它在页面加载时以 `Math.random()` 播种，然后在整个会话中缓存该值。
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,8 +40,8 @@ fn rc4_encrypt(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
     out
 }
 
-/// String → byte iterator that truncates each Unicode scalar to one byte, the
-/// same lossy transform Douyin's SDK performs on inputs like the user agent.
+/// 字符串 → 字节迭代器，把每个 Unicode 标量截断为一个字节，
+/// 与抖音 SDK 对用户代理等输入所做的有损变换一致。
 fn scalar_bytes(value: &str) -> Vec<u8> {
     value.chars().map(|c| c as u32 as u8).collect()
 }
@@ -73,8 +70,8 @@ fn sm3_gg(j: usize, x: u32, y: u32, z: u32) -> u32 {
     }
 }
 
-/// Digest of a byte slice using the SM3 hash. Ported from Douyin's SDK; used
-/// only for a_bogus derivation, never for security-sensitive hashing.
+/// 用 SM3 哈希计算字节切片的摘要。从抖音 SDK 移植；
+/// 仅用于 a_bogus 推导，绝不用于安全敏感的哈希场景。
 fn sm3_sum(data: &[u8]) -> [u8; 32] {
     let mut reg: [u32; 8] = [
         1937774191, 1226093241, 388252375, 3666478592, 2842636476, 372324522, 3817729613,
@@ -151,8 +148,8 @@ fn sm3_sum(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Pack every three characters of `long_str` into a 24-bit integer, matching
-/// the SDK's grouping used by `result_encrypt`.
+/// 把 `long_str` 的每三个字符打包成一个 24 位整数，
+/// 对应 SDK 在 `result_encrypt` 中使用的分组方式。
 fn get_long_int(round_num: usize, long_str: &[u32]) -> u32 {
     let i = round_num * 3;
     let b1 = long_str.get(i).copied().unwrap_or(0);
@@ -161,7 +158,7 @@ fn get_long_int(round_num: usize, long_str: &[u32]) -> u32 {
     (b1 << 16) | (b2 << 8) | b3
 }
 
-/// Base64-like encoder using one of the five SDK alphabets keyed by `table`.
+/// 类 Base64 编码器，按 `table` 选择五套 SDK 字母表之一。
 fn result_encrypt(long_str: &[u8], table: &str) -> String {
     const MASKS: [u32; 4] = [0xFC0000, 0x3F000, 0xFC0, 0x3F];
     const SHIFTS: [u32; 4] = [18, 12, 6, 0];
@@ -199,7 +196,7 @@ fn gener_random(random_num: i32, option: [u8; 2]) -> [u8; 4] {
 }
 
 fn generate_random_prefix() -> Vec<u8> {
-    // Fixed seeds match the SDK's cached `Math.random()` reference values.
+    // 固定种子对应 SDK 缓存的 `Math.random()` 参考值。
     let mut bytes = Vec::with_capacity(12);
     bytes.extend_from_slice(&gener_random((0.123_456_789_f64 * 10000.0) as i32, [3, 45]));
     bytes.extend_from_slice(&gener_random((0.987_654_321_f64 * 10000.0) as i32, [1, 0]));
@@ -333,15 +330,14 @@ fn generate_rc4_bb(
     rc4_encrypt(&bb, b"y")
 }
 
-/// Generate the `a_bogus` value for a Douyin web request.
+/// 为抖音 Web 请求生成 `a_bogus` 值。
 ///
-/// * `query` — the request query string with parameters already URL-encoded,
-///   omitting `a_bogus` itself. The order must match the string you plan to
-///   send.
-/// * `user_agent` — the exact UA header value the request will carry.
+/// * `query` —— 已完成 URL 编码、且不含 `a_bogus` 本身的请求 query 字符串。
+///   其顺序必须与实际发送的字符串一致。
+/// * `user_agent` —— 请求将携带的确切 UA 头取值。
 ///
-/// Returns a URL-safe token (may include `/` and `+` — callers must URL-encode
-/// it into the outgoing query string).
+/// 返回 URL 安全的 token（可能包含 `/` 和 `+` ——
+/// 调用方必须把它 URL 编码进发出的 query）。
 pub fn generate_a_bogus(query: &str, user_agent: &str) -> String {
     let mut buffer = generate_random_prefix();
     buffer.extend_from_slice(&generate_rc4_bb(
@@ -360,13 +356,13 @@ mod tests {
 
     #[test]
     fn sm3_matches_reference_vectors() {
-        // "abc" — GB/T 32905-2016 SM3 sample.
+        // "abc" —— GB/T 32905-2016 SM3 样例。
         let digest = sm3_sum(b"abc");
         assert_eq!(
             hex::encode(digest),
             "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0"
         );
-        // Empty input.
+        // 空输入。
         assert_eq!(
             hex::encode(sm3_sum(b"")),
             "1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b"
@@ -375,7 +371,7 @@ mod tests {
 
     #[test]
     fn rc4_matches_reference_vector() {
-        // RFC 6229 §2: key = "Key", plaintext = "Plaintext" → BBF316E8D940AF0AD3.
+        // RFC 6229 §2：key = "Key"，plaintext = "Plaintext" → BBF316E8D940AF0AD3。
         let out = rc4_encrypt(b"Plaintext", b"Key");
         assert_eq!(hex::encode(out), "bbf316e8d940af0ad3");
     }

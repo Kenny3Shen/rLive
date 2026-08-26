@@ -5,38 +5,36 @@ import {
 import type { RecordedDanmakuEntry } from "./recordedDanmaku";
 
 /**
- * Lane assignment for recorded playback.
+ * 录制回放的车道分配。
  *
- * Recorded danmaku is laid out ahead of time instead of per frame: media time
- * can jump in either direction, so a lane may only be chosen from data that is
- * independent of the current position. The occupancy rule mirrors the ASS
- * exporter (`recording_ass.rs`, after DanmakuFactory): a lane accepts the next
- * bullet once the previous one has left a safety gap behind its tail and, at the
- * moment the newcomer's head reaches that gap, has already left the stage.
+ * 录制弹幕提前布局而不是逐帧布局：媒体时间可能双向跳转，
+ * 因此车道只能依据与当前位置无关的数据来决定。占用规则与 ASS 导出器一致
+ * （`recording_ass.rs`，仿照 DanmakuFactory）：当前一条弹幕的尾部留出安全间距、
+ * 并且在新来者头部抵达该间距的时刻已完全离场之后，
+ * 车道才接受下一条弹幕。
  */
 
 export type RecordedDanmakuLayoutOptions = {
   laneCount: number;
   stageWidth: number;
-  /** Horizontal slack outside both stage edges, matching the canvas painter. */
+  /** 舞台两侧边缘之外的横向余量，与 canvas 绘制器一致。 */
   padding: number;
-  /** Minimum horizontal distance kept between neighbours on one lane. */
+  /** 同一车道相邻弹幕之间保持的最小横向距离。 */
   laneGap: number;
   /**
-   * Rendered width of a bullet, stroke expansion included. `entry` and `count`
-   * are passed alongside the aggregated text because a bullet carrying image
-   * emotes is not measurable from its text alone.
+   * 弹幕的渲染宽度，包含描边扩展。`entry` 与 `count`
+   * 随聚合文本一起传入，因为携带图片表情的弹幕
+   * 无法仅凭文本测量。
    */
   measure: (text: string, entry: RecordedDanmakuEntry, count: number) => number;
-  /** Lifetime of a bullet with the given rendered width. */
+  /** 给定渲染宽度弹幕的存续时长。 */
   lifetimeFor: (width: number) => number;
-  /** Reduced motion pins bullets in place, so a lane is exclusive end to end. */
+  /** 减少动态效果时弹幕原地固定不动，车道全程独占。 */
   staticLayout: boolean;
   mergeWindowMs: number;
   /**
-   * Longest span one merge group may cover. Capping it to the visible lifetime
-   * keeps a duplicate from being folded into an anchor that already scrolled
-   * off screen, which would drop it from view entirely.
+   * 单个合并组允许覆盖的最大跨度。把它限制在可见存续期内，
+   * 避免重复消息被折叠进早已滚出屏幕的锚点而完全消失。
    */
   maxGroupSpanMs: number;
 };
@@ -47,26 +45,26 @@ export type RecordedDanmakuPlacement = {
   startMs: number;
   endMs: number;
   lifetimeMs: number;
-  /** Width reserved for the largest count this group can reach. */
+  /** 为该组可能达到的最大计数预留的宽度。 */
   width: number;
   baseText: string;
-  /** Offsets of every message folded into this bullet, ascending. */
+  /** 折叠进该弹幕的所有消息偏移量，升序。 */
   memberOffsets: number[];
 };
 
 export type RecordedDanmakuLayout = {
-  /** Ascending by `startMs`; entries no lane could hold are absent. */
+  /** 按 `startMs` 升序；任何车道都无法容纳的条目不出现。 */
   placements: RecordedDanmakuPlacement[];
-  /** Longest lifetime in the layout, used as the visibility lookback. */
+  /** 布局中最长的存续时长，用作可见性回看窗口。 */
   maxLifetimeMs: number;
 };
 
 export type RecordedDanmakuBullet = {
   placement: RecordedDanmakuPlacement;
   text: string;
-  /** Messages folded into this bullet that already happened, at least 1. */
+  /** 已折叠进该弹幕且已经发生的消息数，至少为 1。 */
   count: number;
-  /** Fraction of the lifetime already elapsed, 0 ..= 1. */
+  /** 已过去的存续时长比例，0 ..= 1。 */
   progress: number;
   ageMs: number;
 };
@@ -79,15 +77,15 @@ type MergeGroup = {
 };
 
 type Lane = {
-  /** Earliest start that keeps a safety gap behind the previous tail. */
+  /** 能在前一条尾部之后保留安全间距的最早开始时间。 */
   freeFrom: number;
-  /** When the previous bullet fully left the stage. */
+  /** 前一条弹幕完全离开舞台的时刻。 */
   leftAt: number;
 };
 
 /**
- * Fold duplicate chat into anchors without deciding any count: the anchor keeps
- * every member offset so the painter can count only what already happened.
+ * 把重复聊天折叠进锚点但不预先决定任何计数：锚点保留每个成员的偏移量，
+ * 由绘制器只统计已经发生的部分。
  */
 function groupDuplicates(
   entries: readonly RecordedDanmakuEntry[],
@@ -125,16 +123,14 @@ function groupDuplicates(
 }
 
 /**
- * Longest shift the `delay` fallback may apply. Recorded playback is offline, so
- * a bounded shift is preferable to overlapping text, but a bullet that drifts
- * further than this no longer belongs to what is on screen.
+ * `delay` 兜底允许的最大平移。录制回放是离线的，有界的平移优于文字重叠，
+ * 但漂移超过此距离的弹幕已不属于屏幕上的内容。
  */
 export const RECORDED_DANMAKU_MAX_DELAY_MS = 5_000;
 
 /**
- * Assign lanes for the whole recording once. Bullets no lane can hold within the
- * delay budget are dropped, which is what keeps dense traffic readable instead of
- * stacking text on top of itself.
+ * 为整场录制一次性分配车道。在延迟预算内没有任何车道能容纳的弹幕会被丢弃，
+ * 这正是让密集流量保持可读、而不是文字叠文字的原因。
  */
 export function layoutRecordedDanmaku(
   entries: readonly RecordedDanmakuEntry[],
@@ -153,8 +149,8 @@ export function layoutRecordedDanmaku(
 
   const groups = groupDuplicates(entries, options.mergeWindowMs, options.maxGroupSpanMs);
   for (const group of groups) {
-    // Reserve room for the largest count this group can reach so a growing
-    // counter never widens a bullet past the gap its lane was granted.
+    // 为该组可能达到的最大计数预留空间，
+    // 使增长的计数永远不会把弹幕撑出其车道获批的间隙。
     const maxCount = group.memberOffsets.length;
     const width = Math.max(
       1,
@@ -179,8 +175,7 @@ export function layoutRecordedDanmaku(
       }
     }
     if (lane < 0) {
-      // Every lane is busy: take the one that frees up first, as long as the
-      // shift stays inside the budget.
+      // 所有车道都忙：只要平移保持在预算内，选择最早空出的那条。
       let bestStart = Number.POSITIVE_INFINITY;
       for (let index = 0; index < lanes.length; index += 1) {
         const candidate = earliest(lanes[index]!);
@@ -207,8 +202,8 @@ export function layoutRecordedDanmaku(
     if (lifetimeMs > maxLifetimeMs) maxLifetimeMs = lifetimeMs;
   }
 
-  // The delay fallback shifts starts, so restore ascending order for the
-  // windowed lookup below. Equal starts keep their lane order, top to bottom.
+  // 延迟兜底会平移开始时间，因此重新排成升序供下方按窗口查找。
+  // 相同开始时间的保持车道顺序，自上而下。
   placements.sort((left, right) => left.startMs - right.startMs || left.lane - right.lane);
   return { placements, maxLifetimeMs };
 }
@@ -228,8 +223,8 @@ function firstPlacementStartingAtOrAfter(
 }
 
 /**
- * Bullets alive at `currentMs`. Repeat counts include only the messages that
- * already happened, so seeking backwards never reveals a future count.
+ * 在 `currentMs` 时仍存活的弹幕。重复计数只包含已经发生的消息，
+ * 因此向后 seek 绝不会泄露未来的计数。
  */
 export function visibleRecordedDanmaku(
   layout: RecordedDanmakuLayout,

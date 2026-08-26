@@ -4,7 +4,7 @@ function roomKey(room: LiveRoomItem) {
   return `${room.site_id}:${room.room_id}`;
 }
 
-/** Keep a changing recommendation feed from rendering a room more than once. */
+/** 防止不断变化的推荐信息流把同一个房间渲染多次。 */
 export function mergeRoomPages(pages: readonly RoomListPage[] | undefined): LiveRoomItem[] {
   if (!pages) return [];
 
@@ -22,9 +22,8 @@ export function mergeRoomPages(pages: readonly RoomListPage[] | undefined): Live
 }
 
 /**
- * Stop pagination if an upstream recommendation page contains no new rooms.
- * Some feeds report `has_more` from a non-empty response rather than a stable
- * cursor, so this prevents automatic scrolling from repeatedly fetching it.
+ * 当上游推荐页没有包含任何新房间时停止翻页。部分信息流以非空响应而非稳定游标
+ * 来报告 `has_more`，这样可以防止自动滚动反复抓取同一页。
  */
 export function nextRecommendPage(
   lastPage: RoomListPage,

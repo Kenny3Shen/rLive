@@ -77,8 +77,8 @@ export function SearchPage() {
     retry: false,
   });
 
-  // A direct lookup is both faster and more reliable for a room number. If a
-  // platform resolves aliases differently, fall back to its normal search API.
+  // 对房间号而言直接查询既更快也更可靠。若某平台对别名的解析方式不同，
+  // 再回退到其常规搜索接口。
   const useTextSearch = keyword.length > 0 && (scope !== "room" || roomLookup.isError);
   const textQuery = useInfiniteQuery({
     queryKey: ["search", siteId, keyword, scope],

@@ -42,7 +42,7 @@ function termScore(name: string, groups: readonly string[], term: string): numbe
   return null;
 }
 
-/** Build category choices once, ordered by the groups viewers are most likely to use. */
+/** 分类选项只构建一次，按观众最常使用的分组排序。 */
 export function getIptvGroupOptions(channels: readonly IptvChannel[]): IptvGroupOption[] {
   const counts = new Map<string, IptvGroupOption>();
   for (const channel of channels) {
@@ -64,9 +64,8 @@ export function getIptvGroupOptions(channels: readonly IptvChannel[]): IptvGroup
 }
 
 /**
- * Match every whitespace-separated keyword against a channel name or group.
- * Exact and prefix matches sort ahead of loose substring matches while blank
- * searches retain the upstream playlist's curated order.
+ * 把每个以空白分隔的关键字与频道名或分组匹配。精确与前缀匹配排在宽松子串
+ * 匹配之前；空搜索保留上游播放列表精心编排的顺序。
  */
 export function filterIptvChannels(
   channels: readonly IptvChannel[],

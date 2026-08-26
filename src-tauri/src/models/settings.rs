@@ -1,44 +1,42 @@
 use serde::{Deserialize, Serialize};
 
-/// Appearance, layout, and filtering used when a recorded danmaku sidecar is
-/// converted to an ASS subtitle.
+/// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RecordingAssSettings {
     pub resolution_width: u32,
     pub resolution_height: u32,
-    /// Installed font family or PostScript name written into the ASS style.
+    /// 写入 ASS 样式的已安装字体族名或 PostScript 名称。
     pub font_name: String,
     pub font_size: u32,
-    /// Text opacity as a whole percentage, 0 ..= 100.
+    /// 文本整体不透明度，百分比 0 ..= 100。
     pub opacity_percent: u32,
     pub outline: f32,
     pub shadow: f32,
     pub bold: bool,
-    /// Time taken by one scrolling item to cross the canvas.
+    /// 单条滚动弹幕横穿画布所需的时间。
     pub scroll_duration_seconds: u32,
-    /// Portion of the canvas height used by scrolling items, as a percentage.
+    /// 滚动弹幕占画布高度的比例，以百分比计。
     pub display_area_percent: u32,
-    /// Lane exhaustion strategy: `overlap` | `drop` | `delay`.
+    /// 车道耗尽策略：`overlap` | `drop` | `delay`。
     ///
-    /// Backfilled for records written before the option existed, because the
-    /// remaining fields stay required and must not be masked by defaults.
+    /// 为该选项出现之前的记录回填的默认值，因为其余字段仍为必填，
+    /// 不能被默认值遮蔽。
     #[serde(default = "default_recording_ass_overflow_policy")]
     pub overflow_policy: String,
-    /// Upper bound of the time shift applied by the `delay` policy, in seconds.
+    /// `delay` 策略应用的时间偏移上限，单位为秒。
     #[serde(default = "default_recording_ass_max_delay_seconds")]
     pub max_delay_seconds: u32,
-    /// Fixed window used to merge duplicate chat messages; zero disables it.
+    /// 合并重复聊天消息的固定窗口；为零时禁用。
     pub merge_window_seconds: u32,
     pub filter_gifts: bool,
     pub show_super_chat: bool,
-    /// One literal substring or regular expression per item.
+    /// 每项一个字面子串或正则表达式。
     pub shield_rules: Vec<String>,
     pub shield_regex: bool,
 }
 
-/// Recorded playback is offline, so a bounded time shift is preferable to
-/// either overlapping bullets or discarded chat.
+/// 录制回放是离线的，因此有界的时间偏移优于弹幕重叠或丢弃聊天内容。
 fn default_recording_ass_overflow_policy() -> String {
     "delay".into()
 }
@@ -78,92 +76,90 @@ impl Default for RecordingAssSettings {
     }
 }
 
-/// Persisted application preferences (JSON in `settings_kv` key `app_settings`).
+/// 持久化的应用偏好设置（`settings_kv` 中 key 为 `app_settings` 的 JSON）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AppSettings {
-    /// `system` | `light` | `dark`
+    /// 9
+    /// 被拒绝的原生请求仍可能通过下方 execCommand 成功。
     pub theme: String,
     pub default_site: String,
-    /// Platform ids hidden from discovery and room navigation.
+    /// 从发现页与房间导航中隐藏的平台 id。
     pub disabled_site_ids: Vec<String>,
-    /// e.g. `http://127.0.0.1:7890`
+    /// 例如 `http://127.0.0.1:7890`
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
     pub danmaku_opacity: f32,
-    /// Player danmaku text outline width in CSS pixels, 0.0 ..= 1.5.
+    /// 播放器弹幕描边宽度，CSS 像素，0.0 ..= 1.5。
     pub danmaku_font_stroke: f32,
     pub danmaku_font_size: u32,
-    /// Scrolling danmaku speed in CSS pixels per second, 50 ..= 200.
+    /// 滚动弹幕速度，CSS 像素每秒，50 ..= 200。
     pub danmaku_speed: u32,
-    /// Portion of the video height used by scrolling danmaku, 0.1 ..= 1.0.
+    /// 滚动弹幕占视频高度的比例，0.1 ..= 1.0。
     pub danmaku_area: f32,
-    /// Sliding window used to merge duplicate chat messages, in seconds.
-    /// Zero disables merging; normalized to 0 ..= 30 at the settings
-    /// persistence boundary.
+    /// 合并重复聊天消息的滑动窗口，单位为秒。
+    /// 为零时禁用合并；
+    /// 在设置持久化边界处归一化到 0 ..= 30。
     pub danmaku_merge_window_seconds: u32,
-    /// Whether gift-related messages should be hidden from the danmaku stream.
+    /// 是否在弹幕流中隐藏与礼物相关的消息。
     pub danmaku_filter_gifts: bool,
-    /// Whether Super Chat cards are enabled for the current site.
+    /// 当前站点是否启用 Super Chat 卡片。
     pub super_chat_enabled: bool,
     pub danmaku_shield_words: Vec<String>,
-    /// Preferred starting clarity: `high` | `mid` | `low` (Simple Live).
+    /// 偏好的起始清晰度：`high` | `mid` | `low`。
     pub quality_level: String,
-    /// Same-protocol `switchURL` path. The frontend retains its hard-reload
-    /// fallback for incompatible protocols and failed switches.
+    /// 同协议的 `switchURL` 切换路径。前端对不兼容协议和切换失败
+    /// 仍保留硬刷新兜底。
     pub playback_soft_switch_enabled: bool,
-    /// Device-local permission for the user-operated single-message senders.
-    /// It remains disabled until the user explicitly enables it in Settings and
-    /// is not profile-imported. A Cookie and each platform's own validation
-    /// are still required after this global consent is enabled.
+    /// 用户手动发送单条消息功能的本机权限开关。在用户于设置中显式启用之前
+    /// 保持关闭，且不随配置导入。启用这项全局同意后，
+    /// 发送仍需要 Cookie 以及各平台自身的校验。
     pub danmaku_send_enabled: bool,
-    /// Device-local consent for the optional on-device ASR model. It remains
-    /// disabled by default so first launch never downloads model data.
+    /// 可选端侧 ASR 模型的本机同意开关。默认关闭，
+    /// 保证首次启动绝不下载模型数据。
     pub asr_enabled: bool,
-    /// Device-local ASR execution provider: `auto`, `cpu`, or `cuda`.
+    /// 本机 ASR 执行后端：`auto`、`cpu` 或 `cuda`。
     pub asr_provider: String,
-    /// Enable Zipformer's silence-based endpoint/VAD rules. Defaults to true;
-    /// disabling it keeps only the maximum utterance length boundary.
+    /// 启用 Zipformer 基于静音的端点/VAD 规则。默认开启；
+    /// 关闭后仅保留最大语句长度边界。
     pub asr_vad_enabled: bool,
-    /// Enable the optional CT-Transformer punctuation model. Defaults to true.
+    /// 启用可选的 CT-Transformer 标点模型。默认开启。
     pub asr_punctuation_enabled: bool,
-    /// Optional endpoint-level speaker differentiation. This setting is
-    /// device-local because enabling it downloads and loads an additional
-    /// speaker embedding model.
+    /// 可选的端点级说话人区分。该设置仅存于本机，
+    /// 因为启用它会下载并加载额外的说话人嵌入模型。
     pub asr_speaker_diarization_enabled: bool,
     /// Device-local domain phrases (主播名、游戏名等), one phrase per item.
     pub asr_hotwords: Vec<String>,
-    /// Device-local streaming PCM chunk interval in seconds, clamped to
-    /// 0.2..=1.0 with one decimal place.
+    /// 本机流式 PCM 分片间隔，单位为秒，钳制到 0.2..=1.0 并保留一位小数。
     pub asr_window_seconds: f32,
-    /// Player subtitle font size in CSS pixels.
+    /// 播放器字幕字号，CSS 像素。
     pub asr_font_size: u32,
-    /// Device-local consent for sending committed ASR captions to Google
-    /// Translate. Disabled by default because subtitle text leaves the device.
+    /// 把已定稿的 ASR 字幕发送到 Google 翻译的本机同意开关。
+    /// 字幕文本会离开设备，因此默认关闭。
     pub asr_translation_enabled: bool,
-    /// Google Translate source language, or `auto` for language detection.
+    /// Google 翻译源语言，`auto` 表示自动检测。
     pub asr_translation_from: String,
-    /// Google Translate target language, or `auto` for automatic selection.
+    /// Google 翻译目标语言，`auto` 表示自动选择。
     pub asr_translation_to: String,
-    /// Optional custom IPTV M3U address for this device.
+    /// 本设备的自定义 IPTV M3U 地址（可选）。
     ///
-    /// A playlist URL can identify a private source or include an access token,
-    /// so it is intentionally excluded from profile export and import.
+    /// 播放列表 URL 可能标识私有来源或包含访问 token，
+    /// 因此刻意排除在配置导出/导入之外。
     pub iptv_custom_m3u_url: Option<String>,
-    /// Accepted only to read settings written before background recording became
-    /// unconditional. Recordings now always continue after their page is left.
+    /// 仅为读取后台录制成为无条件行为之前写入的设置而保留。
+    /// 现在录制在其页面被离开后总是继续。
     #[serde(default, rename = "recording_continue_after_leave", skip_serializing)]
     pub legacy_recording_continue_after_leave: bool,
-    /// Include the synchronized danmaku sidecar by default for live recordings.
+    /// 直播录制默认包含同步的弹幕伴生文件。
     pub recording_include_danmaku: bool,
-    /// Maximum duration of one FFmpeg recording bundle in minutes.
-    /// Zero keeps one bundle until the task stops.
+    /// 单个 FFmpeg 录制分卷的最大时长，单位为分钟。
+    /// 为零表示任务停止前一直使用同一个分卷。
     pub recording_auto_split_minutes: u32,
-    /// FFmpeg/libavformat blocking read timeout in seconds.
+    /// FFmpeg/libavformat 阻塞读取超时，单位为秒。
     pub ffmpeg_rw_timeout_seconds: u32,
-    /// Maximum delay between FFmpeg network reconnect attempts in seconds.
+    /// FFmpeg 网络重连尝试之间的最大延迟，单位为秒。
     pub ffmpeg_reconnect_delay_max_seconds: u32,
-    /// Number of retries for a failed HLS media segment.
+    /// 失败的 HLS 媒体分片的重试次数。
     pub ffmpeg_hls_segment_retry_count: u32,
     pub recording_ass: RecordingAssSettings,
 }

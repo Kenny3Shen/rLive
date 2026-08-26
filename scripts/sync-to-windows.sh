@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync the WSL workspace to the configured Windows mirror.
+# 把 WSL 工作区同步到配置好的 Windows 镜像目录。
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,8 +15,8 @@ echo "== sync =="
 echo "  from: $SRC"
 echo "  to:   $DEST_MNT  ($DEST_WIN)"
 
-# Exclude build caches and VCS noise; keep source + configs. Android's Gradle
-# intermediates can contain multi-gigabyte APKs and are regenerated locally.
+# 排除构建缓存和版本控制噪音，只保留源码与配置。Android 的 Gradle
+# 中间产物可能包含数 GB 的 APK，且可在本地重新生成。
 rsync -a --delete \
   --exclude '.git/' \
   --exclude 'node_modules/' \

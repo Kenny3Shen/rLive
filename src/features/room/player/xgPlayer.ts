@@ -29,8 +29,8 @@ export type XgPlayerModules = {
 export type XgHlsCore = {
   startLoad: (startPosition?: number) => void;
   /**
-   * Wall clock of the frame at `media.currentTime`, taken from the playlist's
-   * `EXT-X-PROGRAM-DATE-TIME`. Null when the playlist carries no program clock.
+   * 位于 `media.currentTime` 处那一帧的挂钟时间，取自播放列表的
+   * `EXT-X-PROGRAM-DATE-TIME`。清单不带节目时钟时为 null。
    */
   programDateMs: () => number | null;
 };
@@ -39,7 +39,7 @@ export type XgMpegtsCore = {
   on: (event: string, handler: (...args: unknown[]) => void) => void;
   off?: (event: string, handler: (...args: unknown[]) => void) => void;
   currentTime?: number;
-  /** Uses mpegts.js' seek path directly when its protocol core is attached. */
+  /** 协议内核挂载时直接使用 mpegts.js 的 seek 路径。 */
   seek?: (seconds: number) => boolean;
 };
 
@@ -52,7 +52,7 @@ function loadCoreModule(): Promise<typeof import("xgplayer")> {
   return coreModulePromise;
 }
 
-/** Lazy-load only the protocol plugin required by the selected live source. */
+/** 按所选直播源惰性加载所需的唯一协议插件。 */
 export async function loadXgPlayerModules(kind: XgPlaybackKind): Promise<XgPlayerModules> {
   const corePromise = loadCoreModule();
   if (kind === "hls") {
@@ -133,9 +133,8 @@ export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {
   } | null;
   if (!plugin) return null;
 
-  // The plugin destroys and replaces its mpegts.js instance on every URL
-  // change. Keep subscriptions attached to that current instance even when
-  // the first core was already present when this helper was called.
+  // 插件在每次 URL 变化时销毁并重建其 mpegts.js 实例。即使调用本助手时第一个
+  // 内核已经存在，也要把订阅挂在当前实例上。
   return {
     seek: (seconds) => {
       const core = plugin.mpegts ?? null;
@@ -161,9 +160,8 @@ export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {
 }
 
 export function xgPlaybackSwitchOptions(kind: XgPlaybackKind): { seamless: boolean } {
-  // xgplayer-mpegts.js recreates its own transmuxer/MSE state on URL_CHANGE.
-  // Keep the outer player and media element, but do not request timestamp-
-  // seamless behavior across independent FLV CDNs.
+  // xgplayer-mpegts.js 在 URL_CHANGE 时重建自己的 transmuxer/MSE 状态。保留外层
+  // 播放器与媒体元素，但不要求跨相互独立的 FLV CDN 保持时间戳无缝。
   return { seamless: kind !== "flv" };
 }
 
@@ -200,9 +198,8 @@ export function getXgHlsCore(player: XgPlayerInstance): XgHlsCore | null {
   } | null;
   if (!plugin) return null;
 
-  // xgplayer starts protocol plugins from Player.start(), and the plugin
-  // replaces its hls.js instance on a URL change. Always read through the
-  // plugin so recovery calls and clock reads stay valid across both.
+  // xgplayer 从 Player.start() 启动协议插件，且插件在 URL 变化时替换 hls.js 实例。
+  // 始终经由插件读取，使恢复调用与时钟读取对两者都保持有效。
   return {
     startLoad: (startPosition?: number) => {
       plugin.hls?.startLoad(startPosition);
@@ -229,12 +226,10 @@ export function xgPlayerErrorMessage(error: unknown, fallback = "播放失败"):
 }
 
 /**
- * Chromium reports HLS/MSE decoder failures through several layers: the
- * native media error uses code 3, while an xgplayer protocol plugin may
- * surface code 5103 or
- * only preserve the browser's pipeline message. Keep the check structural so
- * Twitch can lower an incompatible rendition without treating a network
- * failure as a codec problem.
+ * Chromium 经多层上报 HLS/MSE 解码失败：原生媒体错误用 code 3，而 xgplayer 协议
+ * 插件可能给出 code 5103 或只保留浏览器的 pipeline message。检查保持结构化，
+ * 使 Twitch 能降级不兼容的渲染档，
+ * 而不把网络失败当成编解码问题。
  */
 export function isXgPlayerDecodeError(error: unknown): boolean {
   if (typeof error === "string") {

@@ -96,7 +96,7 @@ const LAYOUT_PADDING = 20;
 const LAYOUT_FONT_SIZE = 24;
 const LAYOUT_SPEED_PX_PER_S = 160;
 
-/** Stand-in for canvas metrics: a fixed advance per code point. */
+/** canvas 度量的替身：每个码点固定步进。 */
 function measureText(text: string): number {
   return [...text].length * LAYOUT_FONT_SIZE;
 }
@@ -333,7 +333,7 @@ describe("recording presentation helpers", () => {
 
     expect(withRecordingView(params, "all").toString()).toBe("platform=twitch");
     expect(withRecordingView(params, "recording").get(RECORDING_VIEW_PARAM)).toBe("recording");
-    // The source params are never mutated in place.
+    // 来源参数绝不原地修改。
     expect(params.has(RECORDING_VIEW_PARAM)).toBe(false);
   });
 
@@ -471,8 +471,7 @@ describe("recording presentation helpers", () => {
     const layout = layoutRecordedDanmaku(entries, layoutOptions({ mergeWindowMs: 10_000 }));
 
     expect(layout.placements).toHaveLength(1);
-    // One lane holds the whole group, and the reserved width already covers the
-    // widest text it will ever paint.
+    // 一条车道容纳整组，预留宽度已经覆盖它将来绘制出的最宽文本。
     expect(layout.placements[0]?.memberOffsets).toEqual([1000, 2000, 4000]);
     expect(layout.placements[0]?.width).toBe(measureText("加油 ×3"));
 
@@ -488,8 +487,8 @@ describe("recording presentation helpers", () => {
 
 describe("recorded danmaku lane layout", () => {
   test("dense traffic never overlaps on a lane", () => {
-    // 120 messages 150 ms apart against four lanes: far more traffic than the
-    // stage can carry, which is exactly the case that used to stack text.
+    // 120 条相隔 150ms 的消息对四条车道：远超舞台承载量，
+    // 这正是过去文字叠文字的场景。
     const entries = chatEntries(120, 150, (index) => `密集弹幕内容${index}`);
     const layout = layoutRecordedDanmaku(entries, layoutOptions());
 
@@ -500,7 +499,7 @@ describe("recorded danmaku lane layout", () => {
       const perLane = new Map<number, { left: number; right: number }[]>();
       for (const bullet of visibleRecordedDanmaku(layout, currentMs)) {
         const { placement } = bullet;
-        // Same geometry the canvas painter uses.
+        // 与 canvas 绘制器相同的几何参数。
         const left =
           LAYOUT_STAGE_WIDTH +
           LAYOUT_PADDING -
@@ -515,8 +514,7 @@ describe("recorded danmaku lane layout", () => {
         for (let index = 1; index < boxes.length; index += 1) {
           const previous = boxes[index - 1]!;
           const current = boxes[index]!;
-          // Rounding in the progress term can cost a fraction of a pixel; a
-          // visible overlap is orders of magnitude larger than that.
+          // 进度项中的舍入可能损失不到一像素；可见的重叠比那大几个数量级。
           expect(current.left - previous.right).toBeGreaterThan(-0.5);
         }
       }
@@ -528,7 +526,7 @@ describe("recorded danmaku lane layout", () => {
     const layout = layoutRecordedDanmaku(entries, layoutOptions());
 
     expect(layout.placements).toHaveLength(entries.length);
-    // Nothing had to be delayed, so each bullet still starts at its own offset.
+    // 没有任何内容需要延迟，每颗弹幕仍按各自的偏移开始。
     expect(layout.placements.map((placement) => placement.startMs)).toEqual(
       entries.map((entry) => entry.offsetMs),
     );
@@ -575,8 +573,7 @@ describe("recorded danmaku lane layout", () => {
       layoutOptions({ mergeWindowMs: 10_000, maxGroupSpanMs: 5_000 }),
     );
 
-    // The anchor may only absorb duplicates that arrive while it is still on
-    // screen; later ones become their own bullets instead of vanishing.
+    // 锚点只能吸收它仍在屏幕上期间到达的重复项；更晚的成为独立弹幕而不是消失。
     expect(layout.placements.length).toBeGreaterThan(1);
     expect(
       layout.placements.flatMap((placement) => placement.memberOffsets).sort((a, b) => a - b),
@@ -790,8 +787,8 @@ describe("recording playback route", () => {
   const id = "bilibili_100/主播_20260820-192158";
 
   test("spends one path segment on each bundle level", () => {
-    // Encoding the id as a single segment would emit %2F, which react-router
-    // hands back only half-decoded, so the id would match no library item.
+    // 把 id 编码成单段会产出 %2F，react-router 只交还半解码的参数，
+    // id 将匹配不到任何库条目。
     const path = recordingPlaybackPath(id);
     expect(path).toBe("/recordings/play/bilibili_100/%E4%B8%BB%E6%92%AD_20260820-192158");
     expect(path).not.toContain("%2F");
@@ -824,8 +821,7 @@ describe("dedicated recording play url", () => {
   }
 
   test("keeps the watched line by identity, not by position", () => {
-    // A re-fetch may reorder CDNs. Selecting by index would hand the recording a
-    // different line than the one on screen.
+    // 重新抓取可能重排 CDN。按下标选择会让录制拿到与屏幕上不同的线路。
     const refetched = [
       line("cdn-b", "https://b.example/2.flv"),
       line("cdn-a", "https://a.example/2.flv"),
@@ -844,8 +840,8 @@ describe("dedicated recording play url", () => {
   });
 
   test("a re-signed url differs from the one the player holds", () => {
-    // The point of the re-fetch: the recording must not share the player's
-    // address, or a per-request signature is consumed by two connections.
+    // 这正是重新抓取的意义：录制不得共用播放器的地址，
+    // 否则按请求签名会被两条连接消耗。
     const played = line("cdn-a", "https://a.example/live.flv?sign=first&tt=1");
     const resigned = line("cdn-a", "https://a.example/live.flv?sign=second&tt=2");
     const picked = pickRecordingLine([resigned], played.source_id);

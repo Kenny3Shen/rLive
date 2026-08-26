@@ -1,9 +1,8 @@
-//! Localhost HTTP proxy that injects CDN headers for WebView media playback.
+//! 本机 HTTP 代理，为 WebView 媒体播放注入 CDN 所需请求头。
 //!
-//! Browser `<video>` / MSE cannot attach Bilibili `Referer` / `User-Agent` to
-//! media requests. This proxy binds `127.0.0.1:0`, forwards the live URL with
-//! the required headers, and returns a same-origin-friendly stream URL for
-//! xgplayer protocol plugins — no mpv HWND.
+//! 浏览器 `<video>` / MSE 无法为媒体请求附加 Bilibili 的 `Referer` /
+//! `User-Agent`。该代理绑定 `127.0.0.1:0`，携带所需请求头转发直播地址，
+//! 并为 xgplayer 协议插件返回一个同源友好的流地址 —— 无需 mpv HWND。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,22 +24,20 @@ use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_SOURCES: usize = 12;
 const MAX_PROBE_SAMPLE_BYTES: usize = 64 * 1024;
-// FFmpeg gives each localhost read 10 seconds. Leave enough time to deliver a
-// gap playlist before the demuxer treats the local proxy as unresponsive.
+// FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
+// 留出足够时间交付一份 gap 播放列表。
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
-/// Longest a recording waits for its Twitch manifest proxy to produce a
-/// playlist that carries real segments. The slow case is a commercial break
-/// plus a sweep over the fallback player profiles; past this point the
-/// recording reports why it cannot start instead of handing libavformat a
-/// placeholder-only playlist it can never open.
+/// 录制等待 Twitch 清单代理产出带真实分片的播放列表的最长时间。
+/// 最慢的情况是广告插播叠加对兜底播放 profile 的完整轮询；
+/// 超过此时限后，录制会报告无法启动的原因，
+/// 而不是把一份只有占位符、永远打不开的播放列表交给 libavformat。
 ///
-/// Recording is desktop-only, so this and the warm-up path below follow the
-/// same gate as the `recording` module rather than becoming dead code on
-/// Android.
+/// 录制仅限桌面端，因此这里与下方的预热路径都遵循与 `recording` 模块相同的
+/// 闸门，避免在 Android 上成为死代码。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub const TWITCH_RECORDING_WARMUP_BUDGET: Duration = Duration::from_secs(20);
-/// Twitch media playlists advertise ~2 second segments, so re-polling faster
-/// than this cannot surface media that is not there yet.
+/// Twitch 的媒体清单声明约 2 秒一个分片，
+/// 比这更快地重复轮询不会带来尚不存在的媒体。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const TWITCH_RECORDING_WARMUP_INTERVAL: Duration = Duration::from_millis(1_000);
 
@@ -56,9 +53,8 @@ pub struct StreamProxyProbe {
     pub error_code: Option<String>,
 }
 
-/// Probe playback candidates through the same configured upstream proxy used
-/// by the real relay. Results are returned in input order and contain no URL,
-/// Cookie, Referer, redirect target, or transport error text.
+/// 经由真实中继所用的同一上游代理探测播放候选。结果按输入顺序返回，
+/// 且不包含 URL、Cookie、Referer、重定向目标或传输错误文本。
 pub async fn probe_sources(
     sources: Vec<PlayUrl>,
     proxy: Option<&str>,
@@ -162,22 +158,21 @@ fn validate_probe_sample(
     }
 }
 
-/// Active proxy endpoints keyed by frontend playback session.
+/// 按前端播放会话索引的活动代理端点。
 ///
-/// Each player owns an independent loopback listener. Replacing a quality or
-/// line only swaps the listener for that player's `session_id`; other players
-/// keep streaming without sharing lifecycle state.
+/// 每个播放器拥有独立的回环监听器。更换画质或线路只替换该播放器
+/// `session_id` 对应的监听器；
+/// 其他播放器继续推流，不共享生命周期状态。
 pub struct StreamProxy {
     state: Mutex<ProxyState>,
 }
 
-/// All lifecycle mutations share one short, synchronous critical section.
+/// 所有生命周期变更共用一段简短的同步临界区。
 ///
-/// Binding a TCP listener is asynchronous, so an active proxy alone is not
-/// enough to describe the lifecycle: while a new listener is being created we
-/// also need to remember which playback session is allowed to install it.
-/// Otherwise two overlapping `start` commands can each bind a listener and
-/// the later assignment can orphan the former task.
+/// 绑定 TCP 监听器是异步的，因此仅有活动代理不足以描述生命周期：
+/// 在创建新监听器的过程中，还需要记住允许哪个播放会话安装它。
+/// 否则两个重叠的 `start` 命令可能各自绑定监听器，
+/// 而后到的赋值会让先前的任务变成孤儿。
 #[derive(Default)]
 struct ProxyState {
     active: HashMap<String, ProxyInner>,
@@ -199,14 +194,13 @@ struct ProxyTelemetryCounters {
     bytes_forwarded: AtomicU64,
     first_response_ms: AtomicU64,
     latest_response_ms: AtomicU64,
-    /// Wall-clock epoch of the first forwarded media byte of this session.
+    /// 本会话第一个被转发的媒体字节的挂钟纪元。
     ///
-    /// Multi-view clock alignment needs an absolute anchor for streams whose
-    /// container carries no wall clock (FLV/MPEG-TS timestamps start near
-    /// zero). Pairing this epoch with the media timeline position the player
-    /// observed at start turns `currentTime` into an estimated capture time.
-    /// The CDN's own edge burst is included in the estimate, so it is only
-    /// comparable between feeds, never an exact capture instant.
+    /// 多视图时钟对齐需要绝对锚点，用于容器本身不带挂钟的流
+    /// （FLV/MPEG-TS 时间戳从接近零开始）。把这个纪元与播放器启动时观察到的
+    /// 媒体时间轴位置配对，即可把 `currentTime` 转换为估计的采集时刻。
+    /// CDN 自身的边缘突发也包含在估计里，
+    /// 因此它只在多条流之间可比，绝不是精确的采集瞬间。
     first_media_at_ms: AtomicU64,
 }
 
@@ -223,7 +217,7 @@ impl ProxyTelemetryCounters {
         }
     }
 
-    /// Latch the epoch of the first media byte; later chunks keep the first one.
+    /// 锁存第一个媒体字节的纪元；后续分片沿用第一个的取值。
     fn record_media_start(&self) {
         let _ = self.first_media_at_ms.compare_exchange(
             0,
@@ -283,9 +277,9 @@ fn unix_timestamp_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
-/// The proxy rewrites HLS manifests to this localhost listener.  Only URLs
-/// found in a manifest are placed in the registry, so the loopback server
-/// cannot become a generic browser-accessible request proxy.
+/// 代理把 HLS 清单改写到这个本机监听器上。只有清单中出现的 URL 才会被
+/// 登记进注册表，因此回环服务器不会沦为
+/// 浏览器可任意访问的通用请求代理。
 struct HlsResources {
     next_id: AtomicU64,
     max_entries: usize,
@@ -295,10 +289,9 @@ struct HlsResources {
 struct HlsResourceEntries {
     by_id: HashMap<u64, String>,
     by_url: HashMap<String, u64>,
-    /// Least-recently used resource identifier at the front.  The selected
-    /// HLS child playlist is requested for every playlist refresh, whereas
-    /// individual media segments are normally requested once.  Treating this
-    /// as an access queue keeps that long-lived playlist mapping alive.
+    /// 最近最少使用的资源标识符排在最前。选中的 HLS 子播放列表在每次刷新时都会
+    /// 被请求，而单个媒体分片通常只请求一次。把它当作访问队列处理，
+    /// 可以让那条长期存活的播放列表映射不被淘汰。
     access_order: VecDeque<u64>,
 }
 
@@ -310,8 +303,8 @@ struct TwitchAdRecoverySession {
 }
 
 struct TwitchAdRecoveryState {
-    /// One cached fallback playlist URL per entry in
-    /// `TWITCH_AD_FALLBACK_PROFILES`, indexed by that array's position.
+    /// `TWITCH_AD_FALLBACK_PROFILES` 中每个条目各对应一条缓存的兜底播放列表 URL，
+    /// 按数组位置索引。
     fallback_urls: [Option<String>; crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES.len()],
     active_profile: Option<usize>,
     last_clean_manifest: Option<(String, Url)>,
@@ -741,20 +734,18 @@ impl StreamProxy {
 
     pub fn stop(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        // A global stop is used only during application shutdown. Clearing
-        // reservations prevents listeners that are still binding from being
-        // installed after all active tasks have been terminated.
+        // 全局停止只在应用关机时使用。清空预订可防止仍在绑定中的监听器
+        // 在所有活动任务终止之后又被安装。
         state.pending.clear();
         for (_, inner) in state.active.drain() {
             Self::stop_inner(inner);
         }
     }
 
-    /// Stop only the listener/reservation owned by `session_id`.
+    /// 只停止 `session_id` 拥有的监听器/预订。
     ///
-    /// Route unmount cleanup is asynchronous.  Without this ownership check,
-    /// an old room can finish its `stream_proxy_stop` command after a fast
-    /// re-entry has already started a fresh proxy, producing a black player.
+    /// 路由卸载清理是异步的。没有这个归属检查，旧房间可能在快速重进已经启动新
+    /// 代理之后才完成它的 `stream_proxy_stop` 命令，导致播放器黑屏。
     pub fn stop_for_session(&self, session_id: &str) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let cancelled_pending = state.pending.remove(session_id).is_some();
@@ -764,8 +755,8 @@ impl StreamProxy {
         cancelled_pending || stopped_active.is_some()
     }
 
-    /// Return only aggregate counters for the active owner. URLs and request
-    /// headers are intentionally absent from the diagnostics contract.
+    /// 只为活动拥有者返回聚合计数器。诊断契约刻意不包含
+    /// URL 和请求头。
     pub fn telemetry_for_session(&self, session_id: &str) -> Option<StreamProxyTelemetry> {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state
@@ -774,7 +765,7 @@ impl StreamProxy {
             .map(|inner| inner.telemetry.snapshot())
     }
 
-    /// Start (or replace) a proxy for `url` with `headers`. Returns local play URL.
+    /// 用 `headers` 为 `url` 启动（或替换）一个代理。返回本地播放 URL。
     pub async fn start(
         &self,
         url: String,
@@ -784,14 +775,13 @@ impl StreamProxy {
         proxy: Option<&str>,
         twitch_ad_recovery: Option<TwitchAdRecovery>,
     ) -> AppResult<String> {
-        // Reserve ownership before the first await.  A later start or a stop
-        // can supersede this reservation, in which case this request drops
-        // its uninstalled listener instead of overwriting a newer task.
+        // 在第一次 await 之前完成所有权预订。后续的 start 或 stop 可以取代这次预订，
+        // 此时当前请求丢弃自己未安装的监听器，
+        // 而不是覆盖更新的任务。
         let generation = self.reserve_start(&session_id);
 
-        // Every proxy gets an ephemeral port, so there is no need to wait for
-        // a previous socket's port to become reusable.  Avoiding that sleep is
-        // also important: it used to widen the enter/exit/re-enter race.
+        // 每个代理都使用临时端口，无需等待前一个套接字的端口变为可复用。
+        // 避免那个 sleep 同样重要：它曾扩大进入/退出/重进的竞争窗口。
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(e) => {
@@ -810,9 +800,9 @@ impl StreamProxy {
                 AppError::new("stream_proxy_bind", e.to_string())
             })?
             .port();
-        // MSE protocol plugins can issue several localhost requests for one live stream.
-        // Build one client per proxy lifetime so those requests share its
-        // connection pool instead of rebuilding TLS/pool state per request.
+        // MSE 协议插件可能为一场直播发出多个本机请求。在每个代理生命周期内构建一个
+        // 客户端，使这些请求共享其连接池，
+        // 而不是每个请求都重建 TLS/连接池状态。
         let client = match build_stream_client(proxy) {
             Ok(client) => client,
             Err(error) => {
@@ -841,8 +831,8 @@ impl StreamProxy {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let is_current = state.pending.get(&session_id) == Some(&generation);
         if !is_current {
-            // `listener` has never been spawned, so dropping it is enough to
-            // release the socket.  Do not touch a newer reservation/task.
+            // `listener` 尚未 spawn，丢弃它即可释放套接字。
+            // 不要触碰更新的预订/任务。
             return Err(AppError::new(
                 "stream_proxy_superseded",
                 "playback session was replaced before proxy startup finished",
@@ -866,8 +856,8 @@ impl StreamProxy {
         let task = tauri::async_runtime::spawn(async move {
             run_proxy_loop(listener, context, shutdown_rx).await;
         });
-        // Keep this session's old listener alive until its replacement is
-        // completely bound and configured. Other sessions are untouched.
+        // 让本会话的旧监听器保持存活，直到它的替代者完全绑定并构建好网络客户端。
+        // 其他会话不受影响。
         if let Some(previous) = state.active.remove(&session_id) {
             Self::stop_inner(previous);
         }
@@ -883,19 +873,17 @@ impl StreamProxy {
         Ok(format!("http://127.0.0.1:{port}/live"))
     }
 
-    /// Block until this proxy's `/live` endpoint answers with a playlist a
-    /// one-shot demuxer can open, or until `budget` runs out.
+    /// 阻塞直到该代理的 `/live` 端点应答出一份一次性解复用器能打开的播放列表，
+    /// 或直到 `budget` 耗尽。
     ///
-    /// [`Self::start`] only binds the listener; it never fetches `/live`. A
-    /// browser player tolerates that because it keeps reloading the playlist
-    /// until media appears, but libavformat calls `avformat_open_input` exactly
-    /// once. If that single response is the gap-only wait playlist the Twitch
-    /// recovery path emits — during a commercial break, on an expired token, or
-    /// after a failed upstream — every segment is an `#EXT-X-GAP` placeholder,
-    /// the demuxer finds no readable data and the whole recording dies with
-    /// `Invalid data found when processing input` before one byte is written.
-    /// Recording therefore warms the proxy up here and only hands ffmpeg a URL
-    /// that has already proven it serves real segments.
+    /// [`Self::start`] 只绑定监听器，从不抓取 `/live`。浏览器播放器能容忍这一点，
+    /// 因为它会不断重新加载播放列表直到出现媒体；而 libavformat 只调用一次
+    /// `avformat_open_input`。如果那唯一一次响应是 Twitch 恢复路径发出的
+    /// 纯 gap 等待清单 —— 广告插播期间、token 过期或上游失败之后 ——
+    /// 每个分片都是 `#EXT-X-GAP` 占位符，解复用器找不到任何可读数据，
+    /// 整场录制在写入一个字节之前就以
+    /// `Invalid data found when processing input` 失败。
+    /// 因此录制在这里预热代理，只把已证明能提供真实分片的 URL 交给 ffmpeg。
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub async fn wait_for_playable_manifest(
         &self,
@@ -906,13 +894,13 @@ impl StreamProxy {
         let client = build_loopback_client()?;
         let deadline = Instant::now() + budget;
         let mut attempts = 0_u32;
-        // Every path through the poll below records why that attempt failed, so
-        // the timeout can name the last real cause instead of a placeholder.
+        // 下方轮询的每条路径都记录了那次尝试失败的原因，
+        // 因此超时可以指出最后一个真实原因，而不是占位符。
         let mut last_reason: String;
         loop {
-            // A stop or a replacement start during warm-up removes this
-            // listener; polling a dead port until the budget expires would
-            // only delay the outcome the caller already decided.
+            // 预热期间的 stop 或替代性 start 会移除该监听器；
+            // 对着死端口轮询到预算耗尽，
+            // 只会拖延调用方已经做出的决定。
             if self.telemetry_for_session(session_id).is_none() {
                 return Err(AppError::new(
                     "stream_proxy_superseded",
@@ -950,8 +938,8 @@ impl StreamProxy {
         }
     }
 
-    /// Reserve the next generation for `session_id`. The active listener stays
-    /// usable until the replacement has bound and built its network client.
+    /// 为 `session_id` 预订下一代。活动监听器保持可用，
+    /// 直到替代者完成绑定并构建好网络客户端。
     fn reserve_start(&self, session_id: &str) -> u64 {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let generation = Self::advance_generation(&mut state);
@@ -968,8 +956,8 @@ impl StreamProxy {
 
     fn advance_generation(state: &mut ProxyState) -> u64 {
         state.generation = state.generation.wrapping_add(1);
-        // `0` is not special today, but keeping generated values nonzero makes
-        // future diagnostics and optional IDs less surprising after wrapping.
+        // 如今 `0` 并无特殊含义，但让生成的取值保持非零，
+        // 可在回绕后减少未来诊断和可选 id 的意外。
         if state.generation == 0 {
             state.generation = 1;
         }
@@ -977,9 +965,8 @@ impl StreamProxy {
     }
 
     fn stop_inner(inner: ProxyInner) {
-        // The accept loop owns every handler in a JoinSet. A successful send
-        // lets it cancel and drain those handlers; if its receiver is already
-        // gone, abort the remaining top-level task as a final fallback.
+        // accept 循环通过 JoinSet 持有全部 handler。发送成功后它可以取消并排空这些
+        // handler；如果接收方已经不在，则中止剩余的顶层任务作为最后兜底。
         if inner.shutdown.send(true).is_err() {
             inner.task.abort();
         }
@@ -1178,8 +1165,8 @@ mod tests {
     fn rewritten_segment_urls_carry_an_extension_ffmpeg_will_open() {
         let resources = HlsResources::new();
         let upstream = Url::parse("https://video-weaver.example/live/chunked/index.m3u8").unwrap();
-        // A Twitch fMP4 segment: the extension is followed by a signed query
-        // that must not reach the local path.
+        // Twitch 的 fMP4 分片：扩展名之后跟着签名 query，
+        // 绝不能让它进入本地路径。
         let manifest = concat!(
             "#EXTM3U\n",
             "#EXT-X-MAP:URI=\"https://cdn.example/v1/segment/init.mp4?dna=SECRET\"\n",
@@ -1192,16 +1179,14 @@ mod tests {
         let rewritten =
             rewrite_hls_manifest(manifest, &upstream, "http://127.0.0.1:41500", &resources);
 
-        // FFmpeg 8+ enables `extension_picky` by default and refuses a segment
-        // whose extension is not in its allowed list, so an extensionless URL
-        // fails `avformat_open_input` outright.
+        // FFmpeg 8+ 默认启用 `extension_picky`，拒绝扩展名不在白名单内的分片，
+        // 因此没有扩展名的 URL 会直接导致 `avformat_open_input` 失败。
         assert!(
             rewritten.contains("URI=\"http://127.0.0.1:41500/hls/1.mp4\""),
             "init segment kept no extension: {rewritten}"
         );
         assert!(rewritten.contains("http://127.0.0.1:41500/hls/2.mp4"));
-        // Nothing recognizable to carry over stays extensionless rather than
-        // getting an invented extension.
+        // 没有任何可识别内容可以继承时保持无扩展名，而不是编造一个扩展名。
         assert!(rewritten.contains("http://127.0.0.1:41500/hls/3\n"));
         assert!(
             !rewritten.contains("dna=SECRET\n") && !rewritten.contains("/hls/2.mp4?dna"),
@@ -1219,8 +1204,7 @@ mod tests {
                 .as_deref(),
             Ok("https://cdn.example/segment.mp4?dna=SECRET")
         );
-        // The bare form a previously issued manifest may still reference keeps
-        // working, and a non-numeric id is still rejected.
+        // 先前签发的清单可能仍引用裸形态，保持其可用；非数字 id 仍然被拒绝。
         assert_eq!(
             resolve_upstream_target(&format!("/hls/{id}"), "http://unused/live", &resources)
                 .as_deref(),
@@ -1236,8 +1220,7 @@ mod tests {
 
         assert_eq!(extension("https://cdn.example/a/b.ts?token=x.y"), "ts");
         assert_eq!(extension("https://cdn.example/a/b.M3U8"), "m3u8");
-        // No extension, an over-long one, and a non-alphanumeric one all stay
-        // out of the local path.
+        // 无扩展名、过长扩展名和非字母数字扩展名都不会进入本地路径。
         assert_eq!(extension("https://cdn.example/a/segment"), "");
         assert_eq!(extension("https://cdn.example/a/b.superlong"), "");
         assert_eq!(extension("https://cdn.example/a/b.ts%2f"), "");
@@ -1246,9 +1229,9 @@ mod tests {
 
     #[test]
     fn hls_resource_registry_keeps_a_refreshed_child_playlist_alive() {
-        // A player asks for its selected child playlist on every reload, while
-        // segment URLs continuously enter the bounded registry.  The playlist
-        // must be promoted on access rather than eventually becoming a 404.
+        // 播放器每次重载都会请求选中的子播放列表，而分片 URL 会持续进入有界注册表。
+        // 播放列表必须在被访问时提升优先级，
+        // 否则最终会变成 404。
         let resources = HlsResources::with_capacity(3);
         let playlist = resources.register("https://cdn.example.test/live/index.m3u8".into());
         let first_segment = resources.register("https://cdn.example.test/live/001.ts".into());
@@ -1293,8 +1276,8 @@ mod tests {
 
     #[test]
     fn twitch_ad_detection_reads_the_stream_source_daterange() {
-        // A live rendition names `live` as its source and must stay untouched,
-        // even though the playlist also carries unrelated DATERANGE rows.
+        // 直播渲染档以 `live` 作为来源名，必须原样保留，
+        // 即使清单中还带有无关的 DATERANGE 行。
         assert!(!is_twitch_ad_manifest(concat!(
             "#EXTM3U\n",
             "#EXT-X-DATERANGE:ID=\"playlist-creation-1\",CLASS=\"timestamp\"\n",
@@ -1302,16 +1285,16 @@ mod tests {
             "X-TV-TWITCH-STREAM-SOURCE=\"live\"\n",
             "#EXTINF:2.000,live\nlive.ts\n"
         )));
-        // A commercial names its own source, which is the signal that survives
-        // when Twitch omits the `stitched` marker.
+        // 广告时段会写明自己的来源名，这是在 Twitch 省略 `stitched` 标记时
+        // 仍然有效的信号。
         assert!(is_twitch_ad_manifest(concat!(
             "#EXTM3U\n",
             "#EXT-X-DATERANGE:ID=\"source-2\",CLASS=\"twitch-stream-source\",",
             "X-TV-TWITCH-STREAM-SOURCE=\"midroll\"\n",
             "#EXTINF:2.000,\nad.ts\n"
         )));
-        // END-ON-NEXT closes the older source range. A rolling window can
-        // retain the ad row briefly after a newer live row has resumed.
+        // END-ON-NEXT 关闭较早的来源区间。滚动窗口可能在新 live 行恢复之后
+        // 短暂保留广告行。
         assert!(!is_twitch_ad_manifest(concat!(
             "#EXTM3U\n",
             "#EXT-X-DATERANGE:ID=\"source-ad\",CLASS=\"twitch-stream-source\",",
@@ -1324,11 +1307,10 @@ mod tests {
 
     #[test]
     fn twitch_ad_detection_matches_a_captured_live_commercial_break() {
-        // Trimmed from a real `site/web` playlist captured during a commercial on
-        // four channels simultaneously (2026-08-11). Twitch named the ad source
-        // `Amazon|<creative id>` and tagged the segments with it, while carrying
-        // no "Commercial break in progress" text at all - so the DATERANGE source
-        // is what a text-only check would have missed.
+        // 从四个频道同时处于广告时段（2026-08-11）时捕获的真实 `site/web`
+        // 播放列表裁剪而来。Twitch 把广告来源命名为 `Amazon|<creative id>` 并用它
+        // 标记分片，却完全没有"Commercial break in progress"文本 ——
+        // 这正是纯文本检查会漏掉、而 DATERANGE 来源能抓住的情况。
         let captured = concat!(
             "#EXTM3U\n",
             "#EXT-X-DATERANGE:ID=\"playlist-session-1786466727\",CLASS=\"twitch-session\",",
@@ -1344,8 +1326,8 @@ mod tests {
         assert!(is_twitch_ad_manifest(captured));
         assert!(looks_like_hls_manifest(captured.as_bytes()));
 
-        // The same channel once the break ends: identical structure, `live`
-        // source, and it must not be treated as an ad.
+        // 广告结束后同一频道的样子：结构相同、来源为 `live`，
+        // 不得被当作广告。
         let resumed = captured.replace("Amazon|2474283100494", "live");
         assert!(!is_twitch_ad_manifest(&resumed));
     }
@@ -1379,9 +1361,8 @@ mod tests {
         assert!(manifest.contains("#EXT-X-GAP"));
     }
 
-    /// The playability check exists solely to keep a gap-only playlist away from
-    /// `avformat_open_input`, so the wait playlist the recovery path emits and a
-    /// fully gapped clean playlist must both read as unplayable.
+    /// 可播放性检查的唯一目的就是不让纯 gap 播放列表到达 `avformat_open_input`，
+    /// 因此恢复路径发出的等待清单和完全 gap 化的干净清单都必须判为不可播放。
     #[test]
     fn placeholder_only_playlists_are_not_playable() {
         assert!(!manifest_has_playable_segment(&twitch_wait_manifest()));
@@ -1400,7 +1381,7 @@ mod tests {
             &mark_all_hls_segments_as_gaps(clean)
         ));
 
-        // A break that gaps only its ad segments still carries recordable media.
+        // 只把广告分片 gap 掉的广告时段仍然带有可录制的媒体。
         let partial = concat!(
             "#EXTM3U\n",
             "#EXTINF:2.000,\n",
@@ -1412,7 +1393,7 @@ mod tests {
             &mark_twitch_ad_segments_as_gaps(partial)
         ));
 
-        // An init segment alone is not media, and neither is a non-manifest body.
+        // 仅有 init 分片不算媒体，非清单 body 也不算。
         assert!(!manifest_has_playable_segment(concat!(
             "#EXTM3U\n",
             "#EXT-X-MAP:URI=\"https://cdn.example.test/init.mp4\"\n"
@@ -1420,8 +1401,8 @@ mod tests {
         assert!(!manifest_has_playable_segment("<html>error</html>"));
     }
 
-    /// Recording must not hand ffmpeg a URL whose only response is placeholders:
-    /// the demuxer opens it once, finds no media and fails the whole session.
+    /// 录制绝不能把只有占位符应答的 URL 交给 ffmpeg：
+    /// 解复用器只打开一次，找不到媒体就判定整场会话失败。
     #[tokio::test]
     async fn warmup_rejects_a_proxy_that_only_serves_gap_playlists() {
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1465,8 +1446,8 @@ mod tests {
         server.abort();
     }
 
-    /// The same warm-up must return as soon as real segments are available, so a
-    /// healthy channel starts recording without paying the whole budget.
+    /// 同样的预热只要真实分片可用就必须立即返回，
+    /// 让健康的频道不必付出整个预算就能开始录制。
     #[tokio::test]
     async fn warmup_accepts_a_playlist_that_carries_real_segments() {
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1515,8 +1496,8 @@ mod tests {
         server.abort();
     }
 
-    /// Stopping the recording during warm-up must end the wait immediately
-    /// rather than polling a dead listener until the budget expires.
+    /// 预热期间停止录制必须立即结束等待，
+    /// 而不是对着死监听器轮询到预算耗尽。
     #[tokio::test]
     async fn warmup_ends_when_the_session_is_stopped() {
         let proxy = StreamProxy::new();
@@ -1541,10 +1522,10 @@ mod tests {
         assert_eq!(error.code, "stream_proxy_superseded");
     }
 
-    /// Holds a warmed, recording-shaped proxy open so an *external* demuxer can
-    /// be pointed at it. Prints `PROXY_URL=` on stdout. Run with
-    /// `TWITCH_VARIANT_URL=<variant playlist>` and optional
-    /// `RLIVE_PROXY_HOLD_SECS`.
+    /// 保持一个已预热、形态与录制一致的代理供*外部*解复用器指向。
+    /// 在 stdout 打印 `PROXY_URL=`。运行时传入
+    /// `TWITCH_VARIANT_URL=<variant playlist>` 和可选的
+    /// `RLIVE_PROXY_HOLD_SECS`。
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "holds a live Twitch recording proxy open for external probing"]
     async fn live_twitch_recording_proxy_stays_open_for_external_probe() {
@@ -1590,13 +1571,13 @@ mod tests {
         proxy.stop_for_session(session_id);
     }
 
-    /// Records a few seconds from a live channel through the real recording path
-    /// (recording proxy + warm-up + libavformat) and asserts a non-trivial file
-    /// lands on disk.  Run with `TWITCH_VARIANT_URL=<variant playlist>`.
+    /// 经真实录制路径（录制代理 + 预热 + libavformat）从直播频道录制数秒，
+    /// 并断言磁盘上落下一个非平凡的文件。
+    /// 运行时传入 `TWITCH_VARIANT_URL=<variant playlist>`。
     ///
-    /// `flavor = "multi_thread"` is required: ffmpeg is driven with a blocking
-    /// `Command`, and on a current-thread runtime that would starve the proxy's
-    /// own accept loop, leaving ffmpeg's request pending in the listen backlog.
+    /// 必须使用 `flavor = "multi_thread"`：ffmpeg 由阻塞的 `Command` 驱动，
+    /// 在 current-thread 运行时上会饿死代理自己的 accept 循环，
+    /// 使 ffmpeg 的请求滞留在监听队列里。
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "live Twitch recording; requires TWITCH_VARIANT_URL and external network"]
     async fn live_twitch_recording_writes_media_through_the_warmed_proxy() {
@@ -1680,10 +1661,9 @@ mod tests {
         let _ = std::fs::remove_file(&output);
     }
 
-    /// Reproduces the recording hand-off end to end against a live channel:
-    /// the real proxy, `force_hls = true`, Twitch recovery attached, then every
-    /// URL the rewritten primary manifest points at.  Run with
-    /// `TWITCH_VARIANT_URL=<variant playlist>`.
+    /// 针对直播频道端到端重现录制交接：真实代理、`force_hls = true`、附加 Twitch
+    /// 恢复逻辑，然后访问改写后的主清单指向的每一个 URL。
+    /// 运行时传入 `TWITCH_VARIANT_URL=<variant playlist>`。
     #[tokio::test]
     #[ignore = "live Twitch recording hand-off; requires TWITCH_VARIANT_URL and external network"]
     async fn live_twitch_recording_proxy_serves_a_playable_manifest() {
@@ -1764,10 +1744,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "live Kai Cenat commercial-break replacement; requires channel and external network"]
     async fn live_kaicenat_commercial_break_replacement_smoke() {
-        // The fallback profiles can only mint a playlist while the channel is
-        // live; off air every profile answers with nothing to replace and the
-        // recovery correctly degrades to the wait manifest. Skip instead of
-        // reporting that expected degradation as a proxy regression.
+        // 兜底 profile 只有在频道开播时才能签发播放列表；下播时每个 profile 都无可
+        // 替换而返回空，恢复逻辑正确地降级为等待清单。此时跳过测试，
+        // 不要把这种预期中的降级报告成代理回归。
         use crate::sites::traits::LiveSite;
 
         let probe = crate::sites::twitch::TwitchSite::new(
@@ -1944,8 +1923,8 @@ mod tests {
         assert_eq!(telemetry.bytes_forwarded, 3);
         assert!(telemetry.first_response_ms.is_some());
         assert!(telemetry.latest_response_ms.is_some());
-        // The media anchor multi-view clock alignment relies on is latched from
-        // the first forwarded media byte of the session.
+        // 多视图时钟对齐所依赖的媒体锚点，
+        // 锁存自本会话第一个被转发的媒体字节。
         assert!(telemetry.first_media_at_ms.is_some_and(|epoch| epoch > 0));
         relay.stop_for_session(session_id);
         server.join().unwrap();
@@ -2072,9 +2051,8 @@ mod tests {
     }
 }
 
-/// Streaming deliberately has no overall request timeout: a healthy live
-/// response may remain open indefinitely.  It still shares the same transport
-/// limits for every client connected to this proxy instance.
+/// 流式传输刻意不设整体请求超时：健康的直播响应可以无限期保持打开。
+/// 连接到该代理实例的所有客户端仍共享相同的传输层限制。
 fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
     crate::http_client::with_proxy(
         Client::builder()
@@ -2179,7 +2157,7 @@ async fn handle_client(
         telemetry,
     } = context;
 
-    // Read request head (we only need method/path; body unused for GET).
+    // 读取请求头（只需要方法/路径；GET 不使用 body）。
     let mut buf = [0u8; 4096];
     let n = socket
         .read(&mut buf)
@@ -2243,7 +2221,7 @@ async fn handle_client(
     for (k, v) in headers.as_ref() {
         req = req.header(k.as_str(), v.as_str());
     }
-    // Avoid compressed bodies that confuse MSE demuxers.
+    // 避免会让 MSE 解复用器困惑的压缩 body。
     req = req.header("accept-encoding", "identity");
     if let Some(range) = request_header(&head, "range") {
         req = req.header(reqwest::header::RANGE, range);
@@ -2426,8 +2404,7 @@ async fn handle_client(
             "no-store",
         )
         .await?;
-        // The probe above already pulled the first media bytes, so this is the
-        // arrival epoch of the head of the stream.
+        // 上面的探测已经拉到了最初的媒体字节，这就是流头部到达的纪元。
         telemetry.record_media_start();
         if !prefix.is_empty() && socket.write_all(&prefix).await.is_err() {
             return Ok(());
@@ -2463,7 +2440,7 @@ async fn handle_client(
         }
         telemetry.record_media_start();
         if socket.write_all(&chunk).await.is_err() {
-            break; // client gone
+            break; // 客户端已离开
         }
     }
     let _ = socket.flush().await;
@@ -2487,8 +2464,8 @@ fn resolve_upstream_target(
     if id.is_empty() || id.contains('/') {
         return Err("invalid HLS resource path");
     }
-    // Rewritten URLs carry the upstream extension for FFmpeg's benefit; the
-    // registry itself is still keyed by the numeric id alone.
+    // 改写后的 URL 为 FFmpeg 保留了上游扩展名；
+    // 注册表本身仍然只以数字 id 为键。
     let id = id.split_once('.').map_or(id, |(id, _)| id);
     let id = id
         .parse::<u64>()
@@ -2534,18 +2511,17 @@ async fn fetch_twitch_playlist(
     Ok((body, effective_url))
 }
 
-/// `pub(crate)` so the live Twitch smoke tests judge a playlist with the same
-/// detector the proxy ships, rather than a text-only copy that would miss the
-/// textless breaks this function exists to catch.
+/// 设为 `pub(crate)`，让 Twitch 直播冒烟测试用代理自带的同一个检测器判断
+/// 播放列表，而不是用只会漏掉无文本广告段（本函数正是为此存在）的
+/// 纯文本副本。
 pub(crate) fn is_twitch_ad_manifest(manifest: &str) -> bool {
     let lower = manifest.to_ascii_lowercase();
     if lower.contains("commercial break in progress") {
         return true;
     }
-    // Twitch labels the current rendition through a `twitch-stream-source`
-    // DATERANGE. A clean live playlist reports `live`; during a server-side
-    // commercial it names the ad source instead. This catches an ad break that
-    // carries neither of the textual markers above.
+    // Twitch 通过 `twitch-stream-source` DATERANGE 标注当前渲染档。干净的直播
+    // 清单报告 `live`；服务端广告期间则改标广告来源。
+    // 这能抓住上面两种文本标记都不带的广告时段。
     let current_source = manifest
         .lines()
         .filter(|line| line.trim_start().starts_with("#EXT-X-DATERANGE:"))
@@ -2592,10 +2568,10 @@ fn mark_hls_segments_as_gaps(manifest: &str, mark_all: bool) -> String {
     body
 }
 
-/// Client used to warm a recording proxy up over loopback.
+/// 用于经回环预热录制代理的客户端。
 ///
-/// Deliberately not the relay's own upstream client: that one may carry the
-/// user's HTTP proxy, and routing `127.0.0.1` through it would fail.
+/// 刻意不用中继自身的上游客户端：后者可能携带用户的 HTTP 代理，
+/// 把 `127.0.0.1` 路由过去必然失败。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn build_loopback_client() -> AppResult<Client> {
     Client::builder()
@@ -2605,13 +2581,12 @@ fn build_loopback_client() -> AppResult<Client> {
         .map_err(|_| AppError::new("stream_proxy_warmup_client", "本地清单预热客户端初始化失败"))
 }
 
-/// Whether an HLS media playlist offers at least one segment a demuxer can
-/// actually read.
+/// 判断某份 HLS 媒体清单是否至少提供一个解复用器真正可读的分片。
 ///
-/// `#EXT-X-GAP` declares that the URI that follows it holds no media, which is
-/// exactly what the Twitch ad/wait paths emit. A playlist made only of those is
-/// valid HLS and a polling player rides it out, but `avformat_open_input` reads
-/// the placeholders once, finds nothing, and fails the recording outright.
+/// `#EXT-X-GAP` 声明其后的 URI 不含媒体，这正是 Twitch 的广告/等待路径产出的
+/// 内容。仅由它组成的清单是合法 HLS，轮询式播放器可以扛过去，
+/// 但 `avformat_open_input` 读一次占位符、一无所获，
+/// 直接判定录制失败。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn manifest_has_playable_segment(manifest: &str) -> bool {
     if !looks_like_hls_manifest(manifest.as_bytes()) {
@@ -2785,24 +2760,24 @@ fn hls_local_url(
         return None;
     }
     let id = hls_resources.register(resolved.to_string());
-    // FFmpeg's HLS demuxer only opens segment URLs whose extension is in its
-    // allowed list, and since FFmpeg 8 `extension_picky` turns that into the
-    // default. An extensionless `/hls/{id}` plays fine in a browser but makes
-    // `avformat_open_input` fail with `Invalid data found when processing
-    // input`, which kills a recording before it writes a byte. Carrying the
-    // upstream extension over keeps the rewritten URL recognizable to both.
+    // FFmpeg 的 HLS 解复用器只打开扩展名在其白名单内的分片 URL，而自 FFmpeg 8 起
+    // `extension_picky` 把这变成了默认行为。无扩展名的 `/hls/{id}` 在浏览器中播放
+    // 正常，却会让 `avformat_open_input` 以
+    // `Invalid data found when processing input` 失败，
+    // 在录制写入一个字节之前就将其杀死。继承上游扩展名
+    // 可以让改写后的 URL 对浏览器和 FFmpeg 都保持可识别。
     Some(match hls_path_extension(&resolved) {
         Some(extension) => format!("{local_origin}/hls/{id}.{extension}"),
         None => format!("{local_origin}/hls/{id}"),
     })
 }
 
-/// The upstream path's file extension, when it is short and alphanumeric.
+/// 上游路径的文件扩展名（仅当它较短且为字母数字时）。
 ///
-/// Read from the path only. A Twitch segment URL ends in `.mp4?dna=<token>`,
-/// and neither that token nor any other query material may leak into a local
-/// path. An unusual or absent extension yields `None`, and the rewritten URL
-/// stays extensionless rather than inventing one.
+/// 只从路径读取。Twitch 分片 URL 以 `.mp4?dna=<token>` 结尾，
+/// 该 token 和任何其他 query 内容都不得泄漏进本地路径。
+/// 扩展名异常或缺失时返回 `None`，改写后的 URL 保持无扩展名，
+/// 而不是编造一个。
 fn hls_path_extension(url: &Url) -> Option<String> {
     let last = url.path_segments()?.next_back()?;
     let extension = last.rsplit_once('.')?.1;

@@ -11,8 +11,8 @@ describe("follow status refresh scheduling", () => {
 
   test("resumes the existing cadence when a page is revisited", () => {
     const now = 1_700_000_000_000;
-    // Re-entering the page 10s after the last refresh must wait out the rest of
-    // the interval instead of issuing another remote status request.
+    // 距上次刷新 10s 后重进页面必须等完剩余间隔，
+    // 而不是再发一次远程状态请求。
     expect(followStatusRefreshDelay(now - 10_000, now)).toBe(
       FOLLOW_STATUS_REFRESH_INTERVAL_MS - 10_000,
     );

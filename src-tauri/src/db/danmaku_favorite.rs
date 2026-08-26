@@ -4,9 +4,8 @@ use serde::Serialize;
 use crate::db::schema::map_db_err;
 use crate::error::AppResult;
 
-/// One intentional, reusable outgoing message. Favorites are deliberately
-/// independent from send history, so clearing the latter never discards a
-/// message the user chose to retain.
+/// 一条刻意保存、可复用的发送消息。收藏与发送历史刻意相互独立，
+/// 因此清空历史绝不会丢弃用户选择保留的消息。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DanmakuFavoriteRecord {
     pub site_id: String,
@@ -40,7 +39,7 @@ pub fn list(conn: &Connection, site_id: &str) -> AppResult<Vec<DanmakuFavoriteRe
     Ok(out)
 }
 
-/// Add a favorite or move an existing one to the top of its platform list.
+/// 添加收藏，或把已有收藏移到其平台列表顶部。
 pub fn upsert(conn: &Connection, site_id: &str, content: &str, added_at: i64) -> AppResult<()> {
     conn.execute(
         "INSERT INTO danmaku_favorites (site_id, content, added_at)

@@ -24,13 +24,13 @@ type AsrCaptionSegment = {
 };
 
 type AsrTranscribeResponse = {
-  /** Endpointed utterances, safe to append to the committed line. */
+  /** 已被端点定稿的语句，可以安全地追加到已提交行之后。 */
   segments: AsrCaptionSegment[];
-  /** Current in-flight hypothesis; replaced on every window. */
+  /** 当前在途的假设文本；每个窗口都会替换。 */
   partial: string | null;
 };
 
-/** Committed captions older than this are dropped from the visible line. */
+/** 早于此时长的已提交字幕会从可见行中移除。 */
 const CAPTION_RETENTION_MS = 12_000;
 type TranscriptionJob = {
   pcm: Float32Array;
@@ -102,8 +102,7 @@ export function useAsrCaptions(options: {
           if (job.epoch !== epochRef.current) continue;
           setNotice(null);
 
-          // The live hypothesis changes on every window, including back to
-          // empty once an utterance is committed.
+          // 实时假设随每个窗口变化，包括语句被提交后回到空值。
           setPartial(response.partial?.trim() || null);
 
           if (response.segments.length === 0) continue;
@@ -115,8 +114,7 @@ export function useAsrCaptions(options: {
               current ?? "",
             ),
           );
-          // Only the committed line expires; the partial is superseded by the
-          // next window rather than timed out.
+          // 只有已提交行会过期；部分文本由下一个窗口取代，而不是超时清除。
           clearCaptionTimer();
           captionTimerRef.current = window.setTimeout(() => {
             setCaption(null);
@@ -156,8 +154,8 @@ export function useAsrCaptions(options: {
     epochRef.current += 1;
     chunkSetterRef.current = null;
     clearCaptionTimer();
-    // Streaming decode keeps state across windows, so a new room or media
-    // element must clear it or the next caption resumes mid-utterance.
+    // 流式解码跨窗口保持状态，因此切换房间或媒体元素时必须清空它，
+    // 否则下一条字幕会从上一条语句中间继续。
     if (model.supported) void invokeCmd("asr_reset_stream").catch(() => {});
   }, [clearCaptionTimer, model.supported, options.mediaKey, options.sessionKey]);
 
@@ -178,8 +176,8 @@ export function useAsrCaptions(options: {
     let cancelled = false;
     let subscription: AudioCaptureSubscription | null = null;
     void subscribeToVideoPcm(video, (pcm) => {
-      // Publish each completed window immediately, while keeping only the
-      // newest not-yet-started window when inference is slower than playback.
+      // 每完成一个窗口立即发布；当推理慢于播放时，
+      // 只保留最新一个尚未开始的窗口。
       pendingJobRef.current = { pcm, epoch };
       void processPendingJobs();
     })
@@ -281,8 +279,8 @@ export function useAsrCaptions(options: {
 
   let controlLabel = captionsOn ? "关闭语音字幕" : "开启语音字幕";
   let controlDisabled = false;
-  // Recognition continues after enabling captions. A spinner for every
-  // window makes the captions icon flash, so busy only describes preparation.
+  // 启用字幕之后识别仍在继续。为每个窗口显示转圈会让字幕图标闪烁，
+  // 因此 busy 只描述准备阶段。
   let controlBusy = false;
   if (!isTauri() || !localAsrClient) {
     controlLabel = "语音字幕仅在 Tauri 桌面客户端可用";

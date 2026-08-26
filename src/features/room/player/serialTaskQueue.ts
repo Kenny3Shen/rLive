@@ -1,9 +1,8 @@
 /**
- * Runs asynchronous lifecycle operations one at a time.
+ * 逐个执行异步生命周期操作。
  *
- * The stream proxy is process-global, so a stale room cleanup must finish
- * before the next room creates its proxy. Rejections are isolated so a failed
- * operation never prevents later teardown or startup work.
+ * 流代理是进程全局的，过期房间的清理必须先完成，下一个房间才能创建自己的代理。
+ * 拒绝被隔离，使一次失败的操作绝不阻碍后续的销毁或启动工作。
  */
 export type SerialTaskQueue = {
   enqueue<T>(task: () => Promise<T> | T): Promise<T>;

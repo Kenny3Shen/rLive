@@ -1,9 +1,8 @@
-//! Desktop live-stream recorder and local playback service.
+//! 桌面端直播录制与本地回放服务。
 //!
-//! Recordings deliberately live outside the SQLite database. A recording is a
-//! small self-contained bundle (metadata plus media), so it remains recoverable
-//! when the application is killed and
-//! can be inspected or copied by the user without a database export.
+//! 录制内容刻意存放在 SQLite 数据库之外。一场录制是一个自包含的小型分卷
+//! （元数据加媒体），因此应用被杀死后仍可恢复，
+//! 用户无需导出数据库即可查看或复制。
 
 #![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 
@@ -68,7 +67,7 @@ pub enum RecordingStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordingItem {
     pub id: String,
-    /// Stable content identity used to prevent accidental duplicate sessions.
+    /// 用于防止意外重复会话的稳定内容标识。
     pub source_key: String,
     pub source_kind: String,
     pub site_id: Option<String>,
@@ -83,16 +82,16 @@ pub struct RecordingItem {
     pub ended_at: Option<i64>,
     pub duration_ms: u64,
     pub size_bytes: u64,
-    /// Whether a local, separately switchable danmaku track was requested.
+    /// 是否请求了本地可独立开关的弹幕轨道。
     pub include_danmaku: bool,
-    /// Whether this session may keep recording after its player page closes.
+    /// 该会话是否可以在其播放器页关闭后继续录制。
     pub continue_on_leave: bool,
-    /// Number of danmaku events successfully written to the sidecar so far.
+    /// 到目前为止成功写入伴生文件的弹幕事件数量。
     pub danmaku_count: u64,
-    /// Relative sidecar path inside the recording bundle, when enabled.
+    /// 启用时，录制分卷内伴生文件的相对路径。
     pub danmaku_file: Option<String>,
-    /// Absolute path of the playable media for the native file reveal action.
-    /// The playback URL itself is intentionally separate.
+    /// 供原生文件定位操作使用的可播放媒体绝对路径。
+    /// 播放 URL 本身刻意与之分开。
     pub file_path: String,
     pub error: Option<String>,
 }
@@ -109,17 +108,16 @@ pub struct RecordingStartInput {
     pub user_name: String,
     pub cover: String,
     pub user_avatar: String,
-    /// Save the active danmaku connection as a synchronized sidecar track.
+    /// 把活动的弹幕连接保存为同步的伴生轨道。
     #[serde(default)]
     pub include_danmaku: Option<bool>,
-    /// Keep the media task and any requested danmaku sidecar capture alive
-    /// when the current player page is left.
+    /// 离开当前播放器页时，保持媒体任务及请求的弹幕伴生采集继续运行。
     #[serde(default)]
     pub continue_on_leave: Option<bool>,
 }
 
-/// Background continuation is unconditional: an unspecified request keeps the
-/// task alive after its page is left, and only an explicit `false` opts out.
+/// 后台延续是无条件的：未指定的请求会在页面离开后保持任务存活，
+/// 只有显式的 `false` 才选择退出。
 pub(crate) const CONTINUE_ON_LEAVE_DEFAULT: bool = true;
 
 impl RecordingStartInput {
@@ -268,7 +266,7 @@ impl Default for RecordingStorageConfig {
 struct RecordingStorageState {
     default_root: PathBuf,
     current_root: PathBuf,
-    /// Includes the current and default roots, followed by historical roots.
+    /// 包含当前与默认根目录，其后是历史根目录。
     roots: Vec<PathBuf>,
     history: Vec<PathBuf>,
     config_path: PathBuf,
@@ -644,8 +642,8 @@ impl Drop for BundleGuard {
     }
 }
 
-/// A process-wide manager. It owns recording tasks and lazily starts the
-/// loopback file server used by the in-app recording player.
+/// 进程级管理器。它持有录制任务，
+/// 并惰性启动应用内录制播放器使用的回环文件服务器。
 pub struct RecordingManager {
     _instance_lock: File,
     storage: Arc<Mutex<RecordingStorageState>>,
@@ -682,8 +680,8 @@ impl Drop for PendingBackgroundDanmakuStart<'_> {
             }
         }
         drop(pending);
-        // A failed start may have caused route cleanup to park the connection
-        // for this reservation. Release it once no committed recording owns it.
+        // 一次失败的启动可能已让路由清理为该预订挂起了连接。
+        // 只要没有已提交的录制持有它，就释放掉。
         self.events.release_background_danmaku(&source_key);
     }
 }
@@ -900,8 +898,8 @@ impl RecordingManager {
         validate_start_input(&input)?;
         let source_key = input.source_key.trim().to_string();
         let include_danmaku = input.include_danmaku.unwrap_or(false);
-        // Same default as the command layer, so a direct `start` call behaves like
-        // an IPC one instead of silently opting out of background continuation.
+        // 与命令层相同的默认值，使直接调用 `start` 的行为与 IPC 调用一致，
+        // 而不是静默退出后台延续。
         let continue_on_leave = input.continue_on_leave.unwrap_or(CONTINUE_ON_LEAVE_DEFAULT);
         let _danmaku_start_reservation = self.reserve_background_danmaku_start(
             &source_key,
@@ -913,10 +911,9 @@ impl RecordingManager {
             input.source.protocol
         };
         validate_recording_source(source_protocol, &input.source, proxy)?;
-        // Serialize the start lifecycle so duplicate checks stay atomic. The
-        // session mutex itself is released before proxy construction and
-        // filesystem I/O, so a slow disk or proxy cannot block stop/list/
-        // capture_danmaku.
+        // 对启动生命周期串行化，保证去重检查的原子性。会话互斥锁本身在代理构造和
+        // 文件系统 I/O 之前就会释放，
+        // 因此慢磁盘或代理不会阻塞 stop/list/capture_danmaku。
         let _start_gate = self
             .start_gate
             .lock()
@@ -967,9 +964,8 @@ impl RecordingManager {
         drop(finalizing);
         drop(sessions);
 
-        // Validate the proxy before creating a bundle. A malformed proxy must
-        // not leave behind metadata that looks like an active recording but
-        // has no task attached to it.
+        // 在创建分卷之前先校验代理。格式错误的代理不得留下看似活动录制、
+        // 却没有任务挂载的元数据。
         let stream_client = http_client::recording_stream_client_for_proxy(proxy)?;
 
         let root = self.current_root();
@@ -1063,9 +1059,9 @@ impl RecordingManager {
             .sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Shutdown may stop waiting for a slow start lifecycle once its shared
-        // deadline expires. Commit under the session lock only after checking
-        // the fence again, so that drain and spawn cannot cross each other.
+        // 一旦共享截止时间到期，关机流程可以停止等待缓慢的启动生命周期。
+        // 只有在再次检查围栏之后才在会话锁下提交，
+        // 使 drain 与 spawn 无法交错穿越。
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(AppError::new(
                 "recording_shutting_down",
@@ -1140,10 +1136,9 @@ impl RecordingManager {
             }
         });
         let item = state.snapshot();
-        // No other start can pass the gate while this task is being built, so
-        // the reservation checked above remains valid. Shutdown sets its fence
-        // before waiting on the gate; a start past the pre-spawn check commits
-        // here and is then drained with the other sessions.
+        // 在该任务构建期间没有其他启动能通过闸门，因此上面检查过的预订仍然有效。
+        // 关机流程会在等待闸门之前设置自己的围栏；越过预检查的启动在这里提交，
+        // 随后与其他会话一起被 drain。
         sessions.insert(
             Uuid::new_v4().to_string(),
             Session {
@@ -1159,13 +1154,12 @@ impl RecordingManager {
         Ok(item)
     }
 
-    /// Marks an active recording as continuing after its player page closes.
+    /// 把进行中的录制标记为在其播放器页关闭后继续。
     ///
-    /// The leave guard calls this when the user chooses "继续录制并离开" while
-    /// leaving the room. Flipping the flag makes
-    /// `has_background_danmaku_recording` true, so the room's danmaku websocket
-    /// is detached to the background on unmount (and released when the session
-    /// finishes) instead of being torn down.
+    /// 用户在离开房间时选择"继续录制并离开"时由离开拦截调用。翻转标记会让
+    /// `has_background_danmaku_recording` 变为 true，于是房间的弹幕 websocket
+    /// 在卸载时被移入后台（会话结束时释放），
+    /// 而不是被拆除。
     pub fn set_continue_on_leave(
         &self,
         id: &str,
@@ -1296,18 +1290,18 @@ impl RecordingManager {
                 ));
             }
         }
-        // The storage root comes from the lookup, not from `bundle.parent()`:
-        // an id spans two path levels, so the parent is the room directory. The
-        // library is keyed by storage root, so a room directory would silently
-        // match no entry and leave the deleted recording in the index.
+        // 存储根来自查询结果，而不是 `bundle.parent()`：
+        // 一个 id 跨越两级路径，其父目录是房间目录。
+        // 库按存储根索引，房间目录会静默匹配不到任何条目，
+        // 导致已删除的录制仍留在索引里。
         let Some((root, bundle)) = find_bundle_in_root(&self.storage_roots(), id) else {
             return Ok(());
         };
         std::fs::remove_dir_all(&bundle).map_err(|error| {
             AppError::new("recording_delete_error", format!("删除录制失败: {error}"))
         })?;
-        // An emptied room directory is not left behind as a stray entry, but a
-        // room that still holds other sessions must survive.
+        // 清空的房间目录不会作为游离条目残留，
+        // 但仍持有其他会话的房间目录必须保留。
         if let Some(room_dir) = bundle.parent()
             && room_dir != root
         {
@@ -1370,9 +1364,9 @@ impl RecordingManager {
         Ok(Some(self.playback.url(id, file).await?))
     }
 
-    /// Converts the recorded danmaku sidecar into an ASS subtitle placed next
-    /// to the media file, using the media stem so external players such as
-    /// PotPlayer or mpv pick it up automatically. Returns the written path.
+    /// 把录制的弹幕伴生文件转换为 ASS 字幕并放在媒体文件旁，
+    /// 复用媒体词干命名，让 PotPlayer、mpv 等外部播放器自动加载。
+    /// 返回写出的路径。
     pub async fn export_danmaku_ass(
         &self,
         id: &str,
@@ -1404,8 +1398,8 @@ impl RecordingManager {
         }
         let bundle = root.join(id);
         let source = bundle.join(danmaku_relative);
-        // Reuse the media stem so a subtitle sits beside the video with the
-        // name every desktop player looks for.
+        // 复用媒体词干，使字幕以所有桌面播放器都会查找的名字
+        // 紧挨着视频文件放置。
         let target = bundle.join(media_relative).with_extension("ass");
 
         tokio::task::spawn_blocking(move || -> AppResult<String> {
@@ -1447,9 +1441,8 @@ impl RecordingManager {
         })?
     }
 
-    /// Appends one already-batched danmaku payload to every matching active
-    /// recording. The source key fence prevents a room switch from leaking
-    /// the new room's chat into an older recording.
+    /// 把一批已批量化的弹幕负载追加到每个匹配的活动录制。
+    /// 源键围栏防止房间切换把新房间的聊天泄漏进较早的录制。
     pub fn capture_danmaku(&self, source_key: &str, events: &[DanmakuEvent]) {
         if events.is_empty() {
             return;
@@ -1483,9 +1476,8 @@ impl RecordingManager {
         }
     }
 
-    /// Whether leaving this source must retain its danmaku websocket. Only
-    /// sessions explicitly configured for both sidecar capture and background
-    /// recording own a connection after their player page closes.
+    /// 离开该源时是否必须保留其弹幕 websocket。只有在播放器页关闭后，
+    /// 显式配置了伴生采集且后台录制的会话才持有连接。
     pub fn has_background_danmaku_recording(&self, source_key: &str) -> bool {
         if self
             .pending_background_danmaku
@@ -1519,9 +1511,9 @@ impl RecordingManager {
             })
     }
 
-    /// Number of tasks currently capturing media, matching the rows the library
-    /// shows as 录制中. Sessions already finalizing are excluded: they are
-    /// saving rather than recording, and the shutdown path waits for them.
+    /// 当前正在采集媒体的任务数量，对应库界面显示为"录制中"的行。
+    /// 已在收尾的会话不计入：它们在保存而非录制，
+    /// 且关机路径会等待它们完成。
     pub fn active_count(&self) -> usize {
         let mut sessions = self
             .sessions
@@ -1532,9 +1524,9 @@ impl RecordingManager {
     }
 
     pub async fn stop_all_graceful(&self) {
-        // Fence new starts immediately. Taking the gate afterwards is a barrier:
-        // a start already past its pre-spawn check commits its task before the
-        // manager drains sessions, while every later start fails.
+        // 立即对新启动设置围栏。之后获取闸门是一道屏障：
+        // 已经越过预检查的启动会在 manager drain 会话之前提交任务，
+        // 而此后所有的启动都会失败。
         if self.shutting_down.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -1577,7 +1569,7 @@ impl RecordingManager {
         self.playback.stop();
     }
 
-    /// Synchronous compatibility wrapper for non-async shutdown hooks.
+    /// 为非异步关机钩子提供的同步兼容包装。
     pub fn stop_all(&self) {
         let result = std::thread::scope(|scope| {
             scope
@@ -1774,9 +1766,9 @@ fn finish_interrupted_session(state: &Arc<SessionState>, error: String) {
     );
 }
 
-/// Promotes a media part left behind by a worker that terminated before the
-/// normal task finalizer could publish it. Revalidate the metadata path here
-/// because this helper is also called from asynchronous error paths.
+/// 接管某个 worker 在正常任务收尾之前终止而遗留的媒体分片。
+/// 这里要重新校验元数据路径，
+/// 因为异步错误路径也会调用这个辅助函数。
 fn salvage_temporary_media_after_worker_failure(state: &Arc<SessionState>) {
     let (recording_id, media_file) = {
         let stored = state
@@ -1822,8 +1814,8 @@ fn create_split_segment(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
-    // A split is a new session of the same room, so it stays under the same room
-    // directory and only takes a fresh `username_starttime` level.
+    // 切分是同一房间的新会话，因此仍在同一个房间目录之下，
+    // 只需取新的 `username_starttime` 一级。
     let session_dir = format!(
         "{}_{}",
         sanitize_bundle_component(&previous.user_name, "未知用户", 120),
@@ -1980,15 +1972,14 @@ async fn run_ffmpeg_recording(
         }
     };
 
-    // `start` only binds the loopback listener. Wait until it actually serves a
-    // playlist with readable segments before ffmpeg opens it: the demuxer probes
-    // the URL exactly once, so an ad break or a stale token at this moment would
-    // otherwise abort the whole recording with `Invalid data found when
-    // processing input` and leave no media file behind.
+    // `start` 只绑定回环监听器。要等到它真正开始提供带可读分片的播放列表后
+    // 再让 ffmpeg 打开：解复用器只探测一次 URL，
+    // 否则此刻的广告插播或过期 token 会让整场录制以
+    // `Invalid data found when processing input` 失败，
+    // 并且不留下任何媒体文件。
     //
-    // `None` below means a stop won the race. A cancellation that arrived before
-    // this point leaves `changed()` with nothing to report, so the flag is read
-    // directly first.
+    // 下面的 `None` 表示停止赢得了竞争。在此之前到达的取消会让 `changed()`
+    // 无事可报，因此先直接读取标志位。
     let warmup = if *cancel.borrow() {
         None
     } else {
@@ -2209,10 +2200,10 @@ fn finish_session_inner(
     if salvage_temporary_media {
         salvage_temporary_media_after_worker_failure(state);
     }
-    // Close the sidecar before publishing the finished flag. A dispatcher
-    // callback that was already in flight either completes before this lock
-    // or observes the close flag and skips, so the final metadata count is
-    // stable without exposing a half-written metadata snapshot to list().
+    // 在发布完成标志之前先关闭伴生文件。已经在途的分发回调要么在这把锁之前
+    // 完成，要么观察到关闭标志而跳过，
+    // 因此最终元数据计数保持稳定，
+    // 也不会向 list() 暴露半写的元数据快照。
     state.danmaku_closed.store(true, Ordering::Release);
     let mut danmaku_writer = state
         .danmaku_writer
@@ -2245,9 +2236,8 @@ fn finish_session_inner(
             Some(previous) => format!("{previous}; 保存录制结束状态失败: {}", error.message),
             None => format!("保存录制结束状态失败: {}", error.message),
         });
-        // A rename can fail transiently after the previous metadata file was
-        // removed. Persist the failed state once more so a restart does not
-        // mistake this session for an active recording.
+        // 在上一个元数据文件被删除之后，rename 可能瞬时失败。再把失败状态持久化
+        // 一次，避免重启时把这个会话误判为活动录制。
         if let Err(retry_error) = write_metadata(&state.bundle, &stored) {
             tracing::error!(
                 recording_id = %stored.id,
@@ -2364,7 +2354,7 @@ fn recording_file_stem(user_name: &str, title: &str, started_at: i64) -> String 
     format!("{user}_{title}_{timestamp}")
 }
 
-/// Outer bundle level: every session of one room lands under `platform_roomid`.
+/// 外层分卷层级：同一房间的每个会话都落在 `platform_roomid` 之下。
 fn recording_bundle_room_dir(input: &RecordingStartInput) -> String {
     let platform = input
         .site_id
@@ -2389,9 +2379,9 @@ fn recording_bundle_room_dir(input: &RecordingStartInput) -> String {
     )
 }
 
-/// Inner bundle level: one recording session, named `username_starttime`. The
-/// timestamp is the same `recording_timestamp` the media file name carries, so a
-/// session directory and the file inside it agree.
+/// 内层分卷层级：一次录制会话，命名为 `username_starttime`。时间戳与媒体
+/// 文件名携带的 `recording_timestamp` 相同，
+/// 因此会话目录与其中的文件相互对应。
 fn recording_bundle_session_dir(input: &RecordingStartInput, started_at: i64) -> String {
     format!(
         "{}_{}",
@@ -2400,11 +2390,11 @@ fn recording_bundle_session_dir(input: &RecordingStartInput, started_at: i64) ->
     )
 }
 
-/// Creates `<root>/<room_dir>/<session_dir>/` and returns the absolute bundle
-/// path together with the id, which is that bundle relative to `root`.
+/// 创建 `<root>/<room_dir>/<session_dir>/` 并返回绝对分卷路径及其 id，
+/// id 即该分卷相对于 `root` 的路径。
 ///
-/// The room level is shared by every session of the room, so only the session
-/// level takes a suffix when two recordings start within the same second.
+/// 房间层级由该房间的所有会话共享，因此只有会话层级
+/// 在两场录制同一秒内开始时追加后缀。
 fn create_recording_bundle(
     root: &Path,
     known_roots: &[PathBuf],
@@ -2430,8 +2420,8 @@ fn create_recording_bundle(
         if !is_safe_recording_id(&id) {
             return Err(AppError::new("recording_storage_error", "录制目录名称无效"));
         }
-        // A recording is addressed by this relative id, so it has to be free in
-        // every configured storage root and not just the one being written to.
+        // 录制通过这个相对 id 寻址，所以它在每个已配置的存储根中都必须可用，
+        // 而不仅仅是在当前写入的这个根里。
         if known_roots
             .iter()
             .any(|known_root| known_root.join(&id).exists())
@@ -2529,13 +2519,13 @@ fn unix_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-/// Validates a recording id, which is also its path relative to a storage root.
+/// 校验录制 id，它同时也是相对于某个存储根的路径。
 ///
-/// The id has exactly two segments — `<platform>_<room>/<user>_<timestamp>` — so
-/// one room groups all of its sessions. This is the only guard against traversing
-/// out of a storage root, so it rejects anything that is not two plain names:
-/// `..`, absolute paths, empty or dot-only segments, and separators beyond the
-/// single `/` that joins the two levels.
+/// id 恰好有两段 —— `<platform>_<room>/<user>_<timestamp>` —— 因此一个房间
+/// 把它所有会话归为一组。这是防止逃出存储根的唯一守卫，
+/// 所以任何不是两个普通名字的内容都会被拒绝：
+/// `..`、绝对路径、空段或仅含点的段，
+/// 以及除连接两级的单个 `/` 之外的分隔符。
 fn is_safe_recording_id(id: &str) -> bool {
     if id.is_empty()
         || id.len() > 360
@@ -2553,22 +2543,22 @@ fn is_safe_recording_id(id: &str) -> bool {
     if !is_safe_bundle_segment(room_dir) || !is_safe_bundle_segment(session_dir) {
         return false;
     }
-    // The room level keeps the `<platform>_<room>` shape the library groups by.
+    // 房间层级保持 `<platform>_<room>` 形态，库正是按它分组。
     let Some((platform, room)) = room_dir.split_once('_') else {
         return false;
     };
     if platform.is_empty() || room.is_empty() {
         return false;
     }
-    // Belt and braces: the parsed form must still be exactly two plain
-    // components, so no `.`/`..`/prefix slips through the textual checks.
+    // 双保险：解析后的形式必须仍然恰好是两个普通组件，
+    // 确保没有 `.`/`..`/前缀绕过文本层面的检查。
     let mut components = Path::new(id).components();
     matches!(components.next(), Some(Component::Normal(_)))
         && matches!(components.next(), Some(Component::Normal(_)))
         && components.next().is_none()
 }
 
-/// One level of a bundle path: a plain directory name and nothing else.
+/// 分卷路径中的一级：只能是普通目录名，不能有其他内容。
 fn is_safe_bundle_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment.trim() == segment
@@ -2733,8 +2723,8 @@ fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
             "录制保存位置必须是绝对目录",
         ));
     }
-    // A filesystem root is too broad for a recording library and is almost
-    // always an accidental directory-picker selection.
+    // 文件系统根目录对录制库来说过于宽泛，
+    // 几乎总是目录选择器的误选结果。
     if path.parent().is_none() {
         return Err(AppError::new(
             "recording_storage_path_invalid",
@@ -2789,8 +2779,8 @@ fn prepare_storage_root(path: &Path) -> AppResult<PathBuf> {
 
 fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, PathBuf)>> {
     let mut moved = Vec::new();
-    // Bundles sit two levels down, so the ids drive the move and the room level
-    // is recreated under the target root as needed.
+    // 分卷位于两级之下，因此移动由 id 驱动，
+    // 并在需要时于目标根下重建房间层级。
     let candidates = list_bundle_candidates(from).map_err(|error| {
         AppError::new(
             "recording_storage_error",
@@ -2838,8 +2828,8 @@ fn migrate_recording_bundles(from: &Path, to: &Path) -> AppResult<Vec<(PathBuf, 
                 format!("目标录制目录已存在: {}", target.display()),
             ));
         }
-        // The room level may not exist in the target root yet. Creating it before
-        // the rename keeps the move a single atomic step per bundle.
+        // 目标根下可能还没有房间层级。在 rename 之前创建它，
+        // 让每次移动对单个分卷而言都是一步原子操作。
         if let Some(parent) = target.parent()
             && let Err(error) = std::fs::create_dir_all(parent)
         {
@@ -2916,10 +2906,10 @@ fn find_bundle(roots: &[PathBuf], id: &str) -> Option<PathBuf> {
     find_bundle_in_root(roots, id).map(|(_root, bundle)| bundle)
 }
 
-/// Locates a recording and reports which storage root holds it.
+/// 定位一场录制，并报告它位于哪个存储根。
 ///
-/// The root is returned rather than derived from the bundle: an id spans two path
-/// levels, so `bundle.parent()` is the room directory and not the storage root.
+/// 返回根目录而不是从分卷推导：一个 id 跨越两级路径，
+/// `bundle.parent()` 是房间目录而不是存储根。
 fn find_bundle_in_root(roots: &[PathBuf], id: &str) -> Option<(PathBuf, PathBuf)> {
     if !is_safe_recording_id(id) {
         return None;
@@ -2970,8 +2960,8 @@ fn write_bundle_file_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Writes through a sibling temporary file and publishes only when `write`
-/// returns `Some`. `None` is an intentional abort used by empty ASS exports.
+/// 经由同级的临时文件写入，仅当 `write` 返回 `Some` 时才发布。
+/// `None` 是刻意的放弃，供空的 ASS 导出使用。
 fn write_bundle_file_with_sync<T>(
     path: &Path,
     write: impl FnOnce(&mut File) -> std::io::Result<Option<T>>,
@@ -3106,10 +3096,10 @@ fn recover_transaction_sidecars(
     Ok(())
 }
 
-/// Accepts a metadata replacement only when it belongs to this bundle.
+/// 仅当元数据替换属于本分卷时才接受。
 ///
-/// The id spans both bundle levels, so it is matched against the room and session
-/// directories together rather than against the bundle's own name.
+/// id 同时跨越分卷的两级，因此要与房间目录和会话目录一起匹配，
+/// 而不是只与分卷自身的名字匹配。
 fn valid_metadata_replacement(bytes: &[u8], bundle: &Path) -> bool {
     let Ok(stored) = parse_stored_recording(bytes) else {
         return false;
@@ -3146,11 +3136,11 @@ fn recording_root_modified_at(root: &Path) -> Option<SystemTime> {
         .ok()
 }
 
-/// Lists every `<room_dir>/<session_dir>` under a storage root as `(id, path)`.
+/// 列出某个存储根下的全部 `<room_dir>/<session_dir>` 为 `(id, path)`。
 ///
-/// Used by the recovery pass, which needs the id alongside the directory. Entries
-/// whose two levels do not form a valid id are skipped, so a stray directory or a
-/// pre-nesting single-level bundle is ignored rather than treated as a recording.
+/// 恢复流程使用它，需要 id 与目录并存。两级无法构成有效 id 的条目会被跳过，
+/// 因此游离目录或嵌套布局之前的单级分卷会被忽略，
+/// 而不会被当作一场录制。
 fn list_bundle_candidates(root: &Path) -> AppResult<Vec<(String, PathBuf)>> {
     let room_entries = std::fs::read_dir(root)
         .map_err(|error| AppError::new("recording_storage_error", error.to_string()))?;
@@ -3184,11 +3174,10 @@ fn list_bundle_candidates(root: &Path) -> AppResult<Vec<(String, PathBuf)>> {
     Ok(candidates)
 }
 
-/// Scans `<root>/<room_dir>/<session_dir>/metadata.json`.
+/// 扫描 `<root>/<room_dir>/<session_dir>/metadata.json`。
 ///
-/// Bundles live two levels down, so the outer loop walks room directories and the
-/// inner one their sessions. Single-level directories written before this layout
-/// carry no session level and are simply not found.
+/// 分卷位于两级之下，因此外层循环遍历房间目录，内层遍历其会话。
+/// 在此布局之前写入的单级目录没有会话层级，自然不会被找到。
 fn scan_recording_root(root: &Path) -> HashMap<String, StoredRecording> {
     let mut recordings = HashMap::new();
     let Ok(room_entries) = std::fs::read_dir(root) else {
@@ -3233,8 +3222,8 @@ fn scan_recording_root(root: &Path) -> HashMap<String, StoredRecording> {
                     continue;
                 }
             };
-            // `Path::ends_with` compares whole components, so a two-segment id
-            // still has to match the room and session directories exactly.
+            // `Path::ends_with` 按完整组件比较，因此两段的 id
+            // 仍必须与房间和会话目录精确匹配。
             if !is_safe_recording_id(&stored.id) || !path.ends_with(&stored.id) {
                 continue;
             }
@@ -3499,8 +3488,8 @@ impl PlaybackServer {
             }
         }
 
-        // Bind outside the synchronous mutex. Tauri commands may call this
-        // concurrently when two library cards are opened at once.
+        // 在同步互斥锁之外绑定。两张库卡片同时打开时，
+        // Tauri 命令可能并发调用这里。
         let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|error| {
             AppError::new(
                 "recording_server_error",
@@ -3561,8 +3550,8 @@ fn local_playback_url(base_url: &str, token: &str, id: &str, relative: &str) -> 
         .path_segments_mut()
         .map_err(|_| AppError::new("recording_server_error", "录制回放地址不支持文件路径"))?;
     segments.clear().push(token);
-    // The id spans two path levels, so it contributes two URL segments. The
-    // server splits them back apart in the same order.
+    // id 占据两级路径，因此贡献两个 URL 段。
+    // 服务器按相同顺序把它们重新拆开。
     for level in id.split('/') {
         segments.push(level);
     }
@@ -3656,7 +3645,7 @@ async fn handle_playback_client(
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
-    // A recording id is two path levels, so it occupies two URL segments here.
+    // 录制 id 是两级路径，因此在这里占据两个 URL 段。
     let Some(encoded_room) = components.next() else {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
@@ -3937,9 +3926,9 @@ mod tests {
     use tokio::sync::{oneshot, watch};
     use uuid::Uuid;
 
-    /// A recording id in the on-disk shape: `<platform>_<room>/<user>_<time>`.
-    /// Tests that create a bundle by hand must `create_dir_all` it, since the id
-    /// now spans a room directory and a session directory.
+    /// 磁盘形态的录制 id：`<platform>_<room>/<user>_<time>`。
+    /// 手工创建分卷的测试必须自行 `create_dir_all`，
+    /// 因为 id 现在跨越房间目录与会话目录。
     fn test_recording_id() -> String {
         format!("bilibili_{}/主播_20260820-192158", Uuid::new_v4())
     }
@@ -3979,8 +3968,8 @@ mod tests {
         let room_dir = recording_bundle_room_dir(&input);
         assert_eq!(room_dir, "bilibili_100");
         let session_dir = recording_bundle_session_dir(&input, started_at);
-        // The session level pairs the user name with the same timestamp the media
-        // file carries, so a bundle and the file inside it agree.
+        // 会话层级把用户名与媒体文件携带的同一时间戳配对，
+        // 因此分卷与其中的文件相互对应。
         assert!(session_dir.ends_with(&recording_timestamp(started_at)));
 
         let roots = [root.clone()];
@@ -3991,8 +3980,8 @@ mod tests {
         let (_third, third_id) =
             create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
 
-        // Every session of one room shares the room directory; only the session
-        // level takes a suffix when two of them collide.
+        // 同一房间的所有会话共享房间目录；只有会话层级
+        // 在两者冲突时追加后缀。
         assert_eq!(first, root.join(&room_dir).join(&session_dir));
         assert_eq!(first_id, format!("{room_dir}/{session_dir}"));
         assert_eq!(second_id, format!("{room_dir}/{session_dir}_1"));
@@ -4005,8 +3994,8 @@ mod tests {
         let all_roots = [historical_root.clone(), root.clone()];
         let (_historical, historical_id) =
             create_recording_bundle(&historical_root, &all_roots, &room_dir, &session_dir).unwrap();
-        // Ids address a recording across every storage root, so a name already
-        // taken in another root is skipped rather than reused.
+        // id 在所有存储根中寻址同一场录制，
+        // 因此在另一个根中已被占用的名字会被跳过而不是复用。
         assert_eq!(historical_id, format!("{room_dir}/{session_dir}_3"));
 
         let mut iptv = input;
@@ -4024,7 +4013,7 @@ mod tests {
     fn scan_finds_nested_bundles_and_ignores_single_level_ones() {
         let root = std::env::temp_dir().join(format!("rlive-recording-scan-{}", Uuid::new_v4()));
 
-        // Two sessions of the same room share one room directory.
+        // 同一房间的两个会话共用一个房间目录。
         let first_id = "bilibili_100/主播_20260820-192158".to_string();
         let second_id = "bilibili_100/主播_20260820-193000".to_string();
         for id in [&first_id, &second_id] {
@@ -4033,8 +4022,8 @@ mod tests {
             write_metadata(&bundle, &completed_recording(id.clone(), "100")).unwrap();
         }
 
-        // A pre-nesting single-level bundle: its metadata sits one level up, so
-        // the two-level scan does not reach it. The files stay on disk untouched.
+        // 嵌套布局之前的单级分卷：它的元数据在上一级，
+        // 两级扫描不会触及它。文件原样留在磁盘上。
         let legacy = root.join("bilibili_legacy");
         std::fs::create_dir_all(&legacy).unwrap();
         write_metadata(
@@ -4050,7 +4039,7 @@ mod tests {
         assert!(!found.contains_key("bilibili_legacy"));
         assert!(legacy.join("metadata.json").is_file());
 
-        // Both sessions resolve back to their own bundle through the id.
+        // 两个会话都能通过 id 解析回各自的分卷。
         let roots = [root.clone()];
         assert_eq!(
             find_bundle(&roots, &first_id).unwrap(),
@@ -4061,11 +4050,11 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Deleting must drop the recording from the cached library index too.
+    /// 删除时也要把该录制从缓存的库索引中去掉。
     ///
-    /// The index is keyed by storage root. Deriving that root from
-    /// `bundle.parent()` yields the room directory under the nested layout, which
-    /// matches no index entry, so the deleted card reappeared on every refresh.
+    /// 索引按存储根索引。在嵌套布局下从 `bundle.parent()` 推导出的
+    /// 是房间目录，匹配不到任何索引条目，
+    /// 于是被删除的卡片在每次刷新时都会重新出现。
     #[test]
     fn deleting_a_recording_also_drops_it_from_the_library_index() {
         let app_directory =
@@ -4073,8 +4062,8 @@ mod tests {
         let manager = RecordingManager::new(&app_directory).unwrap();
         let root = PathBuf::from(manager.storage_info().path);
 
-        // Two sessions of one room, so the room directory must outlive the first
-        // delete and disappear only with the second.
+        // 同一房间的两个会话，因此房间目录必须在第一次删除后存活，
+        // 只在第二次删除时消失。
         let kept_id = "bilibili_100/主播_20260820-192158".to_string();
         let removed_id = "bilibili_100/主播_20260820-193000".to_string();
         for id in [&kept_id, &removed_id] {
@@ -4083,7 +4072,7 @@ mod tests {
             write_metadata(&bundle, &completed_recording(id.clone(), "100")).unwrap();
         }
 
-        // Listing first is what populates the cached index.
+        // 先执行列表操作，正是它填充缓存的索引。
         let listed = manager.list().unwrap();
         assert_eq!(listed.len(), 2);
 
@@ -4098,15 +4087,15 @@ mod tests {
             "删除后的录制不应继续出现在列表中"
         );
         assert!(!root.join(&removed_id).exists());
-        // The surviving session keeps the shared room directory.
+        // 留存下来的会话保留共享的房间目录。
         assert!(root.join("bilibili_100").is_dir());
 
         manager.delete(&kept_id).unwrap();
         assert!(manager.list().unwrap().is_empty());
-        // The last session of a room takes the emptied room directory with it.
+        // 房间的最后一个会话删除时带走被清空的房间目录。
         assert!(!root.join("bilibili_100").exists());
 
-        // Deleting something already gone stays a success.
+        // 删除已经不存在的内容仍然视为成功。
         manager.delete(&removed_id).unwrap();
 
         drop(manager);
@@ -4118,14 +4107,14 @@ mod tests {
         assert!(is_safe_recording_id("bilibili_100/user_20260820-192158"));
         assert!(is_safe_recording_id("iptv_cctv1/未知用户_20260820-192158"));
 
-        // A single level is the pre-nesting layout and is no longer an id.
+        // 单级属于嵌套之前的布局，已不再构成有效 id。
         assert!(!is_safe_recording_id("bilibili_100"));
-        // Three levels would let a bundle hide below its room directory.
+        // 三级会让某个分卷藏到其房间目录之下。
         assert!(!is_safe_recording_id("bilibili_100/user_1/extra"));
         assert!(!is_safe_recording_id(&Uuid::new_v4().to_string()));
 
-        // Traversal, absolute paths, and dot-only levels stay rejected: this is
-        // the only guard keeping playback and deletion inside a storage root.
+        // 路径穿越、绝对路径和仅含点的层级仍然被拒绝：
+        // 这是把播放与删除限制在存储根之内的唯一守卫。
         assert!(!is_safe_recording_id("../bilibili_100/user_1"));
         assert!(!is_safe_recording_id("bilibili_100/../../etc"));
         assert!(!is_safe_recording_id("bilibili_100/.."));
@@ -4135,10 +4124,10 @@ mod tests {
         assert!(!is_safe_recording_id("bilibili_100/user_1/"));
         assert!(!is_safe_recording_id("bilibili_100\\user_1"));
         assert!(!is_safe_recording_id("bilibili:100/user_1"));
-        // The room level still has to carry the `<platform>_<room>` shape.
+        // 房间层级仍必须符合 `<platform>_<room>` 形态。
         assert!(!is_safe_recording_id("bilibili/user_1"));
         assert!(!is_safe_recording_id("_100/user_1"));
-        // Trailing dots and surrounding whitespace break Windows paths.
+        // 末尾的点号和首尾空白会破坏 Windows 路径。
         assert!(!is_safe_recording_id("bilibili_100/user_1."));
         assert!(!is_safe_recording_id("bilibili_100./user_1"));
         assert!(!is_safe_recording_id(" bilibili_100/user_1"));
@@ -4241,7 +4230,7 @@ mod tests {
         let id = test_recording_id();
         let bundle = root.join(&id);
         std::fs::create_dir_all(&bundle).unwrap();
-        // The id spans both bundle levels, so it cannot come from `file_name()`.
+        // id 跨越分卷的两级，因此不可能来自 `file_name()`。
         let mut old = completed_recording(id, "old");
         old.status = RecordingStatus::Recording;
         let mut next = old.clone();
@@ -4306,15 +4295,14 @@ mod tests {
         assert!(url.contains("%20"));
         let parsed = Url::parse(&url).unwrap();
         let segments = parsed.path_segments().unwrap().collect::<Vec<_>>();
-        // The id occupies two segments after the token, and the playback server
-        // rejoins exactly those two. Encoder and parser have to agree here or
-        // every recording plays back as a 404.
+        // id 在 token 之后占据两段，回放服务器恰好重新拼接这两段。
+        // 编码端与解析端必须在此一致，
+        // 否则每场录制都会以 404 播放。
         let room = percent_decode_str(segments[1]).decode_utf8().unwrap();
         let session = percent_decode_str(segments[2]).decode_utf8().unwrap();
         assert_eq!(format!("{room}/{session}"), id);
         assert!(is_safe_recording_id(&format!("{room}/{session}")));
-        // The separator inside the id must not survive as a literal, or the two
-        // levels would collapse into one unusable segment.
+        // id 内部的分隔符不能原样保留，否则两级会坍缩成一个不可用的段。
         assert!(!segments[1].contains("%2F"));
         let encoded = segments.last().unwrap().to_string();
         assert_eq!(
@@ -4402,8 +4390,8 @@ mod tests {
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("stream.flv"), b"media").unwrap();
         write_metadata(&bundle, &stored).unwrap();
-        // Avoid relying on the filesystem's timestamp granularity in this unit
-        // test while exercising the same stale-root branch used in production.
+        // 单元测试中避免依赖文件系统的时间戳精度，
+        // 同时仍然走生产代码使用的同一个过期根分支。
         index.roots.get_mut(&root).unwrap().modified_at = None;
 
         index.refresh_changed_roots(std::slice::from_ref(&root));
@@ -4479,8 +4467,8 @@ mod tests {
         {
             let _reservation = manager.reserve_background_danmaku_start(source, true);
             assert!(manager.has_background_danmaku_recording(source));
-            // This is the same decision made by danmaku_disconnect while the
-            // recording start path is still doing filesystem/backend setup.
+            // 这与录制启动路径仍在进行文件系统/后端初始化时
+            // danmaku_disconnect 做出的决定一致。
             assert!(danmaku.detach_for_generation(101));
         }
         assert!(!manager.has_background_danmaku_recording(source));
@@ -4520,14 +4508,13 @@ mod tests {
             },
         );
 
-        // A room recording that has not opted into background continuation
-        // keeps no danmaku connection until the leave guard flips the flag.
+        // 未选择后台延续的房间录制不会保留任何弹幕连接，
+        // 直到离开拦截翻转标记。
         assert!(!manager.has_background_danmaku_recording("live:douyu:100"));
         let item = manager.set_continue_on_leave(&id, true).unwrap();
         assert!(item.continue_on_leave);
         assert!(manager.has_background_danmaku_recording("live:douyu:100"));
-        // The persisted metadata carries the new flag, so a restart keeps the
-        // same contract.
+        // 持久化的元数据携带新标记，重启后仍遵循同一契约。
         assert!(read_stored(&root, &id).unwrap().continue_on_leave);
 
         drop(manager);
@@ -4987,8 +4974,7 @@ mod tests {
         assert_eq!(parsed.include_danmaku, None);
         assert_eq!(parsed.continue_on_leave, None);
 
-        // Background continuation has no configurable default any more, so an
-        // unspecified request always resolves to keeping the task alive.
+        // 后台延续已无可配置默认值，未指定的请求总是解析为保持任务存活。
         let resolved = parsed.with_recording_defaults(true);
         assert_eq!(resolved.include_danmaku, Some(true));
         assert_eq!(resolved.continue_on_leave, Some(true));
@@ -5005,9 +4991,9 @@ mod tests {
 
     #[test]
     fn continue_on_leave_default_is_unconditional() {
-        // `Manager::start` resolves the same default as the command layer, so a
-        // caller that skips `with_recording_defaults` still gets background
-        // continuation instead of silently opting out of it.
+        // `Manager::start` 解析出与命令层相同的默认值，因此跳过
+        // `with_recording_defaults` 的调用方仍获得后台延续，
+        // 而不是静默退出。
         const { assert!(CONTINUE_ON_LEAVE_DEFAULT) };
 
         let mut unspecified = manager_test_input("https://example.test/live.flv", "live:a", "a");
@@ -5162,7 +5148,7 @@ mod tests {
             .await
             .unwrap();
 
-        // The media stem drives the name so external players auto-load it.
+        // 名字由媒体词干驱动，使外部播放器自动加载。
         assert_eq!(
             path,
             crate::app_paths::path_to_string(&bundle.join("stream.ass"))
@@ -5172,8 +5158,8 @@ mod tests {
         assert!(script.contains("Dialogue: 0,0:00:01.20,"));
         assert!(script.contains("你好"));
 
-        // A recording without a sidecar reports a distinct error instead of
-        // writing an empty subtitle.
+        // 没有伴生文件的录制报告一个专门的错误，
+        // 而不是写出空字幕。
         let mut plain = completed_recording(test_recording_id(), "无弹幕");
         plain.include_danmaku = false;
         let plain_bundle = root.join(&plain.id);
@@ -5477,9 +5463,8 @@ mod tests {
         (format!("http://{address}/live.flv"), server)
     }
 
-    /// Twelve one-second H.264/AAC MPEG-TS segments, ready to serve as an HLS
-    /// media playlist. The first segment carries the PAT/PMT, so it is longer
-    /// than the rest.
+    /// 十二个一秒长的 H.264/AAC MPEG-TS 分片，可直接作为 HLS 媒体列表提供服务。
+    /// 第一个分片携带 PAT/PMT，因此比其余分片更长。
     fn manager_test_ts_segments() -> Vec<Vec<u8>> {
         use base64::Engine as _;
         use std::io::Read as _;
@@ -5533,8 +5518,8 @@ mod tests {
         room_id: &str,
     ) -> RecordingStartInput {
         let mut input = manager_test_input(url, source_key, room_id);
-        // Manager lifecycle tests exercise session ownership and finalization.
-        // Valid FLV remuxing has a dedicated integration fixture below.
+        // Manager 生命周期测试检验会话归属与收尾。
+        // 合法的 FLV 重封装在下方有专门的集成夹具。
         input.source.protocol = PlaybackProtocol::Native;
         input
     }
@@ -5853,27 +5838,26 @@ mod tests {
         std::fs::remove_dir_all(app_directory).unwrap();
     }
 
-    /// Stopping an HLS recording must report 「已保存」, not 「已中断」, even when
-    /// no data is arriving.
+    /// 停止 HLS 录制必须报告「已保存」，而不是「已中断」，
+    /// 即使此时没有任何数据到达。
     ///
-    /// The stop reaches libavformat through the interrupt callback while a
-    /// segment fetch is blocked, which is when a real recording finished as
-    /// `Interrupted` with 「直播流已结束」: the HLS demuxer reported the aborted
-    /// fetch as `AVERROR_EOF` and the worker read that as the broadcast ending.
+    /// 停止请求经中断回调抵达 libavformat 时，某个分片抓取正被阻塞，
+    /// 而真实录制正是在这种情况下以 `Interrupted` 和
+    /// 「直播流已结束」收场的：HLS 解复用器把被中止的抓取上报为
+    /// `AVERROR_EOF`，worker 把它读成了直播结束。
     ///
-    /// This is the end-to-end contract, not a test of that classification.
-    /// Whether the aborted read surfaces an error or one last flushed packet is
-    /// decided inside libavformat, and with segments this small it flushes, so
-    /// the loop ends at its own cancellation check. The classification itself is
-    /// pinned by `classify_read_failure`'s unit tests in `recording_ffmpeg`.
+    /// 这里验证的是端到端契约，而不是那个分类本身。被中止的读取最终报错还是
+    /// 冲刷出最后一个数据包由 libavformat 内部决定，而在分片这么小的情况下它会
+    /// 冲刷，于是循环在自己的取消检查处结束。分类行为由
+    /// `recording_ffmpeg` 中 `classify_read_failure` 的单元测试固定。
     #[tokio::test(flavor = "multi_thread")]
     async fn stopping_an_hls_recording_while_a_fetch_is_stalled_completes_it() {
         let segments = Arc::new(manager_test_ts_segments());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let sequence = Arc::new(AtomicU64::new(0));
-        // Flipped once media is on disk. From then on a segment fetch never
-        // answers, so the stop request has to interrupt a blocked read.
+        // 媒体落盘后翻转一次。从那时起分片抓取不再应答，
+        // 停止请求必须打断一次阻塞中的读取。
         let stall = Arc::new(AtomicBool::new(false));
         let stalled_fetches = Arc::new(AtomicU64::new(0));
         let server_stall = stall.clone();
@@ -5899,9 +5883,8 @@ mod tests {
                         .and_then(|line| line.split_whitespace().nth(1))
                         .unwrap_or("");
                     let (content_type, body) = if path == "/live.m3u8" {
-                        // A one-segment sliding window: the demuxer has to come
-                        // back for a reload after every segment instead of running
-                        // ahead on a buffered window.
+                        // 单分片滑动窗口：解复用器在每个分片之后都必须回来重新加载，
+                        // 而不能靠缓冲窗口一路领先。
                         let current = sequence.load(Ordering::Relaxed);
                         (
                             "application/vnd.apple.mpegurl",
@@ -5923,8 +5906,8 @@ mod tests {
                             return;
                         };
                         if stall.load(Ordering::Relaxed) {
-                            // Headers only, then silence, so the demuxer is
-                            // blocked inside this fetch when the stop arrives.
+                            // 只有响应头，然后陷入沉默，
+                            // 使停止请求到达时解复用器正好阻塞在这场抓取里。
                             let _ = socket
                                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: 1504\r\nConnection: close\r\n\r\n")
                                 .await;
@@ -5932,8 +5915,7 @@ mod tests {
                             std::future::pending::<()>().await;
                             return;
                         }
-                        // Advance the window only once its segment has actually
-                        // been served, so no segment is ever skipped.
+                        // 只有分片真正被服务过才推进窗口，保证任何分片都不会被跳过。
                         let last = segments.len().saturating_sub(1) as u64;
                         let next = ((index as u64) + 1).min(last);
                         let _ = sequence.fetch_update(
@@ -5977,8 +5959,8 @@ mod tests {
         })
         .await
         .expect("测试服务器应开始一次会被停止打断的分片请求");
-        // Long enough for the demuxer to drain what it already fetched and block
-        // inside the stalled request.
+        // 足够让解复用器排空已抓取的内容，
+        // 并阻塞在这个停滞的请求内部。
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         let stopped = manager.stop(&active.id).await.unwrap();

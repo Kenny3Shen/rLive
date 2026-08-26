@@ -149,15 +149,15 @@ describe("mobile player layout", () => {
   });
 
   test("hides volume and side-panel buttons in mobile fullscreen", () => {
-    // Compact landscape still shows them outside fullscreen.
+    // 紧凑横屏在非全屏时仍显示这两个按钮。
     expect(showPlayerVolumeControl(true, false, false)).toBe(true);
     expect(showPlayerSidePanelControl(true, false, false)).toBe(true);
-    // Compact + fullscreen drops both; edge-swipe volume remains.
+    // 紧凑 + 全屏去掉两者；边缘滑动音量保留。
     expect(showPlayerVolumeControl(true, false, true)).toBe(false);
     expect(showPlayerSidePanelControl(true, false, true)).toBe(false);
     expect(showPlayerVolumeControl(true, true, true)).toBe(false);
     expect(showPlayerSidePanelControl(true, true, true)).toBe(false);
-    // Desktop fullscreen keeps them.
+    // 桌面全屏保留它们。
     expect(showPlayerVolumeControl(false, false, true)).toBe(true);
     expect(showPlayerSidePanelControl(false, false, true)).toBe(true);
   });
@@ -168,14 +168,13 @@ describe("mobile player layout", () => {
   });
 
   test("the portrait stack marker ignores fullscreen so CSS can lead the re-render", () => {
-    // `player.mode` trails the browser's `:fullscreen` by one state update. The
-    // marker must stay true across that frame, or the CSS keyed off it would lag
-    // exactly as much as the React classes it exists to pre-empt.
+    // `player.mode` 比 `:fullscreen` 晚一个状态更新。标记必须跨过那一帧保持 true，
+    // 否则依赖它的 CSS 会与 React 类一样滞后 —— 它存在的意义就是抢先于那些类。
     expect(usesPortraitStackLayout(true, true)).toBe(true);
     expect(usesPortraitStackLayout(true, false)).toBe(false);
     expect(usesPortraitStackLayout(false, true)).toBe(false);
 
-    // The stack itself still yields the screen to fullscreen.
+    // 堆叠层本身仍把屏幕让给全屏。
     expect(isPortraitStackedPlayer(true, false)).toBe(true);
     expect(isPortraitStackedPlayer(true, true)).toBe(false);
     expect(isPortraitStackedPlayer(false, false)).toBe(false);
@@ -185,15 +184,15 @@ describe("mobile player layout", () => {
     let retained = shouldRetainRoomSidePanel(false, true, true);
     expect(retained).toBe(true);
 
-    // Entering fullscreen rotates the viewport and closes the visible panel.
+    // 进入全屏旋转视口并关闭可见面板。
     retained = shouldRetainRoomSidePanel(retained, false, true);
     expect(retained).toBe(true);
     expect(shouldShowRoomDanmakuPanel(false, true, "chat")).toBe(false);
 
-    // Exiting fullscreen reveals the same retained chat panel and its backlog.
+    // 退出全屏重新露出同一个保活的聊天面板及其积压消息。
     expect(shouldShowRoomDanmakuPanel(true, false, "chat")).toBe(true);
 
-    // A fresh landscape room still avoids mounting a panel that was never opened.
+    // 全新的横屏房间仍避免挂载从未打开过的面板。
     expect(shouldRetainRoomSidePanel(false, false, true)).toBe(false);
     expect(shouldRetainRoomSidePanel(false, false, false)).toBe(true);
   });
@@ -254,8 +253,8 @@ describe("mobile player edge gestures", () => {
   });
 
   test("keeps taps on their picture target until a vertical adjustment is recognised", () => {
-    // A pending contact must not be captured by the stage, otherwise the
-    // floating bullet never receives pointerup and cannot open its touch action menu.
+    // 进行中的触摸接触不能被舞台捕获，否则悬浮 bullet 收不到 pointerup、
+    // 打不开它的触摸操作菜单。
     expect(playerEdgeGestureIntent(0, 0)).toBe("pending");
     expect(playerEdgeGestureIntent(6, 6)).toBe("pending");
     expect(playerEdgeGestureIntent(0, 12)).toBe("adjust");
@@ -312,8 +311,8 @@ describe("Android native player controls", () => {
     await expect(setAndroidMediaVolume(52.375, nativeInvoke)).resolves.toBe(52.375);
     await expect(setAndroidBrightness(3.125, nativeInvoke)).resolves.toBe(3.125);
     await expect(resetAndroidBrightness(nativeInvoke)).resolves.toBeUndefined();
-    // App-level commands, not `plugin:player-controls|…`: a plugin-namespaced
-    // invoke is answered by the Rust plugin and never reaches Kotlin.
+    // 应用级命令，而不是 `plugin:player-controls|…`：带插件命名空间的 invoke
+    // 由 Rust 插件应答，永远到不了 Kotlin。
     expect(calls).toEqual([
       { command: "android_player_controls_get_state", args: undefined },
       { command: "android_player_controls_set_media_volume", args: { value: 52.375 } },
@@ -397,8 +396,7 @@ describe("fullscreen top HUD", () => {
   });
 
   test("skips the scrim band when there is neither identity nor actions", () => {
-    // Otherwise a detail payload without a title paints an empty gradient strip
-    // across the top of the picture.
+    // 否则没有标题的详情负载会在画面顶部画出一条空渐变带。
     expect(
       showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: false, hasActions: false }),
     ).toBe(false);
@@ -420,9 +418,8 @@ describe("overlay chrome system gesture bar allowance", () => {
   });
 
   test("drops the inset when content is stacked below the player", () => {
-    // Portrait rooms put the danmaku panel under the picture: the gesture bar
-    // is below that panel, not below the controls. Reserving it there is the
-    // gap that appears on a cold start and hides after a fullscreen round trip.
+    // 竖屏房间把弹幕面板放在画面下方：手势栏在那个面板之下而不是控件之下。
+    // 在那里预留空间就是冷启动出现、全屏往返后消失的那道缝隙。
     expect(playerControlsAvoidSystemGestureBar(false, true)).toBe(false);
   });
 

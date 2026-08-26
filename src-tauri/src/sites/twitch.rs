@@ -1,17 +1,15 @@
-//! Twitch public-web live-site client.
+//! Twitch 公开 Web 直播站点客户端。
 //!
-//! Twitch's documented Helix endpoints require an app OAuth credential, which
-//! a desktop client must not embed.  This module instead uses the same public
-//! GraphQL endpoint and playback bootstrap exposed by `www.twitch.tv` to an
-//! anonymous visitor.  The public web client id is discovered from the
-//! bootstrap document at runtime; it is neither hard-coded nor persisted.
+//! Twitch 有文档记载的 Helix 接口需要应用级 OAuth 凭据，桌面客户端不得内嵌。
+//! 本模块改为使用 `www.twitch.tv` 向匿名访客暴露的同一批公开 GraphQL 接口和
+//! 播放引导数据。公开 Web 客户端 id 在运行时从引导文档中发现，
+//! 既不硬编码也不持久化。
 //!
-//! Browsing is paginated by *language shard* rather than by Relay cursor.
-//! Twitch answers any `after:` cursor with `IntegrityCheckFailed` unless the
-//! request comes from a browser context that passed its JavaScript integrity
-//! challenge, whereas a plain `broadcasterLanguages` filter needs nothing but
-//! the public client id.  Walking the language list therefore reaches the same
-//! depth with no token, no hidden WebView and identical behaviour on mobile.
+//! 浏览按*语言分片*分页，而不是按 Relay 游标。除非请求来自通过了其 JS 完整性
+//! 挑战的浏览器上下文，否则 Twitch 对任何 `after:` 游标都回答
+//! `IntegrityCheckFailed`；而单纯的 `broadcasterLanguages` 过滤只需要公开的
+//! 客户端 id。因此遍历语言列表即可达到相同深度：
+//! 无需 token、无需隐藏 WebView，移动端行为也一致。
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -36,59 +34,53 @@ const TWITCH_USHER_URL: &str = "https://usher.ttvnw.net/api/channel/hls";
 const PAGE_SIZE: u32 = 30;
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// The pagination axis: one shard is one `broadcasterLanguages` filter, and the
-/// empty string means "no filter", i.e. the global top-viewed listing that used
-/// to be the only reachable page.
+/// 分页轴：一个分片就是一个 `broadcasterLanguages` 过滤值，
+/// 空字符串表示"不过滤"，即过去唯一可达的全局热门列表。
 ///
-/// `first` is capped at 30 server-side, so a single unfiltered request can never
-/// see past the 30 most-watched channels. Sharding by language is what makes the
-/// tail reachable: measured against the global feed the 27 shards below yield 735
-/// distinct live channels, versus 30 without them.
+/// `first` 服务端上限为 30，因此单个不过滤的请求永远看不到观看数前 30 之外的
+/// 频道。按语言分片才让长尾可达：相对全局信息流测量，下面 27 个分片能带来
+/// 735 个去重后的直播频道，而不用它们只有 30 个。
 ///
-/// Ordered by audience size so the first pages stay the most interesting ones,
-/// and kept to languages Twitch's own directory filter offers -- an unknown code
-/// is not an error, it just returns nothing and wastes a request.
+/// 按观众规模排序，让前面的分片保持最有内容；
+/// 并限定在 Twitch 自家目录过滤提供的语言内 —— 未知的代码不是错误，
+/// 只会返回空结果并浪费一次请求。
 const LANGUAGE_SHARDS: &[&str] = &[
     "", "EN", "ZH", "JA", "KO", "ES", "PT", "DE", "FR", "RU", "IT", "PL", "TR", "TH", "VI", "AR",
     "NL", "SV", "CS", "HU", "FI", "DA", "NO", "ID", "MS", "EL", "RO",
 ];
 
-/// Shards merged into one list page. Three keeps the burst small while still
-/// filling a page: the shards overlap (a channel can be listed under both the
-/// global and its language shard), so three 30-item shards land at roughly
-/// 70-80 distinct rooms.
+/// 合并进一个列表页的分片数。取三既能让突发请求保持较小规模又能填满一页：
+/// 分片之间有重叠（一个频道可能同时出现在全局与其语言分片中），
+/// 三个 30 条的分片大约落在 70-80 个去重房间。
 const SHARD_WINDOW: usize = 3;
 
-/// Twitch decides server-side ad stitching per playback token, and the
-/// `playerType` the token was minted for is part of that decision.  `site` stays
-/// the primary because it is both clean and full quality: measured on
-/// `kaicenat` it carries the channel's whole ladder (`1080p60` source down to
-/// `audio_only`, 7 renditions) and returned no stitched ad in any sample.
+/// Twitch 按播放 token 在服务端决定广告拼接，而签发 token 时使用的 `playerType`
+/// 是决策的一部分。`site` 保持首选，因为它既干净又是全画质：
+/// 在 `kaicenat` 上实测，它携带频道的完整清晰度阶梯
+/// （`1080p60` 原画到 `audio_only`，共 7 档），
+/// 且所有样本中都没有出现拼接广告。
 pub(crate) const TWITCH_PRIMARY_PLAYER_TYPE: (&str, &str) = ("site", "web");
 
-/// Recovery order for a stitched playlist, ordered by what was measured rather
-/// than by guesswork.  Across six consecutive samples of `kaicenat` the verdict
-/// per `playerType` was completely stable, which is why this is an ordered list
-/// and not a set to try at random:
+/// 拼接广告播放列表的恢复顺序，按实测结果而非猜测排列。对 `kaicenat` 连续六次
+/// 采样中，每个 `playerType` 的结论完全稳定，因此这里是有序列表，
+/// 而不是随机尝试的集合：
 ///
-/// | profile             | stitched ad | ladder                     |
+/// | profile             | 拼接广告     | 清晰度阶梯                 |
 /// |---------------------|-------------|----------------------------|
-/// | `popout`            | no          | 7, up to `1080p60` source  |
-/// | `autoplay`          | no          | 3, capped at `360p`        |
-/// | `embed`             | yes (preroll) | 7                        |
-/// | `picture-by-picture`| yes (preroll) | 3, capped at `360p`      |
+/// | `popout`            | 无          | 7 档，最高 `1080p60` 原画  |
+/// | `autoplay`          | 无          | 3 档，封顶 `360p`          |
+/// | `embed`             | 有（preroll） | 7 档                     |
+/// | `picture-by-picture`| 有（preroll） | 3 档，封顶 `360p`         |
 ///
-/// So `popout` is tried first: it was clean *and* keeps the full ladder.
-/// `autoplay` is next -- also clean, but Twitch caps it, so it trades quality
-/// for an ad-free picture.  `embed` and `picture-by-picture` stay last precisely
-/// because they were the profiles observed carrying ads; they are retained only
-/// as a final attempt for the case where the profiles above are the stitched
-/// ones, since Twitch's per-profile decision is not guaranteed to stay fixed.
+/// 所以先试 `popout`：它既干净又保留完整阶梯。其次是 `autoplay` —— 同样干净，
+/// 但被 Twitch 封顶，用画质换取无广告画面。`embed` 和 `picture-by-picture`
+/// 放在最后，正是因为观测到它们带广告；仅当上面那些 profile 才是拼接对象时
+/// 才作为最后尝试保留 —— Twitch 按 profile 的决策并不保证一成不变。
 ///
-/// Note the ads seen on `embed` / `picture-by-picture` were `ROLL-TYPE=PREROLL`,
-/// i.e. attached to a freshly minted playback session rather than to a mid-stream
-/// commercial.  A profile being clean here therefore does not prove it survives a
-/// real commercial break; it proves Twitch does not treat all player types alike.
+/// 注意在 `embed` / `picture-by-picture` 上看到的广告都是 `ROLL-TYPE=PREROLL`，
+/// 即附着在新签发的播放会话上，而不是插播的商业广告。某个 profile 在此表现
+/// 干净并不能证明它能挺过真实的插播；它只证明 Twitch 并不一视同仁地对待
+/// 所有播放器类型。
 pub(crate) const TWITCH_AD_FALLBACK_PROFILES: [(&str, &str); 4] = [
     ("popout", "web"),
     ("autoplay", "android"),
@@ -96,12 +88,12 @@ pub(crate) const TWITCH_AD_FALLBACK_PROFILES: [(&str, &str); 4] = [
     ("picture-by-picture", "web"),
 ];
 
-/// Keep a stable browser-like UA for the web bootstrap and HLS CDN.  It does
-/// not identify an account and is not coupled to a fragile browser version.
+/// 为 Web 引导与 HLS CDN 保持稳定的类浏览器 UA。它不标识账号，
+/// 也不绑定到脆弱的浏览器版本号。
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-/// The current Twitch public-web GraphQL client id is embedded in the HTML
-/// bootstrap.  It may rotate, so retain it only in process memory.
+/// 当前 Twitch 公开 Web 的 GraphQL 客户端 id 内嵌在 HTML 引导文档中。
+/// 它可能轮换，因此只保存在进程内存里。
 #[derive(Clone)]
 struct PublicWebContext {
     client_id: String,
@@ -110,16 +102,14 @@ struct PublicWebContext {
 
 static PUBLIC_WEB_CONTEXT: OnceLock<Mutex<Option<PublicWebContext>>> = OnceLock::new();
 
-/// Twitch's web client sends a device identifier with every GraphQL request.
-/// Omitting it marks the caller as an unrecognised client, which is one of the
-/// signals that decides whether a playback token gets server-stitched ads.
-/// This is a random per-process value: it is never persisted, never derived
-/// from the machine, and identifies no account.
+/// Twitch 的 Web 客户端在每个 GraphQL 请求中都发送设备标识符。省略它会把调用方
+/// 标记为未识别客户端，这是决定播放 token 是否被服务端拼接广告的信号之一。
+/// 它是每个进程随机生成的取值：绝不持久化、不从机器信息派生、不标识任何账号。
 static GQL_DEVICE_ID: OnceLock<String> = OnceLock::new();
 
 fn gql_device_id() -> &'static str {
     GQL_DEVICE_ID.get_or_init(|| {
-        // Twitch's own identifier is 32 lowercase alphanumerics.
+        // Twitch 自己的标识符是 32 位小写字母数字。
         const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
         let raw = uuid::Uuid::new_v4().as_u128();
         let mut id = String::with_capacity(32);
@@ -136,24 +126,24 @@ fn gql_device_id() -> &'static str {
     })
 }
 
-/// Twitch's registered live-site backend.
+/// 已注册的 Twitch 直播站点后端。
 pub struct TwitchSite {
     client: Client,
     site_id: SiteId,
 }
 
-/// First shard index of `page`'s window, or `None` once the shard list is
-/// exhausted. Pure arithmetic, so a page can be requested directly without
-/// having walked the pages before it.
+/// `page` 窗口的第一个分片下标；分片列表耗尽时返回 `None`。
+/// 纯算术运算，因此可以直接请求某一页，
+/// 而不必先走完它之前的页面。
 fn shard_window_start(page: u32) -> Option<usize> {
     let start = (page.max(1) as usize - 1).checked_mul(SHARD_WINDOW)?;
     (start < LANGUAGE_SHARDS.len()).then_some(start)
 }
 
-/// A language-sharded feed: each feed type (recommend, category) knows how to
-/// ask Twitch for one language shard and where its edges live in the response.
-/// Paging walks shards instead of Relay cursors, so every page is independent
-/// and needs no per-process state.
+/// 按语言分片的信息流：每种信息流类型（推荐、分类）都知道如何向 Twitch 请求
+/// 一个语言分片，以及其边界在响应中的位置。翻页遍历的是分片而不是 Relay 游标，
+/// 每一页相互独立，
+/// 不需要任何进程内的游标状态。
 trait ShardFeed {
     fn operation_name(&self) -> &'static str;
     fn query(&self) -> &'static str;
@@ -240,8 +230,8 @@ impl ShardFeed for CategoryFeed<'_> {
     }
 }
 
-/// `broadcasterLanguages: []` means "every language" and is what page 1 uses;
-/// a concrete code restricts the shard to that language.
+/// `broadcasterLanguages: []` 表示"所有语言"，第 1 页使用它；
+/// 具体的语言代码把分片限定到该语言。
 fn language_filter(language: &str) -> Value {
     if language.is_empty() {
         json!([])
@@ -252,9 +242,8 @@ fn language_filter(language: &str) -> Value {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TwitchVariant {
-    /// A semantic ID from the HLS master playlist, rather than the variant's
-    /// position in that playlist. Twitch can reorder the playlist each time a
-    /// short-lived playback token is issued.
+    /// 来自 HLS master playlist 的语义 ID，而不是变体在该列表中的位置。
+    /// 每次签发短时效播放 token 时，Twitch 都可能重排列表。
     selector: String,
     label: String,
     url: String,
@@ -345,8 +334,8 @@ impl TwitchSite {
         Ok(context)
     }
 
-    /// One anonymous-web-visit GraphQL POST: the headers and text/plain
-    /// content type mirror Twitch's own bootstrap requests.
+    /// 一次匿名 Web 访问式的 GraphQL POST：
+    /// 请求头与 text/plain 内容类型都对齐 Twitch 自己的引导请求。
     async fn post_gql(&self, body: &Value) -> AppResult<Value> {
         let context = self.public_web_context().await?;
         let response = self
@@ -398,21 +387,17 @@ impl TwitchSite {
             .ok_or_else(|| Self::parse_err("Twitch GraphQL 响应缺少 data"))
     }
 
-    /// Fetch the language shards belonging to `page` and merge them into one
-    /// list page.
+    /// 抓取属于 `page` 的各语言分片，并把它们合并成一个列表页。
     ///
-    /// Twitch rejects every Relay `after:` cursor that is not backed by a live
-    /// browser integrity context, which is why page 2 used to be reachable only
-    /// through the hidden WebView and not at all on mobile. A shard request
-    /// carries no cursor, so the public `Client-ID` is enough and the same depth
-    /// is reachable on every platform.
+    /// Twitch 会拒绝所有没有真实浏览器完整性上下文支撑的 Relay `after:` 游标，
+    /// 这正是过去第 2 页只能靠隐藏 WebView 访问、移动端完全无法访问的原因。
+    /// 分片请求不携带游标，公开的 `Client-ID` 就够了，
+    /// 且同样的深度在每个平台都可达。
     ///
-    /// The page-to-shard mapping is fixed arithmetic, so no cursor state has to
-    /// survive between requests. Sparse categories can interleave empty shards
-    /// (measured on `factorio`: 20 of 26 languages return nothing), therefore an
-    /// empty page does not mean the feed is exhausted: `has_more` remains true
-    /// until the language list itself ends, allowing the frontend to scan on to
-    /// a later shard that still contains rooms.
+    /// 页码到分片的映射是固定的算术，因此请求之间不需要保存游标状态。稀疏分类可能
+    /// 穿插空分片（在 `factorio` 上实测：26 种语言中 20 种返回空），所以空页不代表
+    /// 信息流耗尽：在语言列表本身结束之前 `has_more` 保持 true，
+    /// 允许前端继续向后扫描仍含房间的分片。
     async fn shard_page(&self, feed: impl ShardFeed, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
         let Some(start) = shard_window_start(page) else {
@@ -420,8 +405,8 @@ impl TwitchSite {
         };
         let window_end = (start + SHARD_WINDOW).min(LANGUAGE_SHARDS.len());
 
-        // Warm the shared context before fan-out. Otherwise a cold page would
-        // race three bootstrap GETs, because each shard needs the same Client-ID.
+        // 在扇出之前先预热共享上下文。否则冷启动的一页会并发三个引导 GET，
+        // 因为每个分片都需要同一个 Client-ID。
         self.public_web_context().await?;
 
         let mut items = Vec::new();
@@ -435,9 +420,9 @@ impl TwitchSite {
         })
     }
 
-    /// Request a shard range concurrently and append the new rooms in shard
-    /// order. The range is at most `SHARD_WINDOW` wide, which keeps the burst
-    /// comparable to what Twitch's own web client issues for one directory view.
+    /// 并发请求一个分片区间，并按分片顺序追加新房间。区间宽度至多为
+    /// `SHARD_WINDOW`，使突发请求量与 Twitch 自己的 Web 客户端
+    /// 发出单次目录浏览时相当。
     async fn collect_shards(
         &self,
         feed: &impl ShardFeed,
@@ -473,8 +458,8 @@ impl TwitchSite {
 
     async fn search_page(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        // Search uses offset-based cursors (base64-encoded integers) and does
-        // not require the integrity token. Compute cursor arithmetically.
+        // 搜索使用基于偏移的游标（base64 编码的整数），不需要完整性 token。
+        // 游标直接用算术计算。
         let offset = (page.saturating_sub(1)) * PAGE_SIZE;
         let cursor =
             base64::engine::general_purpose::STANDARD.encode(offset.to_string().as_bytes());
@@ -552,9 +537,8 @@ impl TwitchSite {
         let data = self
             .graphql(
                 "PlaybackAccessToken_Template",
-                // This is the non-persisted query emitted in Twitch's public
-                // HTML bootstrap.  It avoids relying on a rotating persisted
-                // query hash and returns only a short-lived public play token.
+                // 这是 Twitch 公开 HTML 引导中下发的非持久化 query。它避免依赖会轮换的持久化
+                // query hash，且只返回短时效的公开播放 token。
                 r#"
                     query PlaybackAccessToken_Template(
                       $login: String!,
@@ -741,10 +725,9 @@ impl LiveSite for TwitchSite {
         category: &LiveSubCategory,
         page: u32,
     ) -> AppResult<RoomListPage> {
-        // CategoryPage provides a synthetic "全部热门分类" tile with ID "0"
-        // for every platform. Twitch has no corresponding game ID, so route
-        // that common UI affordance back to the regular live recommendation
-        // feed instead of returning an empty `game(id: "0")` result.
+        // CategoryPage 为每个平台提供 ID 为 "0" 的合成"全部热门分类"磁贴。Twitch 没有
+        // 对应的 game id，因此把这个通用 UI 入口重新路由到常规直播推荐流，
+        // 而不是返回空的 `game(id: "0")` 结果。
         if is_all_categories_entry(&category.id) {
             return self.get_recommend_rooms(page).await;
         }
@@ -832,11 +815,10 @@ impl LiveSite for TwitchSite {
             .iter()
             .map(|variant| LivePlayQuality {
                 quality: variant.label.clone(),
-                // The signed URL is intentionally not retained in this
-                // payload.  Re-fetch it immediately before playback so stale
-                // Twitch tokens cannot survive in the frontend query cache.
-                // Keep the semantic HLS selector so the same quality can be
-                // found even if Twitch changes manifest ordering meanwhile.
+                // 签名 URL 刻意不保留在这个负载中。在真正播放前立即重新抓取，
+                // 避免过期的 Twitch token 存留在前端查询缓存里。
+                // 同时保留语义化的 HLS 选择器，
+                // 即使 Twitch 中途改变清单顺序也能找到同一画质。
                 data: json!({ "selector": variant.selector.clone() }),
             })
             .collect())
@@ -893,9 +875,8 @@ fn empty_page() -> RoomListPage {
 }
 
 fn parse_public_client_id(html: &str) -> Option<String> {
-    // Current public Twitch bootstrap assigns `clientId="..."`.  The second
-    // marker handles an equivalent object-literal form without treating an
-    // arbitrary value in the page as a client id.
+    // 当前公开的 Twitch 引导使用 `clientId="..."` 赋值形式。第二个标记用于处理等价
+    // 的对象字面量形式，而不会把页面里的任意取值当作客户端 id。
     ["clientId=\"", "clientId:\""].iter().find_map(|marker| {
         let rest = html.split_once(marker)?.1;
         let candidate = rest.split('"').next()?.trim();
@@ -951,9 +932,8 @@ fn normalize_category_slug(value: &str) -> AppResult<String> {
     Ok(value.to_string())
 }
 
-/// The shared category page reserves `0` for its synthetic "all" tile.
-/// Twitch game IDs are positive numeric strings, so this sentinel is never
-/// sent to Twitch's `game(id:)` GraphQL field.
+/// 共享的分类页面为合成"全部"磁贴保留了 `0`。Twitch 的游戏 id 是正数字字符串，
+/// 因此这个哨兵值绝不会发送给 Twitch 的 `game(id:)` GraphQL 字段。
 fn is_all_categories_entry(value: &str) -> bool {
     value.trim() == "0"
 }
@@ -1066,9 +1046,9 @@ fn parse_room_detail(
     })
 }
 
-/// The follow refresher asks Twitch for this intentionally narrow query: no
-/// room profile, preview image, title, or playback-token data is needed to
-/// decide whether a followed channel is currently live.
+/// 关注刷新只向 Twitch 请求这份刻意收窄的 query：
+/// 判断关注频道是否正在直播，
+/// 不需要房间资料、预览图、标题或播放 token 数据。
 fn parse_room_live_status(data: &Value) -> AppResult<LiveRoomStatus> {
     let user = data
         .get("user")
@@ -1176,10 +1156,9 @@ fn parse_hls_variants(manifest: &str, master_url: &Url) -> Vec<TwitchVariant> {
                 .unwrap_or_default(),
         });
     }
-    // The UI's default-quality preference treats index zero as the best
-    // option. HLS master manifests are not ordered by the protocol, and
-    // Twitch may change their order between token refreshes, so order by the
-    // actual stream properties instead.
+    // UI 的默认画质偏好把下标 0 视为最佳选项。HLS master 清单并不保证有序，
+    // 而且 Twitch 可能在两次 token 刷新之间改变顺序，
+    // 因此改为按流的实际属性排序。
     variants.sort_by(|left, right| {
         right
             .is_source
@@ -1202,16 +1181,15 @@ fn hls_variant_selector(
     bandwidth: Option<&str>,
     url: &Url,
 ) -> String {
-    // Twitch's `VIDEO` rendition group is the stable identity of a quality
-    // (for example `chunked`, `720p60` or `480p30`). It remains valid when a
-    // new token produces a master playlist with a different item order.
+    // Twitch 的 `VIDEO` 渲染组是一种画质的稳定身份
+    // （例如 `chunked`、`720p60` 或 `480p30`）。即使新 token 生成的
+    // master 清单项顺序不同，它依然有效。
     if let Some(group) = video_group.map(str::trim).filter(|group| !group.is_empty()) {
         return format!("video-group:{}", group.to_ascii_lowercase());
     }
 
-    // `VIDEO` is normally present for Twitch. Keep a deterministic fallback
-    // for an incomplete master playlist without falling back to its array
-    // position. The URI path is only used when no stream metadata exists.
+    // Twitch 通常都带有 `VIDEO`。对不完整的 master 清单保留确定性的兜底，
+    // 而不是回退到数组位置。URI 路径只在完全没有流元数据时使用。
     let resolution = hls_selector_part(resolution);
     let frame_rate = hls_selector_part(frame_rate);
     let codecs = hls_selector_part(codecs);
@@ -1409,9 +1387,9 @@ fn preview(value: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Reads one quoted `#EXT-X-DATERANGE` attribute out of a playlist. Used by
-    /// the live diagnostics to name what made a playlist unclean without dumping
-    /// the whole tag, which carries a multi-kilobyte ad token.
+    /// 从播放列表中读取一个带引号的 `#EXT-X-DATERANGE` 属性。直播诊断用它指名
+    /// 是什么污染了清单，而不用输出整个 tag ——
+    /// 后者携带数 KB 的广告 token。
     fn twitch_daterange_attribute(manifest: &str, attribute: &str) -> Option<String> {
         manifest
             .lines()
@@ -1492,14 +1470,14 @@ mod tests {
     #[test]
     fn shard_windows_tile_the_language_list_without_gaps_or_overlap() {
         assert_eq!(shard_window_start(1), Some(0));
-        // Page 1 must stay the unfiltered global listing so the first screen is
-        // unchanged from what cursor pagination used to show.
+        // 第 1 页必须保持不过滤的全局列表，
+        // 使首屏与过去游标分页展示的内容一致。
         assert_eq!(LANGUAGE_SHARDS[0], "");
         assert_eq!(shard_window_start(2), Some(SHARD_WINDOW));
         assert_eq!(shard_window_start(3), Some(SHARD_WINDOW * 2));
 
-        // Consecutive windows are adjacent: no shard is skipped and none is
-        // fetched twice, which is what keeps the merged listing gap-free.
+        // 相邻窗口彼此衔接：不跳过任何分片，也不重复抓取，
+        // 这正是合并列表无缺口的原因。
         let mut expected = 0;
         while let Some(start) = shard_window_start((expected / SHARD_WINDOW) as u32 + 1) {
             assert_eq!(start, expected);
@@ -1512,19 +1490,18 @@ mod tests {
     fn shard_windows_end_with_the_language_list() {
         let last_page = LANGUAGE_SHARDS.len().div_ceil(SHARD_WINDOW) as u32;
         assert!(shard_window_start(last_page).is_some());
-        // One page past the tail reports exhaustion instead of wrapping around
-        // or emitting an out-of-range slice.
+        // 越过末尾再翻一页时报告耗尽，而不是回绕或产生越界切片。
         assert_eq!(shard_window_start(last_page + 1), None);
         assert_eq!(shard_window_start(u32::MAX), None);
 
-        // A zero page number is treated as page 1 rather than underflowing.
+        // 页码为 0 视作第 1 页，而不是发生下溢。
         assert_eq!(shard_window_start(0), Some(0));
     }
 
     #[test]
     fn language_filter_distinguishes_all_languages_from_one() {
-        // An empty array is Twitch's "no language restriction"; a code narrows
-        // the shard. Sending `[""]` instead would match no broadcaster at all.
+        // 空数组是 Twitch 的"不限语言"；具体代码则收窄分片。
+        // 如果发送 `[""]`，将匹配不到任何主播。
         assert_eq!(language_filter(""), json!([]));
         assert_eq!(language_filter("ZH"), json!(["ZH"]));
     }
@@ -1683,8 +1660,8 @@ mod tests {
             .expect("720p60 variant");
         assert_eq!(selected.selector, "video-group:720p60");
 
-        // A renewed playback token can put these exact same qualities in a
-        // different order and give their child playlists different URLs.
+        // 刷新后的播放 token 可能把这些完全相同的画质排成不同顺序，
+        // 并给它们的子播放列表分配不同 URL。
         let refreshed_manifest = concat!(
             "#EXTM3U\n",
             "#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID=\"480p30\",NAME=\"480p30\"\n",
@@ -1856,9 +1833,9 @@ mod tests {
             .text()
             .await
             .expect("Kai Cenat primary playlist body");
-        // Judged with the proxy's own detector: every break measured on this
-        // channel carried no textual marker at all, so a text-only check here
-        // would report a stitched playlist as clean.
+        // 用代理自带的检测器判断：该频道上测到的每段广告都没有任何文本标记，
+        // 因此这里若只做文本检查，
+        // 会把拼接过的播放列表误报为干净。
         let primary_clean = primary_status.is_success()
             && primary_body.trim_start().starts_with("#EXTM3U")
             && !crate::stream_proxy::is_twitch_ad_manifest(&primary_body);
@@ -1886,10 +1863,9 @@ mod tests {
                 && body.trim_start().starts_with("#EXTM3U")
                 && !crate::stream_proxy::is_twitch_ad_manifest(&body);
             if !clean {
-                // Attribute the verdict instead of just reporting it: `clean=false`
-                // has to be traceable to a real stitched ad rather than to a
-                // detector quirk. Only the identifying attributes are printed --
-                // the full DATERANGE carries a multi-kilobyte ad token.
+                // 对结论做归因而不是简单上报：`clean=false` 必须能追溯到真实的拼接广告，
+                // 而不是检测器的怪癖。只打印有辨识度的属性 ——
+                // 完整 DATERANGE 携带数 KB 的广告 token。
                 let roll_type = twitch_daterange_attribute(&body, "X-TV-TWITCH-AD-ROLL-TYPE");
                 let source = twitch_daterange_attribute(&body, "X-TV-TWITCH-STREAM-SOURCE");
                 eprintln!(
@@ -1898,12 +1874,10 @@ mod tests {
                     source.as_deref().unwrap_or("-"),
                 );
             }
-            // The quality a profile can offer is the other half of the picture:
-            // `autoplay` is a profile observed to stay clean through a break, but
-            // Twitch caps it, so a "clean" verdict alone would hide what it costs.
-            // Read from the *variant list*, because the URL above is already
-            // resolved to a single media playlist and so never carries
-            // `#EXT-X-STREAM-INF` itself.
+            // 某 profile 能提供的画质是另一半事实：`autoplay` 是观测到能干净度过一段广告
+            // 的 profile，但被 Twitch 封顶，只凭"干净"的结论会掩盖它的代价。
+            // 从*变体列表*读取，因为上面的 URL 已解析成单个媒体清单，
+            // 本身不再携带 `#EXT-X-STREAM-INF`。
             let ladder = TwitchSite::new(client.clone())
                 .playback_variants_for_profile(&recovery.login, player_type, platform)
                 .await
@@ -1923,9 +1897,8 @@ mod tests {
                 clean_profiles.push(player_type);
             }
         }
-        // Not asserted: when the channel is not in a commercial every profile is
-        // clean, and during one the honest outcome may be that only the capped
-        // `autoplay` survives. Both are findings to read, not failures.
+        // 不断言：频道不在广告时段时每个 profile 都是干净的，而在广告期间诚实的结论
+        // 可能就是只有被封顶的 `autoplay` 能存活。两者都是要解读的发现，不是失败。
         eprintln!(
             "Kai Cenat primary clean={primary_clean} clean fallback profiles: {clean_profiles:?}"
         );

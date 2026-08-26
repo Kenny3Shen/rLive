@@ -3,7 +3,7 @@ import type { ComponentType } from "react";
 export type LazyRouteModule = { default: ComponentType };
 export type RouteModuleLoader = () => Promise<LazyRouteModule>;
 
-/** Share one import promise between React.lazy, intent preloading, and idle preloading. */
+/** 在 React.lazy、意图预加载和空闲预加载之间共享同一个 import promise。 */
 export function createCachedRouteLoader(load: RouteModuleLoader): RouteModuleLoader {
   let cached: Promise<LazyRouteModule> | undefined;
 
@@ -80,7 +80,7 @@ export const loadMultiRoomPage = createCachedRouteLoader(() =>
   })),
 );
 
-/** Keep expensive player code last so small, common destinations become ready first. */
+/** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
 export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadCategoryPage,
   loadCategoryRoomsPage,
@@ -123,7 +123,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   return null;
 }
 
-/** Intent preloading is best-effort; navigation still owns visible error handling. */
+/** 意图预加载尽力而为；可见错误的处理仍归导航本身负责。 */
 export function preloadRouteModule(target: string): void {
   const loader = routeModuleLoaderForPath(target);
   if (loader) void loader().catch(() => undefined);

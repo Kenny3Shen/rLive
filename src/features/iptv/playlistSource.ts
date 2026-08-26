@@ -5,9 +5,9 @@ export type PlaylistSource = {
   url: string;
 };
 
-// IPTV-org publishes its verified public-link catalogue to GitHub Pages on a
-// daily workflow. These official scopes stay below the native 4,000-channel
-// safety ceiling; the 13k+ global index would be silently truncated here.
+// IPTV-org 通过每日工作流把其审核过的公开链接目录发布到 GitHub Pages。
+// 这些官方范围低于原生 4000 频道的安全上限；
+// 13k+ 的全球索引在这里会被静默截断。
 export const builtInSources: readonly PlaylistSource[] = [
   {
     id: "chinese",
@@ -38,9 +38,8 @@ export const builtInSources: readonly PlaylistSource[] = [
 export const DEFAULT_PLAYLIST_SOURCE = builtInSources[0];
 
 /**
- * Compact, deterministic identity for device-local IPTV state. The raw URL
- * can contain private hostnames or signed query parameters, so callers store
- * only this opaque fingerprint alongside favorites and recordings.
+ * 为设备本地的 IPTV 状态提供紧凑且确定的身份标识。原始 URL 可能包含私有主机名
+ * 或带签名的 query 参数，因此调用方只在收藏和录制旁存储这个不透明指纹。
  */
 export function iptvUrlFingerprint(value: string): string {
   let hash = 0x811c9dc5;
@@ -51,16 +50,16 @@ export function iptvUrlFingerprint(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/** Build the source options shared by the IPTV discovery and follow pages. */
+/** 构建发现页与关注页共享的来源选项。 */
 export function playlistSourcesForSettings(customUrl: string | null | undefined): PlaylistSource[] {
   const customSource = playlistSourceFromRoute("custom", customUrl);
   return customSource.id === "custom" ? [...builtInSources, customSource] : [...builtInSources];
 }
 
 /**
- * Keep favorites from different custom playlists separate without persisting
- * the private M3U address itself as a source identifier. This hash is only a
- * deterministic local namespace; channel URLs remain the actual identities.
+ * 让不同自定义播放列表的收藏相互隔离，同时不把私有 M3U 地址本身作为来源标识
+ * 持久化。这个哈希只是一个确定性的本地命名空间；
+ * 频道 URL 才是真正的身份。
  */
 export function iptvFavoriteSourceId(source: PlaylistSource): string {
   if (source.id !== "custom") return source.id;
@@ -109,7 +108,7 @@ export function isHttpUrl(value: string | null | undefined): value is string {
   }
 }
 
-/** Resolve a compact navigation reference into a safe playlist source. */
+/** 把紧凑的导航引用解析为安全的播放列表来源。 */
 export function playlistSourceFromRoute(
   sourceId: string | null | undefined,
   customUrl: string | null | undefined,

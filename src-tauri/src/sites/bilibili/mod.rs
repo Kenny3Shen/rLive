@@ -1,4 +1,4 @@
-//! Bilibili live site client — ported from simple_live_core bilibili_site.dart.
+//! Bilibili 直播站点客户端。
 
 mod api;
 
@@ -25,7 +25,7 @@ use crate::sites::traits::LiveSite;
 
 use api::{buvid_from_cookie, parse_buvid, parse_room_detail_from_data, parse_room_live_status};
 
-/// Mutable session fields shared across requests (buvid / wbi keys).
+/// 跨请求共享的可变会话字段（buvid / wbi 密钥）。
 #[derive(Default)]
 struct Session {
     buvid3: String,
@@ -38,18 +38,17 @@ pub struct BilibiliSite {
     client: Client,
     cookie: String,
     session: Mutex<Session>,
-    /// Serializes play-info requests with a min interval (upstream throttle).
+    /// 以最小间隔串行化 play-info 请求（上游节流）。
     play_gate: AsyncMutex<Option<Instant>>,
 }
 
 const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
-/// Older official endpoint. It remains useful when the newer web endpoint is
-/// challenged by Bilibili risk control before it returns a short-lived token.
+/// 较旧的官方接口。当较新的 Web 接口在返回短时效 token 之前
+/// 被 Bilibili 风控拦截时，它仍然有用。
 const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Danmu/getConf";
 
-/// Accept both a raw browser Cookie value and a copied `Cookie: ...` request
-/// header. The latter is a common paste format and must not become part of the
-/// value of the first cookie field.
+/// 同时接受原始浏览器 Cookie 值和复制来的 `Cookie: ...` 请求头。
+/// 后者是常见的粘贴格式，绝不能成为第一个 cookie 字段值的一部分。
 fn normalize_cookie_header(value: &str) -> String {
     let value = value.trim();
     let value = match value.get(..7) {
@@ -59,13 +58,12 @@ fn normalize_cookie_header(value: &str) -> String {
     value.trim().to_string()
 }
 
-/// Whether a saved Bilibili browser Cookie is still accepted by the platform.
+/// 保存的 Bilibili 浏览器 Cookie 是否仍被平台接受。
 ///
-/// Returns `Some(true)` when the nav endpoint reports a valid logged-in
-/// session, `Some(false)` when Bilibili explicitly rejects the Cookie
-/// (expired or logged out, commonly `code = -101`), and `None` when the
-/// session cannot be verified (network failure or an unrecognized response).
-/// Callers use `false` to fall back to anonymous danmaku and notify the user.
+/// nav 接口报告有效的已登录会话时返回 `Some(true)`；Bilibili 明确拒绝该
+/// Cookie（过期或已登出，常见 `code = -101`）时返回 `Some(false)`；
+/// 无法验证会话（网络失败或无法识别的响应）时返回 `None`。
+/// 调用方用 `false` 回退到匿名弹幕并提示用户。
 pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<bool> {
     let cookie = normalize_cookie_header(cookie);
     if cookie.is_empty() {
@@ -86,9 +84,9 @@ pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<
     parse_nav_session_status(&response.text().await.ok()?)
 }
 
-/// `code != 0` (commonly `-101`) is Bilibili explicitly rejecting the Cookie.
-/// A `code = 0` answer is only accepted when `data.isLogin` confirms a logged
-/// in session, otherwise the Cookie no longer carries an identity.
+/// `code != 0`（常见 `-101`）表示 Bilibili 明确拒绝了 Cookie。
+/// 只有 `data.isLogin` 确认存在已登录会话时才接受 `code = 0` 的应答，
+/// 否则该 Cookie 已不再携带身份。
 fn parse_nav_session_status(body: &str) -> Option<bool> {
     let response: Value = serde_json::from_str(body).ok()?;
     let code = response.get("code")?.as_i64()?;
@@ -103,10 +101,9 @@ fn parse_nav_session_status(body: &str) -> Option<bool> {
     )
 }
 
-/// Preserve user-supplied cookie values and add a generated value only when a
-/// field is absent (or empty). This is deliberately a small Cookie-header
-/// merger rather than a Set-Cookie parser: account data is stored as a request
-/// header value, not as browser cookie attributes.
+/// 保留用户提供的 cookie 值，仅在字段缺失（或为空）时添加生成的值。
+/// 这里刻意只是一个小的 Cookie 头合并器，而不是 Set-Cookie 解析器：
+/// 账号数据以请求头值的形式存储，而非浏览器 cookie 属性。
 fn merge_missing_cookie_value(cookie: &str, key: &str, generated: &str) -> String {
     let generated = generated.trim();
     let mut found = false;
@@ -126,9 +123,8 @@ fn merge_missing_cookie_value(cookie: &str, key: &str, generated: &str) -> Strin
             continue;
         }
 
-        // Cookies with the same name are ambiguous. Keep the first non-empty
-        // user value and discard later duplicates; if it is empty, replace it
-        // with the generated device identifier when one is available.
+        // 同名的 cookie 有歧义。保留第一个非空的用户值并丢弃后续重复项；
+        // 若为空，则在有可用生成值时以设备标识符替换。
         if found {
             continue;
         }
@@ -151,13 +147,13 @@ fn cookie_with_buvids(cookie: &str, buvid3: &str, buvid4: &str) -> String {
     merge_missing_cookie_value(&cookie, "buvid4", buvid4)
 }
 
-/// Convert a host array from either Bilibili danmaku endpoint into the shape
-/// consumed by `parse_room_detail_from_data`.
+/// 把任一 Bilibili 弹幕接口返回的主机数组转换为
+/// `parse_room_detail_from_data` 消费的形态。
 ///
-/// `getDanmuInfo` calls it `host_list`, while the older official `getConf`
-/// endpoint uses `host_server_list` (and some historical responses use
-/// `server_list`). Keep only non-empty host names, but otherwise preserve the
-/// upstream object so future consumers can use its port metadata if needed.
+/// `getDanmuInfo` 称其为 `host_list`，而较旧的官方 `getConf` 接口使用
+/// `host_server_list`（部分历史响应则用 `server_list`）。只保留非空主机名，
+/// 其余部分原样保留上游对象，
+/// 以便将来的消费方在需要时可以使用其端口元数据。
 fn normalized_danmaku_hosts(data: &Value) -> Vec<Value> {
     for field in ["host_list", "host_server_list", "server_list"] {
         let Some(entries) = data.get(field).and_then(Value::as_array) else {
@@ -196,11 +192,11 @@ fn normalized_danmaku_hosts(data: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Return only an official danmaku response data object that contains a usable
-/// token. Bilibili can return `code = 0` while omitting the short-lived token
-/// for a particular Cookie/device combination; treating that as success would
-/// later fail at WebSocket startup. Normalize the legacy endpoint's host field
-/// at the boundary so the remainder of the connection pipeline stays uniform.
+/// 只返回包含可用 token 的官方弹幕响应 data 对象。对某个特定的
+/// Cookie/设备组合，Bilibili 可能在返回 `code = 0` 的同时省略短时效 token；
+/// 把它当作成功会在稍后 WebSocket 启动时失败。
+/// 在这里把旧接口的主机字段归一化，
+/// 使连接管线的其余部分保持统一。
 fn danmaku_data_with_token(text: &str) -> Option<Value> {
     let mut data = serde_json::from_str::<Value>(text)
         .ok()?
@@ -211,8 +207,8 @@ fn danmaku_data_with_token(text: &str) -> Option<Value> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|token| !token.is_empty())?;
-    // Keep the value sent to the WebSocket free of accidental surrounding
-    // whitespace without logging or exposing the token itself.
+    // 去除发往 WebSocket 的取值两侧意外的空白字符，
+    // 同时不记录也不暴露 token 本身。
     data["token"] = Value::String(token.to_string());
     let hosts = normalized_danmaku_hosts(&data);
     if !hosts.is_empty() {
@@ -332,7 +328,7 @@ impl BilibiliSite {
             )
             .with_site("bilibili"));
         }
-        // Bilibili often returns code != 0 in body with HTTP 200.
+        // Bilibili 经常在 HTTP 200 的 body 中返回 code != 0。
         if let Ok(v) = serde_json::from_str::<Value>(&text)
             && let Some(code) = v.get("code").and_then(|c| c.as_i64())
             && code != 0
@@ -350,13 +346,12 @@ impl BilibiliSite {
         Ok(text)
     }
 
-    /// Fetch a public Bilibili response without bootstrapping device IDs.
+    /// 不引导设备 id，直接获取公开的 Bilibili 响应。
     ///
-    /// Follow-list refreshes only need the room's on/off state.  Calling the
-    /// normal JSON helper would first call `ensure_buvid`, which can add a
-    /// fingerprint request for every fresh site instance.  This endpoint is
-    /// public, so a UA and Referer are sufficient and keep the probe to one
-    /// request.
+    /// 关注列表刷新只需要房间的开播/下播状态。调用普通的 JSON 辅助函数会先执行
+    /// `ensure_buvid`，为每个新站点实例增加一次指纹请求。该接口是公开的，
+    /// UA 与 Referer 已足够，
+    /// 使这次探测保持为单个请求。
     async fn get_public_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
         let mut request = self
             .client
@@ -414,7 +409,7 @@ impl BilibiliSite {
                 return Ok((s.img_key.clone(), s.sub_key.clone()));
             }
         }
-        // Nav often returns code != 0 when logged out but still includes wbi_img.
+        // 登出状态下 nav 常返回 code != 0，但仍携带 wbi_img。
         let text = self
             .get_json_raw("https://api.bilibili.com/x/web-interface/nav", &[])
             .await?;
@@ -427,7 +422,7 @@ impl BilibiliSite {
         Ok((img, sub))
     }
 
-    /// HTTP GET that does not require API `code == 0` (for nav / WBI keys).
+    /// 不要求 API `code == 0` 的 HTTP GET（用于 nav / WBI 密钥）。
     async fn get_json_raw(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
         let headers = self.headers().await?;
         let mut req = self.client.get(url);
@@ -468,7 +463,7 @@ impl BilibiliSite {
             .iter()
             .map(|(k, v)| (k.as_str(), v.clone()))
             .collect();
-        // Lifetime workaround: rebuild with owned pairs via query builder
+        // 生命周期限制：通过 query builder 用持有所有权的键值对重建
         let headers = self.headers().await?;
         let mut req = self.client.get(url);
         for (k, v) in headers {
@@ -477,7 +472,7 @@ impl BilibiliSite {
         for (k, v) in &signed {
             req = req.query(&[(k.as_str(), v.as_str())]);
         }
-        let _ = query; // silence if unused after rebuild
+        let _ = query; // 重建后未使用则静默处理
         let resp = req.send().await.map_err(map_http)?;
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;
@@ -511,13 +506,13 @@ impl BilibiliSite {
         Ok(text)
     }
 
-    /// Resolve a token and websocket hosts for the room chat WebSocket.
+    /// 为房间聊天 WebSocket 解析 token 与 websocket 主机列表。
     ///
-    /// `getDanmuInfo` sits behind WBI risk control and answers `code = -352` to
-    /// every unsigned request, independent of room id or device cookies, so it
-    /// is only ever called signed. The older `getConf` endpoint needs no WBI
-    /// keys and still returns a usable token, which keeps danmaku working when
-    /// the key fetch itself fails (`nav` rate limited, network hiccup).
+    /// `getDanmuInfo` 处于 WBI 风控之后，对所有未签名请求一律回答 `code = -352`，
+    /// 与房间 id 或设备 cookie 无关，因此只允许带签名调用。较旧的 `getConf`
+    /// 接口不需要 WBI 密钥且仍能返回可用 token，
+    /// 在密钥获取本身失败时（`nav` 被限流、网络抖动）
+    /// 弹幕仍能继续工作。
     async fn get_danmaku_data(&self, room_id: &str) -> Option<Value> {
         let mut params = BTreeMap::new();
         params.insert("id".into(), room_id.to_string());
@@ -575,7 +570,7 @@ impl BilibiliSite {
             .chain(std::iter::once(0))
             .enumerate()
         {
-            // Throttle: min 450ms between play-info calls.
+            // 节流：play-info 调用之间至少间隔 450ms。
             {
                 let mut gate = self.play_gate.lock().await;
                 if let Some(prev) = *gate {
@@ -671,8 +666,8 @@ impl BilibiliSite {
         parse_recommend_rooms(&text)
     }
 
-    /// Bilibili's signed-in home payload is a single, non-paginated page.
-    /// Callers only reach this helper when a saved Cookie is present.
+    /// Bilibili 已登录首页负载是单个不分页的页面。
+    /// 只有存在已保存 Cookie 时调用方才会走到这个辅助函数。
     async fn get_account_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
         if page.max(1) > 1 {
             return Ok(RoomListPage {
@@ -808,7 +803,7 @@ impl LiveSite for BilibiliSite {
             })
             .unwrap_or_else(|| room_id.to_string());
 
-        // Danmaku info is best-effort (upstream: failure must not block room entry).
+        // 弹幕信息尽力而为（上游约定：失败不得阻塞进入房间）。
         let danmaku = self.get_danmaku_data(&real_room_id).await;
 
         let (b3, _) = self.ensure_buvid().await.unwrap_or_default();
@@ -910,9 +905,9 @@ mod live_tests {
         assert_eq!(data["host_list"][1]["host"], "legacy-2.example");
     }
 
-    /// Guards the -352 regression: `getDanmuInfo` is behind WBI risk control and
-    /// answers `code = -352` to any unsigned request, so the signed call must be
-    /// the one that succeeds — without the legacy endpoint being reached at all.
+    /// 守住 -352 回归：`getDanmuInfo` 处于 WBI 风控之后，对任何未签名请求都回答
+    /// `code = -352`，因此必须由带签名的那次调用成功 ——
+    /// 而且完全不应触及旧接口。
     #[tokio::test]
     #[ignore = "live network smoke — run with --ignored"]
     async fn live_signed_danmaku_info_smoke() {
@@ -958,7 +953,7 @@ mod live_tests {
         assert!(!cats[0].children.is_empty());
     }
 
-    /// Full path: recommend → live room → play URL list (web player consumes these).
+    /// 完整链路：推荐 → 直播间 → 播放地址列表（Web 播放器消费这些）。
     #[tokio::test]
     #[ignore = "live network smoke — run with --ignored"]
     async fn live_play_url_smoke() {

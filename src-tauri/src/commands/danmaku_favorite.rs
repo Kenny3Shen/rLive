@@ -12,8 +12,8 @@ fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Co
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
 }
 
-/// Lists reusable messages deliberately saved for one sending platform. These
-/// records remain device-local and are not tied to clearing send history.
+/// 列出为某个发送平台刻意保存的可复用消息。这些记录仅存于本机，
+/// 且不受清空发送历史的影响。
 #[tauri::command]
 pub fn danmaku_favorite_list(
     state: State<'_, AppState>,
@@ -23,8 +23,8 @@ pub fn danmaku_favorite_list(
     danmaku_favorite::list(&conn, site_id.as_str())
 }
 
-/// Saves one reusable outgoing message. The timestamp is created locally so
-/// callers cannot reorder favorites or inject a stale record.
+/// 保存一条可复用的发送消息。时间戳在本地生成，
+/// 因此调用方无法重排收藏顺序或注入过期记录。
 #[tauri::command]
 pub fn danmaku_favorite_add(
     state: State<'_, AppState>,

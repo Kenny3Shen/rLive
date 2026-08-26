@@ -12,9 +12,9 @@ import type { IptvChannel } from "./types";
 
 export type IptvAvailabilityProbeOptions = {
   sourceUrl: string;
-  /** Surface success/failure toasts only for user-initiated runs. */
+  /** 只为用户主动触发的运行展示成功/失败 toast。 */
   notify?: boolean;
-  /** Keep startup work bounded even when a source contains thousands of rows. */
+  /** 即使来源包含数千行也保持启动工作有界。 */
   limit?: number;
 };
 
@@ -28,15 +28,15 @@ function messageFromError(error: unknown): string {
   return String(error ?? "未知错误");
 }
 
-/** Invalidate a running probe before changing or replacing the source. */
+/** 更改或替换来源之前先使进行中的探测失效。 */
 export function cancelIptvAvailabilityProbe(): void {
   probeEpoch += 1;
   useIptvAvailabilityStore.getState().setProgress(null);
 }
 
 /**
- * Probe a bounded set of IPTV URLs and keep the result in the session cache.
- * The epoch guard makes a late response from a previous source harmless.
+ * 探测有界的 IPTV URL 集合并把结果保存在会话缓存中。
+ * 纪元守卫使先前来源的迟到响应无害。
  */
 export async function probeIptvAvailability(
   channels: readonly IptvChannel[],

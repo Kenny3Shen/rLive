@@ -1,4 +1,4 @@
-//! Tauri command for the localhost image hotlink proxy.
+//! 本机图片防盗链代理的 Tauri 命令。
 
 use tauri::State;
 

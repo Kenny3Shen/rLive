@@ -5,33 +5,29 @@ import { cn } from "@/lib/utils";
 import { motionProfile, prefersReducedMotion } from "./tokens";
 
 /**
- * Scale the immersive page starts from when entering, and returns to on exit.
+ * 沉浸页进入时的起始缩放，退出时回归的目标。
  *
- * Both directions share it so the transition is one motion read forwards or
- * backwards: entering, the room grows from 0.96 to 1 as the browse list falls
- * away; leaving, the room shrinks back to 0.96 as the list resolves. An exit
- * that scaled *up* instead would read as a second, unrelated push.
+ * 两个方向共用它，使过渡成为一段可正向也可反向解读的运动：进入时房间从 0.96
+ * 长到 1、浏览列表退去；离开时房间缩回 0.96、列表浮现。若退出反而放大，
+ * 会被读作第二次无关的推入。
  */
 const ROOM_ZOOM_START_SCALE = 0.96;
 /**
- * Scale the destination resolves from while a room zooms away above it.
+ * 房间在其上方缩走时目的地由该缩放浮现。
  *
- * Only the exit has a second layer to move: the room's live subtree is retained
- * during exit precisely so it can animate, whereas entering unmounts the browse
- * list immediately and leaves the room as the only surface on screen.
+ * 只有退出才有第二层要动：房间的活跃子树在退出期间被保留正是为了让它可以动画，
+ * 而进入时浏览列表立即卸载、房间是屏幕上唯一的表面。
  *
- * Kept much nearer 1 than `ROOM_ZOOM_START_SCALE`. The destination is context
- * rather than the subject, and giving it the same travel as the leaving room
- * made both layers read as moving the same distance, which flattened the depth
- * the zoom exists to convey.
+ * 刻意比 `ROOM_ZOOM_START_SCALE` 更接近 1。目的地是背景而不是主角，
+ * 给它与离开房间相同的行程会让两层看似移动同样距离，
+ * 抹平缩放想表达的纵深感。
  */
 const ROOM_ZOOM_BACKDROP_SCALE = 1.02;
 /**
- * Share of the transition the outgoing page spends fading.
+ * 离场页用于淡出的过渡占比。
  *
- * The exit tween runs shorter than the enter so the two overlap: the incoming
- * page is already resolving while the old one clears, instead of the viewport
- * passing through a fully blank frame between them.
+ * 退出补间比进入短以便两者重叠：旧页清场时新页已在浮现，
+ * 而不是视口在两页之间穿过一帧完全空白。
  */
 const ROOM_ZOOM_EXIT_RATIO = 0.72;
 
@@ -41,14 +37,14 @@ type ZoomSnapshot = {
   enabled: boolean;
 };
 
-/** Zooms into a room and keeps its live subtree mounted while zooming back out. */
+/** 缩放进入房间，缩放退出期间保持其活跃子树挂载。 */
 export function PageZoom({
   zoomKey,
   enabled,
   children,
   className,
 }: {
-  /** Changing this restarts the transition when the destination is enabled. */
+  /** 目的地启用时，改变它会重启过渡。 */
   zoomKey: string;
   enabled: boolean;
   children: ReactNode;
@@ -78,8 +74,8 @@ export function PageZoom({
   const outgoing = transition.renderedKey === zoomKey ? transition.outgoing : null;
 
   useLayoutEffect(() => {
-    // Refs mutated during render survive an abandoned concurrent render. Keep
-    // the exit source tied to the page React actually committed instead.
+    // 渲染期间修改的 refs 能在被放弃的并发渲染中幸存。让退出来源绑定到 React
+    // 实际提交的那一页。
     committedRef.current = { key: zoomKey, node: children, enabled };
   }, [children, enabled, zoomKey]);
 
@@ -113,9 +109,8 @@ export function PageZoom({
         const incomingPage = incomingRef.current;
         const timeline = gsap.timeline();
 
-        // Leaving a room is the enter played backwards: the room contracts to
-        // the scale it grew from while the destination expands out of the
-        // counter-scale it receded to.
+        // 离开房间就是倒放的进入：房间收缩回它长出来的缩放，
+        // 目的地从它退到的反向缩放中扩张出来。
         timeline.fromTo(
           leaving,
           { autoAlpha: 1, scale: 1, transformOrigin: "50% 50%", willChange: "transform,opacity" },
@@ -124,8 +119,8 @@ export function PageZoom({
             scale: ROOM_ZOOM_START_SCALE,
             duration: duration * ROOM_ZOOM_EXIT_RATIO,
             ease,
-            // This node is about to unmount. Clearing opacity/visibility here
-            // would restore the live room for one frame before React removes it.
+            // 该节点即将卸载。在这里清除 opacity/visibility 会让活跃房间在 React 移除它
+            // 之前重现一帧。
           },
           0,
         );
@@ -156,9 +151,8 @@ export function PageZoom({
           );
         }
 
-        // Unmount the leaving room once the whole crossfade is done, not when
-        // its own shorter tween ends: React removing a live player mid-timeline
-        // is visible as a hitch in the surface still animating behind it.
+        // 等整段交叉淡化结束再卸载离开的房间，而不是等它自己较短的补间结束：
+        // React 在时间轴中途移除活跃播放器会表现为其后仍在动画的表面上的一次卡顿。
         timeline.eventCallback("onComplete", () => {
           releaseAfterFinalFrame(() => {
             startTransition(dropOutgoing);
@@ -231,9 +225,8 @@ export function PageZoom({
         key={zoomKey}
         className={cn(
           "relative flex h-full min-h-0 min-w-0 flex-1",
-          // During an exit this page fades up from transparent underneath the
-          // leaving room, so it needs its own ground: without it the room stays
-          // visible through the destination for the length of the crossfade.
+          // 退出期间本页在离开房间下方从透明淡入，因此需要自己的底层：
+          // 没有它，交叉淡化期间房间会透过目的地一直可见。
           outgoing && "pointer-events-none bg-background",
         )}
       >

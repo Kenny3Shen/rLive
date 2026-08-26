@@ -32,7 +32,7 @@ const MIN_DANMAKU_LIFETIME_MS = 3_500;
 const MAX_DANMAKU_LIFETIME_MS = 30_000;
 const HORIZONTAL_PADDING = 20;
 const FADE_OUT_MS = 500;
-/** Horizontal breathing room between neighbours on one lane, as a font ratio. */
+/** 同一车道上相邻弹幕之间的横向呼吸间距，以字号比例计。 */
 const LANE_GAP_RATIO = 0.6;
 const FONT_FAMILY = '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 
@@ -43,9 +43,9 @@ type RecordedDanmakuCanvasProps = {
 };
 
 /**
- * Media-time-driven recording overlay. Seeking redraws immediately, and every
- * appearance/filter option is sourced from the same settings store as live
- * danmaku so recordings do not maintain a second visual configuration.
+ * 由媒体时间驱动的录制回放叠加层。seek 立即重绘，所有外观/过滤选项与直播弹幕
+ * 来自同一个设置 store，
+ * 使录制不维护第二套视觉配置。
  */
 export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDanmakuCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -83,23 +83,22 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     let layout: RecordedDanmakuLayout | null = null;
     const reducedMotion = prefersReducedMotion();
     const lineHeight = danmuLaneHeight(fontSize);
-    // A paused overlay has no animation frame to piggyback on, so an emote that
-    // arrives late needs an explicit repaint.
+    // 暂停状态的叠加层没有动画帧可以搭车，
+    // 迟到的表情需要显式触发一次重绘。
     const images = createRecordedDanmakuImageCache(() => {
       if (video.paused || video.ended) draw();
     });
 
-    // A stroke widens the painted glyphs on both sides, so charge it to the
-    // reserved width; otherwise neighbours look glued together at the gap.
+    // 描边会把绘制出的字形向两侧加宽，因此把它计入预留宽度；
+    // 否则间隙处相邻弹幕看起来会粘在一起。
     const strokePadding = fontStroke > 0 ? fontStroke * 2 : 0;
     /**
-     * Segments are measured during layout and reused by every frame that paints
-     * the bullet. The key carries the count because a growing repeat counter
-     * changes the trailing text segment.
+     * 分段在布局阶段测量，供每一帧绘制该弹幕时复用。
+     * key 携带次数，因为不断增长的重复计数会改变尾部的文本分段。
      */
     const segmentCache = new Map<string, RecordedDanmakuSegment[] | null>();
 
-    /** Measuring and painting must share one font, or widths drift apart. */
+    /** 测量与绘制必须使用同一种字体，否则宽度会产生漂移。 */
     function applyTextStyle(context: CanvasRenderingContext2D) {
       context.font = `700 ${fontSize}px ${FONT_FAMILY}`;
       context.textBaseline = "middle";
@@ -107,7 +106,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       if (fontStroke > 0) context.lineWidth = fontStroke * 2;
     }
 
-    /** Null for a plain-text bullet, which takes the cheaper single-call path. */
+    /** 纯文本弹幕为 null，走更便宜的单次调用路径。 */
     function cachedSegments(
       context: CanvasRenderingContext2D,
       entry: RecordedDanmakuEntry,
@@ -125,10 +124,8 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     }
 
     /**
-     * Paint one bullet fragment by fragment from `x`, with `y` on the text
-     * baseline centre. Every segment advances the cursor by its reserved width,
-     * including a slot whose image has not arrived yet, so a late emote never
-     * shifts the fragments after it.
+     * 从 `x` 开始逐段绘制一条弹幕，`y` 位于文本基线中心。每个分段按其预留宽度
+     * 推进光标，包括图片尚未到达的槽位，因此迟到的表情绝不会移动其后的分段。
      */
     function paintSegments(
       context: CanvasRenderingContext2D,
@@ -154,8 +151,8 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
             segment.size,
           );
         } else if (images.hasFailed(segment.url)) {
-          // Mirror the DOM layer, which swaps a broken emote for a text marker
-          // rather than leaving a hole in the sentence.
+          // 对齐 DOM 层的做法：坏掉的表情替换为文本标记，
+          // 而不是在句子里留下一个洞。
           if (fontStroke > 0) context.strokeText(DANMAKU_IMAGE_FALLBACK_TEXT, cursor, y);
           context.fillText(DANMAKU_IMAGE_FALLBACK_TEXT, cursor, y);
         }
@@ -172,8 +169,8 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     }
 
     /**
-     * Lane assignment depends on measured widths and the stage size, so it is
-     * rebuilt whenever those change and reused by every frame in between.
+     * 车道分配取决于测量宽度和舞台尺寸，因此这些变化时重建一次，
+     * 期间的所有帧复用该结果。
      */
     function buildLayout() {
       const context = canvas.getContext("2d");

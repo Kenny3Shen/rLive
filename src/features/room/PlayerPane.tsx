@@ -77,32 +77,32 @@ export type PlayerMobileRoomAction = {
   onSelect: () => void;
 };
 
-/** Keep the visual tab order and touch-navigation order in one place. */
+/** 把视觉页签顺序与触摸导航顺序保持在同一处。 */
 export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
 
-// A CSS pixel is density-independent in an Android WebView.  This keeps a
-// normal vertical scroll or a short finger adjustment from changing the tab.
+// Android WebView 中一个 CSS 像素与密度无关。这样普通的纵向滚动或短促的手指
+// 微调就不会改变页签。
 export const ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX = 48;
 const ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO = 1.25;
 
-// Android uses a native bridge for Activity brightness. Other mobile clients
-// keep the same picture-local gesture through the compositor shade fallback.
+// Android 经原生桥控制 Activity 亮度。其他移动客户端通过合成器阴影兜底
+// 实现同样的画面局部手势。
 export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
 const PLAYER_EDGE_GESTURE_DIRECTION_RATIO = 1.25;
 const PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX = 160;
-// Bilibili-style adjustment tracks the finger across the whole picture height
-// instead of jumping through coarse fixed steps.
+// Bilibili 风格的调节让手指在整个画面高度上连续跟踪，
+// 而不是按粗粒度的固定档位跳变。
 const PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO = 1;
 const PLAYER_EDGE_GESTURE_HUD_LINGER_MS = 520;
 const PLAYER_EDGE_GESTURE_START_GUTTER_RATIO = 0.08;
-// Match familiar mobile stage interactions: a short tap toggles the
-// chrome, a second tap within this window enters/exits fullscreen.
+// 对齐常见的移动端舞台交互：短按切换 chrome，
+// 在此窗口内的第二次按击进入/退出全屏。
 export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
 export const PLAYER_STAGE_TAP_MAX_DURATION_MS = 320;
 export const PLAYER_STAGE_DOUBLE_TAP_MS = 280;
 
-/** Fullscreen desktop pictures need larger targets; mobile keeps the compact
- * pill so three actions do not cover a disproportionate part of the video. */
+/** 全屏桌面画面需要更大的目标；移动端保持紧凑胶囊，
+ * 使三个操作不会遮住不成比例的视频区域。 */
 export function shouldUseLargeDanmakuActionMenu(
   fullscreen: boolean,
   mobileClient: boolean,
@@ -121,7 +121,7 @@ type PlayerEdgeGestureState = {
   startValue: number;
   lastValue: number;
   active: boolean;
-  /** Snapshot native availability so a delayed bridge failure cannot reroute a swipe. */
+  /** 快照原生可用性，使延迟到来的桥失败无法改变滑动路由。 */
   native: boolean;
 };
 
@@ -132,7 +132,7 @@ type PlayerStageTapState = {
   startedAt: number;
 };
 
-/** The left half adjusts picture brightness; the right half adjusts volume. */
+/** 左半边调节画面亮度；右半边调节音量。 */
 export function playerEdgeGestureForStart(
   clientX: number,
   stageLeft: number,
@@ -141,13 +141,13 @@ export function playerEdgeGestureForStart(
   return clientX - stageLeft < Math.max(0, stageWidth) / 2 ? "brightness" : "volume";
 }
 
-/** Convert the 0-100 fallback brightness into a compositor-only black overlay. */
+/** 把 0-100 的兜底亮度转换为仅合成器的黑色叠加层。 */
 export function playerBrightnessShadeOpacity(value: number): number {
   const brightness = Math.max(0, Math.min(100, value));
   return (100 - brightness) / 100;
 }
 
-/** A deliberate vertical drag wins over a diagonal or horizontal gesture. */
+/** 刻意的纵向拖拽优先于斜向或横向手势。 */
 export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boolean {
   const verticalDistance = Math.abs(deltaY);
   return (
@@ -159,10 +159,9 @@ export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boo
 export type PlayerEdgeGestureIntent = "pending" | "adjust" | "reject";
 
 /**
- * Keep short contacts with their original picture target until they either
- * become a vertical adjustment or clearly turn into another gesture. This is
- * especially important for the live danmaku overlay: it needs the matching pointerup
- * to finish touch hit testing.
+ * 让短促的接触保持其原始的画面目标，直到它要么变成纵向调节、
+ * 要么明确转变为其他手势。这对直播弹幕浮层尤其重要：
+ * 它需要对应的 pointerup 来完成触摸命中测试。
  */
 export function playerEdgeGestureIntent(deltaX: number, deltaY: number): PlayerEdgeGestureIntent {
   const horizontalDistance = Math.abs(deltaX);
@@ -177,8 +176,8 @@ export function playerEdgeGestureIntent(deltaX: number, deltaY: number): PlayerE
 }
 
 /**
- * Drag distance that maps to a full 0–100 adjustment. Using the whole stage
- * makes small finger movements continuous and controllable rather than jumpy.
+ * 映射到完整 0–100 调节的拖拽距离。使用整个舞台使小幅手指移动连续可控，
+ * 而不是忽跳忽停。
  */
 export function playerEdgeGestureDragExtent(stageHeight: number): number {
   return (
@@ -187,7 +186,7 @@ export function playerEdgeGestureDragExtent(stageHeight: number): number {
   );
 }
 
-/** Dragging one player-height up/down maps to a full 0–100 adjustment. */
+/** 上下拖拽一个播放器高度对应完整的 0–100 调节。 */
 export function playerEdgeGestureValue(
   startValue: number,
   deltaY: number,
@@ -198,8 +197,8 @@ export function playerEdgeGestureValue(
 }
 
 /**
- * Leave a narrow top/bottom gutter for system-edge gestures. Interactive
- * playback chrome is excluded separately by `isPlayerEdgeGestureIgnoredTarget`.
+ * 为系统边缘手势留下狭窄的上下留白。交互式播放 chrome 由
+ * `isPlayerEdgeGestureIgnoredTarget` 单独排除。
  */
 export function canStartPlayerEdgeGesture(
   clientY: number,
@@ -214,7 +213,7 @@ export function canStartPlayerEdgeGesture(
   );
 }
 
-/** A short, mostly stationary touch is a stage tap rather than a drag gesture. */
+/** 短促且基本不动的触摸是舞台点按，而不是拖拽手势。 */
 export function isPlayerStageTap(deltaX: number, deltaY: number, durationMs: number): boolean {
   return (
     durationMs >= 0 &&
@@ -223,7 +222,7 @@ export function isPlayerStageTap(deltaX: number, deltaY: number, durationMs: num
   );
 }
 
-/** Second short touch inside the double-tap window toggles fullscreen. */
+/** 双击窗口内的第二次短触摸切换全屏。 */
 export function isPlayerStageDoubleTap(lastTapAt: number, now: number): boolean {
   return lastTapAt > 0 && now - lastTapAt <= PLAYER_STAGE_DOUBLE_TAP_MS;
 }
@@ -242,9 +241,8 @@ export function isHorizontalRoomSideTabSwipe(deltaX: number, deltaY: number): bo
 }
 
 /**
- * Returns the adjacent tab for a deliberate horizontal swipe, or null for a
- * vertical/short gesture and at either end of the tab strip.  A left swipe
- * advances through the visible order; a right swipe goes back.
+ * 对刻意为之的横向滑动返回相邻页签；纵向/短促手势以及位于页签条两端时返回
+ * null。向左滑动按可见顺序前进；向右滑动后退。
  */
 export function nextRoomSideTabForSwipe(
   currentTab: RoomSideTab,
@@ -264,11 +262,11 @@ const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
 type OverlayInteractionSource = "controls" | "composer" | "hud";
 
 function isTouchPointer(pointerType: string): boolean {
-  // A few Android WebViews expose an empty pointerType for finger input.
+  // 少数 Android WebView 对手指输入暴露空的 pointerType。
   return pointerType === "touch" || pointerType === "";
 }
 
-/** Stop the floating layer only while an overlay genuinely covers the video frame. */
+/** 只在浮层确实遮住视频帧时才暂停浮动层。 */
 export function shouldRunFloatingDanmaku({
   danmakuActive,
   osdOn,
@@ -281,12 +279,12 @@ export function shouldRunFloatingDanmaku({
   return danmakuActive && osdOn && !sidePanelOverlaysPlayer;
 }
 
-/** Portrait phones show the chat directly below the picture on first entry. */
+/** 竖屏手机首次进入时把聊天直接显示在画面下方。 */
 export function sidePanelStartsOpen(compactLandscapeViewport: boolean): boolean {
   return !compactLandscapeViewport;
 }
 
-/** Once opened, keep the panel alive so hidden/fullscreen chat can retain its queue. */
+/** 面板一旦打开就保持存活，使隐藏/全屏聊天能保留其队列。 */
 export function shouldRetainRoomSidePanel(
   retained: boolean,
   sidePanelOpen: boolean,
@@ -304,12 +302,12 @@ export function shouldShowRoomDanmakuPanel(
 }
 
 /**
- * Whether this player stacks the picture above the chat when windowed.
+ * 窗口化时该播放器是否把画面堆叠在聊天上方。
  *
- * Deliberately independent of fullscreen. `player.mode` is derived from a
- * `fullscreenchange` state update, so it trails the browser's own `:fullscreen`
- * by a frame; the CSS that closes that gap (see `data-portrait-stack` in
- * styles.css) needs a marker that is already correct during the transition.
+ * 刻意与全屏无关。`player.mode` 派生自 `fullscreenchange` 状态更新，
+ * 比浏览器自身的 `:fullscreen` 晚一帧；弥补这一差距的 CSS
+ * （见 styles.css 的 `data-portrait-stack`）
+ * 需要一个在过渡期间就已经正确的标记。
  */
 export function usesPortraitStackLayout(
   inlineCompactSidePanel: boolean,
@@ -318,7 +316,7 @@ export function usesPortraitStackLayout(
   return inlineCompactSidePanel && sidePanelOpen;
 }
 
-/** The stack only applies while windowed; fullscreen gives the picture the screen. */
+/** 堆叠只适用于窗口化状态；全屏时画面拥有整个屏幕。 */
 export function isPortraitStackedPlayer(
   portraitStackLayout: boolean,
   fullscreen: boolean,
@@ -343,9 +341,8 @@ function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * A player-edge swipe must start on the picture itself. In particular, a
- * touch that begins in the bottom control bar must never turn into a volume
- * gesture when it leaves a button's hit target.
+ * 播放器边缘滑动必须始于画面本身。特别是，起始于底部控制条的触摸
+ * 绝不能在离开按钮命中目标后变成音量手势。
  */
 function isPlayerEdgeGestureIgnoredTarget(target: EventTarget | null): boolean {
   const element =
@@ -362,7 +359,7 @@ type PlayerPaneProps = {
   loading?: boolean;
   error?: unknown;
   onRetry?: () => void;
-  /** Compact streamer identity shown above the side tabs. */
+  /** 侧页签上方展示的紧凑主播身份。 */
   sideHeader?: ReactNode;
   danmakuActive?: boolean;
   danmakuStatusText?: string | null;
@@ -372,42 +369,42 @@ type PlayerPaneProps = {
   lines?: PlayUrl[];
   lineIndex?: number;
   onLineChange?: (index: number) => void;
-  /** Refresh the active stream metadata and rebuild the MSE session. */
+  /** 刷新活动流元数据并重建 MSE 会话。 */
   onRefresh?: () => void;
   loadError?: string | null;
   reloadToken?: number;
   onPlayerMediaFailure?: (event: PlayerEvent) => void;
   onPlayerPlaying?: () => void;
-  /** Stable room identity, used to discard messages during direct room switches. */
+  /** 稳定的房间身份，用于直接切换房间时丢弃消息。 */
   roomSessionKey?: string;
-  /** Controlled by RoomPage so a follow-list room switch keeps this tab open. */
+  /** 由 RoomPage 控制，使关注列表切换房间时保持该页签打开。 */
   sideTab?: RoomSideTab;
   onSideTabChange?: (tab: RoomSideTab) => void;
-  /** The canonical room identity for platform-specific chat controls. */
+  /** 规范的房间身份，供平台专属的聊天控件使用。 */
   siteId?: SiteId;
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
   roomUserAvatar?: string;
   roomOnline?: number;
-  /** Room-scoped tools rendered by the title bar and fullscreen HUD. */
+  /** 由标题栏和全屏 HUD 渲染的房间级工具。 */
   autoDanmakuSend?: AutoDanmakuSendController;
   sleepTimer?: SleepTimerController;
   /**
-   * Room-level entries for the fullscreen HUD overflow menu (copy link, follow,
-   * multi-room). The app chrome that normally hosts them is covered by the
-   * fullscreen stage, so the page hands them down instead.
+   * 全屏 HUD 溢出菜单的房间级条目（复制链接、关注、多房间）。
+   * 通常承载它们的应用 chrome 被全屏舞台覆盖，
+   * 因此由页面把它们传递下来。
    */
   fullscreenRoomActions?: readonly PlayerHudRoomAction[];
-  /** Publishes portrait-only secondary controls to RoomPage's room-actions menu. */
+  /** 把仅竖屏显示的次要控件发布到 RoomPage 的房间操作菜单。 */
   onMobileRoomActionsChange?: (actions: readonly PlayerMobileRoomAction[]) => void;
 };
 
 /**
- * Room player — **xgplayer web MSE path** (protocol plugins + localhost proxy).
+ * 房间播放器 —— **xgplayer Web MSE 路径**（协议插件 + 本机代理）。
  *
- * No mpv / no native HWND / no companion overlay window. Video + scrolling
- * danmaku share one DOM stack; leave-room unmount stops everything cleanly.
+ * 不使用 mpv / 原生 HWND / 伴随浮层窗口。视频与滚动弹幕共享同一 DOM 栈；
+ * 离开房间卸载时全部干净停止。
  */
 export function PlayerPane({
   playUrl,
@@ -447,15 +444,13 @@ export function PlayerPane({
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   const androidClient = clientPlatform === "android";
-  // Portrait phones use a normal video + chat stack, so new rooms immediately
-  // expose the danmaku list. Short landscape screens stay viewing-first and
-  // retain a dismissible overlay drawer instead.
+  // 竖屏手机使用常规的视频+聊天堆叠，新房间立即展示弹幕列表。较矮的横屏保持
+  // 观看优先，改用可关闭的浮层抽屉。
   const [sidePanelOpen, setSidePanelOpen] = useState(() =>
     sidePanelStartsOpen(compactLandscapeViewport),
   );
-  // PlayerPane is normally controlled by RoomPage, but keeping a local value
-  // preserves the same tab behaviour for embedded/uncontrolled callers and
-  // lets a touch gesture select a tab without depending on Base UI internals.
+  // PlayerPane 通常由 RoomPage 受控，但保留本地取值可为内嵌/非受控调用方维持
+  // 同样的页签行为，并让触摸手势无需依赖 Base UI 内部即可选择页签。
   const [uncontrolledSideTab, setUncontrolledSideTab] = useState<RoomSideTab>("chat");
   const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const activeSideTab = sideTab ?? uncontrolledSideTab;
@@ -488,12 +483,11 @@ export function PlayerPane({
   );
   const controlsHideTimerRef = useRef<number | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
-  // The fullscreen top HUD is a second chrome layer on the same idle timer.
+  // 全屏顶部 HUD 是同一空闲计时器上的第二层 chrome。
   const hudRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
-  // Track focus inside the bottom chrome. A clicked button also takes DOM
-  // focus, so the idle guard below additionally checks :focus-visible before
-  // treating that focus as a keyboard interaction that must keep it present.
+  // 跟踪底部 chrome 内的焦点。点击的按钮也会取得 DOM 焦点，因此下方的空闲守卫
+  // 在把焦点当作必须保持显示的键盘交互之前，还会额外检查 :focus-visible。
   const controlsFocusWithinRef = useRef(false);
   const lastControlsActivityAtRef = useRef(Date.now());
   const overlayInteractionOpenRef = useRef(false);
@@ -520,8 +514,8 @@ export function PlayerPane({
     playUrl,
     siteId,
     quality: qualities[qualityIndex]?.quality ?? null,
-    // Android volume is controlled by STREAM_MUSIC through the native bridge;
-    // keep the WebView media element at unity gain to avoid two volume layers.
+    // Android 音量经原生桥由 STREAM_MUSIC 控制；让 WebView 媒体元素保持单位增益，
+    // 避免出现两层音量。
     initialVolume: androidClient ? 100 : 80,
     sessionKey: roomSessionKey,
     reloadToken,
@@ -532,8 +526,7 @@ export function PlayerPane({
     scope: playerEdgeGestureFeedbackRef,
   });
   const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
-  // Landscape streams auto-rotate on Android fullscreen; portrait ones stay
-  // upright because the lock is derived from the decoded frame size.
+  // 横屏流在 Android 全屏时自动旋转；竖屏流保持直立，因为方向锁由解码后的帧尺寸决定。
   useAndroidFullscreenOrientation({
     enabled: androidClient,
     fullscreen: player.mode === "fullscreen",
@@ -558,8 +551,7 @@ export function PlayerPane({
       : null);
   const showHost = !loading && displayError == null && !!playUrl;
   const transportDisabled = !showHost;
-  // A failed MSE session still has a stream URL and must be refreshable; the
-  // error state is precisely where this control is most useful.
+  // 失败的 MSE 会话仍有流地址且必须可刷新；错误状态正是这个控件最有用的地方。
   const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError ?? player.fullscreenError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
@@ -575,9 +567,6 @@ export function PlayerPane({
     translationFrom: asrTranslationFrom,
     translationTo: asrTranslationTo,
   });
-  // Android routes loudness through STREAM_MUSIC. Use native state whenever the
-  // bridge is supported, even before the first getState resolves, so UI and
-  // gestures never fall back to the HTML <video> volume on a phone.
   const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
   const nativePlayerControlState = nativePlayerControlsActive ? androidPlayerControls.state : null;
   const playerControlVolume = nativePlayerControlState?.mediaVolume ?? player.volume;
@@ -713,16 +702,14 @@ export function PlayerPane({
       sleepTimer !== undefined,
   });
 
-  // Entering short landscape switches to an overlay drawer; rotating back to
-  // portrait restores the immediately useful video + danmaku stack.
+  // 进入较矮横屏时切换为浮层抽屉；转回竖屏恢复立即可用的视频+弹幕堆叠。
   useEffect(() => {
     setSidePanelOpen(sidePanelStartsOpen(compactLandscapeViewport));
   }, [compactLandscapeViewport]);
 
-  // A new room starts over: drop the retention flag and let the effect below
-  // raise it again on the following render if this viewport mounts the panel anyway.
-  // Clearing rather than recomputing keeps the dependency list honest — the
-  // recomputed value is exactly what that effect derives.
+  // 新房间从头开始：清除保留标志，若此视口仍会挂载面板，
+  // 让下方副作用在下一次渲染中再次置位。用清除而不是重新计算，
+  // 可以保持依赖列表诚实 —— 重算出的值正是那个副作用推导的内容。
   useEffect(() => {
     setSidePanelRetained(false);
   }, [roomSessionKey]);
@@ -750,10 +737,10 @@ export function PlayerPane({
     };
   }, [mobileDrawerOpen]);
 
-  // Toasts default to a `<body>` portal, which the fullscreen stage covers on
-  // both paths (browser top layer, and the fixed in-page layer used by the
-  // desktop native window). Re-home the viewport for as long as this player
-  // owns the screen so copy/follow feedback stays visible.
+  // toast 默认经 `<body>` portal，两条路径下都会被全屏舞台盖住
+  // （浏览器 top layer，以及桌面原生窗口使用的页面内固定层）。
+  // 只要本播放器拥有屏幕，就把 viewport 迁移过去，
+  // 使复制/关注反馈保持可见。
   useEffect(() => {
     if (player.mode !== "fullscreen") return;
     const stage = player.stageRef.current;
@@ -762,10 +749,9 @@ export function PlayerPane({
     return () => setToastPortalContainer(null);
   }, [player.mode, player.stageRef]);
 
-  // Prefer exiting fullscreen before room navigation. This is the only Back
-  // handling the Android in-page fullscreen has: the Activity deliberately does
-  // not consume Back for it, so that overlay listeners above (HUD menu, volume
-  // panel) keep their turn at the same event.
+  // 房间导航前先退出全屏。这是 Android 页面内全屏唯一的 Back 处理：
+  // Activity 刻意不为它消费 Back，
+  // 使上方的浮层监听器（HUD 菜单、音量面板）能在同一事件中获得自己的机会。
   useEffect(() => {
     if (player.mode !== "fullscreen") return;
     const exitOnAndroidBack = (event: Event) => {
@@ -794,15 +780,13 @@ export function PlayerPane({
     if (controlsVisibleRef.current === visible) return;
     controlsVisibleRef.current = visible;
 
-    // Hiding controls used to update PlayerPane state. That re-rendered the
-    // live danmaku layer and every keep-mounted side tab at the exact moment the
-    // animation started, which is perceptible during a busy danmaku stream.
-    // This small DOM-only state is deliberately isolated to the overlay: CSS
-    // still performs the composited fade, while the video, danmaku layer and lists
-    // continue their existing work without a React reconciliation.
+    // 隐藏控件过去会更新 PlayerPane 状态。那会在动画开始的瞬间重渲染直播弹幕层
+    // 和每个保活的侧页签，繁忙弹幕流中可以感知到。这块仅限 DOM 的小状态刻意隔离在
+    // 浮层内：CSS 仍然执行合成淡出，
+    // 而视频、弹幕层和列表无需 React 协调即可继续现有工作。
     //
-    // Both chrome layers are driven from here so the fullscreen top HUD and the
-    // bottom bar always appear and fade as one surface.
+    // 两层 chrome 都从这里驱动，使全屏顶部 HUD 与底部控制条
+    // 始终作为一个整体表面出现和淡出。
     for (const layer of [controlsRef.current, hudRef.current]) {
       if (!layer) continue;
       layer.dataset.visible = visible ? "true" : "false";
@@ -838,10 +822,10 @@ export function PlayerPane({
       return;
     }
 
-    // Pointer events can fire at display refresh rate. Rather than resetting a
-    // timeout for each one, keep one timer and let it check the latest activity
-    // timestamp when it wakes up. This leaves the video/danmaku main thread
-    // free while retaining an exact idle-delay contract.
+    // 指针事件可能以屏幕刷新率触发。与其为每次事件都重置一个超时，
+    // 不如只保留一个计时器，唤醒时检查最新的活动时间戳。
+    // 这使视频/弹幕主线程保持空闲，
+    // 同时维持精确的空闲延迟契约。
     const hideWhenIdle = () => {
       const remaining = CONTROLS_HIDE_DELAY_MS - (Date.now() - lastControlsActivityAtRef.current);
       if (remaining > 0) {
@@ -885,7 +869,7 @@ export function PlayerPane({
     setControlVisibility(false);
   }, [clearControlsHideTimer, clearPlayerStageTapTimer, setControlVisibility]);
 
-  /** Simple Live single-tap: show when hidden, hide when already visible. */
+  /** Simple Live 式单击：隐藏时显示，已可见时隐藏。 */
   const toggleControls = useCallback(() => {
     if (controlsVisibleRef.current) {
       hideControls();
@@ -934,8 +918,8 @@ export function PlayerPane({
     [handleOverlayInteractionChange],
   );
 
-  // Both chrome layers hold themselves visible while pointer or keyboard focus
-  // is inside them, and Tab between them must not restart the idle countdown.
+  // 指针或键盘焦点位于其中时，两层 chrome 保持自身可见，
+  // 且在两者之间 Tab 不得重启空闲倒计时。
   const handleChromePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.stopPropagation();
@@ -1130,7 +1114,7 @@ export function PlayerPane({
       }
 
       const kind = playerEdgeGestureForStart(event.clientX, stageBounds.left, stageBounds.width);
-      // Android controls both brightness and volume through the native bridge.
+      // Android 经原生桥同时控制亮度与音量。
       const native = nativePlayerControlsActive;
       let startValue: number;
       if (kind === "brightness") {
@@ -1165,7 +1149,7 @@ export function PlayerPane({
     ],
   );
 
-  /** Returns whether this pointer belongs to a pending/active edge gesture. */
+  /** 返回该指针是否属于一次待处理/进行中的边缘手势。 */
   const handlePlayerEdgeGestureMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>): boolean => {
       const gesture = playerEdgeGestureRef.current;
@@ -1185,12 +1169,11 @@ export function PlayerPane({
         }
         gesture.active = true;
         beganAdjustment = true;
-        // Do not capture on pointerdown: a short touch must keep its original
-        // target so the danmaku layer can receive pointerup and finish hit testing.
-        // Once the contact is a real adjustment, capture keeps it continuous
-        // when the finger reaches a stage edge in Android WebView fullscreen.
+        // 不要在 pointerdown 时捕获：短触摸必须保持其原始目标，
+        // 使弹幕层能收到 pointerup 并完成命中测试。一旦接触被确认是真正的调节，
+        // 捕获可以在 Android WebView 全屏中手指到达舞台边缘时保持连续。
         event.currentTarget.setPointerCapture(event.pointerId);
-        // A recognised volume/brightness drag cancels any pending stage tap.
+        // 识别出的音量/亮度拖拽会取消任何待处理的舞台点按。
         clearPlayerStageTapTimer();
         lastPlayerStageTapAtRef.current = 0;
         playerStageTapRef.current = null;
@@ -1282,9 +1265,9 @@ export function PlayerPane({
       if (event.type === "pointerdown") {
         event.currentTarget.focus({ preventScroll: true });
       }
-      // Desktop/mouse keeps the always-reveal behaviour. Mobile touch uses an
-      // explicit single-tap toggle so a second tap can hide the chrome again,
-      // matching familiar mobile players rather than only resetting the timer.
+      // 桌面/鼠标保持"总是显示"的行为。移动端触摸使用显式的单击切换，
+      // 使第二次点击可以再次隐藏 chrome，
+      // 对齐常见移动播放器，而不只是重置计时器。
       if (mobileClient && isTouchPointer(event.pointerType)) return;
       revealControls();
     },
@@ -1333,9 +1316,9 @@ export function PlayerPane({
       const tap = playerStageTapRef.current;
       if (!tap || tap.pointerId !== event.pointerId) return;
       playerStageTapRef.current = null;
-      // Child picture overlays use preventDefault to claim a completed tap.
-      // Still let the event reach here so pending edge/tap state is cleared,
-      // but never turn that claimed press into playback or fullscreen chrome.
+      // 子级画面浮层用 preventDefault 认领已完成的点按。仍让事件到达这里以清理
+      // 待处理的边缘/点按状态，
+      // 但绝不能把那次已认领的按压变成播放或全屏 chrome 操作。
       if (gestureConsumed || event.defaultPrevented) return;
       if (
         !mobileClient ||
@@ -1356,15 +1339,15 @@ export function PlayerPane({
       if (isPlayerStageDoubleTap(lastPlayerStageTapAtRef.current, now)) {
         clearPlayerStageTapTimer();
         lastPlayerStageTapAtRef.current = 0;
-        // Double-tap toggles fullscreen like other mobile video players.
+        // 双击切换全屏，与其他移动视频播放器一致。
         void togglePlayerFullscreen();
         return;
       }
 
       lastPlayerStageTapAtRef.current = now;
       clearPlayerStageTapTimer();
-      // Delay the single-tap action so a second tap can claim double-tap
-      // fullscreen without first flashing the control bar.
+      // 延迟单击动作，使第二次点按能够认领双击全屏，
+      // 而不会先闪一下控制条。
       playerStageTapTimerRef.current = window.setTimeout(() => {
         playerStageTapTimerRef.current = null;
         lastPlayerStageTapAtRef.current = 0;
@@ -1412,13 +1395,12 @@ export function PlayerPane({
   }, [nativePlayerControlState]);
 
   const focusFirstControl = useCallback(() => {
-    // Hidden transparent chrome must not be in the tab sequence.  After Tab
-    // reveals it, explicitly put focus on its first usable control instead of
-    // relying on an asynchronous React state update to affect this key's
-    // native tab traversal.
+    // 隐藏的透明 chrome 不得进入 Tab 序列。Tab 揭示它之后，
+    // 显式把焦点放到其第一个可用控件上，
+    // 而不是依赖异步 React 状态更新来影响此 key 的原生 Tab 遍历。
     //
-    // Layers are visited in DOM order, so a fullscreen session enters at the
-    // top HUD and Tab continues naturally down into the bottom bar.
+    // 各层按 DOM 顺序访问，因此全屏会话从顶部 HUD 进入，
+    // Tab 自然向下继续到底部控制条。
     window.requestAnimationFrame(() => {
       for (const layer of [hudRef.current, controlsRef.current]) {
         const target = layer?.querySelector<HTMLElement>(
@@ -1468,8 +1450,7 @@ export function PlayerPane({
     [focusFirstControl, player, revealControls],
   );
 
-  // Live playback stays unobstructed by default, while every pointer, touch
-  // or keyboard interaction brings the bottom chrome back immediately.
+  // 直播播放默认不受遮挡，而任何指针、触摸或键盘交互都会立即带回底部 chrome。
   useEffect(() => {
     markControlsActivity();
     setControlVisibility(true);
@@ -1484,8 +1465,8 @@ export function PlayerPane({
   ]);
 
   useEffect(() => {
-    // A direct room switch unmounts popovers, but reset the source fence as a
-    // fallback so a closing portal can never pin controls for the next room.
+    // 直接切换房间会卸载 popover，但仍重置来源围栏作为兜底，
+    // 使正在关闭的 portal 绝不可能为下一个房间钉住控件。
     overlayInteractionSourcesRef.current.controls = false;
     overlayInteractionSourcesRef.current.composer = false;
     overlayInteractionSourcesRef.current.hud = false;
@@ -1496,16 +1477,16 @@ export function PlayerPane({
 
   useEffect(() => {
     if (overlayInteractionOpen) return;
-    // Base UI returns focus from a portalled Select/Popover to its trigger.
-    // Its exit transition is 100ms, so schedule after focus restoration rather
-    // than allowing that focus handler to clear the idle timer.
+    // Base UI 会把经 portal 的 Select/Popover 焦点归还给其触发器。它的退出过渡为
+    // 100ms，因此在焦点恢复之后再调度，
+    // 避免那个焦点处理器清掉空闲计时器。
     const timer = window.setTimeout(resumeControlsAutoHide, OVERLAY_FOCUS_RESTORE_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [overlayInteractionOpen, resumeControlsAutoHide]);
 
-  // Show the controls after every fullscreen switch, whichever implementation
-  // performed it. Keyed on `player.mode` rather than `fullscreenchange`, because
-  // the desktop and Android in-page layers never fire that event.
+  // 每次全屏切换之后都显示控件，无论由哪种实现执行。以 `player.mode` 为 key
+  // 而不是 `fullscreenchange`，
+  // 因为桌面与 Android 页面内固定层从不触发该事件。
   useEffect(() => {
     revealControls();
   }, [player.mode, revealControls]);
@@ -1529,13 +1510,11 @@ export function PlayerPane({
           ref={player.stageRef}
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
-          // Fullscreen-independent, so CSS can restore the 16:9 stack in the
-          // same frame the browser leaves fullscreen.
+          // 与全屏无关，使 CSS 能在浏览器离开全屏的同一帧恢复 16:9 堆叠。
           data-portrait-stack={portraitStackLayout ? "true" : undefined}
           data-audio-only={audioOnly ? "true" : undefined}
-          // Overlays anchored above the controls (super chat, captions) must
-          // clear the same gesture-bar allowance the chrome uses, and only
-          // when the chrome actually reserves it.
+          // 锚定在控件上方的浮层（超级留言、字幕）必须清出与 chrome 相同的手势栏预留，
+          // 且仅在 chrome 真正预留时生效。
           style={
             {
               "--player-chrome-inset": portraitStackedPlayer
@@ -1603,7 +1582,7 @@ export function PlayerPane({
                   audioOnly && "invisible",
                 )}
               >
-                {/* key=mediaKey forces a clean <video> after leave/re-enter (MSE). */}
+                {/* key=mediaKey 在离开/重进后强制一个干净的 <video>（MSE）。 */}
                 <video
                   key={player.mediaKey}
                   ref={player.videoRef}
@@ -1617,8 +1596,8 @@ export function PlayerPane({
                 />
               </div>
 
-              {/* Floating danmaku shares the picture brightness, while the
-                  controls and room information keep their normal contrast. */}
+              {/* 悬浮弹幕跟随画面亮度，
+                  而控件与房间信息保持正常对比度。 */}
               {showHost && osdOn && !audioOnly && (
                 <DanmuJsDanmaku
                   active={floatingDanmakuActive}
@@ -1634,9 +1613,8 @@ export function PlayerPane({
                   className="z-10"
                 />
               )}
-              {/* Dimming only needs alpha composition. A full-surface CSS
-                  brightness filter would re-filter both video and the danmaku layer on
-                  every gesture step in browser/bridge-fallback playback. */}
+              {/* 调暗只需要 alpha 合成。整面 CSS brightness 滤镜会在浏览器/桥兜底播放中
+                  于每一步手势时对视频和弹幕层重复滤波。 */}
               <div
                 ref={brightnessShadeRef}
                 data-player-brightness-shade
@@ -1749,10 +1727,9 @@ export function PlayerPane({
               data-visible={controlsVisibleRef.current ? "true" : "false"}
               aria-hidden={!controlsVisibleRef.current}
               className={cn(
-                // Mirror of the bottom chrome: a fixed-position sibling of the
-                // video surface that floats over the top edge instead of taking
-                // layout height, faded by the same imperative data attribute so
-                // no React reconciliation happens on the idle timer.
+                // 底部 chrome 的镜像：视频表面的 fixed 定位兄弟节点，悬浮于顶边而不占布局
+                // 高度，由同一个命令式 data 属性驱动淡入淡出，
+                // 使空闲计时器不会引发 React 协调。
                 "absolute inset-x-0 top-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
               )}
               onPointerEnter={holdControlsVisible}
@@ -1793,13 +1770,10 @@ export function PlayerPane({
             data-visible="true"
             aria-hidden="false"
             className={cn(
-              // The chrome floats over the bottom edge of the picture instead
-              // of consuming layout height, so hiding it gives the whole stage
-              // back to the video. Keep the filtered surface stationary: moving
-              // backdrop blur would resample the video on every transition
-              // frame. The data attribute changes imperatively, so this
-              // compositor-only fade also avoids reconciling the video, danmaku layer
-              // and side panels.
+              // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
+              // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
+              // data 属性以命令式变更，
+              // 这种仅合成器的淡出也避免了对视频、弹幕层和侧面板的协调。
               "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
             )}
             onPointerEnter={holdControlsVisible}
@@ -1834,9 +1808,9 @@ export function PlayerPane({
               lines={lines}
               lineIndex={lineIndex}
               fullscreen={player.mode === "fullscreen"}
-              // Capability is device-level and stable; keep the control
-              // mounted so reconnect loops (loading toggling) cannot make
-              // the chrome flicker. transportDisabled covers unusable states.
+              // 能力是设备级且稳定的；保持控件挂载，
+              // 使重连循环（loading 反复切换）无法让 chrome 闪烁。
+              // transportDisabled 覆盖不可用状态。
               pictureInPictureSupported={player.pictureInPictureSupported}
               pictureInPictureActive={player.pictureInPictureActive}
               pictureInPictureDisabled={
@@ -1845,9 +1819,8 @@ export function PlayerPane({
               loadError={loadError}
               disabled={transportDisabled}
               overlay
-              // Portrait stacks the danmaku panel under the picture, so the
-              // controls float over the video's bottom edge rather than the
-              // window's — no gesture-bar inset there.
+              // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
+              // 那里没有手势栏 inset。
               stackedBelowPlayer={portraitStackedPlayer}
               compact={compactViewport}
               portalContainer={player.stageRef}
@@ -1862,11 +1835,9 @@ export function PlayerPane({
                     roomTitle={roomTitle}
                     roomUserName={roomUserName}
                     overlay
-                    // The composer lives inside the player chrome, so its quick
-                    // picker must portal into the stage rather than <body>:
-                    // fullscreen puts the stage in the top layer (or on a fixed
-                    // z-index layer in the Tauri clients), and a body-level
-                    // popup renders underneath it.
+                    // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
+                    // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
+                    // body 级弹窗会被压在其下。
                     portalContainer={player.stageRef}
                     onOverlayInteractionChange={handleComposerOverlayInteractionChange}
                   />

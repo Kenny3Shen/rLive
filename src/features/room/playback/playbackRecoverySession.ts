@@ -147,7 +147,7 @@ export function isDuplicatePlaybackFailure(
   );
 }
 
-/** FLV plugins already retry their network request internally before reporting failure. */
+/** FLV 插件在报告失败前已在内部重试其网络请求。 */
 export function playerRebuildRetryLimit(siteId: SiteId | undefined): number {
   return siteId === "douyu" || siteId === "huya" ? 1 : 2;
 }
@@ -161,7 +161,7 @@ export function matchingQualityIndex(
   return matchingIndex >= 0 ? matchingIndex : clampIndex(fallbackIndex, qualities.length);
 }
 
-/** Return the next Twitch video rendition after a browser decode failure. */
+/** 浏览器解码失败后返回下一个 Twitch 视频渲染档。 */
 export function nextTwitchDecodeQualityIndex(
   qualities: Pick<LivePlayQuality, "quality">[],
   currentIndex: number,

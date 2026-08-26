@@ -56,7 +56,7 @@ function SidebarLink({
   badgeLabel,
   onIntent,
 }: NavItem & {
-  /** Rendered as a small counter over the icon when greater than zero. */
+  /** 大于零时以图标上的小计数徽标呈现。 */
   badgeCount?: number;
   badgeLabel?: string;
   onIntent?: () => void;
@@ -106,9 +106,8 @@ function SidebarLink({
               <Badge
                 variant="default"
                 aria-label={badgeLabel}
-                // A solid fill rather than the tinted `destructive` variant: a
-                // counter this small has to stay readable over the icon it
-                // covers, and the sidebar-coloured ring keeps it detached.
+                // 用实心填充而不是着色的 `destructive` 变体：这么小的计数必须在其覆盖的图标
+                // 上保持可读，侧栏色的描边让它与图标脱开。
                 className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
               >
                 {badgeCount > 99 ? "99+" : badgeCount}
@@ -211,8 +210,8 @@ function AppearanceToggle() {
 export function Sidebar() {
   const queryClient = useQueryClient();
   const siteId = useSiteId();
-  // The recording list is already shared and event-driven, so subscribing here
-  // keeps the badge live without adding a second polling source.
+  // 录制列表已经是共享且事件驱动的，在这里订阅即可让徽标保持实时，
+  // 又不必增加第二个轮询源。
   const recordings = useRecordings();
   const activeRecordings = activeRecordingCount(recordings.data);
   const preloadHome = useCallback(() => {

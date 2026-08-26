@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
 
-/** Opens the dedicated search page instead of growing an inline header form. */
+/** 打开专门的搜索页，而不是扩展内联头部表单。 */
 export function HeaderSearch() {
   const navigate = useNavigate();
   const { pathname } = useLocation();

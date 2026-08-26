@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# Load and validate the per-machine Windows sync configuration.
-# This file is sourced by the sync and WSL build entry points.
+# 加载并校验按机器配置的 Windows 同步设置。
+# 本文件由同步脚本和 WSL 构建入口 source 引入。
 load_windows_sync_config() {
   local root="$1"
   local config_file="${RLIVE_WINDOWS_SYNC_CONFIG:-$root/scripts/windows-sync.conf}"
@@ -35,7 +35,7 @@ load_windows_sync_config() {
     return 1
   fi
 
-  # rsync --delete must never receive a drive root or an arbitrary path.
+  # rsync --delete 绝不能收到盘符根目录或任意路径。
   if [[ ! "$sync_path_mnt" =~ ^/mnt/[[:alpha:]]/.+ ]]; then
     echo "error: WINDOWS_SYNC_PATH must resolve below a mounted Windows drive: $WINDOWS_SYNC_PATH" >&2
     return 1

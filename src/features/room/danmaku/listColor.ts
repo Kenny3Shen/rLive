@@ -1,20 +1,19 @@
 /**
- * Platform chat colours are painted for dark video overlays. The side-panel
- * list reuses the same field for usernames, so near-white defaults such as
- * Bilibili's `#ffffff` become invisible on a light surface. Keep the colour
- * only when it stays readable against the active panel background.
+ * 平台聊天颜色是为深色视频叠加层调制的。侧栏列表复用同一字段渲染用户名，
+ * 接近白色的默认值（如 Bilibili 的 `#ffffff`）在浅色表面上会不可见。
+ * 只有当颜色在当前面板背景上仍可读时才保留。
  */
 
 const HEX_COLOR = /^#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i;
 
-/** Approximate `:root --background` / panel fill used for contrast checks. */
+/** 用于对比度检查的近似 `:root --background` / 面板填充色。 */
 const LIGHT_SURFACE = "#f9f9fb";
-/** Approximate `.dark --card` fill used for the room side panel. */
+/** 用于房间侧栏的近似 `.dark --card` 填充色。 */
 const DARK_SURFACE = "#1e2030";
 
 /**
- * WCAG large-text floor. Usernames are short UI chrome; requiring full body
- * text contrast would drop most saturated VIP colours on both themes.
+ * WCAG 大字号下限。用户名属于短小的 UI chrome；
+ * 若要求正文级对比度，两种主题下大多数饱和的 VIP 颜色都会被丢弃。
  */
 const MIN_CONTRAST = 3;
 
@@ -49,8 +48,8 @@ function contrastRatio(foreground: string, background: string): number {
 }
 
 /**
- * Returns a safe inline colour for the list username, or `null` so the row
- * falls back to the theme `text-primary` token.
+ * 返回列表用户名的安全内联颜色；为 `null` 时该行回退到主题
+ * `text-primary` token。
  */
 export function resolveDanmakuListUserColor(
   color: string | null | undefined,
@@ -64,7 +63,7 @@ export function resolveDanmakuListUserColor(
   return contrastRatio(safe, background) >= MIN_CONTRAST ? safe : null;
 }
 
-/** Resolve the active list surface from the settings theme mode. */
+/** 根据设置的主题模式解析当前活动列表表面。 */
 export function danmakuListSurfaceFromTheme(
   theme: "system" | "light" | "dark",
   prefersDark = false,

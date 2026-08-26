@@ -1,33 +1,26 @@
 /**
- * Android fullscreen without the WebView's HTML Fullscreen API.
+ * 不使用 WebView 的 HTML Fullscreen API 实现 Android 全屏。
  *
- * Tapping fullscreen used to call `stage.requestFullscreen()`. Chromium answers
- * that by asking `WebChromeClient.onShowCustomView` for a container and
- * *reparenting the rendered content into a brand-new View*. That is a render
- * surface handoff: the old WebView stops drawing before the new View has
- * produced its first frame, so the screen goes fully black for several frames
- * and the picture only reappears once the new surface draws. No amount of
- * same-frame CSS can fix it, because the frames in question belong to a View
- * that has not drawn yet.
+ * 过去点全屏会调用 `stage.requestFullscreen()`。Chromium 应答时会请求
+ * `WebChromeClient.onShowCustomView` 提供容器并*把渲染内容重新挂载到一个全新
+ * 的 View 上*。这是一次渲染表面交接：旧 WebView 在新 View 产出第一帧之前就停止
+ * 绘制，于是屏幕连续黑掉数帧，画面要等新表面绘制后才出现。同帧 CSS 无法补救，
+ * 因为问题帧属于一个尚未绘制过的 View。
  *
- * Desktop Tauri already avoids the browser fullscreen for an unrelated reason
- * (WebView2 will not grow a maximized window past the work area) and fills the
- * screen with an in-page fixed layer instead — `data-fullscreen="true"` on the
- * stage. That path never hands a surface over, so it never black-frames.
- * Android reuses it: the stage becomes the fixed layer and the system bars are
- * hidden through the native plugin rather than as a side effect of the custom
- * view.
+ * 桌面 Tauri 早就因为另一个原因避开浏览器全屏（WebView2 无法让最大化窗口越过
+ * 工作区），改用页面内固定层铺满屏幕 —— 即舞台上的 `data-fullscreen="true"`。
+ * 那条路径从不交接表面，因此从不黑帧。Android 复用它：舞台成为固定层，
+ * 系统栏经原生插件隐藏，
+ * 而不是作为 custom view 的副作用。
  *
- * Back needs nothing extra. `AndroidBackNavigator` already turns the system Back
- * into the cancelable `rlive:android-back` event, and `PlayerPane` cancels it
- * while `mode === "fullscreen"` to run the normal exit — which restores the
- * bars, releases the orientation lock and drops the layer in the right order.
- * Consuming Back in the Activity instead would preempt that event and take the
- * overlay listeners (HUD menu, volume panel) with it.
+ * Back 无需额外处理。`AndroidBackNavigator` 已把系统 Back 转换为可取消的
+ * `rlive:android-back` 事件，而 `PlayerPane` 在 `mode === "fullscreen"` 时取消它
+ * 并执行正常退出 —— 按正确顺序恢复系统栏、释放方向锁并撤掉固定层。
+ * 改为在 Activity 中消费 Back 会抢占该事件，
+ * 连带带走浮层监听器（HUD 菜单、音量面板）。
  *
- * Non-Tauri mobile browsers keep the real Fullscreen API — there is no native
- * bridge there, and a plain `position: fixed` layer cannot hide a browser's own
- * chrome.
+ * 非 Tauri 的移动浏览器保留真正的 Fullscreen API —— 那里没有原生桥，
+ * 普通的 `position: fixed` 层也藏不住浏览器自身 chrome。
  */
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -38,11 +31,9 @@ const NATIVE_SET_IMMERSIVE = "android_player_controls_set_immersive";
 type NativeImmersiveInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**
- * Whether this client should fill the screen in-page instead of requesting
- * browser fullscreen.
+ * 该客户端是否应以页面内固定层铺满屏幕而不是请求浏览器全屏。
  *
- * Kept as a pure function of the two inputs so both branches stay testable
- * without a WebView.
+ * 保持为两个输入的纯函数，使两条分支无需 WebView 即可测试。
  */
 export function usesInPageFullscreen({
   tauriRuntime,
@@ -59,10 +50,10 @@ export function runningOnAndroidTauri(): boolean {
 }
 
 /**
- * Hides or restores the Android system bars for the in-page fullscreen player.
+ * 为页面内全屏播放器隐藏或恢复 Android 系统栏。
  *
- * Rejections are the caller's to swallow: an older APK without the command must
- * still get the in-page layer, just with the status bar left visible.
+ * 拒绝由调用方吞掉：没有该命令的旧 APK 仍能得到页面内固定层，
+ * 只是状态栏保持可见。
  */
 export async function setAndroidImmersive(
   immersive: boolean,

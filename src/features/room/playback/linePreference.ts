@@ -89,7 +89,7 @@ export function rememberPlaybackLine(
     );
     storage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {
-    // Playback remains usable when storage is unavailable or full.
+    // 存储不可用或已满时播放仍保持可用。
   }
 }
 

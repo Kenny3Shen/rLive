@@ -8,13 +8,13 @@ use crate::sites::huya::HuyaSite;
 use crate::sites::traits::LiveSite;
 use crate::sites::twitch::TwitchSite;
 
-/// Metadata for site list UI (no cookie / HTTP session).
+/// 站点列表 UI 使用的元数据（不含 cookie / HTTP 会话）。
 pub struct SiteMeta {
     pub id: SiteId,
     pub name: &'static str,
 }
 
-/// All registered live sites, in stable display order.
+/// 全部已注册直播站点，按稳定的展示顺序排列。
 pub fn all_meta() -> Vec<SiteMeta> {
     vec![
         SiteMeta {
@@ -40,9 +40,9 @@ pub fn all_meta() -> Vec<SiteMeta> {
     ]
 }
 
-/// Build a site client using the currently selected HTTP(S) proxy when one is
-/// configured.  Each proxy policy owns a separate reqwest client, preventing
-/// a cached direct connection from bypassing a later settings change.
+/// 使用当前选定的 HTTP(S) 代理构建站点客户端（如已配置）。每种代理策略
+/// 持有独立的 reqwest 客户端，
+/// 防止缓存的直连连接绕过之后的设置变更。
 pub fn site_with_proxy(
     id: &SiteId,
     cookie: Option<String>,
@@ -75,7 +75,7 @@ fn site_with_client(
     }
 }
 
-/// Whether a site's LiveSite methods are fully implemented (HTTP, etc.).
+/// 某站点的 LiveSite 方法是否完整实现（HTTP 等）。
 pub fn is_ready(id: &SiteId) -> bool {
     matches!(
         id,

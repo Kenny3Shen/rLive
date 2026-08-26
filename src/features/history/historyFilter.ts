@@ -5,7 +5,7 @@ export const HISTORY_QUERY_PARAM = "q";
 export const HISTORY_DATE_PARAM = "date";
 export const HISTORY_PLATFORM_PARAM = "platform";
 
-/** Relative presets plus `YYYY-MM-DD` for one specific local day. */
+/** 相对预设加上表示某个本地日期的 `YYYY-MM-DD`。 */
 export type HistoryDateFilter = "all" | "today" | "yesterday" | "7d" | "30d" | (string & {});
 
 export const HISTORY_DATE_PRESETS = ["all", "today", "yesterday", "7d", "30d"] as const;
@@ -22,8 +22,8 @@ export function isSpecificDayFilter(value: string): boolean {
 }
 
 /**
- * A filter the address bar can carry. Anything unrecognised degrades to `all`
- * so a hand-edited or stale URL still renders the full timeline.
+ * 地址栏能够承载的过滤器。无法识别的内容一律降级为 `all`，
+ * 使手工编辑或过期的 URL 仍能渲染完整时间线。
  */
 export function historyDateFilterFromSearch(value: string | null | undefined): HistoryDateFilter {
   if (!value) return "all";
@@ -50,7 +50,7 @@ export function historyDateFilterLabel(filter: HistoryDateFilter): string {
   }
 }
 
-/** A platform filter the address bar can carry; stale values show all sites. */
+/** 地址栏能承载的平台过滤；过期取值显示全部站点。 */
 export function historyPlatformFilterFromSearch(
   value: string | null | undefined,
 ): HistoryPlatformFilter {
@@ -68,9 +68,9 @@ function shiftLocalDay(timestamp: number, days: number): number {
 }
 
 /**
- * Half-open `[from, to)` window in local time, or `null` for no date bound.
- * Presets are day-aligned rather than "now minus N hours" so "近 7 天" keeps
- * meaning seven calendar days regardless of the time of day.
+ * 本地时间的半开 `[from, to)` 窗口，无日期限制时为 `null`。
+ * 预设按自然日对齐而不是"现在减 N 小时"，
+ * 使"近 7 天"无论几点都表示七个日历日。
  */
 export function historyDateWindow(
   filter: HistoryDateFilter,
@@ -97,7 +97,7 @@ export function historyDateWindow(
   }
 }
 
-/** Case-insensitive match over the fields a record exposes to search. */
+/** 对记录暴露给搜索的字段做不区分大小写的匹配。 */
 export function matchesHistoryKeyword(fields: readonly (string | undefined)[], keyword: string) {
   const needle = keyword.trim().toLowerCase();
   if (!needle) return true;
@@ -113,9 +113,8 @@ export type HistoryFilterOptions<T> = {
 };
 
 /**
- * Narrows a timeline by free-text and date before it is grouped. Records whose
- * timestamp is unusable stay visible unless a date bound is active, so a bad
- * clock never silently hides history.
+ * 在分组之前先用自由文本和日期收窄时间线。时间戳不可用的记录保持可见，
+ * 除非日期限制生效，避免坏时钟悄悄藏起历史。
  */
 export function filterHistoryItems<T>(
   items: readonly T[],

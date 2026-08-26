@@ -82,7 +82,7 @@ export function LanSyncField() {
         const next = await invokeCmd<LanSyncSessionInfo | null>("lan_sync_status");
         if (!cancelled && next) setSession(next);
       } catch {
-        // The visible session remains usable; the next tick can recover status.
+        // 可见的会话仍保持可用；下一个 tick 可以恢复状态。
       }
       if (!cancelled) setNow(Date.now());
     };

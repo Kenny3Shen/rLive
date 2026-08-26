@@ -24,9 +24,9 @@ export function searchPath(keyword: string, scope: SearchScope = "all"): string 
 }
 
 /**
- * React Router records its in-app position in the browser history state.
- * Only use a browser Back navigation when that state proves there is an
- * earlier in-app page; direct links otherwise return safely to discovery.
+ * React Router 把应用内位置记录在浏览器历史状态里。只有该状态证明存在更早的
+ * 应用内页面时才使用浏览器 Back；
+ * 否则直链安全地返回发现页。
  */
 export function canSearchNavigateBack(historyState: unknown): boolean {
   return (
@@ -89,8 +89,8 @@ function rank(room: LiveRoomItem, keyword: string, scope: SearchScope): number {
 }
 
 /**
- * Sites return a broad search response. This makes the user-selected field
- * explicit, removes duplicate pages, and brings exact matches to the front.
+ * 站点返回宽泛的搜索响应。这里让用户选择的字段显式生效、去除重复页，
+ * 并把精确匹配提前。
  */
 export function prepareSearchResults(
   rooms: LiveRoomItem[],

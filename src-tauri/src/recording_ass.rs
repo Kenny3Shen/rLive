@@ -674,8 +674,8 @@ mod tests {
             &[
                 &format!(r#"{{"offset_ms":0,"events":[{}]}}"#, event("chat", "6")),
                 &format!(r#"{{"offset_ms":2000,"events":[{}]}}"#, event("chat", "6")),
-                // Beyond the 10s window from the anchor, so it starts a new one
-                // instead of extending the first entry's count.
+                // 超出锚点 10 秒窗口，因此开启新的一条计数，
+                // 而不是延长第一条的计数。
                 &format!(r#"{{"offset_ms":15000,"events":[{}]}}"#, event("chat", "6")),
                 &format!(r#"{{"offset_ms":20000,"events":[{}]}}"#, event("chat", "6")),
             ],

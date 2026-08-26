@@ -1,11 +1,10 @@
 /**
- * Runtime side of the multi-view live clock alignment.
+ * 多视图直播时钟对齐的运行时部分。
  *
- * The tiles register their player handles here; one timer samples every feed,
- * asks `planLiveSync` for corrections and applies them. Statuses are published
- * through a per-feed subscription so a tick only re-renders the tiles whose
- * displayed numbers actually changed — six players re-rendering every second
- * would be far more expensive than the alignment itself.
+ * 各磁贴在这里注册播放器句柄；一个计时器采样每条流，
+ * 向 `planLiveSync` 请求校正并应用。状态通过逐流订阅发布，
+ * 使一次 tick 只重渲染显示数值真正变化的磁贴 ——
+ * 六个播放器每秒全部重渲染的开销远高于对齐本身。
  */
 
 import type { LivePlayerSyncApi } from "@/features/room/player/useWebPlayer";
@@ -18,30 +17,29 @@ import {
   type LiveSyncSample,
 } from "./liveSync";
 
-/** Sampling period of the correction loop. */
+/** 校正循环的采样周期。 */
 export const LIVE_SYNC_TICK_MS = 1_000;
 /**
- * A seek needs a moment to settle: mpegts.js re-primes its buffer and the
- * element fires `seeking`/`seeked` asynchronously. Correcting again inside that
- * window would read a stale position and jump twice.
+ * seek 需要一点时间稳定：mpegts.js 会重建缓冲，元素异步触发
+ * `seeking`/`seeked`。在这个窗口内再次校正会读到过期位置并二次跳转。
  */
 export const LIVE_SYNC_SEEK_COOLDOWN_MS = 2_200;
 
 export type LiveSyncFeedStatus = {
   clockKind: LiveSyncClockKind;
-  /** Signed seconds away from the shared target; positive means too late. */
+  /** 偏离共享目标的带符号秒数；正表示过晚。 */
   errorSeconds: number | null;
-  /** Seconds behind this feed's own live edge. */
+  /** 落后于该流自身直播边缘的秒数。 */
   holdSeconds: number | null;
-  /** The retained buffer could not reach the target position. */
+  /** 保留缓冲区无法到达目标位置。 */
   limited: boolean;
 };
 
 export type LiveSyncSummary = {
   mode: LiveSyncMode;
-  /** Shared latency behind wall clock in `auto` mode, else null. */
+  /** `auto` 模式下落后于挂钟的共享延迟，否则为 null。 */
   targetLatencySeconds: number | null;
-  /** Feeds currently being corrected. */
+  /** 当前正在校正的流。 */
   activeCount: number;
 };
 
@@ -59,7 +57,7 @@ function sameStatus(a: LiveSyncFeedStatus | null, b: LiveSyncFeedStatus | null):
   const same = (left: number | null, right: number | null) =>
     left == null || right == null
       ? left === right
-      : // Only tenths are ever shown, so ignore churn below that.
+      : // 界面最多显示到十分位，忽略更小的抖动。
         Math.round(left * 10) === Math.round(right * 10);
   return (
     a.clockKind === b.clockKind &&
@@ -70,12 +68,12 @@ function sameStatus(a: LiveSyncFeedStatus | null, b: LiveSyncFeedStatus | null):
 }
 
 /**
- * Extra delay the alignment added to a feed, relative to an unsynced player.
+ * 对齐给某条流附加的额外延迟，相对未同步的播放器而言。
  *
- * Danmaku arrives from the server in real time, so any hold the alignment adds
- * would otherwise make comments run ahead of the picture they belong to. The
- * value is quantized to half a second: comment timing does not need more, and a
- * value that changed on every tick would re-render the danmaku layer constantly.
+ * 弹幕由服务器实时下发，对齐造成的任何滞留若不补偿，
+ * 都会让评论跑在其所属画面的前面。该值量化到半秒：
+ * 评论时序不需要更细，
+ * 而逐 tick 变化的取值会让弹幕层不停重渲染。
  */
 export function liveSyncDanmakuDelayMs(status: LiveSyncFeedStatus | null): number {
   if (!status || status.holdSeconds == null) return 0;
@@ -83,7 +81,7 @@ export function liveSyncDanmakuDelayMs(status: LiveSyncFeedStatus | null): numbe
   return extra <= 0 ? 0 : Math.round(extra * 2) * 500;
 }
 
-/** How trustworthy a feed's wall clock is, in the grid's own wording. */
+/** 以网格自己的措辞描述某条流挂钟的可信程度。 */
 export function liveSyncClockLabel(kind: LiveSyncClockKind): string {
   switch (kind) {
     case "program-date":
@@ -95,7 +93,7 @@ export function liveSyncClockLabel(kind: LiveSyncClockKind): string {
   }
 }
 
-/** One-line status for a feed, used by the control panel and the tile badge. */
+/** 单条流的单行状态，供控制面板和磁贴徽标使用。 */
 export function liveSyncFeedStatusText(status: LiveSyncFeedStatus | null): string {
   if (!status || status.holdSeconds == null) return "等待画面就绪";
   const parts = [liveSyncClockLabel(status.clockKind), `延后 ${status.holdSeconds.toFixed(1)}s`];
@@ -113,15 +111,15 @@ export type MultiRoomLiveSyncRegistry = {
   getFeedStatus: (key: string) => LiveSyncFeedStatus | null;
   subscribeSummary: (listener: () => void) => () => void;
   getSummary: () => LiveSyncSummary;
-  /** Run one sampling/correction pass. Called by the provider's timer. */
+  /** 执行一次采样/校正。由 provider 的计时器调用。 */
   tick: (input: {
     mode: LiveSyncMode;
     offsets: Record<string, number>;
     nowMs: number;
   }) => Record<string, number>;
-  /** Release every correction and clear published statuses. */
+  /** 释放所有校正并清空已发布的状态。 */
   reset: () => void;
-  /** Manual-mode offsets that put the feeds on the slowest feed's clock. */
+  /** manual 模式偏移量，把各流对齐到最慢流的时钟。 */
   computeAlignOffsets: (nowMs: number) => Record<string, number>;
 };
 

@@ -217,8 +217,8 @@ export function RecordingPlaybackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { roomDir, sessionDir } = useParams<{ roomDir: string; sessionDir: string }>();
-  // The id spans both route segments, so it is rejoined here rather than read
-  // from a single param.
+  // id 跨越两个路由段，因此在这里重新拼接，
+  // 而不是从单个参数读取。
   const recordingId = recordingIdFromPlaybackParams(roomDir, sessionDir);
   const supported = recordingSupported();
   const recordings = useRecordings();

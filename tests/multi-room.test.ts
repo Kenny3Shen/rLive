@@ -120,8 +120,8 @@ describe("multi-room audio defaults", () => {
 
 describe("multi-room fullscreen ownership", () => {
   test("limits shared-window fullscreen to its owning player", () => {
-    // All six feeds share one window, so its fullscreen state would otherwise
-    // mark every secondary fullscreen and grow the grid instead of the picture.
+    // 六条流共享一个窗口，否则其全屏状态会把每个次要流都标记为全屏、
+    // 放大网格而不是画面。
     expect(playerOwnsFullscreen(true)).toBe(true);
     expect(playerOwnsFullscreen(false)).toBe(false);
     expect(playerOwnsFullscreen(undefined)).toBe(true);

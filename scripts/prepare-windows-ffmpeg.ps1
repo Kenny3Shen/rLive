@@ -1,19 +1,16 @@
-# Prepare the FFmpeg development SDK and runtime files used by ffmpeg-next on
-# Windows. The SDK is built from the pinned official source with only the
-# components rLive actually exercises, so headers, import libraries, and DLLs
-# stay aligned by construction.
+# 准备 Windows 上 ffmpeg-next 使用的 FFmpeg 开发 SDK 与运行时文件。
+# 该 SDK 由固定版本的官方源码构建，只包含 rLive 实际用到的组件，
+# 因此头文件、导入库和 DLL 天然保持一致。
 #
-# Windows previously downloaded Gyan's `full_build-shared` archive. That build
-# turns on 103 `--enable-*` options including `--enable-gpl` and
-# `--enable-version3`, which made the four runtime DLLs 116 MB - over 88% of the
-# installed application, with avcodec alone above 93 MB - and put the product
-# under a GPLv3 compliance audit. rLive never decodes or encodes: recording
-# demuxes FLV/HLS/MPEG-TS and remuxes into FLV or MPEG-TS
-# (`src-tauri/src/recording_ffmpeg.rs`), so none of that surface is reachable.
-# Building the same component whitelist that `prepare-macos-ffmpeg.sh` and
-# `prepare-linux-ffmpeg.sh` use brings the DLLs to roughly 2.4 MB, keeps the
-# three desktop platforms behaving identically, and leaves the build plain
-# `LGPL version 2.1 or later`.
+# Windows 过去下载 Gyan 的 `full_build-shared` 压缩包。那个构建开启了 103 个
+# `--enable-*` 选项，包括 `--enable-gpl` 和 `--enable-version3`，使四个运行时
+# DLL 达到 116 MB —— 超过安装后应用体积的 88%，其中仅 avcodec 就超过 93 MB ——
+# 并把产品置于 GPLv3 合规审计之下。rLive 从不解码或编码：录制只解复用
+# FLV/HLS/MPEG-TS 并重新封装为 FLV 或 MPEG-TS
+# （`src-tauri/src/recording_ffmpeg.rs`），那一整片能力都不可达。
+# 改用与 `prepare-macos-ffmpeg.sh`、`prepare-linux-ffmpeg.sh` 相同的组件白名单
+# 构建后，DLL 缩小到约 2.4 MB，三个桌面平台行为一致，
+# 且构建结果只是普通的 `LGPL version 2.1 or later`。
 
 param(
     [string]$ProjectRoot = (Get-Location).Path,
@@ -25,44 +22,40 @@ $ProgressPreference = "SilentlyContinue"
 $FfmpegVersion = "9.0.1"
 $FfmpegArchiveName = "ffmpeg-$FfmpegVersion.tar.xz"
 $FfmpegDownloadUrl = "https://ffmpeg.org/releases/$FfmpegArchiveName"
-# Measured from the official tarball after verifying its detached signature
-# against the FFmpeg release signing key
-# FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>.
-# Identical to the pins in prepare-macos-ffmpeg.sh and prepare-linux-ffmpeg.sh:
-# all three desktop platforms build the same upstream release.
+# 校验官方 tarball 的分离签名后计算得出，签名对应 FFmpeg 发布签名密钥
+# FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>。
+# 与 prepare-macos-ffmpeg.sh、prepare-linux-ffmpeg.sh 中固定的版本一致：
+# 三个桌面平台构建同一个上游发布版本。
 $FfmpegArchiveSha256 = "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
 
-# Asserted in the generated config_components.h after `configure` runs.
-# `configure` downgrades a component whose dependencies are unmet to a warning
-# and still exits 0 - a TLS backend it cannot find silently turns
-# `--enable-protocol=https` into `CONFIG_HTTPS_PROTOCOL 0`, and the loss would
-# surface only at runtime, as a failed HTTPS recording on a user's machine.
+# 在 `configure` 运行后，于生成的 config_components.h 中断言这些项。
+# `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
+# 后端会静默地把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
+# 而这种缺失只会在运行时暴露，表现为用户机器上 HTTPS 录制失败。
 $RequiredComponents = @(
     "HTTPS_PROTOCOL", "TLS_PROTOCOL", "HTTP_PROTOCOL", "FILE_PROTOCOL",
     "CRYPTO_PROTOCOL", "FLV_DEMUXER", "LIVE_FLV_DEMUXER", "HLS_DEMUXER",
     "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER"
 )
 
-# `--disable-autodetect` pins the feature set to exactly what is listed here
-# instead of whatever happens to be installed, which is what makes the artifact
-# reproducible. It also switches off schannel, so TLS is re-enabled explicitly: a
-# direct HTTPS recording needs it. schannel is the Windows-native backend and
-# links only against secur32/ncrypt/crypt32, so unlike OpenSSL or GnuTLS it adds
-# no third-party code to the audit.
+# `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
+# 机器上恰好安装了什么，这正是产物可复现的原因。它同时会关掉 schannel，
+# 因此显式重新启用 TLS：直连 HTTPS 录制需要它。schannel 是 Windows 原生后端，
+# 只链接 secur32/ncrypt/crypt32，因此与 OpenSSL 或 GnuTLS 不同，
+# 不会给审计引入任何第三方代码。
 #
-# swresample is disabled because nothing reaches it: the Gyan full build's
-# avcodec imported it for audio resampling, but with the codecs off the import
-# tables are just avformat -> avcodec -> avutil, and `ffmpeg-sys-next` links only
-# avcodec and avformat.
+# 禁用 swresample 是因为没有任何路径会用到它：Gyan 完整构建的 avcodec
+# 为音频重采样导入了它，但在关闭编解码器后，导入关系只剩
+# avformat -> avcodec -> avutil，而 `ffmpeg-sys-next` 只链接
+# avcodec 和 avformat。
 #
-# zlib is deliberately left off, unlike on macOS and Linux where the platform
-# already ships it. It would mean pinning and auditing another dependency to
-# serve only two paths a live remux cannot reach: QuickTime `cmov` (compressed
-# moov) and matroska zlib-compressed tracks. It is a `suggest` in configure, not
-# a `deps`, so every required component is still enabled without it.
+# zlib 被刻意关闭，这与 macOS 和 Linux 不同 —— 那两个平台系统已自带。
+# 启用它意味着要再固定并审计一个依赖，却只服务两条实时重封装不可能走到的
+# 路径：QuickTime 的 `cmov`（压缩 moov）和 matroska 的 zlib 压缩轨道。
+# 它在 configure 中是 `suggest` 而非 `deps`，所以没有它所有必需组件仍能启用。
 #
-# This list is also written into the SDK's README.txt, which ships beside the
-# DLLs, so the notice cannot drift from the build.
+# 这个列表也会写进随 DLL 一起分发的 SDK README.txt，
+# 因此声明不会与实际构建产生偏差。
 $ConfigureOptions = @(
     "--enable-shared --disable-static",
     "--disable-autodetect --enable-schannel",
@@ -103,9 +96,9 @@ function Find-LibClangDirectory {
         if ([string]::IsNullOrWhiteSpace($Candidate)) {
             return $false
         }
-        # The Android NDK clang is a host compiler for Android tooling. Its
-        # resource directory does not provide the MSVC desktop headers needed
-        # by libquickjs-ng-sys when the target is x86_64-pc-windows-msvc.
+        # Android NDK 的 clang 是面向 Android 工具链的宿主编译器。当目标为
+        # x86_64-pc-windows-msvc 时，它的资源目录不提供
+        # libquickjs-ng-sys 所需的 MSVC 桌面头文件。
         if ($Candidate -match '(?i)[\\/]android-sdk[\\/]|[\\/]ndk[\\/]') {
             return $false
         }
@@ -115,8 +108,8 @@ function Find-LibClangDirectory {
         )
     }
 
-    # WSL interop can pass a stale process-level value even after the user
-    # environment has been updated, so inspect all scopes before fallbacks.
+    # 即使用户环境变量已更新，WSL 互操作仍可能传入过期的进程级取值，
+    # 因此在回退之前检查所有作用域。
     $configuredPaths = @(
         [Environment]::GetEnvironmentVariable("LIBCLANG_PATH", "Process"),
         [Environment]::GetEnvironmentVariable("LIBCLANG_PATH", "User"),
@@ -175,10 +168,10 @@ function Assert-FfmpegSdk([string]$SdkRoot) {
 function Get-FfmpegRuntimeFiles([string]$SdkRoot) {
     $binDirectory = Join-Path $SdkRoot "bin"
     $runtimeFiles = @()
-    # Only these three. The Gyan full build's avcodec imported swresample for its
-    # audio resampling paths, so that DLL had to ship too; with the codecs
-    # disabled nothing references it, `ffmpeg-sys-next` links only avcodec and
-    # avformat, and the import tables here are avformat -> avcodec -> avutil.
+    # 只有这三个。Gyan 完整构建的 avcodec 为其音频重采样路径导入了
+    # swresample，那个 DLL 也必须一起分发；关闭编解码器后没有任何引用，
+    # `ffmpeg-sys-next` 只链接 avcodec 和 avformat，
+    # 这里的导入关系是 avformat -> avcodec -> avutil。
     foreach ($library in @("avutil", "avcodec", "avformat")) {
         $matches = @(Get-ChildItem $binDirectory -Filter "$library-*.dll" -File -ErrorAction SilentlyContinue)
         if ($matches.Count -ne 1) {
@@ -190,14 +183,12 @@ function Get-FfmpegRuntimeFiles([string]$SdkRoot) {
 }
 
 function Find-Msys2Root {
-    # MSYS2 is pre-installed on GitHub's windows runners at C:\msys64 but is
-    # deliberately kept off PATH, so probe well-known roots instead of relying on
-    # `Get-Command`. The build needs a POSIX shell because FFmpeg's `configure`
-    # is a shell script; MinGW-w64 is used rather than FFmpeg's MSVC toolchain
-    # because it works without `cl.exe` on PATH and still produces the same
-    # `ar`-format import libraries the MSVC target links against today - the
-    # previous Gyan SDK was itself a MinGW build shipping that same
-    # `.def` + `.lib` + `.dll.a` trio.
+    # GitHub 的 windows 运行器在 C:\msys64 预装了 MSYS2，但刻意不放进 PATH，
+    # 因此这里探测常见根目录而不依赖 `Get-Command`。构建需要 POSIX shell，
+    # 因为 FFmpeg 的 `configure` 是 shell 脚本；选择 MinGW-w64 而非 FFmpeg 的
+    # MSVC 工具链，是因为它无需 PATH 上有 `cl.exe`，且仍能产出当前 MSVC
+    # 目标所链接的 `ar` 格式导入库 —— 此前的 Gyan SDK 本身就是 MinGW 构建，
+    # 分发的正是同一组 `.def` + `.lib` + `.dll.a`。
     $candidates = [Collections.Generic.List[string]]::new()
     $configured = Get-ConfiguredEnvironmentValue "MSYS2_ROOT"
     if ($configured) {
@@ -210,10 +201,9 @@ function Find-Msys2Root {
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path (Join-Path $candidate "usr\bin\bash.exe"))) {
             $root = [IO.Path]::GetFullPath($candidate)
-            # pacman installs the rest of the toolchain, so a root without it is
-            # not usable. Checking here turns what would otherwise be a bare
-            # "command not found" from inside a generated script into a message
-            # that names the directory that was probed.
+            # 其余工具链由 pacman 安装，所以缺少它的根目录不可用。在这里检查，
+            # 可以把原本来自生成脚本内部的一句
+            # "command not found"，变成明确指出所探测目录的提示信息。
             if (-not (Test-Path (Join-Path $root "usr\bin\pacman.exe"))) {
                 throw "MSYS2 at $root has no usr\bin\pacman.exe; cannot install the build toolchain."
             }
@@ -229,19 +219,18 @@ FFmpeg SDK that was prepared elsewhere.
 "@
 }
 
-# PATH for every MSYS2 invocation below. /etc/profile is what normally assembles
-# it, and `--noprofile` skips that, so a bash started here would otherwise
-# inherit only the Windows PATH and fail on `pacman: command not found`.
-# /mingw64/bin comes first so `configure` probes the MinGW-w64 gcc and nasm that
-# will compile the libraries; /usr/bin supplies pacman, make, tar and coreutils.
-# The Windows PATH is deliberately not appended: a stray Windows tool ahead of an
-# MSYS2 one is exactly the kind of drift this build avoids.
+# 为下面所有 MSYS2 调用准备 PATH。通常由 /etc/profile 负责拼装，而
+# `--noprofile` 会跳过它，所以在这里启动的 bash 否则只会继承 Windows 的
+# PATH，并因 `pacman: command not found` 失败。/mingw64/bin 放在最前，
+# 让 `configure` 探测到将真正编译这些库的 MinGW-w64 gcc 与 nasm；
+# /usr/bin 提供 pacman、make、tar 和 coreutils。刻意不追加 Windows PATH：
+# 让某个 Windows 工具排在 MSYS2 工具之前，正是本构建要避免的偏差。
 $Msys2PathExport = 'export PATH="/mingw64/bin:/usr/bin:/usr/local/bin"'
 
 function ConvertTo-Msys2Path([string]$Msys2Root, [string]$WindowsPath) {
-    # MSYS2 needs POSIX paths; cygpath is the only reliable converter for drive
-    # letters and UNC roots. cygpath lives in /usr/bin, which --noprofile leaves
-    # off PATH, so set it here too.
+    # MSYS2 需要 POSIX 路径，而 cygpath 是处理盘符和 UNC 根目录唯一可靠的
+    # 转换工具。cygpath 位于 /usr/bin，而 --noprofile 不会把它加入 PATH，
+    # 所以这里也要设置。
     $bash = Join-Path $Msys2Root "usr\bin\bash.exe"
     $escaped = $WindowsPath.Replace("\", "\\").Replace('"', '\"')
     $converted = & $bash --noprofile --norc -c "$Msys2PathExport; cygpath -u `"$escaped`"" 2>$null
@@ -253,46 +242,41 @@ function ConvertTo-Msys2Path([string]$Msys2Root, [string]$WindowsPath) {
 
 function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureMessage) {
     $bash = Join-Path $Msys2Root "usr\bin\bash.exe"
-    # The script is written to a file rather than piped into `bash -s`, because
-    # piping appends CRLF to the final line: bash then runs `make install\r` and
-    # fails with "No rule to make target". Normalizing every line ending here
-    # also makes the build independent of how git checked this file out, since a
-    # core.autocrlf checkout would otherwise put a CR on every line of the
-    # here-string.
+    # 脚本被写入文件而不是通过管道传给 `bash -s`，因为管道会给最后一行追加
+    # CRLF：bash 于是会执行 `make install\r` 并以 "No rule to make target" 失败。
+    # 在这里统一规范化换行，也让构建不受本文件的 git 检出方式影响，
+    # 否则 core.autocrlf 检出会给 here-string 的每一行都加上 CR。
     $scriptPath = Join-Path ([IO.Path]::GetTempPath()) "rlive-msys2-$([Guid]::NewGuid().ToString('N')).sh"
-    # PATH is prepended to the script itself rather than wrapped around it with
-    # `bash -c ... . script`, which would leak the script's `set -e` and `exit`
-    # into the outer shell.
+    # PATH 被前置写入脚本自身，而不是用 `bash -c ... . script` 包在外面，
+    # 后者会把脚本里的 `set -e` 和 `exit` 泄漏到外层 shell。
     $normalized = ($Msys2PathExport + "`n" + $Script -replace "`r`n", "`n" -replace "`r", "`n")
     if (-not $normalized.EndsWith("`n")) {
         $normalized += "`n"
     }
-    # WriteAllText, not Set-Content: the latter appends a trailing newline of the
-    # host's own and would reintroduce CRLF on Windows PowerShell.
+    # 用 WriteAllText 而不是 Set-Content：后者会自行追加一个换行，
+    # 在 Windows PowerShell 上会重新引入 CRLF。
     [IO.File]::WriteAllText($scriptPath, $normalized, [Text.UTF8Encoding]::new($false))
     $scriptPosix = ConvertTo-Msys2Path $Msys2Root $scriptPath
 
-    # MSYS2's own launchers set MSYSTEM and re-exec a login shell; calling
-    # bash.exe directly avoids `-l` resetting the working directory, so the
-    # script always cd's to an absolute path itself. MSYSTEM is still set because
-    # the toolchain reads it, but it does not build PATH: /etc/profile does, and
-    # --noprofile skips it, leaving bash with the Windows PATH and no /usr/bin.
-    # Every MSYS2 command therefore has to be reachable through the PATH set
-    # here, or it fails with "command not found".
+    # MSYS2 自带的启动器会设置 MSYSTEM 并重新执行登录 shell；直接调用
+    # bash.exe 可避免 `-l` 重置工作目录，因此脚本始终自己 cd 到绝对路径。
+    # 仍然设置 MSYSTEM 是因为工具链会读取它，但它不负责构建 PATH：
+    # 那是 /etc/profile 的工作，而 --noprofile 跳过了它，使 bash 只剩
+    # Windows PATH 且没有 /usr/bin。所以每个 MSYS2 命令都必须能通过
+    # 这里设置的 PATH 找到，否则会以 "command not found" 失败。
     $previousMsystem = $env:MSYSTEM
     $previousChere = $env:CHERE_INVOKING
-    # `Stop` would turn MSYS2's ordinary progress output on stderr into a
-    # terminating NativeCommandError before the build could finish.
+    # `Stop` 会把 MSYS2 输出到 stderr 的普通进度信息变成终止性的
+    # NativeCommandError，让构建无法完成。
     $previousPreference = $ErrorActionPreference
     try {
         $env:MSYSTEM = "MINGW64"
         $env:CHERE_INVOKING = "1"
         $ErrorActionPreference = "Continue"
-        # Out-Host, not bare invocation: a PowerShell function returns everything
-        # written to the success stream, so the build's stdout would otherwise be
-        # collected into the caller's return value. Get-ManagedFfmpegSdk returned
-        # the whole pacman and make transcript alongside the SDK path, and
-        # Test-Path then choked on "::" as an invalid wildcard.
+        # 使用 Out-Host 而不是直接调用：PowerShell 函数会返回写入成功流的所有内容，
+        # 否则构建的 stdout 会被收集进调用方的返回值。Get-ManagedFfmpegSdk 曾把
+        # 整个 pacman 与 make 的输出连同 SDK 路径一起返回，
+        # 随后 Test-Path 因 "::" 是无效通配符而报错。
         & $bash --noprofile --norc $scriptPosix | Out-Host
         $exitCode = $LASTEXITCODE
     } finally {
@@ -307,24 +291,21 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
 }
 
 function Install-Msys2BuildTools([string]$Msys2Root) {
-    # The runner image ships MSYS2 with only a minimal package set: no make,
-    # nasm, diffutils, or the MinGW-w64 gcc, all of which `configure` needs.
-    # nasm in particular is fatal rather than a silent downgrade, so a missing
-    # one fails the build loudly.
-    # make and diffutils come from the MSYS environment; the compiler, assembler
-    # and pkg-config must be the MINGW64 builds so that what `configure` probes
-    # is the toolchain that will actually compile the libraries. pkg-config only
-    # silences a detection warning here - `--disable-autodetect` means there are
-    # no external libraries to find - but a future dependency would otherwise
-    # fail to be detected rather than fail loudly.
+    # 运行器镜像自带的 MSYS2 只有最小包集：没有 make、nasm、diffutils，
+    # 也没有 MinGW-w64 gcc，而 `configure` 全都需要。其中 nasm 缺失是致命错误
+    # 而非静默降级，因此缺少时会让构建直接失败。
+    # make 与 diffutils 来自 MSYS 环境；编译器、汇编器和 pkg-config 必须是
+    # MINGW64 版本，这样 `configure` 探测到的就是真正编译这些库的工具链。
+    # pkg-config 在这里只是消除一条探测警告 —— `--disable-autodetect` 意味着
+    # 没有外部库需要查找 —— 但若将来新增依赖，缺少它会导致依赖探测不到
+    # 而不是直接报错。
     $packages = @(
         "make", "diffutils",
         "mingw-w64-x86_64-gcc", "mingw-w64-x86_64-nasm", "mingw-w64-x86_64-pkgconf"
     )
-    # Probing is a plain `-c` command rather than a script so that its non-zero
-    # "tools missing" exit is not mistaken for a failure by Invoke-Msys2Bash.
-    # It must export the same PATH, or every tool looks missing and the install
-    # runs on an installation that already has them.
+    # 探测使用普通的 `-c` 命令而不是脚本，这样它"工具缺失"时的非零退出
+    # 不会被 Invoke-Msys2Bash 当成失败。它必须导出相同的 PATH，
+    # 否则所有工具都像缺失，而安装步骤又会在已装好的环境上重跑。
     $probe = "$Msys2PathExport; " +
         'missing=0; command -v make > /dev/null || missing=1; ' +
         'command -v diff > /dev/null || missing=1; ' +
@@ -348,11 +329,10 @@ function Install-Msys2BuildTools([string]$Msys2Root) {
     }
 
     Write-Host "Installing MSYS2 build tools: $($packages -join ', ')"
-    # -Sy refreshes the package database first: the runner image's is as old as
-    # the image, so pacman would otherwise resolve to package versions that have
-    # already been dropped from the mirrors and fail on a 404. A full -Syu is
-    # avoided on purpose - upgrading the whole installation can replace the
-    # running msys-2.0.dll and needs a second pass to finish.
+    # -Sy 会先刷新软件包数据库：运行器镜像里的数据库和镜像一样陈旧，
+    # 否则 pacman 会解析到已从镜像站移除的版本并因 404 失败。
+    # 刻意不用完整的 -Syu —— 升级整个安装可能替换正在运行的 msys-2.0.dll，
+    # 并需要第二轮才能完成。
     $install = @"
 set -euo pipefail
 pacman -Sy --noconfirm --disable-download-timeout
@@ -404,10 +384,9 @@ function Build-FfmpegSdk([string]$Msys2Root, [string]$ArchivePath, [string]$SdkR
     $componentList = $RequiredComponents -join " "
 
     try {
-        # One option group per continued line, so a configure failure in the log
-        # points at the group that caused it.
+        # 每个续行放一组选项，这样 configure 失败时日志能指向出问题的那一组。
         $configureArguments = ($ConfigureOptions | ForEach-Object { "  $_ \" }) -join "`n"
-        # PATH is exported by Invoke-Msys2Bash ahead of this script.
+        # PATH 由 Invoke-Msys2Bash 在本脚本之前导出。
         $build = @"
 set -euo pipefail
 
@@ -430,10 +409,9 @@ for component in $componentList; do
   fi
 done
 
-# --enable-gpl is never passed, so any of these being set means a dependency
-# pulled in a stricter license and the audit conclusion no longer holds.
-# configure prints its License: line only to stdout, so assert the generated
-# header, which is what the build actually compiles against.
+# 从不传入 --enable-gpl，所以这些项一旦被设置，就意味着某个依赖引入了
+# 更严格的许可，审计结论不再成立。configure 只把 License: 行打印到 stdout，
+# 因此断言生成的头文件 —— 那才是构建真正编译时依据的内容。
 for macro in GPL NONFREE VERSION3 GPLV3 LGPLV3; do
   if ! grep -qx "#define CONFIG_`${macro} 0" config.h; then
     echo "FFmpeg is not LGPL 2.1+: CONFIG_`${macro} is not 0" >&2
@@ -448,9 +426,9 @@ make install
 "@
         Invoke-Msys2Bash $Msys2Root $build "Could not build the FFmpeg SDK"
 
-        # FFmpeg installs the MSVC import libraries next to the DLLs in
-        # `shlibdir`, but ffmpeg-next's build script looks for them under `lib`,
-        # which is also where the Gyan SDK put them.
+        # FFmpeg 会把 MSVC 导入库安装到 `shlibdir` 中 DLL 的旁边，
+        # 但 ffmpeg-next 的构建脚本在 `lib` 下查找，
+        # Gyan SDK 也是放在那里的。
         $stageBin = Join-Path $stageRoot "bin"
         $stageLib = Join-Path $stageRoot "lib"
         New-Item -ItemType Directory -Force -Path $stageLib | Out-Null
@@ -463,11 +441,10 @@ make install
                 -Destination (Join-Path $stageLib $importLibrary.Name) -Force
         }
 
-        # The notice files the installers ship alongside the DLLs. The upstream
-        # tarball has no README.txt, so record what this SDK actually is. Its
-        # content is ASCII and is written as such: Set-Content -Encoding utf8
-        # emits a BOM on Windows PowerShell 5.1 but not on the pwsh 7 the release
-        # workflow uses, and this file is redistributed.
+        # 随 DLL 一起由安装包分发的声明文件。上游 tarball 没有 README.txt，
+        # 所以这里记录该 SDK 的实际构成。其内容是 ASCII 并按 ASCII 写出：
+        # Set-Content -Encoding utf8 在 Windows PowerShell 5.1 上会写 BOM，
+        # 而发布流程使用的 pwsh 7 不会，且该文件会被再分发。
         Copy-Item (Join-Path $buildDirectory "ffmpeg-$FfmpegVersion\COPYING.LGPLv2.1") `
             (Join-Path $stageRoot "LICENSE") -Force
         @"
@@ -503,9 +480,8 @@ also recorded in the rLive project at https://github.com/Kenny3Shen/rLive.
 
 function Get-ManagedFfmpegSdk {
     $cacheDirectory = Join-Path $env:LOCALAPPDATA "rLive\build"
-    # The directory name carries the component set, not just the version: a
-    # cached full_build-shared SDK from an earlier revision of this script must
-    # not satisfy a request for the trimmed one.
+    # 目录名携带的是组件集合而不仅是版本号：由本脚本早期版本缓存下来的
+    # full_build-shared SDK，不得被当作精简版 SDK 的命中结果。
     $sdkRoot = Join-Path $cacheDirectory "ffmpeg-$FfmpegVersion-rlive-shared"
     New-Item -ItemType Directory -Force -Path $cacheDirectory | Out-Null
 
@@ -547,18 +523,17 @@ $readmeSource = Join-Path $ffmpegRoot "README.txt"
 
 $env:LIBCLANG_PATH = Find-LibClangDirectory
 $env:RLIVE_FFMPEG_RUNTIME_DIR = Join-Path $ffmpegRoot "bin"
-# libquickjs-ng-sys invokes cc-rs with the literal compiler name `clang`.
-# LIBCLANG_PATH is used by bindgen, but cc-rs resolves the executable through
-# PATH, so expose the same LLVM bin directory to both build steps.
+# libquickjs-ng-sys 用字面编译器名 `clang` 调用 cc-rs。LIBCLANG_PATH
+# 供 bindgen 使用，但 cc-rs 通过 PATH 解析可执行文件，
+# 因此要把同一个 LLVM bin 目录同时暴露给两个构建步骤。
 $env:Path = $env:LIBCLANG_PATH + ";" + $env:RLIVE_FFMPEG_RUNTIME_DIR + ";" + $env:Path
 
 if ($StageDestination) {
     $StageDestination = [IO.Path]::GetFullPath($StageDestination)
     New-Item -ItemType Directory -Force -Path $StageDestination | Out-Null
-    # swresample is matched even though the trimmed SDK no longer produces it:
-    # an incremental build over a target directory staged by an earlier revision
-    # of this script would otherwise leave that DLL behind for the bundler to
-    # pick up.
+    # 仍然匹配 swresample，尽管精简后的 SDK 不再产出它：
+    # 若在由本脚本早期版本暂存过的 target 目录上做增量构建，
+    # 否则会把那个 DLL 留在原处被打包器收进产物。
     Get-ChildItem $StageDestination -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^(avutil|avcodec|avformat|swresample)-[0-9]+\.dll$' } |
         Remove-Item -Force

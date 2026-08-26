@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Build Linux Tauri packages after Cargo has staged the shared Sherpa/ONNX
-# runtime. Tauri resolves bundle resources before compiling, so this must stay
-# a two-stage flow instead of declaring target/release/*.so* statically.
+# 在 Cargo 暂存共享 Sherpa/ONNX 运行时之后再构建 Linux Tauri 包。
+# Tauri 会在编译前解析 bundle 资源，因此必须保持两段式流程，
+# 而不能静态声明 target/release/*.so*。
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 bundles="deb,rpm,appimage"
-# Release packages link FFmpeg statically so they do not depend on the build
-# machine's `libav*.so`; a local development build keeps using whatever FFmpeg
-# pkg-config finds, so this stays opt-in.
+# 发布包静态链接 FFmpeg，以免依赖构建机上的 `libav*.so`；
+# 本地开发构建仍使用 pkg-config 找到的任意 FFmpeg，
+# 所以这里保持按需开启。
 cargo_features=()
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -35,7 +35,7 @@ done
 
 feature_args=()
 if [[ "${#cargo_features[@]}" -gt 0 ]]; then
-  # Joined with commas: `tauri build --features` takes one comma-separated list.
+  # 用逗号连接：`tauri build --features` 只接受一个逗号分隔的列表。
   feature_args=(--features "$(
     IFS=,
     echo "${cargo_features[*]}"
@@ -47,8 +47,8 @@ if ! command -v jq >/dev/null; then
   exit 1
 fi
 
-# Compile first: the vendored sherpa-onnx-sys build script copies the shared
-# runtime into target/release only after Cargo has linked the application.
+# 先编译：vendored 的 sherpa-onnx-sys 构建脚本只有在 Cargo 链接完应用之后，
+# 才会把共享运行时复制到 target/release。
 bun run tauri -- build --ci --no-bundle ${feature_args[@]+"${feature_args[@]}"}
 
 release_dir="$repo_root/src-tauri/target/release"
@@ -72,9 +72,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Generic bundle.resources is shared by DEB, RPM and AppImage. Mapping each
-# absolute file to an empty resource path lets Tauri place it under the
-# product-specific Linux resource directory (`/usr/lib/rLive`).
+# 通用的 bundle.resources 由 DEB、RPM 和 AppImage 共用。把每个绝对路径文件
+# 映射到空资源路径，可让 Tauri 将其放入产品专属的 Linux 资源目录
+# （`/usr/lib/rLive`）。
 find "$release_dir" -maxdepth 1 -type f -name '*.so*' -printf '%p\t%f\n' | sort | \
   jq -Rn '
     [inputs | split("\t") | { key: .[0], value: "" }] | from_entries
@@ -87,8 +87,7 @@ fi
 jq -n --slurpfile resources "$runtime_files" \
   '{ bundle: { resources: $resources[0] } }' > "$runtime_config"
 
-# `tauri bundle` requires the same features as the `build` above: it reads the
-# Cargo metadata to locate the compiled binary, and a mismatch makes it look in
-# the wrong place.
+# `tauri bundle` 需要与上面 `build` 相同的 features：它通过 Cargo 元数据
+# 定位已编译的二进制，features 不一致会让它到错误的位置去找。
 bun run tauri -- bundle --ci --bundles "$bundles" --config "$runtime_config" \
   ${feature_args[@]+"${feature_args[@]}"}

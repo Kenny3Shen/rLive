@@ -1,10 +1,8 @@
-//! User-operated Douyin web QR login.
+//! 用户扫码的抖音 Web 登录。
 //!
-//! The flow talks only to Douyin's web SSO endpoints.  The QR payload is
-//! rendered by the client, but the upstream token and the temporary cookie
-//! jar remain in this process.  On confirmation, the resulting Cookie is
-//! returned to the account command solely so it can be persisted in the local
-//! account database.
+//! 整个流程只与抖音的 Web SSO 接口通信。二维码内容由客户端渲染，
+//! 但上游 token 和临时 cookie jar 都留在本进程内。确认登录后，
+//! 生成的 Cookie 返回给账号命令，仅用于持久化到本地账号数据库。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -28,14 +26,14 @@ const MAX_REDIRECTS: usize = 8;
 const MAX_QR_PAYLOAD_LEN: usize = 8 * 1024;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 
-/// Data needed to render a Douyin login QR code in the client.
+/// 客户端渲染抖音登录二维码所需的数据。
 pub struct QrLoginStart {
     pub qr_code_url: String,
-    /// Opaque, process-local handle rather than Douyin's real login token.
+    /// 不透明的进程内句柄，而不是抖音真正的登录 token。
     pub qr_key: String,
 }
 
-/// A QR polling result. Cookie material never crosses the webview boundary.
+/// 一次扫码轮询结果。Cookie 内容绝不跨出 webview 边界。
 pub enum QrLoginPoll {
     Pending,
     Scanned,
@@ -57,7 +55,7 @@ fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
     ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Create a QR payload with Douyin's public web SSO API.
+/// 通过抖音公开的 Web SSO API 创建二维码内容。
 pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
     let client = build_login_client(Arc::clone(&jar), proxy)?;
@@ -74,10 +72,9 @@ pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
     let response = parse_json_response(response, "douyin_qr_generate").await?;
     let (qr_code_url, token) = parse_start_response(&response)?;
 
-    // The QR payload itself must be rendered by the UI, but do not return the
-    // SSO token as a separate value.  Keeping it alongside the bootstrap
-    // cookie jar makes the poll request work when SSO binds it to that
-    // temporary session.
+    // 二维码内容本身必须交给 UI 渲染，但不要把 SSO token 作为单独的值返回。
+    // 把它与引导用的 cookie jar 保存在一起，
+    // 可以在 SSO 把 token 绑定到该临时会话时让轮询请求依然可用。
     let qr_key = Uuid::new_v4().simple().to_string();
     let session = QrSession {
         token,
@@ -93,7 +90,7 @@ pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
     })
 }
 
-/// Poll a previously-started QR login flow.
+/// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
         return Err(
@@ -134,9 +131,8 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
 }
 
 fn web_sso_params() -> Vec<(&'static str, String)> {
-    // These are the stable public parameters used by the Douyin web login
-    // page. No signature, device id, third-party endpoint, or saved Cookie is
-    // sent with either request.
+    // 这些是抖音 Web 登录页使用的稳定公开参数。两个请求都不发送签名、
+    // 设备 id、第三方接口地址或已保存的 Cookie。
     vec![
         ("service", WEB_ORIGIN.to_string()),
         ("need_logo", "false".to_string()),
@@ -150,19 +146,17 @@ fn web_sso_params() -> Vec<(&'static str, String)> {
 }
 
 fn build_login_client(jar: Arc<Jar>, proxy: Option<&str>) -> AppResult<Client> {
-    // Use only the application's explicit proxy setting.  This keeps a QR
-    // session from accidentally inheriting an unrelated HTTP(S)_PROXY process
-    // variable, while still allowing users whose network requires a proxy to
-    // reach Douyin's SSO service.
+    // 只使用应用中显式配置的代理。这样可避免扫码会话意外继承无关的
+    // HTTP(S)_PROXY 进程变量，同时仍允许必须经代理上网的用户
+    // 访问抖音的 SSO 服务。
     let builder = Client::builder()
         .use_native_tls()
         .cookie_provider(jar)
         .no_proxy()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
-        // A completed QR flow is expected to redirect between Douyin web SSO
-        // hosts. Stop rather than follow a redirect outside of Douyin so this
-        // temporary session is never used to make an arbitrary request.
+        // 已完成的扫码流程预期只在抖音 Web SSO 主机之间跳转。跳出抖音时直接停止
+        // 而不是跟随重定向，从而保证这个临时会话绝不会被用于发起任意请求。
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if can_follow_redirect(attempt.url(), attempt.previous().len()) {
                 attempt.follow()
@@ -196,10 +190,9 @@ async fn parse_json_response(response: reqwest::Response, code: &str) -> AppResu
 
 fn parse_json_body(body: &str, code: &str) -> AppResult<Value> {
     serde_json::from_str(body).map_err(|_| {
-        // The public SSO endpoints can return a 200 HTML page when the edge
-        // requires an interactive browser verification.  The native client
-        // must not try to imitate or solve that challenge; provide a useful
-        // recovery path instead of reporting an opaque JSON parse failure.
+        // 当边缘节点要求交互式浏览器验证时，公开 SSO 接口可能返回 200 的 HTML 页面。
+        // 原生客户端不应尝试模仿或求解该验证；这里给出可操作的恢复路径，
+        // 而不是报出一个含义不明的 JSON 解析失败。
         let message = if looks_like_html_document(body) {
             "抖音当前要求在浏览器完成访问验证，应用内无法取得二维码。请检查应用代理后重试，或使用手动 Cookie 登录"
         } else {
@@ -251,9 +244,8 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
     let data = successful_data(response, "douyin_qr_poll")?;
     let redirect_url = optional_text(data, &["redirect_url", "redirectUrl"]);
     if let Some(redirect_url) = redirect_url {
-        // Douyin only provides this after the user has confirmed login. It is
-        // a more reliable success signal than a numeric status that may vary
-        // between web SSO versions.
+        // 抖音只在用户确认登录之后才提供这个字段。它比数值状态更可靠，
+        // 因为后者可能随 Web SSO 版本变化。
         return Ok(PollState::Success { redirect_url });
     }
 
@@ -261,9 +253,8 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
         .or_else(|| optional_number_as_text(data, &["status", "status_code"]))
         .unwrap_or_default();
     match status.trim().to_ascii_lowercase().as_str() {
-        // The public web endpoint has historically used 1/2/3/4 for waiting,
-        // scanned, confirmed, and expired respectively. Treat 0 as waiting
-        // too: a few rollout variants omit a state until the first scan.
+        // 公开 Web 接口历来用 1/2/3/4 分别表示等待、已扫码、已确认和已过期。
+        // 把 0 也当作等待：少数灰度版本在首次扫码前不返回状态。
         "" | "0" | "1" | "pending" | "waiting" | "wait" => Ok(PollState::Pending),
         "2" | "scanned" | "scan" => Ok(PollState::Scanned),
         "4" | "5" | "expired" | "cancelled" | "canceled" => Ok(PollState::Expired),
@@ -331,9 +322,9 @@ async fn finish_login(session: &QrSession, redirect_url: &str) -> AppResult<Stri
 }
 
 fn successful_data<'a>(response: &'a Value, code: &str) -> AppResult<&'a Value> {
-    // Douyin has used both `status_code` and `code` in web SSO responses.
-    // Only a non-zero top-level value is an API error; `data.status` is the
-    // independent QR-state value handled by `parse_poll_response`.
+    // 抖音在 Web SSO 响应中用过 `status_code` 也用过 `code`。只有顶层非零值
+    // 才是 API 错误；`data.status` 是由 `parse_poll_response` 单独处理的
+    // 二维码状态值。
     let api_code = optional_number_as_text(response, &["status_code", "code"])
         .or_else(|| optional_text(response, &["status_code", "code"]));
     if let Some(api_code) = api_code

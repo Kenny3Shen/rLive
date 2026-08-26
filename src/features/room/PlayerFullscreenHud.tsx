@@ -32,7 +32,7 @@ import type { SleepTimerController } from "./useSleepTimer";
 
 export { roomIdentityOverflowDistance };
 
-/** A room-level entry in the HUD overflow menu (copy link, follow, …). */
+/** HUD 溢出菜单中的房间级条目（复制链接、关注等）。 */
 export type PlayerHudRoomAction = {
   id: string;
   label: string;
@@ -40,10 +40,9 @@ export type PlayerHudRoomAction = {
   pressed?: boolean;
   disabled?: boolean;
   /**
-   * The action answers through app chrome that never paints inside the
-   * fullscreen layer (a dialog, a toast, another route), so the player must
-   * leave fullscreen before handing over. Player toggles act on the picture
-   * itself and leave this unset.
+   * 该操作要通过永远不会绘制在全屏层内的应用 chrome 应答（对话框、toast、另一条
+   * 路由），因此播放器必须先退出全屏再移交。播放器开关作用于画面本身，
+   * 不设置此项。
    */
   exitsFullscreen?: boolean;
   onSelect: () => void;
@@ -55,15 +54,15 @@ export type PlayerFullscreenHudProps = {
   roomTitle?: string;
   roomUserName?: string;
   roomUserAvatar?: string;
-  /** Platform popularity/viewer count; hidden when the site reports nothing. */
+  /** 平台人气/观众数；站点未上报时隐藏。 */
   roomOnline?: number;
-  /** Room-level actions (copy link, follow) contributed by the page. */
+  /** 由页面提供的房间级操作（复制链接、关注）。 */
   roomActions?: readonly PlayerHudRoomAction[];
-  /** Player toggles already published for the mobile room-actions sheet. */
+  /** 已为移动端房间操作抽屉发布的播放器开关。 */
   playerActions?: readonly PlayerHudRoomAction[];
-  /** Room-scoped automatic danmaku sender exposed from the overflow menu. */
+  /** 从溢出菜单暴露的房间级自动弹幕发送器。 */
   autoSend?: AutoDanmakuSendController;
-  /** Room-scoped countdown exposed from the overflow menu. */
+  /** 从溢出菜单暴露的房间级倒计时。 */
   sleepTimer?: SleepTimerController;
   /** DLNA 投屏入口；提供时在全屏 HUD 的工具磁贴中出现。 */
   cast?: {
@@ -73,26 +72,25 @@ export type PlayerFullscreenHudProps = {
     device: string | null;
     onDeviceChange: (deviceName: string | null) => void;
   };
-  /** Compact viewport (portrait phone or short landscape). */
+  /** 紧凑视口（竖屏手机或较矮的横屏）。 */
   compact?: boolean;
-  /** Portal target — a `:fullscreen` ancestor owns the top layer. */
+  /** Portal 目标 —— `:fullscreen` 祖先拥有 top layer。 */
   portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
-  /** Tell the stage a menu is open so the idle timer cannot fade it out. */
+  /** 告诉舞台有菜单打开，空闲计时器不能把它淡出。 */
   onOverlayInteractionChange?: (open: boolean) => void;
-  /** Leave fullscreen before an action whose answer lives outside the stage. */
+  /** 应答存在于舞台之外的操作之前先退出全屏。 */
   onExitFullscreen?: () => void | Promise<void>;
 };
 
-/** Heat is only worth a line when the platform actually reports a count. */
+/** 只有平台真的上报了数值时，热度才值得占一行。 */
 export function playerHudOnlineLabel(online: number | undefined): string | null {
   if (online === undefined || !Number.isFinite(online) || online < 0) return null;
   return formatOnline(online);
 }
 
 /**
- * Whether the HUD has anything to draw. Fullscreen alone is not enough: a room
- * without a resolved title, host or menu entry would render an empty scrim band
- * across the top of the picture.
+ * HUD 是否有东西可画。仅全屏还不够：没有解析出的标题、主播和菜单条目的房间
+ * 会在画面顶部渲染一条空的遮罩带。
  */
 export function showPlayerFullscreenHud({
   fullscreen,
@@ -107,11 +105,10 @@ export function showPlayerFullscreenHud({
 }
 
 /**
- * Fullscreen top chrome, the way ordinary live-video sites draw it: the room
- * title and host identity on the left, an overflow menu on the right, over a
- * scrim that fades down into the picture. It is a sibling of the bottom control
- * bar inside the player stage and shares its imperative visibility state, so
- * both layers fade together on the idle timer.
+ * 全屏顶部 chrome，普通直播视频网站的画法：左侧房间标题与主播身份，
+ * 右侧溢出菜单，覆盖一段向下渐隐入画面的遮罩。它是播放器舞台内底部控制条的
+ * 兄弟节点，并共享其命令式可见性状态，
+ * 因此两层一起随空闲计时器淡出。
  */
 export function PlayerFullscreenHud({
   siteId,
@@ -149,7 +146,7 @@ export function PlayerFullscreenHud({
 
   useEffect(() => {
     if (!menuOpen) return;
-    // One Back press closes the menu instead of leaving fullscreen or the room.
+    // 按一次 Back 关闭菜单，而不是退出全屏或离开房间。
     const closeOnAndroidBack = (event: Event) => {
       event.preventDefault();
       setMenuOpen(false);
@@ -167,9 +164,8 @@ export function PlayerFullscreenHud({
   function runAction(action: PlayerHudRoomAction) {
     setMenuOpen(false);
     if (action.exitsFullscreen) {
-      // A dialog or toast raised by this action paints in the app layer, which
-      // the fullscreen stage covers entirely. Leave fullscreen first, then run
-      // the action so its feedback is actually on screen.
+      // 此操作引发的对话框或 toast 绘制在应用层，会被全屏舞台完全遮盖。
+      // 先退出全屏再执行操作，使其反馈真正出现在屏幕上。
       void Promise.resolve(onExitFullscreen?.()).then(() => action.onSelect());
       return;
     }
@@ -346,7 +342,7 @@ export function PlayerFullscreenHud({
   );
 }
 
-/** Icon-over-label tile, matching the room actions sheet on mobile. */
+/** 图标在上文字在下的磁贴，与移动端房间操作抽屉一致。 */
 function HudActionTile({
   action,
   onRun,

@@ -1,71 +1,63 @@
-//! Shared reconnect policy for the site danmaku loops.
+//! 站点弹幕循环共享的重连策略。
 //!
-//! The site loops used to retry unconditionally: every disconnect scheduled
-//! another dial, forever. Worse, a socket that connected and then died at once
-//! counted as a healthy session and reset the backoff, so a permanently broken
-//! room — revoked Cookie, closed channel, stale signature — became a hot retry
-//! loop that never surfaced a verdict to the user.
+//! 过去站点循环会无条件重试：每次断开都会安排下一次拨号，永不停歇。更糟的是，
+//! 一个连上后立刻断掉的套接字会被算作健康会话并重置退避，于是永久损坏的房间
+//! —— Cookie 被吊销、频道关闭、签名过期 —— 会变成疯狂重试的死循环，
+//! 且从不向用户给出任何结论。
 //!
-//! This module makes each disconnect deterministic. A loop classifies why its
-//! attempt ended, the policy decides whether another dial can plausibly help,
-//! and it stops with a user-visible reason once it cannot: a refusal the remote
-//! will repeat, too many consecutive failures, or an exhausted per-session
-//! attempt budget. Only sessions that were actually productive reset the
-//! failure streak, so a flapping endpoint still terminates.
+//! 本模块让每次断开都变得确定。循环先归类本次尝试为何结束，策略再判断再拨号
+//! 是否可能有用，一旦无望就以用户可见的原因停止：远端必然重复的拒绝、连续
+//! 失败过多、或单次会话的尝试预算耗尽。只有真正有产出的会话才会重置失败
+//! 计数，因此反复闪断的端点同样会终止。
 
 use std::time::Duration;
 
-/// A session shorter than this that delivered nothing is treated as a failed
-/// attempt rather than ordinary churn. Without this floor, a gateway that
-/// accepts a socket and closes it immediately would reset the backoff on every
-/// pass and be dialed continuously.
+/// 短于此时长且毫无交付的会话视为一次失败尝试，而不是普通抖动。没有这个
+/// 下限，接受连接后立即关闭的网关会在每一轮都重置退避，
+/// 并被持续不停地拨号。
 pub const DEFAULT_HEALTHY_AFTER: Duration = Duration::from_secs(60);
 pub const DEFAULT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 pub const DEFAULT_MAX_DELAY: Duration = Duration::from_secs(30);
-/// Roughly two minutes of escalating retries (1+2+4+8+16+30+30+30s) before the
-/// loop concludes the endpoint is not coming back.
+/// 约两分钟的递增重试（1+2+4+8+16+30+30+30s）之后，
+/// 循环即认定端点不会恢复。
 pub const DEFAULT_MAX_CONSECUTIVE_FAILURES: u32 = 8;
-/// Upper bound on dials for one room session, so an all-day viewer on a flaky
-/// link still cannot generate unbounded connection attempts.
+/// 单个房间会话的拨号次数上限，
+/// 使长时间观看的用户在劣质链路上也无法产生无界连接尝试。
 pub const DEFAULT_MAX_TOTAL_ATTEMPTS: u32 = 100;
-/// Random 0..=800ms added to every delay so concurrent clients do not
-/// reconnect in lockstep.
+/// 每次延迟附加 0..=800ms 的随机量，
+/// 避免并发客户端同步一致地重连。
 const JITTER_MAX_MS: u64 = 800;
 
-/// Why one connection attempt ended.
+/// 一次连接尝试因何结束。
 #[derive(Debug)]
 pub enum DisconnectReason {
-    /// The socket was established and later closed. `messages` and
-    /// `connected_for` decide whether it counted as a productive session.
+    /// 套接字已建立但随后被关闭。`messages` 与 `connected_for`
+    /// 决定它是否算作有产出的会话。
     ///
-    /// `detail` carries the transport-level cause (a read error, an explicit
-    /// server close, an idle timeout). It is logged but deliberately kept out
-    /// of the user-facing notice: strings like
-    /// `读取失败: … (os error 10054)` diagnose a middlebox resetting the
-    /// socket and mean nothing to a viewer waiting for chat to resume.
+    /// `detail` 携带传输层原因（读取错误、服务端显式关闭、空闲超时）。它会写入
+    /// 日志，但刻意不进入面向用户的提示：`读取失败: … (os error 10054)`
+    /// 这类字符串能诊断出中间设备重置了套接字，
+    /// 对等待聊天恢复的观众却毫无意义。
     Dropped {
         messages: u64,
         connected_for: Duration,
         detail: Option<String>,
     },
-    /// Dial, handshake, or transport failure that a later attempt may survive.
+    /// 后续尝试可能挺过去的拨号、握手或传输失败。
     Transient { message: String },
-    /// The remote is deliberately slowing this client down (429/403 handshake,
-    /// gateway errors). Retrying is allowed but must be much less frequent, so
-    /// the caller supplies the clamp for this class.
+    /// 远端正在刻意拖慢本客户端（429/403 握手、网关错误）。允许重试但频率必须
+    /// 大幅降低，因此由调用方提供该类别的上限。
     Throttled {
         message: String,
         floor: Duration,
         max: Duration,
     },
-    /// The remote refused in a way that retrying cannot change: unknown room,
-    /// rejected credential, unusable local arguments.
+    /// 远端的拒绝无法靠重试改变：未知房间、凭据被拒、本地参数不可用。
     Fatal { message: String },
 }
 
 impl DisconnectReason {
-    /// A session that connected and later ended, tagged with its transport
-    /// cause for the log.
+    /// 已连接但后来结束的会话，附带其传输层原因供日志使用。
     pub fn dropped(messages: u64, connected_for: Duration, detail: impl Into<String>) -> Self {
         Self::Dropped {
             messages,
@@ -95,9 +87,8 @@ impl DisconnectReason {
         }
     }
 
-    /// The cause to record in the log. A `Dropped` session reports its
-    /// transport detail here so a reconnect can be diagnosed after the fact;
-    /// `message()` stays the stable, user-facing summary.
+    /// 要记录到日志中的原因。`Dropped` 会话在这里报告传输层细节，
+    /// 便于事后诊断重连；`message()` 则保持稳定、面向用户的概要。
     fn log_reason(&self) -> &str {
         match self {
             Self::Dropped {
@@ -109,15 +100,14 @@ impl DisconnectReason {
     }
 }
 
-/// Tunables for one site's reconnect behaviour.
+/// 单个站点重连行为的可调参数。
 #[derive(Debug, Clone)]
 pub struct Limits {
     pub max_consecutive_failures: u32,
     pub max_total_attempts: u32,
     pub initial_delay: Duration,
     pub max_delay: Duration,
-    /// How long a session must stay connected to clear the failure streak when
-    /// it delivered no messages.
+    /// 会话在未交付任何消息的情况下，需要保持连接多久才能清除失败计数。
     pub healthy_after: Duration,
 }
 
@@ -133,34 +123,34 @@ impl Default for Limits {
     }
 }
 
-/// What the loop should do after a disconnect.
+/// 断开之后循环应当做什么。
 #[derive(Debug)]
 pub enum Decision {
-    /// Sleep `delay`, then dial again.
+    /// 睡眠 `delay` 后再次拨号。
     Retry {
         delay: Duration,
-        /// User-facing notice for this wait.
+        /// 这次等待对应的用户提示。
         notice: String,
     },
-    /// Give up. The loop must emit `notice` and return.
+    /// 放弃。循环必须发出 `notice` 并返回。
     Stop {
-        /// User-facing terminal notice.
+        /// 面向用户的终止提示。
         notice: String,
-        /// Stable reason, asserted by tests instead of the localized notice.
-        /// The policy already logs it, so site loops match on `..`.
+        /// 稳定的原因值，测试断言用它而不是本地化的提示文本。
+        /// 策略已经把它写入日志，因此站点循环用 `..` 匹配即可。
         #[cfg_attr(not(test), allow(dead_code))]
         cause: StopCause,
     },
 }
 
-/// Why automatic reconnection ended.
+/// 自动重连因何结束。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopCause {
-    /// The remote refused in a way retrying cannot fix.
+    /// 远端的拒绝无法靠重试解决。
     Refused,
-    /// Too many consecutive attempts failed to produce a healthy session.
+    /// 连续尝试多次都没有产生健康的会话。
     FailureStreak,
-    /// This room session used up its total attempt budget.
+    /// 这个房间会话耗尽了总尝试预算。
     AttemptBudget,
 }
 
@@ -174,16 +164,16 @@ impl StopCause {
     }
 }
 
-/// Per-connection reconnect bookkeeping for one room session.
+/// 单个房间会话的按连接重连记账信息。
 #[derive(Debug)]
 pub struct ReconnectPolicy {
     site: &'static str,
     limits: Limits,
-    /// Consecutive attempts that did not yield a productive session.
+    /// 未能产生有效会话的连续尝试次数。
     failures: u32,
-    /// Total dials in this room session, healthy ones included.
+    /// 本房间会话的总拨号次数，包括健康的那些。
     attempts: u32,
-    /// Messages delivered across every attempt, for the user-facing notices.
+    /// 所有尝试累计投递的消息数，用于面向用户的提示。
     total_messages: u64,
 }
 
@@ -202,20 +192,20 @@ impl ReconnectPolicy {
         Self::new(site, Limits::default())
     }
 
-    /// Number of dials already made, including the one being reported.
+    /// 已经完成的拨号次数，包含正在报告的这一次。
     pub fn attempts(&self) -> u32 {
         self.attempts
     }
 
-    /// Record how an attempt ended and decide what happens next.
+    /// 记录一次尝试如何结束，并决定接下来做什么。
     pub fn on_disconnect(&mut self, reason: DisconnectReason) -> Decision {
         self.attempts = self.attempts.saturating_add(1);
         if let DisconnectReason::Dropped { messages, .. } = &reason {
             self.total_messages = self.total_messages.saturating_add(*messages);
         }
 
-        // A refusal is the whole point of this policy: stop before spending a
-        // backoff schedule on an answer the remote has already given.
+        // 拒绝类结果是这套策略的核心：不要为远端已经给出的答复
+        // 再消耗一整套退避排程。
         if let DisconnectReason::Fatal { message } = &reason {
             let notice = format!("弹幕连接失败：{message}；已停止自动重连");
             self.log_stop(StopCause::Refused, message);
@@ -266,8 +256,9 @@ impl ReconnectPolicy {
         Decision::Retry { delay, notice }
     }
 
-    /// A session clears the failure streak only when it actually worked:
-    /// it delivered chat, or it stayed up long enough to look stable.
+    /// 只有真正起作用的会话才能清除失败计数：
+    /// 要么交付过聊天消息，
+    /// 要么存续得足够久、看起来是稳定的。
     fn was_productive(&self, reason: &DisconnectReason) -> bool {
         match reason {
             DisconnectReason::Dropped {
@@ -284,8 +275,7 @@ impl ReconnectPolicy {
             DisconnectReason::Throttled { floor, max, .. } => (*floor, *max),
             _ => (self.limits.initial_delay, self.limits.max_delay),
         };
-        // `failures` is already incremented, so a first failure yields the
-        // initial delay rather than doubling it.
+        // `failures` 已先行自增，因此首次失败得到的是初始延迟而不是翻倍值。
         let shift = self.failures.saturating_sub(1).min(16);
         let seconds = self
             .limits
@@ -332,8 +322,8 @@ impl ReconnectPolicy {
     }
 }
 
-/// Uses `uuid`'s CSPRNG rather than adding a `rand` dependency; the value only
-/// needs to be spread out, not unpredictable.
+/// 使用 `uuid` 的 CSPRNG 而不引入 `rand` 依赖；
+/// 该取值只需要分散开，不需要不可预测。
 fn jitter() -> Duration {
     let ms = (uuid::Uuid::new_v4().as_u128() % u128::from(JITTER_MAX_MS + 1)) as u64;
     Duration::from_millis(ms)
@@ -351,7 +341,7 @@ mod tests {
         }
     }
 
-    /// Strip jitter so the schedule itself can be asserted.
+    /// 剔除抖动，以便对排程本身做断言。
     fn retry_secs(decision: &Decision) -> u64 {
         match decision {
             Decision::Retry { delay, .. } => delay.as_secs(),
@@ -374,8 +364,8 @@ mod tests {
         assert_eq!(policy.attempts(), 1);
     }
 
-    /// A dropped session records its transport cause for the log while the
-    /// notice the viewer reads stays free of socket vocabulary.
+    /// 被丢弃的会话会把传输层原因记入日志，
+    /// 而观众读到的提示保持不含套接字词汇。
     #[test]
     fn a_dropped_session_logs_its_cause_but_does_not_show_it() {
         let reason = DisconnectReason::dropped(
@@ -400,7 +390,7 @@ mod tests {
         }
     }
 
-    /// A loop that breaks without keeping a cause still logs a usable reason.
+    /// 不带原因就退出的循环也要记录可用的原因。
     #[test]
     fn a_dropped_session_without_detail_falls_back_to_the_summary() {
         assert_eq!(dropped(5, 10).log_reason(), "连接已断开");
@@ -413,7 +403,7 @@ mod tests {
             let decision = policy.on_disconnect(DisconnectReason::transient("网络错误"));
             assert_eq!(retry_secs(&decision), expected);
         }
-        // The eighth consecutive failure reaches DEFAULT_MAX_CONSECUTIVE_FAILURES.
+        // 第八次连续失败达到 DEFAULT_MAX_CONSECUTIVE_FAILURES。
         let decision = policy.on_disconnect(DisconnectReason::transient("网络错误"));
         assert_eq!(stop_cause(&decision), StopCause::FailureStreak);
     }
@@ -424,13 +414,13 @@ mod tests {
         for _ in 0..5 {
             policy.on_disconnect(DisconnectReason::transient("网络错误"));
         }
-        // Chat actually arrived, so the next wait restarts at the floor.
+        // 聊天确实到达过，因此下一次等待从下限重新开始。
         assert_eq!(retry_secs(&policy.on_disconnect(dropped(12, 3))), 1);
         assert_eq!(retry_secs(&policy.on_disconnect(dropped(4, 1))), 1);
     }
 
-    /// The regression this policy exists for: a gateway that accepts the socket
-    /// and closes it immediately must not reset the backoff.
+    /// 这套策略所针对的回归场景：接受连接又立即关闭的网关
+    /// 绝不能重置退避。
     #[test]
     fn instant_empty_drops_escalate_and_terminate_instead_of_hot_looping() {
         let mut policy = ReconnectPolicy::with_defaults("test");
@@ -448,15 +438,14 @@ mod tests {
         let mut policy = ReconnectPolicy::with_defaults("test");
         policy.on_disconnect(DisconnectReason::transient("网络错误"));
         policy.on_disconnect(DisconnectReason::transient("网络错误"));
-        // No chat, but the socket held for the healthy window: a quiet room is
-        // not a broken one.
+        // 没有聊天，但套接字在健康窗口内存续：安静的房间不是坏掉的房间。
         assert_eq!(retry_secs(&policy.on_disconnect(dropped(0, 120))), 1);
     }
 
     #[test]
     fn throttling_uses_its_own_floor_and_ceiling() {
-        // A wide streak limit keeps this focused on the delay schedule; the
-        // streak itself is covered above.
+        // 把连续失败上限放宽，让这个测试专注于延迟排程；
+        // 计数本身已在上面覆盖。
         let mut policy = ReconnectPolicy::new(
             "test",
             Limits {
@@ -469,11 +458,11 @@ mod tests {
             floor: Duration::from_secs(60),
             max: Duration::from_secs(300),
         };
-        // The floor dominates while exponential growth is still below it.
+        // 指数增长仍低于下限时，由下限主导。
         for _ in 0..6 {
             assert_eq!(retry_secs(&policy.on_disconnect(throttled())), 60);
         }
-        // Then growth resumes from the schedule and rises toward the ceiling.
+        // 随后恢复按排程增长，并向天花板靠近。
         assert_eq!(retry_secs(&policy.on_disconnect(throttled())), 64);
         assert_eq!(retry_secs(&policy.on_disconnect(throttled())), 128);
         assert_eq!(retry_secs(&policy.on_disconnect(throttled())), 256);

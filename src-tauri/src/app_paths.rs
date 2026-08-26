@@ -44,10 +44,9 @@ impl AppDirectories {
     }
 }
 
-/// `dirs` deliberately does not expose Android's app sandbox. Falling back to a
-/// relative path there makes startup depend on the process working directory
-/// (normally `/`), which an app cannot write to, so the mobile host must supply
-/// the private data directory.
+/// `dirs` 刻意不暴露 Android 的应用沙箱目录。在那里回退到相对路径会让启动
+/// 依赖进程工作目录（通常是 `/`），而应用无权写入该目录，
+/// 因此移动端宿主必须提供私有数据目录。
 #[cfg(target_os = "android")]
 fn application_root(mobile_data_dir: Option<&Path>) -> AppResult<PathBuf> {
     mobile_data_dir
@@ -206,9 +205,8 @@ fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Completes or rolls back an interrupted same-directory replacement. A valid
-/// target is already committed; otherwise a valid backup wins over an
-/// uncommitted temporary file.
+/// 完成或回滚被中断的同目录替换。有效的目标文件表示替换已提交；
+/// 否则有效的备份文件优先于未提交的临时文件。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn recover_recoverable_file(
     path: &Path,
@@ -252,8 +250,8 @@ pub(crate) fn recover_recoverable_file(
     Ok(())
 }
 
-/// Publishes a synced temporary file with atomic replacement on Unix and a
-/// recoverable backup transaction where Windows cannot rename over a target.
+/// 以原子替换的方式发布已落盘的临时文件（Unix），
+/// 在 Windows 无法直接改名覆盖目标时使用可恢复的备份事务。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn write_recoverable_file(
     path: &Path,
@@ -316,10 +314,10 @@ fn publish_temporary_file(path: &Path, temporary: &Path, backup: &Path) -> io::R
     Ok(())
 }
 
-/// Converts native filesystem paths to the stable form used by IPC and JSON.
-/// `canonicalize` returns Windows verbatim paths (`\\?\C:\...` or
-/// `\\?\UNC\server\share`) which native dialogs and the web UI should not
-/// expose. Internally callers may retain the canonical `PathBuf`.
+/// 把原生文件系统路径转换为 IPC 与 JSON 使用的稳定形式。
+/// `canonicalize` 在 Windows 上返回 verbatim 路径（`\\?\C:\...` 或
+/// `\\?\UNC\server\share`），原生对话框和 Web UI 都不应暴露这种形式。
+/// 进程内部的调用方仍可保留规范化后的 `PathBuf`。
 pub(crate) fn path_to_string(path: &Path) -> String {
     strip_windows_verbatim_prefix(&path.to_string_lossy())
 }
@@ -331,8 +329,8 @@ fn strip_windows_verbatim_prefix(path: &str) -> String {
     path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
 }
 
-/// Windows CUDA probing runs outside `AsrManager` and needs the same root the
-/// on-demand ASR runtime is staged into.
+/// Windows 上的 CUDA 探测运行在 `AsrManager` 之外，
+/// 需要与按需 ASR 运行时暂存位置相同的根目录。
 #[cfg(windows)]
 static PROCESS_APP_DATA_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
     system_data_root()

@@ -1,8 +1,7 @@
-//! Anonymous Twitch IRC chat over WebSocket.
+//! 基于 WebSocket 的 Twitch 匿名 IRC 聊天。
 //!
-//! Twitch permits read-only chat with the documented `justinfan` anonymous
-//! identity. No user OAuth token or saved Cookie is needed to receive public
-//! channel messages.
+//! Twitch 允许使用其文档中的 `justinfan` 匿名身份进行只读聊天。
+//! 接收公开频道消息无需用户 OAuth token 或已保存的 Cookie。
 
 use std::time::{Duration, Instant};
 
@@ -37,11 +36,11 @@ enum ProxyScheme {
     Https,
 }
 
-/// Sanitised HTTP CONNECT proxy configuration for the anonymous IRC client.
+/// 供匿名 IRC 客户端使用的、已净化的 HTTP CONNECT 代理配置。
 ///
-/// The source setting is deliberately not retained: aside from avoiding
-/// accidental credential logging, the WebSocket path only needs an address
-/// and an optional already-encoded `Proxy-Authorization` value.
+/// 刻意不保留原始设置：除了避免无意中记录凭据之外，
+/// WebSocket 路径只需要一个地址
+/// 和一个可选的、已编码好的 `Proxy-Authorization` 取值。
 struct ConnectProxy {
     scheme: ProxyScheme,
     host: String,
@@ -114,10 +113,10 @@ fn safe_color(value: Option<&str>) -> Option<String> {
     .then(|| value.to_ascii_uppercase())
 }
 
-/// Decode one Twitch IRC `PRIVMSG` into the common live-chat payload.
+/// 把一条 Twitch IRC `PRIVMSG` 解码为通用的直播聊天负载。
 ///
-/// The IRC server can put multiple CRLF-delimited lines into one WebSocket
-/// message, so callers split the transport frame before feeding this parser.
+/// IRC 服务器可能把多条以 CRLF 分隔的行放进同一个 WebSocket 消息，
+/// 因此调用方要先拆分传输帧再交给这个解析器。
 pub fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
     let line = line.trim_end_matches('\r');
     let (tags, rest) = if let Some(after_tag) = line.strip_prefix('@') {
@@ -207,8 +206,8 @@ fn websocket_connection_error(error: impl std::fmt::Display) -> AppError {
     .retryable()
 }
 
-/// Decode the percent-encoded URL user-info component without treating `+`
-/// as a space (URL credentials are not form data).
+/// 解码 URL 的 user-info 部分中的百分号编码，且不把 `+` 当作空格
+/// （URL 中的凭据不是表单数据）。
 fn percent_decode_proxy_credential(value: &str) -> AppResult<Vec<u8>> {
     fn hex(byte: u8) -> Option<u8> {
         match byte {
@@ -255,12 +254,12 @@ fn proxy_authorization(url: &Url) -> AppResult<Option<String>> {
     Ok(Some(STANDARD.encode(credentials)))
 }
 
-/// Parse the same user-facing HTTP(S) proxy setting used by site requests.
+/// 解析与站点请求相同的、面向用户的 HTTP(S) 代理设置。
 ///
-/// `reqwest::Proxy` accepts a missing scheme as HTTP, so retain that friendly
-/// behavior for previously saved `127.0.0.1:7890` settings. SOCKS proxy URLs
-/// are rejected explicitly: this connection uses a standards-compliant HTTP
-/// CONNECT tunnel and must not silently bypass a user's selected proxy.
+/// `reqwest::Proxy` 会把缺失的 scheme 视为 HTTP，因此这里保留该宽松行为，
+/// 以兼容此前保存的 `127.0.0.1:7890` 之类设置。SOCKS 代理 URL 会被明确拒绝：
+/// 本连接使用符合标准的 HTTP CONNECT 隧道，
+/// 绝不能悄悄绕过用户选择的代理。
 fn proxy_from_setting(proxy: Option<&str>) -> AppResult<Option<ConnectProxy>> {
     let Some(raw) = proxy.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -325,9 +324,9 @@ where
         return Err(proxy_connection_error("Twitch 弹幕代理 CONNECT 响应头过大"));
     }
     let mut line = Vec::new();
-    // `read_until` otherwise grows its destination until it finds a newline.
-    // A local proxy is still an untrusted network peer, so cap each response
-    // line and the complete response header before allocating it.
+    // 否则 `read_until` 会不断扩张目标缓冲区直到找到换行。本地代理同样是
+    // 不可信的网络对端，因此在分配之前先限制每行响应
+    // 以及完整响应头的长度。
     let mut limited = (&mut *stream).take(remaining as u64);
     let received = limited
         .read_until(b'\n', &mut line)
@@ -492,7 +491,7 @@ where
     })
 }
 
-/// Outcome of one IRC session that reached the chat loop.
+/// 一次进入聊天循环的 IRC 会话的结果。
 struct SessionEnd {
     messages: u64,
     connected_for: Duration,
@@ -503,8 +502,8 @@ pub async fn run_loop(
     args: TwitchDanmakuArgs,
     proxy: Option<String>,
 ) -> AppResult<()> {
-    // A malformed proxy setting is a local configuration error: every retry
-    // would fail identically, so surface it instead of entering the loop.
+    // 代理设置格式错误属于本地配置问题：每次重试都会以同样方式失败，
+    // 因此直接报错而不是进入循环。
     let proxy = proxy_from_setting(proxy.as_deref())?;
 
     let mut policy = ReconnectPolicy::with_defaults("twitch");
@@ -513,11 +512,11 @@ pub async fn run_loop(
             Ok(end) => DisconnectReason::Dropped {
                 messages: end.messages,
                 connected_for: end.connected_for,
-                // The IRC loop breaks without keeping the transport cause.
+                // IRC 循环退出时不保留传输层原因。
                 detail: None,
             },
-            // Dial, tunnel, and IRC transport failures are all recoverable;
-            // the policy decides when the streak has gone on too long.
+            // 拨号、隧道和 IRC 传输失败都是可恢复的；
+            // 由策略决定这串失败何时算持续太久。
             Err(error) => DisconnectReason::transient(error.message),
         };
         match policy.on_disconnect(reason) {

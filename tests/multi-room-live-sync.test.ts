@@ -30,7 +30,7 @@ import { pruneMultiRoomSyncOffsets } from "../src/features/multi-room/multiRoomS
 
 const NOW = 1_700_000_000_000;
 
-/** A feed whose shown frame is `latency` seconds old and `edge` from live. */
+/** 一条流显示的帧落后 `latency` 秒、距离直播边缘 `edge` 秒。 */
 function feed(
   key: string,
   options: {
@@ -80,8 +80,8 @@ describe("live sync clock mapping", () => {
 describe("live sync target latency", () => {
   test("follows the audible main feed so its pitch is never bent", () => {
     const samples = [feed("main", { main: true, latency: 6 }), feed("b", { latency: 3 })];
-    // Main sits `LIVE_SYNC_BASE_HOLD_SECONDS` behind its own live edge (1s away
-    // here), and the group follows that position.
+    // 主流落后自身直播边缘 `LIVE_SYNC_BASE_HOLD_SECONDS`（此处为 1s），
+    // 整组跟随该位置。
     expect(liveSyncTargetLatencySeconds(samples, NOW, null)).toBeCloseTo(
       6 - 1 + LIVE_SYNC_BASE_HOLD_SECONDS,
       5,
@@ -89,8 +89,8 @@ describe("live sync target latency", () => {
   });
 
   test("does not drift further back when the main feed falls behind its edge", () => {
-    // A rebuffered main feed is 9s behind wall clock but its live edge has moved
-    // on by 4s, so the target stays near the edge instead of keeping the lag.
+    // 重新缓冲后的主流落后挂钟 9s 但其直播边缘又前进了 4s，
+    // 目标保持在边缘附近而不是保留滞后。
     const samples = [feed("main", { main: true, latency: 9, edge: 4 })];
     expect(liveSyncTargetLatencySeconds(samples, NOW, null)).toBeCloseTo(
       9 - 4 + LIVE_SYNC_BASE_HOLD_SECONDS,
@@ -99,8 +99,8 @@ describe("live sync target latency", () => {
   });
 
   test("moves back when a secondary feed cannot reach the main position", () => {
-    // This feed's live edge is still 12s behind wall clock, so nobody can be
-    // aligned in front of it: the whole grid has to wait for it.
+    // 该流的直播边缘仍落后挂钟 12s，谁也无法对齐到它前面：
+    // 整个网格都得等它。
     const samples = [
       feed("main", { main: true, latency: 4 }),
       feed("slow", { latency: 14, edge: 2 }),
@@ -122,7 +122,7 @@ describe("live sync target latency", () => {
       feed("early", { latency: 5, offset: -4 }),
     ];
     const target = liveSyncTargetLatencySeconds(samples, NOW, null);
-    // The early feed must still be able to reach `target - 4`.
+    // 早出发的流必须仍能到达 `target - 4`。
     expect(target).not.toBeNull();
     expect(target!).toBeGreaterThanOrEqual(5 - 1 + 4);
   });
@@ -162,7 +162,7 @@ describe("live sync planning", () => {
     });
     const action = plan.feeds[0]?.action;
     expect(action?.kind).toBe("seek");
-    // 120 + 6 (live edge) - 1.2 (base hold)
+    // 120 + 6（直播边缘）- 1.2（基准滞留）
     expect(action?.kind === "seek" ? action.mediaTime : null).toBeCloseTo(
       126 - LIVE_SYNC_BASE_HOLD_SECONDS,
       5,
@@ -177,7 +177,7 @@ describe("live sync planning", () => {
       previousTargetSeconds: null,
     });
     const action = plan.feeds[0]?.action;
-    // 120 + 12 (live edge) - 1.2 (base hold) - 4 (offset)
+    // 120 + 12（直播边缘）- 1.2（基准滞留）- 4（偏移）
     expect(action?.kind === "seek" ? action.mediaTime : null).toBeCloseTo(
       132 - LIVE_SYNC_BASE_HOLD_SECONDS - 4,
       5,
@@ -195,7 +195,7 @@ describe("live sync planning", () => {
     expect(plan.targetLatencySeconds).toBeCloseTo(target, 5);
     const fast = plan.feeds.find((entry) => entry.key === "fast");
     expect(fast?.action.kind).toBe("seek");
-    // Delaying by `target - 3` seconds means playing that much earlier.
+    // 延迟到 `target - 3` 秒意味着提前那么多播放。
     expect(fast?.action.kind === "seek" ? fast.action.mediaTime : null).toBeCloseTo(
       120 - (target - 3),
       5,
@@ -391,7 +391,7 @@ describe("sync offset bookkeeping", () => {
   });
 });
 
-/** Minimal stand-in for one player's imperative sync handle. */
+/** 单个播放器命令式同步句柄的最小替身。 */
 function fakeFeed(sample: LiveSyncSample) {
   const calls: { seeks: number[]; rates: number[] } = { seeks: [], rates: [] };
   return {

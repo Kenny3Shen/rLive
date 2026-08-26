@@ -4,21 +4,20 @@ use serde::Serialize;
 use crate::db::schema::map_db_err;
 use crate::error::AppResult;
 
-/// Keep the reusable composer menu useful without retaining an unbounded
-/// transcript of a user's outgoing messages.
+/// 让可复用的输入菜单保持实用，
+/// 同时不无限保留用户发出消息的完整记录。
 pub const MAX_RECORDS_PER_SITE: i64 = 50;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DanmakuSendHistoryRecord {
     pub site_id: String,
     pub content: String,
-    /// Room the message was sent to. Empty when unavailable.
+    /// 消息发往的房间。不可得时为空。
     pub room_id: String,
-    /// Room title captured at send time, so the history screen can name the
-    /// room without a live lookup. Empty when unknown.
+    /// 发送时捕获的房间标题，使历史界面无需实时查询即可标示房间。
+    /// 未知时为空。
     pub room_title: String,
-    /// Streamer name captured with the room title. Empty when a platform's
-    /// detail payload omitted it.
+    /// 与房间标题一起捕获的主播名。平台详情负载未提供时为空。
     pub room_user_name: String,
     pub sent_at: i64,
 }
@@ -55,9 +54,9 @@ pub fn list(conn: &Connection, site_id: &str) -> AppResult<Vec<DanmakuSendHistor
     Ok(out)
 }
 
-/// Returns every locally recorded outgoing message, newest first. Unlike the
-/// composer menu this is intentionally not filtered to a single platform so
-/// the history screen can present one chronological timeline.
+/// 返回本地记录的全部发出消息，最新的在前。与输入菜单不同，
+/// 这里刻意不限定单一平台，
+/// 以便历史界面呈现统一的时间线。
 pub fn list_all(conn: &Connection) -> AppResult<Vec<DanmakuSendHistoryRecord>> {
     let mut stmt = conn
         .prepare(
@@ -75,8 +74,8 @@ pub fn list_all(conn: &Connection) -> AppResult<Vec<DanmakuSendHistoryRecord>> {
     Ok(out)
 }
 
-/// Store one platform-confirmed outgoing message. Reusing a message moves it
-/// to the top of that platform's history instead of duplicating the entry.
+/// 存储一条经平台确认的发出消息。重复发送同一条消息会把它移到
+/// 该平台历史的顶部，而不是产生重复条目。
 pub fn record(
     conn: &Connection,
     site_id: &str,
@@ -117,9 +116,9 @@ pub fn record(
     )
     .map_err(map_db_err)?;
 
-    // SQLite's `LIMIT -1 OFFSET n` means every row after the first n. Scope
-    // the pruning query to the platform so active Bilibili usage never evicts
-    // the user's smaller Huya/Douyu history.
+    // SQLite 的 `LIMIT -1 OFFSET n` 表示第 n 行之后的全部行。
+    // 清理查询按平台限定范围，避免 Bilibili 的活跃使用
+    // 挤掉用户较少使用的虎牙／斗鱼历史。
     conn.execute(
         "DELETE FROM danmaku_send_history
          WHERE rowid IN (
@@ -238,7 +237,7 @@ mod tests {
         )
         .unwrap();
 
-        // A later duplicate is the entry the surviving timestamp belongs to.
+        // 较晚出现的重复条目才是留存时间戳所属的那条。
         record(
             &conn,
             "bilibili",
@@ -255,7 +254,7 @@ mod tests {
         assert_eq!(records[0].room_user_name, "第二个主播");
         assert_eq!(records[0].sent_at, 20);
 
-        // An out-of-order older send must not relabel the newer entry.
+        // 乱序到达的更早发送不得改写更新的条目。
         record(
             &conn,
             "bilibili",

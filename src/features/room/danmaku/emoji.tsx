@@ -14,20 +14,20 @@ import {
 } from "./content";
 
 export type DanmakuEmoji = {
-  /** Stable local identifier; never sent to an upstream service. */
+  /** 稳定的本地标识符；绝不发送给上游服务。 */
   id: string;
-  /** The Unicode text inserted into the Bilibili draft when selected. */
+  /** 选中时插入 Bilibili 草稿的 Unicode 文本。 */
   text: string;
   label: string;
   src: string;
-  /** Common Bilibili text aliases rendered with the same local artwork. */
+  /** 使用同一套本地素材渲染的常见 Bilibili 文本别名。 */
   aliases?: readonly string[];
 };
 
 /**
- * A deliberately small, local fallback palette for incoming plain-text
- * messages. It avoids importing/rehosting platform-owned emote packs while
- * still rendering portable Unicode and common Bilibili-style aliases.
+ * 为到达的纯文本消息准备的刻意精简的本地兜底表情表。它避免导入或转存平台
+ * 所有的表情包，
+ * 同时仍能渲染通用 Unicode 和常见 Bilibili 风格别名。
  */
 export const DANMAKU_EMOJIS: readonly DanmakuEmoji[] = [
   { id: "smile", text: "😀", label: "微笑", src: smileSrc, aliases: ["[微笑]"] },
@@ -41,9 +41,8 @@ export const DANMAKU_EMOJIS: readonly DanmakuEmoji[] = [
 ];
 
 /**
- * Bilibili Live's built-in text faces from its web client's `EMOJI_LIST`.
- * These are ordinary danmaku text, so selecting one does not rely on a
- * platform-owned image pack or a user-specific emote entitlement.
+ * Bilibili 直播 Web 客户端 `EMOJI_LIST` 中的内置文字颜文字。它们是普通的弹幕
+ * 文本，选择它们不依赖平台所有的图片包或用户专属的表情权益。
  */
 export const BILIBILI_NATIVE_TEXT_EMOJIS = [
   "(⌒▽⌒)",
@@ -99,10 +98,10 @@ for (const emoji of DANMAKU_EMOJIS) {
   for (const alias of emoji.aliases ?? []) emojiByToken.set(alias, emoji);
 }
 
-// Longest first matters for future aliases that share a prefix.
+// 最长的优先，为将来共享前缀的别名做准备。
 const emojiTokens = [...emojiByToken.keys()].sort((left, right) => right.length - left.length);
 
-/** Split only the known, local emoji tokens; all remaining text stays text. */
+/** 只拆分已知、本地的 emoji 记号；其余文本保持原样。 */
 export function tokenizeDanmakuContent(content: string): DanmakuContentSegment[] {
   if (!content) return [];
 
@@ -132,7 +131,7 @@ export function tokenizeDanmakuContent(content: string): DanmakuContentSegment[]
   return segments;
 }
 
-/** Safe text renderer for the right-side message lists; it never parses HTML. */
+/** 右侧消息列表的安全文本渲染器；绝不解析 HTML。 */
 export function DanmakuEmojiText({
   content,
   className,
@@ -172,9 +171,8 @@ export function DanmakuEmojiText({
 }
 
 /**
- * Renders protocol-provided Bilibili image emotes when the backend supplied
- * validated rich spans. Plain text continues through the local emoji renderer
- * so every supported site keeps the same lightweight fallback behaviour.
+ * 当后端提供已校验的富片段时渲染平台下发的 Bilibili 图片表情。纯文本继续走
+ * 本地表情渲染器，使每个受支持的站点保持同样轻量的兜底行为。
  */
 export function DanmakuRichText({
   content,

@@ -33,7 +33,7 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import { invokeCmd } from "@/shared/api/tauri";
 import { FieldTip } from "./FieldTip";
 
-/** One log file's tail, mirroring `commands::diagnostics::LogFileContent`. */
+/** 一个日志文件的尾部，对应 `commands::diagnostics::LogFileContent`。 */
 export type LogFileContent = {
   path: string;
   exists: boolean;
@@ -64,16 +64,15 @@ async function clearAppLog(): Promise<void> {
   return invokeCmd<void>("app_log_clear");
 }
 
-/** Which of the two files the viewer is showing. */
+/** 查看器当前显示的是两个文件中的哪一个。 */
 type LogTab = "current" | "previous";
 
 /**
- * Log viewer for the About pane.
+ * “关于”面板的日志查看器。
  *
- * Release Windows builds have no console, so `rlive.log` is the only record a
- * user can quote when reporting a failure. The log is failure-only by
- * construction — `init_logging` never writes Cookie values, tokens, or chat
- * text — so showing it here does not expose credentials.
+ * Windows 发布版没有控制台，`rlive.log` 是用户反馈失败时唯一能引用的记录。
+ * 该日志在设计上只记录失败 —— `init_logging` 绝不写 Cookie 值、token 或聊天文本 ——
+ * 因此在这里展示它不会暴露凭据。
  */
 export function AppLogField() {
   const queryClient = useQueryClient();
@@ -83,13 +82,13 @@ export function AppLogField() {
   const [status, setStatus] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revealing, setRevealing] = useState(false);
-  // The log folder is only browsable on a desktop shell.
+  // 日志目录只能在桌面外壳中打开浏览。
   const canReveal = getClientPlatform() === "desktop";
 
   const snapshot = useQuery({
     queryKey: APP_LOG_QUERY_KEY,
     queryFn: appLogSnapshot,
-    // Only read the file while the dialog is actually showing it.
+    // 只有对话框真正在展示该文件时才读取它。
     enabled: open,
     staleTime: 0,
     gcTime: 0,
@@ -153,7 +152,7 @@ export function AppLogField() {
       onOpenChange={(next) => {
         setOpen(next);
         if (!next) {
-          // Reopening should show the current file and a clean status line.
+          // 重新打开时应显示当前文件和干净的状态行。
           setTab("current");
           setActionError(null);
           setStatus(null);
@@ -306,8 +305,8 @@ export function AppLogField() {
             )}
             {clear.isPending ? "正在清空…" : "清空"}
           </Button>
-          {/* Same outline variant and `sm` size as the four action buttons
-              beside it; every other dialog closes with an outline button too. */}
+          {/* 与旁边四个操作按钮相同的 outline 变体与 `sm` 尺寸；
+              其他所有对话框也都用 outline 按钮关闭。 */}
           <DialogCloseButton size="sm">关闭</DialogCloseButton>
         </DialogFooter>
       </DialogContent>

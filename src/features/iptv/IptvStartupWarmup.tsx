@@ -9,7 +9,7 @@ import type { IptvChannel } from "./types";
 
 const STARTUP_WARMUP_DELAY_MS = 700;
 
-/** Refresh and probe one IPTV source after the first screen has had time to paint. */
+/** 在首屏有时间绘制之后，刷新并探测一个 IPTV 来源。 */
 export function IptvStartupWarmup() {
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -42,8 +42,7 @@ export function IptvStartupWarmup() {
           return probeIptvAvailability(channels, { sourceUrl: source.url, notify: false });
         })
         .catch(() => {
-          // Startup maintenance is deliberately silent; IPTV remains available
-          // for a manual retry from its page when a source is temporarily down.
+          // 启动期维护刻意静默；来源暂时不可用时，IPTV 仍可在其页面手动重试。
         });
     }, STARTUP_WARMUP_DELAY_MS);
     return () => {

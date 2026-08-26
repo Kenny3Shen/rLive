@@ -14,9 +14,7 @@ import {
   DanmakuTrackSettingsFields,
 } from "@/features/settings/PlaybackPreferenceFields";
 import { siteSupportsSuperChat } from "./superChat";
-/**
- * Room-local access to the shared playback preferences.
- */
+/** 访问共享播放偏好设置的房间级入口。 */
 export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   className,
   siteId,

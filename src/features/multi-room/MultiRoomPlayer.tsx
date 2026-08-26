@@ -172,11 +172,11 @@ function MainMultiRoomDanmaku({
       roomId={detail?.room_id || room.roomId}
       roomTitle={detail?.title || room.title}
       roomUserName={detail?.user_name || room.userName}
-      // Fullscreen puts the picture a whole display away, where the compact
-      // pill is hard to aim at. Grid cells are small enough already.
+      // 全屏把画面放到整整一块屏幕之外，紧凑的胶囊按钮很难点到。
+      // 网格单元本来就已经很小了。
       large={player.mode === "fullscreen"}
-      // Comments arrive in real time, so a clock alignment that holds the
-      // picture back has to hold them back by the same amount.
+      // 弹幕是实时到达的，把画面往后拉的时钟对齐
+      // 必须把弹幕也拉后同样的量。
       delayMs={liveSyncDanmakuDelayMs(syncStatus)}
       className="absolute inset-0 z-10"
     />
@@ -370,8 +370,8 @@ function MainMultiRoomControls({
           refreshDisabled={loading || !playback.playUrl}
           loadError={loadError}
           overlay
-          // One cell of the director grid: outside fullscreen there is always
-          // more grid below, so the chrome is not on the window's bottom edge.
+          // 导演网格的一个单元：非全屏时下方总有更多网格，
+          // 因此控制元素不在窗口底边。
           stackedBelowPlayer
           portalContainer={player.stageRef}
           centerSlot={
@@ -405,7 +405,7 @@ function MainMultiRoomControls({
   );
 }
 
-/** Live-clock status pill for one tile; isolated so a tick only re-renders it. */
+/** 单个磁贴的直播时钟状态胶囊；独立成组件使一次 tick 只重渲染它。 */
 function MultiRoomSyncBadge({
   roomKey,
   portalContainer,
@@ -483,12 +483,12 @@ export function MultiRoomPlayer({
     sessionKey: `multi-room:${room.key}`,
     initialVolume: room.volume,
     initialMuted: room.muted,
-    // Every feed shares one window, so only the main one may read or drive
-    // fullscreen; otherwise all six would report themselves as fullscreen.
+    // 所有流共享一个窗口，因此只有主流可以读取或驱动全屏；
+    // 否则六条流都会声称自己在全屏。
     fullscreenOwner: main,
     reloadToken: playback.reloadToken,
-    // The protocol plugins read their latency options only at creation, so the
-    // alignment profile is part of the transport identity.
+    // 协议插件只在创建时读取延迟选项，
+    // 因此对齐配置属于传输身份的一部分。
     liveSyncHold: syncMode !== "off",
     onMediaFailure: playback.onPlayerMediaFailure,
     onPlaying: playback.onPlayerPlaying,
@@ -507,10 +507,9 @@ export function MultiRoomPlayer({
     if (!main) setOsdOn(false);
   }, [main]);
 
-  // A feed can be demoted, dragged away or removed while it is the fullscreen
-  // stage. Fullscreen belongs to whichever feed is main, so give it up as soon
-  // as this one stops being main — including on unmount — instead of leaving
-  // the window fullscreen around the whole director grid.
+  // 某条流在全屏舞台期间可能被降级、拖走或移除。全屏属于当前的主流，
+  // 因此一旦它不再是主流就立即交出 —— 包括卸载时 ——
+  // 而不是让整个导演网格周围一直保持窗口全屏。
   useEffect(() => {
     if (!main) return;
     return () => {
@@ -573,7 +572,8 @@ export function MultiRoomPlayer({
   }, []);
 
   const setControlsVisible = useCallback((visible: boolean) => {
-    // Room-keyed tiles change roles in place, so stale inert state must always be resynced.
+    // 按房间为键的磁贴会原地更换角色，
+    // 过期的 inert 状态必须始终重新同步。
     controlsVisibleRef.current = visible;
     for (const layer of [controlsRef.current, hudRef.current]) {
       if (!layer) continue;
@@ -737,10 +737,9 @@ export function MultiRoomPlayer({
       ref={player.stageRef}
       data-multi-room-player={room.key}
       data-main={main ? "true" : "false"}
-      // Only the main feed carries the stage markers. Fullscreen then lifts
-      // this one article out of the 3x3 grid as a fixed, full-window layer
-      // (see the [data-player-stage] rule in styles.css) instead of merely
-      // growing the window around the whole director matrix.
+      // 只有主流携带舞台标记。全屏时这条 article 从 3x3 网格中提升为固定全窗口层
+      // （见 styles.css 的 [data-player-stage] 规则），
+      // 而不是仅仅让窗口围绕整个导演矩阵变大。
       data-player-stage={main ? "" : undefined}
       data-fullscreen={fullscreen ? "true" : undefined}
       className="group/player relative size-full min-h-0 overflow-hidden bg-black outline-none"

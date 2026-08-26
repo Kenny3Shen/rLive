@@ -1,10 +1,9 @@
-//! Douyin live danmaku transport.
+//! 抖音直播弹幕传输。
 //!
-//! Douyin's web IM endpoint requires a short-lived, signed WSS URL. rLive
-//! builds that URL locally: room metadata + anonymous user id, MSSDK
-//! signature via QuickJS, then a direct WebSocket with gzip / protobuf framing,
-//! heartbeat and ACK.  The dial rotates through several webcast edge hosts
-//! and the read loop reconnects with an exponential, status-aware backoff.
+//! 抖音的 Web IM 接口要求一个短时效的带签名 WSS URL。rLive 在本地构造该 URL：
+//! 房间元数据 + 匿名用户 id，经 QuickJS 生成 MSSDK 签名，然后建立采用
+//! gzip / protobuf 分帧、带心跳与 ACK 的直连 WebSocket。拨号会在多个 webcast
+//! 边缘主机之间轮换，读循环则按状态感知的指数退避重连。
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -34,14 +33,13 @@ const DEFAULT_HEARTBEAT_MS: u64 = 10_000;
 const MAX_DECOMPRESSED_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EVENT_TEXT_CHARS: usize = 500;
 const MAX_USER_NAME_CHARS: usize = 128;
-/// This is a valid `PushFrame` containing protobuf field 7 = "hb".
+/// 这是一个包含 protobuf 字段 7 = "hb" 的合法 `PushFrame`。
 const HEARTBEAT: &[u8] = &[0x3a, 0x02, b'h', b'b'];
-/// Maximum wait for one edge host's WSS handshake before rotating.
+/// 单个边缘主机 WSS 握手在轮换前的最长等待时间。
 const CONNECT_TIMEOUT_SECS: u64 = 12;
 
-/// Douyin webcast push edges, in preference order.  The first host mirrors
-/// the web client's primary edge; the rest are rotation candidates used when
-/// the primary is unreachable or rate-limited.
+/// 抖音 webcast 推送边缘节点，按优先级排列。第一个主机对应 Web 客户端的
+/// 主用节点；其余作为主用节点不可达或被限流时的轮换候选。
 const DOUYIN_WS_HOSTS: &[&str] = &[
     "webcast3-ws-web-lq.douyin.com",
     "webcast5-ws-web-lf.douyin.com",
@@ -50,10 +48,9 @@ const DOUYIN_WS_HOSTS: &[&str] = &[
     "webcast3-ws-web-lf.douyin.com",
 ];
 
-/// Per-class reconnect clamps handed to the shared policy.  A handshake
-/// rejected as 429/403 means the edge is rate-limiting this client, so back off
-/// much harder instead of hammering the same egress IP; 504 suggests a
-/// transient gateway issue that clears sooner.
+/// 交给共享策略的分类重连上限。握手被以 429/403 拒绝意味着该边缘节点正在限流
+/// 本客户端，因此要显著加大退避，而不是反复冲击同一个出口 IP；
+/// 504 则提示网关的偶发问题，通常恢复更快。
 const RECONNECT_BACKOFF_GATEWAY_FLOOR_SECS: u64 = 10;
 const RECONNECT_BACKOFF_GATEWAY_MAX_SECS: u64 = 120;
 const RECONNECT_BACKOFF_BLOCKED_FLOOR_SECS: u64 = 60;
@@ -61,13 +58,13 @@ const RECONNECT_BACKOFF_BLOCKED_MAX_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct DouyinDanmakuArgs {
-    /// Internal (numeric) room id used by the WSS query string.
+    /// WSS query string 使用的内部（数字）房间 id。
     pub room_id: String,
-    /// Anonymous web uid bound to the signed URL.
+    /// 绑定到签名 URL 的匿名 Web uid。
     pub user_unique_id: String,
-    /// Short-lived MSSDK WSS signature.
+    /// 短时效的 MSSDK WSS 签名。
     pub signature: String,
-    /// Browser-style `internal_ext` query value (see [`build_internal_ext`]).
+    /// 浏览器风格的 `internal_ext` query 取值（参见 [`build_internal_ext`]）。
     pub internal_ext: String,
     pub headers: HashMap<String, String>,
     pub heartbeat_interval: Duration,
@@ -91,12 +88,12 @@ fn douyin_ws_hosts() -> Vec<String> {
         .collect()
 }
 
-/// Resolve room metadata into a short-lived signed WSS connection.
+/// 把房间元数据解析为一次短时效的带签名 WSS 连接。
 ///
-/// Flow matches Simple Live: internal room id + anonymous user id → local
-/// MSSDK signature → WSS query string, then Cookie / Origin headers for the
-/// direct WebSocket.  The edge host is picked per dial by [`run_loop`], so
-/// the signature and `internal_ext` are computed here and shared across hosts.
+/// 流程为：内部房间 id + 匿名用户 id → 本地 MSSDK 签名 →
+/// WSS query string，然后为直连 WebSocket 准备 Cookie / Origin 请求头。
+/// 边缘主机由 [`run_loop`] 在每次拨号时选择，
+/// 因此签名与 `internal_ext` 在这里计算一次并在各主机间共用。
 pub fn build_connection(
     room_id: &str,
     raw: &serde_json::Value,
@@ -104,8 +101,8 @@ pub fn build_connection(
 ) -> AppResult<DouyinDanmakuArgs> {
     let actual_room_id = numeric_field(raw.get("room_id")).unwrap_or_else(|| room_id.to_string());
     validate_numeric_id(&actual_room_id, "房间号")?;
-    // Prefer the session web id captured from the SSR room page; the locally
-    // generated anonymous id is only a fallback.
+    // 优先使用从 SSR 房间页捕获的会话 web id；
+    // 本地生成的匿名 id 只是兜底。
     let user_unique_id =
         web_id_field(raw.get("user_unique_id")).unwrap_or_else(generate_user_unique_id);
     let signature = douyin_sign::get_signature(&actual_room_id, &user_unique_id)?;
@@ -177,9 +174,9 @@ fn build_wss_url(host: &str, args: &DouyinDanmakuArgs) -> AppResult<String> {
     Ok(url.to_string())
 }
 
-/// Browser-style `internal_ext` captured from the web client.  The value
-/// binds the WSS request to the room / web id pair and is *not* part of the
-/// MSSDK signature input, so it can be added without re-signing.
+/// 从 Web 客户端捕获的浏览器风格 `internal_ext`。该值把 WSS 请求绑定到
+/// 房间／web id 这一对上，且*不*属于 MSSDK 签名的输入，
+/// 因此可以在不重新签名的情况下添加。
 fn build_internal_ext(room_id: &str, user_unique_id: &str, ts_ms: u64) -> String {
     let first_req_ms = ts_ms.saturating_sub(100);
     format!(
@@ -194,11 +191,10 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Map one failed handshake onto a reconnect reason.
+/// 把一次失败的握手映射为重连原因。
 ///
-/// A 403/429 means this egress IP is being refused or rate-limited, and 504 is
-/// a transient gateway fault; both stay retryable but on a much slower
-/// schedule. A 401 is a rejected credential, which retrying cannot fix.
+/// 403/429 表示这个出口 IP 被拒绝或被限流，504 是网关的偶发故障；两者都仍可
+/// 重试，但节奏要慢得多。401 表示凭据被拒，重试无法解决。
 fn connect_failure_reason(failure: ConnectFailure) -> DisconnectReason {
     match failure.http_status {
         Some(401) => DisconnectReason::fatal(format!(
@@ -221,14 +217,14 @@ fn connect_failure_reason(failure: ConnectFailure) -> DisconnectReason {
     }
 }
 
-/// Anonymous 12-digit web uid (Simple Live `generateRandomNumber(12)`).
+/// 匿名的 12 位 Web uid。
 fn generate_user_unique_id() -> String {
     let bytes = uuid::Uuid::new_v4().into_bytes();
     let mut value = 0u128;
     for byte in bytes {
         value = (value << 8) | u128::from(byte);
     }
-    // Produce 12 decimal digits without leading-zero collapse.
+    // 生成 12 位十进制数字，且不会因前导零而缩短。
     format!("{:012}", value % 1_000_000_000_000)
 }
 
@@ -242,15 +238,14 @@ fn numeric_field(value: Option<&serde_json::Value>) -> Option<String> {
     (!number.is_empty()).then_some(number)
 }
 
-/// The SSR room page exposes the session's own web id (a numeric string or
-/// number).  Unlike [`numeric_field`] it is not required to be digits-only,
-/// because alphanumeric ids are signable too.
+/// SSR 房间页会暴露会话自己的 web id（数字字符串或数字）。
+/// 与 [`numeric_field`] 不同，它不要求全是数字，
+/// 因为字母数字混合的 id 同样可以参与签名。
 ///
-/// Ids that cannot be signed with — a `s_v_web_id` cookie value, for instance,
-/// which is over-long and carries `_`/`-`/`%` — are dropped here so the caller
-/// falls back to [`generate_user_unique_id`].  Signing with them is impossible
-/// (they would forge fields in the delimited signature stub) and failing the
-/// handshake would leave the room with no danmaku at all.
+/// 无法用于签名的 id —— 例如 `s_v_web_id` cookie 值，它过长且带有 `_`/`-`/`%`
+/// —— 会在这里被丢弃，使调用方回退到 [`generate_user_unique_id`]。
+/// 用它们签名是不可能的（会在带分隔符的签名 stub 中伪造出额外字段），
+/// 而让握手失败又会导致该房间完全没有弹幕。
 fn web_id_field(value: Option<&serde_json::Value>) -> Option<String> {
     let value = value?;
     let id = match value {
@@ -296,7 +291,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> Ap
 
 #[derive(Debug)]
 struct ConnectFailure {
-    /// HTTP status of the failed WSS handshake when the edge answered.
+    /// 边缘节点有应答时，失败 WSS 握手的 HTTP 状态码。
     http_status: Option<u16>,
     message: String,
 }
@@ -379,8 +374,8 @@ async fn run_connection_once(
 
     emit_system(events, "抖音弹幕服务器连接成功");
     let mut heartbeat = time::interval(args.heartbeat_interval);
-    // `interval` ticks immediately; consume that tick because the opening
-    // heartbeat above has already been sent.
+    // `interval` 会立即触发一次；把那一次 tick 消费掉，
+    // 因为上面开场的心跳已经发送过了。
     heartbeat.tick().await;
 
     let mut msg_count: u64 = 0;
@@ -427,8 +422,7 @@ async fn run_connection_once(
     DisconnectReason::Dropped {
         messages: msg_count,
         connected_for: connected_at.elapsed(),
-        // This loop breaks without keeping the transport cause; the policy
-        // falls back to its stable summary.
+        // 这个循环退出时不保留传输层原因；策略会退回到其稳定的概要描述。
         detail: None,
     }
 }
@@ -704,9 +698,8 @@ fn decode_like(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
         return Ok(None);
     }
     event_if_content(
-        // Likes are platform interaction notices rather than user-authored
-        // chat. Classifying them with gifts lets the shared gift-information
-        // setting hide both high-frequency event types consistently.
+        // 点赞属于平台互动通知而非用户撰写的聊天内容。把它与礼物归为一类，
+        // 可让共享的礼物信息设置一致地隐藏这两类高频事件。
         DanmakuKind::Gift,
         user,
         format!("点赞 × {count}"),
@@ -1039,7 +1032,7 @@ mod tests {
                 .contains("wss_push_did:7392091211001140287")
         );
 
-        // Without a session web id the anonymous fallback is 12 digits.
+        // 没有会话 web id 时，匿名兜底值是 12 位数字。
         let raw = serde_json::json!({ "room_id": "1234567890123456789" });
         let args = build_connection("522864404974", &raw, "").unwrap();
         assert_eq!(args.user_unique_id.len(), 12);
@@ -1050,10 +1043,10 @@ mod tests {
         );
     }
 
-    /// Entering a Douyin cookie used to break danmaku outright: the room page
-    /// attaches the session's `s_v_web_id` as `user_unique_id`, and that value
-    /// cannot be signed with, so the handshake failed with 「无效的抖音用户标识」。
-    /// It must degrade to the anonymous id instead.
+    /// 填入抖音 cookie 曾直接导致弹幕不可用：房间页会把会话的 `s_v_web_id`
+    /// 作为 `user_unique_id` 带上，而该值无法用于签名，
+    /// 于是握手失败并报「无效的抖音用户标识」。
+    /// 它必须降级为匿名 id。
     #[test]
     fn build_connection_falls_back_when_the_session_web_id_is_unsignable() {
         let raw = serde_json::json!({
@@ -1084,9 +1077,9 @@ mod tests {
         assert!(hosts.len() >= 3);
     }
 
-    /// The handshake status decides the retry class, so a rejected credential
-    /// stops instead of spending a five-minute backoff schedule on an answer
-    /// the edge has already given.
+    /// 握手状态决定重试类别，因此凭据被拒时直接停止，
+    /// 而不是为边缘节点已经给出的答复
+    /// 再花掉五分钟的退避排程。
     #[test]
     fn handshake_status_selects_the_retry_class() {
         let failure = |status: Option<u16>| ConnectFailure {
@@ -1114,7 +1107,7 @@ mod tests {
             }
             other => panic!("expected gateway throttling, got {other:?}"),
         }
-        // An unanswered dial (DNS, TLS, timeout) stays on the ordinary schedule.
+        // 无应答的拨号（DNS、TLS、超时）继续按普通节奏重试。
         assert!(matches!(
             connect_failure_reason(failure(None)),
             DisconnectReason::Transient { .. }

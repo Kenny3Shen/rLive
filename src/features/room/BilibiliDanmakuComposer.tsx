@@ -58,23 +58,23 @@ type DanmakuComposerProps = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
-  /** Compact transparent variant for the player-overlay control bar. */
+  /** 供播放器浮层控制条使用的紧凑透明变体。 */
   overlay?: boolean;
-  /** Portal target for fullscreen player overlays. */
+  /** 全屏播放器浮层使用的 Portal 目标。 */
   portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
-  /** Keeps the player chrome visible while the emoji picker is open. */
+  /** 表情选择器打开期间保持播放器 chrome 可见。 */
   onOverlayInteractionChange?: (open: boolean) => void;
 };
 
 type DanmakuPickerTab = "emoji" | "favorites" | "history";
 
 /**
- * The quick picker and the send button flank the same input. Sharing one
- * geometry keeps the group symmetric, and staying a step under the group's
- * 2rem height keeps either button from touching its border.
+ * 快捷选择器和发送按钮分列输入框两侧。共享同一几何尺寸让整组对称，
+ * 且比组合 2rem 高度略小一档，
+ * 使任何一个按钮都不会碰到边框。
  */
 const COMPOSER_BUTTON_CLASS = "size-7 rounded-md transition-colors";
-/** Matches the transparent player chrome the overlay composer sits in. */
+/** 匹配浮层输入框所在的透明播放器 chrome。 */
 const COMPOSER_OVERLAY_GHOST_CLASS =
   "text-white/90 hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-ring-overlay";
 
@@ -580,9 +580,8 @@ function DanmakuQuickPicker({
 }
 
 /**
- * One intentionally small, user-operated composer for platforms with a
- * verified local send endpoint. Platform chat is shown only when it arrives
- * through the normal live websocket stream.
+ * 为具备已验证本地发送接口的平台提供的、刻意保持精简的用户手动输入框。
+ * 平台聊天只在通过正常直播 websocket 流到达时才显示。
  */
 export function DanmakuComposer({
   siteId,
@@ -609,10 +608,8 @@ export function DanmakuComposer({
     if (!sendConfig || !roomId) return;
     let cancelled = false;
     setAvailability(null);
-    // Do not ask the backend while the explicit sending permission is still
-    // queued for persistence. Once it settles this effect runs again,
-    // preventing a stale disabled status from pinning the composer until the
-    // user re-enters.
+    // 显式发送权限还在等待持久化时不要询问后端。它落定后本副作用会再次运行，
+    // 避免一个过期的禁用状态把输入框钉住直到用户重进房间。
     if (danmakuSendPending) {
       setAvailability({
         send_enabled: danmakuSendEnabled,
@@ -658,8 +655,8 @@ export function DanmakuComposer({
   if (!sendConfig || !roomId || !isDanmakuSendSite(siteId)) return null;
 
   const config = sendConfig;
-  // Keep the narrowed room identity stable for async send callbacks. React
-  // may render a different room while an earlier request is still in flight.
+  // 让收窄后的房间身份对异步发送回调保持稳定。早先的请求仍在途时，
+  // React 可能已经渲染了另一个房间。
   const currentRoomId = roomId;
   const ready = availability?.available === true;
   const canSubmit = ready && draft.trim().length > 0 && !sending;
@@ -702,8 +699,8 @@ export function DanmakuComposer({
   }
 
   async function send() {
-    // State updates are asynchronous, so a ref closes the tiny gap in which
-    // repeated Enter/click events could otherwise submit the same draft twice.
+    // 状态更新是异步的，用一个 ref 填补微小间隙，
+    // 否则连续的 Enter/点击事件可能把同一份草稿提交两次。
     if (!canSubmit || sendInFlightRef.current) return;
     sendInFlightRef.current = true;
     setSending(true);
@@ -784,10 +781,8 @@ export function DanmakuComposer({
             aria-busy={sending}
             className={cn(
               COMPOSER_BUTTON_CLASS,
-              // Idle, the button is as quiet as the picker opposite it. Once
-              // the draft is actually sendable it fills in, so the primary
-              // action reads at a glance without a permanent bright block
-              // sitting in the player chrome.
+              // 空闲时按钮与对面的选择器一样低调。草稿真正可发送时才填充颜色，
+              // 使主操作一眼可辨，又不会在播放器 chrome 里常驻一块亮色。
               overlay
                 ? cn(
                     COMPOSER_OVERLAY_GHOST_CLASS,
@@ -799,9 +794,8 @@ export function DanmakuComposer({
                     canSubmit &&
                       "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
                   ),
-              // The disabled group already dims; a second opacity pass on the
-              // button makes the icon nearly invisible over video. Dim via
-              // colour above instead, so the affordance stays legible.
+              // 禁用组本身已经变暗；再给按钮叠一层透明度会让图标在视频上几乎不可见。
+              // 改为在上面的配色中变暗，保持可辨识度。
               "disabled:opacity-100",
             )}
           >

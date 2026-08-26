@@ -41,14 +41,14 @@ export function defaultDanmakuFontSize(mobile = isMobileClient()): number {
   return mobile ? DANMAKU_FONT_SIZE_MOBILE_DEFAULT : DANMAKU_FONT_SIZE_DESKTOP_DEFAULT;
 }
 
-/** Whole CSS pixels per second inside the supported scrolling-speed range. */
+/** 受支持滚动速度范围内的整数 CSS 像素每秒。 */
 export function parseDanmakuSpeed(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return DANMAKU_SPEED_DEFAULT;
   return Math.min(DANMAKU_SPEED_MAX, Math.max(DANMAKU_SPEED_MIN, Math.round(numeric)));
 }
 
-/** Keep the player text outline on the supported half-pixel increments. */
+/** 让播放器文字描边保持在支持的半像素步进上。 */
 export function parseDanmakuFontStroke(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return DANMAKU_FONT_STROKE_DEFAULT;
@@ -56,9 +56,9 @@ export function parseDanmakuFontStroke(value: unknown): number {
   return Math.min(DANMAKU_FONT_STROKE_MAX, Math.max(DANMAKU_FONT_STROKE_MIN, stepped));
 }
 
-// `settings_set` writes one complete object. Serialize writes so rapid room
-// controls (for example two slider commits) cannot resolve out of order and
-// restore an earlier snapshot over the newest setting.
+// `settings_set` 写入完整对象。串行化写入使快速的房间控件
+// （例如两次滑杆提交）不会乱序 resolve、
+// 用过期快照覆盖最新设置。
 let settingsWriteQueue: Promise<void> = Promise.resolve();
 let danmakuSendSettingEpoch = 0;
 let asrSettingEpoch = 0;
@@ -90,8 +90,8 @@ export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
 export const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
 /**
- * Background recording is unconditional, so this is the fixed start value of
- * the per-task "离开页面后继续录制" switch rather than a stored preference.
+ * 后台录制是无条件的，因此这是逐任务"离开页面后继续录制"开关的固定初始值，
+ * 而不是存储的偏好。
  */
 export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = true;
 export const RECORDING_AUTO_SPLIT_MINUTES_MIN = 0;
@@ -315,7 +315,7 @@ export const DANMAKU_MERGE_WINDOW_SECONDS_MIN = 0;
 export const DANMAKU_MERGE_WINDOW_SECONDS_MAX = 30;
 export const DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT = 10;
 
-/** Whole seconds inside 0..=30, where 0 disables merging; invalid values fall back to 10s. */
+/** 0..=30 内的整秒，0 表示关闭合并；非法取值回退 10s。 */
 export function parseDanmakuMergeWindowSeconds(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT;
@@ -335,7 +335,7 @@ function parseAsrWindowSeconds(value: unknown): number {
 type SettingsState = {
   theme: ThemeMode;
   siteId: string;
-  /** Platform opt-outs. */
+  /** 平台停用项。 */
   disabledSiteIds: SiteId[];
   proxy: string | null;
   danmakuOpacity: number;
@@ -350,7 +350,7 @@ type SettingsState = {
   qualityLevel: QualityLevel;
   playbackSoftSwitchEnabled: boolean;
   danmakuSendEnabled: boolean;
-  /** True while the local multi-platform sending permission reaches the backend. */
+  /** 本地多平台发送权限同步到后端期间为 true。 */
   danmakuSendPending: boolean;
   asrEnabled: boolean;
   asrProvider: AsrProvider;
@@ -363,15 +363,14 @@ type SettingsState = {
   asrTranslationEnabled: boolean;
   asrTranslationFrom: CaptionTranslationSourceLanguage;
   asrTranslationTo: CaptionTranslationLanguage;
-  /** True while the device-local ASR choice reaches the Rust backend. */
+  /** 设备本地 ASR 选择同步到 Rust 后端期间为 true。 */
   asrPending: boolean;
   /**
-   * In-memory only revision for a send-capable account cookie. It deliberately
-   * carries no credential data; consumers use it solely to invalidate cached
-   * permission checks after a successful account update.
+   * 可发送账号 cookie 的仅内存 revision。它刻意不携带任何凭据数据；
+   * 消费方只用它来在账号更新成功后失效缓存的权限检查。
    */
   danmakuCookieRevision: number;
-  /** Device-local custom IPTV M3U address; never included in profile packages. */
+  /** 设备本地自定义 IPTV M3U 地址；绝不纳入配置包。 */
   iptvCustomM3uUrl: string | null;
   recordingIncludeDanmaku: boolean;
   recordingAutoSplitMinutes: number;
@@ -379,9 +378,9 @@ type SettingsState = {
   ffmpegReconnectDelayMaxSeconds: number;
   ffmpegHlsSegmentRetryCount: number;
   recordingAssSettings: RecordingAssSettings;
-  /** True after backend load or the browser-only no-backend fallback. */
+  /** 后端加载完成或纯浏览器无后端兜底完成后为 true。 */
   hydratedFromBackend: boolean;
-  /** A real Tauri settings/schema error blocks the app until it is resolved. */
+  /** 真实的 Tauri 设置/schema 错误会阻塞应用直至解决。 */
   settingsLoadError: unknown | null;
   setTheme: (theme: ThemeMode) => void;
   setSiteId: (siteId: string) => void;
@@ -410,9 +409,9 @@ type SettingsState = {
   setFfmpegHlsSegmentRetryCount: (count: number) => void;
   setRecordingAssSettings: (patch: Partial<RecordingAssSettings>) => void;
   applyFromBackend: (settings: AppSettings) => void;
-  /** Load settings from Rust; backend becomes source of truth. */
+  /** 从 Rust 加载设置；此后后端为事实来源。 */
   loadFromBackend: () => Promise<void>;
-  /** Persist current settings (or partial merge) to Rust. */
+  /** 把当前设置（或部分合并）持久化到 Rust。 */
   persistToBackend: (patch?: Partial<AppSettings>) => Promise<void>;
 };
 
@@ -576,9 +575,8 @@ export const useSettingsStore = create<SettingsState>()(
         void get()
           .persistToBackend({ danmaku_send_enabled: danmakuSendEnabled })
           .finally(() => {
-            // Rapidly toggling on/off queues two whole-settings writes. Only
-            // the newest completion may clear the sync marker, otherwise the
-            // composer could query the old backend value in between them.
+            // 快速开关会排队两次完整设置写入。只有最新的完成才能清除同步标记，
+            // 否则输入框可能在两次写入之间查到旧的后端取值。
             if (epoch === danmakuSendSettingEpoch) {
               set({ danmakuSendPending: false });
             }
@@ -745,8 +743,8 @@ export const useSettingsStore = create<SettingsState>()(
         });
       },
       markDanmakuCookieChanged: () => {
-        // This is intentionally not persisted. It has no meaning across an
-        // app restart and must never contain the Cookie itself.
+        // 刻意不持久化。它在应用重启后没有意义，
+        // 且绝不能包含 Cookie 本身。
         set((state) => ({ danmakuCookieRevision: state.danmakuCookieRevision + 1 }));
       },
       setIptvCustomM3uUrl: (iptvCustomM3uUrl) => {
@@ -847,8 +845,8 @@ export const useSettingsStore = create<SettingsState>()(
             disabled_site_ids: disabledSiteIds,
           });
         } catch (error) {
-          // Browser-only development has no Rust settings source. A real Tauri
-          // schema error must remain observable instead of becoming defaults.
+          // 纯浏览器开发没有 Rust 设置来源。真实的 Tauri schema 错误必须保持可观察，
+          // 而不能变成默认值。
           if (isTauriUnavailableError(error)) {
             set({ hydratedFromBackend: true, settingsLoadError: null });
             return;
@@ -858,8 +856,8 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       persistToBackend: async (patch) => {
-        // Avoid clobbering backend fields (proxy, danmaku_*) with
-        // local defaults before loadFromBackend / applyFromBackend finishes.
+        // 避免在 loadFromBackend / applyFromBackend 完成前用本地默认值
+        // 覆盖后端字段（proxy、danmaku_*）。
         if (!get().hydratedFromBackend) {
           return;
         }
@@ -871,7 +869,7 @@ export const useSettingsStore = create<SettingsState>()(
             try {
               await invokeCmd<void>("settings_set", { settings: next });
             } catch {
-              // Ignore when not running under Tauri.
+              // 非 Tauri 环境下忽略。
             }
           });
         await settingsWriteQueue;
@@ -879,7 +877,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "rlive-settings-v2",
-      // Persist the small v2 local state needed for first paint; backend overwrites after load.
+      // 持久化首屏需要的少量 v2 本地状态；后端加载后覆盖。
       partialize: (s) => ({
         theme: s.theme,
         siteId: s.siteId,

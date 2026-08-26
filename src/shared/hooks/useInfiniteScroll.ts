@@ -10,11 +10,11 @@ type UseInfiniteScrollOptions = {
 };
 
 /**
- * Loads the next page shortly before the end-of-list sentinel is visible.
+ * 在列表末尾哨兵可见前不久加载下一页。
  *
- * A manual control remains available when IntersectionObserver is unavailable
- * (for example, in older embedded WebViews). Errors deliberately pause the
- * observer so a failed request is retried only by an explicit user action.
+ * IntersectionObserver 不可用时（例如较旧的内嵌 WebView）手动控制仍可用。
+ * 错误刻意暂停观察器，
+ * 失败的请求只由用户显式操作重试。
  */
 export function useInfiniteScroll({
   hasNextPage,
@@ -58,11 +58,10 @@ export function useInfiniteScroll({
       return;
     }
 
-    // Observe against the element that actually scrolls. `main` only clips —
-    // Shell puts `overflow-y-auto` on the page wrapper inside it — and a root
-    // that never scrolls computes visibility against a box the sentinel can sit
-    // permanently inside, so the observer keeps asking for the next page.
-    // `null` falls back to the viewport, which is still a scrolling box.
+    // 对着真正滚动的元素观察。`main` 只负责裁剪 —— Shell 把 `overflow-y-auto`
+    // 放在其内部的页面包装层上 —— 而永不滚动的 root 会以哨兵可以永远待在其中的盒子
+    // 计算可见性，观察器就会不停要下一页。`null` 回退到视口，
+    // 它仍是可滚动的盒子。
     const root = findVerticalScrollParent(target);
 
     const observer = new IntersectionObserver(

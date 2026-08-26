@@ -1,5 +1,4 @@
-//! Pure parsers and low-level helpers for the Bilibili live APIs.
-//! Ported from upstream simple_live_core `bilibili_site.dart`.
+//! Bilibili 直播 API 的纯解析器与底层辅助函数。
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,7 +15,7 @@ use crate::models::live::{
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
 pub const DEFAULT_REFERER: &str = "https://live.bilibili.com/";
 
-/// Character shuffle table for Bilibili WBI signing (upstream mixinKeyEncTab).
+/// Bilibili WBI 签名用的字符乱序表（上游的 mixinKeyEncTab）。
 const MIXIN_KEY_ENC_TAB: [usize; 64] = [
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
     28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
@@ -24,7 +23,7 @@ const MIXIN_KEY_ENC_TAB: [usize; 64] = [
 ];
 
 // ---------------------------------------------------------------------------
-// JSON helpers
+// JSON 辅助函数
 // ---------------------------------------------------------------------------
 
 fn as_str(v: &Value) -> String {
@@ -47,9 +46,9 @@ fn json_err(msg: impl Into<String>) -> AppError {
     AppError::new("bilibili_parse_error", msg).with_site("bilibili")
 }
 
-/// Strip Bilibili search highlight tags like `<em class="keyword">`.
+/// 去除 Bilibili 搜索结果中的高亮标签，如 `<em class="keyword">`。
 pub fn strip_em_tags(s: &str) -> String {
-    // Avoid adding the `regex` crate; char-scan is enough for `<...em...>`.
+    // 避免引入 `regex` crate；字符扫描足以处理 `<...em...>`。
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(start) = rest.find('<') {
@@ -86,12 +85,12 @@ fn cover_thumb(cover: &str, suffix: &str) -> String {
     }
 }
 
-/// Turn the Bilibili avatar field into a secure, directly loadable image URL.
+/// 把 Bilibili 的头像字段转换为安全、可直接加载的图片 URL。
 ///
-/// The API can return a protocol-relative `//i0.hdslb.com/...` value. That is
-/// not valid relative to Tauri's custom WebView protocol, so always make it
-/// explicit before handing it to the frontend. Keep any query/fragment after
-/// the CDN resize suffix rather than appending the suffix to the query string.
+/// API 可能返回协议相对形式的 `//i0.hdslb.com/...`。它相对于 Tauri 自定义
+/// WebView 协议不是有效地址，因此在交给前端之前总是补全协议。
+/// CDN 缩放后缀之后若还有 query/fragment，保持原样，
+/// 而不是把后缀追加到 query 字符串上。
 fn avatar_thumb(face: &str) -> String {
     let face = face.trim();
     if face.is_empty() {
@@ -113,9 +112,8 @@ fn avatar_thumb(face: &str) -> String {
         format!("https://{path}")
     };
 
-    // Do not repeatedly append a CDN transform when an upstream response is
-    // already resized. The last segment is the only part where Bilibili uses
-    // `@...` transformations.
+    // 当上游响应已经过缩放时，不要重复追加 CDN 变换。
+    // 最后一段是 Bilibili 唯一使用 `@...` 变换的部分。
     let has_transform = path
         .rsplit('/')
         .next()
@@ -128,10 +126,10 @@ fn avatar_thumb(face: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Pure parsers (fixture-testable)
+// 纯解析器（可用夹具测试）
 // ---------------------------------------------------------------------------
 
-/// Parse `room/v1/Area/getList` response body.
+/// 解析 `room/v1/Area/getList` 响应 body。
 pub fn parse_categories(raw: &str) -> AppResult<Vec<LiveCategory>> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("categories json: {e}")))?;
@@ -194,7 +192,7 @@ fn room_item_from_list_obj(item: &Value) -> LiveRoomItem {
     }
 }
 
-/// Parse `room/v1/Area/getRoomList` body. `page_size` defaults to 30 for has_more.
+/// 解析 `room/v1/Area/getRoomList` body。`page_size` 默认为 30（用于 has_more）。
 pub fn parse_category_rooms(raw: &str, page_size: usize) -> AppResult<RoomListPage> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("category rooms: {e}")))?;
@@ -208,7 +206,7 @@ pub fn parse_category_rooms(raw: &str, page_size: usize) -> AppResult<RoomListPa
     Ok(RoomListPage { has_more, items })
 }
 
-/// Parse recommend `getListByArea` body.
+/// 解析推荐 `getListByArea` body。
 pub fn parse_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("recommend: {e}")))?;
     let list = root
@@ -221,13 +219,12 @@ pub fn parse_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
     Ok(RoomListPage { has_more, items })
 }
 
-/// Parse Bilibili Live's signed-in homepage `index/getList` payload.
+/// 解析 Bilibili 直播已登录首页的 `index/getList` 负载。
 ///
-/// The homepage contains a short top recommendation strip followed by
-/// personalised modules. The rLive home view is a single room grid, so retain
-/// that display order, flatten module lists, and remove repeated rooms. The
-/// endpoint does not supply a stable next-page cursor, therefore this is
-/// deliberately a one-page result.
+/// 首页由顶部一小条推荐位加个性化模块组成。rLive 首页是单一房间网格，
+/// 因此保留其展示顺序、摊平模块列表并去除重复房间。
+/// 该接口不提供稳定的下一页游标，
+/// 因此刻意只做单页结果。
 pub fn parse_account_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("account recommend: {e}")))?;
@@ -266,7 +263,7 @@ pub fn parse_account_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
     })
 }
 
-/// Parse search `live` type body.
+/// 解析搜索 `live` 类型 body。
 pub fn parse_search_rooms(raw: &str) -> AppResult<RoomListPage> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("search: {e}")))?;
     let list = root
@@ -293,8 +290,8 @@ pub fn parse_search_rooms(raw: &str) -> AppResult<RoomListPage> {
     })
 }
 
-/// Parse `getInfoByRoom` data object into LiveRoomDetail.
-/// `danmaku` optional JSON for token/hosts stored in `raw`.
+/// 把 `getInfoByRoom` 的 data 对象解析为 LiveRoomDetail。
+/// `danmaku` 为可选 JSON，存放 token/主机列表到 `raw` 中。
 #[cfg(test)]
 fn parse_room_detail(
     room_info_root: &str,
@@ -345,7 +342,7 @@ pub fn parse_room_detail_from_data(
         .cloned()
         .unwrap_or_else(|| "broadcastlv.chat.bilibili.com".into());
 
-    // Viewer mid for WS auth (from cookie DedeUserID), NOT the streamer uid.
+    // WS 认证用的观众 mid（来自 cookie DedeUserID），不是主播 uid。
     let viewer_uid: i64 = cookie
         .split(';')
         .filter_map(|p| {
@@ -395,14 +392,14 @@ pub fn parse_room_detail_from_data(
     })
 }
 
-/// Extract playurl map from getRoomPlayInfo response.
+/// 从 getRoomPlayInfo 响应中提取 playurl map。
 pub fn read_playurl(result: &Value) -> AppResult<&Value> {
     result.pointer("/data/playurl_info/playurl").ok_or_else(|| {
         AppError::new("bilibili_play_info", "B站播放信息响应异常，请稍后重试").with_site("bilibili")
     })
 }
 
-/// Parse qualities from play-info response.
+/// 从 play-info 响应解析画质列表。
 pub fn parse_play_qualities(raw: &str) -> AppResult<Vec<LivePlayQuality>> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("play qualities: {e}")))?;
@@ -445,7 +442,7 @@ pub fn parse_play_qualities(raw: &str) -> AppResult<Vec<LivePlayQuality>> {
     Ok(qualities)
 }
 
-/// Parse play URLs from play-info response (with qn selected).
+/// 从 play-info 响应解析播放地址（含选定的 qn）。
 pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("play urls: {e}")))?;
     let playurl = read_playurl(&root)?;
@@ -484,7 +481,7 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
         }
     }
 
-    // Prefer non-mcdn hosts first (upstream sort).
+    // 优先使用非 mcdn 主机（与上游排序一致）。
     urls.sort_by(|a, b| {
         let a_m = a.contains("mcdn");
         let b_m = b.contains("mcdn");
@@ -513,11 +510,11 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
         .collect())
 }
 
-/// Parse the follow-list live metadata from `Room/get_info`.
+/// 从 `Room/get_info` 解析关注列表所需的直播元数据。
 ///
-/// This endpoint is intentionally used by follow refreshes instead of the
-/// room-detail endpoint: the latter resolves playback and danmaku metadata
-/// that a status badge does not need.
+/// 关注刷新刻意使用这个接口而不是房间详情接口：
+/// 后者会解析状态角标既不需要展示也不需要的
+/// 播放与弹幕会话元数据。
 pub fn parse_room_live_status(raw: &str) -> AppResult<LiveRoomStatus> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| json_err(format!("live status: {e}")))?;
@@ -536,7 +533,7 @@ pub fn parse_room_live_status(raw: &str) -> AppResult<LiveRoomStatus> {
     })
 }
 
-/// Parse buvid spi response.
+/// 解析 buvid spi 响应。
 pub fn parse_buvid(raw: &str) -> AppResult<(String, String)> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("buvid: {e}")))?;
     let data = root.get("data").cloned().unwrap_or(Value::Null);
@@ -546,7 +543,7 @@ pub fn parse_buvid(raw: &str) -> AppResult<(String, String)> {
     ))
 }
 
-/// Extract img_key / sub_key filenames from nav wbi_img.
+/// 从 nav 的 wbi_img 中提取 img_key / sub_key 文件名。
 pub fn parse_wbi_keys(raw: &str) -> AppResult<(String, String)> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("wbi keys: {e}")))?;
     let img_url = as_str(
@@ -581,7 +578,7 @@ pub fn get_mixin_key(origin: &str) -> String {
     s.chars().take(32).collect()
 }
 
-/// Sign query params with WBI (returns map including wts + w_rid).
+/// 用 WBI 对 query 参数签名（返回包含 wts + w_rid 的 map）。
 pub fn wbi_sign_params(
     mut params: BTreeMap<String, String>,
     img_key: &str,
@@ -591,7 +588,7 @@ pub fn wbi_sign_params(
     let mixin_key = get_mixin_key(&format!("{img_key}{sub_key}"));
     params.insert("wts".into(), wts.to_string());
 
-    // Filter "!'()*" from values, already sorted via BTreeMap.
+    // 从取值中过滤字符 "!'()*"，排序已由 BTreeMap 保证。
     let filtered: BTreeMap<String, String> = params
         .iter()
         .map(|(k, v)| {
@@ -615,7 +612,7 @@ pub fn wbi_sign_params(
     out
 }
 
-/// Percent-encode like Uri.encodeQueryComponent (encode space as %20).
+/// 按 Uri.encodeQueryComponent 的方式做百分号编码（空格编码为 %20）。
 fn urlencoding_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.as_bytes() {
@@ -639,14 +636,14 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Extract buvid3/buvid4 from cookie string if present.
+/// 若存在，从 cookie 字符串提取 buvid3/buvid4。
 pub fn buvid_from_cookie(cookie: &str) -> Option<(String, String)> {
     let b3 = extract_cookie_value(cookie, "buvid3").unwrap_or_default();
     let b4 = extract_cookie_value(cookie, "buvid4").unwrap_or_default();
-    // A browser export can contain only one of the two device IDs.  Keep the
-    // available value so the caller can fetch and merge only the missing one;
-    // a substring check such as `cookie.contains("buvid3")` also misclassifies
-    // unrelated cookie values as a device identifier.
+    // 浏览器导出可能只包含两个设备 id 之一。保留可用的那个值，
+    // 让调用方只需抓取并合并缺失的一个；
+    // 像 `cookie.contains("buvid3")` 这样的子串检查还会把无关的 cookie 值
+    // 误判成设备标识符。
     (!b3.is_empty() || !b4.is_empty()).then_some((b3, b4))
 }
 
@@ -713,7 +710,7 @@ mod tests {
         assert!(!page.has_more);
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.items[0].room_id, "10001");
-        // user_cover fallback
+        // user_cover 兜底
         assert!(page.items[1].cover.contains("c2.jpg"));
     }
 
@@ -736,7 +733,7 @@ mod tests {
         assert_eq!(detail.user_name, "详情主播");
         assert!(detail.user_avatar.contains("@100w_100h.webp"));
         assert_eq!(detail.raw["danmaku"]["buvid"], "b3");
-        // room_id stored as number for WS join
+        // room_id 以数字存储，供 WS 加入使用
         assert!(
             detail.raw["room_id"].as_i64().is_some() || detail.raw["room_id"].as_str().is_some()
         );
@@ -781,7 +778,7 @@ mod tests {
 
         let urls = parse_play_urls(raw).unwrap();
         assert_eq!(urls.len(), 2);
-        // non-mcdn first
+        // 非 mcdn 优先
         assert!(!urls[0].url.contains("mcdn"));
         assert!(urls[1].url.contains("mcdn"));
         assert!(urls[0].headers.contains_key("referer"));
@@ -825,7 +822,7 @@ mod tests {
         );
         assert_eq!(signed.get("wts").unwrap(), "1700000000");
         assert_eq!(signed.get("w_rid").unwrap().len(), 32);
-        // deterministic
+        // 保证确定性
         let mut params2 = BTreeMap::new();
         params2.insert("foo".into(), "1".into());
         params2.insert("bar".into(), "2".into());

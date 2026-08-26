@@ -1,4 +1,4 @@
-//! Tauri commands for the localhost media proxy (web player path).
+//! 本机媒体代理（Web 播放器路径）的 Tauri 命令。
 
 use std::collections::HashMap;
 
@@ -38,9 +38,8 @@ pub async fn stream_proxy_start(
             "playback session is empty",
         ));
     }
-    // The browser only ever connects to this loopback listener. Its upstream
-    // reqwest client must therefore receive the saved proxy explicitly; the
-    // WebView's own networking configuration cannot route HLS subresources.
+    // 浏览器只会连接这个回环监听器。因此它的上游 reqwest 客户端必须显式收到
+    // 已保存的代理设置；WebView 自身的网络配置无法为 HLS 子资源提供路由。
     let proxy = configured_proxy(&state)?;
     state
         .stream_proxy

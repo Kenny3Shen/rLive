@@ -287,9 +287,8 @@ describe("player session queue", () => {
       replacementStarted = true;
     });
 
-    // A browser can leave `HTMLMediaElement.play()` pending until the live
-    // stream produces its first segment. That must not retain the serialized
-    // proxy queue after this room has been left.
+    // 浏览器可能让 `HTMLMediaElement.play()` 挂起直到直播流产出第一个分片。
+    // 本房间离开后不得继续占住串行化的代理队列。
     expect(replacementStarted).toBe(true);
 
     oldSessionCurrent = false;

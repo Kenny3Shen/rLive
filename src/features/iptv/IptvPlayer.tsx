@@ -107,7 +107,7 @@ type IptvPlayerProps = {
   onReconnect?: () => void;
 };
 
-/** IPTV page adapter for the shared browser media lifecycle module. */
+/** 共享浏览器媒体生命周期模块的 IPTV 页面适配器。 */
 export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }: IptvPlayerProps) {
   const channelId = channel?.id ?? null;
   const channelUrl = channel?.url ?? null;
@@ -232,8 +232,8 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     setStatus(channelId ? "connecting" : "idle");
   }, [channelId, channelUrl, clearRetryTimer]);
 
-  // Manual refresh owns a fresh IPTV retry budget. Automatic retries increment
-  // only reconnectToken and therefore preserve their bounded attempt count.
+  // 手动刷新拥有全新的 IPTV 重试预算。自动重试只递增 reconnectToken，
+  // 因而保留其有界的尝试次数。
   useEffect(() => {
     clearRetryTimer();
     retryAttemptRef.current = 0;

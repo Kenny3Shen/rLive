@@ -17,12 +17,12 @@ export function PlatformScope({
   return createElement(PlatformScopeContext.Provider, { value }, children);
 }
 
-/** Returns the platform captured by a transition, when a page is being kept alive. */
+/** 页面被保活时返回过渡捕获的平台。 */
 export function usePlatformScope(): PlatformScopeValue | null {
   return useContext(PlatformScopeContext);
 }
 
-/** Current site from settings, normalized to a known and enabled `SiteId`. */
+/** 来自设置的当前站点，归一化为已知且启用的 `SiteId`。 */
 export function useSiteId(): SiteId {
   const siteId = useSettingsStore((s) => s.siteId);
   const disabledSiteIds = useSettingsStore((s) => s.disabledSiteIds);

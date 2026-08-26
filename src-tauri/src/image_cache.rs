@@ -1,10 +1,9 @@
-//! Best-effort persistent cache for remote image bodies.
+//! 远程图片内容的尽力而为持久缓存。
 //!
-//! Cache files contain the original image bytes and use an MD5 digest of the
-//! already allowlisted upstream URL as their name. The digest is only a cache
-//! key, not a security boundary: the proxy validates the upstream host before
-//! this module is called, and the hex-only path cannot contain user-controlled
-//! path separators.
+//! 缓存文件保存原始图片字节，并以已加入白名单的上游 URL 的 MD5 摘要作为
+//! 文件名。摘要只是缓存键，不是安全边界：
+//! 代理在本模块被调用前已校验上游主机，
+//! 且纯十六进制的路径不可能包含用户可控的路径分隔符。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,7 +14,7 @@ use serde::Serialize;
 use tokio::fs;
 use uuid::Uuid;
 
-/// Keep the image proxy's in-memory response bound and cache entry bound equal.
+/// 让图片代理的内存响应上限与缓存条目上限保持一致。
 pub const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(target_os = "android")]
@@ -25,9 +24,9 @@ const CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
 const CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const TOUCH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-/// A `put` writes at most `MAX_IMAGE_BYTES` and commits immediately, so a
-/// temporary file older than this cannot belong to an in-flight write: it is
-/// the residue of a process that died between `write` and `rename`.
+/// `put` 至多写 `MAX_IMAGE_BYTES` 并立即提交，因此早于该时限的临时文件
+/// 不可能属于进行中的写入：它是某个进程死在 `write` 与 `rename`
+/// 之间留下的残余。
 const ORPHAN_TTL: Duration = Duration::from_secs(60 * 60);
 const TEMPORARY_SUFFIX: &str = ".tmp-";
 const SWEEP_WRITE_INTERVAL: u64 = 64;
@@ -54,9 +53,8 @@ struct CacheEntry {
     modified: SystemTime,
 }
 
-/// Everything the cache directory holds. Committed entries are what `usage`
-/// reports and what the budget applies to; orphans are temporary files from
-/// interrupted writes, tracked separately so a sweep can reclaim them.
+/// 缓存目录中的全部内容。已提交条目是 `usage` 报告并受预算约束的部分；
+/// 孤儿文件是中断写入产生的临时文件，单独跟踪以便清扫时回收。
 #[derive(Debug, Default)]
 struct CacheSnapshot {
     entries: Vec<CacheEntry>,
@@ -139,9 +137,9 @@ impl ImageCache {
         let committed = match fs::rename(&temporary, &path).await {
             Ok(()) => true,
             Err(error) => {
-                // On Windows rename refuses an existing target. If another
-                // request won the race, the desired cache entry is already
-                // present and the temporary file can simply be discarded.
+                // Windows 上 rename 会拒绝已存在的目标。如果是另一个请求赢得了竞争，
+                // 期望的缓存条目已经存在，
+                // 直接丢弃临时文件即可。
                 let target_exists = fs::metadata(&path).await.is_ok();
                 if !target_exists {
                     tracing::debug!(error = %error, "commit image cache file failed");
@@ -159,9 +157,9 @@ impl ImageCache {
         }
     }
 
-    /// Reports committed cache entries. Temporary files from interrupted
-    /// writes are excluded: they are garbage the next sweep reclaims, not
-    /// cache content the user can benefit from.
+    /// 只报告已提交的缓存条目。中断写入留下的临时文件不计入：
+    /// 它们是下一次清扫会回收的垃圾，
+    /// 不是用户能受益的缓存内容。
     pub async fn usage(&self) -> CacheUsage {
         let entries = self.snapshot().await.entries;
         CacheUsage {
@@ -169,8 +167,8 @@ impl ImageCache {
                 .iter()
                 .fold(0_u64, |total, entry| total.saturating_add(entry.bytes)),
             files: entries.len() as u64,
-            // The root is canonicalized, so on Windows it carries the `\\?\`
-            // verbatim prefix that must not reach the UI or a native dialog.
+            // 根目录已被规范化，因此在 Windows 上带有 `\\?\` verbatim 前缀，
+            // 不能让它进入 UI 或原生对话框。
             path: crate::app_paths::path_to_string(&self.root),
         }
     }
@@ -186,15 +184,15 @@ impl ImageCache {
                 ));
             }
         }
-        // Recreate the (now empty) directory so the path reported by `usage`
-        // stays browsable from the settings page.
+        // 重建（现已为空的）目录，使 `usage` 报告的路径
+        // 仍可从设置页打开浏览。
         self.ensure_root().await;
         self.writes.store(0, Ordering::Relaxed);
         Ok(())
     }
 
-    /// Best-effort: the cache itself creates what it needs on write, but the
-    /// settings page offers to open this directory before anything is cached.
+    /// 尽力而为：缓存自身会在写入时创建所需目录，
+    /// 但设置页可能在任何内容被缓存之前就提供打开该目录的入口。
     pub(crate) async fn ensure_root(&self) {
         if let Err(error) = fs::create_dir_all(&self.root).await {
             tracing::debug!(error = %error, "create image cache root failed");
@@ -213,8 +211,8 @@ impl ImageCache {
         {
             return;
         }
-        // Clears the flag even if the sweep panics or its task is aborted, so
-        // one failure cannot disable eviction for the rest of the process.
+        // 即使清扫 panic 或任务被中止也要清除该标志，
+        // 这样一次失败不会禁用进程剩余生命周期的淘汰机制。
         let _guard = SweepGuard(&self.sweeping);
 
         self.sweep_inner(budget).await;
@@ -268,9 +266,9 @@ impl ImageCache {
         self.root.join(&key[..2]).join(key)
     }
 
-    /// Walks the two-level cache tree in one blocking task. The directory can
-    /// hold thousands of files, and a `tokio::fs` walk would dispatch a
-    /// separate blocking job per `read_dir` and per `metadata`.
+    /// 在一个阻塞任务里遍历两层缓存树。目录可能持有数千个文件，
+    /// 而 `tokio::fs` 遍历会为每次 `read_dir` 和每次 `metadata`
+    /// 分别派发一个阻塞任务。
     async fn snapshot(&self) -> CacheSnapshot {
         let root = self.root.clone();
         tokio::task::spawn_blocking(move || collect_snapshot(&root))
@@ -370,8 +368,8 @@ fn temporary_file_name(key: &str) -> String {
     format!("{key}{TEMPORARY_SUFFIX}{}", Uuid::new_v4().simple())
 }
 
-/// Matches the names `temporary_file_name` produces. Anything else in the
-/// cache tree is left alone: this module must only reclaim its own files.
+/// 匹配 `temporary_file_name` 生成的名字。缓存树中的其他内容一概不动：
+/// 本模块只能回收自己的文件。
 fn is_orphan_file_name(value: &str) -> bool {
     let Some((key, suffix)) = value.split_once(TEMPORARY_SUFFIX) else {
         return false;
@@ -381,7 +379,7 @@ fn is_orphan_file_name(value: &str) -> bool {
         && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Releases the sweep flag on every exit path, including unwind.
+/// 在每条退出路径（包括 unwind）上都释放清扫标志。
 struct SweepGuard<'a>(&'a AtomicBool);
 
 impl Drop for SweepGuard<'_> {
@@ -572,7 +570,7 @@ mod tests {
         }
         set_modified(&stale, Duration::from_secs(2 * 60 * 60));
 
-        // Temporary files occupy disk but are not cache content.
+        // 临时文件占用磁盘，但不属于缓存内容。
         let usage = cache.usage().await;
         assert_eq!(usage.files, 1);
         assert_eq!(usage.bytes, b"\x89PNG\r\n\x1a\ncache".len() as u64);

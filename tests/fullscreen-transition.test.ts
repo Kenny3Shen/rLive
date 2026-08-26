@@ -37,8 +37,7 @@ function fakeRoot(): {
 
 describe("fullscreen inset freeze", () => {
   test("only the inset-driven mobile shell needs the freeze", () => {
-    // Desktop swaps to a native window fullscreen and carries no safe-area
-    // padding, so there is nothing to pin.
+    // 桌面切换为原生窗口全屏且不带安全区内边距，因此没有可钉住的东西。
     expect(shouldFreezeFullscreenInsets("desktop")).toBe(false);
     expect(shouldFreezeFullscreenInsets("android")).toBe(true);
     expect(shouldFreezeFullscreenInsets("ios")).toBe(true);
@@ -64,7 +63,7 @@ describe("fullscreen inset freeze", () => {
     const release = beginFullscreenTransition(root, "24px");
 
     release();
-    // A late timeout must not clear a freeze a newer transition installed.
+    // 迟到的超时不得清除更新一次过渡安装的冻结。
     root.setAttribute(FULLSCREEN_TRANSITION_ATTRIBUTE, "true");
     release();
 
@@ -74,7 +73,7 @@ describe("fullscreen inset freeze", () => {
   test("skips the freeze when there is no padding to hold still", () => {
     const { root, attributes, properties } = fakeRoot();
 
-    // A zero inset would pin nothing while still suppressing a later change.
+    // 为零的 inset 钉不住任何东西，但仍会抑制之后的变更。
     beginFullscreenTransition(root, frozenSafeAreaTopValue("0px"));
     beginFullscreenTransition(root, frozenSafeAreaTopValue(""));
     beginFullscreenTransition(root, frozenSafeAreaTopValue(null));

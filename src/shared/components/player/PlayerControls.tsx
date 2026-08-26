@@ -97,8 +97,8 @@ export function showSecondaryPlayerControls(compact: boolean, portrait: boolean)
 }
 
 /**
- * Mobile fullscreen already exposes edge-swipe volume and hides the side panel
- * chrome, so the bar drops those two buttons to keep the stage uncluttered.
+ * 移动端全屏已经暴露边缘滑动音量并隐藏了侧面板 chrome，
+ * 因此控制条去掉这两个按钮保持舞台简洁。
  */
 export function showPlayerVolumeControl(
   compact: boolean,
@@ -123,17 +123,14 @@ export function showPlayerControlsCenterSlot(compact: boolean, fullscreen: boole
 }
 
 /**
- * Whether the overlay chrome should reserve room for the system gesture bar.
+ * 浮层 chrome 是否应为系统手势栏预留空间。
  *
- * `env(safe-area-inset-bottom)` describes the window, not this element. The
- * inset is only real padding when the controls actually sit on the bottom
- * window edge: fullscreen, or a player that fills the viewport down to it.
- * Portrait rooms stack danmaku below the picture, so the controls float over
- * the video's bottom edge with the panel — not the gesture bar — underneath.
- * Padding there would push the buttons up off the picture by the inset height,
- * which is exactly the gap that shows up on a cold start (Android reports the
- * inset) and disappears after a fullscreen round trip (the WebView leaves it
- * collapsed at 0) — same layout, two different renderings of the same bug.
+ * `env(safe-area-inset-bottom)` 描述的是窗口而不是本元素。只有当控件真的位于
+ * 窗口底边时 inset 才是真实的内边距：全屏状态，或播放器铺满视口直达底边时。
+ * 竖屏房间的弹幕堆叠在画面之下，控件悬浮于视频底边之上，
+ * 其下是面板而不是手势栏。在那里加内边距会把按钮抬高 inset 高度离开画面 ——
+ * 这正是冷启动时出现（Android 上报 inset）、全屏往返后消失（WebView 使其塌缩为
+ * 0）的那道缝隙：同一布局，同一 bug 的两种表现。
  */
 export function playerControlsAvoidSystemGestureBar(
   fullscreen: boolean,
@@ -148,7 +145,7 @@ export type PlayerControlsProps = {
   muted?: boolean;
   audioOnly?: boolean;
   sidePanelOpen?: boolean;
-  /** Changes with the responsive side-panel presentation (rail vs. drawer). */
+  /** 随响应式侧面板形态（侧栏 vs 抽屉）变化。 */
   sidePanelLabel?: string;
   osdOn?: boolean;
   asrVisible?: boolean;
@@ -171,38 +168,37 @@ export type PlayerControlsProps = {
   pictureInPictureActive?: boolean;
   pictureInPictureDisabled?: boolean;
   disabled?: boolean;
-  /** Use when controls are rendered over the bottom edge of the video. */
+  /** 控件绘制在视频底边之上时使用。 */
   overlay?: boolean;
   /**
-   * Set when content (portrait danmaku panel, page footer) is stacked below
-   * the player, so the controls do not sit on the window's bottom edge and
-   * must not reserve space for the system gesture bar.
+   * 当内容（竖屏弹幕面板、页面页脚）堆叠在播放器下方时设置，
+   * 使控件不落在窗口底边，
+   * 也就不必为系统手势栏预留空间。
    */
   stackedBelowPlayer?: boolean;
-  /** Optional compact content centered between transport and room controls. */
+  /** 可选的紧凑内容，居中放置于传输控制与房间控制之间。 */
   centerSlot?: ReactNode;
-  /** Optional full-width media timeline rendered above the transport row. */
+  /** 可选的全宽媒体时间轴，渲染在传输控制行之上。 */
   timeline?: ReactNode;
-  /** Feature-specific controls appended to the shared playback settings menu. */
+  /** 追加到共享播放设置菜单的功能专属控件。 */
   playbackSettings?: ReactNode;
   playbackSettingsTitle?: string;
   playbackSettingsLabel?: string;
   playbackSettingsDisabled?: boolean;
   /**
-   * Compact viewport (portrait phones + short landscape). Drops desktop-only
-   * keyboard hints from labels so the chrome reads shorter on a small screen.
+   * 紧凑视口（竖屏手机 + 较矮横屏）。从标签中去掉仅限桌面的键盘提示，
+   * 使 chrome 在小屏幕上读起来更短。
    */
   compact?: boolean;
   /**
-   * Portal target for the settings/volume popovers. Under a `:fullscreen`
-   * ancestor the top layer owns the stacking context, so a portal rendered to
-   * <body> stacks beneath the fullscreen element — render inside the stage
-   * instead so the popover stays above the controls bar.
+   * 设置/音量 popover 的 Portal 目标。`:fullscreen` 祖先之下 top layer 拥有
+   * 堆叠上下文，渲染进 <body> 的 portal 会堆在全屏元素之下 ——
+   * 改为渲染进舞台内部，popover 才能保持在控制条上方。
    */
   portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
   /**
-   * The menu content is portalled outside the player stage. Tell the stage
-   * when one is open so its idle timer cannot fade out beneath a menu.
+   * 菜单内容经 portal 渲染在播放器舞台之外。菜单打开时告诉舞台，
+   * 使其空闲计时器不能在菜单下面淡出。
    */
   onOverlayInteractionChange?: (open: boolean) => void;
   refreshDisabled?: boolean;
@@ -231,24 +227,23 @@ type ControlButtonProps = Omit<
 > & {
   label: string;
   children: ReactNode;
-  /** Desktop hover tooltip. Disabled on compact touch layouts. */
+  /** 桌面悬停提示框。紧凑触摸布局下禁用。 */
   tooltip?: boolean;
   tooltipContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
 };
 
 /**
- * Video chrome reads from further away than in-page buttons, so the glyphs run
- * one small step above the shared button default (size-4).
+ * 视频 chrome 的阅读距离比页面内按钮更远，因此图标比共享按钮默认值
+ * （size-4）大一小档。
  *
- * These three are exported because the fullscreen top HUD draws its own button
- * outside this bar; sharing the classes keeps the two chrome layers from
- * drifting apart in glyph size, hit area or focus treatment.
+ * 导出这三个是因为全屏顶部 HUD 在本控制条之外绘制自己的按钮；
+ * 共享这些类使两层 chrome 的图标尺寸、命中区域和焦点处理不会漂移。
  */
 export const PLAYER_CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-4.5";
-/** Player chrome stays compact even when the shared coarse-pointer floor is 44px. */
+/** 即使共享粗指针下限是 44px，播放器 chrome 也保持紧凑。 */
 export const PLAYER_CONTROL_BUTTON_CLASS =
   "size-9 [@media(pointer:coarse)]:size-9! [@media(pointer:coarse)]:min-h-9! [@media(pointer:coarse)]:min-w-9! [@media(pointer:coarse)]:touch-manipulation";
-/** Trim for a chrome button drawn over video: white glyph on a scrim. */
+/** 绘制在视频上的 chrome 按钮裁剪：遮罩上的白色图标。 */
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
   "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-ring-overlay drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]";
 const CONTROL_ICON_CLASS = PLAYER_CONTROL_ICON_CLASS;
@@ -288,7 +283,7 @@ function ControlButton({
   );
 }
 
-/** Shared React controls kept separate from each feature's media lifecycle. */
+/** 与各功能媒体生命周期分离的共享 React 控件。 */
 export function PlayerControls({
   paused,
   volume,
@@ -351,10 +346,9 @@ export function PlayerControls({
   const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
   const [asrSettingsOpen, setAsrSettingsOpen] = useState(false);
   const [asrSettingsError, setAsrSettingsError] = useState<string | null>(null);
-  // Mobile settings open as a drawer: bottom sheet in portrait, right side in
-  // landscape. The shared hook resolves orientation on the first paint and on
-  // change from one source, so control density never renders at desktop size
-  // for a frame before settling.
+  // 移动端设置以抽屉打开：竖屏为底部抽屉、横屏为右侧抽屉。共享 hook 在首次
+  // 绘制和变化时从单一来源解析方向，使控件密度绝不会有渲染成一帧桌面尺寸
+  // 才稳定下来的情况。
   const portrait = usePortraitOrientation();
   const showSecondaryControls = showSecondaryPlayerControls(compact, portrait);
   const showVolumeControl = showPlayerVolumeControl(compact, portrait, fullscreen);
@@ -374,8 +368,7 @@ export function PlayerControls({
       ? "退出全屏（F）"
       : "全屏（F）";
   const overlayButtonClass = overlay ? PLAYER_OVERLAY_CONTROL_BUTTON_CLASS : undefined;
-  // Option rows come from the shared glass module so the player popups, the
-  // settings drawer and the room sheet cannot drift apart.
+  // 选项行来自共享玻璃模块，使播放器弹窗、设置抽屉与房间抽屉不会漂移。
   const overlayStreamSettingsOptionClass = glassOptionClass({ overlay }) || undefined;
   const overlayInteractionOpen = volumeOpen || streamSettingsOpen || asrSettingsOpen;
 
@@ -411,8 +404,8 @@ export function PlayerControls({
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
-    // The Select stores its index as the value. Do not expose that internal
-    // value (or an upstream numeric-only label) in the player chrome.
+    // Select 以下标作为取值。不要把这个内部取值（或上游纯数字标签）
+    // 暴露在播放器 chrome 中。
     if (!label || /^(?:rate)?\d+$/i.test(label)) {
       return ["原画", "蓝光", "超清", "高清", "流畅", "标清"][index] ?? "可用清晰度";
     }
@@ -433,9 +426,8 @@ export function PlayerControls({
     .join("，");
   const closeStreamSettings = () => setStreamSettingsOpen(false);
   /**
-   * Shared trigger glyph. On desktop this button *is* the popover trigger, so it
-   * doubles as the positioning anchor — rendering a separate anchor would leave a
-   * stray default-variant button visible in the bar.
+   * 共享触发图标。桌面端这个按钮*就是* popover 触发器，兼任定位锚点 ——
+   * 单独渲染锚点会让一个多余默认变体按钮留在控制条里。
    */
   const streamSettingsTriggerProps = {
     variant: "ghost",
@@ -454,7 +446,7 @@ export function PlayerControls({
   const AudioOnlyControlIcon = audioOnlyControl.icon === "headphones" ? Headphones : VideoOff;
   const VolumeControlIcon = volumeControl.icon === "volume-x" ? VolumeX : Volume2;
   const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
-  /** Shared body of the stream settings popover/drawer. */
+  /** 流设置 popover/抽屉的共享主体。 */
   const streamSettingsBody = (
     <>
       {qualities.length > 0 && (
@@ -671,14 +663,12 @@ export function PlayerControls({
         timeline ? "flex-col items-stretch gap-0" : "items-center gap-1",
         compact && !timeline && "justify-between gap-0.5",
         overlay
-          ? // A scrim that fades up into the picture, the way ordinary video
-            // players draw their bottom chrome — no top border, no blur, no
-            // panel edge. The gradient reaches every player edge; safe-area
-            // spacing stays inside the surface so it never creates a gutter.
-            // The bottom inset applies only when the chrome really sits on the
-            // window edge (see playerControlsAvoidSystemGestureBar).
-            // Extra top padding gives the fade room to resolve before the
-            // first control.
+          ? // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部， 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效 （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距 给渐变留出在第一个控件之前化解的空间。
+            // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、
+            // 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部，
+            // 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效
+            // （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距
+            // 给渐变留出在第一个控件之前化解的空间。
             cn(
               "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
               compact ? "pt-1.5" : "pt-3",
@@ -746,8 +736,7 @@ export function PlayerControls({
                 glass
                 className={cn(
                   "w-auto items-center gap-2 p-2.5",
-                  // Same material as the settings popup beside it, so the two
-                  // control-bar popups read as one family.
+                  // 与其旁的设置弹窗相同材质，使两个控制条弹窗看起来属于同一家族。
                   glassPanelClass({ overlay }),
                 )}
               >
@@ -834,9 +823,8 @@ export function PlayerControls({
                     container={portalContainer}
                     glass
                     className={cn(
-                      // Over video the drawer needs the darker tint; both
-                      // contexts now supply their material through the helper,
-                      // so `glass` is unconditional and only drops `bg-popover`.
+                      // 视频之上抽屉需要更深色调；两种上下文现在都经由辅助函数提供材质，
+                      // 因此 `glass` 是无条件的，只去掉 `bg-popover`。
                       glassPanelClass({ overlay }),
                     )}
                   >

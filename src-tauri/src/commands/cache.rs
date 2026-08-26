@@ -1,4 +1,4 @@
-//! Tauri commands for the persistent local image cache.
+//! 持久化本地图片缓存的 Tauri 命令。
 
 use tauri::State;
 

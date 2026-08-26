@@ -21,9 +21,9 @@ import { cn } from "@/lib/utils";
 
 type PullToRefreshProps = Omit<ComponentPropsWithoutRef<"div">, "onRefresh"> & {
   onRefresh: () => void | Promise<unknown>;
-  /** When true, pull tracking is disabled (for example during an in-flight refetch). */
+  /** 为 true 时禁用下拉跟踪（例如刷新请求在途期间）。 */
   disabled?: boolean;
-  /** External pending flag; combined with the component's own promise state. */
+  /** 外部 pending 标志；与组件自身的 promise 状态合并。 */
   refreshing?: boolean;
   children: ReactNode;
 };
@@ -35,12 +35,12 @@ type PullState = {
 };
 
 /**
- * Touch pull-to-refresh for list pages.
+ * 列表页的触摸下拉刷新。
  *
- * Uses non-passive capture touch listeners on the page scroller (`main`) so
- * Android WebView cannot steal the downward overscroll before JS runs. React
- * pointer handlers alone are not enough: the browser claims the gesture for
- * scrolling and never delivers preventDefault-capable move events.
+ * 在页面滚动容器（`main`）上使用非 passive 的捕获阶段 touch 监听器，
+ * 使 Android WebView 无法在 JS 运行之前抢走向下的过度滚动。仅靠 React 指针
+ * 处理器不够：浏览器会把该手势认领给滚动，
+ * 永远不会派发可 preventDefault 的 move 事件。
  */
 export function PullToRefresh({
   onRefresh,
@@ -61,7 +61,7 @@ export function PullToRefresh({
   const pendingDraggingRef = useRef(false);
   const distanceFrameRef = useRef<number | null>(null);
   const [localRefreshing, setLocalRefreshing] = useState(false);
-  // Parent often passes `false`; `??` would ignore localRefreshing. OR them.
+  // 父组件常传 `false`；`??` 会忽略 localRefreshing。改用 OR。
   const refreshing = Boolean(refreshingProp) || localRefreshing;
   const disabledRef = useRef(disabled);
   const refreshingRef = useRef(refreshing);
@@ -130,8 +130,8 @@ export function PullToRefresh({
   }, []);
 
   useLayoutEffect(() => {
-    // Re-apply after React swaps the idle arrow for the loading glyph, without
-    // putting the high-frequency drag distance back into component state.
+    // React 把空闲箭头换成加载图标之后重新应用，
+    // 同时不把高频拖拽距离放回组件状态。
     applyDistance(distanceRef.current, false);
   }, [applyDistance, refreshing]);
 
@@ -146,8 +146,8 @@ export function PullToRefresh({
     try {
       await onRefreshRef.current();
     } catch {
-      // Queries and mutations own their visible error state/toast. The gesture
-      // still needs to settle without leaking an unhandled rejection.
+      // 查询与变更拥有各自的可见错误状态/toast。手势仍需正常收尾，
+      // 且不泄漏未处理的 rejection。
     } finally {
       refreshingRef.current = refreshingPropRef.current;
       setLocalRefreshing(false);
@@ -201,7 +201,7 @@ export function PullToRefresh({
         pull.active = true;
       }
 
-      // Non-passive listener: stop the page scroller from eating the overscroll.
+      // 非 passive 监听器：阻止页面滚动容器吞掉过度滚动。
       event.preventDefault();
       updateDistance(pullToRefreshDistance(deltaY), true);
     };

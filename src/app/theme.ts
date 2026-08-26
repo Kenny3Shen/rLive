@@ -33,8 +33,8 @@ export function applyTheme(theme: ThemeMode) {
 }
 
 /**
- * Viewport-relative geometry avoids Android WebView's device-pixel scaling of
- * CSS px lengths inside the View Transition pseudo-tree.
+ * 采用视口相对的几何尺寸，规避 Android WebView 对 View Transition 伪树内
+ * CSS px 长度做的设备像素缩放。
  */
 export function themeRevealGeometry(
   origin: ThemeRevealOrigin,
@@ -50,8 +50,8 @@ export function themeRevealGeometry(
   return {
     x: `${((x / width) * 100).toFixed(3)}vw`,
     y: `${((y / height) * 100).toFixed(3)}vh`,
-    // One extra vmax covers rounding at the snapshot edge without spending a
-    // noticeable part of the easing curve outside the viewport.
+    // 多出的一个 vmax 用于吸收快照边缘的舍入误差，
+    // 而不必让缓动曲线的可观部分花费在视口之外。
     radius: `${((radius / maxDimension) * 100 + 1).toFixed(3)}vmax`,
   };
 }
@@ -72,7 +72,7 @@ function updateThemeImmediately(updateTheme: () => void): ThemeRevealTransition 
   return { ready: complete, finished: complete };
 }
 
-/** Reveals the newly applied theme outwards from the activating control. */
+/** 从触发控件向外揭示新应用的主题。 */
 export function revealThemeAt(
   origin: ThemeRevealOrigin,
   updateTheme: () => void,
@@ -108,9 +108,8 @@ export function revealThemeAt(
 
   activeThemeTransition = transition;
 
-  // The reveal itself is one CSS animation on the new snapshot. Keeping the
-  // timing inside the View Transition pseudo-tree makes `finished` the single
-  // source of truth instead of racing a separate WAAPI Animation.
+  // 揭示本身就是新快照上的一段 CSS 动画。把时序留在 View Transition 伪树内，
+  // 让 `finished` 成为唯一事实来源，而不是与另一个 WAAPI Animation 竞争。
   const ready = transition.ready
     .catch(() => {
       if (activeThemeTransition === transition) transition.skipTransition();

@@ -247,7 +247,7 @@ function isDanmakuSendCookieSite(siteId: SiteId): boolean {
   return siteId === "bilibili" || siteId === "douyu" || siteId === "huya" || siteId === "douyin";
 }
 
-/** Huya UDB serves a ready-made PNG; other platforms return encodeable payloads. */
+/** 虎牙 UDB 直接提供现成的 PNG；其他平台返回可编码的负载。 */
 function isHostedQrImageUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -381,8 +381,7 @@ function QrLogin({
           <div className="rounded-xl border border-border-subtle bg-white p-3 text-neutral-500 shadow-sm">
             {session ? (
               isHostedQrImageUrl(session.qr_code_url) ? (
-                // Huya UDB returns a PNG from getQrImg; other platforms give a
-                // payload string that QRCodeSVG encodes locally.
+                // 虎牙 UDB 的 getQrImg 返回 PNG；其他平台给出由 QRCodeSVG 本地编码的负载字符串。
                 <img
                   src={session.qr_code_url}
                   alt={`${siteName}登录二维码`}
@@ -459,9 +458,8 @@ function AccountCard({
   const inputId = `${siteId}-cookie`;
 
   const refreshCookieDependentQueries = useCallback(() => {
-    // The Cookie write has already succeeded at this point. A failed network
-    // refresh must not turn that successful account update into a UI error;
-    // the affected query keeps its own error state and remains stale to retry.
+    // 此时 Cookie 写入已经成功。一次失败的网络刷新不得把成功的账号更新变成 UI 错误；
+    // 受影响的查询保留自己的错误状态并保持过期以便重试。
     void invalidateCookieDependentSiteQueries(queryClient, siteId).catch(() => {});
   }, [queryClient, siteId]);
 
@@ -585,7 +583,7 @@ function AccountCard({
         ? "已登录"
         : "未登录";
 
-  // Auto logout when cookie is expired
+  // Cookie 过期时自动登出
   useEffect(() => {
     if (profileLoading || !expired || !hasCookie) return;
 
@@ -601,7 +599,7 @@ function AccountCard({
           refreshCookieDependentQueries();
         }
       } catch (error) {
-        // Silent failure - user can still manually logout
+        // 静默失败 —— 用户仍可手动登出
         console.error("Auto logout failed:", error);
       }
     };
@@ -895,8 +893,7 @@ function PlaybackSettingsResetField() {
     setError(null);
     try {
       const store = useSettingsStore.getState();
-      // Turn ASR off first so the remaining field resets cannot restart a
-      // recognition session mid-way.
+      // 先关闭 ASR，使剩余字段的重置不会在中途重启识别会话。
       if (!mobileClient && store.asrEnabled) {
         await store.setAsrEnabled(false);
       }
@@ -1125,8 +1122,8 @@ function AsrModelField() {
                 {actionError ?? presentation.message}
               </FieldError>
             ) : (
-              // Steady-state copy (ready/disabled summaries) stays hidden;
-              // only transient progress such as a model download shows here.
+              // 稳态文案（就绪/禁用摘要）保持隐藏；
+              // 这里只显示模型下载之类的瞬态进度。
               enabled &&
               presentation.busy && (
                 <FieldDescription role="status" aria-live="polite">
@@ -1517,7 +1514,7 @@ function AppearanceSettings() {
   );
 }
 
-/** Mobile does not expose an explicit light/dark setting in the settings page. */
+/** 移动端不在设置页暴露明确的明暗模式选择。 */
 export function showExplicitThemeSettings(mobileClient: boolean): boolean {
   return !mobileClient;
 }
@@ -1699,8 +1696,8 @@ function AboutSettings() {
 
   function openProjectHomepage() {
     void openUrl(PROJECT_HOMEPAGE_URL).catch(() => {
-      // Keep the link useful in a browser-based development preview, where
-      // the native opener plugin is intentionally unavailable.
+      // 让链接在基于浏览器的开发预览中仍然有用，
+      // 那里刻意不提供原生 opener 插件。
       window.open(PROJECT_HOMEPAGE_URL, "_blank", "noopener,noreferrer");
     });
   }
@@ -1817,8 +1814,8 @@ export function SettingsPage() {
     else setCategory(null, true);
   }
 
-  // Category bodies stay keyed here so the overview navigation changes only
-  // the page shell; every existing setting and persistence path remains intact.
+  // 分类主体保持此处的 key，使概览导航只改变页面外壳；
+  // 每个既有设置与持久化路径原样保留。
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
     playback: (
       <SettingsContent title="播放">
@@ -2103,9 +2100,8 @@ export function SettingsPage() {
         settings: boolean;
       }>("profile_import", { path });
       await loadFromBackend();
-      // Import can change settings as well as follows/history. Mark every
-      // cached page stale and immediately refresh pages currently on screen,
-      // so the shell cannot show an old platform or stale local data.
+      // 导入不仅改变关注/历史，也可能改变设置。把每个缓存页标记为过期并立即刷新
+      // 当前屏幕上的页面，使外壳无法展示旧平台或过期的本地数据。
       await queryClient.invalidateQueries({ refetchType: "active" });
       setProfileStatus(
         `已导入：${r.follows} 个主播关注、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,

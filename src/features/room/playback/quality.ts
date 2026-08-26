@@ -1,9 +1,6 @@
 import type { QualityLevel } from "@/shared/types/player";
 
-/**
- * Map a Simple Live–style quality preference onto a qualities list.
- * List order is assumed best-first (Bilibili / simple_live_core convention).
- */
+/** 把画质偏好映射到画质列表。列表顺序假定按优劣排列。 */
 export function pickDefaultQualityIndex(length: number, level: QualityLevel = "high"): number {
   if (length <= 0) return 0;
   if (level === "high") return 0;

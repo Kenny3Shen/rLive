@@ -26,11 +26,11 @@ function withValue(params: URLSearchParams, key: string, value: string | null | 
 function withSource(params: URLSearchParams, source: PlaylistSource | undefined) {
   if (!source) return;
   params.set("source", source.id);
-  // A custom address can contain a subscriber token. It is intentionally read
-  // from device-local settings instead of being written into history or links.
+  // 自定义地址可能包含订阅 token。它刻意从设备本地设置读取，
+  // 而不写入历史或链接。
 }
 
-/** Keep discovery selections in the URL so Back returns to the same list. */
+/** 把发现页的选择保存在 URL 中，Back 即可回到同一列表。 */
 export function iptvHomePath({ source, group, query }: IptvHomePathOptions = {}): string {
   const params = new URLSearchParams();
   withSource(params, source);
@@ -40,7 +40,7 @@ export function iptvHomePath({ source, group, query }: IptvHomePathOptions = {})
   return search ? `/iptv?${search}` : "/iptv";
 }
 
-/** A player route identifies both the playlist and its channel for reload-safe playback. */
+/** 播放路由同时标识播放列表及其频道，实现可安全重载的播放。 */
 export function iptvPlayerPath({
   source,
   channelUrl,
@@ -56,14 +56,14 @@ export function iptvPlayerPath({
   return `/iptv/play?${params.toString()}`;
 }
 
-/** Open a user-provided media URL in the shared immersive player. */
+/** 在共享沉浸播放器中打开用户提供的媒体地址。 */
 export function directPlayerPath({ directUrl }: DirectPlayerPathOptions): string {
   const params = new URLSearchParams();
   withValue(params, "direct", directUrl);
   return `/iptv/play?${params.toString()}`;
 }
 
-/** Only honour supported local entry pages as player return targets. */
+/** 仅接受受支持的本地入口页作为播放器返回目标。 */
 export function iptvReturnPathFromState(state: unknown): string | null {
   if (!state || typeof state !== "object" || !("returnTo" in state)) return null;
   const value = state.returnTo;

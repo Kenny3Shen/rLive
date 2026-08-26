@@ -1,7 +1,7 @@
 /**
- * A fixed-capacity FIFO that avoids `Array#shift` / front `splice` on every
- * overflow. Busy rooms can receive many more messages than the list can
- * paint, so evicting the oldest item has to stay O(1) amortized.
+ * 定容 FIFO，避免每次溢出都使用 `Array#shift` 或头部 `splice`。
+ * 繁忙房间收到的消息远多于列表能绘制的数量，
+ * 淘汰最旧元素必须保持均摊 O(1)。
  */
 export class BoundedQueue<T> {
   private items: T[] = [];
@@ -21,19 +21,19 @@ export class BoundedQueue<T> {
     this.head = 0;
   }
 
-  /** Adds one item and returns any oldest items evicted by the capacity cap. */
+  /** 加入一个元素并返回因容量上限而被淘汰的最旧元素。 */
   push(value: T): T[] {
     this.items.push(value);
     return this.trimToCapacity();
   }
 
-  /** Adds a batch and returns any oldest items evicted by the capacity cap. */
+  /** 加入一批并返回因容量上限而被淘汰的最旧元素。 */
   pushAll(values: Iterable<T>): T[] {
     for (const value of values) this.items.push(value);
     return this.trimToCapacity();
   }
 
-  /** Takes at most `limit` items in FIFO order. */
+  /** 按 FIFO 至多取出 `limit` 个元素。 */
   take(limit: number): T[] {
     const count = Math.min(this.length, Math.max(0, Math.floor(limit)));
     if (count === 0) return [];
@@ -59,9 +59,9 @@ export class BoundedQueue<T> {
   }
 
   /**
-   * Do not copy for every dropped item. Once a meaningful prefix is dead,
-   * compact it in one copy; this keeps queue operations O(1) amortized while
-   * bounding retained array memory during a long, busy stream.
+   * 不要为每个被丢弃的元素做复制。当有意义的前缀已经死亡时一次性压缩；
+   * 这使队列操作保持均摊 O(1)，
+   * 同时在漫长繁忙的直播中限制数组保留内存。
    */
   private compactIfUseful(): void {
     if (this.head < 128 || this.head * 2 < this.items.length) return;

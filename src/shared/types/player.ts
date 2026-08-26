@@ -1,6 +1,6 @@
 export type PlayerUiMode = "windowed" | "fullscreen";
 
-/** MSE / web player media lifecycle (failover hooks). */
+/** MSE / Web 播放器的媒体生命周期（故障切换钩子）。 */
 export type PlayerEventKind = "playing" | "paused" | "idle" | "eof" | "error";
 export type PlayerTransportProtocol = "flv" | "hls" | "mpegts" | "native";
 
@@ -10,17 +10,17 @@ export type PlayerEvent = {
   kind: PlayerEventKind;
   message?: string | null;
   protocol?: PlayerTransportProtocol;
-  /** HTTP status observed while loading media metadata or segments. */
+  /** 加载媒体元数据或分片时观察到的 HTTP 状态码。 */
   httpStatus?: number | null;
-  /** The transport has exhausted its protocol-specific in-place recovery. */
+  /** 传输层已耗尽其协议专属的就地恢复手段。 */
   recoveryExhausted?: boolean;
-  /** Twitch returned its temporary commercial-break response. */
+  /** Twitch 返回了其临时的广告插播响应。 */
   commercialBreak?: boolean;
-  /** The browser rejected the media because the selected rendition is not decodable. */
+  /** 浏览器因所选渲染档无法解码而拒绝了媒体。 */
   decodeError?: boolean;
 };
 
-/** Preferred starting clarity when a room opens (Simple Live qualityLevel). */
+/** 打开房间时偏好的起始清晰度。 */
 export type QualityLevel = "high" | "mid" | "low";
 
 export type StreamProxyTelemetry = {
@@ -31,11 +31,10 @@ export type StreamProxyTelemetry = {
   first_response_ms: number | null;
   latest_response_ms: number | null;
   /**
-   * Epoch of the first media byte the proxy forwarded for this session.
+   * 代理为本会话转发的第一个媒体字节的纪元。
    *
-   * Used as the wall-clock anchor for containers without a program clock
-   * (FLV / MPEG-TS). It includes the CDN edge burst, so it is an estimate that
-   * is comparable across feeds rather than an exact capture time.
+   * 用作不带节目时钟容器（FLV / MPEG-TS）的挂钟锚点。它包含 CDN 边缘突发，
+   * 因此是可在多条流之间比较的估计值，而不是精确采集时刻。
    */
   first_media_at_ms: number | null;
 };

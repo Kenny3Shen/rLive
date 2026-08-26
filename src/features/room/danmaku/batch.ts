@@ -1,7 +1,7 @@
 import type { DanmakuEvent } from "@/shared/types/live";
 import { isDanmakuEvent } from "./filter";
 
-/** Payload emitted by the native danmaku transport at a bounded cadence. */
+/** 原生弹幕传输以有节奏的批次发出的负载。 */
 export type DanmakuBatch = {
   connection_epoch: number;
   events: DanmakuEvent[];
@@ -13,8 +13,8 @@ export type ValidatedDanmakuBatch = {
 };
 
 /**
- * Tauri events cross a native boundary, so reject malformed envelopes before
- * any room sink iterates their raw event candidates.
+ * Tauri 事件跨越原生边界，因此在任何房间 sink 迭代原始事件候选之前，
+ * 先拒绝畸形信封。
  */
 export function batchEvents(payload: unknown): readonly unknown[] {
   if (!payload || typeof payload !== "object") return [];
@@ -23,9 +23,8 @@ export function batchEvents(payload: unknown): readonly unknown[] {
 }
 
 /**
- * Validate a native batch once at the room boundary. The floating DOM layer,
- * chat and the SC overlay can then consume the same immutable event objects without each
- * repeating the span and field checks for every message.
+ * 在房间边界处对原生批次校验一次。悬浮 DOM 层、聊天与 SC 叠加层随后可以消费
+ * 同一批不可变事件对象，而不必每条消息都重复片段与字段检查。
  */
 export function validatedBatchEvents(payload: unknown): DanmakuEvent[] {
   const valid: DanmakuEvent[] = [];
@@ -36,9 +35,8 @@ export function validatedBatchEvents(payload: unknown): DanmakuEvent[] {
 }
 
 /**
- * Preserve the native connection fence alongside the prevalidated events.
- * A final batch from a room that is being disconnected must never be rendered
- * by a freshly mounted room that happens to share the Tauri event channel.
+ * 在预校验事件旁保留原生连接围栏。正被断开的房间发来的最后一批数据，
+ * 绝不能被恰好共用同一 Tauri 事件通道的新挂载房间渲染出来。
  */
 export function validatedDanmakuBatch(payload: unknown): ValidatedDanmakuBatch | null {
   if (!payload || typeof payload !== "object") return null;

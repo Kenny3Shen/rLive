@@ -24,7 +24,7 @@ function probeBySourceIndex(
   return new Map(probes.map((probe) => [probe.index, probe]));
 }
 
-/** Stable ranking: known healthy lines, untested lines, then known failures. */
+/** 稳定排序：已知健康的线路、未测试的线路，然后是已知失败的。 */
 export function rankPlaybackSourceIndices(
   sources: readonly PlayUrl[],
   probes: readonly PlaybackSourceProbe[],
@@ -65,7 +65,7 @@ export function lineDiagnostics(
   });
 }
 
-/** Do not disrupt healthy playback merely because a background probe is faster. */
+/** 不要仅因为后台探测更快就打断健康的播放。 */
 export function shouldAdoptProbeWinner(input: {
   currentIndex: number;
   winnerIndex: number;

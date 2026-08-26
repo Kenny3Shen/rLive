@@ -56,7 +56,7 @@ describe("page scroll memory", () => {
     for (let i = 0; i < PAGE_SCROLL_MEMORY_LIMIT; i += 1) {
       rememberPageScroll(pageScrollKey(`entry-${i}`, "/", null), i + 1);
     }
-    // Touch the oldest so eviction takes the next-oldest instead.
+    // 触碰最旧的，使淘汰发生在次旧的条目上。
     rememberPageScroll(pageScrollKey("entry-0", "/", null), 10);
     rememberPageScroll(pageScrollKey("entry-overflow", "/", null), 99);
 
@@ -101,8 +101,8 @@ describe("scroll restore eligibility", () => {
   });
 
   test("keeps a platform switch inside one entry at the top", () => {
-    // A swipe between platforms is a POP-free surface change under the same
-    // entry: different rooms the user has not seen at this offset.
+    // 平台之间的滑动是同一条历史下不产生 POP 的表面变化：
+    // 是用户在此偏移处没看过的不同房间。
     expect(
       shouldRestorePageScroll({
         navigationType: "POP",
@@ -120,8 +120,8 @@ describe("restore suppression", () => {
     rememberPageScroll(HOME, 1240);
 
     const endRestore = beginPageScrollRestore(HOME);
-    // Each `scrollTop = target` write fires a scroll event; while the list is
-    // still short the browser clamps it, and storing that would erase the goal.
+    // 每次 `scrollTop = target` 写入都会触发 scroll 事件；列表还矮时浏览器会钳制它，
+    // 存下这个值会抹掉目标。
     rememberPageScroll(HOME, 0);
     rememberPageScroll(HOME, 380);
     expect(recallPageScroll(HOME)).toBe(1240);

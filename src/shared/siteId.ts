@@ -3,10 +3,10 @@ import type { SiteId } from "./types/live";
 export const DEFAULT_SITE_ID: SiteId = "bilibili";
 
 /**
- * Stable display and fallback order for the platforms bundled with the app.
+ * 随应用打包平台的稳定展示与兜底顺序。
  *
- * Keep this list alongside the `SiteId` union. Platform visibility is stored
- * as a disabled list so a newly shipped platform is enabled by default.
+ * 保持这份列表与 `SiteId` union 并列。平台可见性存储为停用列表，
+ * 使新分发的平台默认启用。
  */
 export const LIVE_SITE_IDS = [
   "bilibili",
@@ -27,11 +27,9 @@ export function normalizeSiteId(value: unknown): SiteId {
 }
 
 /**
- * Sanitizes the persisted opt-out list. An absent or malformed value means
- * every platform is on.
+ * 净化持久化的停用列表。缺失或畸形意味着所有平台启用。
  *
- * The final active platform is kept enabled as a local safety net. Rust
- * applies the same rule before it persists a settings object.
+ * 最后一个平台保持启用作为本地安全网。Rust 在持久化设置对象前执行相同规则。
  */
 export function normalizeDisabledSiteIds(value: unknown): SiteId[] {
   if (!Array.isArray(value)) return [];
@@ -43,20 +41,20 @@ export function normalizeDisabledSiteIds(value: unknown): SiteId[] {
   return disabled.filter((siteId) => siteId !== DEFAULT_SITE_ID);
 }
 
-/** Lists the platforms that remain visible after applying persisted opt-outs. */
+/** 列出应用持久化停用后仍然可见的平台。 */
 export function enabledSiteIds(disabledSiteIds: unknown): SiteId[] {
   const disabled = new Set(normalizeDisabledSiteIds(disabledSiteIds));
   return LIVE_SITE_IDS.filter((siteId) => !disabled.has(siteId));
 }
 
-/** Whether a known platform is currently enabled. */
+/** 已知平台当前是否启用。 */
 export function isSiteEnabled(siteId: unknown, disabledSiteIds: unknown): siteId is SiteId {
   return isSiteId(siteId) && enabledSiteIds(disabledSiteIds).includes(siteId);
 }
 
 /**
- * Resolves a requested platform to an enabled one. The stable first enabled
- * platform is used for stale links and settings that name an opt-out.
+ * 把请求的平台解析为已启用的平台。过期的链接与点名已停用平台的设置
+ * 使用稳定的第一个已启用平台。
  */
 export function resolveEnabledSiteId(value: unknown, disabledSiteIds: unknown): SiteId {
   const enabled = enabledSiteIds(disabledSiteIds);
@@ -64,10 +62,7 @@ export function resolveEnabledSiteId(value: unknown, disabledSiteIds: unknown): 
   return enabled.includes(requested) ? requested : enabled[0]!;
 }
 
-/**
- * Applies one platform toggle while preserving the invariant that at least
- * one platform stays enabled.
- */
+/** 切换单个平台开关，同时保持至少一个平台启用的不变量。 */
 export function updateDisabledSiteIds(
   disabledSiteIds: unknown,
   siteId: SiteId,

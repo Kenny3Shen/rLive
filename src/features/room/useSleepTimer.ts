@@ -42,8 +42,8 @@ async function closeApplication(): Promise<void> {
 }
 
 /**
- * Room-scoped sleep timer. The deadline is kept as an absolute timestamp so
- * backgrounding the WebView or a delayed interval cannot add extra time.
+ * 房间级定时关闭。截止时间保存为绝对时间戳，
+ * 使 WebView 进入后台或间隔延迟都不会额外增加时间。
  */
 export function useSleepTimer(roomSessionKey?: string): SleepTimerController {
   const [deadline, setDeadline] = useState<number | null>(null);
@@ -63,8 +63,8 @@ export function useSleepTimer(roomSessionKey?: string): SleepTimerController {
     setDeadline(Date.now() + normalizedMinutes * 60_000);
   }, []);
 
-  // A room session owns its timer. Navigating to another room must never let a
-  // stale timer close the newly opened session unexpectedly.
+  // 定时器属于房间会话。导航到另一个房间绝不能让过期计时器
+  // 意外关掉新打开的会话。
   useEffect(() => {
     if (previousRoomSessionKey.current === roomSessionKey) return;
     previousRoomSessionKey.current = roomSessionKey;

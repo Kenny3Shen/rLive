@@ -17,9 +17,9 @@ pub struct SiteInfo {
 }
 
 fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::traits::LiveSite>> {
-    // A site instance can make several dependent requests (Twitch bootstrap,
-    // GraphQL, room data, then its HLS master playlist). Snapshot the cookie
-    // and proxy together so every request in that chain follows the setting.
+    // 一个站点实例可能发起多个相互依赖的请求（Twitch bootstrap、GraphQL、
+    // 房间数据，然后是它的 HLS master playlist）。把 cookie 和代理一起快照，
+    // 使这条链上的每个请求都遵循同一份设置。
     let (cookie, proxy) = {
         let conn = state
             .db

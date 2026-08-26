@@ -836,8 +836,8 @@ export function FollowPage() {
     value: activeView,
     onChange: handleViewChangeFromSwipe,
     enabled: isMobileClient(),
-    // Clicked tabs use the existing GSAP fade; a committed gesture settles
-    // directly from the pointer release in the hook.
+    // 点击页签使用现有的 GSAP 渐隐；
+    // 已提交的手势则在 hook 中直接从指针释放处收尾。
     animate: false,
     layout: "track",
   });

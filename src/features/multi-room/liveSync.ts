@@ -1,78 +1,75 @@
 /**
- * Multi-view live clock alignment (director grid "直播时钟同步").
+ * 多视图直播时钟对齐（导演网格"直播时钟同步"）。
  *
- * Two deliberately different levels, because live streams do not all carry a
- * usable wall clock:
+ * 刻意区分两种层级，因为并非所有直播流都带有可用的挂钟时间：
  *
- * - `manual`: every feed is held a user-chosen number of seconds behind its own
- *   live edge. No absolute clock is involved, so it works on every site.
- * - `auto`: feeds are pulled onto one shared wall-clock position. HLS gives an
- *   exact clock through `EXT-X-PROGRAM-DATE-TIME`; FLV/MPEG-TS only get an
- *   estimate from the proxy's first-media-byte epoch, which still carries the
- *   CDN edge burst. The estimate is comparable between feeds but not exact,
- *   which is why a per-feed trim always stays available.
+ * - `manual`：每条流被固定落后于自身直播边缘用户指定的秒数。
+ * 不涉及绝对时钟，因此在所有站点都可用。
+ * - `auto`：各流被拉到同一个共享挂钟位置。HLS 通过
+ * `EXT-X-PROGRAM-DATE-TIME` 提供精确时钟；FLV/MPEG-TS 只能从代理的
+ * 首媒体字节纪元得到估计值，其中仍含 CDN 边缘突发。估计值在多条流之间可比
+ * 但并不精确，因此每条流的微调始终保持可用。
  *
- * This module is intentionally pure: the controller samples the players, calls
- * `planLiveSync`, and applies the returned corrections. Frame-accurate sync is
- * explicitly out of scope — corrections stop inside a tolerance band.
+ * 本模块刻意保持纯函数：控制器采样播放器、调用 `planLiveSync` 并应用返回的
+ * 校正。帧级精确同步明确不在范围内 —— 校正在容差带内即停止。
  */
 
 export const LIVE_SYNC_MODES = ["off", "manual", "auto"] as const;
 export type LiveSyncMode = (typeof LIVE_SYNC_MODES)[number];
 
-/** How a feed's media position is mapped onto wall-clock time. */
+/** 一条流的媒体位置如何映射到挂钟时间。 */
 export type LiveSyncClockKind =
-  /** `EXT-X-PROGRAM-DATE-TIME` from the HLS playlist. */
+  /** 来自 HLS 播放列表的 `EXT-X-PROGRAM-DATE-TIME`。 */
   | "program-date"
-  /** Estimated from the proxy's first media byte epoch (FLV / MPEG-TS). */
+  /** 由代理首媒体字节纪元估计（FLV / MPEG-TS）。 */
   | "stream-anchor"
-  /** No usable clock yet; the feed can only be held behind its own live edge. */
+  /** 尚无可用的时钟；只能让该流落后于自身的直播边缘。 */
   | "none";
 
-/** Seconds a feed is held behind its own live edge before any user offset. */
+/** 任何用户偏移之前，该流落后于自身直播边缘的秒数。 */
 export const LIVE_SYNC_BASE_HOLD_SECONDS = 1.2;
-/** Smallest distance to the live edge a correction may target. */
+/** 校正允许瞄准的、距直播边缘的最小距离。 */
 export const LIVE_SYNC_EDGE_MARGIN_SECONDS = 0.6;
-/** Smallest distance to the start of the retained buffer a correction may target. */
+/** 校正允许瞄准的、距保留缓冲区起点的最小距离。 */
 export const LIVE_SYNC_BUFFER_MARGIN_SECONDS = 0.4;
-/** User offset range, in seconds. Negative pulls a feed ahead of the group. */
+/** 用户偏移范围，单位秒。负值把该流提前到组之前。 */
 export const LIVE_SYNC_OFFSET_MIN_SECONDS = -5;
 export const LIVE_SYNC_OFFSET_MAX_SECONDS = 20;
 export const LIVE_SYNC_OFFSET_STEP_SECONDS = 0.5;
-/** Bounds for the shared target latency in `auto` mode. */
+/** `auto` 模式下共享目标延迟的取值范围。 */
 export const LIVE_SYNC_MIN_TARGET_LATENCY_SECONDS = 1;
 export const LIVE_SYNC_MAX_TARGET_LATENCY_SECONDS = 40;
-/** Errors below this are left alone; sync is not frame accurate by design. */
+/** 低于此值的误差不予处理；同步在设计上就不是帧级精确。 */
 export const LIVE_SYNC_TOLERANCE_SECONDS = 0.35;
-/** Above this the correction jumps instead of trimming the playback rate. */
+/** 超过此值时直接跳转，而不是微调播放速率。 */
 export const LIVE_SYNC_SEEK_THRESHOLD_SECONDS = 1.5;
-/** Rate trim applied to muted secondary feeds while they converge. */
+/** 静音的次要流在收敛期间应用的速率微调。 */
 export const LIVE_SYNC_RATE_TRIM = 0.03;
-/** How fast the shared target may move towards a smaller latency, per tick. */
+/** 每个 tick 共享目标向更小延迟靠近的最大速度。 */
 export const LIVE_SYNC_TARGET_RELEASE_SECONDS = 0.35;
-/** Extra headroom kept above the slowest feed's reachable position. */
+/** 在最慢流可达位置之上保留的额外余量。 */
 export const LIVE_SYNC_TARGET_MARGIN_SECONDS = 0.3;
 
 export type LiveSyncSample = {
   key: string;
-  /** The audible feed: it is the reference clock and never gets a rate trim. */
+  /** 有声的那条流：它是参考时钟，绝不会被速率微调。 */
   main: boolean;
-  /** Playing with at least one buffered range. */
+  /** 正在播放且至少有一个已缓冲区段。 */
   ready: boolean;
   mediaTime: number;
   bufferStart: number;
-  /** Live edge on this feed's own media timeline. */
+  /** 该流自身媒体时间轴上的直播边缘。 */
   bufferEnd: number;
   clockKind: LiveSyncClockKind;
-  /** Epoch (ms) that corresponds to `mediaTime === 0`, when a clock exists. */
+  /** 存在时钟时与 `mediaTime === 0` 对应的纪元（毫秒）。 */
   epochAtMediaZeroMs: number | null;
-  /** Per-feed user offset in seconds; positive delays this feed. */
+  /** 每条流的用户偏移（秒）；正值延迟该流。 */
   offsetSeconds: number;
   playbackRate: number;
 };
 
 export type LiveSyncAction =
-  /** Nothing to do: inside tolerance, or no correction is possible. */
+  /** 无事可做：已在容差内，或无法进行校正。 */
   | { kind: "hold"; rate: 1 }
   | { kind: "rate"; rate: number }
   | { kind: "seek"; mediaTime: number; rate: 1 };
@@ -80,17 +77,17 @@ export type LiveSyncAction =
 export type LiveSyncFeedPlan = {
   key: string;
   action: LiveSyncAction;
-  /** Signed seconds this feed is away from its target (positive = too late). */
+  /** 该流偏离目标的带符号秒数（正 = 过晚）。 */
   errorSeconds: number | null;
-  /** Seconds behind the live edge after this plan is applied. */
+  /** 应用本计划后落后于直播边缘的秒数。 */
   holdSeconds: number | null;
   clockKind: LiveSyncClockKind;
-  /** The buffer could not reach the target position; the offset was clamped. */
+  /** 缓冲无法到达目标位置；偏移已被钳制。 */
   limited: boolean;
 };
 
 export type LiveSyncPlan = {
-  /** Shared latency behind wall clock in `auto` mode, else null. */
+  /** `auto` 模式下落后于挂钟的共享延迟，否则为 null。 */
   targetLatencySeconds: number | null;
   feeds: LiveSyncFeedPlan[];
 };
@@ -111,13 +108,13 @@ export function normalizeLiveSyncOffset(value: unknown): number {
   return clamp(stepped, LIVE_SYNC_OFFSET_MIN_SECONDS, LIVE_SYNC_OFFSET_MAX_SECONDS);
 }
 
-/** Wall-clock epoch (ms) of the frame a feed is currently showing. */
+/** 该流当前显示帧对应的挂钟纪元（毫秒）。 */
 export function liveSyncEpochPositionMs(sample: LiveSyncSample): number | null {
   if (sample.clockKind === "none" || sample.epochAtMediaZeroMs == null) return null;
   return sample.epochAtMediaZeroMs + sample.mediaTime * 1_000;
 }
 
-/** Seconds a feed is behind wall clock, from its own clock mapping. */
+/** 按其时钟映射计算的、该流落后挂钟的秒数。 */
 export function liveSyncLatencySeconds(sample: LiveSyncSample, nowMs: number): number | null {
   const position = liveSyncEpochPositionMs(sample);
   if (position == null) return null;
@@ -125,8 +122,8 @@ export function liveSyncLatencySeconds(sample: LiveSyncSample, nowMs: number): n
 }
 
 /**
- * Smallest latency a feed can actually play at: its live edge, kept a margin
- * away so the correction does not land on an unbuffered position.
+ * 一条流实际可播放的最小延迟：即其直播边缘再保留一段余量，
+ * 避免校正落在未缓冲的位置上。
  */
 function reachableLatencySeconds(sample: LiveSyncSample, nowMs: number): number | null {
   const latency = liveSyncLatencySeconds(sample, nowMs);
@@ -136,17 +133,15 @@ function reachableLatencySeconds(sample: LiveSyncSample, nowMs: number): number 
 }
 
 /**
- * Shared latency all feeds are pulled to.
+ * 所有流被拉到的共享延迟。
  *
- * The main feed sets it, because it is the only audible one and must never be
- * rate-trimmed: the target is the latency main has when it plays
- * `LIVE_SYNC_BASE_HOLD_SECONDS` behind its own live edge. That keeps the group
- * as live as the audible feed can be and, unlike following main's momentary
- * position, cannot drift further back with every rebuffer.
+ * 由主流决定，因为它是唯一有声的一条且绝不能被速率微调：
+ * 目标是主播放落后自身直播边缘 `LIVE_SYNC_BASE_HOLD_SECONDS` 时的延迟。
+ * 这样整组的实时程度等于有声流所能达到的上限，而且不像追随主流瞬时位置那样，
+ * 会在每次重新缓冲时越退越远。
  *
- * A slower secondary feed can still force the group back, since delaying a feed
- * is always possible inside the retained buffer while catching up past a live
- * edge is not.
+ * 较慢的次要流仍能把整组拖回来：在保留缓冲区内延迟一条流总是可行，
+ * 而越过直播边缘追赶则不然。
  */
 export function liveSyncTargetLatencySeconds(
   samples: readonly LiveSyncSample[],
@@ -168,8 +163,8 @@ export function liveSyncTargetLatencySeconds(
     .map((sample) => {
       const reachable = reachableLatencySeconds(sample, nowMs);
       if (reachable == null) return null;
-      // A feed asked to run ahead of the group needs the shared target to sit
-      // that much further back before its own offset becomes reachable.
+      // 要求跑到组之前的流，需要共享目标先退后相应距离，
+      // 其自身偏移才变得可达。
       return reachable - Math.min(0, sample.offsetSeconds) + LIVE_SYNC_TARGET_MARGIN_SECONDS;
     })
     .filter((latency): latency is number => latency != null);
@@ -182,8 +177,8 @@ export function liveSyncTargetLatencySeconds(
     LIVE_SYNC_MAX_TARGET_LATENCY_SECONDS,
   );
   if (previousTargetSeconds == null || desired >= previousTargetSeconds) return desired;
-  // Releasing latency slowly keeps one feed's rebuffer from dragging the whole
-  // grid forward and back again.
+  // 缓慢释放延迟可以避免一条流的重新缓冲
+  // 带着整个网格来回摆动。
   return Math.max(desired, previousTargetSeconds - LIVE_SYNC_TARGET_RELEASE_SECONDS);
 }
 
@@ -198,7 +193,7 @@ function feedCorrection(
       ? clamp(sample.mediaTime, Math.min(lowerBound, upperBound), Math.max(lowerBound, upperBound))
       : clamp(targetMediaTime, lowerBound, upperBound);
   const limited = Math.abs(reachable - targetMediaTime) > LIVE_SYNC_TOLERANCE_SECONDS;
-  // Positive error: the feed shows an older frame than it should.
+  // 正误差：该流显示的画面比应有的更旧。
   const errorSeconds = reachable - sample.mediaTime;
 
   const magnitude = Math.abs(errorSeconds);
@@ -208,19 +203,18 @@ function feedCorrection(
   if (magnitude >= LIVE_SYNC_SEEK_THRESHOLD_SECONDS) {
     return { action: { kind: "seek", mediaTime: reachable, rate: 1 }, errorSeconds, limited };
   }
-  // The audible feed must not have its pitch bent, so it only ever jumps — and
-  // only once the error is large enough to be worth a visible cut.
+  // 有声流的音调绝不能被改变，所以它只会跳转 ——
+  // 而且只在误差大到值得一次可见切换时才跳。
   if (sample.main) return { action: { kind: "hold", rate: 1 }, errorSeconds, limited };
   const rate = errorSeconds > 0 ? 1 + LIVE_SYNC_RATE_TRIM : 1 - LIVE_SYNC_RATE_TRIM;
   return { action: { kind: "rate", rate }, errorSeconds, limited };
 }
 
 /**
- * Decide one correction per feed.
+ * 为每条流决定一次校正。
  *
- * `manual` holds each feed behind its own live edge; `auto` maps every feed
- * onto `targetLatencySeconds` using its clock, and falls back to the manual
- * rule for feeds that have no clock yet.
+ * `manual` 让每条流落后于自身直播边缘；`auto` 用各自的时钟把每条流映射到
+ * `targetLatencySeconds`，尚无时钟的流回退到 manual 规则。
  */
 export function planLiveSync(input: {
   mode: LiveSyncMode;
@@ -262,7 +256,7 @@ export function planLiveSync(input: {
     const targetMediaTime =
       targetLatencySeconds != null && latency != null
         ? sample.mediaTime + (latency - (targetLatencySeconds + sample.offsetSeconds))
-        : // Without a clock, hold the feed behind its own live edge instead.
+        : // 无时钟时改为让该流落后于自身直播边缘。
           sample.bufferEnd - (LIVE_SYNC_BASE_HOLD_SECONDS + Math.max(0, sample.offsetSeconds));
     const { action, errorSeconds, limited } = feedCorrection(sample, targetMediaTime);
     const resolvedMediaTime = action.kind === "seek" ? action.mediaTime : sample.mediaTime;
@@ -280,12 +274,11 @@ export function planLiveSync(input: {
 }
 
 /**
- * Manual-mode offsets that put every feed on the slowest feed's wall clock.
+ * manual 模式的偏移量，使每条流都对齐到最慢流的挂钟。
  *
- * `manual` holds each feed behind its own live edge, so aligning means giving
- * the faster feeds exactly the extra delay their stream is ahead by. Auto mode
- * does this continuously; here it is a one-shot fill of the sliders the user can
- * still trim afterwards. Feeds without a clock keep their current offset.
+ * `manual` 让每条流落后于自身直播边缘，因此对齐就是给较快的流补足恰好等于
+ * 其领先量的额外延迟。auto 模式连续做这件事；这里是一次性填充滑杆，
+ * 用户随后仍可微调。没有时钟的流保持现有偏移。
  */
 export function liveSyncManualAlignOffsets(
   samples: readonly LiveSyncSample[],

@@ -8,9 +8,8 @@ use crate::error::AppResult;
 use crate::models::live::SiteId;
 use crate::state::AppState;
 
-// This response contains a one-time QR payload and its local polling handle.
-// Keep it out of accidental `Debug` logs; neither item is needed outside the
-// user-operated login flow.
+// 该响应包含一次性的二维码内容及其本地轮询句柄。避免让它进入无意的
+// `Debug` 日志；这两项在用户扫码登录流程之外都不需要。
 #[derive(Serialize)]
 pub struct AccountQrLoginStart {
     pub qr_code_url: String,
@@ -32,8 +31,8 @@ pub struct AccountQrLoginPoll {
     pub message: String,
 }
 
-/// Non-sensitive account summary for the settings UI.  Cookie material stays
-/// in the local database and is never included in this IPC response.
+/// 供设置界面使用的非敏感账号摘要。Cookie 内容留在本地数据库中，
+/// 绝不包含在这个 IPC 响应里。
 #[derive(Debug, Serialize)]
 pub struct AccountProfile {
     pub username: Option<String>,
@@ -41,19 +40,19 @@ pub struct AccountProfile {
     pub status: AccountStatus,
 }
 
-/// Cookie session state as far as the app can determine it locally.  Platforms
-/// without a cheap validity check report `Unknown` while a Cookie is present.
+/// 应用在本地所能判断出的 Cookie 会话状态。没有低成本有效性检查的平台，
+/// 在存在 Cookie 时报告 `Unknown`。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountStatus {
-    /// No Cookie is saved for this site.
+    /// 该站点没有保存 Cookie。
     None,
-    /// The platform accepted the session.
+    /// 平台接受了该会话。
     Valid,
-    /// The platform explicitly rejected the session (expired / logged out).
-    /// Danmaku falls back to the anonymous mode and sends are disabled.
+    /// 平台明确拒绝了该会话（已过期／已登出）。
+    /// 弹幕将回退到匿名模式，并禁用发送。
     Expired,
-    /// The session could not be verified (network failure or unsupported).
+    /// 无法验证该会话（网络失败或平台不支持）。
     Unknown,
 }
 
@@ -95,18 +94,16 @@ pub fn account_clear_cookie(state: State<'_, AppState>, site_id: SiteId) -> AppR
     crate::account::clear_cookie(&conn, &site_id)
 }
 
-/// Read a safe display summary for a saved account without exposing its
-/// Cookie to the webview.  Bilibili is checked against its first-party nav
-/// endpoint because its QR-login callback Cookie has no username field;
-/// platforms that carry a trusted name field use that local value directly.
+/// 读取已保存账号的安全展示摘要，同时不把其 Cookie 暴露给 webview。
+/// Bilibili 需要请求其第一方 nav 接口，因为扫码登录回调的 Cookie 没有
+/// 用户名字段；携带可信名称字段的平台则直接使用本地取值。
 #[tauri::command(async)]
 pub async fn account_get_profile(
     state: State<'_, AppState>,
     site_id: SiteId,
 ) -> AppResult<AccountProfile> {
-    // Snapshot every value needed for the lookup before awaiting a network
-    // request. Holding the SQLite mutex across an await would block all other
-    // settings and account operations.
+    // 在等待网络请求之前先快照查询所需的全部值。跨 await 持有 SQLite 互斥锁
+    // 会阻塞其他所有设置与账号操作。
     let (cookie, proxy) = {
         let conn = state.db.lock().map_err(|e| {
             crate::error::AppError::new("db_lock_error", format!("account_get_profile: {e}"))
@@ -122,8 +119,8 @@ pub async fn account_get_profile(
     let (username, status) = match site_id {
         SiteId::Bilibili if has_cookie => {
             match bilibili_profile_lookup(&cookie, proxy.as_deref()).await {
-                // A completed first-party lookup is authoritative: an
-                // expired Cookie must not keep showing an old cached name.
+                // 完成的第一方查询具有权威性：不能让已过期的 Cookie
+                // 继续显示旧的缓存名称。
                 BilibiliProfileLookup::Verified(username) => {
                     let status = if username.is_some() {
                         AccountStatus::Valid
@@ -132,8 +129,8 @@ pub async fn account_get_profile(
                     };
                     (username, status)
                 }
-                // Network/challenge failures should not hide the optional
-                // DedeUserName field present in some browser exports.
+                // 网络或验证挑战导致的失败不应遮蔽部分浏览器导出中
+                // 存在的可选字段 DedeUserName。
                 BilibiliProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
             }
         }
@@ -168,9 +165,8 @@ pub async fn account_qr_login_start(
             })
         }
         SiteId::Douyin => {
-            // QR login uses the same explicit application proxy as other
-            // Douyin requests. Read it before awaiting the network request so
-            // the database mutex is never held across an await point.
+            // 扫码登录与其他抖音请求使用同一个显式应用代理。在等待网络请求之前
+            // 先读取它，保证数据库互斥锁不会跨 await 点被持有。
             let proxy = {
                 let conn = state.db.lock().map_err(|e| {
                     crate::error::AppError::new(
@@ -298,11 +294,11 @@ fn qr_login_site_name(site_id: &SiteId) -> &'static str {
 }
 
 enum BilibiliProfileLookup {
-    /// The upstream response was valid. `None` means it explicitly reported
-    /// an unauthenticated/expired session or omitted a usable display name.
+    /// 上游响应有效。`None` 表示它明确报告了未认证／已过期的会话，
+    /// 或者没有给出可用的显示名。
     Verified(Option<String>),
-    /// The request could not be completed or was not a recognized API
-    /// response. Callers may safely use a Cookie-derived fallback instead.
+    /// 请求未能完成，或者不是可识别的 API 响应。
+    /// 调用方可以安全地改用从 Cookie 推导的兜底值。
     Unavailable,
 }
 
@@ -332,9 +328,9 @@ async fn bilibili_profile_lookup(cookie: &str, proxy: Option<&str>) -> BilibiliP
     parse_bilibili_profile(&body)
 }
 
-/// Keep copied Cookie headers bounded and free of control bytes before they
-/// are passed to reqwest. A manual Cookie may include a literal `Cookie:`
-/// prefix, which must not become part of the first cookie name.
+/// 在把复制来的 Cookie header 交给 reqwest 之前，先限制其长度并剔除控制字节。
+/// 手动填写的 Cookie 可能带有字面的 `Cookie:` 前缀，
+/// 它不能成为第一个 cookie 名称的一部分。
 fn cookie_header_value(value: &str) -> Option<&str> {
     const MAX_COOKIE_BYTES: usize = 16 * 1024;
 
@@ -360,8 +356,8 @@ fn parse_bilibili_profile(body: &str) -> BilibiliProfileLookup {
         return BilibiliProfileLookup::Unavailable;
     };
     if code != 0 {
-        // Bilibili uses a non-zero API code (commonly -101) for a rejected or
-        // expired session. This is a completed answer, not a network failure.
+        // Bilibili 用非零 API code（常见为 -101）表示会话被拒绝或已过期。
+        // 这属于一次完成的应答，而不是网络失败。
         return BilibiliProfileLookup::Verified(None);
     }
     let Some(data) = response.get("data") else {

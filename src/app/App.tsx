@@ -33,9 +33,9 @@ import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
 import { useFollowAutoRecording } from "../features/recording/followRecording";
 import { RecordingExitGuard } from "../features/recording/RecordingExitGuard";
 
-// Keep the discovery page on the critical path, but defer secondary pages
-// (especially the player and its danmaku renderer) until a route needs them.
-// This substantially reduces the JS parsed before the first room grid paints.
+// 让发现页保持在关键路径上，把次要页面（尤其是播放器及其弹幕渲染器）
+// 推迟到路由真正需要时再加载。
+// 这能显著减少首屏房间网格绘制前需要解析的 JS 量。
 const CategoryPage = lazy(loadCategoryPage);
 const CategoryRoomsPage = lazy(loadCategoryRoomsPage);
 const SearchPage = lazy(loadSearchPage);
@@ -49,15 +49,14 @@ const IptvPlayerPage = lazy(loadIptvPlayerPage);
 const MultiRoomPage = lazy(loadMultiRoomPage);
 const RoomPage = lazy(loadRoomPage);
 
-/** Prevent stale links from opening a platform the user has opted out of. */
+/** 防止过期链接打开用户已选择隐藏的平台。 */
 function EnabledRoomRoute() {
   const { siteId } = useParams<{ siteId: string }>();
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
 
-  // Zustand restores this small preference from localStorage before the first
-  // render. Let a deep link begin loading with that persisted value instead of
-  // serially waiting for settings_get; applyFromBackend will rerender this
-  // guard and redirect if the authoritative backend value disagrees.
+  // Zustand 会在首次渲染之前从 localStorage 恢复这个轻量偏好。让深链接直接以
+  // 该持久化值开始加载，而不是串行等待 settings_get；
+  // 若后端的权威取值不一致，applyFromBackend 会重新渲染这道守卫并重定向。
 
   if (isSiteId(siteId) && !isSiteEnabled(siteId, disabledSiteIds)) {
     return <Navigate to="/" replace />;
@@ -91,9 +90,9 @@ const router = createBrowserRouter(
         <Route path="follow" element={<FollowPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="recordings" element={<RecordingsPage />} />
-        {/* A recording id spans two path levels (`platform_room/user_time`), so
-            the route carries one segment per level. A single `:recordingId`
-            would receive a half-decoded param and never match a library item. */}
+        {/* 录制 id 跨越两级路径（`platform_room/user_time`），
+            因此路由为每级携带一个段。单个 `:recordingId`
+            会收到半解码的参数，永远匹配不到库条目。 */}
         <Route path="recordings/play/:roomDir/:sessionDir" element={<RecordingPlaybackPage />} />
         <Route path="iptv/play" element={<IptvPlayerPage />} />
         <Route path="iptv" element={<IptvPage />} />

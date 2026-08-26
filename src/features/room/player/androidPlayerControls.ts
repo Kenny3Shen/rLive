@@ -3,15 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notify } from "@/components/ui/toast";
 import { getClientPlatform } from "@/shared/clientPlatform";
 
-/** Batch rapid pointer-move writes while keeping native controls responsive. */
+/** 批量处理快速的指针移动写入，同时保持原生控制的响应性。 */
 const NATIVE_CONTROL_THROTTLE_MS = 50;
 
 /**
- * App-level commands, not `plugin:player-controls|…`.
+ * 应用级命令，而不是 `plugin:player-controls|…`。
  *
- * A plugin-namespaced invoke is answered by the Rust plugin's own invoke
- * handler and never reaches the Kotlin `@Command` methods. The Rust side wraps
- * the plugin handle in these app commands instead.
+ * 带插件命名空间的 invoke 由 Rust 插件自己的 invoke handler 应答，
+ * 永远到不了 Kotlin 的 `@Command` 方法。Rust 侧改为把这些应用命令
+ * 包装插件句柄。
  */
 const NATIVE_COMMANDS = {
   getState: "android_player_controls_get_state",
@@ -40,7 +40,7 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-/** Tauri rejects with an `AppError` object, Kotlin failures with a string. */
+/** Tauri 以 `AppError` 对象拒绝，Kotlin 失败则是字符串。 */
 function nativeControlErrorText(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
     return String((error as { message: unknown }).message);
@@ -49,7 +49,7 @@ function nativeControlErrorText(error: unknown): string {
   return String(error ?? "未知错误");
 }
 
-/** Clamp arbitrary input without quantizing it before Android chooses a stream level. */
+/** 钳制任意输入但不做量化，交给 Android 选择流级别。 */
 export function clampAndroidPlayerControl(value: number): number {
   return clampPercent(value);
 }
@@ -60,7 +60,7 @@ function percentFrom(value: unknown): number | null {
     : null;
 }
 
-/** Keep the platform test pure so desktop/browser fallback is easy to test. */
+/** 保持平台判定为纯函数，便于测试桌面/浏览器兜底路径。 */
 export function supportsAndroidNativePlayerControls({
   tauriRuntime,
   platform,
@@ -78,7 +78,7 @@ function runningOnAndroidTauri(): boolean {
   });
 }
 
-/** Read the system media volume and app-window brightness from the native bridge. */
+/** 从原生桥读取系统媒体音量与应用窗口亮度。 */
 export async function getAndroidPlayerControls(
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<AndroidPlayerControlsState> {
@@ -117,7 +117,7 @@ export function setAndroidBrightness(
   return setAndroidPlayerControl("setBrightness", value, nativeInvoke);
 }
 
-/** Restore the Activity brightness captured before the first player gesture. */
+/** 恢复第一次播放器手势之前捕获的 Activity 亮度。 */
 export async function resetAndroidBrightness(
   nativeInvoke: NativePlayerControlsInvoke = invoke,
 ): Promise<void> {
@@ -125,9 +125,9 @@ export async function resetAndroidBrightness(
 }
 
 /**
- * Batches pointer-move writes to Android and fences late replies. A swipe
- * updates its visual feedback immediately, while native calls are serialized
- * through one queue so brightness and volume cannot reorder across JNI.
+ * 把指针移动写入批量发往 Android 并围栏迟到的应答。滑动立即更新视觉反馈，
+ * 原生调用则经由单一队列串行化，
+ * 使亮度与音量不会跨 JNI 重排。
  */
 export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") {
   const [state, setState] = useState<AndroidPlayerControlsState | null>(null);
@@ -143,7 +143,8 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
   });
   const previousMediaVolumeRef = useRef(80);
   const mountedRef = useRef(true);
-  /** One toast per mount: a drag emits many writes and would spam otherwise. */
+  /** 每次挂载只弹一次 toast：一次拖拽会产生大量写入，
+  否则会刷屏。 */
   const reportedWriteErrorRef = useRef(false);
 
   const replaceState = useCallback((next: AndroidPlayerControlsState | null) => {
@@ -225,8 +226,8 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
 
   const releaseBrightness = useCallback(() => {
     cancelPendingWrites("brightness");
-    // A volume gesture may still be queued when the room changes. Commit it
-    // before resetting brightness so the system volume cannot be lost.
+    // 房间变化时可能仍有音量手势排在队列中。在重置亮度之前提交它，
+    // 避免丢失系统音量。
     flush();
     const release = nativeWriteQueueRef.current
       .catch(() => undefined)
@@ -354,14 +355,13 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
 
   const supported = enabled && (available || runningOnAndroidTauri());
 
-  // PlayerPane includes this object in callbacks that it publishes to
-  // RoomPage. Keep the container stable when none of its values changed, or
-  // that parent update immediately creates and publishes another action list.
+  // PlayerPane 会把这个对象包含进它发布给 RoomPage 的回调。值未变时保持容器
+  // 引用稳定，否则父级更新会立刻创建并发布又一份操作列表。
   return useMemo(
     () => ({
-      /** True after a successful native read/write. */
+      /** 原生读写成功后为 true。 */
       available,
-      /** True on Android Tauri even before getState finishes. */
+      /** 即使在 getState 完成之前，Android Tauri 上也为 true。 */
       supported,
       state,
       setMediaVolume,

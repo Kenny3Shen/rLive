@@ -23,19 +23,17 @@ pub struct BilibiliDanmakuArgs {
     pub token: String,
     pub buvid: String,
     pub server_host: String,
-    /// All websocket hosts returned by `getDanmuInfo`, primary first.  Bilibili
-    /// regularly retires individual edge nodes, so keeping the whole list is
-    /// important when a long-lived room connection needs to recover.
+    /// `getDanmuInfo` 返回的全部 websocket 主机，主用节点在前。Bilibili 会定期
+    /// 下线个别边缘节点，因此长连接房间需要恢复时，保留完整列表很重要。
     pub server_hosts: Vec<String>,
-    /// The session used to obtain the original danmaku token.  It never leaves
-    /// the backend; reconnects use it only to refresh the ephemeral token and
-    /// host list from Bilibili.
+    /// 用于获取原始弹幕 token 的会话。它绝不离开后端；
+    /// 重连时仅用它向 Bilibili 刷新短时效 token 与主机列表。
     session_cookie: String,
-    /// Viewer mid (DedeUserID). Use 0 when anonymous.
+    /// 观众的 mid（DedeUserID）。匿名时使用 0。
     pub uid: i64,
 }
 
-/// Return the value portion of a copied browser `Cookie:` header, if present.
+/// 若存在，返回复制来的浏览器 `Cookie:` header 中值的部分。
 fn cookie_header_value(cookie: &str) -> &str {
     let cookie = cookie.trim();
     match cookie.get(..7) {
@@ -44,7 +42,7 @@ fn cookie_header_value(cookie: &str) -> &str {
     }
 }
 
-/// Extract `key=value` from a cookie header string.
+/// 从 cookie header 字符串中提取 `key=value`。
 fn cookie_value(cookie: &str, key: &str) -> Option<String> {
     let cookie = cookie_header_value(cookie);
     for part in cookie.split(';') {
@@ -62,28 +60,27 @@ fn cookie_value(cookie: &str, key: &str) -> Option<String> {
 }
 
 const SEND_CHAT_URL: &str = "https://api.live.bilibili.com/msg/send";
-/// Current ordinary-web-composer default, measured in UTF-16 code units.
+/// 当前普通 Web 输入框的默认上限，按 UTF-16 码元计。
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 20;
 const DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
-/// The older official token endpoint needs no WBI keys, so it stays reachable
-/// when the signed `getDanmuInfo` call or its key fetch fails.
+/// 较老的官方 token 接口不需要 WBI 签名密钥，因此当带签名的 `getDanmuInfo`
+/// 调用或其密钥获取失败时，它仍然可用。
 const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Danmu/getConf";
-/// Source of the WBI signing keys required by `getDanmuInfo`.
+/// `getDanmuInfo` 所需 WBI 签名密钥的来源。
 const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Whether a saved browser Cookie contains the two values required for the
-/// Bilibili live chat write endpoint.  This intentionally exposes only a
-/// boolean to callers; neither Cookie nor CSRF values leave the backend.
+/// 保存的浏览器 Cookie 是否包含 Bilibili 直播聊天写入接口所需的两个值。
+/// 这里刻意只向调用方暴露一个布尔值；
+/// Cookie 与 CSRF 值都不会离开后端。
 pub fn has_send_credentials(cookie: &str) -> bool {
     cookie_value(cookie, "SESSDATA").is_some() && cookie_value(cookie, "bili_jct").is_some()
 }
 
-/// Send one user-initiated, plain scrolling Bilibili danmaku.
+/// 发送一条由用户发起的普通滚动 Bilibili 弹幕。
 ///
-/// This intentionally has no retry and no optimistic local event.  A timeout
-/// could still mean that Bilibili accepted the message, while the normal room
-/// WebSocket is the source of truth for its eventual echo.
+/// 这里刻意不做重试，也不产生乐观的本地事件。超时仍可能意味着 Bilibili
+/// 已接受该消息，而房间的正常 WebSocket 才是其最终回显的事实来源。
 pub async fn send_chat(
     client: &Client,
     cookie: &str,
@@ -93,8 +90,8 @@ pub async fn send_chat(
     send_chat_to_url(client, cookie, room_id, message, SEND_CHAT_URL).await
 }
 
-/// Internal endpoint-injectable variant used by the HTTP contract tests. The
-/// public sender is intentionally pinned to Bilibili's live-chat endpoint.
+/// 供 HTTP 契约测试使用的、可注入接口地址的内部变体。
+/// 公开的发送函数刻意固定指向 Bilibili 的直播聊天接口。
 async fn send_chat_to_url(
     client: &Client,
     cookie: &str,
@@ -194,9 +191,8 @@ async fn send_chat_to_url(
     }
 }
 
-/// Validate a plain, user-composed chat message before it consumes a manual
-/// send cooldown. The sender repeats this validation as a defence-in-depth
-/// check for any future caller outside the Tauri command.
+/// 在消耗手动发送冷却之前校验用户编写的普通消息。发送函数会重复这套校验，
+/// 作为对将来 Tauri 命令之外调用方的纵深防御。
 pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     let message = value.trim();
     if message.is_empty() {
@@ -246,12 +242,11 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<BilibiliDanmakuArg
         .unwrap_or("broadcastlv.chat.bilibili.com")
         .to_string();
     let mut server_hosts = collect_server_hosts(&danmaku);
-    // Older cached room details contain just `server_host`. Always keep that
-    // value as the first choice, even if a newer detail additionally carries
-    // `server_hosts`.
+    // 较旧的缓存房间详情只包含 `server_host`。始终把该值作为首选，
+    // 即使更新的详情额外携带了 `server_hosts`。
     prepend_unique_host(&mut server_hosts, &server_host);
 
-    // Join packet `uid` is the **viewer** mid, never the streamer's room uid.
+    // 加入包中的 `uid` 是**观众**的 mid，绝不是主播的房间 uid。
     let uid = danmaku
         .get("viewer_uid")
         .and_then(|v| v.as_i64())
@@ -308,11 +303,11 @@ fn collect_server_hosts(data: &Value) -> Vec<String> {
             continue;
         };
         for item in items {
-            // `parse_room_detail_from_data` stores the initial endpoint list
-            // as strings in `raw.danmaku.server_hosts`; newer API responses
-            // use `host_list`, while the legacy `getConf` endpoint calls the
-            // same shape `host_server_list`. Accept all official spellings so
-            // a reconnect can rotate through the refreshed gateways.
+            // `parse_room_detail_from_data` 会把初始节点列表以字符串形式存入
+            // `raw.danmaku.server_hosts`；更新的 API 响应使用 `host_list`，
+            // 而旧的 `getConf` 接口把同样的结构称为 `host_server_list`。
+            // 这里接受所有官方写法，
+            // 使重连能够在刷新后的网关之间轮换。
             let Some(host) = item
                 .as_str()
                 .or_else(|| item.get("host").and_then(Value::as_str))
@@ -373,8 +368,8 @@ impl BilibiliDanmakuArgs {
 
         let mut hosts = collect_server_hosts(data);
         if hosts.is_empty() {
-            // Keep a known-good host if an otherwise valid response omits the
-            // optional list. This is common on some CDN edge responses.
+            // 当一个本来有效的响应缺少这个可选列表时，保留已知可用的主机。
+            // 这在部分 CDN 边缘响应中很常见。
             prepend_unique_host(&mut hosts, &self.server_host);
         }
         let primary = hosts.first().cloned().ok_or("B站没有返回弹幕服务器地址")?;
@@ -390,10 +385,10 @@ pub fn encode_packet(body: &[u8], operation: u32) -> Vec<u8> {
     let packet_len = (body.len() + 16) as u32;
     let mut buf = Vec::with_capacity(packet_len as usize);
     buf.extend_from_slice(&packet_len.to_be_bytes());
-    buf.extend_from_slice(&16u16.to_be_bytes()); // header length
-    buf.extend_from_slice(&0u16.to_be_bytes()); // protocol version (JSON for send)
+    buf.extend_from_slice(&16u16.to_be_bytes()); // header 长度
+    buf.extend_from_slice(&0u16.to_be_bytes()); // 协议版本（发送时用 JSON）
     buf.extend_from_slice(&operation.to_be_bytes());
-    buf.extend_from_slice(&1u32.to_be_bytes()); // sequence
+    buf.extend_from_slice(&1u32.to_be_bytes()); // 序号
     buf.extend_from_slice(body);
     buf
 }
@@ -425,7 +420,7 @@ fn inflate_brotli(body: &[u8]) -> Option<Vec<u8>> {
     if reader.read_to_end(&mut out).is_ok() && !out.is_empty() {
         Some(out)
     } else {
-        // Fallback: whole-buffer API when streaming decompress fails.
+        // 兜底：流式解压失败时改用整缓冲区 API。
         out.clear();
         if brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut out).is_ok()
             && !out.is_empty()
@@ -437,7 +432,7 @@ fn inflate_brotli(body: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Test-only allocating wrapper around the streaming packet decoder.
+/// 仅供测试使用的分配式包装，内部是流式数据包解码器。
 #[cfg(test)]
 fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
     let mut out = Vec::new();
@@ -445,10 +440,10 @@ fn decode_packets(data: &[u8]) -> Vec<DanmakuEvent> {
     out
 }
 
-/// Decode a packet buffer directly into a caller-owned sink.
+/// 把数据包缓冲区直接解码进调用方持有的 sink。
 ///
-/// The websocket loop can emit each event as it is decoded, avoiding a
-/// short-lived `Vec<DanmakuEvent>` for every busy-room frame.
+/// websocket 循环可以在解码出每个事件时立即发出，
+/// 避免为每个繁忙房间的帧都创建一个短命的 `Vec<DanmakuEvent>`。
 fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     let mut offset = 0usize;
     while offset + 16 <= data.len() {
@@ -465,17 +460,16 @@ fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
         offset += packet_len;
 
         match operation {
-            // Heartbeat reply / popularity — ignore
+            // 心跳应答／人气值 —— 忽略
             3 => {}
-            // Auth reply — ignore (handled in run_loop)
+            // 认证应答 —— 忽略（在 run_loop 中处理）
             8 => {}
-            // Notify / danmaku payload
+            // 通知／弹幕数据
             5 => {
                 match protocol_version {
-                    // Compressed frames expand into nested packets (headers +
-                    // bodies). They necessarily own a decompression buffer,
-                    // but the recursive decoder streams events from it rather
-                    // than allocating an additional event vector.
+                    // 压缩帧会展开为嵌套数据包（header + body）。它们必然要
+                    // 持有一个解压缓冲区，但递归解码器是从中流式发出事件，
+                    // 而不是再分配一个事件向量。
                     2 | 3 => {
                         let payload = if protocol_version == 2 {
                             inflate_zlib(body)
@@ -494,9 +488,9 @@ fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
                         }
                         parse_notify_body_with(&payload, emit);
                     }
-                    // Raw JSON payloads borrow the websocket frame directly;
-                    // copying them was a measurable allocation source in
-                    // high-traffic rooms.
+                    // 原始 JSON 负载直接借用 websocket 帧；
+                    // 在高流量房间里，复制它们曾是可测量的
+                    // 内存分配来源。
                     _ => parse_notify_body_with(body, emit),
                 }
             }
@@ -505,12 +499,12 @@ fn decode_packets_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     }
 }
 
-/// The outcome carried by Bilibili's auth reply packet (op=8).
+/// Bilibili 认证应答包（op=8）携带的结果。
 ///
-/// A few edge nodes omit the JSON body, which older clients have always
-/// treated as a successful join. Preserve that compatibility while still
-/// surfacing an explicit non-zero auth code so reconnect can refresh its
-/// short-lived token instead of waiting for the server to close the socket.
+/// 少数边缘节点不返回 JSON body，老客户端一向把这种情况当作加入成功。
+/// 这里保留该兼容行为，同时仍暴露明确的非零认证码，
+/// 使重连可以刷新其短时效 token，
+/// 而不是等服务器关闭套接字。
 fn auth_reply_result(data: &[u8]) -> Option<Result<(), i64>> {
     let mut offset = 0usize;
     while offset + 16 <= data.len() {
@@ -540,7 +534,7 @@ fn auth_reply_result(data: &[u8]) -> Option<Result<(), i64>> {
 fn parse_notify_body_with(body: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     let text = String::from_utf8_lossy(body);
     let mut emitted = false;
-    // One WS body may contain multiple JSON objects glued by control bytes.
+    // 一个 WS body 可能包含多个由控制字节粘连在一起的 JSON 对象。
     for part in text.split(|c: char| c.is_control()) {
         let part = part.trim();
         if part.len() > 2
@@ -551,7 +545,7 @@ fn parse_notify_body_with(body: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
             emitted = true;
         }
     }
-    // Fallback: whole body as single JSON
+    // 兜底：把整个 body 当作单个 JSON
     if !emitted {
         let trimmed = text.trim();
         if trimmed.starts_with('{')
@@ -571,9 +565,8 @@ fn json_stringish(v: &Value) -> String {
     }
 }
 
-// The Bilibili websocket carries image-emote metadata inline with a DANMU_MSG
-// rather than requiring a separate pack download. Keep the payload bounded
-// before it crosses the native/webview boundary.
+// Bilibili 的 websocket 会把图片表情元数据随 DANMU_MSG 一起内联下发，
+// 而不要求单独下载表情包。在它跨越原生/webview 边界之前先限制其大小。
 const MAX_DANMAKU_CONTENT_SPANS: usize = 32;
 const MAX_DANMAKU_EMOTE_TOKEN_BYTES: usize = 256;
 const MAX_DANMAKU_EMOTE_URL_BYTES: usize = 2_048;
@@ -585,9 +578,8 @@ fn is_trusted_bilibili_image_host(host: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
-/// Convert Bilibili's protocol-relative/legacy HTTP image URL to HTTPS only
-/// after its hostname has been constrained to Bilibili's image CDNs. This
-/// applies to both message emotes and SC sender avatars.
+/// 只有在主机名已被限定为 Bilibili 的图片 CDN 之后，才把其协议相对或旧式
+/// HTTP 图片 URL 转换为 HTTPS。这对消息表情和 SC 发送者头像都适用。
 fn safe_bilibili_image_url(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty()
@@ -609,9 +601,8 @@ fn safe_bilibili_image_url(value: &str) -> Option<String> {
     {
         return None;
     }
-    // Bilibili still sends HTTP in some legacy emote payloads. The trusted
-    // hostname check above makes an in-place HTTPS upgrade safe and avoids
-    // mixed-content failures in the desktop webview.
+    // Bilibili 在部分旧表情数据中仍下发 HTTP。上面对可信主机名的检查
+    // 使就地升级为 HTTPS 是安全的，也避免了桌面 webview 的混合内容失败。
     url.set_scheme("https").ok()?;
     Some(url.into())
 }
@@ -638,17 +629,17 @@ fn add_bilibili_extra_emotes(emotes: &mut HashMap<String, String>, extra: &Value
         return;
     };
     for (key, emot) in items {
-        // The map can contain the whole room's currently available pack. Only
-        // retain tokens that this particular comment actually references.
+        // 该映射可能包含整个房间当前可用的表情包。
+        // 只保留这条评论实际引用到的 token。
         if message.contains(key) {
             add_bilibili_emote(emotes, key, emot.get("url"));
         }
     }
 }
 
-/// Build ordered text/image spans following Simple Live's Bilibili decoder:
-/// a one-off whole-message emote may be at `info[0][13].url`, while inline
-/// emotes are keyed by token in JSON stored at `info[0][15].extra.emots`.
+/// 按 Bilibili Web 客户端的解码方式构建有序的文本/图片片段：
+/// 整条消息级的一次性表情可能位于 `info[0][13].url`，
+/// 而内联表情按 token 存放在 `info[0][15].extra.emots` 的 JSON 中。
 fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuContentSpan>> {
     let metadata = info.first()?.as_array()?;
     let mut emotes = HashMap::<String, String>::new();
@@ -676,8 +667,8 @@ fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuCo
     if emotes.is_empty() {
         return None;
     }
-    // Prefer the longest matching token so a future pack cannot make a
-    // shorter alias consume the prefix of a distinct emote.
+    // 优先匹配最长的 token，避免将来的表情包让较短的别名
+    // 吃掉另一个表情的前缀。
     let mut keys: Vec<&String> = emotes.keys().collect();
     keys.sort_unstable_by(|left, right| {
         right
@@ -727,8 +718,8 @@ fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuCo
 const MAX_SUPER_CHAT_PRICE: f64 = 1_000_000.0;
 const MAX_SUPER_CHAT_DURATION_SECS: u64 = 86_400;
 
-/// Bilibili provides card colours as CSS-style hex strings. Keep the decoder
-/// strict because this value is later used as an inline style in the client.
+/// Bilibili 以 CSS 风格的十六进制字符串提供卡片颜色。解码保持严格，
+/// 因为该值随后会作为内联样式用于客户端。
 fn safe_css_hex_color(value: Option<&Value>) -> Option<String> {
     let color = value?.as_str()?.trim();
     let hex = color.strip_prefix('#')?;
@@ -812,10 +803,10 @@ fn parse_super_chat_info(data: &Value) -> SuperChatInfo {
 
 pub fn parse_message_json(json_message: &str) -> Option<DanmakuEvent> {
     let obj: Value = serde_json::from_str(json_message).ok()?;
-    // Keep the command borrowed from `serde_json::Value`. It is inspected for
-    // every websocket payload, while only a subset becomes a UI event.
+    // 让命令名保持对 `serde_json::Value` 的借用。每个 websocket 负载都会检查它，
+    // 而只有其中一部分会变成 UI 事件。
     let cmd = obj.get("cmd")?.as_str()?;
-    // Newer cmds look like "DANMU_MSG:4:0:0:0"
+    // 较新的 cmd 形如 "DANMU_MSG:4:0:0:0"
     let cmd_base = cmd.split(':').next().unwrap_or(cmd);
 
     if cmd_base == "DANMU_MSG" || cmd.contains("DANMU_MSG") {
@@ -961,9 +952,8 @@ const CLOSE_GRACE_PERIOD: Duration = Duration::from_secs(2);
 struct ConnectionEnd {
     message_count: u64,
     authenticated: bool,
-    /// Set when the gateway explicitly rejected the join credential. The token
-    /// is short-lived, so one rejection is worth a refresh-and-retry; a second
-    /// one after a fresh token means the Cookie itself is no longer valid.
+    /// 当网关明确拒绝加入凭据时设置。token 是短时效的，因此第一次被拒值得
+    /// 刷新后重试；换成新 token 后再次被拒，说明 Cookie 本身已失效。
     auth_rejected: bool,
     reason: String,
     connected_for: Duration,
@@ -986,10 +976,10 @@ fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
     );
 }
 
-/// Fetch WBI signing keys from `nav`.
+/// 从 `nav` 获取 WBI 签名密钥。
 ///
-/// `nav` answers `code = -101` ("not logged in") for anonymous sessions but
-/// still carries `wbi_img`, so the code is deliberately ignored here.
+/// 对匿名会话，`nav` 会返回 `code = -101`（"未登录"），但仍携带
+/// `wbi_img`，因此这里刻意忽略该 code。
 async fn fetch_wbi_keys(client: &Client, cookie: &str) -> Result<(String, String), String> {
     let mut request = client
         .get(NAV_URL)
@@ -1051,7 +1041,7 @@ async fn refresh_connection_info(
 ) -> Result<(), String> {
     let cookie = args.refresh_cookie();
 
-    // `getDanmuInfo` always returns -352 when unsigned; sign it first.
+    // 未签名时 `getDanmuInfo` 始终返回 -352；先签名再请求。
     let keys = fetch_wbi_keys(client, &cookie).await;
     match keys {
         Ok((img_key, sub_key)) => {
@@ -1109,38 +1099,36 @@ async fn refresh_connection_info(
         .map_err(str::to_string)
 }
 
-/// How long a danmaku socket may sit idle before the kernel probes the peer.
+/// 弹幕套接字在内核开始探测对端之前可以空闲多久。
 ///
-/// Bilibili pushes chat continuously in a busy room, but a quiet room plus the
-/// 30s application heartbeat still leaves the socket idle long enough for NAT
-/// and firewall middleboxes to age out their translation entry. When that
-/// happens the peer answers the next write with an RST, which the read half
-/// reports as `os error 10054` on Windows (WSAECONNRESET) — a disconnect the
-/// application never announced. Kernel keepalive keeps the mapping warm and
-/// surfaces a genuinely dead path in bounded time.
+/// 繁忙房间里 Bilibili 会持续推送聊天，但安静房间加上 30 秒的应用层心跳，
+/// 仍会让套接字空闲到足以让 NAT 与防火墙中间设备淘汰其转换表项。
+/// 一旦发生，对端会用 RST 回应下一次写入，读半边在 Windows 上把它报为
+/// `os error 10054`（WSAECONNRESET）—— 一次应用层从未宣告的断开。
+/// 内核 keepalive 能让映射保持活跃，
+/// 并在有限时间内暴露真正不可用的链路。
 const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
-/// Apply keepalive and `TCP_NODELAY` to a freshly connected danmaku socket.
+/// 为刚建立连接的弹幕套接字应用 keepalive 与 `TCP_NODELAY`。
 ///
-/// Split out from the dial so the option set can be asserted against a real
-/// socket: reading this code is not evidence that the kernel accepted the knobs.
+/// 从拨号过程中拆分出来，使这组选项能对真实套接字做断言：
+/// 读代码并不能证明内核确实接受了这些参数。
 fn tune_danmaku_socket(stream: &TcpStream) {
-    // Chat frames are small and latency-sensitive; do not wait for Nagle.
+    // 聊天帧很小且对延迟敏感，不要等待 Nagle 算法。
     let _ = stream.set_nodelay(true);
     let keepalive = socket2::TcpKeepalive::new()
         .with_time(TCP_KEEPALIVE_IDLE)
         .with_interval(TCP_KEEPALIVE_INTERVAL);
-    // Best-effort: a platform that rejects an individual keepalive knob must
-    // not prevent the connection from being used.
+    // 尽力而为：某个平台拒绝单个 keepalive 参数时，
+    // 不应因此让连接不可用。
     let _ = socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive);
 }
 
-/// Open the TCP transport for a danmaku socket with keepalive and `TCP_NODELAY`.
+/// 为弹幕套接字打开 TCP 传输，并启用 keepalive 与 `TCP_NODELAY`。
 ///
-/// `connect_async` would dial with kernel defaults, which on Windows means
-/// keepalive is off entirely. Building the socket here is the only place the
-/// options can be set before the TLS handshake consumes the stream.
+/// `connect_async` 会用内核默认值拨号，在 Windows 上意味着 keepalive 完全关闭。
+/// 在这里自行构造套接字，是 TLS 握手消费该流之前唯一能设置这些选项的位置。
 async fn open_danmaku_tcp(host: &str) -> std::io::Result<TcpStream> {
     let stream = TcpStream::connect((host, 443)).await?;
     tune_danmaku_socket(&stream);
@@ -1153,11 +1141,10 @@ async fn run_connection(
     host: &str,
 ) -> ConnectionEnd {
     let url = format!("wss://{host}/sub");
-    // Bilibili's edge nodes now reset the `/sub` socket immediately after the
-    // upgrade unless it carries browser-like headers, which manifests as an
-    // instant `received=0`, never-authenticated reconnect loop. Mirror the
-    // other danmaku backends and present Origin / User-Agent (and the session
-    // cookie when available) on the handshake.
+    // 如今 Bilibili 的边缘节点在 upgrade 之后会立即重置不带类浏览器请求头的
+    // `/sub` 套接字，表现为瞬间 `received=0`、始终无法认证的重连循环。
+    // 这里与其他弹幕后端保持一致，在握手时带上 Origin / User-Agent
+    // （以及可用时的会话 cookie）。
     let mut request = match url.as_str().into_client_request() {
         Ok(request) => request,
         Err(error) => {
@@ -1213,7 +1200,7 @@ async fn run_connection(
     let connected_at = time::Instant::now();
     let (mut write, mut read) = ws.split();
 
-    // Auth / join. `uid` must be viewer mid (or 0).
+    // 认证／加入。`uid` 必须是观众 mid（或 0）。
     let join_body = serde_json::json!({
         "uid": args.uid,
         "roomid": args.room_id,
@@ -1236,9 +1223,9 @@ async fn run_connection(
     }
 
     let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
-    // When a busy frame takes longer than one interval to decode, the default
-    // `Burst` policy would send several heartbeats back-to-back. Bilibili can
-    // close such a connection as malformed/rate-limited, so skip missed ticks.
+    // 当某个繁忙帧的解码耗时超过一个心跳间隔时，默认的 `Burst` 策略会连续
+    // 发出多个心跳。Bilibili 可能把这种连接当作格式错误或超频而关闭，
+    // 因此跳过错过的 tick。
     heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
     let mut idle_check = time::interval(INBOUND_IDLE_CHECK_INTERVAL);
@@ -1282,9 +1269,9 @@ async fn run_connection(
                                     }
                                 }
                                 decode_packets_with(&bin, &mut |ev| {
-                                    // First payload can arrive before an op=8 reply.
-                                    // Treat it as a healthy connection and announce that
-                                    // state before forwarding the first chat event.
+                                    // 第一个负载可能早于 op=8 应答到达。
+                                    // 把它视为连接健康，并在转发第一条聊天事件之前
+                                    // 先宣告该状态。
                                     if !auth_ok {
                                         auth_ok = true;
                                         emit_system(events, "弹幕服务器连接成功");
@@ -1319,9 +1306,8 @@ async fn run_connection(
         }
     };
 
-    // Explicitly finish the local half as well; otherwise a sequence of
-    // reconnects can leave native TLS/WebSocket resources pending until their
-    // drop tasks get scheduled under load.
+    // 同时显式收尾本地半边；否则连续多次重连可能让原生 TLS/WebSocket
+    // 资源一直挂着，直到高负载下它们的 drop 任务被调度。
     let _ = time::timeout(CLOSE_GRACE_PERIOD, write.close()).await;
     ConnectionEnd {
         message_count: msg_count,
@@ -1347,13 +1333,12 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
     }
 
     let refresh_client = crate::http_client::default_client();
-    // Host rotation stays independent of the reconnect policy: even a healthy
-    // socket that Bilibili closes should try the next edge rather than pinning
-    // every later attempt to one gateway.
+    // 主机轮换与重连策略保持独立：即使是被 Bilibili 关闭的健康套接字，
+    // 也应该尝试下一个边缘节点，
+    // 而不是把后续所有尝试都钉在同一个网关上。
     let mut host_attempt = 0_u32;
-    // A token is short-lived, so the first rejection is worth one refresh; a
-    // second rejection with a freshly fetched token means the credential
-    // itself is not accepted, and no amount of retrying will change that.
+    // token 是短时效的，因此第一次被拒值得刷新一次；用刚获取的 token 再次被拒，
+    // 说明凭据本身不被接受，再怎么重试都不会改变结果。
     let mut token_refreshed_after_rejection = false;
     let mut policy = ReconnectPolicy::with_defaults("bilibili");
 
@@ -1402,10 +1387,9 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
             }
         }
 
-        // Tokens and edge hosts are short-lived. Refreshing before each retry
-        // handles token expiry and lets us leave an unhealthy gateway, while
-        // retaining the previous values if Bilibili's metadata endpoint is
-        // temporarily unavailable.
+        // token 和边缘主机都是短时效的。每次重试前刷新既能应对 token 过期，
+        // 也能让我们离开不健康的网关，同时在 Bilibili 的元数据接口
+        // 暂时不可用时保留此前的取值。
         match refresh_connection_info(&refresh_client, &mut args).await {
             Ok(()) => {
                 if rejected {
@@ -1473,10 +1457,9 @@ mod tests {
         (format!("http://{address}/msg/send"), server)
     }
 
-    /// The RST this guards against (`os error 10054`) came from a middlebox
-    /// dropping an idle mapping, so the fix is only real if the kernel actually
-    /// accepted the options. Assert against a live socket rather than trusting
-    /// that the setter was called.
+    /// 这里要防的 RST（`os error 10054`）来自中间设备丢弃空闲映射，
+    /// 因此只有内核确实接受了这些选项，修复才算真实生效。
+    /// 对活动套接字做断言，而不是相信 setter 已被调用。
     #[tokio::test]
     async fn a_danmaku_socket_gets_keepalive_and_nodelay() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1485,8 +1468,8 @@ mod tests {
         let stream = tokio::net::TcpStream::connect(address).await.unwrap();
         let _server = accepted.await.unwrap();
 
-        // Baseline: both options are off by default, so the assertions below
-        // observe this call rather than a kernel default that happens to match.
+        // 基线：两个选项默认都是关闭的，因此下面的断言观察的是这次调用，
+        // 而不是恰好匹配的内核默认值。
         assert!(!stream.nodelay().unwrap(), "nodelay is on before tuning");
         assert!(
             !socket2::SockRef::from(&stream).keepalive().unwrap(),
@@ -1498,8 +1481,8 @@ mod tests {
         assert!(stream.nodelay().unwrap(), "nodelay was not applied");
         let socket = socket2::SockRef::from(&stream);
         assert!(socket.keepalive().unwrap(), "keepalive was not enabled");
-        // The idle time and probe interval are what keep a NAT mapping warm;
-        // enabling keepalive with the kernel's 2h default would not.
+        // 真正让 NAT 映射保持活跃的是空闲时间与探测间隔；
+        // 只启用 keepalive 而沿用内核 2 小时默认值是不够的。
         assert_eq!(socket.tcp_keepalive_time().unwrap(), TCP_KEEPALIVE_IDLE);
         #[cfg(not(target_os = "windows"))]
         assert_eq!(
@@ -1592,8 +1575,8 @@ mod tests {
     fn parse_danmu_msg_reads_one_off_emote_metadata_and_rejects_untrusted_url() {
         let mut metadata = vec![Value::Null; 14];
         metadata[13] = serde_json::json!({
-            // A real live-emote URL shape: unlike inline pack emotes, live
-            // messages can use `/bfs/live/` and legacy HTTP.
+            // 一个真实的直播表情 URL 形态：与内联表情包不同，
+            // 直播消息可能使用 `/bfs/live/` 和旧式 HTTP。
             "url": "http://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png"
         });
         let payload = serde_json::json!({
@@ -1891,7 +1874,7 @@ mod tests {
 
     #[test]
     fn zlib_nested_packet_roundtrip() {
-        // Build a nested op=5 JSON packet, zlib-compress as outer ver=2 body.
+        // 构造嵌套的 op=5 JSON 数据包，并以 zlib 压缩为外层 ver=2 的 body。
         let inner_json = br#"{"cmd":"DANMU_MSG","info":[[0,1,25,0],"nested",[1,"carol",0]]}"#;
         let inner = encode_packet(inner_json, 5);
         use flate2::Compression;
@@ -1901,7 +1884,7 @@ mod tests {
         enc.write_all(&inner).unwrap();
         let compressed = enc.finish().unwrap();
 
-        // Outer packet: ver=2, op=5
+        // 外层数据包：ver=2, op=5
         let mut outer = Vec::new();
         let packet_len = (compressed.len() + 16) as u32;
         outer.extend_from_slice(&packet_len.to_be_bytes());

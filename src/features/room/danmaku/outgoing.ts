@@ -1,18 +1,17 @@
 /**
- * Bilibili Live's current ordinary-web-composer default. The service can
- * provide this policy per account, but rLive has no supported read contract
- * for that value yet.
+ * Bilibili 直播当前普通 Web 输入框的默认值。服务可以按账号下发该策略，
+ * 但 rLive 尚无可支持的读取契约。
  */
 export const BILIBILI_LIVE_DANMAKU_MAX_UTF16_UNITS = 20;
 
-/** Matches the official web composer's JavaScript String.length metric. */
+/** 与官方 Web 输入框相同的 JavaScript String.length 度量。 */
 export function bilibiliDanmakuUtf16Units(value: string): number {
   return value.length;
 }
 
 /**
- * Caps text at a UTF-16-unit boundary without slicing through an astral
- * character. `for…of` yields whole Unicode code points, unlike String.slice.
+ * 在 UTF-16 码元边界截断文本而不切开增补平面字符。`for…of` 迭代的是完整的
+ * Unicode 码点，与 String.slice 不同。
  */
 export function truncateBilibiliDanmaku(
   value: string,

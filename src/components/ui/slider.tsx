@@ -13,11 +13,11 @@ function Slider({
   ...props
 }: SliderPrimitive.Root.Props & {
   variant?: "default" | "player";
-  /** Percentage of media already buffered, rendered below the played range. */
+  /** 媒体已缓冲的百分比，渲染在已播放区段之下。 */
   buffered?: number;
 }) {
-  // Base UI accepts a scalar for a single-thumb slider and an array only for
-  // a range slider.  Keep the rendered thumb count in sync with that value.
+  // Base UI 对单滑块接受标量、仅范围滑块接受数组。
+  // 让渲染的滑块数量与该取值保持一致。
   const values = Array.isArray(value)
     ? value
     : Array.isArray(defaultValue)

@@ -31,8 +31,8 @@ const DANMAKU_KINDS: readonly DanmakuKind[] = [
 ];
 
 /**
- * Tauri events originate outside the TypeScript type system. Treat a malformed
- * payload as a dropped message instead of letting a busy listener throw.
+ * Tauri 事件源自 TypeScript 类型系统之外。把畸形负载当作一条被丢弃的消息，
+ * 而不是让繁忙的监听器抛异常。
  */
 export function isDanmakuEvent(value: unknown): value is DanmakuEvent {
   if (!value || typeof value !== "object") return false;
@@ -53,37 +53,35 @@ export function isDanmakuEvent(value: unknown): value is DanmakuEvent {
 const ROOM_ENTER_SUFFIXES = ["进入直播间", "进入了直播间", "进入直播间了"];
 
 function hasRoomEnterSuffix(content: string): boolean {
-  // Keep the common chat path allocation-free. The three supported notices
-  // only end in one of these two characters; importantly, `进入直播间了`
-  // ends in `了`, not `间`.
+  // 保持常见聊天路径零分配。三种受支持通知只以这两个字符之一结尾；关键是
+  // `进入直播间了` 以 `了` 结尾，而不是 `间`。
   const finalCharacter = content.at(-1);
   if (finalCharacter !== "间" && finalCharacter !== "了") return false;
   return ROOM_ENTER_SUFFIXES.some((suffix) => content.endsWith(suffix));
 }
 
 /**
- * A few relays encode an entry notice as ordinary chat text instead of the
- * shared `enter` event. Normalize whitespace so both “小明进入直播间” and
- * “小明 进入了直播间” are suppressed consistently after an upstream fallback.
+ * 部分中继把进房通知编码为普通聊天文本而不是共享的 `enter` 事件。归一化空白
+ * 使"小明进入直播间"和"小明 进入了直播间"在上游兜底之后
+ * 都能被一致地抑制。
  */
 function isRoomEnterNotice(kind: DanmakuKind, content: string): boolean {
   if (kind === "enter") return true;
-  // This runs for every chat line. Avoid allocating a whitespace-normalized
-  // copy for ordinary messages. `进入直播间了` is intentionally included in
-  // the fast path as it ends in `了` rather than `间`.
+  // 它对每条聊天行都会运行。避免为普通消息分配空白归一化副本。`进入直播间了`
+  // 刻意纳入快速路径，因为它以 `了` 结尾而非 `间`。
   if (hasRoomEnterSuffix(content)) return true;
   const finalCharacter = content.at(-1);
   if (finalCharacter !== "间" && finalCharacter !== "了") return false;
-  // Preserve support for relays which insert spaces inside the notice without
-  // paying the replace-all cost in the normal high-frequency path.
+  // 继续支持在通知中插入空格的中继，
+  // 同时不在高频常规路径上支付全局替换的开销。
   if (!/\s/.test(content)) return false;
   const compact = content.replaceAll(/\s+/g, "");
   return hasRoomEnterSuffix(compact);
 }
 
 /**
- * Prepares a shield matcher for high-frequency danmaku listeners. The setting
- * list is normalized only when it changes, rather than once per message.
+ * 为高频弹幕监听准备屏蔽匹配器。设置列表只在变化时归一化，
+ * 而不是每条消息一次。
  */
 export function createShieldMatcher(
   shieldWords: readonly string[],
@@ -92,17 +90,16 @@ export function createShieldMatcher(
   return (event) => matchesShieldWords(event, words);
 }
 
-/** Shared shield-word filter for the list and live floating layer. */
+/** 列表与直播悬浮层共享的屏蔽词过滤器。 */
 export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]): boolean {
   return matchesShieldWords(event, normalizedShieldWords(shieldWords));
 }
 
 /**
- * Hide service join notices everywhere. They are noisy on busy Douyu rooms;
- * Douyu additionally drops them before IPC, while this keeps other sites
- * consistent if they emit the shared `enter` event. Platform social notices
- * (“user followed the host”, “shared the room”) are equally service-level
- * noise, so the `social` kind is filtered with the same blanket rule.
+ * 在所有位置隐藏服务型进房通知。繁忙斗鱼房间里它们非常吵；
+ * 斗鱼会在 IPC 前额外丢弃它们，而这里让其他站点在发出共享 `enter` 事件时
+ * 保持一致。平台社交通知（"关注了主播"、"分享了房间"）同样是服务层噪音，
+ * 因此 `social` 类型适用同一刀切规则。
  */
 export function shouldShowValidatedInDanmakuPanel(
   event: DanmakuEvent,
@@ -130,22 +127,21 @@ export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS = 30_000;
 const MAX_CONTENT_AGGREGATION_KEYS = 512;
 
 export type DanmakuContentAggregation = {
-  /** Shared by every platform and sender; null means this event is not grouped. */
+  /** 全平台、全发送者共享；null 表示该事件不参与分组。 */
   key: string | null;
   count: number;
 };
 
 export type DanmakuContentAggregator = {
   aggregate: (event: DanmakuEvent) => DanmakuContentAggregation;
-  /** Stop a count when its displayed item has fallen out of the bounded feed. */
+  /** 当其展示条目跌出有界信息流时停止计数。 */
   forget: (key: string) => void;
   clear: () => void;
 };
 
 /**
- * Content-only key for normal chat, scoped by whether it came from the local
- * account. A room-wide "加油" burst remains compact, while a local comment
- * never gets folded into another viewer's visual treatment (or vice versa).
+ * 普通聊天使用仅内容的 key，并按是否来自本地账号区分。全房间的"加油"刷屏保持
+ * 紧凑，而本地评论绝不会折叠进另一位观众的视觉处理（反之亦然）。
  */
 export function danmakuContentAggregationKey(event: DanmakuEvent): string | null {
   if (event.kind !== "chat") return null;
@@ -159,8 +155,8 @@ export function aggregatedDanmakuText(content: string, count: number): string {
 }
 
 /**
- * Maintains a bounded, configurable sliding content window. It deliberately
- * ignores gifts and SC because those messages carry independent semantics.
+ * 维护有界、可配置的滑动内容窗口。它刻意忽略礼物和 SC，
+ * 因为这些消息携带独立语义。
  */
 export function createDanmakuContentAggregator(
   enabled: boolean,
@@ -193,8 +189,8 @@ export function createDanmakuContentAggregator(
       const count =
         previous && at >= previous.at && at - previous.at <= safeWindowMs ? previous.count + 1 : 1;
 
-      // Map insertion order doubles as a small LRU queue. A burst containing
-      // many unique comments therefore cannot retain unbounded key history.
+      // Map 的插入顺序兼作小型 LRU 队列。包含大量唯一评论的突发流量
+      // 因此无法保留无界的键历史。
       entries.delete(key);
       entries.set(key, { at, count });
       trimToCapacity();
@@ -209,10 +205,7 @@ export function createDanmakuContentAggregator(
   };
 }
 
-/**
- * Floating track text (Simple Live style): content only.
- * Super chat keeps a short SC marker for emphasis.
- */
+/** 悬浮轨道文本：只显示内容。Super chat 保留简短的 SC 标记以示强调。 */
 export function floatingDanmakuText(event: DanmakuEvent): string {
   const content = event.content.trim();
   if (!content) return "";

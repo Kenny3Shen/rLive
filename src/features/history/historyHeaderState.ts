@@ -39,7 +39,7 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-/** Publish page-owned actions for controls rendered by the parent Shell. */
+/** 发布页面自有操作，供父级 Shell 渲染的控件使用。 */
 export function useHistoryHeaderState(state: HistoryHeaderState) {
   const ownerRef = useRef<symbol | undefined>(undefined);
   if (!ownerRef.current) ownerRef.current = Symbol("history-header");
@@ -54,7 +54,7 @@ export function useHistoryHeaderState(state: HistoryHeaderState) {
   }, []);
 }
 
-/** Subscribe from Shell without coupling it to the lazy history page module. */
+/** 由 Shell 订阅，同时不与懒加载的历史页模块耦合。 */
 export function useHistoryHeaderSnapshot(): HistoryHeaderState {
   return useSyncExternalStore(
     subscribe,

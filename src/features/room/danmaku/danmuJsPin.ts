@@ -17,9 +17,8 @@ type InternalInstance = DanmuJsInstance & {
 };
 
 /**
- * `DanmuJs.destroy()` deletes every own property, so a torn-down instance keeps
- * its identity but loses its methods. Teardown paths still hold a reference to
- * the pin they were carrying, so check before touching one.
+ * `DanmuJs.destroy()` 会删除所有自身属性，被销毁的实例保有身份但失去方法。
+ * 销毁路径仍持有其所携带钉住的引用，因此触碰前先检查。
  */
 function isUsable(instance: DanmuJsInstance): boolean {
   return typeof instance.removeComment === "function";
@@ -37,13 +36,12 @@ function queuedBullet(instance: DanmuJsInstance, id: string): InternalBullet | n
 }
 
 /**
- * Clears the single global freeze slot danmu.js keeps per instance.
+ * 清空 danmu.js 每实例唯一的全局冻结槽位。
  *
- * `freezeComment` sets `freezeId` plus `mouseControl`, and only `restartComment`
- * / `removeComment` clear them again. Any pin that ends without going through
- * those leaves the instance believing a comment is still held, which suppresses
- * its own pointer handling for the rest of the session. Only the holder releases
- * the slot, so a pin that was already superseded leaves it alone.
+ * `freezeComment` 设置 `freezeId` 与 `mouseControl`，只有 `restartComment` /
+ * `removeComment` 会再次清除它们。任何未经这两个路径结束的钉住都会让实例
+ * 以为仍有评论被冻结，从而在整个会话剩余时间内抑制其自身的指针处理。
+ * 只有持有者释放槽位；已被取代的钉住不去动它。
  */
 export function releaseDanmuJsFreezeLock(instance: DanmuJsInstance, id: string): void {
   if (!isUsable(instance)) return;
@@ -54,12 +52,11 @@ export function releaseDanmuJsFreezeLock(instance: DanmuJsInstance, id: string):
 }
 
 /**
- * Gives up a pin without deciding what happens to the bullet.
+ * 放弃一次钉住，不决定 bullet 的去向。
  *
- * Hands the freeze slot back and downgrades `forcedPause`, the state only an
- * explicit restart leaves. Callers that are tearing the bullet down anyway use
- * this: `Bullet.remove()` runs `pauseMove()` first, which preserves
- * `forcedPause`, so a bullet left in that state could come back parked.
+ * 交还冻结槽位并把 `forcedPause` 降级 —— 这是只有显式 restart 才能离开的状态。
+ * 反正要销毁 bullet 的调用方使用这一支：`Bullet.remove()` 先运行 `pauseMove()`，
+ * 它会保留 `forcedPause`，留在这个状态的 bullet 可能以停驻状态复活。
  */
 export function releaseDanmuJsPin(instance: DanmuJsInstance, id: string): void {
   if (!isUsable(instance)) return;
@@ -69,12 +66,11 @@ export function releaseDanmuJsPin(instance: DanmuJsInstance, id: string): void {
 }
 
 /**
- * Whether the bullet would sit still indefinitely.
+ * 判断 bullet 是否会无限期静止。
  *
- * `forcedPause` is the pinned state, and only an explicit restart leaves it. A
- * plain `paused` is equally terminal while the main loop is running, because
- * nothing else will come back to this bullet — only a paused loop resumes its
- * whole queue on the next `play()`.
+ * `forcedPause` 是钉住状态，只有显式 restart 能离开。普通 `paused` 在主循环
+ * 运行期间同样是终态，因为没有其他东西会回到这颗 bullet —— 只有暂停的循环
+ * 才会在下一次 `play()` 时恢复它的整条队列。
  */
 function isParked(bullet: InternalBullet, mainStatus: string | undefined): boolean {
   if (bullet.status === "forcedPause") return true;
@@ -82,12 +78,11 @@ function isParked(bullet: InternalBullet, mainStatus: string | undefined): boole
 }
 
 /**
- * Puts a pinned bullet back in motion.
+ * 让被钉住的 bullet 重新运动。
  *
- * Returns `false` when the bullet is still parked afterwards, so the caller can
- * fall back to removing it instead of leaving it frozen on screen: a parked
- * bullet has no running CSS transition, so the `transitionend` that its removal
- * depends on never fires and it would occupy its track forever.
+ * 若之后 bullet 仍处于停驻状态则返回 `false`，调用方可改用移除而不是把它冻在
+ * 屏幕上：停驻的 bullet 没有运行中的 CSS transition，其删除所依赖的
+ * `transitionend` 永远不会触发，会永远占着车道。
  */
 export function resumeDanmuJsPin(instance: DanmuJsInstance, id: string): boolean {
   if (!isUsable(instance)) return true;
@@ -96,30 +91,30 @@ export function resumeDanmuJsPin(instance: DanmuJsInstance, id: string): boolean
   if (!main) return false;
 
   const bullet = queuedBullet(instance, id);
-  // Not in the render queue any more: nothing is stuck on screen.
+  // 已经不在渲染队列里：屏幕上没有任何卡住的东西。
   if (!bullet) return true;
-  // A stopped main loop already emptied its container, so there is nothing to
-  // restart into: the caller should drop the comment instead.
+  // 停止的主循环已经清空了容器，没有可以重启进入的状态：
+  // 调用方应改为丢弃该评论。
   if (main.status === "closed") return false;
 
-  // The only public call that passes `force` to `Bullet.startMove`, and the one
-  // that clears danmu.js' own freeze bookkeeping. On a paused main loop it just
-  // marks the bullet `paused`, which is what the next `play()` expects.
+  // 唯一一个向 `Bullet.startMove` 传 `force` 的公开调用，
+  // 也是清除 danmu.js 自身冻结记账的那一个。主循环暂停时它只是把 bullet 标记为
+  // `paused`，正是下一次 `play()` 所期待的状态。
   instance.restartComment(id);
   if (!isParked(bullet, main.status)) return true;
 
-  // `Main.play()` resumes bullets without `force` and `Bullet.startMove` returns
-  // early for `forcedPause`, so a pin that survived the restart above can only be
-  // revived by forcing the move here.
+  // `Main.play()` 不带 `force` 地恢复 bullet，而 `Bullet.startMove` 对
+  // `forcedPause` 提前返回，因此挺过了上面 restart 的钉住只能在这里强制移动才能
+  // 复活。
   if (typeof bullet.startMove !== "function") return false;
   bullet.status = "paused";
   bullet.startMove(true);
   return !isParked(bullet, main.status);
 }
 
-/** Takes a pinned bullet off screen for good, freeze slot included. */
+/** 把钉住的 bullet 彻底移出屏幕，包括冻结槽位。 */
 export function removeDanmuJsPin(instance: DanmuJsInstance, id: string): void {
-  // `removeComment` dereferences `main` unconditionally.
+  // `removeComment` 无条件解引用 `main`。
   if (!isUsable(instance) || !internalMain(instance)) return;
   releaseDanmuJsPin(instance, id);
   instance.removeComment(id);

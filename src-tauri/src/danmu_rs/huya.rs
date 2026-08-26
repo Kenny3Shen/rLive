@@ -1,9 +1,9 @@
-//! Huya danmaku — TARS binary over WebSocket (simple_live `HuyaDanmaku`).
+//! 虎牙弹幕 —— 基于 WebSocket 的 TARS 二进制协议。
 //!
-//! WS: `wss://cdnws.api.huya.com`
-//! Join packet encodes ayyuid + channel ids; chat push uri=1400.
-//! Reconnects follow the shared [`crate::danmu_rs::reconnect`] policy, which
-//! stops once the endpoint stops looking recoverable.
+//! WS：`wss://cdnws.api.huya.com`
+//! 加入包中编码 ayyuid 与频道 id；聊天推送使用 uri=1400。
+//! 重连遵循共享的 [`crate::danmu_rs::reconnect`] 策略，
+//! 一旦端点看起来不再可恢复就停止。
 
 use std::time::{Duration, Instant};
 
@@ -23,26 +23,25 @@ use crate::danmu_rs::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3
 use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
-/// simple_live heartbeat payload: base64 `ABQdAAwsNgBM`
+/// 心跳负载：base64 `ABQdAAwsNgBM`
 const SERVER_URL: &str = "wss://cdnws.api.huya.com";
 const HEARTBEAT_SECS: u64 = 60;
-/// simple_live heartbeat payload: base64 `ABQdAAwsNgBM`
+/// 心跳负载：base64 `ABQdAAwsNgBM`
 const HEARTBEAT_B64: &str = "ABQdAAwsNgBM";
 
-// The authenticated web signal service is separate from the anonymous room
-// subscription endpoint above. Do not reuse a receive connection for a
-// user-initiated write: it deliberately has no browser Cookie attached.
+// 经过认证的 Web 信令服务与上面的匿名房间订阅接口是分开的。
+// 不要把接收连接复用于用户发起的写入：它刻意不附带浏览器 Cookie。
 const SEND_SERVER_URLS: &[&str] = &["wss://wsapi.huya.com/", "wss://cdnws.api.huya.com/"];
 const SEND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_OUTGOING_CHAT_UTF16_UNITS: usize = 30;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 const HUYA_APP_SOURCE: &str = "HUYA&ZH&2052";
-// This is Huya Signal's protocol UA, not the HTTP User-Agent header. The web
-// client carries it in `WSConnectParaInfo`, `WSVerifyCookieReq`, and `UserId`.
-// The official web player currently advertises its H5-player build here.
-// `webh5&2.26.0&websocket` was retired long ago; the signal gateway uses
-// this value together with the Cookie carried in WSConnectParaInfo to decide
-// whether a browser session may issue write requests.
+// 这是虎牙信令的协议 UA，而不是 HTTP User-Agent 请求头。Web 客户端在
+// `WSConnectParaInfo`、`WSVerifyCookieReq` 和 `UserId` 中携带它。
+// 官方 Web 播放器目前在这里声明其 H5 播放器版本。
+// `webh5&2.26.0&websocket` 早已停用；信令网关会结合该值与
+// WSConnectParaInfo 中携带的 Cookie，判断某个浏览器会话
+// 是否可以发起写入请求。
 const HUYA_SIGNAL_UA: &str = "webh5&2607101000&websocket";
 const HUYA_HTTP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const WS_CMD_WUP_REQUEST: i64 = 3;
@@ -55,7 +54,7 @@ pub struct HuyaDanmakuArgs {
     pub ayyuid: i64,
     pub top_sid: i64,
     pub sub_sid: i64,
-    /// The broadcaster id used as `lPid` by `HUYA.SendMessageReq`.
+    /// `HUYA.SendMessageReq` 用作 `lPid` 的主播 id。
     pub presenter_id: i64,
 }
 
@@ -74,8 +73,8 @@ pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> 
     let mut top_sid = raw.get("topSid").and_then(json_i64).unwrap_or(0);
     let mut sub_sid = raw.get("subSid").and_then(json_i64).unwrap_or(0);
 
-    // Fallback: retain channel IDs alongside each parsed stream line. A
-    // presenter's uid (`lPid`) is not interchangeable with a channel id.
+    // 兜底：在每条解析出的线路旁保留频道 id。
+    // 主播的 uid（`lPid`）不能与频道 id 互换使用。
     if top_sid == 0
         && let Some(lines) = raw.get("lines").and_then(|v| v.as_array())
     {
@@ -109,10 +108,10 @@ pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> 
             sub_sid = top_sid;
         }
     }
-    // A public profile/short room id is not a signal channel id.  Sending it
-    // as lTid/lSid can target a different room while appearing locally valid.
-    // The room resolver is responsible for supplying canonical IDs (including
-    // the documented offline-room presenter fallback) before we reach here.
+    // 公开的资料页／短房间号不是信令频道 id。把它当作 lTid/lSid 发送，
+    // 可能在本地看起来有效却指向另一个房间。
+    // 房间解析器负责在走到这里之前提供规范 id
+    // （包括有文档记载的下播房间主播兜底）。
     if top_sid <= 0 || sub_sid <= 0 {
         return Err(AppError::new(
             "danmaku_bad_room",
@@ -144,7 +143,7 @@ pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> 
     })
 }
 
-/// Build WS join packet (wscmd type=1 + UserInfo body).
+/// 构造 WS 加入包（wscmd type=1 + UserInfo body）。
 pub fn encode_join(ayyuid: i64, tid: i64, sid: i64) -> Vec<u8> {
     let mut inner = TarsWriter::new();
     inner.write_i64(ayyuid, 0);
@@ -202,10 +201,10 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// A complete local browser session for a single explicit Huya chat send.
+/// 用于单次明确的虎牙聊天发送的完整本地浏览器会话。
 ///
-/// Deliberately omit `Debug`: Cookie content and the temporary guid must never
-/// reach logs, errors, or Tauri event payloads.
+/// 刻意不实现 `Debug`：Cookie 内容与临时 guid 绝不能进入日志、
+/// 错误信息或 Tauri 事件负载。
 #[derive(Clone)]
 struct HuyaSendCredentials {
     uid: i64,
@@ -241,11 +240,10 @@ fn credentials_from_cookie(cookie: &str) -> Option<HuyaSendCredentials> {
     if cookie.is_empty()
         || cookie.len() > MAX_COOKIE_LEN
         || cookie.contains(['\r', '\n'])
-        // A single yyuid is easy to fabricate and is insufficient proof of a
-        // logged-in web session. Browser exports often carry `udb_n` /
-        // `udb_cred`; the UDB QR flow more commonly yields `udb_biztoken`.
-        // The server-side verification response remains authoritative before
-        // any chat write.
+        // 单个 yyuid 很容易伪造，不足以证明存在已登录的 Web 会话。
+        // 浏览器导出通常带有 `udb_n` / `udb_cred`；UDB 扫码流程
+        // 更常产出 `udb_biztoken`。在任何聊天写入之前，
+        // 服务端的校验响应仍具有最终权威。
         || !["udb_n", "udb_cred", "udb_biztoken"]
             .iter()
             .any(|&key| cookie_value(cookie, key).is_some())
@@ -264,15 +262,13 @@ fn credentials_from_cookie(cookie: &str) -> Option<HuyaSendCredentials> {
     })
 }
 
-/// Whether a manually saved Cookie has enough local session fields to attempt
-/// the authenticated Huya signal handshake. The server's verify response is
-/// still authoritative and is checked before sending any text.
+/// 手动保存的 Cookie 是否具备足够的本地会话字段来尝试经过认证的虎牙信令
+/// 握手。服务器的 verify 响应仍具权威性，并会在发送任何文本前被检查。
 pub fn has_send_credentials(cookie: &str) -> bool {
     credentials_from_cookie(cookie).is_some()
 }
 
-/// Validate an ordinary manually composed chat message before the caller
-/// reserves its per-room cooldown.
+/// 在调用方占用其房间级冷却之前，校验手工编写的普通聊天消息。
 pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     let message = value.trim();
     if message.is_empty() {
@@ -308,16 +304,18 @@ fn percent_encode_query(value: &[u8]) -> String {
     out
 }
 
-/// Serialize HUYA.WSConnectParaInfo exactly as the first-party H5 player
-/// does for an authenticated signal connection.
+/// 完全按第一方 H5 播放器为经过认证的信令连接所做的方式，
+/// 序列化 HUYA.WSConnectParaInfo。
 ///
-/// Its `sCookie` field is part of the websocket URL's `baseinfo` descriptor
-/// (tag 8), not merely an Upgrade header.  Leaving it blank lets a socket
-/// connect but makes its later VerifyCookie / sendMessage frames an
-/// unauthenticated write path.
+/// 它的 `sCookie` 字段属于 websocket URL 的 `baseinfo` 描述符（tag 8），
+/// 而不仅是一个 Upgrade 请求头。留空虽然能让套接字连上，
+/// 但会使其后续的 VerifyCookie / sendMessage 帧
+/// 变成未认证的写入路径。
 fn encode_send_baseinfo(credentials: &HuyaSendCredentials) -> Vec<u8> {
     let mut writer = TarsWriter::new();
-    // HUYA.WSConnectParaInfo
+    // 6
+    // 对刻意为之的横向滑动返回相邻页签；纵向/短促手势以及位于页签条两端时返回
+    // null。向左滑动按可见顺序前进；向右滑动后退。
     writer.write_i64(credentials.uid, 0);
     writer.write_string(&credentials.guid, 1);
     writer.write_string(HUYA_SIGNAL_UA, 2);
@@ -338,7 +336,7 @@ fn build_send_baseinfo(credentials: &HuyaSendCredentials) -> String {
     percent_encode_query(encoded.as_bytes())
 }
 
-/// Wrap a serialized TARS payload in `HUYA.WebSocketCommand`.
+/// 把序列化后的 TARS 负载包进 `HUYA.WebSocketCommand`。
 fn encode_websocket_command_with_metadata(
     command: i64,
     payload: &[u8],
@@ -373,7 +371,10 @@ fn decode_websocket_command(
 
 fn encode_verify_cookie(credentials: &HuyaSendCredentials) -> Vec<u8> {
     let mut verify = TarsWriter::new();
-    // HUYA.WSVerifyCookieReq
+    // 9
+    // 全屏 HUD 溢出菜单的房间级条目（复制链接、关注、多房间）。
+    // 通常承载它们的应用 chrome 被全屏舞台覆盖，
+    // 因此由页面把它们传递下来。
     verify.write_i64(credentials.uid, 0);
     verify.write_string(HUYA_SIGNAL_UA, 1);
     verify.write_string(&credentials.cookie, 2);
@@ -384,7 +385,10 @@ fn encode_verify_cookie(credentials: &HuyaSendCredentials) -> Vec<u8> {
 }
 
 fn write_user_id(writer: &mut TarsWriter, credentials: &HuyaSendCredentials) {
-    // HUYA.UserId
+    // 9
+    // 5
+    // 镜像钉住真正触碰到的 danmu.js 1.2.1 部分：唯一的全局冻结槽位、渲染队列，
+    // 以及 `restartComment` 在主循环关闭后拒绝行动的行为。
     writer.write_i64(credentials.uid, 0);
     writer.write_string(&credentials.guid, 1);
     writer.write_string("", 2);
@@ -396,7 +400,7 @@ fn write_user_id(writer: &mut TarsWriter, credentials: &HuyaSendCredentials) {
 }
 
 fn write_content_format(writer: &mut TarsWriter) {
-    // HUYA.ContentFormat's web defaults.
+    // HUYA.ContentFormat 的 Web 默认值。
     writer.write_i64(-1, 0);
     writer.write_i64(4, 1);
     writer.write_i64(0, 2);
@@ -406,8 +410,8 @@ fn write_content_format(writer: &mut TarsWriter) {
 }
 
 fn write_bullet_format(writer: &mut TarsWriter) {
-    // HUYA.BulletFormat's web defaults. An empty nested
-    // BulletBorderGroundFormat is valid: all fields have protocol defaults.
+    // HUYA.BulletFormat 的 Web 默认值。嵌套的
+    // BulletBorderGroundFormat 为空是合法的：所有字段都有协议默认值。
     writer.write_i64(-1, 0);
     writer.write_i64(4, 1);
     writer.write_i64(0, 2);
@@ -456,15 +460,15 @@ fn encode_send_message(
     });
     let request = request.into_bytes();
     let wup = encode_wup_v3("liveui", "sendMessage", 1, &[("tReq", &request)]);
-    // Huya's web signal client authenticates the WUP wrapper itself with an
-    // MD5 and carries a per-request trace string. They are protocol metadata,
-    // not user credentials, and are regenerated for this one-off send.
+    // 虎牙的 Web 信令客户端用 MD5 为 WUP 包装本身做认证，并携带每次请求的
+    // trace 字符串。它们属于协议元数据而非用户凭据，
+    // 且会为这一次性发送重新生成。
     let trace_seed = Uuid::new_v4().simple().to_string();
     let trace_seed = &trace_seed[..16];
     let trace_id = format!("{trace_seed}:{trace_seed}:0:0");
     let checksum = hex::encode(Md5::digest(&wup));
-    // The WUP request id lives inside `wup`; the outer WebSocketCommand's id
-    // remains zero just like the official `sendWupNew` transport.
+    // WUP 请求 id 位于 `wup` 内部；外层 WebSocketCommand 的 id
+    // 保持为零，与官方 `sendWupNew` 传输一致。
     encode_websocket_command_with_metadata(WS_CMD_WUP_REQUEST, &wup, 0, &trace_id, &checksum)
 }
 
@@ -503,9 +507,9 @@ async fn connect_send_ws(credentials: &HuyaSendCredentials) -> AppResult<HuyaWeb
         match connect_async(request).await {
             Ok((socket, _)) => return Ok(socket),
             Err(error) => {
-                // Do not include the URL here: its query holds a user-bound
-                // connection descriptor. The endpoint name and error are
-                // enough for diagnostics without exposing a session detail.
+                // 这里不要包含 URL：它的 query 中带有与用户绑定的
+                // 连接描述符。端点名称和错误信息已足够诊断，
+                // 无需暴露会话细节。
                 tracing::warn!(host = %endpoint, error = %error, "huya send websocket connect failed");
                 last_error = Some(error.to_string());
             }
@@ -549,9 +553,8 @@ async fn wait_for_command(
                 Message::Binary(data) => {
                     let Ok((command, payload, _request_id)) = decode_websocket_command(&data)
                     else {
-                        // Ignore an unrelated push/control packet. This
-                        // one-off connection only waits for the matching
-                        // authentication or WUP response.
+                        // 忽略无关的推送／控制包。这个一次性连接
+                        // 只等待与之匹配的认证响应或 WUP 响应。
                         continue;
                     };
                     if command == expected_command {
@@ -626,9 +629,9 @@ fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
                 .retryable(),
         );
     };
-    // WUP v3 stores a serialized `SendMessageRsp` struct at `tRsp`.
-    // The first field is the outer struct wrapper at tag 0; treating it as
-    // `iStatus` made a successful server response look malformed.
+    // WUP v3 在 `tRsp` 处存放序列化后的 `SendMessageRsp` 结构体。
+    // 第一个字段是 tag 0 处的外层结构体包装；把它当作
+    // `iStatus` 会让成功的服务器响应看起来格式错误。
     let mut reader = TarsReader::new(response_body);
     reader.read_struct_begin(0, true).map_err(|_| {
         AppError::new("huya_send_response", "虎牙弹幕响应格式异常，请稍后重试")
@@ -640,8 +643,8 @@ fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
             .with_site("huya")
             .retryable()
     })?;
-    // tag 1 is a rich MessageNotice. We do not expose or need it; skip the
-    // complete nested struct so the toast at tag 2 can still be read safely.
+    // tag 1 是内容丰富的 MessageNotice。我们既不暴露也不需要它；
+    // 跳过整个嵌套结构体，使 tag 2 处的提示信息仍能安全读取。
     if reader.read_struct_begin(1, false).map_err(|_| {
         AppError::new("huya_send_response", "虎牙弹幕响应格式异常，请稍后重试")
             .with_site("huya")
@@ -662,9 +665,9 @@ fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
     Ok((status, toast))
 }
 
-/// Authenticate a one-off Huya signal websocket and submit exactly one text
-/// message. No automatic retry or optimistic local echo is performed: a
-/// timeout after the final write can still mean the remote service accepted it.
+/// 认证一次性的虎牙信令 websocket，并只提交一条文本消息。不做自动重试，
+/// 也不做乐观的本地回显：最后一次写入之后的超时
+/// 仍可能意味着远端服务已经接受了它。
 pub async fn send_chat(cookie: &str, args: HuyaDanmakuArgs, message: &str) -> AppResult<()> {
     let message = normalize_outgoing_message(message)?;
     if args.top_sid <= 0 || args.sub_sid <= 0 {
@@ -728,18 +731,18 @@ fn color_hex(font_color: i64) -> Option<String> {
     Some(format!("#{:06x}", font_color as u32 & 0x00ff_ffff))
 }
 
-/// Decode one WS binary frame directly into a caller-owned sink.
+/// 把一个 WS 二进制帧直接解码进调用方持有的 sink。
 ///
-/// A Huya push contains at most one chat event. Streaming it avoids creating
-/// an empty temporary vector for online-count/control frames and lets the
-/// TARS envelope borrow nested byte lists from the websocket buffer.
+/// 一次虎牙推送最多包含一个聊天事件。流式处理可避免为在线人数／控制帧
+/// 创建空的临时向量，并让 TARS 信封从 websocket 缓冲区中
+/// 借用嵌套的字节列表。
 fn decode_message_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
     let mut stream = TarsReader::new(data);
     let msg_type = match stream.read_i64(0, false) {
         Ok(v) => v,
         Err(_) => return,
     };
-    // type == 7 → push message
+    // type == 7 → 推送消息
     if msg_type != 7 {
         return;
     }
@@ -748,24 +751,24 @@ fn decode_message_with(data: &[u8], emit: &mut impl FnMut(DanmakuEvent)) {
         _ => return,
     };
     let mut push = TarsReader::new(push_bytes.as_ref());
-    // HYPushMessage: pushType@0, uri@1, msg@2, protocolType@3
+    // HYPushMessage：pushType@0、uri@1、msg@2、protocolType@3
     let _push_type = push.read_i64(0, false).unwrap_or(0);
     let uri = push.read_i64(1, false).unwrap_or(0);
     let msg = match push.read_bytes_cow(2, false) {
         Ok(bytes) if !bytes.is_empty() => bytes,
         _ => return,
     };
-    // uri 8006 = online count — ignored for now (no dedicated event kind)
+    // uri 8006 = 在线人数 —— 暂时忽略（没有专门的事件类型）
     if uri != 1400 {
         return;
     }
 
-    // HYMessage: userInfo@0, content@3, bulletFormat@6
+    // HYMessage：userInfo@0、content@3、bulletFormat@6
     let mut notice = TarsReader::new(msg.as_ref());
     let mut nick = String::new();
     let mut user_id = None;
     if notice.read_struct_begin(0, false).unwrap_or(false) {
-        // HYSender: uid@0, lMid@0 (ignored), nickName@2, gender@3
+        // HYSender：uid@0、lMid@0（忽略）、nickName@2、gender@3
         let uid = notice.read_i64(0, false).unwrap_or(0);
         user_id = (uid > 0).then(|| uid.to_string());
         nick = notice.read_string(2, false).unwrap_or_default();
@@ -822,8 +825,8 @@ fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
 }
 
 pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppResult<()> {
-    // Channel ids come from room metadata; without one the join packet can
-    // never address a channel, so this is a local refusal rather than a dial.
+    // 频道 id 来自房间元数据；没有它加入包就无法指向任何频道，
+    // 因此这里是本地拒绝而不是发起拨号。
     if args.top_sid == 0 && args.sub_sid == 0 {
         return Err(
             AppError::new("danmaku_bad_room", "虎牙频道号缺失，无法连接弹幕").with_site("huya"),
@@ -874,7 +877,7 @@ async fn run_connection_once(
     let connected_at = Instant::now();
     let (mut write, mut read) = ws.split();
 
-    // simple_live uses topSid for both tid and sid in join
+    // 加入时把 topSid 同时用作 tid 和 sid
     let tid = if args.top_sid != 0 {
         args.top_sid
     } else {
@@ -938,8 +941,7 @@ async fn run_connection_once(
     DisconnectReason::Dropped {
         messages: msg_count,
         connected_for: connected_at.elapsed(),
-        // This loop breaks without keeping the transport cause; the policy
-        // falls back to its stable summary.
+        // 这个循环退出时不保留传输层原因；策略会退回到其稳定的概要描述。
         detail: None,
     }
 }
@@ -952,7 +954,7 @@ mod tests {
     fn join_packet_non_empty() {
         let p = encode_join(1_346_609_715, 1_346_609_715, 1_346_609_715);
         assert!(p.len() > 10);
-        // Outer type tag 0 = 1
+        // 外层类型 tag 0 = 1
         let mut r = TarsReader::new(&p);
         assert_eq!(r.read_i64(0, true).unwrap(), 1);
         let body = r.read_bytes(1, true).unwrap();
@@ -1121,7 +1123,7 @@ mod tests {
     #[test]
     fn decode_empty_is_empty() {
         assert!(decode_message(&[]).is_empty());
-        assert!(decode_message(&[0x0c]).is_empty()); // ZERO at tag0 → type 0
+        assert!(decode_message(&[0x0c]).is_empty()); // tag0 处为 ZERO → type 0
     }
 
     #[test]

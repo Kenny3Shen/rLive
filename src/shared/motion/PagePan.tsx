@@ -3,8 +3,7 @@ import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { EASE_OUT_CSS, motionProfile, prefersReducedMotion } from "./tokens";
 
-// Web Animations can advance this transform on Chromium's compositor while
-// React is busy on the main thread.
+// Web Animations 可以在 React 忙于主线程时由 Chromium 合成器推进这个 transform。
 const PAGE_PAN_EASING = EASE_OUT_CSS;
 
 type PanSnapshot = {
@@ -13,20 +12,17 @@ type PanSnapshot = {
 };
 
 /**
- * Directional page pan, replacing `AnimatePresence` + variants.
+ * 方向性页面平移，取代 `AnimatePresence` + variants。
  *
- * React unmounts a subtree the moment it leaves the element tree, so an exit
- * animation needs the outgoing content kept alive past its own removal. This
- * component holds the previous child in state while it pans out, then drops
- * it — the deferred unmount that `AnimatePresence` used to provide.
+ * React 在子树离开元素树的瞬间卸载它，因此离场动画需要让离场内容在自己的移除
+ * 之后继续存活。本组件在平移离场期间于 state 中保留上一个 child，然后丢弃它 ——
+ * 即 `AnimatePresence` 曾提供的延迟卸载。
  *
- * Both pages travel the same distance, in the same direction, over the same
- * duration and ease, and both stay fully opaque: the pair reads as one
- * continuous surface sliding under the thumb rather than a cross-fade.
+ * 两个页面走过相同距离、相同方向、相同时长与缓动，且全程完全不透明：
+ * 这一对读作一块连续表面在拇指下滑动，而不是交叉淡化。
  *
- * The outgoing page is taken out of layout flow (absolute, inset-0) for the
- * length of the transition — the equivalent of Motion's `mode="popLayout"` — so
- * it cannot push the incoming page down while both are mounted.
+ * 过渡期间离场页脱离布局流（absolute, inset-0）—— 等价于 Motion 的
+ * `mode="popLayout"` —— 使它在两页同时挂载时无法把进入页往下推。
  */
 export function PagePan({
   panKey,
@@ -37,17 +33,17 @@ export function PagePan({
   className,
   contentClassName,
 }: {
-  /** Changing this starts a transition. */
+  /** 改变它会启动一次过渡。 */
   panKey: string;
-  /** 1 pans in from the trailing edge, -1 from the leading edge. */
+  /** 1 表示从尾侧进场，-1 从头侧进场。 */
   direction: 1 | -1;
-  /** Match the motion axis to the navigation control that initiated it. */
+  /** 让运动轴与发起导航的控件一致。 */
   axis?: "horizontal" | "vertical";
-  /** Disabled key changes replace their content without retaining an outgoing page. */
+  /** 禁用的 key 变化直接替换内容，不保留离场页。 */
   enabled?: boolean;
   children: ReactNode;
   className?: string;
-  /** Size each incoming/outgoing page independently from the pan container. */
+  /** 让进场/离场页相对平移容器独立设定尺寸。 */
   contentClassName?: string;
 }) {
   const scopeRef = useRef<HTMLDivElement>(null);
@@ -76,8 +72,8 @@ export function PagePan({
   const outgoing = transition.renderedKey === panKey && enabled ? transition.outgoing : null;
 
   useLayoutEffect(() => {
-    // An abandoned concurrent render must not advance the page snapshot. The
-    // next transition always starts from content React actually committed.
+    // 被放弃的并发渲染不得推进页面快照。下一次过渡总是从 React 真正提交的内容
+    // 出发。
     committedRef.current = { key: panKey, node: children };
   }, [children, panKey]);
 
@@ -97,9 +93,8 @@ export function PagePan({
     const profile = motionProfile();
     const dir = transition.direction;
     const currentAxis = transition.axis;
-    // The vertical route layer spans the clipped viewport exactly, so 100%
-    // keeps the two pages edge-to-edge. Horizontal in-page pans retain the
-    // profile's small gutter-clearing overtravel.
+    // 垂直路由层恰好铺满裁剪视口，因此 100% 使两页贴合。页内水平平移保留
+    // 配置中小小的清槽越冲量。
     const travel = currentAxis === "vertical" ? 100 : profile.tabTravel;
     const transform = (distance: number) =>
       currentAxis === "vertical"
@@ -131,14 +126,13 @@ export function PagePan({
     void Promise.all([incomingAnimation.finished, leavingAnimation.finished])
       .then(() => {
         if (disposed) return;
-        // Persist the offscreen exit position before React synchronously drops
-        // the old subtree. Some Android compositors otherwise paint the
-        // animation's canceled origin for one frame during effect cleanup.
+        // 在 React 同步丢弃旧子树之前持久化屏外离场位置。否则部分 Android 合成器
+        // 会在副作用清理期间把动画被取消的起点画出一帧。
         try {
           leavingAnimation.commitStyles();
         } catch {
-          // Older WebViews can lack commitStyles(); the synchronous removal
-          // below still leaves no scheduled frame between cancel and unmount.
+          // 较旧 WebView 可能缺少 commitStyles()；下方同步移除仍保证 cancel 与卸载之间
+          // 没有排定的帧。
         }
         flushSync(() => {
           setTransition((current) =>
@@ -147,7 +141,7 @@ export function PagePan({
         });
       })
       .catch(() => {
-        // Cancellation is expected when navigation changes again mid-flight.
+        // 导航中途再次变化时预期发生取消。
       });
 
     return () => {
@@ -160,8 +154,8 @@ export function PagePan({
   }, [enabled, outgoing, panKey, transition.axis, transition.direction]);
 
   return (
-    // `relative` positions the outgoing page, which leaves layout flow for the
-    // length of the transition so it cannot displace the incoming one.
+    // `relative` 为离场页定位，它在过渡期间脱离布局流，
+    // 从而不会挤动进入页。
     <div
       ref={scopeRef}
       className={cn("relative h-full min-h-0 min-w-0", className)}

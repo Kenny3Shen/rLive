@@ -1,10 +1,10 @@
-//! User-operated Douyu web QR login.
+//! 用户扫码的斗鱼 Web 登录。
 //!
-//! This mirrors the public QR flow used by Douyu's current passport page:
-//! `scan/generateCode` creates a mobile-app QR payload, then
-//! `japi/scan/auth` reports its state.  The one-time upstream scan code and
-//! the Cookie jar remain process-local.  Only a successful, validated Cookie
-//! header is returned to the account command for local persistence.
+//! 这里对齐斗鱼当前 passport 页面使用的公开扫码流程：
+//! `scan/generateCode` 生成手机 App 可扫的二维码内容，随后
+//! `japi/scan/auth` 上报其状态。一次性的上游 scan code 和 Cookie jar
+//! 都保持在进程内。只有校验通过的成功 Cookie header 才会返回给账号命令
+//! 用于本地持久化。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,14 +31,14 @@ const MAX_QR_PAYLOAD_LEN: usize = 8 * 1024;
 const MAX_SCAN_CODE_LEN: usize = 512;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 
-/// Data needed to render a Douyu login QR code in the client.
+/// 客户端渲染斗鱼登录二维码所需的数据。
 pub struct QrLoginStart {
     pub qr_code_url: String,
-    /// Opaque, process-local handle rather than Douyu's actual scan code.
+    /// 不透明的进程内句柄，而不是斗鱼真正的 scan code。
     pub qr_key: String,
 }
 
-/// A QR polling result. Cookie material never crosses the webview boundary.
+/// 一次扫码轮询结果。Cookie 内容绝不跨出 webview 边界。
 pub enum QrLoginPoll {
     Pending,
     Scanned,
@@ -60,7 +60,7 @@ fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
     ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Start the public Douyu web QR flow.
+/// 启动斗鱼公开的 Web 扫码流程。
 pub async fn start() -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
     let client = build_login_client(Arc::clone(&jar))?;
@@ -79,9 +79,8 @@ pub async fn start() -> AppResult<QrLoginStart> {
     let body = parse_json_response(response, "douyu_qr_generate").await?;
     let (qr_code_url, scan_code) = parse_start_response(&body)?;
 
-    // The UI necessarily receives the QR payload to render, but the scan code
-    // is never returned as a separate value. It remains paired with the
-    // bootstrap Cookie jar in this process.
+    // UI 必然会拿到用于渲染的二维码内容，但 scan code 从不作为单独的值返回。
+    // 它始终与引导用的 Cookie jar 一起留在本进程内。
     let qr_key = Uuid::new_v4().simple().to_string();
     insert_session(
         qr_key.clone(),
@@ -99,7 +98,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
     })
 }
 
-/// Poll a previously-started QR login flow.
+/// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
         return Err(
@@ -146,14 +145,14 @@ fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
     Client::builder()
         .use_native_tls()
         .cookie_provider(jar)
-        // QR authentication carries a temporary login session. Do not use a
-        // process-level HTTP(S) proxy or the app's browsing proxy for it.
+        // 扫码认证携带的是临时登录会话。不要为它使用进程级 HTTP(S) 代理
+        // 或应用的浏览代理。
         .no_proxy()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
-        // Login completion is allowed to traverse only Douyu-owned HTTPS
-        // hosts, so a server-supplied URL cannot turn this client into an
-        // authenticated request to an arbitrary destination.
+        // 登录完成过程只允许在斗鱼自有的 HTTPS 主机之间跳转，
+        // 这样服务端返回的 URL 就无法把该客户端变成
+        // 指向任意目标的已认证请求。
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if can_follow_redirect(attempt.url(), attempt.previous().len()) {
                 attempt.follow()
@@ -218,9 +217,8 @@ enum PollState {
 fn parse_poll_response(response: &Value) -> AppResult<PollState> {
     let error = api_error_code(response).ok_or_else(|| invalid_response("douyu_qr_poll"))?;
     match error {
-        // Confirmed against the current public passport page. `-2` means the
-        // app has not scanned yet; `1` means scanned and awaiting confirmation;
-        // `-1` is an expired or invalid QR code.
+        // 已对照当前公开 passport 页面确认：`-2` 表示 App 尚未扫码；
+        // `1` 表示已扫码、等待确认；`-1` 表示二维码已过期或无效。
         -2 => Ok(PollState::Pending),
         1 => Ok(PollState::Scanned),
         -1 => Ok(PollState::Expired),
@@ -342,9 +340,8 @@ fn parse_json_or_jsonp(body: &str, callback: &str) -> AppResult<Value> {
         return Ok(json);
     }
 
-    // Douyu's completion endpoint is a JSONP callback in its web client.
-    // Accept only the exact callback name selected by this module, not an
-    // arbitrary JavaScript function name returned by the server.
+    // 斗鱼的完成接口在其 Web 客户端里是 JSONP 回调。只接受本模块自己选定的
+    // 回调名，而不接受服务端返回的任意 JavaScript 函数名。
     let body = body.strip_prefix("/**/").unwrap_or(body).trim();
     let prefix = format!("{callback}(");
     let json = body.strip_prefix(&prefix).and_then(|rest| {
@@ -368,9 +365,9 @@ fn cookie_from_jar(jar: &Arc<Jar>) -> Option<String> {
         return None;
     }
 
-    // These are the authenticated Cookie fields required by Douyu's web APIs.
-    // Keep all other web Cookie fields in the stored header, but never accept
-    // a partial successful-looking login without this credential trio.
+    // 这些是斗鱼 Web API 要求的已认证 Cookie 字段。存储的 header 中保留其他
+    // 所有 Web Cookie 字段，但绝不接受缺少这三个凭据、
+    // 只是看起来成功的登录结果。
     const REQUIRED_COOKIES: [&str; 3] = ["acf_username", "acf_stk", "acf_ltkid"];
     let names = value
         .split(';')

@@ -39,8 +39,8 @@ function DrawerContent({
 }: DialogPrimitive.Popup.Props & {
   side?: DrawerSide;
   container?: DialogPrimitive.Portal.Props["container"];
-  /* Opt into the frosted material. When set, the default `bg-popover` is
-     dropped so the glass `::before` fill shows the blurred backdrop through. */
+  /* 选择毛玻璃材质。启用后放弃默认的 `bg-popover`，
+     让玻璃质感的 `::before` 填充透过模糊背景显现。 */
   glass?: boolean;
 }) {
   return (

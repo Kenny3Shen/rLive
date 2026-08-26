@@ -63,31 +63,29 @@ export type DanmakuHitRect = {
 };
 
 /**
- * Safety net for a pinned comment.
+ * 钉住评论的安全网。
  *
- * Pinning parks the danmu.js Bullet in `forcedPause`, a state only an explicit
- * restart leaves. Every dismissal path below releases it, but a comment frozen
- * across a stage resize or a layer teardown used to stay on screen forever, so
- * a pin also expires on its own. Generous on purpose: it must not interrupt
- * someone still reading the comment they pinned.
+ * 钉住会把 danmu.js 的 Bullet 停在 `forcedPause` 状态，只有显式 restart 才能离开。
+ * 下方的每条解除路径都会释放它，但曾有一条冻结的评论跨越舞台缩放或层销毁后
+ * 永远停在屏幕上，因此钉住也会自行过期。时长刻意宽松：
+ * 绝不能打断还在阅读自己钉住的评论的人。
  */
 const DANMU_JS_PIN_AUTO_RELEASE_MS = 20_000;
 /**
- * A press only pins if it stayed put, so dragging a volume/brightness gesture
- * that happens to start on a comment is not read as a pin. Mirrors the stage tap
- * thresholds in `PlayerPane`, duplicated rather than imported because that module
- * renders this one.
+ * 只有保持原地的按压才构成钉住，这样碰巧从评论上开始的音量/亮度拖拽不会被
+ * 读成钉住。对齐 `PlayerPane` 的舞台点按阈值；复制而非导入，
+ * 因为那个模块渲染本模块。
  */
 const DANMU_JS_PIN_TAP_MAX_DISTANCE_PX = 14;
 const DANMU_JS_PIN_TAP_MAX_DURATION_MS = 320;
 /**
- * How long a claimed press keeps suppressing the mouse events derived from it.
- * `click` follows its `pointerup` in the same task, and the `dblclick` of a
- * double press follows the second one, so this only has to outlast one gesture.
+ * 被认领的按压在多长时间内继续抑制由它派生的鼠标事件。`click` 与其 `pointerup`
+ * 在同一任务中先后发生，双击的 `dblclick` 跟在第二次之后，
+ * 所以只需比一次手势多活片刻。
  */
 const DANMU_JS_PIN_CLAIM_WINDOW_MS = 500;
 
-/** Short, mostly stationary press: a pin rather than the start of a gesture. */
+/** 短促且基本不动的按压：是钉住，不是手势的开始。 */
 export function isDanmakuPinTap(deltaX: number, deltaY: number, durationMs: number): boolean {
   return (
     durationMs >= 0 &&
@@ -132,11 +130,10 @@ type DanmuJsDanmakuProps = {
   roomUserName?: string;
   large?: boolean;
   /**
-   * Hold incoming comments back by this many milliseconds.
+   * 把到达的评论延后这么多毫秒。
    *
-   * The multi-view clock alignment can play a feed several seconds behind its
-   * live edge; comments arrive from the server in real time, so without the
-   * same delay they would describe a moment the picture has not reached yet.
+   * 多视图时钟对齐可能让一条流落后其直播边缘数秒；评论由服务器实时下发，
+   * 不加同样的延迟，它们描述的就是画面尚未到达的时刻。
    */
   delayMs?: number;
 };
@@ -158,9 +155,9 @@ type RuntimeBullet = {
   meta: DanmuJsBulletMeta;
   layer: DanmuJsRenderLayer;
   instance: DanmuJsInstance;
-  /** When the comment was handed to danmu.js, for the ghost sweep below. */
+  /** 交给 danmu.js 的时间，供下方幽灵清扫使用。 */
   sentAt: number;
-  /** Set from the attach hook: only an attached comment has a bullet on screen. */
+  /** 由挂载钩子设置：只有已挂载的评论屏幕上才有 bullet。 */
   attached: boolean;
 };
 
@@ -397,14 +394,13 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const removeRecordRef = useRef<(id: string, removeFromInstance: boolean) => void>(() => {});
 
   /**
-   * Undoes one pin on the danmu.js side, given the record that holds it.
+   * 在 danmu.js 一侧撤销一次钉住，传入持有它的记录。
    *
-   * `dropped` means the bullet is going away regardless — its own record is
-   * being torn down, or the whole layer is — so the freeze only has to be handed
-   * back. Otherwise the bullet has to move again, and when danmu.js cannot
-   * restart it the comment is removed instead: a bullet stranded in
-   * `forcedPause` has no running transition, so the `transitionend` that its own
-   * removal waits for would never arrive and it would hold its track forever.
+   * `dropped` 表示 bullet 无论如何都要消失 —— 它自己的记录正在销毁或整个层正在
+   * 销毁 —— 因此只需交还冻结状态。否则 bullet 必须重新移动，而当 danmu.js 无法
+   * 重启它时改为移除评论：困在 `forcedPause` 的 bullet 没有运行中的 transition，
+   * 其自身删除所等待的 `transitionend` 永远不会到来，
+   * 会永远占着车道。
    */
   const unpinRecord = useCallback((record: RuntimeBullet, id: string, dropped: boolean) => {
     const element = record.meta.element;
@@ -420,7 +416,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       removeRecordRef.current(id, true);
       return;
     }
-    // A resumed bullet only moves again once its main loop ticks.
+    // 恢复的 bullet 要等主循环 tick 之后才会重新移动。
     if (record.instance.status === "paused") record.instance.play();
   }, []);
   const unpinRecordRef = useRef(unpinRecord);
@@ -428,7 +424,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     unpinRecordRef.current = unpinRecord;
   }, [unpinRecord]);
 
-  /** Ends the current pin, if any. See {@link unpinRecord} for `dropped`. */
+  /** 结束当前的钉住（若有）。`dropped` 见 {@link unpinRecord}。 */
   const releaseSelection = useCallback(
     (dropped = false) => {
       const selectedId = selectedIdRef.current;
@@ -463,9 +459,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       aggregationTargetsRef.current.delete(key);
       aggregatorRef.current.forget(key);
     }
-    // The map entry is already gone, so `releaseSelection` could no longer find
-    // the record: unpin through the one still in hand, before the element
-    // references that cleanup needs are dropped below.
+    // map 条目已经不在了，`releaseSelection` 无法找到记录：趁下方丢弃清理所需的
+    // 元素引用之前，用手头仍在的这条执行 unpin。
     if (selectedIdRef.current === id) {
       selectedIdRef.current = null;
       setHoverTarget(null);
@@ -515,15 +510,13 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, []);
 
   /**
-   * Drops records for comments danmu.js accepted but never rendered.
+   * 丢弃 danmu.js 接受却从未渲染的评论记录。
    *
-   * `Main.readData` discards a real-time comment without building a Bullet when
-   * every lane is busy, and that path fires neither `bullet_remove` nor the
-   * detach hook. Those records used to accumulate until the active budget was
-   * exhausted, at which point the oldest record — a bullet still scrolling across
-   * the stage — was evicted, which is why the first comments of a busy room
-   * vanished mid-flight. Reclaiming them here keeps the budget honest about what
-   * is actually on screen.
+   * `Main.readData` 在所有车道都忙时会直接丢弃实时评论而不构建 Bullet，
+   * 且该路径既不触发 `bullet_remove` 也不触发 detach 钩子。这些记录曾不断累积
+   * 直到活动预算耗尽，然后最旧的记录 —— 一颗还在舞台上滚动的 bullet —— 被
+   * 淘汰，这正是繁忙房间的前几条评论中途消失的原因。在这里回收它们，
+   * 让预算如实反映屏幕上实际存在的内容。
    */
   const sweepGhostRecords = useCallback(() => {
     const ghosts = danmuGhostRecordIds(recordOrderRef.current, recordsRef.current);
@@ -566,9 +559,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         if (aggregation.key && aggregation.count > 1) {
           const targetId = aggregationTargetsRef.current.get(aggregation.key);
           const target = targetId ? recordsRef.current.get(targetId) : undefined;
-          // Merging into a comment that never reached the screen would hide the
-          // repeat as well. A real-time comment attaches synchronously inside
-          // `sendComment`, so an unattached target can only be a silent drop.
+          // 合并进一条从未上屏的评论会把重复计数也藏掉。实时评论在 `sendComment`
+          // 内同步挂载，未挂载的目标只能是静默丢弃的结果。
           if (target?.attached) {
             updateDanmuAggregation(target.comment, aggregation.count);
             continue;
@@ -577,10 +569,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           aggregation = aggregatorRef.current.aggregate(event);
         }
 
-        // Saturation drops the newest comment, never one already in flight: a
-        // bullet that entered the stage has to be allowed to finish crossing it.
-        // Fixed comments bypass the budget because they take no scrolling lane and
-        // carry their own caps.
+        // 饱和时丢弃最新的评论，绝不在途中的那条：已进入舞台的 bullet
+        // 必须被允许走完全程。固定弹幕绕过预算，
+        // 因为它们不占用滚动车道且有自己的上限。
         if (!isPinnedDanmakuEvent(event) && recordsRef.current.size >= maxActiveComments) continue;
 
         const id = `rlive-danmu-${runtimeEpochRef.current}-${++sequenceRef.current}`;
@@ -666,7 +657,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const delayMsRef = useRef(delayMs);
   useLayoutEffect(() => {
-    // Kept in a ref so a changing hold never resubscribes the batch stream.
+    // 保存在 ref 里，使滞留值变化不会让批量流重新订阅。
     delayMsRef.current = Number.isFinite(delayMs) ? Math.max(0, Math.min(60_000, delayMs)) : 0;
   }, [delayMs]);
 
@@ -692,10 +683,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     };
   }, [active, pageVisible, reducedMotion, sessionKey]);
 
-  // Pending messages belong to a room session, not to one renderer instance.
-  // The instance below is recreated when a zero-sized host becomes measurable,
-  // so keep this boundary independent of `sizeReady` and clear the queue only
-  // when the room/visibility session actually ends.
+  // 待处理消息属于房间会话，不属于某个渲染器实例。零尺寸宿主变为可测量时下方
+  // 实例会被重建，因此这道边界要独立于 `sizeReady`，
+  // 只在房间/可见性会话真正结束时清空队列。
   useEffect(() => {
     const pendingEvents = pendingEventsRef.current;
     return () => {
@@ -769,9 +759,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       return;
     }
 
-    // A zero-sized host is common while a room tab or grid cell is entering.
-    // Tear down any old bullets, but leave the bounded pending queue intact so
-    // the first valid measurement can flush messages received in the interim.
+    // 房间页签或网格单元进入时宿主尺寸为零很常见。拆除旧 bullet，
+    // 但保留有界待处理队列，让第一次有效测量能冲刷期间收到的消息。
     if (!sizeReady) {
       clearRenderedState(true);
       return;
@@ -803,9 +792,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
               meta.countElement = undefined;
               meta.countSlotElement = undefined;
             }
-            // A real-time comment can be rejected when every channel is
-            // occupied. danmu.js does not emit bullet_remove for that path,
-            // so release the local record from the detach hook as well.
+            // 所有通道都被占用时实时评论可能被拒绝。danmu.js 对该路径不发 bullet_remove，
+            // 因此也要从 detach 钩子释放本地记录。
             if (meta) removeRecordRef.current(meta.id, false);
           },
         };
@@ -817,10 +805,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
             defaultOff: true,
             area: danmuLayerAreaConfig(layer, areaRef.current),
             channelSize: laneHeightRef.current,
-            // Pinning is driven by our own press delegate on the layer below, so
-            // danmu.js' hover path stays off. It also owns a single global freeze
-            // slot whose `mouseControl` flag, once set, suppresses every later
-            // hover on the instance — nothing here should be able to set it.
+            // 钉住由下层自己的按压委托驱动，danmu.js 的 hover 路径保持关闭。它还拥有唯一
+            // 的全局冻结槽位，其 `mouseControl` 标志一旦设置会抑制实例上的所有后续 hover
+            // —— 本组件任何地方都不应能设置它。
             mouseControl: false,
             mouseControlPause: false,
             needResizeObserver: true,
@@ -863,8 +850,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
     return () => {
       disposed = true;
-      // Size changes and the session-boundary cleanup both pass through here.
-      // The separate session effect above owns pending-queue invalidation.
+      // 尺寸变化与会话边界清理都会经过这里。上方独立的会话副作用负责待处理队列失效。
       clearRenderedState(true);
     };
   }, [active, pageVisible, reducedMotion, sessionKey, sizeReady]);
@@ -911,19 +897,15 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       releaseSelection();
     };
 
-    // Pinning is press-driven on both desktop and touch, so a pin ends on the
-    // next press that lands anywhere other than this comment or its menu. Listen
-    // in the capture phase above the player so chrome that stops propagation
-    // still dismisses the pin.
     document.addEventListener("pointerdown", dismissOnOutsidePointerDown, true);
     return () => document.removeEventListener("pointerdown", dismissOnOutsidePointerDown, true);
   }, [hoverTarget?.hoverKey, releaseSelection]);
 
   useEffect(() => {
     if (!hoverTarget?.hoverKey) return;
-    // Nothing outside this component can be relied on to end a pin: a stage
-    // resize, a layer teardown or a rejected re-attach can all strand the frozen
-    // bullet. Expire the pin on its own so a comment can never stay parked.
+    // 结束一次钉住不能依赖组件之外的任何东西：舞台缩放、层销毁或被拒绝的
+    // 重新挂载都可能让冻结的 bullet 受困。让钉住自行过期，
+    // 评论才绝不可能一直停驻。
     const timer = window.setTimeout(
       () => releaseSelectionRef.current(),
       DANMU_JS_PIN_AUTO_RELEASE_MS,
@@ -940,8 +922,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       const meta = recordsRef.current.get(selectedId)?.meta;
       const rect = meta && relativeVisualRect(host, meta);
       if (!meta || !rect) {
-        // The bullet lost its box, but it may still sit in the render queue in
-        // `forcedPause`. Go through the resuming path so it cannot stay parked.
+        // 释放无法在评论层自身捕获。评论持续在指针下移动，而层本身不接受指针事件，
+        // 按压数帧后的鼠标 pointerup 命中测试往往落在画面上。触摸又是另一回事 ——
+        // 它会捕获到收到 pointerdown 的元素 —— 因此唯一能可靠看到两者的是 document。
+        // 在舞台上方的捕获阶段监听，也让 `preventDefault` 能及时抵达舞台自己的
+        // 冒泡阶段点按处理器。
         if (selectedIdRef.current === selectedId) releaseSelectionRef.current();
         return;
       }
@@ -967,11 +952,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return () => window.cancelAnimationFrame(frame);
   }, [hoverTarget?.hoverKey]);
 
-  // Desktop and touch share one press gesture. Which comment a press aims at is
-  // decided on pointerdown, because the comment keeps moving underneath: only the
-  // press being short and still is checked on pointerup, so a volume/brightness
-  // drag that happens to begin on a comment still reaches the stage. The
-  // document-level delegate above owns dismissal.
+  // 桌面与触摸共用同一种按压手势。按压瞄准哪条评论在 pointerdown 时决定，
+  // 因为评论一直在指针下方移动；pointerup 只检查按压是否短促且原地不动，
+  // 于是碰巧始于评论的音量/亮度拖拽仍会到达舞台。文档级委托负责解除。
   const handleLayerPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const bullet = bulletElementFromTarget(event.target);
     const id = bullet?.dataset.rliveDanmakuId;
@@ -1004,8 +987,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         return;
       }
       if (!recordsRef.current.has(tap.id)) return;
-      // Claim the completed press: the stage reads `defaultPrevented` and will
-      // not turn it into a control-bar toggle or a double-tap fullscreen.
+      // 认领已完成按压：舞台读取 `defaultPrevented`，
+      // 不会把它变成控制条切换或双击全屏。
       event.preventDefault();
       claimedPressAtRef.current = Date.now();
       if (selectedIdRef.current === tap.id) releaseSelection();
@@ -1019,29 +1002,23 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [finishPress]);
 
   useEffect(() => {
-    // The release cannot be caught on the layer itself. A comment keeps moving
-    // under the pointer, and the layer takes no pointer events, so a mouse
-    // pointerup a few frames after the press often hit-tests to the picture
-    // instead. Touch is different again — it captures to the element that got the
-    // pointerdown — so the only place that reliably sees both is the document.
-    // Capture phase, above the stage, is also what lets `preventDefault` reach
-    // the stage's own bubble-phase tap handler in time.
+    // 层本身从不接受指针；只有其中的 bullet 文本接受（见 `createDanmuBulletElement`），
+    // 这正是空白画面的按压能落到舞台的原因。
     const onPointerUp = (event: PointerEvent) => finishPressRef.current(event);
     const onPointerCancel = (event: PointerEvent) => {
       if (pinTapRef.current?.pointerId === event.pointerId) pinTapRef.current = null;
     };
-    // `preventDefault` on a pointerup does not stop the click and dblclick it
-    // produces, and those bubble to ancestors that read a press on the picture as
-    // their own gesture (the multi-room grid promotes a cell that way). Their
-    // target is the common ancestor of press and release, so a drifted comment
-    // leaves them pointing at the picture: go by the claim the press recorded.
+    // pointerup 上的 `preventDefault` 阻止不了它产生的 click 与 dblclick，
+    // 而这些会冒泡到把画面上的按压当作自己手势的祖先（多房间网格正是借此提升
+    // 单元）。它们的目标是按压与释放的共同祖先，漂移中的评论会让目标指向画面：
+    // 因此依据按压记录下的认领来判断。
     const swallowClaimedClick = (event: MouseEvent) => {
       if (isMenuTarget(event.target)) return;
       if (Date.now() - claimedPressAtRef.current > DANMU_JS_PIN_CLAIM_WINDOW_MS) return;
       event.stopPropagation();
     };
-    // Any press that did not start on a comment ends the claim, so pressing a
-    // control right after pinning is never swallowed by the window above.
+    // 任何不是从评论上开始的按压都会终止认领，因此钉住后立即按下控件
+    // 绝不会被上面的窗口监听吞掉。
     const dropStaleClaim = (event: PointerEvent) => {
       if (!bulletElementFromTarget(event.target)) claimedPressAtRef.current = 0;
     };
@@ -1065,9 +1042,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         ref={scrollContainerRef}
         aria-hidden="true"
         data-rlive-danmaku-layer="scroll"
-        // The layer itself never takes the pointer; only the bullet text inside
-        // it does (see `createDanmuBulletElement`), which is what makes a press
-        // on empty picture fall through to the stage.
+        // 层本身从不接受指针；只有其中的 bullet 文本接受（见 `createDanmuBulletElement`），
+        // 这正是空白画面的按压能落到舞台的原因。
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
         style={{ opacity: 1 }}
         onPointerDown={handleLayerPointerDown}

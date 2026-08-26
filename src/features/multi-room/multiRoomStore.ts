@@ -69,7 +69,7 @@ export function createMultiRoomEntry(
   };
 }
 
-/** Keep exactly the current main feed audible while secondary feeds stay muted. */
+/** 精确保持当前主流有声，其余次要流保持静音。 */
 export function normalizeMultiRoomAudioRoles(
   slots: readonly (MultiRoomEntry | null)[],
 ): (MultiRoomEntry | null)[] {
@@ -117,7 +117,7 @@ function copyMultiRoomSlotsPreservingPositions(
   });
 }
 
-/** Swap one occupied secondary slot with the main slot. */
+/** 用一个已占用的次要槽位交换主槽位。 */
 export function swapMultiRoomMain(
   slots: readonly (MultiRoomEntry | null)[],
   sourceIndex: number,
@@ -128,7 +128,7 @@ export function swapMultiRoomMain(
   return swapMultiRoomSlots(slots, sourceIndex, MULTI_ROOM_MAIN_SLOT);
 }
 
-/** Move into an empty slot or swap with another occupied slot. */
+/** 移动到空槽位，或与其他已占用槽位交换。 */
 export function swapMultiRoomSlots(
   slots: readonly (MultiRoomEntry | null)[],
   sourceIndex: number,
@@ -172,9 +172,9 @@ type MultiRoomState = {
   slots: (MultiRoomEntry | null)[];
   layout: MultiRoomLayout;
   fourLayout: MultiRoomFourLayout;
-  /** Live clock alignment across the grid; see `liveSync.ts`. */
+  /** 跨网格的直播时钟对齐；参见 `liveSync.ts`。 */
   syncMode: LiveSyncMode;
-  /** Per-room alignment offset in seconds, keyed like the slots. */
+  /** 逐房间的对齐偏移（秒），键结构与槽位一致。 */
   syncOffsets: Record<string, number>;
   addRoom: (candidate: MultiRoomCandidate) => MultiRoomAddResult;
   removeRoom: (key: string) => void;
@@ -186,13 +186,13 @@ type MultiRoomState = {
   setFourLayout: (layout: MultiRoomFourLayout) => void;
   setSyncMode: (mode: LiveSyncMode) => void;
   setSyncOffset: (key: string, seconds: number) => void;
-  /** Replace several offsets at once, e.g. from a one-shot alignment. */
+  /** 一次性替换多个偏移，例如来自一次性对齐操作。 */
   applySyncOffsets: (offsets: Record<string, number>) => void;
   resetSyncOffsets: () => void;
   clear: () => void;
 };
 
-/** Drop offsets whose room has left the grid so the map cannot grow forever. */
+/** 丢弃房间已离开网格的偏移，避免 map 无限增长。 */
 export function pruneMultiRoomSyncOffsets(
   offsets: Record<string, number>,
   slots: readonly (MultiRoomEntry | null)[],
@@ -278,8 +278,8 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         const normalizedLayout = normalizeMultiRoomLayout(layout);
         const current = get();
         if (normalizedLayout === current.layout) return true;
-        // Compact first: a smaller layout only renders the leading slots, so a
-        // gap would otherwise hide a still-playing room outside the new grid.
+        // 先压缩：更小的布局只渲染靠前的槽位，
+        // 否则空缺会让仍在播放的房间藏在新网格之外。
         const slots = normalizeMultiRoomSlots(current.slots);
         if (slots.filter(Boolean).length > normalizedLayout) return false;
         const mainChanged =

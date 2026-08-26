@@ -1,15 +1,13 @@
 export const HISTORY_VIEW_PARAM = "view";
 
-/** The two timelines the page pages between. */
+/** 页面在其间翻页的两条时间线。 */
 export type HistoryView = "watch" | "danmaku";
 
 export const HISTORY_VIEWS: readonly HistoryView[] = ["watch", "danmaku"];
 
 /**
- * The active timeline lives in the address bar rather than in page state: the
- * application header owns the switcher while the page owns the lists, and a
- * search param is the one place both can read without either importing the
- * other's state.
+ * 活动时间线保存在地址栏而不是页面状态里：应用头部拥有切换器而页面拥有列表，
+ * search 参数是双方都能读取、又互不导入对方状态的唯一位置。
  */
 export function historyViewFromSearch(value: string | null | undefined): HistoryView {
   return value === "danmaku" ? "danmaku" : "watch";

@@ -1,18 +1,17 @@
-//! Forwards the player edge gestures to the Android `RlivePlayerControlsPlugin`.
+//! 把播放器边缘手势转发给 Android 的 `RlivePlayerControlsPlugin`。
 //!
-//! Android media volume is intentionally handled by the native `AudioManager`
-//! bridge so the mobile player follows the device's media-volume semantics.
+//! Android 的媒体音量刻意交由原生 `AudioManager` 桥接处理，
+//! 使移动端播放器遵循设备的媒体音量语义。
 //!
-//! A `plugin:<name>|<command>` invoke is answered by the *Rust* plugin's own
-//! invoke handler, never by the Kotlin `@Command` methods, so the webview
-//! cannot reach a mobile plugin directly. Kotlin is reachable only through the
-//! `PluginHandle` returned by `register_android_plugin`, which is what these
-//! app commands wrap. Registering them in the app's own `generate_handler!`
-//! also keeps them under the existing `core:default` capability instead of
-//! needing a separate plugin permission set.
+//! `plugin:<name>|<command>` 形式的 invoke 由 *Rust* 插件自己的 invoke handler
+//! 应答，绝不会由 Kotlin 的 `@Command` 方法应答，因此 webview 无法直接触达
+//! 移动端插件。Kotlin 只能通过 `register_android_plugin` 返回的 `PluginHandle`
+//! 触达，而这些应用命令正是对它的封装。把它们注册在应用自己的
+//! `generate_handler!` 中，也能让它们继续沿用现有的 `core:default` 能力，
+//! 而不需要另建一套插件权限集合。
 //!
-//! Desktop and browser builds compile the rejecting stubs at the bottom and
-//! keep the existing web player controls.
+//! 桌面端与浏览器构建编译文件末尾那些直接拒绝的 stub，
+//! 并继续使用现有的 Web 播放器控制。
 
 #[cfg(target_os = "android")]
 mod android {
@@ -21,14 +20,13 @@ mod android {
     use tauri::State;
     use tauri::plugin::PluginHandle;
 
-    /// Managed wrapper so commands can reach the registered Kotlin plugin.
+    /// 受管理的包装类型，使命令能触达已注册的 Kotlin 插件。
     pub struct AndroidPlayerControls(pub PluginHandle<tauri::Wry>);
 
-    /// The Kotlin commands resolve plain JSON objects (`{value}`,
-    /// `{mediaVolume, brightness}`, `{orientation}`), so the payload and the
-    /// reply are passed through untouched. `run_mobile_plugin_async` is used
-    /// rather than the blocking variant because the JNI call is dispatched back
-    /// through the Activity: blocking the invoke thread there can deadlock.
+    /// Kotlin 命令解析的是普通 JSON 对象（`{value}`、
+    /// `{mediaVolume, brightness}`、`{orientation}`），因此入参和应答都原样透传。
+    /// 这里使用 `run_mobile_plugin_async` 而非阻塞版本，是因为 JNI 调用会被派发回
+    /// Activity：在那里阻塞 invoke 线程可能造成死锁。
     async fn run(
         controls: State<'_, AndroidPlayerControls>,
         command: &'static str,
@@ -90,12 +88,11 @@ mod android {
         .await
     }
 
-    /// Hides or restores the system bars for the in-page fullscreen player.
+    /// 为页面内全屏播放器隐藏或恢复系统栏。
     ///
-    /// Android fullscreen deliberately avoids the HTML Fullscreen API — see the
-    /// Kotlin `setImmersive` for why the custom-view surface handoff is the
-    /// flicker — so the immersive bars are requested separately from the page
-    /// laying the stage out as a fixed layer.
+    /// Android 全屏刻意避开 HTML Fullscreen API —— 具体原因见 Kotlin 的
+    /// `setImmersive`，那里说明了 custom-view 表面交接才是闪烁根源 ——
+    /// 因此沉浸式系统栏的请求与页面把播放区域布局为固定层这两件事分开进行。
     #[tauri::command]
     pub async fn android_player_controls_set_immersive(
         controls: State<'_, AndroidPlayerControls>,
@@ -118,9 +115,9 @@ mod fallback {
     use crate::error::{AppError, AppResult};
     use serde_json::Value;
 
-    /// The frontend guards these calls behind an Android check, so a desktop
-    /// hit means a bug rather than a user-visible path; report it explicitly
-    /// instead of pretending the native controls succeeded.
+    /// 前端会先做 Android 判断再调用这些命令，所以桌面端走到这里说明有 bug，
+    /// 而不是用户可见路径；这里明确报错，
+    /// 而不是假装原生控制已经成功。
     fn unsupported() -> AppError {
         AppError::new(
             "android_player_controls_unsupported",

@@ -8,9 +8,8 @@ import { SiteLogo } from "@/shared/components/SiteLogo";
 import { cn, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
 
 const FALLBACK_SITES: SiteInfo[] = [
-  // These are the shipped platforms. Keeping the fallback usable avoids a
-  // visibly disabled first frame while the lightweight `site_list` IPC call
-  // resolves, which is especially noticeable when switching platforms.
+  // 这些是随应用分发的平台。保持兜底可用可避免轻量 `site_list` IPC 解析期间出现
+  // 明显禁用的首帧，切换平台时尤其明显。
   { id: "bilibili", name: "Bilibili", ready: true },
   { id: "douyu", name: "Douyu", ready: true },
   { id: "huya", name: "Huya", ready: true },
@@ -35,14 +34,14 @@ function sortSites(sites: SiteInfo[]): SiteInfo[] {
 type SiteSwitcherValue = SiteId | "all";
 
 type SiteSwitcherProps = {
-  /** Controlled selection for filter use; omitted on the home-page switcher. */
+  /** 过滤器使用的受控选择；首页切换器省略。 */
   value?: SiteSwitcherValue;
   onValueChange?: (value: SiteSwitcherValue) => void;
-  /** Adds an all-platform option before the regular platform tabs. */
+  /** 在常规平台页签之前加入全部平台选项。 */
   includeAll?: boolean;
-  /** Renders a controlled platform filter rather than the homepage selector. */
+  /** 渲染受控的平台过滤器而不是首页选择器。 */
   filterMode?: boolean;
-  /** Preloads a destination before a pointer or keyboard activation. */
+  /** 在指针或键盘激活之前预加载目的地。 */
   onValueIntent?: (value: SiteSwitcherValue) => void;
   className?: string;
 };
@@ -78,7 +77,7 @@ export function SiteSwitcher({
           setSites(sortSites(list));
         }
       } catch {
-        /* keep fallback */
+        /* 保留兜底 */
       }
     })();
     return () => {

@@ -15,13 +15,12 @@ fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Co
         .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
 }
 
-/// Apply a follow-list status probe without allowing a previous session's
-/// start time to bleed into a new session.
+/// 应用一次关注列表状态探测，同时不让上一场直播的开播时间
+/// 渗入新的一场。
 ///
-/// Status-only endpoints do not all expose a start timestamp.  That is fine
-/// while a stream remains live, because its stored timestamp is still valid.
-/// Once it has gone offline (or its previous state was unknown), however, a
-/// newly-live result without a timestamp must clear the old value.
+/// 并非所有只返回状态的接口都提供开播时间戳。只要直播仍在进行，这没有问题，
+/// 因为已存储的时间戳依然有效。但一旦它下播过（或此前状态未知），
+/// 新的"正在直播"结果若没有时间戳，就必须清掉旧值。
 fn apply_live_status(record: &mut FollowRecord, live_status: Option<LiveRoomStatus>) {
     match live_status {
         Some(LiveRoomStatus { status: false, .. }) => {
@@ -40,8 +39,8 @@ fn apply_live_status(record: &mut FollowRecord, live_status: Option<LiveRoomStat
                 None
             });
         }
-        // Preserve the last verified timestamp during a transient refresh
-        // failure, while showing the state itself as unknown.
+        // 在偶发刷新失败时保留最后一次已验证的时间戳，
+        // 同时把状态本身显示为未知。
         None => record.live_status = None,
     }
 }
@@ -293,8 +292,8 @@ mod tests {
         assert_eq!(follow.live_status, Some(1));
         assert_eq!(follow.live_started_at, None);
 
-        // An unknown previous state can also carry an old timestamp after a
-        // transient failure, so it must be treated as a potential new session.
+        // 偶发失败后，未知的先前状态也可能携带旧时间戳，
+        // 因此必须把它视为可能是新的一场直播。
         let mut unknown = record(None, Some(1_700_000_000_000));
         apply_live_status(
             &mut unknown,
