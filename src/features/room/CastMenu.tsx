@@ -161,7 +161,15 @@ export function CastMenu({
       )}
 
       {castUrl && !castingName && (
-        <div className="flex min-h-32 flex-col gap-1.5" aria-live="polite">
+        <div
+          className={cn(
+            "flex flex-col gap-1.5",
+            // 仅在搜索动画期间保持稳定高度，避免结果区高度跳动；
+            // 其余状态紧凑排布，让按钮贴住内容区右下角。
+            searching && "min-h-32",
+          )}
+          aria-live="polite"
+        >
           {searching && (
             <p
               className={cn(
