@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "archify": {
+      "source": "tt-a1i/archify",
+      "sourceType": "github",
+      "skillPath": "archify/SKILL.md",
+      "computedHash": "2e35ca0ff70206dea1332f317be849767f67ad055f0c32bad4d350447bc0af80"
+    },
     "gsap-core": {
       "source": "greensock/gsap-skills",
       "sourceType": "github",

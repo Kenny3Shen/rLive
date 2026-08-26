@@ -53,13 +53,19 @@ rLive 是基于 Tauri 的跨平台直播客户端。它在 Rust 后端统一平�
 ## 系统架构
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" width="100%" alt="rLive 系统架构：直播平台、Rust Tauri 后端、Tauri IPC、React 前端和本机资源之间的数据流">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
+    <img src="docs/assets/architecture-light.png" width="100%" alt="rLive 高层运行时架构：WebView 播放页经 Tauri 命令层与 stream_proxy 回环取流，ASR、录制、IPTV、弹幕与 SQLite 作为旁路能力挂在命令层，站点 API、CDN 与弹幕服务器位于不可信网络">
+  </picture>
 </p>
+
+矢量版本见 [architecture.svg](docs/assets/architecture.svg)；可交互版本（主题切换、引导视图、关系追踪）见 [rlive-runtime-architecture.html](docs/diagrams/rlive-runtime-architecture.html)，图形规格为 [rlive-runtime.architecture.json](docs/diagrams/rlive-runtime.architecture.json)。
 
 - **播放路径**：平台 CDN → Rust `stream_proxy` → localhost URL → `xgplayer`。代理负责请求头、跨域访问和 HLS 清单改写；前端编排通用的有界恢复，Twitch 清单恢复由代理配合完成。
 - **录制路径**：平台 CDN → 进程内 `ffmpeg-next` / libavformat → 本地录制目录。FFmpeg 只负责桌面录制，不参与前端播放，也不会启动 `ffmpeg.exe` CLI；新录制目录以「平台_房间号」命名，重复录制追加开始时间和序号；可在「设置 → 录制设置」配置 0–1440 分钟自动分割，每段独立发布；活动任务通过 Tauri Event 增量更新录制库，历史 bundle 由可重建的内存索引读取。
 - **弹幕路径**：平台协议适配器在 Rust 侧解析并批处理消息，再通过 Tauri Events 推送到列表与画面；录制任务从同一批后端消息直接写入 `danmaku.jsonl`，可按「录制设置 → 导出 ASS 弹幕 → 配置选项」转换为与媒体同名的 `.ass` 滚动字幕。
-- **字幕路径**：播放器音频经 Web Audio 转为 16 kHz PCM，通过 Tauri command 送入本机 sherpa-onnx 会话，识别结果返回字幕层。
+- **字幕路径**：播放器音频经 Web Audio 转为 16 kHz PCM，通过 `asr_transcribe` 送入本机 sherpa-onnx 会话，识别结果返回字幕层；模型与音频不出本机。
+- **IPTV 路径**：`iptv_load_playlist` 下载用户提供或公开的 M3U 播放列表，在 Rust 侧解析并探测频道可用性，播放仍复用 `stream_proxy` 回环。
 
 设置、账号、关注和历史保存在 `rlive.db`；录制媒体、`metadata.json` 与 `danmaku.jsonl` 位于独立录制目录，不写入 SQLite。更详细的模块职责和生命周期见[架构说明](docs/zh/架构说明.md)。
 
