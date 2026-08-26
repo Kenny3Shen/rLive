@@ -380,15 +380,13 @@ export function RoomPage() {
                 <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
               </RoomToolPopover>
               <RoomToolPopover icon={Cast} label="投屏" active={castingDevice != null}>
-                <div className="w-64">
-                  <CastMenu
-                    castUrl={playback.playUrl?.url ?? null}
-                    headers={playback.playUrl?.headers ?? {}}
-                    title={detail.title || "rLive 直播"}
-                    showHeader={false}
-                    onCastingDeviceChange={setCastingDevice}
-                  />
-                </div>
+                <CastMenu
+                  castUrl={playback.playUrl?.url ?? null}
+                  headers={playback.playUrl?.headers ?? {}}
+                  title={detail.title || "rLive 直播"}
+                  showHeader={false}
+                  onCastingDeviceChange={setCastingDevice}
+                />
               </RoomToolPopover>
               <RoomToolPopover
                 icon={Car}
