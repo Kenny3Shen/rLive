@@ -23,13 +23,22 @@ pub struct AppDirectories {
 }
 
 impl AppDirectories {
-    pub fn resolve(_mobile_data_dir: Option<&Path>) -> AppResult<Self> {
-        #[cfg(target_os = "android")]
-        let root = application_root(_mobile_data_dir)?;
+    /// Android 的应用沙箱目录只能由 Tauri 移动宿主在启动时提供，
+    /// 此后无法重新解析；需要数据路径的命令必须复用 `AppState`
+    /// 中保存的目录，而不是再次调用 `resolve`。
+    #[cfg(target_os = "android")]
+    pub fn resolve(mobile_data_dir: &Path) -> AppResult<Self> {
+        // `dirs` 刻意不暴露 Android 的应用沙箱目录。回退到相对路径会让启动
+        // 依赖进程工作目录（通常是 `/`），而应用无权写入该目录。
+        Self::from_root(mobile_data_dir.join("rlive"))
+    }
 
-        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-        let root = default_data_root(&system_data_root()?)?;
+    #[cfg(not(target_os = "android"))]
+    pub fn resolve() -> AppResult<Self> {
+        Self::from_root(default_data_root(&system_data_root()?)?)
+    }
 
+    fn from_root(root: PathBuf) -> AppResult<Self> {
         fs::create_dir_all(&root).map_err(|error| {
             AppError::new(
                 "app_data_dir_error",
@@ -42,21 +51,6 @@ impl AppDirectories {
             root,
         })
     }
-}
-
-/// `dirs` 刻意不暴露 Android 的应用沙箱目录。在那里回退到相对路径会让启动
-/// 依赖进程工作目录（通常是 `/`），而应用无权写入该目录，
-/// 因此移动端宿主必须提供私有数据目录。
-#[cfg(target_os = "android")]
-fn application_root(mobile_data_dir: Option<&Path>) -> AppResult<PathBuf> {
-    mobile_data_dir
-        .map(|directory| directory.join("rlive"))
-        .ok_or_else(|| {
-            AppError::new(
-                "app_data_dir_error",
-                "Android app data directory is unavailable during startup",
-            )
-        })
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]

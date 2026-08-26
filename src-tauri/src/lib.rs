@@ -215,9 +215,9 @@ pub fn run() {
             })?;
 
             #[cfg(target_os = "android")]
-            let directories = AppDirectories::resolve(Some(&app_data_dir))?;
+            let directories = AppDirectories::resolve(&app_data_dir)?;
             #[cfg(not(target_os = "android"))]
-            let directories = AppDirectories::resolve(None)?;
+            let directories = AppDirectories::resolve()?;
 
             init_logging(&directories.logs);
             let state = AppState::init(&directories)?;

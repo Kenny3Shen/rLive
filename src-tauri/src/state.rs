@@ -19,6 +19,10 @@ use crate::recording::RecordingManager;
 use crate::stream_proxy::StreamProxy;
 
 pub struct AppState {
+    /// 启动时解析好的应用数据目录。Android 上移动宿主的数据目录
+    /// 仅在启动期间可得，事后无法重新解析，
+    /// 因此所有需要数据路径的命令都从这里取。
+    pub directories: AppDirectories,
     pub db: Mutex<Connection>,
     #[cfg(not(target_os = "android"))]
     pub asr: AsrManager,
@@ -163,6 +167,7 @@ impl AppState {
         let path = create_db_path(app_directory.to_path_buf())?;
         let conn = Db::open(&path)?;
         Ok(Self {
+            directories: directories.clone(),
             db: Mutex::new(conn),
             #[cfg(not(target_os = "android"))]
             asr: AsrManager::new(app_directory),
