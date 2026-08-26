@@ -66,6 +66,7 @@
   --card-elevated: oklch(0.98 0.002 260);
   --border-subtle: oklch(0.92 0.01 260);
   --sidebar-active: oklch(0.93 0.015 260);
+  --settings-appearance: oklch(0.62 0.18 335);
   --settings-playback: oklch(0.59 0.19 255);
   --settings-platform: oklch(0.64 0.19 12);
   --settings-network: oklch(0.58 0.16 150);
@@ -113,6 +114,7 @@
   --card-elevated: oklch(0.22 0.015 265);
   --border-subtle: oklch(0.26 0.012 265);
   --sidebar-active: oklch(0.26 0.02 265);
+  --settings-appearance: oklch(0.75 0.15 335);
   --settings-playback: oklch(0.72 0.16 255);
   --settings-platform: oklch(0.74 0.17 12);
   --settings-network: oklch(0.72 0.15 150);
@@ -180,6 +182,7 @@
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
   --color-sidebar-active: var(--sidebar-active);
+  --color-settings-appearance: var(--settings-appearance);
   --color-settings-playback: var(--settings-playback);
   --color-settings-platform: var(--settings-platform);
   --color-settings-network: var(--settings-network);

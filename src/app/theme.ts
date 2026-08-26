@@ -33,6 +33,19 @@ export function applyTheme(theme: ThemeMode) {
 }
 
 /**
+ * “跟随系统”模式下监听系统亮暗变化，并实时重新应用主题；
+ * 显式选择浅色或深色时不响应。返回移除监听的函数。
+ */
+export function watchSystemThemeChanges(getTheme: () => ThemeMode): () => void {
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  const onChange = () => {
+    if (getTheme() === "system") applyTheme("system");
+  };
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+/**
  * 采用视口相对的几何尺寸，规避 Android WebView 对 View Transition 伪树内
  * CSS px 长度做的设备像素缩放。
  */

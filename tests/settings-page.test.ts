@@ -2,14 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
   settingsCategoryValuesForClient,
   settingsPageMotion,
-  showExplicitThemeSettings,
 } from "../src/features/settings/SettingsPage";
 import { TAURI_UNAVAILABLE_ERROR_CODE, invokeCmd } from "../src/shared/api/tauri";
 
 describe("settings platform presentation", () => {
-  test("removes the explicit theme setting from mobile only", () => {
-    expect(showExplicitThemeSettings(true)).toBe(false);
-    expect(showExplicitThemeSettings(false)).toBe(true);
+  test("keeps the appearance section available on every client", () => {
+    expect(settingsCategoryValuesForClient(true)).toContain("appearance");
+    expect(settingsCategoryValuesForClient(false)).toContain("appearance");
+    expect(settingsPageMotion("appearance", true)).toEqual({
+      category: "appearance",
+      key: "settings:appearance",
+      direction: 1,
+    });
   });
 
   test("moves forward into a section and backward to the overview", () => {
