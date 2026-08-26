@@ -9,6 +9,7 @@ import packageMetadata from "../../../package.json";
 import {
   createContext,
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
   useCallback,
   useContext,
@@ -28,6 +29,7 @@ import {
   LogOut,
   MonitorPlay,
   Network,
+  Palette,
   Play,
   QrCode,
   Radio,
@@ -50,6 +52,7 @@ import {
   ASR_FONT_SIZE_DEFAULT,
   ASR_WINDOW_SECONDS_DEFAULT,
   useSettingsStore,
+  type ThemeMode,
 } from "@/shared/stores/settingsStore";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
@@ -130,6 +133,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 type SettingsCategory =
+  | "appearance"
   | "playback"
   | "platform"
   | "network"
@@ -165,6 +169,12 @@ const settingsCategories: {
   icon: LucideIcon;
   tone: string;
 }[] = [
+  {
+    value: "appearance",
+    label: "外观配置",
+    icon: Palette,
+    tone: "text-settings-appearance bg-settings-appearance/12",
+  },
   {
     value: "playback",
     label: "播放与弹幕",
@@ -213,8 +223,10 @@ const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
 export const settingsCategorySearchText: Record<SettingsCategory, string> = {
+  appearance:
+    "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式",
   playback:
-    "播放 外观 主题 深色 暗色 浅色 亮色 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
+    "播放 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   recording:
@@ -885,7 +897,6 @@ function PlaybackSettingsResetField() {
   const [resetting, setResetting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const resetTheme = showExplicitThemeSettings(mobileClient);
 
   async function resetAll() {
     setResetting(true);
@@ -899,7 +910,6 @@ function PlaybackSettingsResetField() {
       }
       resetDanmakuAppearanceSettings();
       useSettingsStore.setState({
-        ...(resetTheme ? { theme: "system" as const } : null),
         qualityLevel: "high",
         playbackSoftSwitchEnabled: true,
         danmakuShieldWords: [],
@@ -917,7 +927,6 @@ function PlaybackSettingsResetField() {
             }),
       });
       await store.persistToBackend({
-        ...(resetTheme ? { theme: "system" } : null),
         quality_level: "high",
         playback_soft_switch_enabled: true,
         danmaku_shield_words: [],
@@ -984,7 +993,7 @@ function PlaybackSettingsResetField() {
             <AlertDialogDescription>
               {mobileClient
                 ? "将重置本页全部设置项，包括画质、弹幕和屏蔽词。"
-                : "将重置本页全部设置项，包括外观、画质、语音字幕、热词、弹幕和屏蔽词；已开启的语音字幕会被关闭。"}
+                : "将重置本页全部设置项，包括画质、语音字幕、热词、弹幕和屏蔽词；已开启的语音字幕会被关闭。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1470,26 +1479,33 @@ function PlatformEnablementField() {
 }
 
 function AppearanceSettings() {
-  const switchRef = useRef<HTMLButtonElement>(null);
   const switchingRef = useRef(false);
+  const revealOriginRef = useRef<{ x: number; y: number } | null>(null);
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
-  const isDark =
-    theme === "dark" ||
-    (theme === "system" &&
-      typeof document !== "undefined" &&
-      document.documentElement.classList.contains("dark"));
 
-  function handleThemeChange(checked: boolean) {
-    if (checked === isDark || switchingRef.current) return;
+  // 在捕获阶段记录指针坐标，保证先于 ToggleGroup 的 onValueChange 消费；
+  // 键盘激活（event.detail 为 0）时回退到控件中心作为揭示原点。
+  function handleToggleGroupClick(event: MouseEvent<HTMLDivElement>) {
+    if (event.detail > 0) {
+      revealOriginRef.current = { x: event.clientX, y: event.clientY };
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    revealOriginRef.current = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+  }
+
+  function applyThemeMode(next: ThemeMode) {
+    if (next === theme || switchingRef.current) return;
     switchingRef.current = true;
-
-    const rect = switchRef.current?.getBoundingClientRect();
+    const origin = revealOriginRef.current;
+    revealOriginRef.current = null;
     const transition = revealThemeAt(
-      rect
-        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-        : { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      () => flushSync(() => setTheme(checked ? "dark" : "light")),
+      origin ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+      () => flushSync(() => setTheme(next)),
     );
 
     void transition.finished.finally(() => {
@@ -1498,25 +1514,35 @@ function AppearanceSettings() {
   }
 
   return (
-    <Section title="外观" keywords="主题 深色 暗色 浅色 亮色">
+    <Section title="外观" keywords="主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统">
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldTitle id="dark-mode-label">深色模式</FieldTitle>
+          <FieldTitle>
+            <span id="theme-mode-label">亮暗模式</span>
+            <FieldTip>跟随系统时，rLive 会随系统亮暗设置自动切换。</FieldTip>
+          </FieldTitle>
         </FieldContent>
-        <Switch
-          ref={switchRef}
-          aria-labelledby="dark-mode-label"
-          checked={isDark}
-          onCheckedChange={handleThemeChange}
-        />
+        <ToggleGroup
+          aria-labelledby="theme-mode-label"
+          value={[theme]}
+          variant="outline"
+          size="sm"
+          spacing={1}
+          onClickCapture={handleToggleGroupClick}
+          onValueChange={(values) => {
+            const next = values[0];
+            if (next === "system" || next === "light" || next === "dark") {
+              applyThemeMode(next);
+            }
+          }}
+        >
+          <ToggleGroupItem value="system">跟随系统</ToggleGroupItem>
+          <ToggleGroupItem value="light">浅色</ToggleGroupItem>
+          <ToggleGroupItem value="dark">深色</ToggleGroupItem>
+        </ToggleGroup>
       </Field>
     </Section>
   );
-}
-
-/** 移动端不在设置页暴露明确的明暗模式选择。 */
-export function showExplicitThemeSettings(mobileClient: boolean): boolean {
-  return !mobileClient;
 }
 
 function settingsCategoryFromSearch(value: string | null): SettingsCategory | null {
@@ -1546,6 +1572,7 @@ const settingsCategoryGroups: {
   label: string;
   values: SettingsCategory[];
 }[] = [
+  { label: "通用", values: ["appearance"] },
   { label: "观看体验", values: ["playback", "platform", "network"] },
   { label: "账号与数据", values: ["account", "recording", "data"] },
   { label: "应用信息", values: ["about"] },
@@ -1817,9 +1844,13 @@ export function SettingsPage() {
   // 分类主体保持此处的 key，使概览导航只改变页面外壳；
   // 每个既有设置与持久化路径原样保留。
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
+    appearance: (
+      <SettingsContent title="外观">
+        <AppearanceSettings />
+      </SettingsContent>
+    ),
     playback: (
       <SettingsContent title="播放">
-        {showExplicitThemeSettings(mobileClient) && <AppearanceSettings />}
         <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
           <Field orientation="horizontal">
             <FieldTitle id="quality-label">优先清晰度</FieldTitle>
@@ -2229,6 +2260,8 @@ function SettingsContent({ title, children }: { title: string; children: React.R
 
 function titleToCategory(title: string): SettingsCategory {
   switch (title) {
+    case "外观":
+      return "appearance";
     case "播放":
       return "playback";
     case "平台":

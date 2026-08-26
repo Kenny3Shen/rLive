@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./app/App";
-import { applyTheme } from "./app/theme";
+import { applyTheme, watchSystemThemeChanges } from "./app/theme";
 import { getClientPlatform } from "./shared/clientPlatform";
 import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -32,6 +32,7 @@ applyTheme(initialSettings.theme);
 useSettingsStore.subscribe((settings, previous) => {
   if (settings.theme !== previous.theme) applyTheme(settings.theme);
 });
+watchSystemThemeChanges(() => useSettingsStore.getState().theme);
 void useSettingsStore
   .getState()
   .loadFromBackend()

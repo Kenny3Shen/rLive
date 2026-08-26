@@ -43,7 +43,7 @@
 | `src/features/*/` | 功能页、功能内组件和局部状态；`features/recording/` 负责桌面录制库与本地回放 |
 | `src/shared/motion/` | 跨页面动画令牌、系统减少动效检测、`PagePan` 和 `PageZoom` |
 | `src/styles.css` | 主题变量、Tailwind 映射、全局响应式规则和 CSS 关键帧 |
-| `src/app/theme.ts` | 主题解析、应用和 Radial Reveal |
+| `src/app/theme.ts` | 主题解析、应用、系统亮暗监听和 Radial Reveal |
 
 基础组件是仓库内可维护源码，不是不可修改的黑盒。修改 `src/components/ui/` 会影响多个功能页，必须先检查所有调用方；页面特有布局应留在对应 feature 中。
 
@@ -245,7 +245,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 
 ### 4.7 主题 Radial Reveal
 
-主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与桌面设置页协作；移动端设置页不提供显式亮暗模式入口：
+主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与设置页「外观配置」协作；亮暗模式提供跟随系统（默认）、浅色、深色三档，移动端同样可用，跟随系统时由 `watchSystemThemeChanges()` 监听系统亮暗变化并实时重应用：
 
 1. 点击事件提供指针坐标；键盘激活使用按钮中心。
 2. `document.startViewTransition()` 分别捕获旧主题和新主题快照。
@@ -442,7 +442,7 @@ bash scripts/sync-to-windows.sh
 | `src/components/ui/drawer.tsx` | Drawer 结构、方向和开关动画 |
 | `src/app/layout/Shell.tsx` | 页面滚动、路由来源识别和动画编排 |
 | `src/app/layout/Sidebar.tsx` | 桌面/移动导航和主题按钮反馈 |
-| `src/app/theme.ts` | 主题应用与 Radial Reveal |
+| `src/app/theme.ts` | 主题应用、系统亮暗监听与 Radial Reveal |
 | `src/shared/motion/preference.ts` | 系统减少动效偏好检测 |
 | `src/shared/motion/tokens.ts` | GSAP 注册、共享 easing 和 duration |
 | `src/shared/motion/PagePan.tsx` | 整页平移与 outgoing subtree 生命周期 |
