@@ -236,8 +236,14 @@ describe("xgplayer transport selection", () => {
   });
 
   test("reads the hls.js core from its plugin wrapper", () => {
-    const core = { startLoad: () => {} };
+    let startedFrom: number | undefined | "none" = "none";
     let requestedPlugin = "";
+    const core = {
+      startLoad: (position?: number) => {
+        startedFrom = position;
+      },
+      playingDate: new Date(1_700_000_000_000),
+    };
     const player = {
       getPlugin: (condition: string | Function) => {
         requestedPlugin = String(condition);
@@ -245,8 +251,20 @@ describe("xgplayer transport selection", () => {
       },
     } as XgPlayerInstance;
 
-    expect(getXgHlsCore(player)).toBe(core);
+    const wrapper = getXgHlsCore(player);
     expect(requestedPlugin).toBe("HlsJsPlugin");
+    wrapper?.startLoad(12);
+    expect(startedFrom).toBe(12);
+    // The program clock is what multi-view alignment reads for an exact sync.
+    expect(wrapper?.programDateMs()).toBe(1_700_000_000_000);
+  });
+
+  test("reports no program clock for a playlist without EXT-X-PROGRAM-DATE-TIME", () => {
+    const player = {
+      getPlugin: () => ({ hls: { startLoad: () => {}, playingDate: null } }),
+    } as unknown as XgPlayerInstance;
+
+    expect(getXgHlsCore(player)?.programDateMs()).toBeNull();
   });
 
   test("reattaches mpegts.js subscriptions after a soft URL switch", () => {

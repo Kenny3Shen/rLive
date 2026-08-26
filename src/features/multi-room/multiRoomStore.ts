@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
+import { normalizeLiveSyncMode, normalizeLiveSyncOffset, type LiveSyncMode } from "./liveSync";
 
 export const MULTI_ROOM_MAX_SLOTS = 6;
 export const MULTI_ROOM_MAIN_SLOT = 0;
@@ -171,6 +172,10 @@ type MultiRoomState = {
   slots: (MultiRoomEntry | null)[];
   layout: MultiRoomLayout;
   fourLayout: MultiRoomFourLayout;
+  /** Live clock alignment across the grid; see `liveSync.ts`. */
+  syncMode: LiveSyncMode;
+  /** Per-room alignment offset in seconds, keyed like the slots. */
+  syncOffsets: Record<string, number>;
   addRoom: (candidate: MultiRoomCandidate) => MultiRoomAddResult;
   removeRoom: (key: string) => void;
   setMainRoom: (key: string) => void;
@@ -179,8 +184,28 @@ type MultiRoomState = {
   updateMetadata: (key: string, detail: LiveRoomDetail) => void;
   setLayout: (layout: MultiRoomLayout) => boolean;
   setFourLayout: (layout: MultiRoomFourLayout) => void;
+  setSyncMode: (mode: LiveSyncMode) => void;
+  setSyncOffset: (key: string, seconds: number) => void;
+  /** Replace several offsets at once, e.g. from a one-shot alignment. */
+  applySyncOffsets: (offsets: Record<string, number>) => void;
+  resetSyncOffsets: () => void;
   clear: () => void;
 };
+
+/** Drop offsets whose room has left the grid so the map cannot grow forever. */
+export function pruneMultiRoomSyncOffsets(
+  offsets: Record<string, number>,
+  slots: readonly (MultiRoomEntry | null)[],
+): Record<string, number> {
+  const live = new Set(
+    slots.filter((room): room is MultiRoomEntry => room != null).map((r) => r.key),
+  );
+  const next: Record<string, number> = {};
+  for (const [key, seconds] of Object.entries(offsets)) {
+    if (live.has(key)) next[key] = normalizeLiveSyncOffset(seconds);
+  }
+  return next;
+}
 
 const EMPTY_MULTI_ROOM_SLOTS = Array.from<MultiRoomEntry | null>({
   length: MULTI_ROOM_MAX_SLOTS,
@@ -192,6 +217,8 @@ export const useMultiRoomStore = create<MultiRoomState>()(
       slots: [...EMPTY_MULTI_ROOM_SLOTS],
       layout: DEFAULT_MULTI_ROOM_LAYOUT,
       fourLayout: DEFAULT_MULTI_ROOM_FOUR_LAYOUT,
+      syncMode: "off",
+      syncOffsets: {},
       addRoom: (candidate) => {
         const slots = normalizeMultiRoomSlots(get().slots);
         const layout = normalizeMultiRoomLayout(get().layout);
@@ -209,7 +236,10 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         if (index < 0) return;
         slots[index] = null;
         const next = normalizeMultiRoomSlots(slots);
-        set({ slots: index === MULTI_ROOM_MAIN_SLOT ? normalizeMultiRoomAudioRoles(next) : next });
+        set({
+          slots: index === MULTI_ROOM_MAIN_SLOT ? normalizeMultiRoomAudioRoles(next) : next,
+          syncOffsets: pruneMultiRoomSyncOffsets(get().syncOffsets, next),
+        });
       },
       setMainRoom: (key) => {
         const slots = get().slots;
@@ -261,7 +291,20 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         return true;
       },
       setFourLayout: (layout) => set({ fourLayout: normalizeMultiRoomFourLayout(layout) }),
-      clear: () => set({ slots: [...EMPTY_MULTI_ROOM_SLOTS] }),
+      setSyncMode: (mode) => set({ syncMode: normalizeLiveSyncMode(mode) }),
+      setSyncOffset: (key, seconds) =>
+        set({
+          syncOffsets: { ...get().syncOffsets, [key]: normalizeLiveSyncOffset(seconds) },
+        }),
+      applySyncOffsets: (offsets) => {
+        const merged = { ...get().syncOffsets };
+        for (const [key, seconds] of Object.entries(offsets)) {
+          merged[key] = normalizeLiveSyncOffset(seconds);
+        }
+        set({ syncOffsets: pruneMultiRoomSyncOffsets(merged, get().slots) });
+      },
+      resetSyncOffsets: () => set({ syncOffsets: {} }),
+      clear: () => set({ slots: [...EMPTY_MULTI_ROOM_SLOTS], syncOffsets: {} }),
     }),
     {
       name: "rlive-multi-room-v2",
@@ -269,6 +312,8 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         slots: state.slots,
         layout: state.layout,
         fourLayout: state.fourLayout,
+        syncMode: state.syncMode,
+        syncOffsets: state.syncOffsets,
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as Partial<MultiRoomState>;
@@ -283,6 +328,8 @@ export const useMultiRoomStore = create<MultiRoomState>()(
               : DEFAULT_MULTI_ROOM_LAYOUT,
           fourLayout,
           slots,
+          syncMode: normalizeLiveSyncMode(persistedState?.syncMode),
+          syncOffsets: pruneMultiRoomSyncOffsets(persistedState?.syncOffsets ?? {}, slots),
         };
       },
     },

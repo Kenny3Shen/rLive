@@ -30,6 +30,14 @@ export type StreamProxyTelemetry = {
   bytes_forwarded: number;
   first_response_ms: number | null;
   latest_response_ms: number | null;
+  /**
+   * Epoch of the first media byte the proxy forwarded for this session.
+   *
+   * Used as the wall-clock anchor for containers without a program clock
+   * (FLV / MPEG-TS). It includes the CDN edge burst, so it is an estimate that
+   * is comparable across feeds rather than an exact capture time.
+   */
+  first_media_at_ms: number | null;
 };
 
 export type PlaybackTelemetrySnapshot = {

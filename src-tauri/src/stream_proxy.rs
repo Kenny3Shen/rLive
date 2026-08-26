@@ -199,6 +199,15 @@ struct ProxyTelemetryCounters {
     bytes_forwarded: AtomicU64,
     first_response_ms: AtomicU64,
     latest_response_ms: AtomicU64,
+    /// Wall-clock epoch of the first forwarded media byte of this session.
+    ///
+    /// Multi-view clock alignment needs an absolute anchor for streams whose
+    /// container carries no wall clock (FLV/MPEG-TS timestamps start near
+    /// zero). Pairing this epoch with the media timeline position the player
+    /// observed at start turns `currentTime` into an estimated capture time.
+    /// The CDN's own edge burst is included in the estimate, so it is only
+    /// comparable between feeds, never an exact capture instant.
+    first_media_at_ms: AtomicU64,
 }
 
 impl ProxyTelemetryCounters {
@@ -210,7 +219,18 @@ impl ProxyTelemetryCounters {
             bytes_forwarded: AtomicU64::new(0),
             first_response_ms: AtomicU64::new(0),
             latest_response_ms: AtomicU64::new(0),
+            first_media_at_ms: AtomicU64::new(0),
         }
+    }
+
+    /// Latch the epoch of the first media byte; later chunks keep the first one.
+    fn record_media_start(&self) {
+        let _ = self.first_media_at_ms.compare_exchange(
+            0,
+            unix_timestamp_ms().max(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
     }
 
     fn record_response(&self, elapsed: Duration) {
@@ -239,6 +259,7 @@ impl ProxyTelemetryCounters {
             bytes_forwarded: self.bytes_forwarded.load(Ordering::Relaxed),
             first_response_ms: optional(self.first_response_ms.load(Ordering::Relaxed)),
             latest_response_ms: optional(self.latest_response_ms.load(Ordering::Relaxed)),
+            first_media_at_ms: optional(self.first_media_at_ms.load(Ordering::Relaxed)),
         }
     }
 }
@@ -251,6 +272,7 @@ pub struct StreamProxyTelemetry {
     pub bytes_forwarded: u64,
     pub first_response_ms: Option<u64>,
     pub latest_response_ms: Option<u64>,
+    pub first_media_at_ms: Option<u64>,
 }
 
 fn unix_timestamp_ms() -> u64 {
@@ -1922,6 +1944,9 @@ mod tests {
         assert_eq!(telemetry.bytes_forwarded, 3);
         assert!(telemetry.first_response_ms.is_some());
         assert!(telemetry.latest_response_ms.is_some());
+        // The media anchor multi-view clock alignment relies on is latched from
+        // the first forwarded media byte of the session.
+        assert!(telemetry.first_media_at_ms.is_some_and(|epoch| epoch > 0));
         relay.stop_for_session(session_id);
         server.join().unwrap();
         assert!(String::from_utf8_lossy(&response).ends_with("\r\n\r\nTS!"));
@@ -2401,6 +2426,9 @@ async fn handle_client(
             "no-store",
         )
         .await?;
+        // The probe above already pulled the first media bytes, so this is the
+        // arrival epoch of the head of the stream.
+        telemetry.record_media_start();
         if !prefix.is_empty() && socket.write_all(&prefix).await.is_err() {
             return Ok(());
         }
@@ -2433,6 +2461,7 @@ async fn handle_client(
         if chunk.is_empty() {
             continue;
         }
+        telemetry.record_media_start();
         if socket.write_all(&chunk).await.is_err() {
             break; // client gone
         }

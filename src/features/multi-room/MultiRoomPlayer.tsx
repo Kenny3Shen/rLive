@@ -37,6 +37,11 @@ import type { PlaybackController } from "@/features/room/playback/usePlaybackCon
 import { useWebPlayer } from "@/features/room/player/useWebPlayer";
 import type { WebPlayerApi } from "@/features/room/player/useWebPlayer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import {
+  useMultiRoomLiveSyncRegistration,
+  useMultiRoomLiveSyncStatus,
+} from "./MultiRoomLiveSyncProvider";
+import { liveSyncDanmakuDelayMs, liveSyncFeedStatusText } from "./liveSyncRegistry";
 import { useMultiRoomStore, type MultiRoomEntry } from "./multiRoomStore";
 
 const MULTI_ROOM_CONTROLS_HIDE_DELAY_MS = 2_600;
@@ -148,6 +153,7 @@ function MainMultiRoomDanmaku({
   audioOnly: boolean;
   osdOn: boolean;
 }) {
+  const syncStatus = useMultiRoomLiveSyncStatus(room.key);
   const danmaku = useDanmakuConnection({
     siteId: room.siteId,
     roomId: room.roomId,
@@ -169,6 +175,9 @@ function MainMultiRoomDanmaku({
       // Fullscreen puts the picture a whole display away, where the compact
       // pill is hard to aim at. Grid cells are small enough already.
       large={player.mode === "fullscreen"}
+      // Comments arrive in real time, so a clock alignment that holds the
+      // picture back has to hold them back by the same amount.
+      delayMs={liveSyncDanmakuDelayMs(syncStatus)}
       className="absolute inset-0 z-10"
     />
   );
@@ -396,6 +405,29 @@ function MainMultiRoomControls({
   );
 }
 
+/** Live-clock status pill for one tile; isolated so a tick only re-renders it. */
+function MultiRoomSyncBadge({
+  roomKey,
+  portalContainer,
+}: {
+  roomKey: string;
+  portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
+}) {
+  const status = useMultiRoomLiveSyncStatus(roomKey);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Badge variant={status?.limited ? "destructive" : "secondary"} className="tabular-nums" />
+        }
+      >
+        {status?.holdSeconds == null ? "等待同步" : `延后 ${status.holdSeconds.toFixed(1)}s`}
+      </TooltipTrigger>
+      <TooltipContent container={portalContainer}>{liveSyncFeedStatusText(status)}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function MultiRoomPlayer({
   room,
   main,
@@ -409,6 +441,7 @@ export function MultiRoomPlayer({
   const removeRoom = useMultiRoomStore((state) => state.removeRoom);
   const updateAudio = useMultiRoomStore((state) => state.updateAudio);
   const updateMetadata = useMultiRoomStore((state) => state.updateMetadata);
+  const syncMode = useMultiRoomStore((state) => state.syncMode);
   const [audioOnly, setAudioOnly] = useState(false);
   const [osdOn, setOsdOn] = useState(false);
   const controlsHideTimerRef = useRef<number | null>(null);
@@ -454,9 +487,13 @@ export function MultiRoomPlayer({
     // fullscreen; otherwise all six would report themselves as fullscreen.
     fullscreenOwner: main,
     reloadToken: playback.reloadToken,
+    // The protocol plugins read their latency options only at creation, so the
+    // alignment profile is part of the transport identity.
+    liveSyncHold: syncMode !== "off",
     onMediaFailure: playback.onPlayerMediaFailure,
     onPlaying: playback.onPlayerPlaying,
   });
+  useMultiRoomLiveSyncRegistration({ key: room.key, main, sync: player.sync });
   const playerVolume = player.volume;
   const playerMuted = player.muted;
   const setPlayerAudio = player.setAudio;
@@ -814,6 +851,9 @@ export function MultiRoomPlayer({
           />
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+          {syncMode !== "off" && (
+            <MultiRoomSyncBadge roomKey={room.key} portalContainer={player.stageRef} />
+          )}
           {!main && (
             <OverlayIconButton
               label="设为主画面"
