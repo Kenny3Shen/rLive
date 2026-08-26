@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Car,
+  Cast,
   ChevronLeft,
   Ellipsis,
   Heart,
@@ -41,6 +42,7 @@ import {
   roomSideTabFromNavigationState,
 } from "./roomNavigation";
 import { usePlaybackController } from "./playback/usePlaybackController";
+import { CastMenu } from "./CastMenu";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -79,6 +81,7 @@ export function RoomPage() {
   const recordedHistoryRoomRef = useRef<string | null>(null);
 
   const [followBusy, setFollowBusy] = useState(false);
+  const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const [followGroupOpen, setFollowGroupOpen] = useState(false);
   const [confirmUnfollowOpen, setConfirmUnfollowOpen] = useState(false);
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
@@ -379,6 +382,17 @@ export function RoomPage() {
               <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
                 <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
               </RoomToolPopover>
+              <RoomToolPopover icon={Cast} label="投屏" active={castingDevice != null}>
+                <div className="w-64">
+                  <CastMenu
+                    castUrl={playback.playUrl?.url ?? null}
+                    headers={playback.playUrl?.headers ?? {}}
+                    title={detail.title || "rLive 直播"}
+                    showHeader={false}
+                    onCastingDeviceChange={setCastingDevice}
+                  />
+                </div>
+              </RoomToolPopover>
               <RoomToolPopover
                 icon={Car}
                 label="自动发送弹幕"
@@ -414,6 +428,11 @@ export function RoomPage() {
               <RoomMobileActions
                 roomUrl={detail.url || window.location.href}
                 playbackUrl={playback.playUrl?.url}
+                castUrl={playback.playUrl?.url ?? null}
+                castHeaders={playback.playUrl?.headers ?? {}}
+                castTitle={detail.title || "rLive 直播"}
+                castingDevice={castingDevice}
+                onCastingDeviceChange={setCastingDevice}
                 playerActions={playerMobileActions}
                 autoSend={autoDanmakuSend}
                 sleepTimer={sleepTimer}
@@ -653,6 +672,11 @@ function RoomToolPopover({
 function RoomMobileActions({
   roomUrl,
   playbackUrl,
+  castUrl,
+  castHeaders,
+  castTitle,
+  castingDevice,
+  onCastingDeviceChange,
   playerActions,
   autoSend,
   sleepTimer,
@@ -660,6 +684,11 @@ function RoomMobileActions({
 }: {
   roomUrl: string;
   playbackUrl?: string;
+  castUrl: string | null;
+  castHeaders: Record<string, string>;
+  castTitle: string;
+  castingDevice: string | null;
+  onCastingDeviceChange: (deviceName: string | null) => void;
   playerActions: readonly PlayerMobileRoomAction[];
   autoSend: AutoDanmakuSendController;
   sleepTimer: SleepTimerController;
@@ -668,6 +697,7 @@ function RoomMobileActions({
   const [open, setOpen] = useState(false);
   const [autoSendExpanded, setAutoSendExpanded] = useState(false);
   const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
+  const [castExpanded, setCastExpanded] = useState(false);
 
   function copy(value: string, successMessage: string) {
     setOpen(false);
@@ -754,6 +784,7 @@ function RoomMobileActions({
                 onClick={() => {
                   setAutoSendExpanded((expanded) => !expanded);
                   setSleepTimerExpanded(false);
+                  setCastExpanded(false);
                 }}
               >
                 <span className="relative inline-flex">
@@ -773,6 +804,7 @@ function RoomMobileActions({
                 onClick={() => {
                   setSleepTimerExpanded((expanded) => !expanded);
                   setAutoSendExpanded(false);
+                  setCastExpanded(false);
                 }}
               >
                 <span className="relative inline-flex">
@@ -783,12 +815,43 @@ function RoomMobileActions({
                   {sleepTimer.active ? "定时中" : "定时关闭"}
                 </span>
               </Button>
+              <Button
+                type="button"
+                variant={castExpanded || castingDevice != null ? "secondary" : "ghost"}
+                className="h-auto min-w-0 flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
+                disabled={!castUrl}
+                aria-pressed={castExpanded || castingDevice != null}
+                aria-expanded={castExpanded}
+                onClick={() => {
+                  setCastExpanded((expanded) => !expanded);
+                  setAutoSendExpanded(false);
+                  setSleepTimerExpanded(false);
+                }}
+              >
+                <span className="relative inline-flex">
+                  <Cast className="size-5" aria-hidden />
+                  {castingDevice != null && <ToolActiveDot />}
+                </span>
+                <span className="max-w-full truncate">
+                  {castingDevice != null ? `投屏中` : "投屏"}
+                </span>
+              </Button>
             </div>
           </>
         )}
         {sleepTimerExpanded && (
           <div className={cn("rounded-lg p-3", glassPanelClass())}>
             <SleepTimerMenu timer={sleepTimer} showTrigger={false} />
+          </div>
+        )}
+        {castExpanded && castUrl && (
+          <div className={cn("rounded-lg p-3", glassPanelClass())}>
+            <CastMenu
+              castUrl={castUrl}
+              headers={castHeaders}
+              title={castTitle}
+              onCastingDeviceChange={onCastingDeviceChange}
+            />
           </div>
         )}
         {autoSendExpanded && (

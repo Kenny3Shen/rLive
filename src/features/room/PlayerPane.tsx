@@ -29,7 +29,6 @@ import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { CastDialog } from "./CastDialog";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
@@ -458,7 +457,6 @@ export function PlayerPane({
   // preserves the same tab behaviour for embedded/uncontrolled callers and
   // lets a touch gesture select a tab without depending on Base UI internals.
   const [uncontrolledSideTab, setUncontrolledSideTab] = useState<RoomSideTab>("chat");
-  const [castOpen, setCastOpen] = useState(false);
   const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const activeSideTab = sideTab ?? uncontrolledSideTab;
   const [sidePanelRetained, setSidePanelRetained] = useState(
@@ -1774,6 +1772,13 @@ export function PlayerPane({
                 playerActions={mobileRoomActions}
                 autoSend={autoDanmakuSend}
                 sleepTimer={sleepTimer}
+                cast={{
+                  url: playUrl?.url ?? null,
+                  headers: playUrl?.headers ?? {},
+                  title: roomTitle || roomUserName || "rLive 直播",
+                  device: castingDevice,
+                  onDeviceChange: setCastingDevice,
+                }}
                 compact={compactViewport}
                 portalContainer={player.stageRef}
                 onOverlayInteractionChange={handleHudOverlayInteractionChange}
@@ -1885,26 +1890,12 @@ export function PlayerPane({
               onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
               onQualityChange={onQualityChange ?? (() => {})}
               onLineChange={onLineChange ?? (() => {})}
-              cast={{
-                active: castingDevice != null,
-                disabled: !playUrl,
-                onClick: () => setCastOpen(true),
-              }}
               onTogglePictureInPicture={handleTogglePictureInPicture}
               onToggleFullscreen={() => void player.toggleFullscreen()}
             />
           </div>
         </div>
       </div>
-
-      <CastDialog
-        open={castOpen}
-        onOpenChange={setCastOpen}
-        castUrl={playUrl?.url ?? null}
-        headers={playUrl?.headers ?? {}}
-        title={roomTitle || roomUserName || "rLive 直播"}
-        onCastingDeviceChange={setCastingDevice}
-      />
 
       {mobileDrawerOpen && (
         <Button
