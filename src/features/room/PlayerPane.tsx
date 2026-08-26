@@ -29,6 +29,7 @@ import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { CastDialog } from "./CastDialog";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
@@ -457,6 +458,7 @@ export function PlayerPane({
   // preserves the same tab behaviour for embedded/uncontrolled callers and
   // lets a touch gesture select a tab without depending on Base UI internals.
   const [uncontrolledSideTab, setUncontrolledSideTab] = useState<RoomSideTab>("chat");
+  const [castOpen, setCastOpen] = useState(false);
   const activeSideTab = sideTab ?? uncontrolledSideTab;
   const [sidePanelRetained, setSidePanelRetained] = useState(
     () => sidePanelOpen || !compactViewport,
@@ -1888,6 +1890,14 @@ export function PlayerPane({
           </div>
         </div>
       </div>
+
+      <CastDialog
+        open={castOpen}
+        onOpenChange={setCastOpen}
+        castUrl={playUrl?.url ?? null}
+        headers={playUrl?.headers ?? {}}
+        title={roomTitle || roomUserName || "rLive 直播"}
+      />
 
       {mobileDrawerOpen && (
         <Button

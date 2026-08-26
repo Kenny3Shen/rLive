@@ -5,6 +5,7 @@ mod asr;
 mod commands;
 mod danmu_rs;
 mod db;
+mod dlna;
 mod error;
 mod http_client;
 mod image_cache;
@@ -53,6 +54,7 @@ use commands::danmaku_send_history::{
     danmaku_send_history_list_all,
 };
 use commands::diagnostics::{app_log_clear, app_log_snapshot};
+use commands::dlna::{dlna_cast, dlna_search_devices, dlna_status, dlna_stop};
 use commands::follow::{
     follow_add, follow_list, follow_refresh, follow_refresh_auto_record, follow_remove,
     follow_set_auto_record, follow_set_tags, tag_list, tag_remove, tag_upsert,
@@ -322,6 +324,10 @@ pub fn run() {
             tag_remove,
             profile_export,
             profile_import,
+            dlna_cast,
+            dlna_search_devices,
+            dlna_status,
+            dlna_stop,
             lan_sync_start,
             lan_sync_status,
             lan_sync_stop,

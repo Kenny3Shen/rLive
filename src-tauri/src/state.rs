@@ -10,6 +10,7 @@ use crate::app_paths::AppDirectories;
 use crate::asr::AsrManager;
 use crate::danmu_rs::DanmakuManager;
 use crate::db::Db;
+use crate::dlna::DlnaManager;
 use crate::error::{AppError, AppResult};
 use crate::image_proxy::ImageProxy;
 use crate::lan_sync::LanSyncManager;
@@ -28,6 +29,7 @@ pub struct AppState {
     pub stream_proxy: StreamProxy,
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub recording: RecordingManager,
+    pub dlna: DlnaManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
 }
@@ -174,6 +176,7 @@ impl AppState {
             stream_proxy: StreamProxy::new(),
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording: RecordingManager::new(app_directory)?,
+            dlna: DlnaManager::new(),
             image_proxy: ImageProxy::new(directories.cache.join("images")),
             lan_sync: LanSyncManager::new(),
         })
