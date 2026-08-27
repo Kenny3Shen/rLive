@@ -199,7 +199,9 @@ function SettingsEntryList({
       setError(`${noun}不能为空`);
       return null;
     }
-    if (Array.from(entry).length > DANMAKU_SHIELD_ENTRY_MAX_LENGTH) {
+    // 点击屏蔽写入的昵称长度由平台决定，可能超过手输上限。原值未改动时放行，
+    // 否则这类条目在列表里既改不动也存不回。
+    if (entry !== replacing && Array.from(entry).length > DANMAKU_SHIELD_ENTRY_MAX_LENGTH) {
       setError(`${noun}最多 ${DANMAKU_SHIELD_ENTRY_MAX_LENGTH} 个字符`);
       return null;
     }

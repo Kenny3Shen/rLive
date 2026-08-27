@@ -316,12 +316,20 @@ function parseAsrFontSize(value: unknown): number {
 
 /** 屏蔽用户列表的容量上限；到达后淘汰最早的条目。 */
 export const DANMAKU_BLOCKED_USERS_MAX = 500;
-/** 单个屏蔽词或被屏蔽昵称的最大长度，两个列表共用同一口径。 */
-export const DANMAKU_SHIELD_ENTRY_MAX_LENGTH = 80;
+/**
+ * 设置里手输的单个屏蔽词或昵称的最大长度，两个列表共用同一口径。
+ *
+ * 取值对齐平台常规设置：B 站单条弹幕上限 20 字、虎牙 30 字（见
+ * `danmaku/sending.ts`），屏蔽词按子串匹配，长过平台弹幕上限的条目永远
+ * 不可能命中。仅约束手输：从弹幕列表点击屏蔽时按事件真实昵称写入，
+ * 不受此上限限制，否则超长昵称会静默屏蔽失败。
+ */
+export const DANMAKU_SHIELD_ENTRY_MAX_LENGTH = 30;
 
 /**
- * 屏蔽用户以弹幕事件携带的展示昵称为准。去空白、去空项、去重并淘汰
- * 超过长度或容量上限的条目，使列表与过滤器输入始终保持规整。
+ * 屏蔽用户以弹幕事件携带的展示昵称为准。去空白、去空项、去重并按容量上限
+ * 淘汰最早的条目。这里不做长度裁剪：昵称来自平台事件，长度由平台决定，
+ * 按设置输入上限丢弃会让点击屏蔽对超长昵称静默失效。
  */
 export function normalizeDanmakuBlockedUsers(users: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -329,9 +337,7 @@ export function normalizeDanmakuBlockedUsers(users: readonly string[]): string[]
   for (const rawUser of users) {
     if (typeof rawUser !== "string") continue;
     const user = rawUser.trim();
-    if (!user || Array.from(user).length > DANMAKU_SHIELD_ENTRY_MAX_LENGTH || seen.has(user)) {
-      continue;
-    }
+    if (!user || seen.has(user)) continue;
     seen.add(user);
     normalized.push(user);
   }
