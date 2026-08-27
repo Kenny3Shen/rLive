@@ -16,7 +16,6 @@ import {
   Activity,
   Check,
   CircleDot,
-  CirclePlay,
   Clock3,
   Folder,
   FolderCog,
@@ -93,6 +92,7 @@ import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -112,6 +112,11 @@ import {
   playlistSourcesForSettings,
 } from "@/features/iptv/playlistSource";
 import { FollowGroupManagerDialog } from "./FollowGroupManagerDialog";
+import {
+  FollowCardActionDrawer,
+  type FollowCardDrawerAction,
+  type FollowCardDrawerGroup,
+} from "./FollowCardActionDrawer";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
 import { IptvFollowView } from "./IptvFollowView";
 import { useFollowDndSensors } from "./useFollowDndSensors";
@@ -257,110 +262,188 @@ function FollowCard({
     data: { follow: user },
     disabled: moving,
   });
+  // 移动端长按弹出底部操作抽屉（与直播卡片一致）；桌面端保留右键菜单。
+  const mobile = isMobileClient();
+  const cardDrawer = useLongPressDrawer({ enabled: mobile });
+  const { onPointerDown: onDragPointerDown, ...dragListeners } = listeners ?? {};
   const live = user.live_status === true;
   const offline = user.live_status === false;
   const liveDuration = live ? formatFollowLiveDuration(user.live_started_at, now) : null;
   const avatarSrc = normalizeImageUrl(user.face);
   const roomPath = `/room/${user.site_id}/${encodeURIComponent(user.room_id)}`;
 
+  function openRoom() {
+    // 长按弹出操作抽屉后，松手合成的点按属于菜单手势的一部分，不进入房间。
+    if (cardDrawer.consumeSyntheticClick()) return;
+    onNavigate(roomPath);
+  }
+
+  const drawerActions: FollowCardDrawerAction[] = recordingSupported
+    ? [
+        {
+          id: "start-recording",
+          icon: CircleDot,
+          label: recordingActive ? "正在录制" : recordingStarting ? "正在开启录制…" : "开启录制",
+          disabled: !live || recordingBusy || recordingActive,
+          onSelect: () => onStartRecording(user),
+        },
+        {
+          id: "auto-record",
+          icon: CircleDot,
+          label: "自动录制",
+          selected: user.auto_record,
+          disabled: autoRecordingDisabled,
+          busy: autoRecordingBusy,
+          onSelect: () => onAutoRecordingChange(user, !user.auto_record),
+        },
+      ]
+    : [];
+  // 未分组永远排在自定义分组之后，与右键菜单一致。
+  const drawerGroups: FollowCardDrawerGroup[] = [
+    ...groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      icon: Folder,
+      current: currentGroupId === group.id,
+    })),
+    {
+      id: UNGROUPED_FOLLOW_GROUP_ID,
+      name: "未分组",
+      icon: Inbox,
+      current: currentGroupId === UNGROUPED_FOLLOW_GROUP_ID,
+    },
+  ];
+
+  const cardClassName = cn(
+    "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20",
+    live &&
+      "before:absolute before:inset-y-3 before:left-0 before:w-0.5 before:rounded-r-full before:bg-success",
+    moving && "opacity-60",
+  );
+
+  const cardBody = (
+    <>
+      <button
+        ref={setActivatorNodeRef}
+        type="button"
+        className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
+        aria-label={`打开${user.user_name}的直播间，可拖动卡片或通过菜单移动分组`}
+        onPointerEnter={() => preloadRouteModule(roomPath)}
+        onFocus={() => preloadRouteModule(roomPath)}
+        onClick={openRoom}
+        onPointerDown={(event) => {
+          // 长按计时与 DnD 激活器共享同一次按压；桌面端两者互不干扰。
+          cardDrawer.onPointerDown(event);
+          onDragPointerDown?.(event);
+        }}
+        onPointerMove={cardDrawer.onPointerMove}
+        onPointerUp={cardDrawer.onPointerUp}
+        onPointerCancel={cardDrawer.onPointerCancel}
+        onContextMenu={cardDrawer.onContextMenu}
+        {...attributes}
+        {...dragListeners}
+      />
+
+      <CardHeader className="pointer-events-none items-center gap-x-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Avatar size="lg">
+            <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
+            <AvatarFallback>{(user.user_name || "?").slice(0, 1)}</AvatarFallback>
+          </Avatar>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <CardTitle className="truncate" title={user.user_name}>
+              {user.user_name}
+            </CardTitle>
+            <CardDescription className="truncate">
+              {SITE_LABELS[user.site_id] ?? user.site_id} · 房间 {user.room_id}
+            </CardDescription>
+          </div>
+        </div>
+
+        <CardAction className="pointer-events-auto relative z-10 flex items-center gap-0.5 self-center">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={removeDisabled || moving}
+                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={`删除${user.user_name}关注`}
+                  onClick={() => onRemove(user)}
+                />
+              }
+            >
+              {removing ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+            </TooltipTrigger>
+            <TooltipContent>删除关注</TooltipContent>
+          </Tooltip>
+        </CardAction>
+      </CardHeader>
+
+      <CardContent className="pointer-events-none flex min-h-5 min-w-0 items-center gap-1.5 overflow-hidden">
+        {live && (
+          <Badge variant="secondary" className="bg-success/15 text-success">
+            直播中
+          </Badge>
+        )}
+        {liveDuration && (
+          <Badge variant="outline" title={`开播时长：${liveDuration}`}>
+            <Clock3 aria-hidden />
+            开播 {liveDuration}
+          </Badge>
+        )}
+        {offline && <Badge variant="secondary">未开播</Badge>}
+        {user.live_status == null && <Badge variant="outline">状态未知</Badge>}
+        {recordingSupported && user.auto_record && (
+          <Badge variant="outline">
+            <CircleDot aria-hidden />
+            自动录制
+          </Badge>
+        )}
+      </CardContent>
+    </>
+  );
+
+  if (mobile) {
+    return (
+      <li ref={setNodeRef} className={cn("min-w-0", isDragging && "opacity-35")}>
+        {/* 拦下 WebView 原生长按菜单，让触摸长按专属于操作抽屉。 */}
+        <Card size="sm" className={cardClassName} onContextMenu={(event) => event.preventDefault()}>
+          {cardBody}
+        </Card>
+        <FollowCardActionDrawer
+          open={cardDrawer.open}
+          onOpenChange={cardDrawer.setOpen}
+          title={user.user_name || "未知主播"}
+          actions={drawerActions}
+          groups={drawerGroups}
+          moving={moving}
+          onMoveGroup={(groupId) => onMove(user, groupId)}
+          destructive={{
+            id: "remove",
+            icon: UserRoundX,
+            label: "取消关注",
+            disabled: removeDisabled,
+            busy: removing,
+            destructive: true,
+            onSelect: () => onRemove(user),
+          }}
+        />
+      </li>
+    );
+  }
+
   return (
     <li ref={setNodeRef} className={cn("min-w-0", isDragging && "opacity-35")}>
       <ContextMenu>
-        <ContextMenuTrigger
-          render={
-            <Card
-              size="sm"
-              className={cn(
-                "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20",
-                live &&
-                  "before:absolute before:inset-y-3 before:left-0 before:w-0.5 before:rounded-r-full before:bg-success",
-                moving && "opacity-60",
-              )}
-            />
-          }
-        >
-          <button
-            ref={setActivatorNodeRef}
-            type="button"
-            className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
-            aria-label={`打开${user.user_name}的直播间，可拖动卡片或通过菜单移动分组`}
-            onPointerEnter={() => preloadRouteModule(roomPath)}
-            onFocus={() => preloadRouteModule(roomPath)}
-            onClick={() => onNavigate(roomPath)}
-            {...attributes}
-            {...listeners}
-          />
-
-          <CardHeader className="pointer-events-none items-center gap-x-2.5">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <Avatar size="lg">
-                <AvatarImage src={avatarSrc} alt="" referrerPolicy="no-referrer" />
-                <AvatarFallback>{(user.user_name || "?").slice(0, 1)}</AvatarFallback>
-              </Avatar>
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <CardTitle className="truncate" title={user.user_name}>
-                  {user.user_name}
-                </CardTitle>
-                <CardDescription className="truncate">
-                  {SITE_LABELS[user.site_id] ?? user.site_id} · 房间 {user.room_id}
-                </CardDescription>
-              </div>
-            </div>
-
-            <CardAction className="pointer-events-auto relative z-10 flex items-center gap-0.5 self-center">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={removeDisabled || moving}
-                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={`删除${user.user_name}关注`}
-                      onClick={() => onRemove(user)}
-                    />
-                  }
-                >
-                  {removing ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
-                </TooltipTrigger>
-                <TooltipContent>删除关注</TooltipContent>
-              </Tooltip>
-            </CardAction>
-          </CardHeader>
-
-          <CardContent className="pointer-events-none flex min-h-5 min-w-0 items-center gap-1.5 overflow-hidden">
-            {live && (
-              <Badge variant="secondary" className="bg-success/15 text-success">
-                直播中
-              </Badge>
-            )}
-            {liveDuration && (
-              <Badge variant="outline" title={`开播时长：${liveDuration}`}>
-                <Clock3 aria-hidden />
-                开播 {liveDuration}
-              </Badge>
-            )}
-            {offline && <Badge variant="secondary">未开播</Badge>}
-            {user.live_status == null && <Badge variant="outline">状态未知</Badge>}
-            {recordingSupported && user.auto_record && (
-              <Badge variant="outline">
-                <CircleDot aria-hidden />
-                自动录制
-              </Badge>
-            )}
-          </CardContent>
+        <ContextMenuTrigger render={<Card size="sm" className={cardClassName} />}>
+          {cardBody}
         </ContextMenuTrigger>
 
         <ContextMenuContent>
           <ContextMenuGroup>
-            <ContextMenuItem
-              onFocus={() => preloadRouteModule(roomPath)}
-              onClick={() => onNavigate(roomPath)}
-            >
-              <CirclePlay aria-hidden />
-              打开直播间
-            </ContextMenuItem>
             {recordingSupported && (
               <>
                 <ContextMenuItem

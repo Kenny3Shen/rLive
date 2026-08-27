@@ -228,7 +228,18 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 
 该 hook 已不再使用 GSAP。开始新手势、禁用 hook 或组件卸载时，必须取消在飞的 Animation、清掉兜底回滚定时器并清除 transform/`will-change`；取消收尾动画时要先把它当前到达的像素位置写回 inline style，否则会回跳到动画起点。
 
-### 4.6 feature 页面入场
+### 4.6 `useLongPress`：触摸长按
+
+`src/shared/hooks/useLongPress.ts` 把「按住不动约半秒」翻译为一次回调；`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页的直播/频道卡片共用，移动端长按即弹出底部操作抽屉。判定常量在 `src/shared/gestures/longPress.ts`：
+
+- 只有触摸/触控笔主指针参与；鼠标交给右键菜单，桌面端直接 `enabled: false`。
+- 按下后 `500ms` 触发；漂移超过 `10px` 半径、抬起或 pointercancel（滚动接管）都会终止，因此长按与列表滚动、页签横滑互不冲突。
+- Android WebView 在系统长按点会派发原生 `contextmenu`：调用方在卡片上 `preventDefault` 并经 `triggerNow()` 立即触发，既拦下 WebView 自带菜单，也让触发时机与系统长按一致；自持计时器承担 iOS WebView（不保证派发 contextmenu）与兜底。
+- 触发后松手可能合成一次 click，调用方需用「触发时置位、下次 pointerdown 清零」的标记抑制，避免长按弹抽屉后误入房间。
+- 关注卡片上长按计时与 dnd-kit 拖拽激活器组合在同一次 pointerdown；触摸不会激活 MouseSensor，长按与桌面鼠标拖拽互不干扰。
+- iOS 侧长按封面图的系统存储菜单由全局 `@media (pointer: coarse)` 规则中的 `-webkit-touch-callout: none` 压制（`styles.css`）。
+
+### 4.7 feature 页面入场
 
 IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由层：
 
@@ -243,7 +254,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 
 长列表不得为所有项目同时创建 tween。优先只动画首屏或有界数量；无限滚动追加内容默认直接出现，避免动画持续争用播放器和画面弹幕的主线程预算。
 
-### 4.7 主题全局淡化
+### 4.8 主题全局淡化
 
 主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与设置页「外观配置」协作；亮暗模式提供跟随系统（默认）、浅色、深色三档，移动端同样可用，跟随系统时由 `watchSystemThemeChanges()` 监听系统亮暗变化并实时重应用：
 
@@ -256,7 +267,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 
 不支持 View Transition API 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下临时 CSS 变量或未结束的快照状态。
 
-### 4.8 CSS 动画
+### 4.9 CSS 动画
 
 CSS 只承担无需 JavaScript 编排的短状态：
 

@@ -1,8 +1,17 @@
-import { memo, useState } from "react";
+import { memo, useState, type ComponentProps } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Copy, ExternalLink, Flame, Hash, PanelsTopLeft, Star, StarOff } from "lucide-react";
+import {
+  Copy,
+  ExternalLink,
+  Flame,
+  Hash,
+  PanelsTopLeft,
+  Star,
+  StarOff,
+  type LucideIcon,
+} from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { copyText } from "@/shared/clipboard";
@@ -20,10 +29,13 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { notify } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
 import { preloadRouteModule } from "@/app/routeModules";
 import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
+import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
 
 type RoomCardProps = {
@@ -36,6 +48,10 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
   const normalizedCover = normalizeCoverUrl(room.cover);
   const [pendingFollowUser, setPendingFollowUser] = useState<FollowUser | null>(null);
+  // 移动端长按卡片改为弹出底部操作抽屉（与直播页清晰度/更多操作抽屉同构），
+  // 桌面端继续使用右键菜单。
+  const mobile = isMobileClient();
+  const cardDrawer = useLongPressDrawer({ enabled: mobile });
   const {
     mountRef: previewMountRef,
     phase: previewPhase,
@@ -128,6 +144,8 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   });
 
   function openRoom() {
+    // 长按弹出操作抽屉后，松手合成的点按属于菜单手势的一部分，不进入房间。
+    if (cardDrawer.consumeSyntheticClick()) return;
     // 导航会卸载卡片,但先停预览可以避免与房间播放器抢同一条本机代理会话。
     stopPreview();
     navigate(roomPath);
@@ -179,70 +197,152 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     }
   }
 
+  const cardBody = (
+    <>
+      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
+        {normalizedCover ? (
+          <img
+            src={normalizedCover}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="motion-room-cover h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+            暂无封面
+          </div>
+        )}
+        {/* 预览盖在封面之上、渐变与热度角标之下。挂载点不接收指针事件,
+              悬停与点击始终落在卡片按钮上。 */}
+        <div ref={previewMountRef} aria-hidden className="pointer-events-none absolute inset-0" />
+        {previewPhase === "loading" && (
+          <span className="pointer-events-none absolute left-2 top-2 inline-flex rounded-md bg-black/65 p-1 text-white backdrop-blur-sm">
+            <Spinner className="size-3" />
+          </span>
+        )}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
+        <span
+          data-mobile-static-backdrop
+          className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm"
+        >
+          <Flame className="size-3 text-orange-400" aria-hidden />
+          {formatOnline(room.online)}
+        </span>
+      </div>
+      <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
+        <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
+          {room.title || "未命名直播间"}
+        </p>
+        <p className="truncate text-xs text-muted-foreground">{room.user_name || "未知主播"}</p>
+      </div>
+    </>
+  );
+
+  const cardButtonProps: ComponentProps<"button"> = {
+    type: "button",
+    onClick: openRoom,
+    onPointerEnter: (event) => {
+      preloadRouteModule(roomPath);
+      onPreviewPointerEnter(event);
+    },
+    onPointerLeave: stopPreview,
+    onPointerDown: (event) => {
+      cardDrawer.onPointerDown(event);
+      preloadRouteModule(roomPath);
+    },
+    onPointerMove: cardDrawer.onPointerMove,
+    onPointerUp: cardDrawer.onPointerUp,
+    onPointerCancel: cardDrawer.onPointerCancel,
+    onContextMenu: cardDrawer.onContextMenu,
+    onFocus: () => preloadRouteModule(roomPath),
+    className: cn(
+      "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring",
+    ),
+  };
+
+  if (mobile) {
+    return (
+      <>
+        <button
+          {...cardButtonProps}
+          data-motion-press
+          data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
+        >
+          {cardBody}
+        </button>
+
+        {/* 长按弹出的底部操作抽屉，磁贴画法对齐全屏 HUD 的「更多房间操作」。 */}
+        <Drawer open={cardDrawer.open} onOpenChange={cardDrawer.setOpen}>
+          <DrawerContent>
+            <DrawerTitle className="truncate">
+              {room.title || room.user_name || "直播间"}
+            </DrawerTitle>
+            <div className="mt-2 grid grid-cols-4 gap-1.5 max-md:gap-2">
+              <RoomCardActionTile
+                icon={Copy}
+                label="复制链接"
+                onClick={() => {
+                  cardDrawer.setOpen(false);
+                  void copyRoomLink();
+                }}
+              />
+              <RoomCardActionTile
+                icon={Hash}
+                label="复制房间号"
+                onClick={() => {
+                  cardDrawer.setOpen(false);
+                  void copyRoomId();
+                }}
+              />
+              <RoomCardActionTile
+                icon={isFollowed ? StarOff : Star}
+                label={isFollowed ? "取消关注" : "关注主播"}
+                disabled={followMutation.isPending || followsQuery.isLoading}
+                onClick={() => {
+                  // 先收抽屉，为可能弹出的分组选择对话框让路。
+                  cardDrawer.setOpen(false);
+                  followMutation.mutate(null);
+                }}
+              />
+              <RoomCardActionTile
+                icon={ExternalLink}
+                label="浏览器打开"
+                onClick={() => {
+                  cardDrawer.setOpen(false);
+                  void openInBrowser();
+                }}
+              />
+            </div>
+          </DrawerContent>
+        </Drawer>
+
+        <FollowGroupPickerDialog
+          open={pendingFollowUser != null}
+          subjectName={pendingFollowUser?.user_name ?? room.user_name}
+          pending={followMutation.isPending && followMutation.variables != null}
+          onOpenChange={(open) => {
+            if (!open) setPendingFollowUser(null);
+          }}
+          onConfirm={(groupId) => followMutation.mutateAsync(groupId).then(() => undefined)}
+        />
+      </>
+    );
+  }
+
   return (
     <ContextMenu>
       <ContextMenuTrigger
         render={
           <button
-            type="button"
+            {...cardButtonProps}
             data-motion-press
             data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
-            onClick={openRoom}
-            onPointerEnter={(event) => {
-              preloadRouteModule(roomPath);
-              onPreviewPointerEnter(event);
-            }}
-            onPointerLeave={stopPreview}
-            onPointerDown={() => preloadRouteModule(roomPath)}
-            onFocus={() => preloadRouteModule(roomPath)}
-            className={cn(
-              "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring",
-            )}
           />
         }
       >
-        <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
-          {normalizedCover ? (
-            <img
-              src={normalizedCover}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="motion-room-cover h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-              暂无封面
-            </div>
-          )}
-          {/* 预览盖在封面之上、渐变与热度角标之下。挂载点不接收指针事件,
-              悬停与点击始终落在卡片按钮上。 */}
-          <div
-            ref={previewMountRef}
-            aria-hidden
-            className="pointer-events-none absolute inset-0"
-          />
-          {previewPhase === "loading" && (
-            <span className="pointer-events-none absolute left-2 top-2 inline-flex rounded-md bg-black/65 p-1 text-white backdrop-blur-sm">
-              <Spinner className="size-3" />
-            </span>
-          )}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
-          <span
-            data-mobile-static-backdrop
-            className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm"
-          >
-            <Flame className="size-3 text-orange-400" aria-hidden />
-            {formatOnline(room.online)}
-          </span>
-        </div>
-        <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
-          <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
-            {room.title || "未命名直播间"}
-          </p>
-          <p className="truncate text-xs text-muted-foreground">{room.user_name || "未知主播"}</p>
-        </div>
+        {cardBody}
       </ContextMenuTrigger>
 
       <ContextMenuContent className="min-w-48">
@@ -256,14 +356,12 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             <Hash aria-hidden />
             复制房间号
           </ContextMenuItem>
-          {/* 多视图仅限桌面（见 MultiRoomPage），触摸设备上长按是进入此菜单的唯一方式。
-              在那里提供该项会把房间加进客户端打不开的表面。 */}
-          {!isMobileClient() && (
-            <ContextMenuItem onClick={addToMultiRoom}>
-              <PanelsTopLeft aria-hidden />
-              加入多画面
-            </ContextMenuItem>
-          )}
+          {/* 多视图仅限桌面（见 MultiRoomPage）；移动端长按走底部操作抽屉，
+              抽屉刻意不提供该项，避免把房间加进客户端打不开的表面。 */}
+          <ContextMenuItem onClick={addToMultiRoom}>
+            <PanelsTopLeft aria-hidden />
+            加入多画面
+          </ContextMenuItem>
         </ContextMenuGroup>
         <ContextMenuSeparator />
         <ContextMenuGroup>
@@ -293,3 +391,29 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     </ContextMenu>
   );
 });
+
+/** 移动端长按操作抽屉里的动作磁贴，画法对齐全屏 HUD 的房间操作磁贴。 */
+function RoomCardActionTile({
+  icon: Icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      disabled={disabled}
+      className="h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3"
+      onClick={onClick}
+    >
+      <Icon className="size-5" aria-hidden />
+      <span className="max-w-full truncate">{label}</span>
+    </Button>
+  );
+}

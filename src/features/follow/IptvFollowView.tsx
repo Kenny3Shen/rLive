@@ -87,9 +87,12 @@ import {
   type PlaylistSource,
 } from "@/features/iptv/playlistSource";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { isMobileClient } from "@/shared/clientPlatform";
+import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { cn } from "@/lib/utils";
 import { PagePan } from "@/shared/motion/PagePan";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { FollowCardActionDrawer, type FollowCardDrawerGroup } from "./FollowCardActionDrawer";
 import { IptvFollowGroupManagerDialog } from "./IptvFollowGroupManagerDialog";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
 import { useFollowDndSensors } from "./useFollowDndSensors";
@@ -191,97 +194,168 @@ function IptvFavoriteCard({
     data: { favorite },
     disabled: moving,
   });
+  // 移动端长按弹出底部操作抽屉（与直播卡片一致）；桌面端保留右键菜单。
+  const mobile = isMobileClient();
+  const cardDrawer = useLongPressDrawer({ enabled: mobile });
+  const { onPointerDown: onDragPointerDown, ...dragListeners } = listeners ?? {};
+
+  function openFavorite() {
+    // 长按弹出操作抽屉后，松手合成的点按属于菜单手势的一部分，不进入播放页。
+    if (cardDrawer.consumeSyntheticClick()) return;
+    onOpen(favorite);
+  }
+
+  const drawerGroups: FollowCardDrawerGroup[] = [
+    ...groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      icon: Folder,
+      current: currentGroupId === group.id,
+    })),
+    {
+      id: IPTV_FOLLOW_UNGROUPED_ID,
+      name: IPTV_FOLLOW_UNGROUPED_NAME,
+      icon: Inbox,
+      current: currentGroupId === IPTV_FOLLOW_UNGROUPED_ID,
+    },
+  ];
+
+  const cardClassName = cn(
+    "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20",
+    moving && "opacity-60",
+  );
+
+  const cardBody = (
+    <>
+      <button
+        ref={setActivatorNodeRef}
+        type="button"
+        className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
+        aria-label={`播放 ${favorite.name}，可拖动卡片或通过菜单移动分组`}
+        onPointerEnter={() => preloadRouteModule("/iptv/play")}
+        onFocus={() => preloadRouteModule("/iptv/play")}
+        onClick={openFavorite}
+        onPointerDown={(event) => {
+          // 长按计时与 DnD 激活器共享同一次按压；桌面端两者互不干扰。
+          cardDrawer.onPointerDown(event);
+          onDragPointerDown?.(event);
+        }}
+        onPointerMove={cardDrawer.onPointerMove}
+        onPointerUp={cardDrawer.onPointerUp}
+        onPointerCancel={cardDrawer.onPointerCancel}
+        onContextMenu={cardDrawer.onContextMenu}
+        {...attributes}
+        {...dragListeners}
+      />
+
+      <CardHeader className="pointer-events-none items-center gap-x-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border-subtle">
+            {favorite.logo ? (
+              <img
+                src={favorite.logo}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="size-full object-contain p-1"
+              />
+            ) : (
+              <Tv className="size-5 text-muted-foreground" aria-hidden />
+            )}
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <CardTitle className="truncate" title={favorite.name}>
+              {favorite.name || "未命名频道"}
+            </CardTitle>
+            <CardDescription className="truncate" title={sourceLabel}>
+              {sourceLabel}
+            </CardDescription>
+          </div>
+        </div>
+
+        <CardAction className="pointer-events-auto relative z-10 self-center">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={removeDisabled || moving}
+                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={`删除${favorite.name}关注`}
+                  onClick={() => onRemove(favorite)}
+                />
+              }
+            >
+              {removing ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+            </TooltipTrigger>
+            <TooltipContent>删除关注</TooltipContent>
+          </Tooltip>
+        </CardAction>
+      </CardHeader>
+
+      <CardContent className="pointer-events-none flex min-h-5 min-w-0 items-center gap-1.5 overflow-hidden">
+        <Badge
+          variant="outline"
+          className="min-w-0 shrink"
+          title={`播放列表分类：${iptvM3uGroupName(favorite)}`}
+        >
+          <Folder aria-hidden />
+          <span className="truncate">{iptvM3uGroupName(favorite)}</span>
+        </Badge>
+        {showFavoriteGroup && (
+          <Badge variant="outline" className="min-w-0 shrink" title={currentGroupName}>
+            <FolderInput aria-hidden />
+            <span className="truncate">{currentGroupName}</span>
+          </Badge>
+        )}
+      </CardContent>
+    </>
+  );
+
+  if (mobile) {
+    return (
+      <li ref={setNodeRef} className={cn("min-w-0", isDragging && "opacity-35")}>
+        {/* 拦下 WebView 原生长按菜单，让触摸长按专属于操作抽屉。 */}
+        <Card size="sm" className={cardClassName} onContextMenu={(event) => event.preventDefault()}>
+          {cardBody}
+        </Card>
+        <FollowCardActionDrawer
+          open={cardDrawer.open}
+          onOpenChange={cardDrawer.setOpen}
+          title={favorite.name || "未命名频道"}
+          actions={[
+            {
+              id: "open",
+              icon: CirclePlay,
+              label: "播放频道",
+              onSelect: () => onOpen(favorite),
+            },
+          ]}
+          groups={drawerGroups}
+          moving={moving}
+          onMoveGroup={(groupId) => onMove(favorite, groupId)}
+          destructive={{
+            id: "remove",
+            icon: Trash2,
+            label: "删除关注",
+            disabled: removeDisabled,
+            busy: removing,
+            destructive: true,
+            onSelect: () => onRemove(favorite),
+          }}
+        />
+      </li>
+    );
+  }
 
   return (
     <li ref={setNodeRef} className={cn("min-w-0", isDragging && "opacity-35")}>
       <ContextMenu>
-        <ContextMenuTrigger
-          render={
-            <Card
-              size="sm"
-              className={cn(
-                "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20",
-                moving && "opacity-60",
-              )}
-            />
-          }
-        >
-          <button
-            ref={setActivatorNodeRef}
-            type="button"
-            className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
-            aria-label={`播放 ${favorite.name}，可拖动卡片或通过菜单移动分组`}
-            onPointerEnter={() => preloadRouteModule("/iptv/play")}
-            onFocus={() => preloadRouteModule("/iptv/play")}
-            onClick={() => onOpen(favorite)}
-            {...attributes}
-            {...listeners}
-          />
-
-          <CardHeader className="pointer-events-none items-center gap-x-2.5">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border-subtle">
-                {favorite.logo ? (
-                  <img
-                    src={favorite.logo}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    className="size-full object-contain p-1"
-                  />
-                ) : (
-                  <Tv className="size-5 text-muted-foreground" aria-hidden />
-                )}
-              </div>
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <CardTitle className="truncate" title={favorite.name}>
-                  {favorite.name || "未命名频道"}
-                </CardTitle>
-                <CardDescription className="truncate" title={sourceLabel}>
-                  {sourceLabel}
-                </CardDescription>
-              </div>
-            </div>
-
-            <CardAction className="pointer-events-auto relative z-10 self-center">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={removeDisabled || moving}
-                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={`删除${favorite.name}关注`}
-                      onClick={() => onRemove(favorite)}
-                    />
-                  }
-                >
-                  {removing ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
-                </TooltipTrigger>
-                <TooltipContent>删除关注</TooltipContent>
-              </Tooltip>
-            </CardAction>
-          </CardHeader>
-
-          <CardContent className="pointer-events-none flex min-h-5 min-w-0 items-center gap-1.5 overflow-hidden">
-            <Badge
-              variant="outline"
-              className="min-w-0 shrink"
-              title={`播放列表分类：${iptvM3uGroupName(favorite)}`}
-            >
-              <Folder aria-hidden />
-              <span className="truncate">{iptvM3uGroupName(favorite)}</span>
-            </Badge>
-            {showFavoriteGroup && (
-              <Badge variant="outline" className="min-w-0 shrink" title={currentGroupName}>
-                <FolderInput aria-hidden />
-                <span className="truncate">{currentGroupName}</span>
-              </Badge>
-            )}
-          </CardContent>
+        <ContextMenuTrigger render={<Card size="sm" className={cardClassName} />}>
+          {cardBody}
         </ContextMenuTrigger>
 
         <ContextMenuContent>

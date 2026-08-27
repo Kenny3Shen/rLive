@@ -570,7 +570,9 @@ body {
 
 /* 触摸优先设备上，浏览器的点按闪烁与误选文本会让卡片和控件密集的页面读起来像
    桌面网页。把这套处理限定在交互 UI 上，普通文章文本与表单取值仍可选择。
-   `manipulation` 保留平移与双指缩放并移除遗留的双击延迟。 */
+   `manipulation` 保留平移与双指缩放并移除遗留的双击延迟；
+   `-webkit-touch-callout` 关掉 iOS 长按交互元素（如卡片封面图）时
+   弹出的系统存储/拷贝菜单，与 Android 侧的 contextmenu 拦截互补。 */
 @media (pointer: coarse) {
   :where(
     a[href],
@@ -586,6 +588,7 @@ body {
     [data-slot="toggle-group-item"]
   ) {
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
     touch-action: manipulation;
