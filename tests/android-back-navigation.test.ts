@@ -3,35 +3,55 @@ import {
   ANDROID_BACK_EVENT,
   dispatchAndroidBackEvent,
   hasBrowserHistoryEntry,
+  isAndroidHomeTabRoot,
   shouldRegisterAndroidBackHandler,
 } from "../src/app/androidBackNavigation";
 
 describe("Android Back navigation", () => {
-  test("only registers an app listener for non-root Tauri Android routes", () => {
+  test("registers the app listener on every Tauri Android route", () => {
+    // 根路由也要注册：返回键需要先经过页面，抽屉等浮层才有机会消费。
     expect(
       shouldRegisterAndroidBackHandler({
-        pathname: "/room/bilibili/1",
         userAgent: "Mozilla/5.0 (Linux; Android 15)",
         tauriRuntime: true,
       }),
     ).toBe(true);
     expect(
       shouldRegisterAndroidBackHandler({
-        pathname: "/",
-        userAgent: "Mozilla/5.0 (Linux; Android 15)",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0)",
         tauriRuntime: true,
       }),
     ).toBe(false);
     expect(
       shouldRegisterAndroidBackHandler({
-        pathname: "/settings",
-        userAgent: "Mozilla/5.0 (Windows NT 10.0)",
-        tauriRuntime: true,
+        userAgent: "Mozilla/5.0 (Linux; Android 15)",
+        tauriRuntime: false,
       }),
     ).toBe(false);
   });
 
-  test("allows room overlays to consume Back before router navigation", () => {
+  test("bottom-nav roots send Back to the system home screen", () => {
+    expect(isAndroidHomeTabRoot("/", "")).toBe(true);
+    expect(isAndroidHomeTabRoot("/follow", "")).toBe(true);
+    expect(isAndroidHomeTabRoot("/category", "")).toBe(true);
+    expect(isAndroidHomeTabRoot("/history", "")).toBe(true);
+    expect(isAndroidHomeTabRoot("/iptv", "")).toBe(true);
+    expect(isAndroidHomeTabRoot("/settings", "")).toBe(true);
+    // 空白 section 仍是设置根页。
+    expect(isAndroidHomeTabRoot("/settings", "?section=")).toBe(true);
+    expect(isAndroidHomeTabRoot("/settings", "?section=%20")).toBe(true);
+  });
+
+  test("drilled-down routes keep history rewind", () => {
+    expect(isAndroidHomeTabRoot("/settings", "?section=playback")).toBe(false);
+    expect(isAndroidHomeTabRoot("/room/bilibili/1", "")).toBe(false);
+    expect(isAndroidHomeTabRoot("/category/1/2", "")).toBe(false);
+    expect(isAndroidHomeTabRoot("/search", "")).toBe(false);
+    expect(isAndroidHomeTabRoot("/iptv/play", "")).toBe(false);
+    expect(isAndroidHomeTabRoot("/recordings", "")).toBe(false);
+  });
+
+  test("allows overlays to consume Back before navigation", () => {
     const target = new EventTarget();
     target.addEventListener(ANDROID_BACK_EVENT, (event) => event.preventDefault());
     expect(dispatchAndroidBackEvent(target)).toBe(true);
