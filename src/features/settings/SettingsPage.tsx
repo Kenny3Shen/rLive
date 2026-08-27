@@ -9,7 +9,6 @@ import packageMetadata from "../../../package.json";
 import {
   createContext,
   type FormEvent,
-  type MouseEvent,
   type ReactNode,
   useCallback,
   useContext,
@@ -44,7 +43,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
-import { revealThemeAt } from "@/app/theme";
+import { fadeTheme } from "@/app/theme";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
@@ -1485,34 +1484,13 @@ function PlatformEnablementField() {
 
 function AppearanceSettings() {
   const switchingRef = useRef(false);
-  const revealOriginRef = useRef<{ x: number; y: number } | null>(null);
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
-
-  // 在捕获阶段记录指针坐标，保证先于 ToggleGroup 的 onValueChange 消费；
-  // 键盘激活（event.detail 为 0）时回退到控件中心作为揭示原点。
-  function handleToggleGroupClick(event: MouseEvent<HTMLDivElement>) {
-    if (event.detail > 0) {
-      revealOriginRef.current = { x: event.clientX, y: event.clientY };
-      return;
-    }
-    const rect = event.currentTarget.getBoundingClientRect();
-    revealOriginRef.current = {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
-  }
 
   function applyThemeMode(next: ThemeMode) {
     if (next === theme || switchingRef.current) return;
     switchingRef.current = true;
-    const origin = revealOriginRef.current;
-    revealOriginRef.current = null;
-    const transition = revealThemeAt(
-      origin ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      () => flushSync(() => setTheme(next)),
-    );
-
+    const transition = fadeTheme(() => flushSync(() => setTheme(next)));
     void transition.finished.finally(() => {
       switchingRef.current = false;
     });
@@ -1533,7 +1511,6 @@ function AppearanceSettings() {
           variant="outline"
           size="sm"
           spacing={1}
-          onClickCapture={handleToggleGroupClick}
           onValueChange={(values) => {
             const next = values[0];
             if (next === "system" || next === "light" || next === "dark") {
