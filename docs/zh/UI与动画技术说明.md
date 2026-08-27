@@ -230,7 +230,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 
 ### 4.6 `useLongPress`：触摸长按
 
-`src/shared/hooks/useLongPress.ts` 把「按住不动约半秒」翻译为一次回调；`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页的直播/频道卡片共用，移动端长按即弹出底部操作抽屉。判定常量在 `src/shared/gestures/longPress.ts`：
+`src/shared/hooks/useLongPress.ts` 把「按住不动约半秒」翻译为一次回调；`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页的直播/频道卡片共用，移动端长按即弹出底部操作抽屉。Back 收起依赖 `AndroidBackNavigator` 派发的 `rlive:android-back` 事件，它在包括底部导航根页在内的所有路由上生效（返回链与根路由退桌面语义见 `docs/zh/架构说明.md` 第 6 节）。判定常量在 `src/shared/gestures/longPress.ts`：
 
 - 只有触摸/触控笔主指针参与；鼠标交给右键菜单，桌面端直接 `enabled: false`。
 - 按下后 `500ms` 触发；漂移超过 `10px` 半径、抬起或 pointercancel（滚动接管）都会终止，因此长按与列表滚动、页签横滑互不冲突。

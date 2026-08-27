@@ -171,7 +171,7 @@ describe("Android in-page fullscreen", () => {
 
   test("requests and releases the native immersive bars", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-    const fakeInvoke = async <T,>(command: string, args?: Record<string, unknown>) => {
+    const fakeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
       return undefined as T;
     };
@@ -189,7 +189,9 @@ describe("Android in-page fullscreen", () => {
     // 我们的 OnBackPressedCallbacks 从 `onWebViewCreate` 注册，晚于 Tauri AppPlugin
     // 注册自己的回调 —— 分发是 LIFO 的，所以我们的先执行。在那里为页面内全屏消费
     // Back 会完全抢占 `rlive:android-back`，连带期望先关闭的 HUD 菜单与音量面板
-    // 监听器。只有页面无法自行关闭的原生 custom view 才允许原生处理。
+    // 监听器。只有页面无法自行关闭的原生 custom view 才允许原生处理；
+    // 根路由退回系统桌面的语义已收敛到页面侧（homeBackCallback 已删除，
+    // 由 `RliveBackNavigationPlugin` 的 `moveTaskToBack` 命令承接）。
     const mainActivity = await Bun.file(
       new URL(
         "../src-tauri/gen/android/app/src/main/java/com/shenss/rlive/MainActivity.kt",
@@ -198,16 +200,17 @@ describe("Android in-page fullscreen", () => {
     ).text();
 
     const backHandlers = mainActivity.match(/handleOnBackPressed\(\)/g);
-    expect(backHandlers).toHaveLength(2);
-    // 两个 Back 处理器都只查询 custom view。沉浸标志保持可读供 `onResume` 使用，
+    expect(backHandlers).toHaveLength(1);
+    // 唯一的 Back 处理器只查询 custom view。沉浸标志保持可读供 `onResume` 使用，
     // 它必须继续隐藏系统栏。
-    expect(mainActivity.match(/fullscreenChromeClient\?\.exitFullscreen\(\) == true/g))
-      .toHaveLength(2);
+    expect(
+      mainActivity.match(/fullscreenChromeClient\?\.exitFullscreen\(\) == true/g),
+    ).toHaveLength(1);
     const backHandlerBodies = mainActivity
       .split("handleOnBackPressed()")
       .slice(1)
       .map((body) => body.slice(0, body.indexOf("isEnabled = false")));
-    expect(backHandlerBodies).toHaveLength(2);
+    expect(backHandlerBodies).toHaveLength(1);
     for (const body of backHandlerBodies) {
       expect(body).not.toContain("isImmersiveActive");
       expect(body).not.toContain("evaluateJavascript");

@@ -31,6 +31,9 @@ use commands::account::{
     account_qr_login_start, account_set_cookie,
 };
 #[cfg(target_os = "android")]
+use commands::android_navigation::AndroidNavigation;
+use commands::android_navigation::android_move_task_to_back;
+#[cfg(target_os = "android")]
 use commands::android_player_controls::AndroidPlayerControls;
 use commands::android_player_controls::{
     android_player_controls_get_state, android_player_controls_reset_brightness,
@@ -120,6 +123,22 @@ fn android_player_controls_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/**
+ * Android 返回键的应用级语义桥（见 `commands/android_navigation`）。
+ * 页面在底部导航根路由上消费不了返回事件时，经它把应用退回系统桌面。
+ */
+#[cfg(target_os = "android")]
+fn android_back_navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("back-navigation")
+        .setup(|app, api| {
+            let handle =
+                api.register_android_plugin("com.shenss.rlive", "RliveBackNavigationPlugin")?;
+            app.manage(AndroidNavigation(handle));
+            Ok(())
+        })
+        .build()
+}
+
 /// 应用日志的同步追加写入器。日志互斥锁中毒时绝不能打断播放或用户发起的
 /// 聊天发送，因此在这种异常情况下写入会被安全地丢弃。
 #[derive(Clone)]
@@ -197,9 +216,12 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
     // 仅限 Android：为播放器边缘手势提供窗口亮度、STREAM_MUSIC 音量
-    // 和全屏方向控制。桌面端沿用 Web 播放器的音量控制。
+    // 和全屏方向控制；并为返回键提供退回系统桌面的应用级桥。
+    // 桌面端沿用 Web 播放器的音量控制。
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(android_player_controls_plugin());
+    let builder = builder
+        .plugin(android_player_controls_plugin())
+        .plugin(android_back_navigation_plugin());
 
     builder
         .setup(|app| {
@@ -335,6 +357,7 @@ pub fn run() {
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
             android_player_controls_set_immersive,
+            android_move_task_to_back,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_active_count,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
