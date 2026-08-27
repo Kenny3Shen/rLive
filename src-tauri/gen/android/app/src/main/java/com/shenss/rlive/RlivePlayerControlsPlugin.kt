@@ -18,43 +18,41 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import kotlin.math.roundToInt
 
-/** Arguments shared by the brightness and media-volume setters. */
+/** 亮度与媒体音量 setter 共用的参数。 */
 @InvokeArg
 class PlayerControlValueArgs {
   var value: Double = 0.0
 }
 
-/** Requested player orientation: "landscape" while fullscreen, "auto" on exit. */
+/** 请求的播放器方向：全屏时 "landscape"，退出时 "auto"。 */
 @InvokeArg
 class PlayerOrientationArgs {
   var orientation: String = "auto"
 }
 
-/** Whether the player wants the system bars hidden for an immersive surface. */
+/** 播放器是否需要隐藏系统栏以获得沉浸表面。 */
 @InvokeArg
 class PlayerImmersiveArgs {
   var immersive: Boolean = false
 }
 
 /**
- * Android-only player system controls.
+ * 仅 Android 的播放器系统控制。
  *
- * The WebView cannot dim the device screen, so brightness has to be native.
- * It is applied as an Activity window override — rLive only, never a write to
- * `Settings.System` — and is restored when the player leaves or the Activity
- * is backgrounded, so a gesture inside a room never outlives that room.
+ * WebView 调不了设备屏幕亮度，必须原生实现。它以 Activity 窗口覆盖的
+ * 方式应用——只影响 rLive，绝不写 `Settings.System`——播放器离开或
+ * Activity 退后台时恢复，房间内的手势不会活过这个房间。
  *
- * Volume is handled here through Android's `STREAM_MUSIC`, matching the
- * device's hardware volume keys and media output. It is intentionally a
- * system-level control: changing it persists after leaving the room just as a
- * hardware volume-key press does.
+ * 音量在这里经 Android 的 `STREAM_MUSIC` 处理，与设备硬件音量键和媒体
+ * 输出一致。它刻意是系统级控制：改动在离开房间后保留，和按一次硬件
+ * 音量键一样。
  */
 @TauriPlugin
 class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activity) {
   private val audioManager: AudioManager
     get() = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-  /** Prior window brightness before the first player gesture override. */
+  /** 首次播放器手势覆盖前的窗口亮度。 */
   private var brightnessBeforePlayer: Float? = null
 
   init {
@@ -63,20 +61,18 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
 
   companion object {
     /**
-     * The Activity cannot reach the plugin through Tauri, but leaving the
-     * player brightness applied while rLive is in the background would dim
-     * other apps' idea of this window on return and survive a process death.
-     * [MainActivity.onPause] calls this so the override is always released.
+     * Activity 经 Tauri 拿不到插件实例，而 rLive 在后台时仍保持播放器亮度
+     * 的话，返回时其他应用眼中的这个窗口会被压暗，还可能活过进程死亡。
+     * [MainActivity.onPause] 调用它，保证覆盖总会被释放。
      */
     private var activeInstance: RlivePlayerControlsPlugin? = null
 
     /**
-     * Whether the in-page fullscreen player currently owns the system bars.
+     * 页面内全屏播放器当前是否持有系统栏。
      *
-     * Kept in the companion rather than on the instance so `MainActivity` can
-     * read it without a plugin handle: `onResume` must not restore the bars
-     * under a player that is still fullscreen. Back is deliberately not routed
-     * through this — see the Back handlers in [MainActivity].
+     * 放在 companion 而不是实例上，`MainActivity` 无需插件句柄即可读取：
+     * `onResume` 不能在仍处于全屏的播放器下恢复系统栏。Back 刻意不经由
+     * 它路由——见 [MainActivity] 的 Back 处理器。
      */
     private var immersive: Boolean = false
 
@@ -88,12 +84,11 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
     }
 
     /**
-     * Drops the immersive flag without touching the window.
+     * 只丢弃沉浸标志，不碰窗口。
      *
-     * An Activity recreation keeps this static state but reloads the page, so
-     * the restored player starts windowed. Clearing the flag on create stops a
-     * stale "still fullscreen" from keeping the bars hidden under a windowed
-     * room (see [MainActivity]).
+     * Activity 重建保留这份静态状态但会重新加载页面，恢复出的播放器以
+     * 窗口模式启动。在 create 时清标志，避免陈旧的「仍在全屏」让系统栏
+     * 在窗口模式的房间下保持隐藏（见 [MainActivity]）。
      */
     fun forgetImmersive() {
       immersive = false
@@ -123,7 +118,7 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
         }
         val percent = clampPercent(args.value)
         val streamVolume = (maxVolume * percent / 100.0).roundToInt()
-        // Do not play a volume tick or vibrate on every pointer-move update.
+        // 指针移动的每次更新都不要播放音量提示音或振动。
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
           AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE
         } else {
@@ -144,8 +139,8 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
       try {
         val percent = clampPercent(args.value)
         rememberBrightnessBeforeOverride()
-        // This is an Activity override, not a write to Settings.System. It
-        // affects rLive only and is restored when the player unmounts.
+        // 这是 Activity 覆盖，不是写 Settings.System。
+        // 只影响 rLive，播放器卸载时恢复。
         setWindowBrightness((percent / 100.0).toFloat())
         invoke.resolve(controlValue(brightnessPercent()))
       } catch (error: Exception) {
@@ -155,8 +150,8 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
   }
 
   /**
-   * Restores the Activity brightness captured before the first gesture override.
-   * Safe to call when no override was made.
+   * 恢复首次手势覆盖前记录的 Activity 亮度。
+   * 未做过覆盖时调用也安全。
    */
   @Command
   fun resetBrightness(invoke: Invoke) {
@@ -170,21 +165,20 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
     }
   }
 
-  /** Drops the gesture override back to the pre-player window brightness. */
+  /** 撤掉手势覆盖，回到播放器前的窗口亮度。 */
   private fun restoreBrightness() {
     brightnessBeforePlayer?.let(::setWindowBrightness)
     brightnessBeforePlayer = null
   }
 
   /**
-   * Locks or releases the Activity orientation for fullscreen playback.
+   * 为全屏播放锁定或释放 Activity 方向。
    *
-   * The WebView's own `requestedOrientation` hint is ignored on purpose (see
-   * [RliveFullscreenWebChromeClient]) because many rooms stream portrait video.
-   * The player decides from the real video aspect ratio instead and asks for a
-   * lock only when landscape actually helps, so vertical streams are never
-   * turned on their side. `SENSOR_LANDSCAPE` keeps both landscape directions
-   * usable, and "auto" restores the user's system rotation preference.
+   * WebView 自己的 `requestedOrientation` 提示被刻意忽略（见
+   * [RliveFullscreenWebChromeClient]），因为很多房间推的是竖屏视频。
+   * 播放器改为按真实画面宽高比判断，只在横屏确有帮助时才请求锁定，
+   * 竖向画面永不会被转成侧躺。`SENSOR_LANDSCAPE` 保留两个横屏方向
+   * 可用，"auto" 恢复用户的系统旋转偏好。
    */
   @Command
   fun setPlayerOrientation(invoke: Invoke) {
@@ -202,24 +196,22 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
   private fun requestedOrientationFor(orientation: String): Int = when (orientation) {
     "landscape" -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-    // Anything else releases the lock rather than guessing a direction.
+    // 其余取值释放锁定，不猜测方向。
     else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
   }
 
   /**
-   * Hides or restores the system bars for the in-page fullscreen player.
+   * 为页面内全屏播放器隐藏或恢复系统栏。
    *
-   * rLive deliberately does not use the WebView's HTML Fullscreen API on
-   * Android. `WebChromeClient.onShowCustomView` reparents the rendered content
-   * into a brand-new View, and that surface handoff shows several fully black
-   * frames before the new View draws its first one — the flicker users see. The
-   * player therefore fills the screen as an in-page fixed layer (the same layer
-   * desktop uses) and asks for the immersive bars separately through here, so
-   * nothing ever hands the render surface over.
+   * rLive 在 Android 上刻意不用 WebView 的 HTML Fullscreen API。
+   * `WebChromeClient.onShowCustomView` 会把渲染内容重挂到一个全新的
+   * View，这次表面交接在新 View 画出第一帧前会出现数个全黑帧——也就是
+   * 用户看到的闪烁。播放器因此以页面内 fixed 层铺满屏幕（与桌面同一
+   * 层），再经这里单独请求沉浸系统栏，渲染表面从不被交接。
    *
-   * Because the custom view no longer exists, this is the only path that hides
-   * the bars. It records the state in the companion so `MainActivity.onResume`
-   * keeps them hidden for a player that is still fullscreen.
+   * custom view 既然不存在了，这就是隐藏系统栏的唯一路径。状态记在
+   * companion 里，`MainActivity.onResume` 便能为仍处于全屏的播放器
+   * 保持隐藏。
    */
   @Command
   fun setImmersive(invoke: Invoke) {
@@ -243,8 +235,8 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
       controller.hide(WindowInsetsCompat.Type.systemBars())
     } else {
-      // Shared with the video custom-view path so both exits reset the
-      // behaviour as well as the visibility (see that method's comment).
+      // 与视频 custom-view 路径共用，两条退出路径都同时重置
+      // behavior 与可见性（见那个方法的注释）。
       RliveFullscreenWebChromeClient.restoreSystemBars(activity)
     }
   }
@@ -272,8 +264,8 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
       return clampPercent(override.toDouble() * 100.0)
     }
 
-    // Reading the user's current brightness is allowed; writing it is not
-    // needed because this plugin intentionally keeps changes app-local.
+    // 读取用户当前亮度是允许的；不需要写入，因为本插件刻意把改动
+    // 保持为应用内。
     val systemBrightness = try {
       Settings.System.getInt(
         activity.contentResolver,
