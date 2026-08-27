@@ -7,8 +7,8 @@ import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/l
 import { getDanmakuSendConfig } from "./sending";
 
 /**
- * 单条评论共享的复制/收藏/+1/屏蔽行为。侧栏列表与悬浮 DOM 层呈现同样四个操作，
- * 必须在可用性规则、乐观缓存更新和状态文案上保持一致。
+ * 单条评论共享的复制/收藏/+1 行为，附加仅在侧栏列表提供的屏蔽用户。悬浮 DOM
+ * 层的胶囊只有三个操作，但共享同一 hook 与状态词汇，保证可用性规则和文案一致。
  */
 
 export type DanmakuActionStatus =
