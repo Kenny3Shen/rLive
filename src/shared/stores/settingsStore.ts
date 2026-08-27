@@ -316,8 +316,8 @@ function parseAsrFontSize(value: unknown): number {
 
 /** 屏蔽用户列表的容量上限；到达后淘汰最早的条目。 */
 export const DANMAKU_BLOCKED_USERS_MAX = 500;
-/** 单个被屏蔽昵称的最大长度，与屏蔽词的条目上限一致。 */
-const DANMAKU_BLOCKED_USER_MAX_LENGTH = 80;
+/** 单个屏蔽词或被屏蔽昵称的最大长度，两个列表共用同一口径。 */
+export const DANMAKU_SHIELD_ENTRY_MAX_LENGTH = 80;
 
 /**
  * 屏蔽用户以弹幕事件携带的展示昵称为准。去空白、去空项、去重并淘汰
@@ -329,7 +329,7 @@ export function normalizeDanmakuBlockedUsers(users: readonly string[]): string[]
   for (const rawUser of users) {
     if (typeof rawUser !== "string") continue;
     const user = rawUser.trim();
-    if (!user || Array.from(user).length > DANMAKU_BLOCKED_USER_MAX_LENGTH || seen.has(user)) {
+    if (!user || Array.from(user).length > DANMAKU_SHIELD_ENTRY_MAX_LENGTH || seen.has(user)) {
       continue;
     }
     seen.add(user);
