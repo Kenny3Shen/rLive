@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent 
 import {
   LONG_PRESS_TRIGGER_MS,
   hasLongPressMovedBeyondSlop,
+  isContextMenuOwnedByPress,
   isLongPressPointer,
 } from "@/shared/gestures/longPress";
 
@@ -25,6 +26,8 @@ type UseLongPressOptions = {
 export function useLongPress({ enabled, onTrigger }: UseLongPressOptions) {
   const timerRef = useRef<number | null>(null);
   const startRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  /** 最近一次长按触发时刻，用于判定稍后到达的 contextmenu 是否归属同一手势。 */
+  const lastTriggeredAtRef = useRef(0);
   const onTriggerRef = useRef(onTrigger);
   onTriggerRef.current = onTrigger;
 
@@ -42,6 +45,7 @@ export function useLongPress({ enabled, onTrigger }: UseLongPressOptions) {
   /** 立即终止计时并触发，供原生 contextmenu 等外部长按信号复用。 */
   const triggerNow = useCallback(() => {
     cancel();
+    lastTriggeredAtRef.current = performance.now();
     onTriggerRef.current();
   }, [cancel]);
 
@@ -69,5 +73,15 @@ export function useLongPress({ enabled, onTrigger }: UseLongPressOptions) {
   const onPointerUp = useCallback(() => cancel(), [cancel]);
   const onPointerCancel = useCallback(() => cancel(), [cancel]);
 
-  return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, triggerNow };
+  /**
+   * contextmenu 是否归属本元素上进行中（或刚刚触发）的按压。
+   * 详见 `isContextMenuOwnedByPress` 的说明：非本元素按压产生的
+   * contextmenu（如遮罩退出期间的重定向信号）不应再触发长按。
+   */
+  const ownsActivePress = useCallback(
+    () => isContextMenuOwnedByPress(startRef.current != null, lastTriggeredAtRef.current, performance.now()),
+    [],
+  );
+
+  return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, triggerNow, ownsActivePress };
 }

@@ -474,6 +474,20 @@ body {
   transition-duration: 120ms;
 }
 
+/*
+ * 退出动画期间的遮罩与弹层不再接收指针：此时用户若快速再按（例如连续
+ * 长按-取消循环），触摸会穿透到下层页面，避免「触摸落在即将卸载的遮罩
+ * 上、抬手时事件派发到已脱离 DOM 的节点」——那会吞掉 touchend，使
+ * WebView 的手势状态残留，后续点按不再合成 click。
+ */
+.motion-dialog-overlay[data-closed],
+.motion-dialog[data-closed],
+.motion-drawer[data-closed],
+.motion-popup[data-closed],
+.motion-toast[data-closed] {
+  pointer-events: none;
+}
+
 .motion-dialog {
   scale: 1;
   opacity: 1;

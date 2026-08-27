@@ -21,6 +21,7 @@ export function useLongPressDrawer({ enabled }: { enabled: boolean }) {
     onPointerUp,
     onPointerCancel,
     triggerNow,
+    ownsActivePress,
   } = useLongPress({
     enabled,
     onTrigger: () => {
@@ -55,14 +56,19 @@ export function useLongPressDrawer({ enabled }: { enabled: boolean }) {
   /**
    * 移动端长按对应的原生 contextmenu（Android WebView 会派发）：拦下 WebView
    * 自带的菜单并立即打开抽屉。未启用时是空操作，可无条件挂在卡片上。
+   *
+   * 只有归属本卡片按压的 contextmenu 才会触发抽屉：遮罩退出期间系统长按
+   * 可能重定向到下层卡片，那种伪信号会把刚收起的抽屉再次弹开，必须忽略；
+   * preventDefault 仍然保留，避免 WebView 弹出自带菜单。
    */
   const onContextMenu = useCallback(
     (event: MouseEvent) => {
       if (!enabled) return;
       event.preventDefault();
+      if (!ownsActivePress()) return;
       triggerNow();
     },
-    [enabled, triggerNow],
+    [enabled, triggerNow, ownsActivePress],
   );
 
   /** 长按触发后松手合成的 click 被吞掉时返回 true；正常点按返回 false。 */
