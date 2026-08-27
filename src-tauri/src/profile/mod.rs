@@ -22,6 +22,7 @@ const PROFILE_FIELDS: &[&str] = &[
     "tags",
     "history",
     "danmaku_shield_words",
+    "danmaku_blocked_users",
 ];
 const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "theme",
@@ -37,6 +38,7 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_filter_gifts",
     "super_chat_enabled",
     "danmaku_shield_words",
+    "danmaku_blocked_users",
     "quality_level",
     "playback_soft_switch_enabled",
     "room_card_preview_enabled",
@@ -78,6 +80,7 @@ const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_filter_gifts",
     "super_chat_enabled",
     "danmaku_shield_words",
+    "danmaku_blocked_users",
     "quality_level",
     "playback_soft_switch_enabled",
     "room_card_preview_enabled",
@@ -121,6 +124,9 @@ pub struct ProfilePackage {
     pub tags: Vec<TagRecord>,
     pub history: Vec<HistoryRecord>,
     pub danmaku_shield_words: Vec<String>,
+    /// 顶层副本；`settings.danmaku_blocked_users` 与它合并导入。
+    #[serde(default)]
+    pub danmaku_blocked_users: Vec<String>,
 }
 
 impl ProfilePackage {
@@ -136,6 +142,7 @@ impl ProfilePackage {
             tags: vec![],
             history: vec![],
             danmaku_shield_words: vec![],
+            danmaku_blocked_users: vec![],
         }
     }
 }
@@ -195,6 +202,7 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
     let mut settings = settings::get(conn)?;
     clear_local_only_settings(&mut settings);
     let shield = settings.danmaku_shield_words.clone();
+    let blocked = settings.danmaku_blocked_users.clone();
     Ok(ProfilePackage {
         version: PROFILE_VERSION,
         exported_at: chrono::Utc::now().timestamp_millis(),
@@ -208,6 +216,7 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
         tags: follow::list_tags(conn)?,
         history: history::list(conn)?,
         danmaku_shield_words: shield,
+        danmaku_blocked_users: blocked,
     })
 }
 
@@ -449,6 +458,19 @@ pub fn merge_into_db(
         }
     }
     settings.danmaku_shield_words = words.into_iter().collect();
+
+    let mut blocked: HashSet<String> = settings.danmaku_blocked_users.into_iter().collect();
+    for u in &package.danmaku_blocked_users {
+        if !u.trim().is_empty() {
+            blocked.insert(u.clone());
+        }
+    }
+    for u in &package.settings.danmaku_blocked_users {
+        if !u.trim().is_empty() {
+            blocked.insert(u.clone());
+        }
+    }
+    settings.danmaku_blocked_users = blocked.into_iter().collect();
     settings::set(&transaction, &settings)?;
 
     transaction.commit().map_err(map_db_err)?;
@@ -537,6 +559,27 @@ mod tests {
         let package = decode_package(&text).unwrap();
 
         assert!(package.settings.room_card_preview_enabled);
+    }
+
+    /// 2.12.x 导出的配置包没有 `danmaku_blocked_users`（顶层与 settings 内都没有），
+    /// 导入时按空列表补齐，其余便携字段仍然必填。
+    #[test]
+    fn profile_backfills_blocked_users_from_older_packages() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("danmaku_blocked_users");
+        value["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("danmaku_blocked_users");
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert!(package.danmaku_blocked_users.is_empty());
+        assert!(package.settings.danmaku_blocked_users.is_empty());
     }
 
     #[test]
@@ -803,6 +846,31 @@ mod tests {
         let settings = settings::get(&conn).unwrap();
         assert_eq!(settings.disabled_site_ids, vec!["huya", "douyin"]);
         assert_eq!(settings.default_site, "douyu");
+    }
+
+    #[test]
+    fn merge_unions_shield_words_and_blocked_users() {
+        let mut conn = open_in_memory().unwrap();
+        let mut local = AppSettings::default();
+        local.danmaku_shield_words = vec!["本地词".into()];
+        local.danmaku_blocked_users = vec!["本地用户".into()];
+        settings::set(&conn, &local).unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.settings.danmaku_shield_words = vec!["包内词".into(), "".into()];
+        package.settings.danmaku_blocked_users = vec!["包内用户".into(), " ".into()];
+        package.danmaku_shield_words = vec!["顶层词".into()];
+        package.danmaku_blocked_users = vec!["顶层用户".into()];
+
+        merge_into_db(&mut conn, &package).unwrap();
+
+        let after = settings::get(&conn).unwrap();
+        let mut shield = after.danmaku_shield_words.clone();
+        let mut blocked = after.danmaku_blocked_users.clone();
+        shield.sort();
+        blocked.sort();
+        assert_eq!(shield, vec!["包内词", "本地词", "顶层词"]);
+        assert_eq!(blocked, vec!["包内用户", "本地用户", "顶层用户"]);
     }
 
     #[test]

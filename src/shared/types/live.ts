@@ -232,6 +232,8 @@ export type AppSettings = {
   /** 在播放器上方显示受支持平台的 Super Chat 卡片。 */
   super_chat_enabled: boolean;
   danmaku_shield_words: string[];
+  /** 按展示昵称屏蔽的用户，聊天列表与飘屏共用。 */
+  danmaku_blocked_users: string[];
   /** 偏好的起始清晰度：high | mid | low。 */
   quality_level: "high" | "mid" | "low";
   /** 同协议 xgplayer switchURL 路径；硬刷新仍是兜底。 */

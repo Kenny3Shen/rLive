@@ -1,12 +1,16 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Copy, MessageSquarePlus, Star } from "lucide-react";
+import { ArrowDownToLine, Ban, Copy, MessageSquarePlus, Star } from "lucide-react";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { createShieldMatcher, shouldShowValidatedInDanmakuPanel } from "./danmaku/filter";
+import {
+  createBlockedUserMatcher,
+  createShieldMatcher,
+  shouldShowValidatedInDanmakuPanel,
+} from "./danmaku/filter";
 import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
@@ -134,6 +138,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   const actions = useDanmakuActions({
     message,
     eventKind: event.kind,
+    user: event.user,
     siteId,
     roomId,
     roomTitle,
@@ -215,6 +220,22 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             <MessageSquarePlus data-icon="inline-start" aria-hidden />
             +1
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start text-destructive"
+            disabled={!actions.canBlock}
+            aria-label={actions.blockLabel}
+            title={actions.blockLabel}
+            onClick={() => {
+              actions.block();
+              setOpen(false);
+            }}
+          >
+            <Ban data-icon="inline-start" aria-hidden />
+            屏蔽
+          </Button>
         </div>
         {actions.statusMessage && (
           <p
@@ -275,8 +296,13 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   const theme = useSettingsStore((s) => s.theme);
   const shieldWords = useSettingsStore((s) => s.danmakuShieldWords);
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
+  const blockedUsers = useSettingsStore((s) => s.danmakuBlockedUsers);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
-  const matchersRef = useRef({ shieldMatcher, filterGifts });
+  const blockedUserMatcher = useMemo(
+    () => createBlockedUserMatcher(blockedUsers),
+    [blockedUsers],
+  );
+  const matchersRef = useRef({ shieldMatcher, blockedUserMatcher, filterGifts });
   const [prefersDark, setPrefersDark] = useState(() =>
     typeof window !== "undefined"
       ? window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -299,8 +325,18 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   // 过滤设置变化期间保持事件订阅稳定，
   // 使隐藏页签的有界队列不会在监听空档丢失消息。
   useLayoutEffect(() => {
-    matchersRef.current = { shieldMatcher, filterGifts };
-  }, [shieldMatcher, filterGifts]);
+    matchersRef.current = { shieldMatcher, blockedUserMatcher, filterGifts };
+  }, [shieldMatcher, blockedUserMatcher, filterGifts]);
+
+  // 与屏蔽词不同，屏蔽用户是即时承诺：点击后该用户的既有行立刻从列表消失，
+  // 而不是等自然裁剪淘汰。解除屏蔽不回填历史 —— 被删的行已不可恢复，
+  // 新消息会照常流入。保持相同引用，未命中时避免无效重渲染。
+  useLayoutEffect(() => {
+    setItems((previous) => {
+      const next = previous.filter((line) => !blockedUserMatcher(line.event));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [blockedUserMatcher]);
 
   useLayoutEffect(() => {
     activeRef.current = active;
@@ -346,7 +382,11 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       // `keepMounted` 让页签切换保留当前消息列表。本面板隐藏期间把新事件扣在有界
       // 队列里，使聊天流量无法协调数百个不可见的 React 节点。
       if (!activeRef.current || !visibleRef.current) return;
-      const batch = pending.take(MAX_PER_FLUSH);
+      // 队列里的行可能携带刚被屏蔽的用户（订阅回调之后才生效），出队时再过一遍。
+      // 匹配器是 Set 查找，重复调用的开销可以忽略。
+      const batch = pending
+        .take(MAX_PER_FLUSH)
+        .filter((line) => !matchersRef.current.blockedUserMatcher(line.event));
       if (batch.length === 0) return;
       lastFlushAtRef.current = performance.now();
 
@@ -398,12 +438,16 @@ export const DanmakuPanel = memo(function DanmakuPanel({
 
     const unsubscribe = subscribeDanmakuBatches((events) => {
       if (!activeRef.current) return;
-      const { shieldMatcher: currentShieldMatcher, filterGifts: currentFilterGifts } =
-        matchersRef.current;
+      const {
+        shieldMatcher: currentShieldMatcher,
+        blockedUserMatcher: currentBlockedUserMatcher,
+        filterGifts: currentFilterGifts,
+      } = matchersRef.current;
       const accepted: DanmakuLine[] = [];
       for (const message of events) {
         if (!shouldShowValidatedInDanmakuPanel(message, currentFilterGifts)) continue;
         if (currentShieldMatcher(message)) continue;
+        if (currentBlockedUserMatcher(message)) continue;
         accepted.push({ id: ++nextIdRef.current, event: message });
       }
 

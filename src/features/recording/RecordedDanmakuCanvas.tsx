@@ -58,14 +58,16 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const showSuperChat = useSettingsStore((state) => state.superChatEnabled);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
+  const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
   const visibleEntries = useMemo(
     () =>
       filterRecordedDanmakuEntries(entries, {
         filterGifts,
         showSuperChat,
         shieldWords,
+        blockedUsers,
       }),
-    [entries, filterGifts, shieldWords, showSuperChat],
+    [entries, filterGifts, shieldWords, blockedUsers, showSuperChat],
   );
 
   useEffect(() => {

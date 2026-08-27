@@ -22,7 +22,7 @@ describe("danmaku clipboard actions", () => {
   test("shares one status vocabulary between the list and the floating overlay", () => {
     expect(danmakuActionStatusMessage("copied")).toBe("已复制弹幕内容");
     expect(danmakuActionStatusMessage("favorited")).toBe("已收藏");
-    expect(danmakuActionStatusMessage("sent")).toBe("已发送相同的弹幕");
+    expect(danmakuActionStatusMessage("blocked")).toBe("已屏蔽该用户，其消息立即隐藏");
     expect(danmakuActionStatusMessage(null)).toBeNull();
   });
 
@@ -31,7 +31,7 @@ describe("danmaku clipboard actions", () => {
     expect(isDanmakuActionFailure("favorite-failed")).toBe(true);
     expect(isDanmakuActionFailure("send-failed")).toBe(true);
     expect(isDanmakuActionFailure("sent")).toBe(false);
-    expect(isDanmakuActionFailure(null)).toBe(false);
+    expect(isDanmakuActionFailure("blocked")).toBe(false);
   });
 });
 

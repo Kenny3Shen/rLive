@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { subscribeDanmakuBatches } from "./eventBus";
 import {
+  createBlockedUserMatcher,
   createDanmakuContentAggregator,
   createShieldMatcher,
   shouldShowValidatedOnFloatingDanmaku,
@@ -146,6 +147,7 @@ type RuntimeConfig = {
   mergeWindowSeconds: number;
   filterGifts: boolean;
   shieldMatcher: (event: DanmakuEvent) => boolean;
+  blockedUserMatcher: (event: DanmakuEvent) => boolean;
   superChatEnabled: boolean;
   siteId?: SiteId;
 };
@@ -313,8 +315,13 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
+  const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
+  const blockedUserMatcher = useMemo(
+    () => createBlockedUserMatcher(blockedUsers),
+    [blockedUsers],
+  );
   const normalizedArea = clampDanmuArea(area);
   const laneHeight = danmuLaneHeight(fontSize);
   const sizeReady = stageSize.width > 0 && stageSize.height > 0;
@@ -331,6 +338,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     mergeWindowSeconds: 10,
     filterGifts: true,
     shieldMatcher: () => false,
+    blockedUserMatcher: () => false,
     superChatEnabled: true,
     siteId,
   });
@@ -349,6 +357,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       mergeWindowSeconds,
       filterGifts,
       shieldMatcher,
+      blockedUserMatcher,
       superChatEnabled,
       siteId,
     };
@@ -362,6 +371,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     normalizedArea,
     opacity,
     shieldMatcher,
+    blockedUserMatcher,
     siteId,
     stageSize.height,
     superChatEnabled,
@@ -480,6 +490,23 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     removeRecordRef.current = removeRecord;
   }, [removeRecord]);
 
+  /**
+   * 屏蔽列表变化后撤下该用户的全部在屏 bullet 并清空其待处理事件。
+   * 与屏蔽词"只影响新消息"不同，屏蔽用户的语义是立即消失：
+   * 用户刚点过屏蔽按钮的那条评论不该继续飘完全程。菜单随被移除的
+   * 钉住评论一起收起（`removeRecord` 会清掉 hover 目标）。
+   */
+  useLayoutEffect(() => {
+    const matcher = blockedUserMatcher;
+    for (const id of [...recordOrderRef.current]) {
+      const record = recordsRef.current.get(id);
+      if (record && matcher(record.meta.event)) removeRecordRef.current(id, true);
+    }
+    pendingEventsRef.current = pendingEventsRef.current.filter(
+      (pending) => !matcher(pending.event),
+    );
+  }, [blockedUserMatcher]);
+
   const selectBullet = useCallback(
     (id: string, element: HTMLElement) => {
       const record = recordsRef.current.get(id);
@@ -542,6 +569,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       for (const event of events) {
         if (!shouldShowValidatedOnFloatingDanmaku(event, config.filterGifts)) continue;
         if (config.shieldMatcher(event)) continue;
+        if (config.blockedUserMatcher(event)) continue;
 
         if (event.kind === "super_chat") {
           if (!supportsSuperChat || !event.content.trim()) continue;

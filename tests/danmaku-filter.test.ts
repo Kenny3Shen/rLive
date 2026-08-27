@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
   aggregatedDanmakuText,
+  createBlockedUserMatcher,
   createDanmakuContentAggregator,
-  DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
   createShieldMatcher,
+  DANMAKU_CONTENT_AGGREGATION_WINDOW_MS,
   isDanmakuEvent,
   shouldShowInDanmakuPanel,
   shouldShowOnFloatingDanmaku,
@@ -73,6 +74,23 @@ describe("danmaku display filter", () => {
     const matcher = createShieldMatcher(["  广告  ", "广告", "AD"]);
     expect(matcher(event({ content: "这是广告" }))).toBe(true);
     expect(matcher(event({ content: "正常聊天" }))).toBe(false);
+  });
+
+  test("blocks every message of a listed user by exact trimmed nickname", () => {
+    const matcher = createBlockedUserMatcher(["  张三  ", "张三", "李四"]);
+    expect(matcher(event({ user: "张三" }))).toBe(true);
+    expect(matcher(event({ user: " 李四 ", content: "任何内容" }))).toBe(true);
+    expect(matcher(event({ user: "张三丰" }))).toBe(false);
+    expect(matcher(event({ user: "张 三" }))).toBe(false);
+    expect(matcher(event({ user: "李四", kind: "super_chat" }))).toBe(true);
+    expect(matcher(event({ user: "李四", kind: "gift" }))).toBe(true);
+    expect(matcher(event({ user: "李四", kind: "system" }))).toBe(false);
+  });
+
+  test("keeps the blocked-user matcher inert for an empty list", () => {
+    const matcher = createBlockedUserMatcher([]);
+    expect(matcher(event({ user: "张三" }))).toBe(false);
+    expect(matcher(event({ user: "" }))).toBe(false);
   });
 
   test("groups matching chat content across senders inside its five-second window", () => {
