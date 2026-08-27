@@ -25,6 +25,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Field,
   FieldContent,
   FieldDescription,
@@ -248,136 +257,172 @@ function SettingsEntryList({
     if (editing === entry) setEditing(null);
     onCommit(entries.filter((item) => item !== entry));
   }
+  const [open, setOpen] = useState(false);
+  const labelId = `${id}-label`;
+  const dialogTitleId = `${id}-dialog-title`;
+
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    // 关闭即放弃未保存的行内编辑与报错；已提交的条目不受影响。
+    if (!nextOpen) {
+      setEditing(null);
+      setError(null);
+    }
+  }
 
   return (
-    <Field className={fieldSurfaceClass(layout)}>
-      <div className="flex items-center gap-1.5">
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
-        {hint && layout === "page" && <FieldTip>{hint}</FieldTip>}
-        {entries.length > 0 && (
-          <Badge variant="secondary" className="ml-auto tabular-nums">
-            {maxEntries === undefined
-              ? entries.length
-              : `${entries.length} / ${maxEntries}`}
-          </Badge>
-        )}
-      </div>
-      <FieldContent>
-        <InputGroup>
-          <InputGroupInput
-            id={id}
-            value={draft}
-            maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
-            spellCheck={false}
-            placeholder={addPlaceholder}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              setError(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              addEntry();
-            }}
-          />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton
-              size="icon-xs"
-              aria-label={`添加${noun}`}
-              disabled={!draft.trim()}
-              onClick={addEntry}
-            >
-              <Plus aria-hidden />
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
-        {error && <FieldError>{error}</FieldError>}
-        {entries.length === 0 ? (
-          <FieldDescription>{emptyText}</FieldDescription>
-        ) : (
-          <ul className="flex max-h-56 flex-col overflow-y-auto rounded-lg border border-border-subtle">
-            {entries.map((entry, index) => (
-              <li key={entry}>
-                {index > 0 && <Separator />}
-                <div className="flex min-h-9 items-center gap-2 px-2 py-1">
-                  {editing === entry ? (
-                    <InputGroup className="min-w-0 flex-1">
-                      <InputGroupInput
-                        value={editingDraft}
-                        maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
-                        autoFocus
-                        spellCheck={false}
-                        aria-label={`编辑${noun}`}
-                        onChange={(event) => {
-                          setEditingDraft(event.target.value);
-                          setError(null);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            saveEditing(entry);
-                          }
-                          if (event.key === "Escape") {
-                            setEditing(null);
+    <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
+      <FieldContent className="min-w-0 flex-none">
+        <FieldTitle>
+          <span id={labelId}>{label}</span>
+          {hint && layout === "page" && <FieldTip>{hint}</FieldTip>}
+          {entries.length > 0 && (
+            <Badge variant="secondary" className="tabular-nums">
+              {maxEntries === undefined ? entries.length : `${entries.length} / ${maxEntries}`}
+            </Badge>
+          )}
+        </FieldTitle>
+        <FieldDescription>
+          {entries.length === 0 ? emptyText : `共 ${entries.length} 条`}
+        </FieldDescription>
+      </FieldContent>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-labelledby={labelId}
+        onClick={() => setOpen(true)}
+      >
+        管理
+      </Button>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent aria-labelledby={dialogTitleId} className="max-w-md">
+          <DialogHeader>
+            <DialogTitle id={dialogTitleId}>{label}</DialogTitle>
+            {hint && <DialogDescription>{hint}</DialogDescription>}
+          </DialogHeader>
+          <InputGroup>
+            <InputGroupInput
+              id={id}
+              value={draft}
+              maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
+              spellCheck={false}
+              placeholder={addPlaceholder}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                addEntry();
+              }}
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-xs"
+                aria-label={`添加${noun}`}
+                disabled={!draft.trim()}
+                onClick={addEntry}
+              >
+                <Plus aria-hidden />
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+          {error && <FieldError role="alert">{error}</FieldError>}
+          {entries.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">{emptyText}</p>
+          ) : (
+            <div className="flex max-h-72 flex-col overflow-y-auto rounded-lg border border-border-subtle">
+              {entries.map((entry, index) => (
+                <div key={entry}>
+                  {index > 0 && <Separator />}
+                  <div className="flex min-h-9 items-center gap-2 px-2 py-1">
+                    {editing === entry ? (
+                      <InputGroup className="min-w-0 flex-1">
+                        <InputGroupInput
+                          value={editingDraft}
+                          maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
+                          autoFocus
+                          spellCheck={false}
+                          aria-label={`编辑${noun}`}
+                          onChange={(event) => {
+                            setEditingDraft(event.target.value);
                             setError(null);
-                          }
-                        }}
-                      />
-                      <InputGroupAddon align="inline-end">
-                        <InputGroupButton
-                          size="icon-xs"
-                          aria-label={`保存${noun}`}
-                          disabled={!editingDraft.trim()}
-                          onClick={() => saveEditing(entry)}
-                        >
-                          <Check aria-hidden />
-                        </InputGroupButton>
-                        <InputGroupButton
-                          size="icon-xs"
-                          aria-label="取消编辑"
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              saveEditing(entry);
+                            }
+                            // 行内编辑时 Esc 先取消编辑而不是关掉整个弹窗。
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setEditing(null);
+                              setError(null);
+                            }
+                          }}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label={`保存${noun}`}
+                            disabled={!editingDraft.trim()}
+                            onClick={() => saveEditing(entry)}
+                          >
+                            <Check aria-hidden />
+                          </InputGroupButton>
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="取消编辑"
+                            onClick={() => {
+                              setEditing(null);
+                              setError(null);
+                            }}
+                          >
+                            <X aria-hidden />
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      </InputGroup>
+                    ) : (
+                      <>
+                        <span className="min-w-0 flex-1 truncate text-sm">{entry}</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`编辑${entry}`}
                           onClick={() => {
-                            setEditing(null);
+                            setEditing(entry);
+                            setEditingDraft(entry);
                             setError(null);
                           }}
                         >
-                          <X aria-hidden />
-                        </InputGroupButton>
-                      </InputGroupAddon>
-                    </InputGroup>
-                  ) : (
-                    <>
-                      <span className="min-w-0 flex-1 truncate text-sm">{entry}</span>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`编辑${entry}`}
-                        onClick={() => {
-                          setEditing(entry);
-                          setEditingDraft(entry);
-                          setError(null);
-                        }}
-                      >
-                        <Pencil aria-hidden />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="hover:text-destructive"
-                        aria-label={`删除${entry}`}
-                        onClick={() => removeEntry(entry)}
-                      >
-                        <Trash2 aria-hidden />
-                      </Button>
-                    </>
-                  )}
+                          <Pencil aria-hidden />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="hover:text-destructive"
+                          aria-label={`删除${entry}`}
+                          onClick={() => removeEntry(entry)}
+                        >
+                          <Trash2 aria-hidden />
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </FieldContent>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>完成</DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Field>
   );
 }
