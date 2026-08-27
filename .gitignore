@@ -42,6 +42,7 @@ lerna-debug.log*
 /.playwright-cli/
 /.grok/
 /.codex/
+/.omp/
 /.claude/worktrees/
 
 # Local release artifacts and signing material
