@@ -10,6 +10,7 @@ import type { FollowUser, LiveRoomDetail, LiveRoomItem } from "@/shared/types/li
 import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
 import { FollowGroupPickerDialog } from "@/features/follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup } from "@/features/follow/followGroups";
+import { useRoomCardPreview } from "@/features/room/player/useRoomCardPreview";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -20,6 +21,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { notify } from "@/components/ui/toast";
+import { Spinner } from "@/components/ui/spinner";
 import { preloadRouteModule } from "@/app/routeModules";
 import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
 import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
@@ -34,6 +36,12 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
   const normalizedCover = normalizeCoverUrl(room.cover);
   const [pendingFollowUser, setPendingFollowUser] = useState<FollowUser | null>(null);
+  const {
+    mountRef: previewMountRef,
+    phase: previewPhase,
+    onPointerEnter: onPreviewPointerEnter,
+    stop: stopPreview,
+  } = useRoomCardPreview({ siteId: room.site_id, roomId: room.room_id });
   const followsQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
@@ -120,6 +128,8 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   });
 
   function openRoom() {
+    // 导航会卸载卡片,但先停预览可以避免与房间播放器抢同一条本机代理会话。
+    stopPreview();
     navigate(roomPath);
   }
 
@@ -178,7 +188,11 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             data-motion-press
             data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
             onClick={openRoom}
-            onPointerEnter={() => preloadRouteModule(roomPath)}
+            onPointerEnter={(event) => {
+              preloadRouteModule(roomPath);
+              onPreviewPointerEnter(event);
+            }}
+            onPointerLeave={stopPreview}
             onPointerDown={() => preloadRouteModule(roomPath)}
             onFocus={() => preloadRouteModule(roomPath)}
             className={cn(
@@ -201,6 +215,18 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
               暂无封面
             </div>
+          )}
+          {/* 预览盖在封面之上、渐变与热度角标之下。挂载点不接收指针事件,
+              悬停与点击始终落在卡片按钮上。 */}
+          <div
+            ref={previewMountRef}
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+          />
+          {previewPhase === "loading" && (
+            <span className="pointer-events-none absolute left-2 top-2 inline-flex rounded-md bg-black/65 p-1 text-white backdrop-blur-sm">
+              <Spinner className="size-3" />
+            </span>
           )}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
           <span

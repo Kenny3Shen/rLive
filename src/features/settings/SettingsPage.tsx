@@ -51,6 +51,7 @@ import type { AsrProvider, SiteId } from "@/shared/types/live";
 import {
   ASR_FONT_SIZE_DEFAULT,
   ASR_WINDOW_SECONDS_DEFAULT,
+  ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   useSettingsStore,
   type ThemeMode,
 } from "@/shared/stores/settingsStore";
@@ -226,7 +227,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式",
   playback:
-    "播放 播放质量 清晰度 线路记忆 软切换 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
+    "播放 播放质量 清晰度 线路记忆 软切换 悬停 预览 卡片 封面 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   recording:
@@ -917,6 +918,7 @@ function PlaybackSettingsResetField() {
         ...(mobileClient
           ? null
           : {
+              roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
               asrProvider: "auto" as const,
               asrVadEnabled: true,
               asrPunctuationEnabled: true,
@@ -934,6 +936,7 @@ function PlaybackSettingsResetField() {
         ...(mobileClient
           ? null
           : {
+              room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
               asr_provider: "auto",
               asr_vad_enabled: true,
               asr_punctuation_enabled: true,
@@ -1802,6 +1805,8 @@ export function SettingsPage() {
   const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
   const playbackSoftSwitchEnabled = useSettingsStore((s) => s.playbackSoftSwitchEnabled);
   const setPlaybackSoftSwitchEnabled = useSettingsStore((s) => s.setPlaybackSoftSwitchEnabled);
+  const roomCardPreviewEnabled = useSettingsStore((s) => s.roomCardPreviewEnabled);
+  const setRoomCardPreviewEnabled = useSettingsStore((s) => s.setRoomCardPreviewEnabled);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
   const [proxyDraft, setProxyDraft] = useState(proxy ?? "");
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
@@ -1888,6 +1893,25 @@ export function SettingsPage() {
             />
           </Field>
         </Section>
+        {!mobileClient && (
+          <Section title="浏览页" keywords="悬停 预览 卡片 封面 试看 静音 直播间 浏览">
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldTitle>
+                  <span id="room-card-preview-title">悬停卡片预览</span>
+                  <FieldTip>
+                    鼠标停留在直播间卡片上时播放静音低画质预览；仅桌面端且系统未开启减少动态效果时生效。
+                  </FieldTip>
+                </FieldTitle>
+              </FieldContent>
+              <Switch
+                aria-labelledby="room-card-preview-title"
+                checked={roomCardPreviewEnabled}
+                onCheckedChange={setRoomCardPreviewEnabled}
+              />
+            </Field>
+          </Section>
+        )}
         {!mobileClient && (
           <Section
             title="语音字幕"

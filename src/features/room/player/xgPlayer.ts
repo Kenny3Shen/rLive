@@ -1,6 +1,22 @@
 import type { IPlayerOptions } from "xgplayer";
+import { playbackProtocol } from "@/lib/playUrl";
+import type { PlayUrl } from "@/shared/types/live";
 
 export type XgPlaybackKind = "flv" | "hls" | "mpegts" | "native";
+
+/** 把站点声明的传输协议映射到本封装惰性加载的 xgplayer 内核。 */
+export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPlaybackKind {
+  switch (playbackProtocol(source)) {
+    case "hls":
+      return "hls";
+    case "mpeg_ts":
+      return "mpegts";
+    case "native":
+      return "native";
+    default:
+      return "flv";
+  }
+}
 
 export type XgPlayerInstance = {
   media: HTMLMediaElement;

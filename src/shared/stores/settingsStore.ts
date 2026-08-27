@@ -88,6 +88,9 @@ const ASR_WINDOW_SECONDS_MIN = 0.2;
 const ASR_WINDOW_SECONDS_MAX = 1;
 export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 
+/** 悬停直播间卡片播放静音直播预览的默认开关。 */
+export const ROOM_CARD_PREVIEW_ENABLED_DEFAULT = true;
+
 export const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
 /**
  * 后台录制是无条件的，因此这是逐任务"离开页面后继续录制"开关的固定初始值，
@@ -349,6 +352,8 @@ type SettingsState = {
   danmakuShieldWords: string[];
   qualityLevel: QualityLevel;
   playbackSoftSwitchEnabled: boolean;
+  /** 悬停浏览页直播间卡片时播放静音直播预览。 */
+  roomCardPreviewEnabled: boolean;
   danmakuSendEnabled: boolean;
   /** 本地多平台发送权限同步到后端期间为 true。 */
   danmakuSendPending: boolean;
@@ -388,6 +393,7 @@ type SettingsState = {
   setProxy: (proxy: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
+  setRoomCardPreviewEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
@@ -431,6 +437,7 @@ const defaultSettings: AppSettings = {
   danmaku_shield_words: [],
   quality_level: "high",
   playback_soft_switch_enabled: true,
+  room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   danmaku_send_enabled: false,
   asr_enabled: false,
   asr_provider: "auto",
@@ -469,6 +476,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_shield_words: state.danmakuShieldWords,
     quality_level: state.qualityLevel,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
+    room_card_preview_enabled: state.roomCardPreviewEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_provider: state.asrProvider,
@@ -509,6 +517,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuShieldWords: [],
       qualityLevel: "high",
       playbackSoftSwitchEnabled: true,
+      roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
@@ -563,6 +572,12 @@ export const useSettingsStore = create<SettingsState>()(
         set({ playbackSoftSwitchEnabled });
         void get().persistToBackend({
           playback_soft_switch_enabled: playbackSoftSwitchEnabled,
+        });
+      },
+      setRoomCardPreviewEnabled: (roomCardPreviewEnabled) => {
+        set({ roomCardPreviewEnabled });
+        void get().persistToBackend({
+          room_card_preview_enabled: roomCardPreviewEnabled,
         });
       },
       setSuperChatEnabled: (superChatEnabled) => {
@@ -811,6 +826,7 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuShieldWords: settings.danmaku_shield_words,
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
+          roomCardPreviewEnabled: settings.room_card_preview_enabled,
           danmakuSendEnabled: settings.danmaku_send_enabled,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled,

@@ -786,6 +786,29 @@ html[data-fullscreen-transition="true"] .app-shell {
   contain-intrinsic-size: auto 13rem;
 }
 
+/* 悬停预览绝对定位在封面之上，绝不参与卡片布局：房间网格靠固定的占位高度
+   维持滚动稳定，任何撑高都会让无限滚动跳动。首帧到达前保持透明，
+   避免出画之前先闪一块黑。 */
+.room-card-preview {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background-color: #000;
+  opacity: 0;
+  transition: opacity 240ms var(--motion-ease-out);
+}
+
+.room-card-preview[data-preview-phase="playing"] {
+  opacity: 1;
+}
+
+/* xgplayer 会把内核容器塞进挂载点，视频必须铺满卡片而不是按容器比例留边。 */
+.room-card-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 /* 相邻的移动端平台页面保持挂载以便跟手预览。隔离它们的布局/绘制工作，
    并在面板激活之前阻止完全屏外的加载器消耗动画帧。 */
 [data-slot="app-swipe-panel"] {

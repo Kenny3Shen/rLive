@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// 比引入它们的版本更早的记录里缺失、且必须按当前默认值回填的顶层设置字段。
+///
+/// 已保存设置与配置包对其余字段仍然严格必填：缺字段说明记录不是当前 schema，
+/// 用默认值静默掩盖会丢掉用户的真实选择。只有纯新增的字段进入这份名单，
+/// 因为旧记录不可能表达过对它的偏好。
+pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &["room_card_preview_enabled"];
+
 /// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +118,13 @@ pub struct AppSettings {
     /// 同协议的 `switchURL` 切换路径。前端对不兼容协议和切换失败
     /// 仍保留硬刷新兜底。
     pub playback_soft_switch_enabled: bool,
+    /// 在浏览页悬停直播间卡片时播放静音直播预览。
+    ///
+    /// 该字段在 2.12.0 引入，因此比它更早保存的设置记录和配置包里没有它。
+    /// 设置与 profile 的必填校验把它列入 `BACKFILLED_SETTINGS_FIELDS`，
+    /// 由这里的 serde default 补齐，避免升级后整份设置不可读。
+    #[serde(default = "default_room_card_preview_enabled")]
+    pub room_card_preview_enabled: bool,
     /// 用户手动发送单条消息功能的本机权限开关。在用户于设置中显式启用之前
     /// 保持关闭，且不随配置导入。启用这项全局同意后，
     /// 发送仍需要 Cookie 以及各平台自身的校验。
@@ -169,6 +183,10 @@ fn default_quality_level() -> String {
 }
 
 fn default_playback_soft_switch_enabled() -> bool {
+    true
+}
+
+fn default_room_card_preview_enabled() -> bool {
     true
 }
 
@@ -254,6 +272,7 @@ impl Default for AppSettings {
             danmaku_shield_words: Vec::new(),
             quality_level: default_quality_level(),
             playback_soft_switch_enabled: default_playback_soft_switch_enabled(),
+            room_card_preview_enabled: default_room_card_preview_enabled(),
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: default_asr_provider(),
@@ -293,6 +312,7 @@ mod tests {
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
         assert!(back.recording_include_danmaku);
         assert_eq!(back.recording_auto_split_minutes, 0);
+        assert!(back.room_card_preview_enabled);
         assert!(!v.contains("recording_auto_follow"));
         assert!(!back.legacy_recording_continue_after_leave);
         assert!(!v.contains("recording_continue_after_leave"));
