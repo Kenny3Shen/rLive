@@ -4,8 +4,60 @@ import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu
 import { cn } from "@/lib/utils";
 import { ChevronRightIcon, CheckIcon } from "lucide-react";
 
-function ContextMenu({ ...props }: ContextMenuPrimitive.Root.Props) {
-  return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
+/**
+ * 同一时刻只应存在一个上下文菜单。每个菜单根实例互相独立,没有 FloatingTree 关联,
+ * Base UI 只依赖 outside-press 关掉上一个菜单;而 Android WebView 的长按序列
+ * (touchstart -> 按住 -> contextmenu -> touchend,全程不合成 mousedown/click)
+ * 绕过了 `useDismiss` 每一条 sloppy 关闭条件:手指不移动,`dismissOnTouchEnd` 始终为
+ * false;抬手没有合成 mousedown;按住超过 1000ms 后连 `dismissOnMouseDown` 也被超时清掉。
+ * 旧菜单于是永不关闭,每次长按新增一个实例,各自带全屏 backdrop 和滚动锁,
+ * 列表被彻底锁死、点击全部落在 backdrop 上,表现为整个应用卡死无响应。
+ */
+interface OpenContextMenu {
+  close: () => void;
+}
+
+const openContextMenus = new Set<OpenContextMenu>();
+
+function ContextMenu({
+  onOpenChange,
+  ...props
+}: Omit<ContextMenuPrimitive.Root.Props, "actionsRef">) {
+  const actionsRef = React.useRef<ContextMenuPrimitive.Root.Actions | null>(null);
+  // 身份稳定,只在真正关闭时解引用 actionsRef,不受 `useImperativeHandle` 赋值时序影响。
+  const entry = React.useMemo<OpenContextMenu>(
+    () => ({
+      close: () => actionsRef.current?.close(),
+    }),
+    [],
+  );
+
+  React.useEffect(() => {
+    return () => {
+      openContextMenus.delete(entry);
+    };
+  }, [entry]);
+
+  return (
+    <ContextMenuPrimitive.Root
+      data-slot="context-menu"
+      actionsRef={actionsRef}
+      onOpenChange={(open, eventDetails) => {
+        if (open) {
+          for (const other of openContextMenus) {
+            if (other === entry) continue;
+            openContextMenus.delete(other);
+            other.close();
+          }
+          openContextMenus.add(entry);
+        } else {
+          openContextMenus.delete(entry);
+        }
+        onOpenChange?.(open, eventDetails);
+      }}
+      {...props}
+    />
+  );
 }
 
 function ContextMenuPortal({ ...props }: ContextMenuPrimitive.Portal.Props) {

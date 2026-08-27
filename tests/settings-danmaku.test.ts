@@ -11,6 +11,7 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   DANMAKU_OPACITY_DEFAULT,
+  DANMAKU_SHIELD_ENTRY_MAX_LENGTH,
   DANMAKU_SPEED_DEFAULT,
   DANMAKU_SPEED_MAX,
   DANMAKU_SPEED_MIN,
@@ -61,6 +62,19 @@ describe("danmaku blocked users settings", () => {
     expect(normalized).toHaveLength(DANMAKU_BLOCKED_USERS_MAX);
     expect(normalized[0]).toBe("用户2");
     expect(normalized.at(-1)).toBe(`用户${DANMAKU_BLOCKED_USERS_MAX + 1}`);
+  });
+
+  test("keeps platform-length nicknames so click-to-block never silently fails", () => {
+    // 手输上限对齐平台单条弹幕长度，但点击屏蔽写入的是事件真实昵称：
+    // 抖音 / Twitch 的昵称可能长于该上限，归一化不能把它们丢掉。
+    const longName = "超".repeat(DANMAKU_SHIELD_ENTRY_MAX_LENGTH + 5);
+    expect(normalizeDanmakuBlockedUsers([longName])).toEqual([longName]);
+  });
+
+  test("bounds hand-typed entries to the platform danmaku length", () => {
+    // B 站单条弹幕 20 字、虎牙 30 字；屏蔽词按子串匹配，长过平台弹幕
+    // 上限的条目永远不可能命中。
+    expect(DANMAKU_SHIELD_ENTRY_MAX_LENGTH).toBe(30);
   });
 });
 
