@@ -272,7 +272,7 @@ function SettingsEntryList({
 
   return (
     <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
-      <FieldContent className="min-w-0 flex-none">
+      <FieldContent className="min-w-0">
         <FieldTitle>
           <span id={labelId}>{label}</span>
           {hint && layout === "page" && <FieldTip>{hint}</FieldTip>}
@@ -282,9 +282,6 @@ function SettingsEntryList({
             </Badge>
           )}
         </FieldTitle>
-        <FieldDescription>
-          {entries.length === 0 ? emptyText : `共 ${entries.length} 条`}
-        </FieldDescription>
       </FieldContent>
       <Button
         type="button"
