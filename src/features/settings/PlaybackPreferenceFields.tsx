@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
 import {
   DANMAKU_AREA_DEFAULT,
+  DANMAKU_BLOCKED_USERS_MAX,
   DANMAKU_FONT_STROKE_DEFAULT,
   DANMAKU_FONT_STROKE_MAX,
   DANMAKU_FONT_STROKE_MIN,
@@ -13,6 +15,7 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
+  DANMAKU_SHIELD_ENTRY_MAX_LENGTH,
   defaultDanmakuFontSize,
   parseDanmakuFontStroke,
   parseDanmakuSpeed,
@@ -20,13 +23,22 @@ import {
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldLabel,
   FieldTitle,
 } from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Separator } from "@/components/ui/separator";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -132,119 +144,240 @@ function persist(patch: Partial<AppSettings>) {
   void useSettingsStore.getState().persistToBackend(patch);
 }
 
-function normalizeShieldWords(value: string): string[] {
-  const seen = new Set<string>();
-  return value
-    .split(/\r?\n|,/)
-    .map((word) => word.trim())
-    .filter((word) => {
-      const key = word.toLowerCase();
-      if (!key || Array.from(word).length > 80 || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function normalizeBlockedUsersDraft(value: string): string[] {
-  const seen = new Set<string>();
-  return value
-    .split(/\r?\n|,/)
-    .map((user) => user.trim())
-    .filter((user) => {
-      // 与匹配器一致按大小写敏感精确匹配，去重也保持同一口径。
-      if (!user || Array.from(user).length > 80 || seen.has(user)) return false;
-      seen.add(user);
-      return true;
-    });
-}
-
 function sameWords(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((word, index) => word === right[index]);
 }
 
+type SettingsEntryListProps = {
+  id: string;
+  label: string;
+  /** 条目名词，用于按钮标签、占位符和校验提示。 */
+  noun: string;
+  hint?: string;
+  entries: readonly string[];
+  layout: PlaybackSettingsFieldLayout;
+  addPlaceholder: string;
+  emptyText: string;
+  /** 屏蔽词忽略大小写去重；屏蔽用户与匹配器一样大小写敏感。 */
+  caseInsensitive?: boolean;
+  /** 列表容量上限；省略表示不限。 */
+  maxEntries?: number;
+  onCommit: (entries: string[]) => void;
+};
+
 /**
- * 屏蔽词与屏蔽用户共享的逐行草稿编辑。输入即时写入本地 store（消息流立即
- * 按新列表过滤），持久化则做 350ms 防抖，组件卸载前冲刷未保存的修改。
+ * 屏蔽词与屏蔽用户共享的逐条编辑列表。每行可以单独改写或删除，写入是离散
+ * 提交而不是逐字符草稿：新增、保存、删除都立即落到 store 并持久化，因此不需要
+ * 防抖或卸载冲刷。校验（空值、长度、重复、容量）在提交前拦截并就地提示。
  */
-function useSettingsLinesDraft(options: {
-  lines: readonly string[];
-  normalize: (value: string) => string[];
-  applyLines: (lines: string[]) => void;
-  persistPatch: (lines: string[]) => Partial<AppSettings>;
-  pendingStatus: string;
-  savedStatus: string;
-}) {
-  const { lines } = options;
-  // 包装 hook 每次渲染都传入新的 options 字面量。直接把它放进 effect 依赖会
-  // 在每次渲染后重跑清理、打穿 350ms 防抖，因此经由 ref 读取最新值，
-  // 依赖数组只跟踪真正驱动行为的 `lines` 与 `draft`。
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
-  const [draft, setDraft] = useState(lines.join("\n"));
-  const [status, setStatus] = useState<string | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const pendingLinesRef = useRef<string[]>([]);
+function SettingsEntryList({
+  id,
+  label,
+  noun,
+  hint,
+  entries,
+  layout,
+  addPlaceholder,
+  emptyText,
+  caseInsensitive = false,
+  maxEntries,
+  onCommit,
+}: SettingsEntryListProps) {
+  const [draft, setDraft] = useState("");
+  // 按值而不是下标记录正在编辑的行：列表可能被弹幕面板的屏蔽操作并发改写，
+  // 下标会指向别的条目，值不存在时编辑态自然失效。
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!sameWords(optionsRef.current.normalize(draft), lines)) {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-        setStatus(null);
-      }
-      setDraft(lines.join("\n"));
+  const atCapacity = maxEntries !== undefined && entries.length >= maxEntries;
+
+  /** 返回规整后的条目，或用 `null` 表示已就地报错。 */
+  function validate(value: string, replacing: string | null): string | null {
+    const entry = value.trim();
+    if (!entry) {
+      setError(`${noun}不能为空`);
+      return null;
     }
-    pendingLinesRef.current = [...lines];
-  }, [draft, lines]);
-
-  useEffect(
-    () => () => {
-      if (saveTimerRef.current === null) return;
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-      persist(optionsRef.current.persistPatch(pendingLinesRef.current));
-    },
-    [],
-  );
-
-  function update(value: string) {
-    const next = optionsRef.current.normalize(value);
-    setDraft(value);
-    optionsRef.current.applyLines(next);
-    pendingLinesRef.current = next;
-    setStatus(optionsRef.current.pendingStatus);
-
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      persist(optionsRef.current.persistPatch(pendingLinesRef.current));
-      setStatus(optionsRef.current.savedStatus);
-    }, 350);
+    if (Array.from(entry).length > DANMAKU_SHIELD_ENTRY_MAX_LENGTH) {
+      setError(`${noun}最多 ${DANMAKU_SHIELD_ENTRY_MAX_LENGTH} 个字符`);
+      return null;
+    }
+    const key = caseInsensitive ? entry.toLowerCase() : entry;
+    const clashes = entries.some(
+      (item) =>
+        (caseInsensitive ? item.toLowerCase() : item) === key &&
+        (replacing === null || item !== replacing),
+    );
+    if (clashes) {
+      setError(`${noun}「${entry}」已在列表中`);
+      return null;
+    }
+    if (replacing === null && atCapacity) {
+      setError(`${noun}最多 ${maxEntries} 条，请先删除不需要的条目`);
+      return null;
+    }
+    setError(null);
+    return entry;
   }
 
-  return { draft, status, update };
-}
+  function addEntry() {
+    const entry = validate(draft, null);
+    if (entry === null) return;
+    setDraft("");
+    onCommit([...entries, entry]);
+  }
 
-function useShieldWordsDraft() {
-  return useSettingsLinesDraft({
-    lines: useSettingsStore((state) => state.danmakuShieldWords),
-    normalize: normalizeShieldWords,
-    applyLines: (words) => useSettingsStore.setState({ danmakuShieldWords: words }),
-    persistPatch: (words) => ({ danmaku_shield_words: words }),
-    pendingStatus: "新的消息会立即按此过滤，正在保存…",
-    savedStatus: "已自动保存，新的消息会立即按此过滤",
-  });
-}
+  function saveEditing(original: string) {
+    const entry = validate(editingDraft, original);
+    if (entry === null) return;
+    const index = entries.indexOf(original);
+    // 编辑期间该行已被别处删除：放弃这次改写，不把条目重新插回列表。
+    if (index === -1) {
+      setEditing(null);
+      return;
+    }
+    setEditing(null);
+    onCommit(entries.map((item, itemIndex) => (itemIndex === index ? entry : item)));
+  }
 
-function useBlockedUsersDraft() {
-  return useSettingsLinesDraft({
-    lines: useSettingsStore((state) => state.danmakuBlockedUsers),
-    normalize: normalizeBlockedUsersDraft,
-    applyLines: (users) => useSettingsStore.setState({ danmakuBlockedUsers: users }),
-    persistPatch: (users) => ({ danmaku_blocked_users: users }),
-    pendingStatus: "屏蔽立即生效并撤下已显示的消息，正在保存…",
-    savedStatus: "已自动保存，屏蔽在弹幕列表与飘屏同时生效",
-  });
+  function removeEntry(entry: string) {
+    setError(null);
+    if (editing === entry) setEditing(null);
+    onCommit(entries.filter((item) => item !== entry));
+  }
+
+  return (
+    <Field className={fieldSurfaceClass(layout)}>
+      <div className="flex items-center gap-1.5">
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        {hint && layout === "page" && <FieldTip>{hint}</FieldTip>}
+        {entries.length > 0 && (
+          <Badge variant="secondary" className="ml-auto tabular-nums">
+            {maxEntries === undefined
+              ? entries.length
+              : `${entries.length} / ${maxEntries}`}
+          </Badge>
+        )}
+      </div>
+      <FieldContent>
+        <InputGroup>
+          <InputGroupInput
+            id={id}
+            value={draft}
+            maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
+            spellCheck={false}
+            placeholder={addPlaceholder}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              addEntry();
+            }}
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton
+              size="icon-xs"
+              aria-label={`添加${noun}`}
+              disabled={!draft.trim()}
+              onClick={addEntry}
+            >
+              <Plus aria-hidden />
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+        {error && <FieldError>{error}</FieldError>}
+        {entries.length === 0 ? (
+          <FieldDescription>{emptyText}</FieldDescription>
+        ) : (
+          <ul className="flex max-h-56 flex-col overflow-y-auto rounded-lg border border-border-subtle">
+            {entries.map((entry, index) => (
+              <li key={entry}>
+                {index > 0 && <Separator />}
+                <div className="flex min-h-9 items-center gap-2 px-2 py-1">
+                  {editing === entry ? (
+                    <InputGroup className="min-w-0 flex-1">
+                      <InputGroupInput
+                        value={editingDraft}
+                        maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
+                        autoFocus
+                        spellCheck={false}
+                        aria-label={`编辑${noun}`}
+                        onChange={(event) => {
+                          setEditingDraft(event.target.value);
+                          setError(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            saveEditing(entry);
+                          }
+                          if (event.key === "Escape") {
+                            setEditing(null);
+                            setError(null);
+                          }
+                        }}
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          size="icon-xs"
+                          aria-label={`保存${noun}`}
+                          disabled={!editingDraft.trim()}
+                          onClick={() => saveEditing(entry)}
+                        >
+                          <Check aria-hidden />
+                        </InputGroupButton>
+                        <InputGroupButton
+                          size="icon-xs"
+                          aria-label="取消编辑"
+                          onClick={() => {
+                            setEditing(null);
+                            setError(null);
+                          }}
+                        >
+                          <X aria-hidden />
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  ) : (
+                    <>
+                      <span className="min-w-0 flex-1 truncate text-sm">{entry}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`编辑${entry}`}
+                        onClick={() => {
+                          setEditing(entry);
+                          setEditingDraft(entry);
+                          setError(null);
+                        }}
+                      >
+                        <Pencil aria-hidden />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="hover:text-destructive"
+                        aria-label={`删除${entry}`}
+                        onClick={() => removeEntry(entry)}
+                      >
+                        <Trash2 aria-hidden />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </FieldContent>
+    </Field>
+  );
 }
 
 export function AsrCaptionFontSizeField({
@@ -577,12 +710,10 @@ export function DanmakuFilterSettingsFields({
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const setSuperChatEnabled = useSettingsStore((state) => state.setSuperChatEnabled);
-  const shield = useShieldWordsDraft();
-  const blocked = useBlockedUsersDraft();
+  const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
+  const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
   const giftLabelId = `${idPrefix}-danmaku-gift-filter-label`;
   const superChatLabelId = `${idPrefix}-super-chat-enabled-label`;
-  const shieldInputId = `${idPrefix}-danmaku-shield-words`;
-  const blockedInputId = `${idPrefix}-danmaku-blocked-users`;
 
   return (
     <>
@@ -637,34 +768,36 @@ export function DanmakuFilterSettingsFields({
           />
         </Field>
       )}
-      <Field className={fieldSurfaceClass(layout)}>
-        <FieldLabel htmlFor={shieldInputId}>屏蔽词</FieldLabel>
-        <FieldContent>
-          <Textarea
-            id={shieldInputId}
-            value={shield.draft}
-            onChange={(event) => shield.update(event.target.value)}
-            rows={layout === "page" ? 5 : 4}
-            placeholder="每行一个词，也可用逗号分隔"
-            className="resize-y"
-          />
-          {shield.status && <FieldDescription role="status">{shield.status}</FieldDescription>}
-        </FieldContent>
-      </Field>
-      <Field className={fieldSurfaceClass(layout)}>
-        <FieldLabel htmlFor={blockedInputId}>屏蔽用户</FieldLabel>
-        <FieldContent>
-          <Textarea
-            id={blockedInputId}
-            value={blocked.draft}
-            onChange={(event) => blocked.update(event.target.value)}
-            rows={layout === "page" ? 5 : 4}
-            placeholder="每行一个昵称；也可在弹幕列表中点击消息直接屏蔽"
-            className="resize-y"
-          />
-          {blocked.status && <FieldDescription role="status">{blocked.status}</FieldDescription>}
-        </FieldContent>
-      </Field>
+      <SettingsEntryList
+        id={`${idPrefix}-danmaku-shield-words`}
+        label="屏蔽词"
+        noun="屏蔽词"
+        hint="命中的聊天、礼物与醒目留言都不再显示，只影响新到达的消息。"
+        entries={shieldWords}
+        layout={layout}
+        addPlaceholder="输入要屏蔽的词，回车添加"
+        emptyText="还没有屏蔽词。"
+        caseInsensitive
+        onCommit={(words) => {
+          useSettingsStore.setState({ danmakuShieldWords: words });
+          persist({ danmaku_shield_words: words });
+        }}
+      />
+      <SettingsEntryList
+        id={`${idPrefix}-danmaku-blocked-users`}
+        label="屏蔽用户"
+        noun="昵称"
+        hint="按昵称精确匹配，区分大小写；也可在弹幕列表中点击消息直接屏蔽。"
+        entries={blockedUsers}
+        layout={layout}
+        addPlaceholder="输入要屏蔽的昵称，回车添加"
+        emptyText="还没有屏蔽用户。"
+        maxEntries={DANMAKU_BLOCKED_USERS_MAX}
+        onCommit={(users) => {
+          useSettingsStore.setState({ danmakuBlockedUsers: users });
+          persist({ danmaku_blocked_users: users });
+        }}
+      />
     </>
   );
 }
