@@ -28,7 +28,6 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -296,7 +295,6 @@ function SettingsEntryList({
         <DialogContent aria-labelledby={dialogTitleId} className="max-w-md">
           <DialogHeader>
             <DialogTitle id={dialogTitleId}>{label}</DialogTitle>
-            {hint && <DialogDescription>{hint}</DialogDescription>}
           </DialogHeader>
           <InputGroup>
             <InputGroupInput
