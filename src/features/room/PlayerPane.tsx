@@ -1,5 +1,3 @@
-import { useGSAP } from "@gsap/react";
-import gsap from "gsap";
 import {
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
@@ -65,6 +63,7 @@ import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
+import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
 
@@ -521,9 +520,6 @@ export function PlayerPane({
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
-  });
-  const { contextSafe: playerEdgeGestureContextSafe } = useGSAP({
-    scope: playerEdgeGestureFeedbackRef,
   });
   const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
   // 横屏流在 Android 全屏时自动旋转；竖屏流保持直立，因为方向锁由解码后的帧尺寸决定。
@@ -982,67 +978,79 @@ export function PlayerPane({
   }, []);
 
   const revealPlayerEdgeGestureFeedback = useMemo(
-    () =>
-      playerEdgeGestureContextSafe(() => {
-        const feedback = playerEdgeGestureFeedbackRef.current;
-        const panel = playerEdgeGesturePanelRef.current;
-        if (!feedback) return;
-        const wasVisible = feedback.dataset.visible === "true";
-        feedback.dataset.visible = "true";
-        if (wasVisible) return;
+    () => () => {
+      const feedback = playerEdgeGestureFeedbackRef.current;
+      const panel = playerEdgeGesturePanelRef.current;
+      if (!feedback) return;
+      const wasVisible = feedback.dataset.visible === "true";
+      feedback.dataset.visible = "true";
+      if (wasVisible) return;
 
-        if (prefersReducedMotion()) {
-          gsap.set(feedback, { autoAlpha: 1 });
-          if (panel) gsap.set(panel, { scale: 1 });
-          return;
-        }
-        gsap.to(feedback, {
-          autoAlpha: 1,
-          duration: 0.16,
-          ease: EASE_OUT,
-          overwrite: "auto",
+      if (prefersReducedMotion()) {
+        killTweensOf(feedback);
+        if (panel) killTweensOf(panel);
+        feedback.style.opacity = "1";
+        if (panel) panel.style.transform = "scale(1)";
+        return;
+      }
+      // 提示层的自然态是 opacity-0 / scale(0.97)，展开后由 fill 持有终态；
+      // 隐藏补间的结束帧才回到自然态，由 settleTween 归还。
+      // 起点读当前计算值而不是固定常量：隐藏中途再次手势时从当前透明度/缩放
+      // 平滑接续（GSAP `.to` 的语义），不跳回起点。
+      const feedbackFrom = getComputedStyle(feedback).opacity;
+      const panelFrom = panel ? getComputedStyle(panel).transform : null;
+      tween(feedback, [{ opacity: feedbackFrom }, { opacity: "1" }], {
+        duration: 160,
+        easing: EASE_OUT,
+        fill: "both",
+      });
+      if (panel && panelFrom) {
+        tween(panel, [{ transform: panelFrom }, { transform: "scale(1)" }], {
+          duration: 160,
+          easing: EASE_OUT,
+          fill: "both",
         });
-        if (panel) {
-          gsap.to(panel, {
-            scale: 1,
-            duration: 0.16,
-            ease: EASE_OUT,
-            overwrite: "auto",
-          });
-        }
-      }),
-    [playerEdgeGestureContextSafe],
+      }
+    },
+    [],
   );
 
   const hidePlayerEdgeGestureFeedback = useMemo(
-    () =>
-      playerEdgeGestureContextSafe(() => {
-        const feedback = playerEdgeGestureFeedbackRef.current;
-        const panel = playerEdgeGesturePanelRef.current;
-        if (!feedback || feedback.dataset.visible !== "true") return;
-        feedback.dataset.visible = "false";
+    () => () => {
+      const feedback = playerEdgeGestureFeedbackRef.current;
+      const panel = playerEdgeGesturePanelRef.current;
+      if (!feedback || feedback.dataset.visible !== "true") return;
+      feedback.dataset.visible = "false";
 
-        if (prefersReducedMotion()) {
-          gsap.set(feedback, { autoAlpha: 0 });
-          if (panel) gsap.set(panel, { scale: 0.97 });
-          return;
-        }
-        gsap.to(feedback, {
-          autoAlpha: 0,
-          duration: 0.14,
-          ease: EASE_OUT,
-          overwrite: "auto",
-        });
-        if (panel) {
-          gsap.to(panel, {
-            scale: 0.97,
-            duration: 0.14,
-            ease: EASE_OUT,
-            overwrite: "auto",
-          });
-        }
-      }),
-    [playerEdgeGestureContextSafe],
+      if (prefersReducedMotion()) {
+        killTweensOf(feedback);
+        if (panel) killTweensOf(panel);
+        feedback.style.opacity = "0";
+        if (panel) panel.style.transform = "";
+        return;
+      }
+      const feedbackFrom = getComputedStyle(feedback).opacity;
+      const panelFrom = panel ? getComputedStyle(panel).transform : null;
+      settleTween(
+        feedback,
+        tween(feedback, [{ opacity: feedbackFrom }, { opacity: "0" }], {
+          duration: 140,
+          easing: EASE_OUT,
+          fill: "both",
+        }),
+      );
+      if (panel && panelFrom) {
+        settleTween(
+          panel,
+          tween(panel, [{ transform: panelFrom }, { transform: "scale(0.97)" }], {
+            duration: 140,
+            easing: EASE_OUT,
+            fill: "both",
+          }),
+        );
+      }
+    },
+    [],
   );
 
   const showPlayerEdgeGestureFeedback = useCallback(
@@ -1683,7 +1691,7 @@ export function PlayerPane({
               data-kind="brightness"
               data-player-edge-gesture-feedback="brightness"
               data-visible="false"
-              className="pointer-events-none invisible absolute inset-0 z-20 flex items-center justify-center opacity-0 [will-change:opacity]"
+              className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center opacity-0 [will-change:opacity]"
             >
               <div
                 ref={playerEdgeGesturePanelRef}

@@ -1,6 +1,4 @@
-import { useGSAP } from "@gsap/react";
-import gsap from "gsap";
-import { useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { Flame } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
@@ -11,11 +9,45 @@ import { SiteLogo } from "../SiteLogo";
 const OVERFLOW_TOLERANCE_PX = 1;
 const OVERFLOW_EDGE_PAUSE_SECONDS = 1.2;
 const OVERFLOW_PIXELS_PER_SECOND = 28;
+const MARQUEE_MIN_TRAVEL_SECONDS = 2.4;
+const MARQUEE_MAX_TRAVEL_SECONDS = 16;
 
 export function roomIdentityOverflowDistance(contentWidth: number, viewportWidth: number): number {
   if (!Number.isFinite(contentWidth) || !Number.isFinite(viewportWidth)) return 0;
   const overflow = contentWidth - viewportWidth;
   return overflow > OVERFLOW_TOLERANCE_PX ? Math.ceil(overflow) : 0;
+}
+
+/**
+ * 溢出行平移的一个完整往返周期，供 Web Animations 无限循环播放。
+ *
+ * 两条端点停顿（往返各一次）编码进关键帧本身：起始停顿承担 GSAP 时代的
+ * `delay`，往返之间的停顿对应 `repeatDelay`。因此一个周期 =
+ * 2 ×（单程 + 停顿），单程时长按像素速度推导并锥制，曲线全程线性（匀速）。
+ */
+export function roomIdentityMarqueeCycle(distance: number): {
+  cycleMs: number;
+  keyframes: Keyframe[];
+} {
+  const travelMs =
+    Math.min(
+      MARQUEE_MAX_TRAVEL_SECONDS,
+      Math.max(MARQUEE_MIN_TRAVEL_SECONDS, distance / OVERFLOW_PIXELS_PER_SECOND),
+    ) * 1000;
+  const pauseMs = OVERFLOW_EDGE_PAUSE_SECONDS * 1000;
+  const cycleMs = 2 * (travelMs + pauseMs);
+  const shift = `translate3d(${-distance}px, 0, 0)`;
+  const rest = "translate3d(0, 0, 0)";
+  return {
+    cycleMs,
+    keyframes: [
+      { transform: rest, offset: 0 },
+      { transform: rest, offset: pauseMs / cycleMs },
+      { transform: shift, offset: (pauseMs + travelMs) / cycleMs },
+      { transform: shift, offset: (2 * pauseMs + travelMs) / cycleMs },
+      { transform: rest, offset: 1 },
+    ],
+  };
 }
 
 type RoomIdentityLineProps = {
@@ -53,74 +85,64 @@ export function RoomIdentityLine({
     online !== undefined && Number.isFinite(online) && online >= 0 ? formatOnline(online) : null;
   const tile = density === "tile";
 
-  useGSAP(
-    () => {
-      const viewport = viewportRef.current;
-      const track = trackRef.current;
-      if (!viewport || !track) return;
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const track = trackRef.current;
+    if (!viewport || !track) return;
 
-      let resizeFrame: number | null = null;
-      let tween: gsap.core.Tween | null = null;
-      const measure = () => {
-        resizeFrame = null;
-        tween?.kill();
-        tween = null;
-        gsap.set(track, { x: 0 });
+    let resizeFrame: number | null = null;
+    let marquee: Animation | null = null;
+    const stopMarquee = () => {
+      marquee?.cancel();
+      marquee = null;
+    };
+    const measure = () => {
+      resizeFrame = null;
+      stopMarquee();
+      track.style.transform = "";
 
-        const distance = roomIdentityOverflowDistance(track.scrollWidth, viewport.clientWidth);
-        viewport.dataset.overflowing = distance > 0 ? "true" : "false";
-        if (distance === 0 || prefersReducedMotion()) {
-          gsap.set(track, { clearProps: "transform,willChange" });
-          return;
-        }
+      const distance = roomIdentityOverflowDistance(track.scrollWidth, viewport.clientWidth);
+      viewport.dataset.overflowing = distance > 0 ? "true" : "false";
+      if (distance === 0 || prefersReducedMotion()) {
+        track.style.willChange = "";
+        return;
+      }
 
-        tween = gsap.to(track, {
-          x: -distance,
-          delay: OVERFLOW_EDGE_PAUSE_SECONDS,
-          duration: Math.min(16, Math.max(2.4, distance / OVERFLOW_PIXELS_PER_SECOND)),
-          ease: "none",
-          repeat: -1,
-          repeatDelay: OVERFLOW_EDGE_PAUSE_SECONDS,
-          yoyo: true,
-          overwrite: "auto",
-          willChange: "transform",
-        });
-      };
+      track.style.willChange = "transform";
+      const { cycleMs, keyframes } = roomIdentityMarqueeCycle(distance);
+      marquee = track.animate(keyframes, { duration: cycleMs, iterations: Infinity });
+    };
 
-      const scheduleMeasure = () => {
-        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
-        resizeFrame = window.requestAnimationFrame(measure);
-      };
+    const scheduleMeasure = () => {
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(measure);
+    };
 
-      scheduleMeasure();
-      const observer =
-        typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
-      observer?.observe(viewport);
-      observer?.observe(track);
-      if (!observer) window.addEventListener("resize", scheduleMeasure);
+    scheduleMeasure();
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleMeasure);
+    observer?.observe(viewport);
+    observer?.observe(track);
+    if (!observer) window.addEventListener("resize", scheduleMeasure);
 
-      return () => {
-        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
-        observer?.disconnect();
-        if (!observer) window.removeEventListener("resize", scheduleMeasure);
-        tween?.kill();
-      };
-    },
-    {
-      dependencies: [
-        avatarUrl,
-        compact,
-        density,
-        displayTitle,
-        displayUserName,
-        onlineLabel,
-        siteId,
-        trimmedRoomId,
-      ],
-      scope: viewportRef,
-      revertOnUpdate: true,
-    },
-  );
+    return () => {
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+      observer?.disconnect();
+      if (!observer) window.removeEventListener("resize", scheduleMeasure);
+      stopMarquee();
+      track.style.transform = "";
+      track.style.willChange = "";
+    };
+  }, [
+    avatarUrl,
+    compact,
+    density,
+    displayTitle,
+    displayUserName,
+    onlineLabel,
+    siteId,
+    trimmedRoomId,
+  ]);
 
   const avatarLabel = `${displayUserName} 的头像`;
 

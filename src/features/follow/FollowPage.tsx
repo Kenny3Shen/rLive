@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import gsap from "gsap";
-import { useGSAP } from "@gsap/react";
 import {
   DndContext,
   DragOverlay,
@@ -93,7 +91,8 @@ import { RefreshFab } from "@/shared/components/RefreshFab";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
-import { prefersReducedMotion } from "@/shared/motion/tokens";
+import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
+import { clearMotionStyles, killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
@@ -621,42 +620,38 @@ export function FollowPage() {
     setSearchParams,
   ]);
 
-  useGSAP(
-    () => {
-      const previousView = previousViewRef.current;
-      previousViewRef.current = activeView;
-      if (previousView === activeView) return;
+  useLayoutEffect(() => {
+    const previousView = previousViewRef.current;
+    previousViewRef.current = activeView;
+    if (previousView === activeView) return;
 
-      const panel = viewMotionRef.current?.querySelector<HTMLElement>(
-        `[data-follow-view-panel="${activeView}"]`,
-      );
-      if (!panel) return;
-      if (skipViewMotionRef.current) {
-        skipViewMotionRef.current = false;
-        gsap.set(panel, { clearProps: "transform,opacity,visibility,willChange" });
-        return;
-      }
-      if (prefersReducedMotion()) {
-        gsap.set(panel, { clearProps: "transform,opacity,visibility,willChange" });
-        return;
-      }
+    const panel = viewMotionRef.current?.querySelector<HTMLElement>(
+      `[data-follow-view-panel="${activeView}"]`,
+    );
+    if (!panel) return;
+    if (skipViewMotionRef.current || prefersReducedMotion()) {
+      if (skipViewMotionRef.current) skipViewMotionRef.current = false;
+      killTweensOf(panel);
+      clearMotionStyles(panel);
+      return;
+    }
 
-      gsap.fromTo(
+    // 结束帧（原位、完全不透明）与自然态一致，settleTween 会归还行内样式；
+    // 补间中途切页时 tween 先取消旧补间，不留叠加动画。
+    const offset = activeView === "iptv" ? 18 : -18;
+    panel.style.willChange = "transform,opacity";
+    settleTween(
+      panel,
+      tween(
         panel,
-        { autoAlpha: 0, x: activeView === "iptv" ? 18 : -18 },
-        {
-          autoAlpha: 1,
-          x: 0,
-          duration: 0.24,
-          ease: "power2.out",
-          overwrite: "auto",
-          willChange: "transform,opacity",
-          clearProps: "transform,opacity,visibility,willChange",
-        },
-      );
-    },
-    { dependencies: [activeView], scope: viewMotionRef, revertOnUpdate: true },
-  );
+        [
+          { opacity: 0, transform: `translate3d(${offset}px, 0, 0)` },
+          { opacity: 1, transform: "translate3d(0, 0, 0)" },
+        ],
+        { duration: 240, easing: EASE_OUT, fill: "both" },
+      ),
+    );
+  }, [activeView]);
 
   const refreshMutation = useMutation({
     mutationFn: () => refreshFollows(queryClient),
@@ -919,7 +914,7 @@ export function FollowPage() {
     value: activeView,
     onChange: handleViewChangeFromSwipe,
     enabled: isMobileClient(),
-    // 点击页签使用现有的 GSAP 渐隐；
+    // 点击页签使用现有的渐隐平移；
     // 已提交的手势则在 hook 中直接从指针释放处收尾。
     animate: false,
     layout: "track",

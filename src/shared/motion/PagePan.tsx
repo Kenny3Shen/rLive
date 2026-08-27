@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
-import { EASE_OUT_CSS, motionProfile, prefersReducedMotion } from "./tokens";
+import { EASE_OUT, motionProfile, prefersReducedMotion } from "./tokens";
 
 // Web Animations 可以在 React 忙于主线程时由 Chromium 合成器推进这个 transform。
-const PAGE_PAN_EASING = EASE_OUT_CSS;
+const PAGE_PAN_EASING = EASE_OUT;
 
 type PanSnapshot = {
   key: string;
