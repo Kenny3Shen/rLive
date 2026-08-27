@@ -287,10 +287,10 @@ fn decode_saved_settings(json: &str) -> AppResult<AppSettings> {
             "当前设置字段定义必须是 JSON object",
         )
     })?;
-    if let Some(field) = default_object
-        .keys()
-        .find(|field| !object.contains_key(field.as_str()))
-    {
+    if let Some(field) = default_object.keys().find(|field| {
+        !object.contains_key(field.as_str())
+            && !crate::models::settings::BACKFILLED_SETTINGS_FIELDS.contains(&field.as_str())
+    }) {
         return Err(AppError::new(
             "settings_schema_unsupported",
             format!("当前设置缺少必填字段 {field}"),
@@ -686,5 +686,26 @@ mod tests {
         let ass = get(&conn).unwrap().recording_ass;
         assert_eq!(ass.overflow_policy, "delay");
         assert_eq!(ass.max_delay_seconds, 5);
+    }
+
+    /// 悬停卡片预览是 2.12.0 新增的顶层字段，2.11.x 保存的记录里没有它。
+    /// 缺失时按默认值补齐，不能让整份设置变成 `settings_schema_unsupported`。
+    #[test]
+    fn backfills_room_card_preview_for_older_records() {
+        let conn = open_in_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("room_card_preview_enabled");
+        object.insert("danmaku_font_size".into(), serde_json::json!(18));
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+        )
+        .unwrap();
+
+        let (settings, saved) = get_with_status(&conn).unwrap();
+        assert!(saved);
+        assert!(settings.room_card_preview_enabled);
+        assert_eq!(settings.danmaku_font_size, 18);
     }
 }

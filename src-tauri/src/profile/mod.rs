@@ -39,6 +39,7 @@ const PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_shield_words",
     "quality_level",
     "playback_soft_switch_enabled",
+    "room_card_preview_enabled",
     "danmaku_send_enabled",
     "asr_enabled",
     "asr_provider",
@@ -79,6 +80,7 @@ const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_shield_words",
     "quality_level",
     "playback_soft_switch_enabled",
+    "room_card_preview_enabled",
     "asr_font_size",
     "recording_include_danmaku",
     "recording_auto_split_minutes",
@@ -356,6 +358,8 @@ fn reject_unknown_fields(
     Ok(())
 }
 
+/// 校验 `required_fields` 是否都存在。`BACKFILLED_SETTINGS_FIELDS` 里的字段例外：
+/// 它们比自身引入的版本更早的包里不存在，由 `AppSettings` 的 serde default 补齐。
 fn require_fields(
     value: &serde_json::Value,
     path: &str,
@@ -367,10 +371,10 @@ fn require_fields(
             format!("{path} must be a JSON object"),
         )
     })?;
-    if let Some(field) = required_fields
-        .iter()
-        .find(|field| !object.contains_key(**field))
-    {
+    if let Some(field) = required_fields.iter().find(|field| {
+        !object.contains_key(**field)
+            && !crate::models::settings::BACKFILLED_SETTINGS_FIELDS.contains(*field)
+    }) {
         return Err(AppError::new(
             "profile_schema_invalid",
             format!("missing field {path}.{field}"),
@@ -423,6 +427,7 @@ pub fn merge_into_db(
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
+    settings.room_card_preview_enabled = package.settings.room_card_preview_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();
     // 不要复制 `danmaku_send_enabled`、`asr_enabled`、`asr_provider`、
     // `asr_vad_enabled`、`asr_punctuation_enabled`、
@@ -516,6 +521,22 @@ mod tests {
 
         assert_eq!(error.code, "profile_schema_invalid");
         assert!(error.message.contains("danmaku_font_weight"));
+    }
+
+    /// 2.11.x 导出的配置包没有 `room_card_preview_enabled`，导入时按默认值补齐，
+    /// 其余便携字段仍然必填。
+    #[test]
+    fn profile_backfills_room_card_preview_from_older_packages() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("room_card_preview_enabled");
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert!(package.settings.room_card_preview_enabled);
     }
 
     #[test]

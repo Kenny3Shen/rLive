@@ -30,6 +30,7 @@ import {
   isXgPlayerDecodeError,
   loadXgPlayerModules,
   switchXgPlaybackSource,
+  webPlaybackKind,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
   type XgPlayerInstance,
@@ -432,19 +433,6 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
     playUrl.protocol,
     playUrl.priority,
   ]);
-}
-
-export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPlaybackKind {
-  switch (playbackProtocol(source)) {
-    case "hls":
-      return "hls";
-    case "mpeg_ts":
-      return "mpegts";
-    case "native":
-      return "native";
-    default:
-      return "flv";
-  }
 }
 
 /**

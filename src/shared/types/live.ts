@@ -236,6 +236,8 @@ export type AppSettings = {
   quality_level: "high" | "mid" | "low";
   /** 同协议 xgplayer switchURL 路径；硬刷新仍是兜底。 */
   playback_soft_switch_enabled: boolean;
+  /** 悬停浏览页直播间卡片时播放静音直播预览。 */
+  room_card_preview_enabled: boolean;
   /** 用户手动发送单条消息功能的设备本地权限开关。 */
   danmaku_send_enabled: boolean;
   /** 下载并加载可选 ASR 模型的设备本地同意开关。 */

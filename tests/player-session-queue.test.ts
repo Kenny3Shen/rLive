@@ -16,8 +16,8 @@ import {
   requestPlayerAutoplay,
   shouldUsePlaybackSoftSwitch,
   shouldEscalateNonTwitchHlsFatal,
-  webPlaybackKind,
 } from "../src/features/room/player/useWebPlayer";
+import { webPlaybackKind } from "../src/features/room/player/xgPlayer";
 
 describe("player session queue", () => {
   test("does not start the replacement until the prior lifecycle has finished", async () => {
