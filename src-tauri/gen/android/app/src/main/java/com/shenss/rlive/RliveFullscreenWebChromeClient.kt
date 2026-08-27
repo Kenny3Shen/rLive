@@ -21,13 +21,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 /**
- * Keeps Tauri's WebChromeClient behaviour while handling the Android WebView
- * custom view used by HTML video fullscreen. Wry's generated client declines
- * custom views, which makes the browser Fullscreen API fail on Android.
+ * 保留 Tauri WebChromeClient 的行为，同时接管 HTML 视频全屏使用的
+ * Android WebView custom view。Wry 生成的 client 拒绝 custom view，
+ * 浏览器 Fullscreen API 在 Android 上会因此失败。
  *
- * Orientation is intentionally left alone: portrait live streams must not be
- * forced into landscape (Simple Live only locks landscape for non-portrait
- * content). Immersive system bars still apply for a true fullscreen surface.
+ * 方向刻意不动：竖屏直播不能被强制横屏（Simple Live 只对非竖屏内容
+ * 锁定横屏）。沉浸式系统栏照常生效，保证真正的全屏表面。
  */
 @Suppress("DEPRECATION")
 class RliveFullscreenWebChromeClient(
@@ -83,8 +82,8 @@ class RliveFullscreenWebChromeClient(
     requestedOrientation: Int,
     callback: CustomViewCallback,
   ) {
-    // Ignore WebView's requestedOrientation: many live rooms are portrait, and
-    // forcing landscape turns vertical streams on their side.
+    // 忽略 WebView 的 requestedOrientation：很多直播间是竖屏，
+    // 强制横屏会把竖向画面转成侧躺。
     onShowCustomView(view, callback)
   }
 
@@ -94,13 +93,13 @@ class RliveFullscreenWebChromeClient(
     }
   }
 
-  /** Returns true when Android video fullscreen consumed the back action. */
+  /** Android 视频全屏消费了返回操作时返回 true。 */
   fun exitFullscreen(): Boolean {
     if (customView == null) {
       return false
     }
 
-    // Chromium normally calls onHideCustomView synchronously from this callback.
+    // Chromium 通常会在这个回调里同步调用 onHideCustomView。
     customViewCallback?.onCustomViewHidden()
     if (dismissCustomView()) {
       delegate.onHideCustomView()
@@ -132,19 +131,17 @@ class RliveFullscreenWebChromeClient(
   }
 
   /**
-   * Brings the system bars back unconditionally.
+   * 无条件恢复系统栏。
    *
-   * An earlier version snapshotted `isVisible(systemBars())` before hiding and
-   * only restored when that snapshot was true. That self-destructs: the
-   * restored bars are still under BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE, so
-   * Android auto-hides them again shortly after. The next fullscreen entry then
-   * samples an already-hidden state, records "was hidden", and skips the
-   * restore forever after.
+   * 早期版本在隐藏前快照 `isVisible(systemBars())`，只在快照为真时恢复。
+   * 那是自毁式的：恢复出来的系统栏仍处于
+   * BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE，Android 不久后会再次自动
+   * 隐藏；下一次进入全屏采样到已隐藏状态，记下「当时隐藏」，之后
+   * 就永远跳过恢复。
    *
-   * The Activity runs edge-to-edge and has no path other than video fullscreen
-   * that hides the bars, so there is no legitimate hidden state to preserve.
-   * Resetting the behaviour first also matters: leaving it on TRANSIENT means
-   * the bars we just showed would fade out on their own.
+   * Activity 以 edge-to-edge 运行，除视频全屏外没有别的隐藏系统栏的
+   * 路径，因此不存在需要保留的合法隐藏状态。先重置 behavior 同样
+   * 重要：留在 TRANSIENT 意味着刚显示的系统栏会自行淡出。
    */
   fun restoreSystemBars() {
     restoreSystemBars(activity)
@@ -152,9 +149,9 @@ class RliveFullscreenWebChromeClient(
 
   companion object {
     /**
-     * Same restore, reachable before [MainActivity] has installed its client.
-     * The chrome client is assigned from a `webView.post {}` block, so an early
-     * `onResume` can run while it is still null.
+     * 同一个恢复逻辑，供 [MainActivity] 尚未安装它的 client 时调用。
+     * chrome client 在 `webView.post {}` 块里赋值，早到的 onResume
+     * 可能在它仍为 null 时运行。
      */
     fun restoreSystemBars(activity: Activity) {
       val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)

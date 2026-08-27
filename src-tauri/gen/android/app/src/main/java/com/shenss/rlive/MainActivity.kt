@@ -17,13 +17,13 @@ class MainActivity : TauriActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
 
-    // The immersive flag is static, so an Activity recreation would carry it
-    // across while the reloaded page starts windowed. Clear it here or onResume
-    // would keep the bars hidden under a windowed room.
+    // 沉浸标志是静态的，Activity 重建会把它带过来，而重新加载的页面
+    // 以窗口模式启动。这里先清掉，否则 onResume 会让系统栏在窗口模式的
+    // 房间下保持隐藏。
     RlivePlayerControlsPlugin.forgetImmersive()
 
-    // Android 7.0/7.1 cannot expose WebView's currently installed Chrome
-    // client. Keep an equivalent Tauri client ready for those devices.
+    // Android 7.0/7.1 拿不到 WebView 当前已安装的 Chrome client。
+    // 为这类设备备一个等价的 Tauri client。
     fallbackChromeClient = RustWebChromeClient(this)
   }
 
@@ -34,10 +34,9 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * A player brightness gesture is an Activity window override scoped to the
-   * room the user is in. Releasing it here means backgrounding rLive — or a
-   * process death that never runs the player's own teardown — always leaves
-   * the screen back on the user's system brightness.
+   * 播放器亮度手势是作用域限定在当前房间的 Activity 窗口覆盖。在这里
+   * 释放，意味着 rLive 退到后台——或进程死亡导致播放器自身的清理永远
+   * 不运行——屏幕都会回到用户的系统亮度。
    */
   override fun onPause() {
     RlivePlayerControlsPlugin.restoreBrightnessOverride()
@@ -45,23 +44,20 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * Video fullscreen and the in-page player fullscreen are the only paths that
-   * hide the system bars, and both restore them on exit. Returning to the
-   * foreground in any other state means the bars should be visible — after a
-   * process death that dropped the custom view, or after the system interrupted
-   * playback mid-fullscreen.
+   * 视频全屏与页面内播放器全屏是仅有的两条隐藏系统栏的路径，退出时都会
+   * 恢复。其余状态回到前台都意味着系统栏应当可见——无论是进程死亡丢掉了
+   * custom view，还是系统在全屏播放中途打断。
    *
-   * Without this the window can stay laid out as if the bars were present while
-   * they are not, which collapses every `env(safe-area-inset-*)` to 0 in the
-   * WebView.
+   * 不这样的话，窗口可能保持按系统栏存在的方式布局而实际不存在，WebView
+   * 里所有 `env(safe-area-inset-*)` 都会塌缩为 0。
    */
   private fun restoreSystemBarsUnlessFullscreen() {
     val client = fullscreenChromeClient
     if (client?.isShowingCustomView == true) {
       return
     }
-    // The in-page player keeps its fixed layer across a pause/resume, so the
-    // bars must stay hidden for it just as they do for a custom view.
+    // 页面内播放器在 pause/resume 之间保持它的 fixed 层，系统栏对它
+    // 必须像对 custom view 一样保持隐藏。
     if (RlivePlayerControlsPlugin.isImmersiveActive()) {
       return
     }
@@ -72,9 +68,9 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     installFullscreenBackHandler()
 
-    // Wry installs its generated RustWebChromeClient immediately after this
-    // hook returns. Post our assignment so we preserve it as the delegate and
-    // only replace the fullscreen custom-view behaviour that Wry rejects.
+    // Wry 在本钩子返回后立刻安装它生成的 RustWebChromeClient。把我们的
+    // 赋值 post 出去，才能保留它作为 delegate，只替换 Wry 拒绝处理的
+    // 全屏 custom-view 行为。
     webView.post {
       if (isFinishing || isDestroyed) {
         return@post
@@ -101,8 +97,8 @@ class MainActivity : TauriActivity() {
           return
         }
 
-        // Let the normal activity dispatcher handle Back outside video
-        // fullscreen (including Tauri's plugin callbacks).
+        // 视频全屏之外的返回交给 Activity 常规分发继续处理
+        // （包括 Tauri 的插件回调）。
         isEnabled = false
         onBackPressedDispatcher.onBackPressed()
         isEnabled = true
@@ -113,9 +109,8 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * Ask Android for the best animation mode the panel exposes, without changing
-   * its physical resolution. This remains a preference: power saving, thermal
-   * throttling and device-specific variable-refresh policies may override it.
+   * 向 Android 请求面板暴露的最优动画模式，不改动物理分辨率。这只是
+   * 偏好：省电、温控和设备各自的变刷新率策略都可能覆盖它。
    */
   private fun requestHighRefreshRate() {
     val display = activityDisplay() ?: return
