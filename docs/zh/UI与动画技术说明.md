@@ -24,8 +24,8 @@
 | 图标 | `lucide-react` | 导航、工具按钮和状态图标 |
 | 运行时动画 | GSAP + `@gsap/react` | 页面入场、Zoom、手势回弹及可中断交互反馈 |
 | 浏览器动画 | Web Animations API | 路由整页平移 |
-| 文档快照 | View Transition API + CSS keyframes | 亮暗主题 Radial Reveal |
-| 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、主题揭示、加载旋转和短状态过渡 |
+| 文档快照 | View Transition API + CSS keyframes | 亮暗主题全局淡化 |
+| 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、主题淡化、加载旋转和短状态过渡 |
 | 直播画面弹幕 | `danmu.js@1.2.1` + CSS transition | DOM 轨道与飘屏；不属于页面 UI 动画层 |
 | 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按本地媒体时间绘制录制 sidecar，行占位整段预计算，图片表情按分段测量与 `drawImage` 绘制，外观与过滤读取直播弹幕设置 |
 
@@ -43,7 +43,7 @@
 | `src/features/*/` | 功能页、功能内组件和局部状态；`features/recording/` 负责桌面录制库与本地回放 |
 | `src/shared/motion/` | 跨页面动画令牌、系统减少动效检测、`PagePan` 和 `PageZoom` |
 | `src/styles.css` | 主题变量、Tailwind 映射、全局响应式规则和 CSS 关键帧 |
-| `src/app/theme.ts` | 主题解析、应用、系统亮暗监听和 Radial Reveal |
+| `src/app/theme.ts` | 主题解析、应用、系统亮暗监听和全局淡化过渡 |
 
 基础组件是仓库内可维护源码，不是不可修改的黑盒。修改 `src/components/ui/` 会影响多个功能页，必须先检查所有调用方；页面特有布局应留在对应 feature 中。
 
@@ -128,7 +128,7 @@ flowchart TD
 | 现有路由整页切换 | `PagePan` 或 `PageZoom`，不要在页面内再叠一层路由动画 |
 | 直播间整页进入与退出 | `PageZoom` |
 | 跟随手指并可回弹的横向切换 | `useHorizontalSwipe` |
-| 整个文档主题快照切换 | `revealThemeAt()` |
+| 整个文档主题快照切换 | `fadeTheme()` |
 | 滚动驱动动画 | 当前没有默认方案；只有明确产品需求并证明不会干扰页面滚动时才评估 ScrollTrigger |
 
 ### 4.2 共享 motion tokens
@@ -243,17 +243,16 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 
 长列表不得为所有项目同时创建 tween。优先只动画首屏或有界数量；无限滚动追加内容默认直接出现，避免动画持续争用播放器和画面弹幕的主线程预算。
 
-### 4.7 主题 Radial Reveal
+### 4.7 主题全局淡化
 
 主题切换由 `src/app/theme.ts`、`src/app/layout/Sidebar.tsx` 与设置页「外观配置」协作；亮暗模式提供跟随系统（默认）、浅色、深色三档，移动端同样可用，跟随系统时由 `watchSystemThemeChanges()` 监听系统亮暗变化并实时重应用：
 
-1. 点击事件提供指针坐标；键盘激活使用按钮中心。
-2. `document.startViewTransition()` 分别捕获旧主题和新主题快照。
-3. `flushSync()` 在 update callback 中应用 Zustand 主题，确保新快照包含更新后的 React 图标与 `.dark` class。
-4. CSS `theme-reveal` keyframe 对 `::view-transition-new(root)` 的 `clip-path` 从 `circle(0)` 扩展到覆盖最远视口角。圆心使用 `vw` / `vh`，终点半径使用 `vmax`，避开 Android WebView 在 View Transition 伪元素中对 CSS `px` 长度重复应用设备像素缩放造成的末帧跳变。
-5. desktop 动画为 `280ms`，coarse pointer 为 `240ms`；指针点击同时提供按钮 scale/rotation 反馈，键盘激活直接切换。
-6. `src/styles.css` 同时关闭浏览器默认的 root-group `250ms` 插值和 snapshot crossfade，整个切换只保留一条径向揭示时间线。
-7. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-reveal`、临时 CSS 变量和 GSAP inline styles。
+1. `document.startViewTransition()` 分别捕获旧主题和新主题快照。
+2. `flushSync()` 在 update callback 中应用 Zustand 主题，确保新快照包含更新后的 React 图标与 `.dark` class。
+3. CSS `theme-fade` keyframe 对 `::view-transition-new(root)` 做 `opacity` 0→1 的整屏淡入，旧快照静态垫底；指针点击与键盘激活共用同一条时间线。
+4. desktop 动画为 `280ms`，coarse pointer 为 `240ms`；侧栏按钮在过渡开始时另有 scale/rotation 反馈。
+5. `src/styles.css` 同时关闭浏览器默认的 root-group `250ms` 插值和 snapshot crossfade，整个切换只保留一条淡化时间线。
+6. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-fade`、临时 CSS 变量和 GSAP inline styles。
 
 不支持 View Transition API 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下临时 CSS 变量或未结束的快照状态。
 
@@ -267,7 +266,7 @@ CSS 只承担无需 JavaScript 编排的短状态：
 - Tooltip 首次 Hover 延迟 `350ms`，相邻 Tooltip 使用 Base UI 的即时状态并跳过动画。
 - Drawer 进入 `240ms`、退出 `160ms`；Dialog 进入 `200ms`、退出 `140ms`；Popover 进入 `160ms`、退出 `110ms`。
 
-CSS 交互动画优先使用可中断 transition；只在主题揭示、加载旋转等确定时间线使用 keyframes。新增效果继续只动画 `transform` / `opacity`，并复用 `--motion-ease-out` 或 `--motion-ease-drawer`。
+CSS 交互动画优先使用可中断 transition；只在主题淡化、加载旋转等确定时间线使用 keyframes。新增效果继续只动画 `transform` / `opacity`，并复用 `--motion-ease-out` 或 `--motion-ease-drawer`。
 
 ## 5. React + GSAP 实现规范
 
@@ -442,7 +441,7 @@ bash scripts/sync-to-windows.sh
 | `src/components/ui/drawer.tsx` | Drawer 结构、方向和开关动画 |
 | `src/app/layout/Shell.tsx` | 页面滚动、路由来源识别和动画编排 |
 | `src/app/layout/Sidebar.tsx` | 桌面/移动导航和主题按钮反馈 |
-| `src/app/theme.ts` | 主题应用、系统亮暗监听与 Radial Reveal |
+| `src/app/theme.ts` | 主题应用、系统亮暗监听与全局淡化过渡 |
 | `src/shared/motion/preference.ts` | 系统减少动效偏好检测 |
 | `src/shared/motion/tokens.ts` | GSAP 注册、共享 easing 和 duration |
 | `src/shared/motion/PagePan.tsx` | 整页平移与 outgoing subtree 生命周期 |

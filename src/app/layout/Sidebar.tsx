@@ -1,7 +1,7 @@
 import { useGSAP } from "@gsap/react";
 import { useQueryClient } from "@tanstack/react-query";
 import gsap from "gsap";
-import { useCallback, useRef, type MouseEvent } from "react";
+import { useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
@@ -16,7 +16,7 @@ import {
   Sun,
   Tv,
 } from "lucide-react";
-import { revealThemeAt } from "@/app/theme";
+import { fadeTheme } from "@/app/theme";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -164,20 +164,11 @@ function AppearanceToggle() {
     );
   });
 
-  function handleThemeToggle(event: MouseEvent<HTMLButtonElement>) {
+  function handleThemeToggle() {
     if (switchingRef.current) return;
     switchingRef.current = true;
 
-    const keyboardActivation = event.detail === 0;
-    if (keyboardActivation) {
-      flushSync(() => setTheme(nextTheme));
-      switchingRef.current = false;
-      return;
-    }
-    const transition = revealThemeAt({ x: event.clientX, y: event.clientY }, () =>
-      flushSync(() => setTheme(nextTheme)),
-    );
-
+    const transition = fadeTheme(() => flushSync(() => setTheme(nextTheme)));
     void transition.ready.then(() => animateToggle(isDark ? -12 : 12));
     void transition.finished.then(() => {
       switchingRef.current = false;

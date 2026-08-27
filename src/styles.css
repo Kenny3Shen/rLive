@@ -124,46 +124,44 @@
   --settings-about: oklch(0.74 0.14 305);
 }
 
-@keyframes theme-reveal {
+@keyframes theme-fade {
   from {
-    clip-path: circle(0 at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh));
+    opacity: 0;
   }
 
   to {
-    clip-path: circle(
-      var(--theme-reveal-radius, 150vmax) at var(--theme-reveal-x, 50vw) var(--theme-reveal-y, 50vh)
-    );
+    opacity: 1;
   }
 }
 
 /* 一个 View Transition 动画负责完整的主题切换。禁用浏览器 250ms 的根组插值与
    旧快照交叉淡化，
-   再用单条 CSS 时间轴揭示稳定后的新快照。 */
-:root[data-theme-reveal="true"]::view-transition-group(root),
-:root[data-theme-reveal="true"]::view-transition-old(root) {
+   再用单条 CSS 时间轴整屏淡入稳定后的新快照。 */
+:root[data-theme-fade="true"]::view-transition-group(root),
+:root[data-theme-fade="true"]::view-transition-old(root) {
   animation: none;
 }
 
-:root[data-theme-reveal="true"]::view-transition-old(root),
-:root[data-theme-reveal="true"]::view-transition-new(root) {
+:root[data-theme-fade="true"]::view-transition-old(root),
+:root[data-theme-fade="true"]::view-transition-new(root) {
   mix-blend-mode: normal;
 }
 
-:root[data-theme-reveal="true"]::view-transition-old(root) {
+:root[data-theme-fade="true"]::view-transition-old(root) {
   z-index: 1;
 }
 
-:root[data-theme-reveal="true"]::view-transition-new(root) {
-  animation: theme-reveal var(--theme-reveal-duration, 280ms) var(--motion-ease-out) both;
+:root[data-theme-fade="true"]::view-transition-new(root) {
+  animation: theme-fade var(--theme-fade-duration, 280ms) var(--motion-ease-out) both;
   z-index: 2;
 }
 
 /* 主题 token 变化必须已在新快照中稳定。带 transition-colors/transition-all 的组件
-   否则会继续在圆形揭示后面插值，
+   否则会继续在淡入层后面插值，
    表现为第二段动画。 */
-:root[data-theme-reveal="true"] *,
-:root[data-theme-reveal="true"] *::before,
-:root[data-theme-reveal="true"] *::after {
+:root[data-theme-fade="true"] *,
+:root[data-theme-fade="true"] *::before,
+:root[data-theme-fade="true"] *::after {
   transition-duration: 0s !important;
   transition-delay: 0s !important;
 }
