@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Copy, MessageSquarePlus, Star } from "lucide-react";
+import { Ban, Copy, MessageSquarePlus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { glassOptionClass, glassPanelClass } from "@/shared/components/player/glassSurface";
@@ -27,12 +27,12 @@ export type DanmakuHoverTarget = {
  * 胶囊在其锚点两侧需要的横向空间，供把它保持在屏内的 CSS `clamp` 使用。
  *
  * 数值贴近真实半宽：一旦锚点距离边缘不足此值，`clamp` 就停止居中，
- * 夸大的取值会让胶囊明显脱离其所属评论。紧凑版是三个 36px 按钮加 6px 间距
- * 和内边距（约 72px）；大号版是三个 44px 按钮加 8px 间距和内边距
- * （约 88px）。
+ * 夸大的取值会让胶囊明显脱离其所属评论。紧凑版是四个 36px 按钮加 6px 间距
+ * 和内边距（约 92px）；大号版是四个 44px 按钮加 8px 间距和内边距
+ * （约 112px）。
  */
-const MENU_HALF_WIDTH_PX = 72;
-const MENU_HALF_WIDTH_LARGE_PX = 88;
+const MENU_HALF_WIDTH_PX = 92;
+const MENU_HALF_WIDTH_LARGE_PX = 112;
 /**
  * 给菜单打上标记，使舞台渲染器能把落在菜单上的按压与落在别处的按压区分开 ——
  * 后者会取消钉住的评论。在这里声明、也在这里应用该属性，
@@ -72,6 +72,7 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   const actions = useDanmakuActions({
     message,
     eventKind: target.eventKind,
+    user: target.user,
     siteId,
     roomId,
     roomTitle,
@@ -169,6 +170,26 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
               "发送我输入的内容" —— 这里没有输入框。方形气泡已是播放器 chrome 中
               弹幕的符号（`MessageSquareText` / `MessageSquareOff`）。 */}
           <MessageSquarePlus aria-hidden className={iconClass} />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-lg"
+          className={cn(
+            "rounded-full text-red-300 hover:text-red-200",
+            buttonClass,
+            glassOptionClass({ overlay: true }),
+          )}
+          disabled={!actions.canBlock}
+          aria-label={actions.blockLabel}
+          title={actions.blockLabel}
+          onClick={() => {
+            // 屏蔽是即时承诺：宿主的屏蔽副作用会撤下这条评论并随之收起菜单，
+            // 因此这里只负责写入偏好本身。
+            actions.block();
+          }}
+        >
+          <Ban aria-hidden className={iconClass} />
         </Button>
       </div>
       {!flipBelow && actions.statusMessage && (

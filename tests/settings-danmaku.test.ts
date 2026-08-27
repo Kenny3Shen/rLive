@@ -1,22 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   DANMAKU_AREA_DEFAULT,
+  DANMAKU_BLOCKED_USERS_MAX,
   DANMAKU_FONT_SIZE_DESKTOP_DEFAULT,
   DANMAKU_FONT_SIZE_MOBILE_DEFAULT,
   DANMAKU_FONT_STROKE_DEFAULT,
   DANMAKU_FONT_STROKE_MAX,
   DANMAKU_FONT_STROKE_MIN,
+  DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
+  DANMAKU_MERGE_WINDOW_SECONDS_MAX,
+  DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   DANMAKU_OPACITY_DEFAULT,
   DANMAKU_SPEED_DEFAULT,
   DANMAKU_SPEED_MAX,
   DANMAKU_SPEED_MIN,
-  DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
-  DANMAKU_MERGE_WINDOW_SECONDS_MAX,
-  DANMAKU_MERGE_WINDOW_SECONDS_MIN,
-  parseDanmakuMergeWindowSeconds,
-  parseDanmakuFontStroke,
-  parseDanmakuSpeed,
   defaultDanmakuFontSize,
+  normalizeDanmakuBlockedUsers,
+  parseDanmakuFontStroke,
+  parseDanmakuMergeWindowSeconds,
+  parseDanmakuSpeed,
   useSettingsStore,
 } from "../src/shared/stores/settingsStore";
 
@@ -39,6 +41,26 @@ describe("danmaku merge window settings", () => {
   test("falls back to ten seconds for invalid values", () => {
     expect(parseDanmakuMergeWindowSeconds(undefined)).toBe(DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT);
     expect(parseDanmakuMergeWindowSeconds(null)).toBe(DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT);
+  });
+});
+
+describe("danmaku blocked users settings", () => {
+  test("normalizes whitespace, empties, and duplicates while preserving order", () => {
+    expect(normalizeDanmakuBlockedUsers(["  张三  ", "", "张三", "李四"])).toEqual([
+      "张三",
+      "李四",
+    ]);
+    // 昵称匹配是大小写敏感的精确比较，去重保持同一口径。
+    expect(normalizeDanmakuBlockedUsers(["abc", "ABC"])).toEqual(["abc", "ABC"]);
+    expect(normalizeDanmakuBlockedUsers(["  ", undefined as unknown as string])).toEqual([]);
+  });
+
+  test("evicts the oldest entries beyond the capacity limit", () => {
+    const users = Array.from({ length: DANMAKU_BLOCKED_USERS_MAX + 2 }, (_, i) => `用户${i}`);
+    const normalized = normalizeDanmakuBlockedUsers(users);
+    expect(normalized).toHaveLength(DANMAKU_BLOCKED_USERS_MAX);
+    expect(normalized[0]).toBe("用户2");
+    expect(normalized.at(-1)).toBe(`用户${DANMAKU_BLOCKED_USERS_MAX + 1}`);
   });
 });
 

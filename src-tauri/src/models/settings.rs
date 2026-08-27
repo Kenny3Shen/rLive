@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 /// 已保存设置与配置包对其余字段仍然严格必填：缺字段说明记录不是当前 schema，
 /// 用默认值静默掩盖会丢掉用户的真实选择。只有纯新增的字段进入这份名单，
 /// 因为旧记录不可能表达过对它的偏好。
-pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &["room_card_preview_enabled"];
+pub const BACKFILLED_SETTINGS_FIELDS: &[&str] =
+    &["room_card_preview_enabled", "danmaku_blocked_users"];
 
 /// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -113,6 +114,13 @@ pub struct AppSettings {
     /// 当前站点是否启用 Super Chat 卡片。
     pub super_chat_enabled: bool,
     pub danmaku_shield_words: Vec<String>,
+    /// 按展示昵称屏蔽的用户。平台事件缺少稳定用户 id，因此以昵称为准；
+    /// 与屏蔽词一样是便携过滤偏好，随配置包导出导入。
+    ///
+    /// 比它更早的设置记录与配置包里没有它，serde default 补齐空列表；
+    /// 必填校验把它列入 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default)]
+    pub danmaku_blocked_users: Vec<String>,
     /// 偏好的起始清晰度：`high` | `mid` | `low`。
     pub quality_level: String,
     /// 同协议的 `switchURL` 切换路径。前端对不兼容协议和切换失败
@@ -270,6 +278,7 @@ impl Default for AppSettings {
             danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
             super_chat_enabled: default_super_chat_enabled(),
             danmaku_shield_words: Vec::new(),
+            danmaku_blocked_users: Vec::new(),
             quality_level: default_quality_level(),
             playback_soft_switch_enabled: default_playback_soft_switch_enabled(),
             room_card_preview_enabled: default_room_card_preview_enabled(),
@@ -313,6 +322,8 @@ mod tests {
         assert!(back.recording_include_danmaku);
         assert_eq!(back.recording_auto_split_minutes, 0);
         assert!(back.room_card_preview_enabled);
+        assert!(back.danmaku_shield_words.is_empty());
+        assert!(back.danmaku_blocked_users.is_empty());
         assert!(!v.contains("recording_auto_follow"));
         assert!(!back.legacy_recording_continue_after_leave);
         assert!(!v.contains("recording_continue_after_leave"));

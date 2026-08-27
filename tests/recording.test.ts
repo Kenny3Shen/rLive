@@ -420,15 +420,16 @@ describe("recording presentation helpers", () => {
     expect(firstRecordedDanmakuAtOrAfter(entries, 1201)).toBe(1);
   });
 
-  test("applies gift, super chat, and shield-word settings to recorded danmaku", () => {
+  test("applies gift, super chat, shield-word, and blocked-user settings to recorded danmaku", () => {
     const entries = parseRecordedDanmakuSidecar(
       JSON.stringify({
         offset_ms: 1200,
         events: [
           { kind: "chat", user: "甲", content: "普通消息", color: null, ts: 1 },
           { kind: "chat", user: "乙", content: "包含剧透内容", color: null, ts: 2 },
-          { kind: "gift", user: "丙", content: "赠送礼物", color: null, ts: 3 },
-          { kind: "super_chat", user: "丁", content: "醒目留言", color: null, ts: 4 },
+          { kind: "chat", user: "丙", content: "被屏蔽者的普通消息", color: null, ts: 3 },
+          { kind: "gift", user: "丁", content: "赠送礼物", color: null, ts: 4 },
+          { kind: "super_chat", user: "戊", content: "醒目留言", color: null, ts: 5 },
         ],
       }),
     );
@@ -438,6 +439,7 @@ describe("recording presentation helpers", () => {
         filterGifts: true,
         showSuperChat: false,
         shieldWords: [" 剧透 "],
+        blockedUsers: ["丙"],
       }).map((entry) => entry.event.content),
     ).toEqual(["普通消息"]);
     expect(
@@ -445,8 +447,9 @@ describe("recording presentation helpers", () => {
         filterGifts: false,
         showSuperChat: true,
         shieldWords: [],
+        blockedUsers: [],
       }).map((entry) => entry.event.kind),
-    ).toEqual(["chat", "chat", "gift", "super_chat"]);
+    ).toEqual(["chat", "chat", "chat", "gift", "super_chat"]);
   });
 
   test("aggregates only visible history without reading future danmaku", () => {

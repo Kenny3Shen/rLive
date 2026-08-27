@@ -1,4 +1,5 @@
 import {
+  createBlockedUserMatcher,
   createShieldMatcher,
   floatingDanmakuText,
   isDanmakuEvent,
@@ -24,6 +25,8 @@ export type RecordedDanmakuFilterOptions = {
   filterGifts: boolean;
   showSuperChat: boolean;
   shieldWords: readonly string[];
+  /** 与直播一致的按昵称屏蔽用户列表。 */
+  blockedUsers: readonly string[];
 };
 
 function isStoredBatch(value: unknown): value is StoredDanmakuBatch {
@@ -92,10 +95,12 @@ export function filterRecordedDanmakuEntries(
   options: RecordedDanmakuFilterOptions,
 ): RecordedDanmakuEntry[] {
   const isShielded = createShieldMatcher(options.shieldWords);
+  const isBlockedUser = createBlockedUserMatcher(options.blockedUsers);
   return entries.filter(
     (entry) =>
       shouldShowValidatedOnFloatingDanmaku(entry.event, options.filterGifts) &&
       (options.showSuperChat || entry.event.kind !== "super_chat") &&
-      !isShielded(entry.event),
+      !isShielded(entry.event) &&
+      !isBlockedUser(entry.event),
   );
 }

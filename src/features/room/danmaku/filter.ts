@@ -80,7 +80,7 @@ function isRoomEnterNotice(kind: DanmakuKind, content: string): boolean {
 }
 
 /**
- * 为高频弹幕监听准备屏蔽匹配器。设置列表只在变化时归一化，
+ * 为高频弹幕监听准备屏蔽词匹配器。设置列表只在变化时归一化，
  * 而不是每条消息一次。
  */
 export function createShieldMatcher(
@@ -93,6 +93,33 @@ export function createShieldMatcher(
 /** 列表与直播悬浮层共享的屏蔽词过滤器。 */
 export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]): boolean {
   return matchesShieldWords(event, normalizedShieldWords(shieldWords));
+}
+
+function normalizedBlockedUsers(blockedUsers: readonly string[]): Set<string> {
+  const users = new Set<string>();
+  for (const rawUser of blockedUsers) {
+    if (typeof rawUser !== "string") continue;
+    const user = rawUser.trim();
+    if (user) users.add(user);
+  }
+  return users;
+}
+
+function matchesBlockedUsers(event: DanmakuEvent, blockedUsers: ReadonlySet<string>): boolean {
+  if (blockedUsers.size === 0 || event.kind === "system") return false;
+  return blockedUsers.has(event.user.trim());
+}
+
+/**
+ * 与屏蔽词匹配器同构的用户屏蔽匹配器。平台事件只携带展示昵称而没有
+ * 稳定的用户 id，因此匹配以昵称为准：列表里呈现的名字就是被屏蔽的名字。
+ * 归一化（去空白、去重）只在设置列表变化时发生一次。
+ */
+export function createBlockedUserMatcher(
+  blockedUsers: readonly string[],
+): (event: DanmakuEvent) => boolean {
+  const users = normalizedBlockedUsers(blockedUsers);
+  return (event) => matchesBlockedUsers(event, users);
 }
 
 /**

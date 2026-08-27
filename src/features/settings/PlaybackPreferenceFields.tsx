@@ -145,55 +145,106 @@ function normalizeShieldWords(value: string): string[] {
     });
 }
 
+function normalizeBlockedUsersDraft(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/\r?\n|,/)
+    .map((user) => user.trim())
+    .filter((user) => {
+      // 与匹配器一致按大小写敏感精确匹配，去重也保持同一口径。
+      if (!user || Array.from(user).length > 80 || seen.has(user)) return false;
+      seen.add(user);
+      return true;
+    });
+}
+
 function sameWords(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((word, index) => word === right[index]);
 }
 
-function useShieldWordsDraft() {
-  const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
-  const [draft, setDraft] = useState(shieldWords.join("\n"));
+/**
+ * 屏蔽词与屏蔽用户共享的逐行草稿编辑。输入即时写入本地 store（消息流立即
+ * 按新列表过滤），持久化则做 350ms 防抖，组件卸载前冲刷未保存的修改。
+ */
+function useSettingsLinesDraft(options: {
+  lines: readonly string[];
+  normalize: (value: string) => string[];
+  applyLines: (lines: string[]) => void;
+  persistPatch: (lines: string[]) => Partial<AppSettings>;
+  pendingStatus: string;
+  savedStatus: string;
+}) {
+  const { lines } = options;
+  // 包装 hook 每次渲染都传入新的 options 字面量。直接把它放进 effect 依赖会
+  // 在每次渲染后重跑清理、打穿 350ms 防抖，因此经由 ref 读取最新值，
+  // 依赖数组只跟踪真正驱动行为的 `lines` 与 `draft`。
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const [draft, setDraft] = useState(lines.join("\n"));
   const [status, setStatus] = useState<string | null>(null);
   const saveTimerRef = useRef<number | null>(null);
-  const pendingWordsRef = useRef(shieldWords);
+  const pendingLinesRef = useRef<string[]>([]);
 
   useEffect(() => {
-    if (!sameWords(normalizeShieldWords(draft), shieldWords)) {
+    if (!sameWords(optionsRef.current.normalize(draft), lines)) {
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
         setStatus(null);
       }
-      setDraft(shieldWords.join("\n"));
+      setDraft(lines.join("\n"));
     }
-    pendingWordsRef.current = shieldWords;
-  }, [draft, shieldWords]);
+    pendingLinesRef.current = [...lines];
+  }, [draft, lines]);
 
   useEffect(
     () => () => {
       if (saveTimerRef.current === null) return;
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
-      persist({ danmaku_shield_words: pendingWordsRef.current });
+      persist(optionsRef.current.persistPatch(pendingLinesRef.current));
     },
     [],
   );
 
   function update(value: string) {
-    const words = normalizeShieldWords(value);
+    const next = optionsRef.current.normalize(value);
     setDraft(value);
-    useSettingsStore.setState({ danmakuShieldWords: words });
-    pendingWordsRef.current = words;
-    setStatus("新的消息会立即按此过滤，正在保存…");
+    optionsRef.current.applyLines(next);
+    pendingLinesRef.current = next;
+    setStatus(optionsRef.current.pendingStatus);
 
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      persist({ danmaku_shield_words: pendingWordsRef.current });
-      setStatus("已自动保存，新的消息会立即按此过滤");
+      persist(optionsRef.current.persistPatch(pendingLinesRef.current));
+      setStatus(optionsRef.current.savedStatus);
     }, 350);
   }
 
-  return { draft, shieldWords, status, update };
+  return { draft, status, update };
+}
+
+function useShieldWordsDraft() {
+  return useSettingsLinesDraft({
+    lines: useSettingsStore((state) => state.danmakuShieldWords),
+    normalize: normalizeShieldWords,
+    applyLines: (words) => useSettingsStore.setState({ danmakuShieldWords: words }),
+    persistPatch: (words) => ({ danmaku_shield_words: words }),
+    pendingStatus: "新的消息会立即按此过滤，正在保存…",
+    savedStatus: "已自动保存，新的消息会立即按此过滤",
+  });
+}
+
+function useBlockedUsersDraft() {
+  return useSettingsLinesDraft({
+    lines: useSettingsStore((state) => state.danmakuBlockedUsers),
+    normalize: normalizeBlockedUsersDraft,
+    applyLines: (users) => useSettingsStore.setState({ danmakuBlockedUsers: users }),
+    persistPatch: (users) => ({ danmaku_blocked_users: users }),
+    pendingStatus: "屏蔽立即生效并撤下已显示的消息，正在保存…",
+    savedStatus: "已自动保存，屏蔽在弹幕列表与飘屏同时生效",
+  });
 }
 
 export function AsrCaptionFontSizeField({
@@ -527,9 +578,11 @@ export function DanmakuFilterSettingsFields({
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const setSuperChatEnabled = useSettingsStore((state) => state.setSuperChatEnabled);
   const shield = useShieldWordsDraft();
+  const blocked = useBlockedUsersDraft();
   const giftLabelId = `${idPrefix}-danmaku-gift-filter-label`;
   const superChatLabelId = `${idPrefix}-super-chat-enabled-label`;
   const shieldInputId = `${idPrefix}-danmaku-shield-words`;
+  const blockedInputId = `${idPrefix}-danmaku-blocked-users`;
 
   return (
     <>
@@ -596,6 +649,20 @@ export function DanmakuFilterSettingsFields({
             className="resize-y"
           />
           {shield.status && <FieldDescription role="status">{shield.status}</FieldDescription>}
+        </FieldContent>
+      </Field>
+      <Field className={fieldSurfaceClass(layout)}>
+        <FieldLabel htmlFor={blockedInputId}>屏蔽用户</FieldLabel>
+        <FieldContent>
+          <Textarea
+            id={blockedInputId}
+            value={blocked.draft}
+            onChange={(event) => blocked.update(event.target.value)}
+            rows={layout === "page" ? 5 : 4}
+            placeholder="每行一个昵称；也可在弹幕列表中点击消息直接屏蔽"
+            className="resize-y"
+          />
+          {blocked.status && <FieldDescription role="status">{blocked.status}</FieldDescription>}
         </FieldContent>
       </Field>
     </>

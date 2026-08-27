@@ -7,7 +7,7 @@ import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/l
 import { getDanmakuSendConfig } from "./sending";
 
 /**
- * 单条评论共享的复制/收藏/+1 行为。侧栏列表与悬浮 DOM 层呈现同样三个操作，
+ * 单条评论共享的复制/收藏/+1/屏蔽行为。侧栏列表与悬浮 DOM 层呈现同样四个操作，
  * 必须在可用性规则、乐观缓存更新和状态文案上保持一致。
  */
 
@@ -18,6 +18,7 @@ export type DanmakuActionStatus =
   | "favorite-failed"
   | "sent"
   | "send-failed"
+  | "blocked"
   | null;
 
 /**
@@ -48,6 +49,8 @@ export function danmakuActionStatusMessage(status: DanmakuActionStatus): string 
       return "收藏失败，请稍后重试";
     case "sent":
       return "已发送相同的弹幕";
+    case "blocked":
+      return "已屏蔽该用户，其消息立即隐藏";
     case "send-failed":
       return "发送失败，请检查账号登录状态或直播间限制";
     default:
@@ -64,6 +67,8 @@ export type DanmakuActionsParams = {
   message: string;
   /** 收藏与 +1 只对普通聊天提供。 */
   eventKind: DanmakuEvent["kind"];
+  /** 评论作者昵称；屏蔽与 +1 一样是本地行为，不依赖平台登录。 */
+  user?: string;
   siteId?: SiteId;
   roomId?: string;
   roomTitle?: string;
@@ -78,17 +83,22 @@ export type DanmakuActions = {
   copy: () => Promise<void>;
   favorite: () => Promise<void>;
   repeat: () => Promise<void>;
+  block: () => void;
   canFavorite: boolean;
   favoriting: boolean;
   favoriteLabel: string;
   canRepeat: boolean;
   sending: boolean;
   repeatLabel: string;
+  /** 作者昵称有效且尚未被屏蔽时为 true。 */
+  canBlock: boolean;
+  blockLabel: string;
 };
 
 export function useDanmakuActions({
   message,
   eventKind,
+  user,
   siteId,
   roomId,
   roomTitle,
@@ -100,8 +110,16 @@ export function useDanmakuActions({
   const [sending, setSending] = useState(false);
   const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
   const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
+  const blockedUsers = useSettingsStore((s) => s.danmakuBlockedUsers);
+  const blockDanmakuUser = useSettingsStore((s) => s.blockDanmakuUser);
   const sendConfig = getDanmakuSendConfig(siteId);
   const isChat = eventKind === "chat" && message.length > 0;
+  const normalizedUser = user?.trim() ?? "";
+  // 匿名/空昵称屏蔽不了：列表按昵称精确匹配，空串会匹配所有缺失昵称的事件。
+  const isBlocked = normalizedUser !== "" && blockedUsers.includes(normalizedUser);
+  const canBlock = normalizedUser !== "" && !isBlocked && eventKind !== "system";
+  const blockLabel = isBlocked ? "该用户已被屏蔽" : `屏蔽 ${normalizedUser || "该用户"}`;
+
   const canRepeat =
     isChat && Boolean(sendConfig && roomId && danmakuSendEnabled && !danmakuSendPending);
   const canFavorite = isChat && Boolean(siteId);
@@ -163,6 +181,13 @@ export function useDanmakuActions({
     }
   }, [message, roomId, roomTitle, roomUserName, sendConfig, sending]);
 
+  // 屏蔽是本地持久化偏好，失败面只有"已在列表中"，因此同步完成并直接上报状态。
+  const block = useCallback(() => {
+    if (!canBlock) return;
+    blockDanmakuUser(normalizedUser);
+    setStatus("blocked");
+  }, [blockDanmakuUser, canBlock, normalizedUser]);
+
   return {
     status,
     statusMessage: danmakuActionStatusMessage(status),
@@ -171,11 +196,14 @@ export function useDanmakuActions({
     copy,
     favorite,
     repeat,
+    block,
     canFavorite,
     favoriting,
     favoriteLabel,
     canRepeat,
     sending,
     repeatLabel,
+    canBlock,
+    blockLabel,
   };
 }

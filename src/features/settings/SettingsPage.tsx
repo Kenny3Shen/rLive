@@ -914,6 +914,7 @@ function PlaybackSettingsResetField() {
         qualityLevel: "high",
         playbackSoftSwitchEnabled: true,
         danmakuShieldWords: [],
+        danmakuBlockedUsers: [],
         superChatEnabled: true,
         ...(mobileClient
           ? null
@@ -932,6 +933,7 @@ function PlaybackSettingsResetField() {
         quality_level: "high",
         playback_soft_switch_enabled: true,
         danmaku_shield_words: [],
+        danmaku_blocked_users: [],
         super_chat_enabled: true,
         ...(mobileClient
           ? null
@@ -960,7 +962,7 @@ function PlaybackSettingsResetField() {
       <FieldContent>
         <FieldTitle>
           恢复默认设置
-          <FieldTip>重置本页全部设置项，包括屏蔽词和语音字幕热词。</FieldTip>
+          <FieldTip>重置本页全部设置项，包括屏蔽词、屏蔽用户和语音字幕热词。</FieldTip>
         </FieldTitle>
         {error ? (
           <FieldError>{error}</FieldError>
@@ -1925,7 +1927,7 @@ export function SettingsPage() {
           <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
-        <Section title="消息过滤" keywords="弹幕 消息 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc">
+        <Section title="消息过滤" keywords="弹幕 消息 过滤 屏蔽词 屏蔽用户 重复 礼物 合并 醒目留言 sc">
           <DanmakuFilterSettingsFields idPrefix="settings" layout="page" showSuperChat />
         </Section>
         <Section title="恢复默认" keywords="恢复 默认 重置 reset">

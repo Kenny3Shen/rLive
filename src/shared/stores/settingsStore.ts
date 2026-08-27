@@ -314,6 +314,30 @@ function parseAsrFontSize(value: unknown): number {
   return Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(numeric)));
 }
 
+/** 屏蔽用户列表的容量上限；到达后淘汰最早的条目。 */
+export const DANMAKU_BLOCKED_USERS_MAX = 500;
+/** 单个被屏蔽昵称的最大长度，与屏蔽词的条目上限一致。 */
+const DANMAKU_BLOCKED_USER_MAX_LENGTH = 80;
+
+/**
+ * 屏蔽用户以弹幕事件携带的展示昵称为准。去空白、去空项、去重并淘汰
+ * 超过长度或容量上限的条目，使列表与过滤器输入始终保持规整。
+ */
+export function normalizeDanmakuBlockedUsers(users: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawUser of users) {
+    if (typeof rawUser !== "string") continue;
+    const user = rawUser.trim();
+    if (!user || Array.from(user).length > DANMAKU_BLOCKED_USER_MAX_LENGTH || seen.has(user)) {
+      continue;
+    }
+    seen.add(user);
+    normalized.push(user);
+  }
+  return normalized.slice(Math.max(0, normalized.length - DANMAKU_BLOCKED_USERS_MAX));
+}
+
 export const DANMAKU_MERGE_WINDOW_SECONDS_MIN = 0;
 export const DANMAKU_MERGE_WINDOW_SECONDS_MAX = 30;
 export const DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT = 10;
@@ -350,6 +374,8 @@ type SettingsState = {
   danmakuMergeWindowSeconds: number;
   superChatEnabled: boolean;
   danmakuShieldWords: string[];
+  /** 按展示昵称屏蔽的用户；列表与飘屏共用。 */
+  danmakuBlockedUsers: string[];
   qualityLevel: QualityLevel;
   playbackSoftSwitchEnabled: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
@@ -395,6 +421,10 @@ type SettingsState = {
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
   setRoomCardPreviewEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
+  /** 屏蔽一个用户；已在列表中时为无操作。 */
+  blockDanmakuUser: (user: string) => void;
+  /** 解除对一个用户的屏蔽；不在列表中时为无操作。 */
+  unblockDanmakuUser: (user: string) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrProvider: (provider: AsrProvider) => Promise<void>;
@@ -435,6 +465,7 @@ const defaultSettings: AppSettings = {
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
   danmaku_shield_words: [],
+  danmaku_blocked_users: [],
   quality_level: "high",
   playback_soft_switch_enabled: true,
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
@@ -474,6 +505,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
     super_chat_enabled: state.superChatEnabled,
     danmaku_shield_words: state.danmakuShieldWords,
+    danmaku_blocked_users: state.danmakuBlockedUsers,
     quality_level: state.qualityLevel,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
@@ -515,6 +547,7 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
       danmakuShieldWords: [],
+      danmakuBlockedUsers: [],
       qualityLevel: "high",
       playbackSoftSwitchEnabled: true,
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
@@ -583,6 +616,24 @@ export const useSettingsStore = create<SettingsState>()(
       setSuperChatEnabled: (superChatEnabled) => {
         set({ superChatEnabled });
         void get().persistToBackend({ super_chat_enabled: superChatEnabled });
+      },
+      blockDanmakuUser: (user) => {
+        const name = user.trim();
+        if (!name) return;
+        const current = get().danmakuBlockedUsers;
+        if (current.includes(name)) return;
+        const danmakuBlockedUsers = normalizeDanmakuBlockedUsers([...current, name]);
+        set({ danmakuBlockedUsers });
+        void get().persistToBackend({ danmaku_blocked_users: danmakuBlockedUsers });
+      },
+      unblockDanmakuUser: (user) => {
+        const name = user.trim();
+        const current = get().danmakuBlockedUsers;
+        const index = current.indexOf(name);
+        if (index < 0) return;
+        const danmakuBlockedUsers = current.filter((_, i) => i !== index);
+        set({ danmakuBlockedUsers });
+        void get().persistToBackend({ danmaku_blocked_users: danmakuBlockedUsers });
       },
       setDanmakuSendEnabled: (danmakuSendEnabled) => {
         const epoch = ++danmakuSendSettingEpoch;
@@ -824,6 +875,7 @@ export const useSettingsStore = create<SettingsState>()(
           ),
           superChatEnabled: settings.super_chat_enabled,
           danmakuShieldWords: settings.danmaku_shield_words,
+          danmakuBlockedUsers: normalizeDanmakuBlockedUsers(settings.danmaku_blocked_users),
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
