@@ -112,7 +112,7 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   // 回退到平台标识而不是空盒子。
   const cover = normalizeImageUrl(item.cover);
 
-  // 这里不放上下文菜单：点按打开房间、删除按钮覆盖了仅剩的操作，
+  // 这里不放上下文菜单，也不响应触摸长按：点按打开房间、删除按钮覆盖了仅剩的操作，
   // 右键/长按菜单只会在每张卡上重复这两个功能。
   return (
     <div
@@ -126,6 +126,11 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
           event.preventDefault();
           onOpen();
         }
+      }}
+      onContextMenu={(event) => {
+        // 拦下 Android WebView 长按派发的原生图片/文本菜单，
+        // 让历史卡片在触摸设备上彻底不可长按。
+        if (isMobileClient()) event.preventDefault();
       }}
       onPointerEnter={() => preloadRouteModule(roomPath)}
       onPointerDown={() => preloadRouteModule(roomPath)}
