@@ -18,7 +18,7 @@
 ## 项目结构与实现边界
 
 - 技术栈为 Tauri 2、Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4 和 shadcn-style/Base UI。
-- 前端使用 TanStack Query 管理服务端/IPC 缓存，Zustand 管理设置和轻量状态；GSAP 封装在 `src/shared/motion/`，动画需尊重减少动态效果设置，并优先使用 `transform`/`opacity`。
+- 前端使用 TanStack Query 管理服务端/IPC 缓存，Zustand 管理设置和轻量状态；动效统一使用 Web Animations API 与 CSS 原生实现，封装在 `src/shared/motion/`，动画需尊重减少动态效果设置，并优先使用 `transform`/`opacity`。
 - `src/` 是 React/Vite 前端，`src-tauri/` 是 Tauri/Rust 后端；`src/app/` 管理路由与 Shell，`src/features/` 管理业务，`src/components/ui/` 提供通用 UI，`src/shared/` 提供跨功能代码。后端命令、站点、弹幕、数据库、IPTV 和 ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmaku/`、`db/`、`iptv/` 和 `asr.rs`。
 - 前后端通过既有 Tauri commands/events 交互。优先复用已有组件、hooks、stores 和功能边界，不在前端复制 Rust 业务逻辑或新增平行实现。
 

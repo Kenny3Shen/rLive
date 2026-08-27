@@ -85,9 +85,10 @@ export type UseHorizontalSwipeOptions<T> = {
  *
  * 1. 手指按下期间 transform 直接由 pointermove 处理器写入。把这些写入合并进
  * rAF 回调总会画出上一帧的指针位置，那正是"不跟手"的样子。
- * 2. 释放是 Web Animations transform，Chromium 在合成器上推进它。GSAP（以及任何
- * rAF ticker）必须与页面变更触发的 React 提交共享主线程 —— 重量级路由上那次提交
- * 长到能吞掉收尾的大部分帧，这正是已提交滑动曾看起来像瞬间切换接一段滑动的原因。
+ * 2. 释放是 Web Animations transform，Chromium 在合成器上推进它。JS 补间库（以及
+ * 任何 rAF ticker）必须与页面变更触发的 React 提交共享主线程 —— 重量级路由上
+ * 那次提交长到能吞掉收尾的大部分帧，这正是已提交滑动曾看起来像瞬间切换接
+ * 一段滑动的原因。
  *
  * 其时长与提交决策都来自手势本身：
  * 页面走过了多少表面，以及松手时手指有多快。

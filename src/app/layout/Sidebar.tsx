@@ -1,6 +1,4 @@
-import { useGSAP } from "@gsap/react";
 import { useQueryClient } from "@tanstack/react-query";
-import gsap from "gsap";
 import { useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -24,7 +22,8 @@ import { preloadRouteModule } from "@/app/routeModules";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 import { activeRecordingCount, useRecordings } from "@/features/recording/recording";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
-import { prefersReducedMotion } from "@/shared/motion/tokens";
+import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
+import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_NAVIGATION_STATE } from "./sidebarNavigation";
@@ -145,24 +144,25 @@ function AppearanceToggle() {
   const nextTheme = isDark ? "light" : "dark";
   const label = isDark ? "切换为浅色模式" : "切换为深色模式";
   const Icon = isDark ? Sun : Moon;
-  const { contextSafe } = useGSAP({ scope: buttonRef });
-  const animateToggle = contextSafe((rotation: number) => {
+  const animateToggle = (rotation: number) => {
     const button = buttonRef.current;
     if (!button || prefersReducedMotion()) return;
 
-    gsap.killTweensOf(button);
-    gsap.fromTo(
+    killTweensOf(button);
+    button.style.willChange = "transform";
+    // 结束帧（无旋转、原始尺寸）与自然态一致，settleTween 会归还行内样式。
+    settleTween(
       button,
-      { rotation, scale: 0.94, willChange: "transform" },
-      {
-        rotation: 0,
-        scale: 1,
-        duration: 0.18,
-        ease: "power2.out",
-        clearProps: "transform,willChange",
-      },
+      tween(
+        button,
+        [
+          { transform: `rotate(${rotation}deg) scale(0.94)` },
+          { transform: "rotate(0deg) scale(1)" },
+        ],
+        { duration: 180, easing: EASE_OUT, fill: "both" },
+      ),
     );
-  });
+  };
 
   function handleThemeToggle() {
     if (switchingRef.current) return;

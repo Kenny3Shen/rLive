@@ -22,14 +22,13 @@
 | 样式 | Tailwind CSS 4 + `src/styles.css` | 响应式布局、语义颜色、简单状态过渡和全局关键帧 |
 | UI 组件 | shadcn-style `base-nova` + Base UI | Button、Tabs、Dialog、Drawer、Field、Select 等可访问基础组件 |
 | 图标 | `lucide-react` | 导航、工具按钮和状态图标 |
-| 运行时动画 | GSAP + `@gsap/react` | 页面入场、Zoom、手势回弹及可中断交互反馈 |
-| 浏览器动画 | Web Animations API | 路由整页平移 |
+| 运行时动画 | Web Animations API（`src/shared/motion/tween.ts`） | 页面入场、Zoom、手势回弹及可中断交互反馈；transform/opacity 由合成器推进 |
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题全局淡化 |
 | 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay 淡入淡出、Drawer 进出、主题淡化、加载旋转和短状态过渡 |
 | 直播画面弹幕 | `danmu.js@1.2.1` + CSS transition | DOM 轨道与飘屏；不属于页面 UI 动画层 |
 | 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按本地媒体时间绘制录制 sidecar，行占位整段预计算，图片表情按分段测量与 `drawImage` 绘制，外观与过滤读取直播弹幕设置 |
 
-当前项目不使用 Framer Motion，也没有启用 ScrollTrigger。不要为一个局部效果引入第二套并行动画体系；先判断现有 GSAP、CSS、`PagePan`、`PageZoom` 或 View Transition 是否已经覆盖需求。
+当前项目不使用 Framer Motion，也不引入 GSAP 等动画库；全部运行时动效由 Web Animations API 与 CSS 原生承担。不要为一个局部效果引入第二套并行动画体系；先判断现有 `tween()` 助手、CSS、`PagePan`、`PageZoom` 或 View Transition 是否已经覆盖需求。
 
 ## 3. UI 系统
 
@@ -109,7 +108,7 @@ flowchart TD
     C --> D[PagePan]
     B -->|进入或退出直播间| E[PageZoom]
     B -->|触摸横向切换| F[useHorizontalSwipe]
-    B -->|页面内容入场| G[feature 内 useGSAP]
+    B -->|页面内容入场| G[feature 内 Web Animations]
     B -->|亮暗主题| H[View Transition + CSS keyframes]
     B -->|Hover、Open、Loading| I[CSS transition / keyframes]
     D --> J[共享 motion tokens]
@@ -123,28 +122,26 @@ flowchart TD
 | 需求 | 首选机制 |
 | --- | --- |
 | Hover、focus、pressed、简单显隐 | Tailwind/CSS transition |
-| 一个 React 组件内的运行时入场或反馈 | GSAP `useGSAP()` |
-| 多步且需要编排的序列 | GSAP timeline |
+| 一个 React 组件内的运行时入场或反馈 | Web Animations（`src/shared/motion/tween.ts` 的 `tween()`） |
+| 多步且需要编排的序列 | 多条并行的 Web Animations 补间 + `Promise.all` 编排 |
 | 现有路由整页切换 | `PagePan` 或 `PageZoom`，不要在页面内再叠一层路由动画 |
 | 直播间整页进入与退出 | `PageZoom` |
 | 跟随手指并可回弹的横向切换 | `useHorizontalSwipe` |
 | 整个文档主题快照切换 | `fadeTheme()` |
-| 滚动驱动动画 | 当前没有默认方案；只有明确产品需求并证明不会干扰页面滚动时才评估 ScrollTrigger |
+| 滚动驱动动画 | 当前没有默认方案；只有明确产品需求并证明不会干扰页面滚动时才评估 |
 
 ### 4.2 共享 motion tokens
 
-`src/shared/motion/tokens.ts` 负责注册 `useGSAP`、设置 GSAP 默认值并输出共享参数。
+`src/shared/motion/tokens.ts` 输出 Web Animations 与 CSS 共用的动效参数，不依赖任何 JS 动画库。
 
 `src/shared/motion/preference.ts` 不再解析或持久化动效模式。`src/main.tsx` 在 React 首帧前设置根元素 `data-motion="full"`；需要避免非必要动画的调用方通过 `prefersReducedMotion()` 直接读取系统 `prefers-reduced-motion`，不依赖应用设置字段。
 
 | Token/配置 | 当前值 | 用途 |
 | --- | --- | --- |
-| GSAP 默认 | `0.22s`, `power2.out` | 未显式指定时的短反馈 |
-| `EASE_OUT` | `power2.out` | 入场减速 |
+| `EASE_OUT` | `cubic-bezier(0.215, 0.61, 0.355, 1)` | 入场减速曲线，`power2.out`（quad out）的 CSS 等价物，Web Animations 与 CSS 共用 |
 | 桌面 enter/exit | `0.22s` | 桌面页面平移和 Zoom |
 | 触控 enter/exit | `0.20s` | 移动端更快完成页面读取 |
-| `EASE_OUT_CSS` | `cubic-bezier(0.215, 0.61, 0.355, 1)` | `power2.out` 的 CSS 等价曲线，供 Web Animations 使用 |
-| `SWIPE_SETTLE_EASING` | 同 `EASE_OUT_CSS` | 手势释放收尾；时长不是常量，由手势本身推导 |
+| `SWIPE_SETTLE_EASING` | 同 `EASE_OUT` | 手势释放收尾；时长不是常量，由手势本身推导 |
 | `PAGE_PAN_PERCENT` | `110%` | 横向页面清除 padding 产生的边缘残影 |
 
 手势释放的时长由 `horizontalSwipeSettleDuration(剩余距离, 释放速度)` 得出，钳制在 `170ms ~ 400ms`：收尾是把手指已经开始的运动走完，快速滑动应该更快结束，慢速拖拽则铺开缓出，因此不能是固定值。
@@ -157,7 +154,7 @@ flowchart TD
 
 上一页快照只在 `useLayoutEffect` 中更新为 React 已提交的 subtree；路由 key 变化时再由 state 接管这份快照。不要在 render 阶段提前改写快照 ref：React 19 可能放弃或重放并发 render，但 ref 写入不会随之回滚，后续导航会误以为目标页已经显示并漏掉退出层。`PageZoom` 遵循同一约束。
 
-该组件使用 Web Animations API 而不是 GSAP tween。原因是大列表挂载会占用 React 主线程，Chromium compositor 仍可推进原生 transform 动画。时长继续读取 `motionProfile()`，easing 使用 `power2.out` 对应的 CSS cubic-bezier。
+该组件使用 Web Animations API：大列表挂载会占用 React 主线程，Chromium compositor 仍可推进原生 transform 动画。时长与 easing 均读取 `motionProfile()`。
 
 `Shell` 当前映射如下：
 
@@ -167,7 +164,7 @@ flowchart TD
 - 首页等平台切换：内层 `PagePan` 进行横向平移；关注页的平台与直播状态是侧栏 Select，不再占用 Shell 顶栏。
 - 搜索页：复用 Shell 顶栏的平台页签，不挂载独立页面标题；桌面端在平台页签最左侧显示返回按钮，移动端不挂载显式返回按钮，由 Android 原生返回和系统 / 浏览器历史手势回到上一页。搜索框旁的 Select 负责「全部 / 主播 / 房间号 / 标题」筛选。
 - IPTV 源切换：与平台切换共用同一套 `PagePan` 横向平移（分组统一为 group，平台与 IPTV 源走同一路径）。
-- 关注页「直播关注 / IPTV 频道」切换：移动端由 `useHorizontalSwipe` 驱动两个保持挂载的面板 track，Shell 顶栏 Tab 与页面手势使用同一 `view`；桌面点击由作用域化 `useGSAP` 对入场内容执行短距离淡入平移。Shell 保持同一内容容器，避免重挂载丢失前一页签状态。
+- 关注页「直播关注 / IPTV 频道」切换：移动端由 `useHorizontalSwipe` 驱动两个保持挂载的面板 track，Shell 顶栏 Tab 与页面手势使用同一 `view`；桌面点击由局部 Web Animations 补间对入场内容执行短距离淡入平移。Shell 保持同一内容容器，避免重挂载丢失前一页签状态。
 - IPTV 关注来源与分组切换：关注页桌面左栏顶部与移动端分组条上方的频道源 Select 更新 `source` 查询参数；桌面左侧分组栏与移动端横向分组条更新 `group`，`IptvFollowView` 内层 `PagePan` 保留旧频道列表并按分组顺序平移。
 - 不属于上述来源的普通内容更新：直接替换，不自动添加整页动画。
 
@@ -181,18 +178,18 @@ flowchart TD
 
 进出共用 `motionProfile().roomZoom` 的同一个时长（桌面 `0.26s`，触摸 `0.22s`），而不是各自取 `enter` / `exit`。进入直播间和离开直播间是同一段动效的正反两个方向，两端时长不同会让一次往返显得头重脚轻。它比整页平移略长，因为这里是两个全屏表面互相溶解，且直播间还要在后面把播放器顶起来。
 
-- 进入：`scale: ROOM_ZOOM_START_SCALE (0.96) -> 1`，同时 `autoAlpha: 0 -> 1`。此时浏览列表已立即卸载，直播间是屏幕上唯一的表面。
-- 退出：改为双层交叉溶解，两层在同一条 `gsap.timeline()` 上从时间 `0` 同时开始：
-  - 离场的直播间 subtree 保持挂载，执行 `scale: 1 -> 0.96` 与 `autoAlpha: 1 -> 0`，是进入动画的逆向播放；
-  - 目标页从 `scale: ROOM_ZOOM_BACKDROP_SCALE (1.02) -> 1` 与 `autoAlpha: 0 -> 1` 展开。这个反向缩放刻意比 `0.96` 更贴近 `1`：目标页是背景而非主体，给它同样的位移会让两层看起来走了一样的距离，反而压平了 zoom 想表达的纵深。
+- 进入：`scale: ROOM_ZOOM_START_SCALE (0.96) -> 1`，同时 `opacity: 0 -> 1`。此时浏览列表已立即卸载，直播间是屏幕上唯一的表面。
+- 退出：改为双层交叉溶解，两层各自一条 Web Animations 补间、从时间 `0` 同时开始：
+  - 离场的直播间 subtree 保持挂载，执行 `scale: 1 -> 0.96` 与 `opacity: 1 -> 0`，是进入动画的逆向播放；
+  - 目标页从 `scale: ROOM_ZOOM_BACKDROP_SCALE (1.02) -> 1` 与 `opacity: 0 -> 1` 展开。这个反向缩放刻意比 `0.96` 更贴近 `1`：目标页是背景而非主体，给它同样的位移会让两层看起来走了一样的距离，反而压平了 zoom 想表达的纵深。
   - 离场补间只跑 `duration * ROOM_ZOOM_EXIT_RATIO (0.72)`，让两层有重叠，避免视口中间穿过一帧全空画面。
 - 退出期间入场节点带 `bg-background`：它是从透明淡入的，没有自己的底色时，离场直播间会在整段交叉溶解里透过目标页继续可见。
 - 出场节点 `pointer-events: none`，避免旧页面在过渡期接收输入；退出期间入场节点同样不接收输入。
 - 入场完成后清除 transform、opacity、visibility、transform origin 和 `will-change`，保证全屏播放器没有永久 transformed ancestor；退出节点在最终帧后直接卸载，不先恢复这些属性。
 
-离场直播间在整条 timeline 完成后才卸载，而不是在它自己那条更短的补间结束时卸载。React 在 timeline 中途移除一个活跃播放器，会在仍在动的那层背景上表现为一次可见的顿挫。
+离场直播间在两条补间都完成（较长的入场补间结束）后才卸载，而不是在它自己那条更短的补间结束时卸载。React 在过渡中途移除一个活跃播放器，会在仍在动的那层背景上表现为一次可见的顿挫。
 
-不要在 `onComplete` 中先恢复出场节点的 opacity 再卸载，这会导致最后一帧闪出直播内容。退出 subtree 只在最终帧之后删除。
+不要在补间完成回调中先恢复出场节点的 opacity 再卸载，这会导致最后一帧闪出直播内容。退出 subtree 只在最终帧之后删除。
 
 Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两者共用同一套进出动画，但 `zoomKey` 取各自的 pathname，因此直播间与 IPTV 播放页之间切换不会被当成同一个页面而跳过过渡。不要让两者共用一个固定 key。
 
@@ -213,7 +210,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
   - 反向回拉在任意距离都取消，避免拖过半屏后又拉回却仍然翻页；
   - 其余情况按位置判定，页面实际走过的屏占比需达到 `HORIZONTAL_SWIPE_COMMIT_PROGRESS`（`0.42`）。
   - 释放速度取最近 `32ms` 窗口内样本的平均值。单纯对最后两个事件求差分噪声过大，会把稳定拖动误判为快扫；窗口自最新样本向前取，因此松手前停顿的手指速度读数为 `0`，回到位置判定。
-- 释放后由 Web Animations 接管剩余位移，时长按 `horizontalSwipeSettleDuration` 从剩余距离和释放速度推导。这里不能用 GSAP：翻页会触发 React 提交，rAF ticker 与该提交争抢主线程，重路由下会吞掉收尾动画的大部分帧——这正是「先切页再平移」的直接原因。Web Animations 的 transform 由 Chromium 合成器推进，不受主线程占用影响。
+- 释放后由 Web Animations 接管剩余位移，时长按 `horizontalSwipeSettleDuration` 从剩余距离和释放速度推导。这里必须用 Web Animations 而不是 JS 补间：翻页会触发 React 提交，rAF ticker 与该提交争抢主线程，重路由下会吞掉收尾动画的大部分帧——这正是「先切页再平移」的直接原因。Web Animations 的 transform 由 Chromium 合成器推进，不受主线程占用影响。
 - 手势中途抓住正在收尾的页面时，从其当前实际像素位置接管（`DOMMatrixReadOnly` 读取），不回跳。
 - `layout` 只保留两种承载方式：
   - `track`：所有挂载页按**绝对索引**排布在 `index × width`，整层平移到 `-活动索引 × width`。提交时没有任何页需要位移，释放时启动的收尾动画可以一路走完。用于 Shell 移动端平台切换、关注页双 Tab、历史页双 Tab 和房间侧栏 Tab。
@@ -226,7 +223,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - Slider、Input、Textarea、Select、可编辑区域和 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管。
 - 已识别 swipe 后短暂抑制合成 click，避免 Android WebView 误触当前控件。
 
-该 hook 已不再使用 GSAP。开始新手势、禁用 hook 或组件卸载时，必须取消在飞的 Animation、清掉兜底回滚定时器并清除 transform/`will-change`；取消收尾动画时要先把它当前到达的像素位置写回 inline style，否则会回跳到动画起点。
+该 hook 全程使用原生 API。开始新手势、禁用 hook 或组件卸载时，必须取消在飞的 Animation、清掉兜底回滚定时器并清除 transform/`will-change`；取消收尾动画时要先把它当前到达的像素位置写回 inline style，否则会回跳到动画起点。
 
 ### 4.6 `useLongPress`：触摸长按
 
@@ -241,14 +238,14 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 
 ### 4.7 feature 页面入场
 
-IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由层：
+IPTV 与设置页不创建局部补间，页面动效全部由 `PagePan` 承担，不改变 Shell 的滚动和路由层：
 
 - 设置页不显示 Shell 或内容级顶部 header。桌面端与移动端共用「设置首页 → 分类详情」二级结构：首页按观看体验、账号与数据、应用信息分组，详情分类写入 `section` 查询参数，使系统返回、浏览器返回和页内返回保持一致。
 - 一级与二级页面复用 `PagePan` 保留退出视图：进入分类时一级向左退出、二级从右进入，返回时方向反转。动画覆盖页内返回、浏览器历史和 Android 边缘返回。
 - 每个设置层级在 `PagePan` 内容层内独立纵向滚动。这样从较深位置返回时，退出的详情保持原滚动位置，进入的首页从顶部出现，外层 `app-page` 不会继承错误的 `scrollTop` 或产生双滚动条。
-- 搜索框仅在首页筛选分类；详情页头只保留返回按钮和当前分类标题。返回按钮必须留在横向裁剪边界内，不使用负边距把 Hover 背景移出 `PagePan` 内容层。首次深链进入设置页时继续通过局部 `useGSAP()` 对当前页头使用 `y: 10` 入场，不挂载相邻设置分类。
-- 设置页完成后通过 `clearProps` 归还 transform、opacity、visibility 和 `will-change`。
-- IPTV 之前对首批 18 张频道卡片的 GSAP stagger 入场已移除，频道网格与其他卡片页面（首页、分类、搜索、关注）保持一致，路由导航层面的位移由 `PagePan` 统一承担。
+- 搜索框仅在首页筛选分类；详情页头只保留返回按钮和当前分类标题。返回按钮必须留在横向裁剪边界内，不使用负边距把 Hover 背景移出 `PagePan` 内容层。首次深链进入设置页时不挂载相邻设置分类，页面直接呈现。
+- 设置页的过渡与样式归还由 `PagePan` 统一承担（`commitStyles` 固定离场位置后同步卸载），页面自身不创建补间。
+- IPTV 之前对首批 18 张频道卡片的 stagger 入场已移除，频道网格与其他卡片页面（首页、分类、搜索、关注）保持一致，路由导航层面的位移由 `PagePan` 统一承担。
 - 频道卡片复用 `.room-card`，共享其 `content-visibility: auto` 长列表优化和移动端按压 `max-md:active:scale-[0.97]` 反馈。
 - 录制库 `RecordingsPage` 一级页不自带页面标题：应用顶栏左侧是「全部 / 录制中 / 已录制」范围 Tab（`role="tablist"`，与 `/history` 的时间线切换器同款下划线指示器和数量后缀），右侧是「保存位置」按钮；侧栏「录制」入口在有活动任务时叠加 destructive 计数 `Badge`。页面主体使用与关注页一致的左侧用户栏和右侧录播 Card 网格；平台筛选复用 `PlatformFilterSelect`，右侧 Card 图标使用录制时保存的直播间封面，左侧用户图标使用独立保存的主播头像。一级页不挂载播放器，也不请求媒体 URL。点击已保存 Card 进入 `/recordings/play/:recordingId` 二级播放页；二级页对齐直播间沉浸式布局，使用居中标题顶栏、无圆角左侧播放器和 `300–320px` 右侧录制信息栏，窄窗口上下堆叠。标题栏右侧的 `RecordingControl` 与「定时关闭」并列，开始时用玻璃 `Popover + FieldGroup + Switch` 选择是否写入弹幕 sidecar，以及是否允许无提示离页继续。弹幕初始值来自桌面设置页，离页继续固定为开启，两项都仍可按任务覆盖；`RecordingLeaveGuard` 在录制中使用 `AlertDialog` 提供留在页面、继续录制并离开、停止录制并离开三种明确动作，`RecordingExitGuard` 在关闭应用且仍有活动任务时用同款 `AlertDialog` 提供「继续录制」与「结束录制并退出」。录制中的圆点与时间码是唯一持续状态提示。停止、删除、目录切换和文件定位使用现有 `Button` / `AlertDialog` / `Dialog` / `Empty` / `Skeleton` 组合，不新增平行基础组件。`RecordingPlayer` 使用 xgplayer 协议插件并复用直播间的 `PlayerControls`、悬浮控制层和全屏身份栏；播放器进度轴使用细轨道、已缓冲层、已播放层和悬停把手，当前/总时长合并在右侧，倍速与弹幕回放设置作为共享控制条的录制扩展内容，设置菜单不再添加重复的「回放」分组标题。`RecordedDanmakuCanvas` 只在回放阶段按媒体时间绘制可开关弹幕，并从全局设置读取显示与过滤参数；减少动态效果时停止横向飘移。页面只在桌面客户端提供完整内容，移动端以明确的 Empty 状态说明能力边界。
 
@@ -263,7 +260,7 @@ IPTV 与设置页使用局部 `useGSAP()`，不改变 Shell 的滚动和路由�
 3. CSS `theme-fade` keyframe 对 `::view-transition-new(root)` 做 `opacity` 0→1 的整屏淡入，旧快照静态垫底；指针点击与键盘激活共用同一条时间线。
 4. desktop 动画为 `280ms`，coarse pointer 为 `240ms`；侧栏按钮在过渡开始时另有 scale/rotation 反馈。
 5. `src/styles.css` 同时关闭浏览器默认的 root-group `250ms` 插值和 snapshot crossfade，整个切换只保留一条淡化时间线。
-6. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-fade`、临时 CSS 变量和 GSAP inline styles。
+6. `ViewTransition.finished` 直接作为唯一结束信号，完成后清理 `data-theme-fade`、临时 CSS 变量和补间行内样式。
 
 不支持 View Transition API 时直接切换主题。快速连续点击由组件锁和可取消 transition 共同约束，不能留下临时 CSS 变量或未结束的快照状态。
 
@@ -279,67 +276,74 @@ CSS 只承担无需 JavaScript 编排的短状态：
 
 CSS 交互动画优先使用可中断 transition；只在主题淡化、加载旋转等确定时间线使用 keyframes。新增效果继续只动画 `transform` / `opacity`，并复用 `--motion-ease-out` 或 `--motion-ease-drawer`。
 
-## 5. React + GSAP 实现规范
+## 5. React + Web Animations 实现规范
 
 ### 5.1 组件内动画模板
 
 ```tsx
-import { useGSAP } from "@gsap/react";
-import gsap from "gsap";
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { motionProfile } from "@/shared/motion/tokens";
+import { settleTween, tween } from "@/shared/motion/tween";
 
 const rootRef = useRef<HTMLDivElement>(null);
 
-useGSAP(
+useLayoutEffect(
   () => {
     const target = rootRef.current?.querySelector<HTMLElement>("[data-motion-target]");
     if (!target) return;
 
     const profile = motionProfile();
-    gsap.fromTo(
+    target.style.willChange = "transform,opacity";
+    settleTween(
       target,
-      { autoAlpha: 0, y: 8, willChange: "transform,opacity" },
-      {
-        autoAlpha: 1,
-        y: 0,
-        duration: profile.enter.duration,
-        ease: profile.enter.ease,
-        clearProps: "transform,opacity,visibility,willChange",
-      },
+      tween(
+        target,
+        [
+          { opacity: 0, transform: "translate3d(0, 8px, 0)" },
+          { opacity: 1, transform: "translate3d(0, 0, 0)" },
+        ],
+        {
+          duration: profile.enter.duration * 1000,
+          easing: profile.enter.ease,
+          fill: "both",
+        },
+      ),
     );
   },
-  {
-    dependencies: [contentKey],
-    scope: rootRef,
-    revertOnUpdate: true,
-  },
+  [contentKey],
 );
 ```
 
 规则：
 
-- 使用真实 DOM ref；字符串 selector 必须限定在 `scope` 内。
-- 依赖变化需要重新运行动画时设置 `dependencies` 和 `revertOnUpdate: true`。
-- 只在浏览器 lifecycle 内调用 GSAP，不在 render 阶段调用。
-- `useGSAP` 已在 `src/shared/motion/tokens.ts` 集中注册，不在每个组件重复注册。
+- 使用真实 DOM ref；字符串 selector 必须限定在 scope 容器内。
+- `tween()` 会先取消同元素上仍在运行的旧补间；结束帧与自然态一致的补间用 `settleTween` 收尾，它会在完成后撤销动画并归还行内样式。
+- 结束态需要保留的表面（如提示层展开后的 opacity）不要 settle，让 fill 持有终态，由下一次反向补间接替。
+- 只在浏览器 lifecycle（effect、事件回调）内创建动画，不在 render 阶段调用。
 
-### 5.2 延迟事件与 `contextSafe`
+### 5.2 事件回调中的补间
 
-点击、Promise、定时器或其他在 hook 执行后才创建 tween 的回调，必须使用 `contextSafe()`：
+点击、Promise 或定时器等在 effect 执行后才创建动画的回调，直接使用 `tween()` / `killTweensOf()`；它们不依赖组件生命周期，元素随子树卸载后条目被 WeakMap 一并回收：
 
 ```tsx
 const buttonRef = useRef<HTMLButtonElement>(null);
-const { contextSafe } = useGSAP({ scope: buttonRef });
 
-const animatePress = contextSafe(() => {
+const animatePress = () => {
   const button = buttonRef.current;
   if (!button) return;
-  gsap.to(button, { scale: 1, clearProps: "transform" });
-});
+  button.style.willChange = "transform";
+  settleTween(
+    button,
+    tween(
+      button,
+      [{ transform: "scale(0.94)" }, { transform: "scale(1)" }],
+      { duration: 180, easing: EASE_OUT, fill: "both" },
+    ),
+  );
+};
 ```
 
-组件卸载后，GSAP context 会撤销其管理的 tween。原生 event listener、`requestAnimationFrame`、Web Animation 和 pointer capture 仍需要各自显式清理。
+原生 event listener、`requestAnimationFrame`、长时间存活的 Animation 和 pointer capture 仍需要各自显式清理；快速重复触发由 `tween()` 的自动取消约束。
 
 ### 5.3 Exit 动画生命周期
 
@@ -355,16 +359,16 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 
 ## 6. 性能规则
 
-- 位移、缩放和旋转使用 GSAP 的 `x`、`y`、`scale`、`rotation` 或 CSS transform；显隐优先使用 `autoAlpha` 或 opacity。
+- 位移、缩放和旋转统一走 CSS transform（经 Web Animations 或 CSS transition）；显隐只动画 opacity。
 - 避免通过动画修改 `width`、`height`、`top`、`left`、margin、padding 和其他触发布局的属性。
 - 先完成 DOM 读取，再批量写入；不要在一个 pointermove 中交替读取布局和写 style。
 - `will-change` 只在动画实际运行时设置，结束、取消和卸载都必须清除。长期 layer promotion 会增加显存和合成成本。
-- 同一 target 开始新动画前调用 `gsap.killTweensOf()`，避免手势、导航或快速点击产生叠加 tween。
-- 相同列表效果使用一个 tween 加 `stagger`，不要为每项创建独立 delay；动画目标数量必须有界。
+- 同一 target 开始新补间前先经 `tween()` 自动取消旧补间（或手动 `killTweensOf()`），避免手势、导航或快速点击产生叠加动画。
+- 相同列表效果使用一条编排好的序列，不要为每项创建独立 delay；动画目标数量必须有界。
 - 大型直播列表继续使用 `.room-card` 的 `content-visibility: auto`，不要用入场动画强制所有离屏卡片参与绘制。
 - 播放器、danmu.js DOM 弹幕和页面动画共享主线程与合成预算。播放页面避免模糊、滤镜、大面积阴影变化和无限背景动画。
-- Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定 GSAP ticker。
-- 实时飘屏的位置与时序由 danmu.js 的单条 linear transform transition 管理，不再维护应用级逐帧渲染循环、目标 FPS、跳帧或位图缓存。普通消息使用 `moveV: 100` 和 `setPlayRate` 实现可配置的 `50–200 px/s` 匀速移动，SC 只使用平台提供的持续时长；不要为调整飘屏快慢叠加 GSAP tween。
+- Android 宿主进入前台时请求同分辨率下不高于 120 Hz 的最高高刷模式；60/90 Hz 设备使用自身可用上限，只有 60/144 Hz 的面板回退到 144 Hz，系统省电、温控与动态刷新策略仍可覆盖该偏好。WebView 的 `requestAnimationFrame` 继续跟随系统实际刷新率，不设置固定帧率 ticker。
+- 实时飘屏的位置与时序由 danmu.js 的单条 linear transform transition 管理，不再维护应用级逐帧渲染循环、目标 FPS、跳帧或位图缓存。普通消息使用 `moveV: 100` 和 `setPlayRate` 实现可配置的 `50–200 px/s` 匀速移动，SC 只使用平台提供的持续时长；不要为调整飘屏快慢叠加 JS 补间。
 - `DanmuJsDanmaku` 在播放器内叠放两个全尺寸兄弟容器，并分别创建 `scroll` / `top` danmu.js 实例；必须等两个容器有非零尺寸后才启动，零尺寸期间只保留有界、带过期时间的 pending。`active`、`sessionKey`、页面可见性、减少动态效果偏好或组件卸载变化时销毁两个旧实例和 listener，避免隐藏播放器继续分配 DOM。
 - danmu.js 数据池、本地 metadata、聚合目标和 SC 计时器都必须有界，并在 `bullet_remove` / `destroy` 时同步释放。活跃 bullet 预算按当前轨道数推算（`120–800`），高弹幕量下丢弃新到消息而不是移除正在滚动的弹幕；danmu.js 在轨道占满时静默丢弃的 comment 由「送出超过 1 秒仍未 attach」的回收扫描释放。普通聊天聚合只更新同一活动 bullet 的文本与计数槽，不为每次 `×N` 变化重新创建动画。
 - B 站图片表情使用预设尺寸的安全 DOM 节点，加载失败回退原文，避免图片就绪后改变轨道高度或让弹幕跳动。平台文本不得写入 `innerHTML`。
@@ -389,7 +393,7 @@ React 会在节点离开 element tree 时立即卸载它，不能对已经卸载
 1. 确定 owner：基础组件、shared component、Shell 还是具体 feature。
 2. 检查 `src/components/ui/` 与现有 motion 封装，避免平行实现。
 3. 先完成无动画的布局、滚动、焦点、键盘和触控行为。
-4. 按第 4.1 节选择 CSS、GSAP、`PagePan`、`PageZoom` 或 View Transition。
+4. 按第 4.1 节选择 CSS、Web Animations、`PagePan`、`PageZoom` 或 View Transition。
 5. 使用共享 token，并实现取消、卸载和 inline style 清理。
 6. 检查桌面、手机竖屏、短横屏、安全区域、长中文和最大数据量。
 7. 执行聚焦检查与浏览器验证；改动完成后再同步到 Windows 镜像。
@@ -454,7 +458,8 @@ bash scripts/sync-to-windows.sh
 | `src/app/layout/Sidebar.tsx` | 桌面/移动导航和主题按钮反馈 |
 | `src/app/theme.ts` | 主题应用、系统亮暗监听与全局淡化过渡 |
 | `src/shared/motion/preference.ts` | 系统减少动效偏好检测 |
-| `src/shared/motion/tokens.ts` | GSAP 注册、共享 easing 和 duration |
+| `src/shared/motion/tokens.ts` | 共享 easing 和 duration |
+| `src/shared/motion/tween.ts` | Web Animations 补间助手：取消旧补间与行内样式归还 |
 | `src/shared/motion/PagePan.tsx` | 整页平移与 outgoing subtree 生命周期 |
 | `src/shared/motion/PageZoom.tsx` | 直播间 Zoom 进入和退出 |
 | `src/shared/hooks/useHorizontalSwipe.ts` | 触摸跟随、回弹、切换和清理 |

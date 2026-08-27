@@ -1,10 +1,9 @@
-import gsap from "gsap";
-import { useGSAP } from "@gsap/react";
 import { isMobileClient } from "@/shared/clientPlatform";
 export { prefersReducedMotion } from "./preference";
 
 /**
- * 建立在 GSAP 之上的共享动效词汇表。
+ * 共享动效词汇表。应用动画统一由 Web Animations API 与 CSS 原生承担，
+ * 不引入 JS 动画库。
  *
  * 两条规则使它在繁忙的直播播放器帧上也负担得起：
  *
@@ -16,29 +15,15 @@ export { prefersReducedMotion } from "./preference";
  * 只在释放时补间，因此一个手势绝不会每帧分配一个补间。
  */
 
-// 对核心而言 `useGSAP` 是个插件；在这个所有动效表面都会导入的唯一模块注册
-// 它，保证注册先于任何 hook 运行 —— 这正是官方 React 技能要求的顺序。
-gsap.registerPlugin(useGSAP);
-
-// 项目级补间默认值。单个补间仍可在语义不同的地方覆盖，
-// 但这让一次性的 `gsap.to` 调用保持风格统一。
-gsap.defaults({ duration: 0.22, ease: "power2.out" });
-
 /**
- * 入场减速曲线 —— 最接近先前 `cubic-bezier(0.2, 0.8, 0.2, 1)` token 的内建曲线。
- * 优先使用内建 ease 而不是 CustomEase，
- * 免得额外注册或打包插件。
- */
-export const EASE_OUT = "power2.out";
-/**
- * `power2.out` 族减速的 CSS 等价物，供经 Web Animations 而非 GSAP 做动画的
- * 表面使用。
+ * 入场减速曲线 —— `power2.out`（quad out）的 cubic-bezier 等价物。
  *
- * Web Animations 能在主线程忙于提交 React 工作时由 Chromium 合成器推进 transform，
- * GSAP 的 rAF ticker 做不到。页面平移与指针驱动的页面收尾都需要这个性质，
+ * Web Animations 与 CSS transition 共用同一条曲线：transform / opacity
+ * 动画在 React 忙于提交时仍由 Chromium 合成器推进，这是 rAF ticker 驱动
+ * 的 JS 补间库做不到的。页面平移、缩放过渡与指针驱动的页面收尾都读它，
  * 因此共享一条曲线而不是各挑一条 bezier。
  */
-export const EASE_OUT_CSS = "cubic-bezier(0.215, 0.61, 0.355, 1)";
+export const EASE_OUT = "cubic-bezier(0.215, 0.61, 0.355, 1)";
 /**
  * 指针驱动页面滑动的释放阶段缓动。
  *
@@ -46,7 +31,7 @@ export const EASE_OUT_CSS = "cubic-bezier(0.215, 0.61, 0.355, 1)";
  * 它的时长不是常量：`horizontalSwipeSettleDuration` 由剩余距离和松手速度推导，
  * 快甩迅速完成，慢拖在更长坡道上缓缓停下。
  */
-export const SWIPE_SETTLE_EASING = EASE_OUT_CSS;
+export const SWIPE_SETTLE_EASING = EASE_OUT;
 
 /**
  * 施加到每次整页平移的额外行程，以其活动轴的比例计。
