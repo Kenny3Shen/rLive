@@ -1,4 +1,3 @@
-
 # rLive Agent 工作规范
 
 ## 通用规则
@@ -22,6 +21,14 @@
 - `src/` 是 React/Vite 前端，`src-tauri/` 是 Tauri/Rust 后端；`src/app/` 管理路由与 Shell，`src/features/` 管理业务，`src/components/ui/` 提供通用 UI，`src/shared/` 提供跨功能代码。后端命令、站点、弹幕、数据库、IPTV 和 ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmaku/`、`db/`、`iptv/` 和 `asr.rs`。
 - 前后端通过既有 Tauri commands/events 交互。优先复用已有组件、hooks、stores 和功能边界，不在前端复制 Rust 业务逻辑或新增平行实现。
 
+## Android 调试
+
+- 排查 Android 端问题时优先用模拟器复现，触摸/手势类 bug 必须在真机验证（模拟器注入的输入没有真实手指微抖，且镜像 WebView 版本落后于真机）。详细流程见 `docs/zh/Android开发-Windows.md` 的「Android 调试」一节。
+- 远程调试前端必须安装 **debug 构建且 ABI 匹配** 的 APK：真机用 `bun run tauri -- android build --debug --target aarch64`，x86_64 模拟器用 `--target x86_64`；用 `unzip -Z1 <apk> | grep lib/` 和 `adb shell pm dump com.shenss.rlive | grep primaryCpuAbi` 双向核对。release 包不会创建 `webview_devtools_remote_<pid>` socket，CDP 无法接入。
+- 连接方式：`adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com.shenss.rlive)` 后用 `playwright-cli attach --cdp=http://localhost:9222`。真机需已授权 USB 调试且保持亮屏（熄屏时 WebView 挂起）。
+- 注入手势用 `adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <y>"`（物理坐标 = CSS 坐标 × devicePixelRatio）；分析触摸问题时先在页面注入 touch/click/contextmenu/cancel 全事件探针再操作，探针模板见 Android 开发文档。
+- 模拟器环境：SDK 在 `~/Android/Sdk`，headless 启动需 KVM 权限（`sg kvm`）；VS Code Emulate 扩展依赖 `emulator.emulatorPathWSL` 设置与 `$ANDROID_HOME/emulator/emulator.exe` 符号链接（指向 Linux 原生 emulator）。
+
 ## 播放与功能边界
 
 - 直播和 IPTV 使用 `xgplayer` 配合 FLV/HLS/MPEG-TS 插件，并统一通过 Rust `stream_proxy` 注入请求头和处理同源访问。
@@ -31,5 +38,5 @@
 
 ## UI 与文档
 
-- UI 以中文为主，保持 Simple Live 风格及桌面/移动响应式布局。
+- UI 以中文为主。
 - 用户文档入口为 `README.md`、`docs/README.md`，详细中文文档位于 `docs/zh/`。功能、配置、运行方式或架构变化时同步更新相关文档。

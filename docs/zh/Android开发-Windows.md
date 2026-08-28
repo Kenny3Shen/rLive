@@ -80,6 +80,98 @@ src-tauri/gen/android/app/build/outputs/apk/
 
 `src-tauri/gen/android/app/src/main/jniLibs/` 是生成目录，旧的本地构建可能遗留被 Git 忽略的 `.so`。Release Gradle 配置会排除桌面 ASR/C++ runtime，发布工作流还会校验最终 native 清单。当前 arm64 APK/AAB 只应包含 `librlive_lib.so`。
 
+## Android 调试
+
+### WebView 远程调试（CDP）原理
+
+前端在 Android 上运行于系统 WebView，可通过 Chrome DevTools Protocol（CDP）连接实时检查 DOM、注入脚本与采集事件流。关键前提：
+
+- **必须安装 debug 构建的 APK**（`bun run tauri -- android build --debug --target aarch64`）。Rust 侧 `debug_assertions` 开启时 wry 才会调用 `WebView.setWebContentsDebuggingEnabled(true)`，release/不可调试 APK 不会创建 `webview_devtools_remote_<pid>` 抽象 socket，CDP 无从接入。
+- 验证方法：`adb shell cat /proc/net/unix | grep devtools_remote`，无输出则说明当前安装的不是 debug 构建，或 WebView 未初始化。
+- 架构必须匹配：模拟器 x86_64 镜像装 x86_64 APK，真机（arm64）装 aarch64 APK。用 `unzip -Z1 xxx.apk | grep lib/` 确认 APK 内的 ABI，`adb shell pm dump com.shenss.rlive | grep primaryCpuAbi` 确认设备实际加载的 ABI；`--target` 参数决定产物 ABI，Tauri flavor 名称显示 `universal` 不代表包含全部 ABI。
+
+连接步骤（真机或模拟器相同）：
+
+```bash
+adb devices                          # 确认设备在线；unauthorized 则在手机上点「允许」
+PID=$(adb shell pidof com.shenss.rlive | tr -d '\r\n ')
+adb forward tcp:9222 localabstract:webview_devtools_remote_$PID
+curl -s http://localhost:9222/json/version   # 返回 Browser 版本即成功
+```
+
+连接后可用 Chrome 打开 `chrome://inspect`，或用 playwright-cli 直接 attach：
+
+```bash
+playwright-cli attach --cdp=http://localhost:9222
+playwright-cli --raw eval "location.pathname"
+```
+
+排查触摸/手势类 bug 时，注入事件探针采集全量事件流（时间戳 + 目标 + touches 数）：
+
+```js
+// 页面侧探针：长按-取消类问题需要 touch/click/contextmenu/cancel 全覆盖
+window.__ev = [];
+const t0 = performance.now();
+['touchstart','touchend','touchcancel','click','contextmenu','pointerdown','pointerup','pointercancel']
+  .forEach(t => document.addEventListener(t, (e) =>
+    window.__ev.push({ t: Math.round(performance.now() - t0), s: t + (e.touches ? `(${e.touches.length})` : ''),
+                       tg: (e.target.className || e.target.tagName).toString().slice(0, 20) }), true));
+```
+
+模拟器注入长按用 `input motionevent`（忠实单指序列，无注入抖动）：
+
+```bash
+adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <y>"
+```
+
+物理坐标 = CSS 坐标 × `window.devicePixelRatio`，探针里可用 `getBoundingClientRect()` 换算。真机/模拟器注入的输入没有真实手指的微抖，无法 100% 复现抖动相关的问题，必要时需真机手动操作配合探针分析。
+
+### 模拟器调试（WSL）
+
+```bash
+# 安装镜像与工具（首次）
+sdkmanager "system-images;android-36;google_apis;x86_64" "emulator" "platform-tools"
+echo no | avdmanager create avd -n rlive_test -k "system-images;android-36;google_apis;x86_64" -d pixel_6
+
+# 启动 headless 模拟器（KVM 权限：sudo gpasswd -a <user> kvm 后重新登录）
+setsid sg kvm -c "$ANDROID_HOME/emulator/emulator -avd rlive_test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect" > /tmp/emu.log 2>&1 &
+
+adb wait-for-device && adb shell getprop sys.boot_completed   # 等待 1
+adb shell settings put global window_animation_scale 0        # 关系统动画提升稳定性
+```
+
+x86_64 模拟器 APK 构建与安装：
+
+```bash
+bun run tauri -- android build --debug --target x86_64
+adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
+```
+
+模拟器内置 WebView 版本随镜像发布（API 36 镜像约 WebView 133），与真机最新 WebView（可达 149+）行为可能不同；触摸/手势类 bug 建议在真机验证。
+
+### 实机调试（USB）
+
+1. 手机开启「开发者选项 → USB 调试」，USB 连接后在弹窗上点「允许」（勾选一律允许）。
+2. 保持屏幕常亮避免 WebView 挂起：开发者选项开启「充电时屏幕不休眠」，或 `adb shell svc power stayon true`。
+3. 构建并安装 arm64 debug 包：
+
+```bash
+bun run tauri -- android build --debug --target aarch64
+adb install -r src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
+```
+
+4. 按「WebView 远程调试」一节 forward CDP 端口后即可用 playwright-cli attach 实时调 DOM。
+
+### 调试排错清单
+
+- **无 devtools socket**：安装的是 release/不可调试构建（`adb shell pm dump com.shenss.rlive | grep pkgFlags` 无 `DEBUGGABLE`），或 ABI 不匹配导致装的仍是旧包。重新构建 `--debug --target aarch64`。
+- **`adb install` 静默失败**：x86_64-only APK 装不进 arm64 设备，`install -r` 可能无输出且旧包仍在；用 `unzip -Z1` 核对 APK 内 `lib/` ABI 后重装。
+- **签名不匹配（INSTALL_FAILED_UPDATE_INCOMPATIBLE）**：换机器/换系统构建的 debug 包与已装包签名不同。保留数据安装可用项目 keystore 重签：`apksigner sign --ks /home/shenss/upload-keystore.jks --ks-key-alias upload`（密码见 `src-tauri/gen/android/app/keystore.properties`），否则先 `adb uninstall com.shenss.rlive`。
+- **unauthorized**：手机上确认 USB 调试授权弹窗。
+- **熄屏后无响应**：屏幕熄灭时 WebView/渲染器会被挂起，唤醒后再采集。
+- **触摸失灵类 bug 排查范式（WebView 149 实测案例）**：`<img>` 上的长按会触发原生图片菜单接管（pointercancel 先于 contextmenu 到达）；应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死，后续 touch 全部不派发（页面只能滚动，点击全无反应），但系统手势与 contextmenu 仍在——极像「应用卡死」。注入全事件探针后若发现 touchstart 完全消失即可确诊。规避：长按交互面内不要让 `<img>` 参与命中测试（`pointer-events: none`），事件探针模板见上文。
+- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下会拼接 `emulator.exe`，且默认路径是 macOS 的 `~/Library/Android/sdk`。修复：`ln -s $ANDROID_HOME/emulator/emulator $ANDROID_HOME/emulator/emulator.exe`，并在 VS Code 远程设置里配置 `"emulator.emulatorPathWSL": "/home/shenss/Android/Sdk/emulator"`。
+
 ## 真机验证
 
 ```bash
