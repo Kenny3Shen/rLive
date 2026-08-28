@@ -607,6 +607,16 @@ body {
     user-select: none;
     touch-action: manipulation;
   }
+
+  /* Android WebView（149+ 实测）在 <img> 上识别长按时会启动原生图片菜单接管：
+     先派发 pointercancel、再派发 contextmenu；应用层 preventDefault 取消菜单后，
+     WebView 的触摸路由会悬死——后续所有 touch 事件不再派发到页面，表现为只能
+     滚动、点按与 Tab 全部失效。让卡片封面/缩略图不参与命中测试，长按落在
+     容器元素上即可同时规避接管与菜单（div 上没有原生长按菜单）。 */
+  .room-card img,
+  [data-motion-press] img {
+    pointer-events: none;
+  }
 }
 
 /* 较矮的横屏手机首先是观看表面。保持底部导航可达但紧凑：图标保留 44px 目标，

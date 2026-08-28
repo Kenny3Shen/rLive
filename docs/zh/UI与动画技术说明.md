@@ -233,6 +233,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 - 按下后 `500ms` 触发；漂移超过 `10px` 半径、抬起或 pointercancel（滚动接管）都会终止，因此长按与列表滚动、页签横滑互不冲突。
 - Android WebView 在系统长按点会派发原生 `contextmenu`：调用方在卡片上 `preventDefault` 并经 `triggerNow()` 立即触发，既拦下 WebView 自带菜单，也让触发时机与系统长按一致；自持计时器承担 iOS WebView（不保证派发 contextmenu）与兜底。`contextmenu` 必须归属本卡片的按压才会触发：系统长按只认手势，若手指实际按在退出中的抽屉遮罩上（快速长按-收起循环的典型竞态），WebView 会把 `contextmenu` 重定向到下层卡片，这种伪信号距上次触发不小于一个触发周期，超出 `LONG_PRESS_CONTEXTMENU_GRACE_MS`（300ms）宽限后一律忽略，否则用户刚收起的抽屉会被立即弹回。
 - 触发后松手可能合成一次 click，调用方需用「触发时置位、下次 pointerdown 清零」的标记抑制，避免长按弹抽屉后误入房间。
+- 卡片封面/缩略图在 `@media (pointer: coarse)` 下 `pointer-events: none`（`.room-card img`、`[data-motion-press] img`）：Android WebView 149+ 在 `<img>` 上识别长按会启动原生图片菜单接管（pointercancel 先于 contextmenu 到达），应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死——后续 touch 全部不再派发到页面，表现为只能滚动、点按与 Tab 全部失效（真机 vivo x300 实测）。让图片不参与命中测试后长按落在容器上，接管与菜单都不会发生，pointercancel 也不再出现。
 - 抽屉退出动画期间（`data-closed` 存在时）遮罩与弹层 `pointer-events: none`（`styles.css` 中 `.motion-dialog-overlay` 等规则）：快速再按时触摸穿透到下层页面，避免抬手事件派发到已卸载的遮罩节点上被吞，那会使 WebView 手势状态残留、后续点按不再合成 click（表现为只能滚动和长按，点击无响应）。
 - 关注卡片上长按计时与 dnd-kit 拖拽激活器组合在同一次 pointerdown；触摸不会激活 MouseSensor，长按与桌面鼠标拖拽互不干扰。
 - iOS 侧长按封面图的系统存储菜单由全局 `@media (pointer: coarse)` 规则中的 `-webkit-touch-callout: none` 压制（`styles.css`）。
