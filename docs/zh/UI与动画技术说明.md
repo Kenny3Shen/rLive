@@ -230,7 +230,7 @@ Zoom 覆盖全部沉浸式播放页：`/room/*` 和 IPTV 的 `/iptv/play`。两�
 `src/shared/hooks/useLongPress.ts` 把「按住不动约半秒」翻译为一次回调；`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页的直播/频道卡片共用，移动端长按即弹出底部操作抽屉。Back 收起依赖 `AndroidBackNavigator` 派发的 `rlive:android-back` 事件，它在包括底部导航根页在内的所有路由上生效（返回链与根路由退桌面语义见 `docs/zh/架构说明.md` 第 6 节）。判定常量在 `src/shared/gestures/longPress.ts`：
 
 - 只有触摸/触控笔主指针参与；鼠标交给右键菜单，桌面端直接 `enabled: false`。
-- 按下后 `500ms` 触发；漂移超过 `10px` 半径、抬起或 pointercancel（滚动接管）都会终止，因此长按与列表滚动、页签横滑互不冲突。
+- 按下后 `500ms` 触发；漂移超过 `10px` 半径、抬起或 pointercancel（滚动接管）都会终止。取消判定除挂在卡片自身的 pointermove/up/cancel 上外，还镜像到 **window 捕获阶段**：祖先手势层（首页/关注页的横向翻页 `useHorizontalSwipe`）锁定手势后会对它的表面 `setPointerCapture` 并 `stopPropagation`，卡片从此收不到任何后续指针事件，自身取消路径整个失明；没有这层守卫时，从卡片上起手横滑切走平台后 500ms 计时器照常到期，上一平台那张卡片的抽屉会凭空弹出（track 布局下各平台面板常驻挂载，卡片不随切换卸载）。window 捕获阶段先于一切祖先的处理器执行，指针被谁捕获、传播被谁拦断都照样可见；`HORIZONTAL_SWIPE_LOCK_DISTANCE_PX`（10px）不小于长按容忍半径，保证能锁定为翻页的手势在计时器到期前必已被守卫取消。
 - Android WebView 在系统长按点会派发原生 `contextmenu`：调用方在卡片上 `preventDefault` 并经 `triggerNow()` 立即触发，既拦下 WebView 自带菜单，也让触发时机与系统长按一致；自持计时器承担 iOS WebView（不保证派发 contextmenu）与兜底。`contextmenu` 必须归属本卡片的按压才会触发：系统长按只认手势，若手指实际按在退出中的抽屉遮罩上（快速长按-收起循环的典型竞态），WebView 会把 `contextmenu` 重定向到下层卡片，这种伪信号距上次触发不小于一个触发周期，超出 `LONG_PRESS_CONTEXTMENU_GRACE_MS`（300ms）宽限后一律忽略，否则用户刚收起的抽屉会被立即弹回。
 - 触发后松手可能合成一次 click，调用方需用「触发时置位、下次 pointerdown 清零」的标记抑制，避免长按弹抽屉后误入房间。
 - 卡片封面/缩略图在 `@media (pointer: coarse)` 下 `pointer-events: none`（`.room-card img`、`[data-motion-press] img`）：Android WebView 149+ 在 `<img>` 上识别长按会启动原生图片菜单接管（pointercancel 先于 contextmenu 到达），应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死——后续 touch 全部不再派发到页面，表现为只能滚动、点按与 Tab 全部失效（真机 vivo x300 实测）。让图片不参与命中测试后长按落在容器上，接管与菜单都不会发生，pointercancel 也不再出现。

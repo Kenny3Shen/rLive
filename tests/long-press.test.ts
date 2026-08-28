@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { HORIZONTAL_SWIPE_LOCK_DISTANCE_PX } from "../src/shared/gestures/horizontalSwipe";
 import {
   LONG_PRESS_CANCEL_SLOP_PX,
   LONG_PRESS_CONTEXTMENU_GRACE_MS,
@@ -37,6 +38,20 @@ describe("long press gesture", () => {
     expect(inside).toBeLessThanOrEqual(LONG_PRESS_CANCEL_SLOP_PX ** 2);
     expect(hasLongPressMovedBeyondSlop(0, 0, 7, 7)).toBe(false);
     expect(hasLongPressMovedBeyondSlop(0, 0, 8, 8)).toBe(true);
+  });
+});
+
+describe("长按与横向翻页手势的边界", () => {
+  test("翻页锁定所需位移不小于长按容忍半径，滑动接管前必已越过容忍半径", () => {
+    // 首页/关注页的横向翻页层锁定手势后会对表面 setPointerCapture 并
+    // stopPropagation，卡片自身的取消路径从此失明；长按的取消判定因此镜像到
+    // window 捕获阶段（见 useLongPress）。锁定距离不小于容忍半径保证：
+    // 任何能被锁定为翻页的手势，其合成位移在锁定前后必然已越过容忍半径，
+    // 守卫会在计时器到期前取消它 —— 否则滑动切走平台后，上一平台卡片的
+    // 长按抽屉会在计时器到期时凭空弹出。
+    expect(HORIZONTAL_SWIPE_LOCK_DISTANCE_PX).toBeGreaterThanOrEqual(
+      LONG_PRESS_CANCEL_SLOP_PX,
+    );
   });
 });
 
