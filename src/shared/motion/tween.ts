@@ -73,3 +73,27 @@ export function settleTween(element: HTMLElement | SVGElement, animation: Animat
     })
     .catch(() => {});
 }
+
+/**
+ * 等补间自然结束后把结束帧固化为行内样式再撤销动画。
+ *
+ * 与 `settleTween` 相对：结束帧需要保留的表面用它替代「fill 持有」。
+ * fill 动画自然结束后不可再被 `killTweensOf` 找到（WeakMap 已忘记它），
+ * 而部分 WebView 会把这种「已完成仍在填充」的动画从 `getAnimations()`
+ * 里移除、其效果却继续挂在级联上——之后任何 cancel 都不会清掉它，
+ * 元素会永久停留在旧效果上（音量/亮度提示卡在播放器中间不消失的根因）。
+ * `commitStyles()` 把终态写进内联样式，cancel 后由内联值确定地持有结束帧；
+ * 缺少 commitStyles 的旧 WebView 保留 fill 动画兜底。
+ */
+export function commitTween(animation: Animation): void {
+  void animation.finished
+    .then(() => {
+      try {
+        animation.commitStyles();
+      } catch {
+        return;
+      }
+      animation.cancel();
+    })
+    .catch(() => {});
+}

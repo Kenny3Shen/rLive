@@ -147,9 +147,26 @@ export function PageZoom({
         .then(() => {
           if (disposed) return;
           releaseAfterFinalFrame(() => {
-            for (const animation of animations) animation.cancel();
+            // 撤销前先把结束帧固化为内联样式：leaving 的 opacity:0 若被 cancel
+            // 直接撤销，会在 React 移除它之前的一两帧里以自然态（完全不透明）
+            // 重新出现——表现为退出直播间时闪现残留画面（与 PagePan 的
+            // commitStyles 同源问题）。
+            for (const animation of animations) {
+              try {
+                animation.commitStyles();
+              } catch {
+                // 较旧 WebView 缺少 commitStyles()；保持 fill 持有。
+              }
+              animation.cancel();
+            }
             if (incomingPage) clearMotionStyles(incomingPage);
-            startTransition(dropOutgoing);
+            // 撤销离场层的 will-change 提升并等一帧合成：整页离场内容曾是一块
+            // 独立合成层，React 移除子树的瞬间部分 WebView 会把该层的旧纹理
+            // 再合成一两帧（表现为退出后闪现残留画面，即使它的 opacity 已为
+            // 0）。先降级回普通绘制、让合成器在没有这层的状态下出一帧，
+            // 再移除子树，销毁时就没有可闪的层。
+            leaving.style.willChange = "";
+            releaseAfterFinalFrame(() => startTransition(dropOutgoing));
           });
         })
         .catch(() => {
