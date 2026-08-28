@@ -170,7 +170,7 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aar
 - **unauthorized**：手机上确认 USB 调试授权弹窗。
 - **熄屏后无响应**：屏幕熄灭时 WebView/渲染器会被挂起，唤醒后再采集。
 - **触摸失灵类 bug 排查范式（WebView 149 实测案例）**：`<img>` 上的长按会触发原生图片菜单接管（pointercancel 先于 contextmenu 到达）；应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死，后续 touch 全部不派发（页面只能滚动，点击全无反应），但系统手势与 contextmenu 仍在——极像「应用卡死」。注入全事件探针后若发现 touchstart 完全消失即可确诊。规避：长按交互面内不要让 `<img>` 参与命中测试（`pointer-events: none`），事件探针模板见上文。
-- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下会拼接 `emulator.exe`，且默认路径是 macOS 的 `~/Library/Android/sdk`。修复：`ln -s $ANDROID_HOME/emulator/emulator $ANDROID_HOME/emulator/emulator.exe`，并在 VS Code 远程设置里配置 `"emulator.emulatorPathWSL": "/home/shenss/Android/Sdk/emulator"`。
+- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下会拼接 `emulator.exe`，且默认路径是 macOS 的 `~/Library/Android/sdk`。修复：`ln -s $ANDROID_HOME/emulator/emulator $ANDROID_HOME/emulator/emulator.exe`，并在 VS Code 远程设置里配置 `"emulator.emulatorPathWSL": "/home/shenss/Android/Sdk/emulator"`。注意：sdkmanager 重装或升级 emulator 包（含切 canary 通道）会重写整个 `emulator/` 目录并删掉该符号链接，导致同一报错复发，重建一次链接即可（`~/.vscode-server/data/Machine/settings.json` 里的设置不受影响）。
 
 ## 真机验证
 
