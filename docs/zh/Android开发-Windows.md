@@ -147,7 +147,7 @@ bun run tauri -- android build --debug --target x86_64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
 ```
 
-模拟器内置 WebView 版本随镜像发布（API 36-ext18 镜像为 WebView 133），与真机最新 WebView（如 vivo x300 的 149+）行为可能不同；触摸/手势类 bug 建议在真机验证。曾在模拟器上尝试将 WebView 升级到 149：官方 x86_64 WebView 无公开分发渠道（APKPure 的 x86_64 变体是占位包），arm64 WebView 虽可 `pm install --abi arm64-v8a` 强制安装，但 arm64 应用在 x86_64 模拟器的 berberis 翻译层会因未实现指令崩溃（`libndk_translation.so DoBadTrampoline`），因此 WebView 149+ 的验证以真机为准。
+模拟器内置 WebView 版本随镜像发布（API 36-ext18 镜像为 WebView 133），与真机最新 WebView（如 vivo x300 的 149+）行为可能不同；触摸/手势类 bug 建议在真机验证。实测镜像兼容性上限（WSL + emulator 37.x）：android-36-ext18（WebView 133）稳定可用；android-36.1（WebView 134）与 android-37.0/37.1 的 guest gfxstream 驱动会在 RegionSampling 中触发 `Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma` 崩溃循环，导致 system_server 反复重启、package 服务间歇不可用，稳定版与 canary 模拟器、GLDMA/VirtioGpuNext/-Vulkan 各种开关均无法绕过，需等待上游修复。也曾在模拟器上尝试将 WebView 升级到 149：官方 x86_64 WebView 无公开分发渠道（APKPure 的 x86_64 变体是占位包），arm64 WebView 虽可 `pm install --abi arm64-v8a` 强制安装，但 arm64 应用在 x86_64 模拟器的 berberis 翻译层会因未实现指令崩溃（`libndk_translation.so DoBadTrampoline`），因此 WebView 149+ 的验证以真机为准。
 
 ### 实机调试（USB）
 
