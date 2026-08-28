@@ -130,8 +130,8 @@ adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <
 
 ```bash
 # 安装镜像与工具（首次）
-sdkmanager "system-images;android-36;google_apis;x86_64" "emulator" "platform-tools"
-echo no | avdmanager create avd -n rlive_test -k "system-images;android-36;google_apis;x86_64" -d pixel_6
+sdkmanager "system-images;android-36-ext18;google_apis;x86_64" "emulator" "platform-tools"
+echo no | avdmanager create avd -n rlive_test -k "system-images;android-36-ext18;google_apis;x86_64" -d pixel_6
 
 # 启动 headless 模拟器（KVM 权限：sudo gpasswd -a <user> kvm 后重新登录）
 setsid sg kvm -c "$ANDROID_HOME/emulator/emulator -avd rlive_test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect" > /tmp/emu.log 2>&1 &
@@ -147,7 +147,7 @@ bun run tauri -- android build --debug --target x86_64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
 ```
 
-模拟器内置 WebView 版本随镜像发布（API 36 镜像约 WebView 133），与真机最新 WebView（可达 149+）行为可能不同；触摸/手势类 bug 建议在真机验证。
+模拟器内置 WebView 版本随镜像发布（API 36-ext18 镜像为 WebView 133），与真机最新 WebView（如 vivo x300 的 149+）行为可能不同；触摸/手势类 bug 建议在真机验证。曾在模拟器上尝试将 WebView 升级到 149：官方 x86_64 WebView 无公开分发渠道（APKPure 的 x86_64 变体是占位包），arm64 WebView 虽可 `pm install --abi arm64-v8a` 强制安装，但 arm64 应用在 x86_64 模拟器的 berberis 翻译层会因未实现指令崩溃（`libndk_translation.so DoBadTrampoline`），因此 WebView 149+ 的验证以真机为准。
 
 ### 实机调试（USB）
 
