@@ -63,7 +63,7 @@ import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
-import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
+import { commitTween, killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
 
@@ -993,23 +993,30 @@ export function PlayerPane({
         if (panel) panel.style.transform = "scale(1)";
         return;
       }
-      // 提示层的自然态是 opacity-0 / scale(0.97)，展开后由 fill 持有终态；
-      // 隐藏补间的结束帧才回到自然态，由 settleTween 归还。
+      // 提示层的自然态是 opacity-0 / scale(0.97)，展开后的终态由 commitTween 固化为
+      // 内联样式持有；隐藏补间的结束帧才回到自然态，由 settleTween 归还。
+      // 不能用 fill 持有展开态：已完成的填充动画会被部分 WebView 从
+      // getAnimations() 移除而效果仍挂在级联上，之后任何 cancel 都无法清除，
+      // 隐藏淡出结束的瞬间会跳回旧效果并永久卡在展开态（提示卡不消失）。
       // 起点读当前计算值而不是固定常量：隐藏中途再次手势时从当前透明度/缩放
       // 平滑接续（GSAP `.to` 的语义），不跳回起点。
       const feedbackFrom = getComputedStyle(feedback).opacity;
       const panelFrom = panel ? getComputedStyle(panel).transform : null;
-      tween(feedback, [{ opacity: feedbackFrom }, { opacity: "1" }], {
-        duration: 160,
-        easing: EASE_OUT,
-        fill: "both",
-      });
-      if (panel && panelFrom) {
-        tween(panel, [{ transform: panelFrom }, { transform: "scale(1)" }], {
+      commitTween(
+        tween(feedback, [{ opacity: feedbackFrom }, { opacity: "1" }], {
           duration: 160,
           easing: EASE_OUT,
           fill: "both",
-        });
+        }),
+      );
+      if (panel && panelFrom) {
+        commitTween(
+          tween(panel, [{ transform: panelFrom }, { transform: "scale(1)" }], {
+            duration: 160,
+            easing: EASE_OUT,
+            fill: "both",
+          }),
+        );
       }
     },
     [],
