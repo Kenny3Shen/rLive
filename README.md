@@ -143,6 +143,25 @@ $env:Path = "$env:LIBCLANG_PATH;$env:Path"
 
 Windows 构建会校验固定的官方 FFmpeg 源码 SHA-256，只启用录制用到的组件，并把 `avformat`、`avcodec`、`avutil`、LGPL 2.1 许可证和构建说明放到 `rlive.exe` 同目录。携带上游许可证不代表应用整体分发合规已经完成。
 
+### Android 调试
+
+Android 前端运行于系统 WebView，debug 构建的 APK 可通过 CDP 远程调试（release 包不会创建调试 socket）。详细流程见 [Android 开发文档](docs/zh/Android开发-Windows.md)的「Android 调试」一节，核心步骤：
+
+```bash
+# 真机（arm64）：安装 debug 包并接入 WebView 调试
+bun run tauri -- android build --debug --target aarch64
+adb install -r src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
+
+PID=$(adb shell pidof com.shenss.rlive | tr -d '\r\n ')
+adb forward tcp:9222 localabstract:webview_devtools_remote_$PID
+curl -s http://localhost:9222/json/version    # 应返回 WebView 版本
+
+# 用 Chrome 打开 chrome://inspect，或用 playwright-cli 直接连接
+playwright-cli attach --cdp=http://localhost:9222
+```
+
+注意事项：模拟器（x86_64 镜像）与真机（arm64）需分别构建对应 ABI 的 APK；手机需开启「USB 调试」并保持屏幕常亮；触摸/手势类问题建议在真机复现，模拟器注入的输入没有真实手指的微抖。
+
 ## 文档
 
 | 文档                                       | 内容                                                     |
