@@ -26,8 +26,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Editor metadata
-/.vscode/*
-!/.vscode/extensions.json
+/.vscode/
 /.idea/
 .DS_Store
 *.suo
@@ -44,7 +43,7 @@ lerna-debug.log*
 /.grok/
 /.codex/
 /.omp/
-/.claude/worktrees/
+/.claude/
 /docs/diagrams/
 
 # Local release artifacts and signing material
