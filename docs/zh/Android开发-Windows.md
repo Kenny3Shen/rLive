@@ -10,7 +10,7 @@ Android 构建使用 Tauri 2、JDK 17、Android SDK、NDK 29.0.13846066 和 Rust
 - Rust target `aarch64-linux-android`
 - Bun 和 JDK 17
 
-QuickJS 的 FFI 绑定需要 NDK clang。Linux/WSL 下通过仓库的 `bun run tauri` 入口构建 Android 时，会自动探测 `ANDROID_NDK_HOME`（或 `ANDROID_HOME` 下的最新 NDK），并为 bindgen、`cc-rs` 和 Cargo linker 注入同一套 NDK 工具链。Tauri 的 Android 构建不经过 `cargo-ndk`，不要把主机 `clang` 或桌面 MSVC 工具链用于 Android。
+Android 交叉编译需要 NDK clang：`scripts/tauri.mjs` 会把它注入为 Cargo linker 与 cc-rs 的 C 编译器（如 rusqlite 打包的 SQLite）。Linux/WSL 下通过仓库的 `bun run tauri` 入口构建 Android 时，会自动探测 `ANDROID_NDK_HOME`（或 `ANDROID_HOME` 下的最新 NDK），并为 cc-rs 和 Cargo linker 注入同一套 NDK 工具链。Tauri 的 Android 构建不经过 `cargo-ndk`，不要把主机 `clang` 或桌面 MSVC 工具链用于 Android。
 
 先设置 SDK/NDK 根目录并确认目标：
 

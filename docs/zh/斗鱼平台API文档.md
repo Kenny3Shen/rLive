@@ -1,6 +1,6 @@
 # 斗鱼平台 API 文档
 
-更新时间：2026-07-27。本页记录 rLive 的斗鱼浏览、播放、账号与实时弹幕接入，以及发送状态机的修复与验证。
+更新时间：2026-08-29。本页记录 rLive 的斗鱼浏览、播放、账号与实时弹幕接入，以及发送状态机的修复与验证。
 
 ## 能力总览
 
@@ -8,14 +8,14 @@
 | --- | --- | --- |
 | 分类、推荐、分区房间、搜索 | 已支持 | 使用网页/H5 读取接口；推荐、分区与搜索按上游分页结果展示。 |
 | 房间详情 | 已支持 | 解析房间、主播、热度、公告、开播状态与开播时间。 |
-| 播放与清晰度 | 已支持 | 使用网页下发的加密播放参数获取线路和清晰度。 |
+| 播放与清晰度 | 已支持 | 使用 `getEncryption` 加密描述符 + 本地 MD5 链签名的 `getH5PlayV1` 获取线路和清晰度。 |
 | 实时弹幕接收 | 已支持 | 连接斗鱼弹幕网关，过滤高频进场噪声并展示普通消息与礼物事件。 |
 | 账号 | 已支持 | 可扫码登录或手动保存完整 Cookie；只保存在当前设备。 |
 | 普通弹幕发送与会话级自动发送 | 已验证 | 已在测试直播间完成发送；每个片段仍按平台确认和真实回显处理。 |
 
 ## rLive 接入接口
 
-读取能力通过统一适配器接口提供：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。房间详情会先取得网页播放签名，再换取可用 CDN、清晰度和播放 URL；签名只在内存中短暂使用。
+读取能力通过统一适配器接口提供：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。播放签名由 `sites/douyu/sign.rs` 以纯 Rust 计算：从 `wgapi/livenc/liveweb/websec/getEncryption` 拉取短时效加密描述符（进程内缓存并单飞刷新），`auth` 由描述符的 `key` / `rand_str` / `enc_time` 迭代 MD5 链得到，每次播放请求都用当前时间戳重新计算；签名只在内存中短暂使用。播放请求发往 `lapi/live/getH5PlayV1`，旧 `getH5Play` 端点已被上游下线（HTTP 403）。
 
 实时能力由 `danmaku_connect` 和 `douyu_danmaku_send_status` / `douyu_danmaku_send` 提供。后两者是当前账号发送一个文本片段的接口，手动发送与房间内会话级自动发送均复用；接收与发送使用不同网关职责：接收链路负责房间事件，发送链路负责当前账号的一条文字消息；两者都遵守应用代理设置。
 

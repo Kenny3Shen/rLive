@@ -1,7 +1,7 @@
 //! 抖音直播弹幕传输。
 //!
 //! 抖音的 Web IM 接口要求一个短时效的带签名 WSS URL。rLive 在本地构造该 URL：
-//! 房间元数据 + 匿名用户 id，经 QuickJS 生成 MSSDK 签名，然后建立采用
+//! 房间元数据 + 匿名用户 id，经 X-Bogus 算法（纯 Rust）生成签名，然后建立采用
 //! gzip / protobuf 分帧、带心跳与 ACK 的直连 WebSocket。拨号会在多个 webcast
 //! 边缘主机之间轮换，读循环则按状态感知的指数退避重连。
 
@@ -62,7 +62,7 @@ pub struct DouyinDanmakuArgs {
     pub room_id: String,
     /// 绑定到签名 URL 的匿名 Web uid。
     pub user_unique_id: String,
-    /// 短时效的 MSSDK WSS 签名。
+    /// 短时效的 X-Bogus WSS 签名。
     pub signature: String,
     /// 浏览器风格的 `internal_ext` query 取值（参见 [`build_internal_ext`]）。
     pub internal_ext: String,
@@ -90,7 +90,7 @@ fn douyin_ws_hosts() -> Vec<String> {
 
 /// 把房间元数据解析为一次短时效的带签名 WSS 连接。
 ///
-/// 流程为：内部房间 id + 匿名用户 id → 本地 MSSDK 签名 →
+/// 流程为：内部房间 id + 匿名用户 id → 本地 X-Bogus 签名 →
 /// WSS query string，然后为直连 WebSocket 准备 Cookie / Origin 请求头。
 /// 边缘主机由 [`run_loop`] 在每次拨号时选择，
 /// 因此签名与 `internal_ext` 在这里计算一次并在各主机间共用。
@@ -175,7 +175,7 @@ fn build_wss_url(host: &str, args: &DouyinDanmakuArgs) -> AppResult<String> {
 }
 
 /// 从 Web 客户端捕获的浏览器风格 `internal_ext`。该值把 WSS 请求绑定到
-/// 房间／web id 这一对上，且*不*属于 MSSDK 签名的输入，
+/// 房间／web id 这一对上，且*不*属于签名的输入，
 /// 因此可以在不重新签名的情况下添加。
 fn build_internal_ext(room_id: &str, user_unique_id: &str, ts_ms: u64) -> String {
     let first_req_ms = ts_ms.saturating_sub(100);
@@ -845,6 +845,101 @@ fn encode_ack(log_id: u64, internal_ext: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use flate2::{Compression, write::GzEncoder};
+
+    /// 直播 WSS 握手冒烟：X-Bogus 签名必须被 webcast 边缘接受。
+    /// 覆盖纯 Rust 签名链路：匿名 `ttwid` 引导 → feed 开播房间 →
+    /// [`build_connection`] 签名 → 握手 → 收到首帧。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_wss_signature_smoke() {
+        let client = crate::http_client::default_client();
+
+        // 1) 匿名 ttwid 引导（与 DouyinSite::ensure_web_session 同源）。
+        let head = client
+            .head("https://live.douyin.com/")
+            .header("user-agent", DEFAULT_USER_AGENT)
+            .send()
+            .await
+            .expect("live home head");
+        let ttwid = head
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find_map(|value| {
+                value
+                    .strip_prefix("ttwid=")
+                    .map(|rest| rest.split(';').next().unwrap_or("").to_string())
+            })
+            .filter(|value| !value.is_empty())
+            .expect("ttwid cookie");
+
+        // 2) 从首页信息流取一个开播房间。
+        let feed = client
+            .get(
+                "https://live.douyin.com/webcast/feed/?aid=6383&app_name=douyin_web&need_map=1&is_draw=1&inner_from_drawer=0&enter_source=web_homepage_hot_web_live_card&source_key=web_homepage_hot_web_live_card",
+            )
+            .header("user-agent", DEFAULT_USER_AGENT)
+            .header("referer", "https://live.douyin.com/hot_live")
+            .header("cookie", format!("ttwid={ttwid}"))
+            .send()
+            .await
+            .expect("feed request")
+            .json::<serde_json::Value>()
+            .await
+            .expect("feed json");
+        let room_id = feed
+            .pointer("/data/0/data/id_str")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                feed.pointer("/data/0/data/id")
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|id| id.to_string())
+            })
+            .filter(|id| id.bytes().all(|byte| byte.is_ascii_digit()))
+            .expect("live room in feed");
+
+        // 3) 纯 Rust X-Bogus 签名 + WSS 握手。
+        let args = build_connection(
+            &room_id,
+            &serde_json::json!({ "room_id": room_id }),
+            "",
+        )
+        .expect("connection args");
+        let url = build_wss_url(DOUYIN_WS_HOSTS[0], &args).expect("wss url");
+        let mut request = url.into_client_request().expect("request");
+        for (name, value) in &args.headers {
+            let name = HeaderName::from_bytes(name.trim().as_bytes()).expect("header name");
+            let value = HeaderValue::from_str(value.trim()).expect("header value");
+            request.headers_mut().insert(name, value);
+        }
+        request.headers_mut().insert(
+            HeaderName::from_bytes(b"Cookie").unwrap(),
+            HeaderValue::from_str(&format!("ttwid={ttwid}")).expect("cookie value"),
+        );
+
+        let (ws, _response) = tokio::time::timeout(
+            Duration::from_secs(CONNECT_TIMEOUT_SECS),
+            connect_async(request),
+        )
+        .await
+        .expect("handshake timeout")
+        .expect("wss handshake with X-Bogus signature");
+
+        // 4) 发送心跳后等待首帧，确认连接承载真实推送。
+        let (mut write, mut read) = ws.split();
+        write
+            .send(Message::Binary(HEARTBEAT.to_vec().into()))
+            .await
+            .expect("heartbeat");
+        let frame = tokio::time::timeout(Duration::from_secs(15), read.next())
+            .await
+            .expect("first frame timeout")
+            .expect("stream open")
+            .expect("first frame");
+        assert!(!frame.is_empty(), "first frame should carry data");
+    }
 
     fn field_bytes(field: u32, value: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
