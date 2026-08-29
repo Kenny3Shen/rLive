@@ -32,10 +32,13 @@ $FfmpegArchiveSha256 = "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77c
 # `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
 # 后端会静默地把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
 # 而这种缺失只会在运行时暴露，表现为用户机器上 HTTPS 录制失败。
+# HTTPPROXY_PROTOCOL 同理：HTTPS 录制经代理隧道时（设置里配了 HTTP 代理），
+# libavformat 的 tls 协议会把连接交给 `httpproxy://` 协议建立 CONNECT 隧道，
+# 缺了它录制只会得到一句 "Protocol not found"。
 $RequiredComponents = @(
     "HTTPS_PROTOCOL", "TLS_PROTOCOL", "HTTP_PROTOCOL", "FILE_PROTOCOL",
-    "CRYPTO_PROTOCOL", "FLV_DEMUXER", "LIVE_FLV_DEMUXER", "HLS_DEMUXER",
-    "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER"
+    "CRYPTO_PROTOCOL", "HTTPPROXY_PROTOCOL", "FLV_DEMUXER", "LIVE_FLV_DEMUXER",
+    "HLS_DEMUXER", "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER"
 )
 
 # `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
@@ -64,7 +67,7 @@ $ConfigureOptions = @(
     "--disable-everything",
     "--enable-demuxer=flv,live_flv,hls,mpegts,mov,matroska",
     "--enable-muxer=flv,mpegts",
-    "--enable-protocol=file,http,https,tls,tcp,crypto"
+    "--enable-protocol=file,http,https,tls,tcp,crypto,httpproxy"
 )
 
 function Invoke-NativeCommand(

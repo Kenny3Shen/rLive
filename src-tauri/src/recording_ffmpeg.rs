@@ -133,7 +133,9 @@ fn remux(
         Err(_) if *cancel.borrow() => {
             return interrupted("停止前尚未收到媒体数据".into());
         }
-        Err(error) => return failed(format!("Rust FFmpeg 打开直播流失败: {error}")),
+        Err(error) => {
+            return failed(open_failure_message(&source.url, proxy.as_deref(), error));
+        }
     };
     if *cancel.borrow() {
         return interrupted("停止前尚未收到媒体数据".into());
@@ -801,6 +803,25 @@ fn discard_unselected_hls_streams(
     }
 }
 
+/// 把 FFmpeg 打开输入失败的错误转换为用户可见消息。
+///
+/// HTTPS 直播流经代理录制时，libavformat 的 tls 协议会把连接交给
+/// `httpproxy://` 协议建立 CONNECT 隧道；裁剪构建若缺少该协议，
+/// 上层只会得到一句含糊的 "Protocol not found"。把这种已知成因
+/// 翻译出来，避免用户面对无法行动的错误。
+fn open_failure_message(url: &str, proxy: Option<&str>, error: Error) -> String {
+    let through_https_proxy_tunnel = proxy.is_some()
+        && url.trim_start().to_ascii_lowercase().starts_with("https://");
+    if through_https_proxy_tunnel && matches!(error, Error::ProtocolNotFound) {
+        format!(
+            "Rust FFmpeg 打开直播流失败: {error}（当前 FFmpeg 缺少 httpproxy 协议，\
+无法通过代理录制 HTTPS 直播流）"
+        )
+    } else {
+        format!("Rust FFmpeg 打开直播流失败: {error}")
+    }
+}
+
 fn ffmpeg_header_block(source: &PlayUrl) -> String {
     let mut headers = String::new();
     let mut has_user_agent = false;
@@ -886,11 +907,13 @@ mod tests {
     use super::super::PlaybackProtocol;
     use super::{
         FfmpegRecordingOptions, MAX_INVALID_READS, PacketTimeline, PlayUrl, ReadFailure,
-        STREAM_STALL_TIMEOUT, StopReason, build_input_options, classify_read_failure, publish_part,
+        STREAM_STALL_TIMEOUT, StopReason, build_input_options, classify_read_failure,
+        open_failure_message, publish_part,
     };
     use ffmpeg_next::{Error, Packet, Rational};
     use std::fs;
     use std::io::Write;
+    use std::time::{Duration, Instant};
 
     /// 通过*进程内* libavformat 绑定、携带真实 `build_input_options` 字典来打开
     /// 预热过的录制代理 —— 与录制执行的是同一个调用。`stream_proxy` 里的 CLI
@@ -1229,6 +1252,35 @@ mod tests {
         assert!(message.contains("ADTS 缺失"), "应保留底层错误: {message}");
     }
 
+    /// 代理下的 HTTPS 直播流打开失败时，"Protocol not found" 的真实成因是
+    /// FFmpeg 构建缺少 httpproxy 协议；错误消息必须把它说出来，
+    /// 否则用户面对的只是一句无法行动的废话。
+    #[test]
+    fn protocol_not_found_through_an_https_proxy_names_the_missing_protocol() {
+        let url = "https://example.com/live.flv";
+        let message = open_failure_message(url, Some("http://127.0.0.1:7897/"), Error::ProtocolNotFound);
+        assert!(
+            message.contains("httpproxy"),
+            "应指出缺失的协议名: {message}"
+        );
+
+        // 没有代理或非 HTTPS 地址时不追加误导性提示。
+        for (url, proxy) in [
+            (url, None),
+            ("http://example.com/live.flv", Some("http://127.0.0.1:7897/")),
+        ] {
+            let message = open_failure_message(url, proxy, Error::ProtocolNotFound);
+            assert!(
+                !message.contains("httpproxy"),
+                "无代理成因时不应追加提示: {message}"
+            );
+        }
+
+        // 其他错误即使发生在代理下也不改写。
+        let message = open_failure_message(url, Some("http://127.0.0.1:7897/"), Error::InvalidData);
+        assert!(!message.contains("httpproxy"), "仅 ProtocolNotFound 补充成因: {message}");
+    }
+
     fn packet(stream: usize, dts: i64, pts: i64) -> Packet {
         let mut packet = Packet::empty();
         packet.set_stream(stream);
@@ -1334,5 +1386,193 @@ mod tests {
             assert!(dts.saturating_abs() < 1_i64 << 40);
             assert!(pts.saturating_abs() < 1_i64 << 40);
         }
+    }
+
+    /// 端到端录制启动冒烟：推荐 → 房间详情 → 播放地址 → 与 `remux` 完全一致的
+    /// 选项字典进程内打开直播流 → 读到真实媒体包。
+    ///
+    /// 不写盘、不跑完整 `remux`，但覆盖录制启动的全部失败面：站点 API、
+    /// 地址解析、请求头、协议选项与 FFmpeg 打开。Twitch 源与生产路径一致地
+    /// 经预热代理打开。
+    ///
+    /// 环境变量：
+    /// - `RLIVE_RECORDING_SMOKE_PROXY`：站点请求与 FFmpeg 都经此 HTTP 代理，
+    ///   验证代理下的 HTTPS 隧道路径（如 `http://127.0.0.1:7897/`）。
+    /// - `RLIVE_RECORDING_SMOKE_ROOM`：直接指定房间号，跳过推荐列表探测。
+    async fn live_recording_open_smoke(site_id: crate::models::live::SiteId) {
+        let proxy = std::env::var("RLIVE_RECORDING_SMOKE_PROXY")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let site =
+            crate::sites::site_with_proxy(&site_id, None, proxy.as_deref()).expect("site");
+
+        let detail = match std::env::var("RLIVE_RECORDING_SMOKE_ROOM") {
+            Ok(room) => site.get_room_detail(&room).await.expect("room detail"),
+            Err(_) => {
+                let page = site.get_recommend_rooms(1).await.expect("recommend page");
+                assert!(!page.items.is_empty(), "{site_id:?} 推荐列表为空");
+                let mut found = None;
+                for item in page.items.iter().take(12) {
+                    if let Ok(detail) = site.get_room_detail(&item.room_id).await
+                        && detail.status
+                    {
+                        found = Some(detail);
+                        break;
+                    }
+                }
+                found.unwrap_or_else(|| panic!("{site_id:?} 推荐列表前 12 个房间都没有开播"))
+            }
+        };
+        assert!(detail.status, "指定的房间未开播");
+
+        let qualities = site.get_play_qualities(&detail).await.expect("play qualities");
+        assert!(!qualities.is_empty(), "{site_id:?} 无可用画质");
+        let mut urls = site
+            .get_play_urls(&detail, &qualities[0])
+            .await
+            .expect("play urls");
+        assert!(!urls.is_empty(), "{site_id:?} 无播放线路");
+        let source = urls
+            .iter()
+            .position(|url| url.protocol != PlaybackProtocol::Unknown)
+            .map(|index| urls.swap_remove(index))
+            .unwrap_or_else(|| urls.swap_remove(0));
+        let preview = &source.url[..source.url.len().min(120)];
+        eprintln!("{site_id:?} source protocol={:?} url={preview}", source.protocol);
+
+        // Twitch：与生产一致，经预热代理打开；解复用器只探测一次，
+        // 广告插播中的清单会让直连打开随机失败。
+        let twitch_recovery = (source.protocol == PlaybackProtocol::Hls)
+            .then(|| source.twitch_ad_recovery.clone())
+            .flatten();
+        let warmed = match twitch_recovery {
+            Some(recovery) => {
+                let session_id = "recording:live-smoke".to_string();
+                let recording_proxy = crate::stream_proxy::StreamProxy::new();
+                let local_url = recording_proxy
+                    .start(
+                        source.url.clone(),
+                        source.headers.clone(),
+                        session_id.clone(),
+                        true,
+                        proxy.as_deref(),
+                        Some(recovery),
+                    )
+                    .await
+                    .expect("启动 Twitch 录制清单代理");
+                recording_proxy
+                    .wait_for_playable_manifest(
+                        &local_url,
+                        &session_id,
+                        crate::stream_proxy::TWITCH_RECORDING_WARMUP_BUDGET,
+                    )
+                    .await
+                    .expect("等待 Twitch 录制清单");
+                Some((recording_proxy, session_id, local_url))
+            }
+            None => None,
+        };
+        let open_source = match &warmed {
+            Some((_, _, local_url)) => {
+                let mut warmed_source = source.clone();
+                warmed_source.url = local_url.clone();
+                warmed_source.headers.clear();
+                warmed_source.twitch_ad_recovery = None;
+                warmed_source
+            }
+            None => source.clone(),
+        };
+        // 直连时把代理交给 FFmpeg；本地代理已在上游处理过它。
+        let ffmpeg_proxy = warmed.is_none().then(|| proxy.as_deref()).flatten();
+
+        let result = open_and_read_media_packets(&open_source, ffmpeg_proxy).await;
+        if let Some((recording_proxy, session_id, _)) = warmed {
+            recording_proxy.stop_for_session(&session_id);
+        }
+        let (packets, bytes, streams) = result.expect("进程内打开直播流并读取媒体包");
+        assert!(packets >= 3, "{site_id:?} 读到的媒体包过少: {packets}");
+        assert!(bytes > 0, "{site_id:?} 未读到任何媒体字节");
+        eprintln!(
+            "{site_id:?} 录制冒烟通过: packets={packets} bytes={bytes} streams={streams}"
+        );
+    }
+
+    /// 用录制真实的选项字典打开直播流，读到至少几包真实媒体数据。
+    async fn open_and_read_media_packets(
+        source: &PlayUrl,
+        proxy: Option<&str>,
+    ) -> Result<(usize, i64, u32), String> {
+        let options = build_input_options(source, proxy, &FfmpegRecordingOptions::default());
+        let url = source.url.clone();
+        let proxy = proxy.map(str::to_string);
+        let proxy_for_error = proxy.clone();
+        tokio::task::spawn_blocking(move || {
+            super::initialize()?;
+            let mut dictionary = ffmpeg_next::Dictionary::new();
+            for (key, value) in &options {
+                dictionary.set(key, value);
+            }
+            // 打开（含 HLS 探测）与读包共享一个壁钟预算，
+            // 避免坏流把测试无限挂住。
+            let deadline = Instant::now() + Duration::from_secs(90);
+            let mut input =
+                ffmpeg_next::format::input_with_interrupt_and_dictionary(
+                    &url,
+                    move || Instant::now() >= deadline,
+                    dictionary,
+                )
+                .map_err(|error| open_failure_message(&url, proxy_for_error.as_deref(), error))?;
+            let streams = input.nb_streams();
+            let mut packets = 0_usize;
+            let mut bytes = 0_i64;
+            for _ in 0..32 {
+                let mut packet = Packet::empty();
+                packet
+                    .read(&mut input)
+                    .map_err(|error| format!("读取媒体包失败: {error}"))?;
+                packets += 1;
+                bytes += packet.size() as i64;
+                // 单个视频关键帧就可能超过 64 KB，因此字节数只在凑够包数后才参与提前退出。
+                if packets >= 3 && bytes >= 65_536 {
+                    break;
+                }
+            }
+            Ok((packets, bytes, streams))
+        })
+        .await
+        .map_err(|error| format!("demux 任务失败: {error}"))?
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_bilibili_recording_open_smoke() {
+        live_recording_open_smoke(crate::models::live::SiteId::Bilibili).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_huya_recording_open_smoke() {
+        live_recording_open_smoke(crate::models::live::SiteId::Huya).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_douyu_recording_open_smoke() {
+        live_recording_open_smoke(crate::models::live::SiteId::Douyu).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_douyin_recording_open_smoke() {
+        live_recording_open_smoke(crate::models::live::SiteId::Douyin).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_twitch_recording_open_smoke() {
+        live_recording_open_smoke(crate::models::live::SiteId::Twitch).await;
     }
 }

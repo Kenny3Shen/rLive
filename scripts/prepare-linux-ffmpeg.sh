@@ -170,15 +170,19 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} -> $prefix"
     --disable-everything \
     --enable-demuxer=flv,live_flv,hls,mpegts,mov,matroska \
     --enable-muxer=flv,mpegts \
-    --enable-protocol=file,http,https,tls,tcp,crypto \
+    --enable-protocol=file,http,https,tls,tcp,crypto,httpproxy \
     --pkg-config-flags=--static
 
   # `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
   # 后端会把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
   # 而这种缺失只会在运行时暴露，表现为用户机器上 HTTPS 录制失败。
+  # httpproxy 同理：HTTPS 录制经代理隧道时（设置里配了 HTTP 代理），
+  # libavformat 的 tls 协议会把连接交给 `httpproxy://` 协议建立 CONNECT 隧道，
+  # 缺了它录制只会得到一句 "Protocol not found"。
   # 因此断言生成的头文件，而不是相信退出码。
   for component in \
     HTTPS_PROTOCOL TLS_PROTOCOL HTTP_PROTOCOL FILE_PROTOCOL CRYPTO_PROTOCOL \
+    HTTPPROXY_PROTOCOL \
     FLV_DEMUXER LIVE_FLV_DEMUXER HLS_DEMUXER MPEGTS_DEMUXER MOV_DEMUXER \
     FLV_MUXER MPEGTS_MUXER; do
     if ! grep -qx "#define CONFIG_${component} 1" config_components.h; then
