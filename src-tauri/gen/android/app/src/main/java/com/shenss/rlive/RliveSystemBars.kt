@@ -3,6 +3,9 @@ package com.shenss.rlive
 import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.webkit.WebView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
@@ -23,6 +26,10 @@ import androidx.core.view.WindowInsetsControllerCompat
 object RliveSystemBars {
   private const val PREFERENCES_NAME = "rlive-system-bars"
   private const val KEY_DARK_SURFACE = "dark_surface"
+
+  /** 与 index.html 启动页同源的背景色，保证启动窗口到 WebView 首帧颜色连续。 */
+  private val LAUNCH_BACKGROUND_DARK = Color.parseColor("#111217")
+  private val LAUNCH_BACKGROUND_LIGHT = Color.parseColor("#f8f9fb")
 
   /** 最近一次前端下发的应用主题是否为深色表面；null 表示尚未收到。 */
   private var darkSurfaceFromApp: Boolean? = null
@@ -49,9 +56,35 @@ object RliveSystemBars {
   fun restoreFromPreferences(activity: Activity) {
     val preferences = activity.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
     if (preferences.contains(KEY_DARK_SURFACE)) {
-      darkSurfaceFromApp = preferences.getBoolean(KEY_DARK_SURFACE, false)
+      val darkSurface = preferences.getBoolean(KEY_DARK_SURFACE, false)
+      darkSurfaceFromApp = darkSurface
+      applyLaunchWindowBackground(activity, darkSurface)
       reapply(activity)
     }
+  }
+
+  /**
+   * 启动窗口背景跟随应用主题：主题的 windowBackground 按 **系统** night mode
+   * 解析，深色主题在系统浅色下会先白屏一秒再切换；这期间按应用主题恢复的
+   * 白色状态栏图标叠在白底上也不可读。背景与 index.html 启动页同色，
+   * WebView 首帧前就绪。无记忆值时保持主题默认。
+   */
+  private fun applyLaunchWindowBackground(activity: Activity, darkSurface: Boolean) {
+    val background = if (darkSurface) LAUNCH_BACKGROUND_DARK else LAUNCH_BACKGROUND_LIGHT
+    activity.window.setBackgroundDrawable(ColorDrawable(background))
+  }
+
+  /**
+   * WebView 首次绘制前默认白底，会在启动窗口与页面首帧之间插入一帧白闪，
+   * 这帧上白色状态栏图标也不可读。按记忆的应用主题（无记忆值时回落
+   * 系统 night mode，与 enableEdgeToEdge 一致）预置底色。
+   * 必须在页面加载前调用，即 MainActivity.onWebViewCreate。
+   */
+  fun applyWebViewBackground(activity: Activity, webView: WebView) {
+    val darkSurface = darkSurfaceFromApp ?: systemInNightMode(activity)
+    webView.setBackgroundColor(
+      if (darkSurface) LAUNCH_BACKGROUND_DARK else LAUNCH_BACKGROUND_LIGHT,
+    )
   }
 
   /**

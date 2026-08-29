@@ -70,6 +70,9 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    // WebView 预绘制帧的底色跟随应用主题，避免启动窗口与页面首帧之间
+    // 插入一帧白闪（见 RliveSystemBars.applyWebViewBackground）。
+    RliveSystemBars.applyWebViewBackground(this, webView)
     installFullscreenBackHandler()
 
     // Wry 在本钩子返回后立刻安装它生成的 RustWebChromeClient。把我们的
