@@ -17,6 +17,13 @@ class MainActivity : TauriActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
 
+    // 视频全屏的 custom view 不会在重建后保留，静态覆盖标志同理要清掉。
+    RliveSystemBars.forgetVideoFullscreen()
+    // 上次会话的应用主题决定系统栏图标外观；否则冷启动首帧沿用
+    // enableEdgeToEdge() 按 **系统** night mode 的判定，页面加载后再纠正
+    // 会闪一次反色。「系统浅色 + 应用深色」正是这次修复的看不清场景。
+    RliveSystemBars.restoreFromPreferences(this)
+
     // 沉浸标志是静态的，Activity 重建会把它带过来，而重新加载的页面
     // 以窗口模式启动。这里先清掉，否则 onResume 会让系统栏在窗口模式的
     // 房间下保持隐藏。

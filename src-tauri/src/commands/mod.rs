@@ -1,6 +1,7 @@
 pub mod account;
 pub mod android_navigation;
 pub mod android_player_controls;
+pub mod android_system_bars;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod app_lifecycle;
 #[cfg(not(target_os = "android"))]

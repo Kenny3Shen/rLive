@@ -1,5 +1,6 @@
 import type { ThemeMode } from "../shared/stores/settingsStore";
 import { prefersReducedMotion } from "../shared/motion/preference";
+import { syncAndroidSystemBars } from "./androidSystemBars";
 
 export type ThemeTransition = {
   ready: Promise<void>;
@@ -15,6 +16,10 @@ export function applyTheme(theme: ThemeMode) {
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const dark = theme === "dark" || (theme === "system" && prefersDark);
   root.classList.toggle("dark", dark);
+  // Android 系统栏图标跟随应用主题：enableEdgeToEdge() 只按系统 night mode
+  // 决定一次，应用内切换亮暗时需经原生桥同步（内部自行去重、非 Android
+  // 客户端 no-op）。
+  syncAndroidSystemBars(dark);
 }
 
 /**

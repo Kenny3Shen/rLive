@@ -113,6 +113,8 @@ class RliveFullscreenWebChromeClient(
     controller.systemBarsBehavior =
       WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     controller.hide(WindowInsetsCompat.Type.systemBars())
+    // 画面为黑：临时滑出的系统栏必须是白图标（见 RliveSystemBars）。
+    RliveSystemBars.setVideoFullscreen(activity, true)
   }
 
   private fun dismissCustomView(): Boolean {
@@ -126,6 +128,8 @@ class RliveFullscreenWebChromeClient(
     customView = null
     customViewCallback = null
 
+    // 先撤掉视频全屏的白图标覆盖，restoreSystemBars 再回到应用主题外观。
+    RliveSystemBars.setVideoFullscreen(activity, false)
     restoreSystemBars()
     return true
   }
@@ -157,6 +161,9 @@ class RliveFullscreenWebChromeClient(
       val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
       controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
       controller.show(WindowInsetsCompat.Type.systemBars())
+      // 显示系统栏的同时重放应用主题图标外观：Android 可能在系统中断
+      // 全屏、Activity 重建等路径后不再保留之前的外观设置。
+      RliveSystemBars.reapply(activity)
     }
   }
 

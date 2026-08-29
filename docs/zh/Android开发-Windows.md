@@ -190,4 +190,4 @@ unzip -Z1 "$APK" | awk '/^lib\// { print }'
 
 `app-*-release.apk` 是可直接安装的 APK；`*.aab` 是应用商店格式，不能用 `adb install` 直接安装。`--ci` 未配置 release keystore 时可能生成 unsigned APK，必须先签名再安装或发布。
 
-安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。高刷设备可通过开发者选项的刷新率叠层确认前台目标模式；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型，也不应包含 `sherpa-onnx` / ONNX Runtime native runtime。
+安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。系统栏图标需覆盖四种组合：系统浅色 × 应用浅色/深色、系统深色 × 应用浅色/深色，图标始终与页面背景对比清晰；应用内切换主题即时生效，冷启动（`adb shell am force-stop` 后重开）首帧图标与上次主题一致；进入房间全屏（页面内层与视频 custom view）后下滑出的临时系统栏为白图标，退出后恢复。高刷设备可通过开发者选项的刷新率叠层确认前台目标模式；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型，也不应包含 `sherpa-onnx` / ONNX Runtime native runtime。
