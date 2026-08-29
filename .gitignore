@@ -44,6 +44,7 @@ lerna-debug.log*
 /.codex/
 /.omp/
 /.claude/worktrees/
+/docs/diagrams/
 
 # Local release artifacts and signing material
 /release-assets/
