@@ -40,6 +40,9 @@ use commands::android_player_controls::{
     android_player_controls_set_brightness, android_player_controls_set_immersive,
     android_player_controls_set_media_volume, android_player_controls_set_orientation,
 };
+#[cfg(target_os = "android")]
+use commands::android_system_bars::AndroidSystemBars;
+use commands::android_system_bars::android_system_bars_set_appearance;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::app_lifecycle::{app_confirm_exit, recording_active_count};
 #[cfg(not(target_os = "android"))]
@@ -139,6 +142,23 @@ fn android_back_navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/**
+ * 应用亮暗主题到 Android 系统栏图标外观的桥（见 `commands/android_system_bars`）。
+ * 应用主题存在 WebView 的 localStorage，Kotlin 读不到；前端每次应用主题时
+ * 把 resolved 亮暗经这里同步给原生。
+ */
+#[cfg(target_os = "android")]
+fn android_system_bars_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("system-bars")
+        .setup(|app, api| {
+            let handle =
+                api.register_android_plugin("com.shenss.rlive", "RliveSystemBarsPlugin")?;
+            app.manage(AndroidSystemBars(handle));
+            Ok(())
+        })
+        .build()
+}
+
 /// 应用日志的同步追加写入器。日志互斥锁中毒时绝不能打断播放或用户发起的
 /// 聊天发送，因此在这种异常情况下写入会被安全地丢弃。
 #[derive(Clone)]
@@ -216,12 +236,14 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
     // 仅限 Android：为播放器边缘手势提供窗口亮度、STREAM_MUSIC 音量
-    // 和全屏方向控制；并为返回键提供退回系统桌面的应用级桥。
+    // 和全屏方向控制；为返回键提供退回系统桌面的应用级桥；并把应用
+    // 亮暗主题同步到系统栏图标外观。
     // 桌面端沿用 Web 播放器的音量控制。
     #[cfg(target_os = "android")]
     let builder = builder
         .plugin(android_player_controls_plugin())
-        .plugin(android_back_navigation_plugin());
+        .plugin(android_back_navigation_plugin())
+        .plugin(android_system_bars_plugin());
 
     builder
         .setup(|app| {
@@ -357,6 +379,7 @@ pub fn run() {
             android_player_controls_reset_brightness,
             android_player_controls_set_orientation,
             android_player_controls_set_immersive,
+            android_system_bars_set_appearance,
             android_move_task_to_back,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_active_count,

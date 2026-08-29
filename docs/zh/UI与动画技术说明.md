@@ -68,7 +68,7 @@
 - `:root` 提供亮色变量和 `color-scheme: light`。
 - `.dark` 覆盖同一组语义变量并设置 `color-scheme: dark`。
 - `@theme inline` 将 CSS 变量映射为 Tailwind 的 `bg-background`、`text-foreground`、`bg-card`、`text-muted-foreground` 等 utilities。
-- `applyTheme()` 根据 `light`、`dark` 或 `system` 切换根元素 `.dark` class；Zustand 设置变化由 `src/main.tsx` 订阅并立即应用。
+- `applyTheme()` 根据 `light`、`dark` 或 `system` 切换根元素 `.dark` class；Zustand 设置变化由 `src/main.tsx` 订阅并立即应用。Android 上同一次调用还经 `src/app/androidSystemBars.ts` 把 resolved 亮暗同步到系统栏图标颜色（Kotlin `RliveSystemBars` 唯一写入，冷启动用 SharedPreferences 记忆值恢复，视频全屏与页面内全屏覆盖为白图标），避免「系统浅色 + 应用深色」时状态栏图标与页面背景同色。
 
 新增颜色时应先确定语义，再同时补齐亮暗值和 `@theme inline` 映射。组件中使用语义 token，不写 `bg-white dark:bg-gray-*`，也不使用原始蓝、红、绿值代替状态语义。`RecordedDanmakuCanvas` 等底层绘图无法消费 Tailwind class 时，才使用明确记录用途的中性描边颜色；本机账号实时弹幕沿用平台原色，以底部优先固定而非身份边框区分。
 
@@ -458,6 +458,7 @@ bash scripts/sync-to-windows.sh
 | `src/app/layout/Shell.tsx` | 页面滚动、路由来源识别和动画编排 |
 | `src/app/layout/Sidebar.tsx` | 桌面/移动导航和主题按钮反馈 |
 | `src/app/theme.ts` | 主题应用、系统亮暗监听与全局淡化过渡 |
+| `src/app/androidSystemBars.ts` | Android 系统栏图标亮暗跟随应用主题的原生同步 |
 | `src/shared/motion/preference.ts` | 系统减少动效偏好检测 |
 | `src/shared/motion/tokens.ts` | 共享 easing 和 duration |
 | `src/shared/motion/tween.ts` | Web Animations 补间助手：取消旧补间与行内样式归还 |

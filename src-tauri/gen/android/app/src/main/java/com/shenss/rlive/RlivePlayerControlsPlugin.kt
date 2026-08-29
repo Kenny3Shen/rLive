@@ -239,6 +239,9 @@ class RlivePlayerControlsPlugin(private val activity: Activity) : Plugin(activit
       // behavior 与可见性（见那个方法的注释）。
       RliveFullscreenWebChromeClient.restoreSystemBars(activity)
     }
+    // 沉浸期间压在黑色画面上的临时系统栏必须是白图标；退出时
+    // restoreSystemBars 会回到应用主题外观。
+    RliveSystemBars.reapply(activity)
   }
 
   private fun state(): JSObject = JSObject().apply {
