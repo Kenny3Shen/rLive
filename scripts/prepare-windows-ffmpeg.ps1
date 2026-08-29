@@ -98,7 +98,7 @@ function Find-LibClangDirectory {
         }
         # Android NDK 的 clang 是面向 Android 工具链的宿主编译器。当目标为
         # x86_64-pc-windows-msvc 时，它的资源目录不提供
-        # libquickjs-ng-sys 所需的 MSVC 桌面头文件。
+        # bindgen 所需的 MSVC 桌面头文件。
         if ($Candidate -match '(?i)[\\/]android-sdk[\\/]|[\\/]ndk[\\/]') {
             return $false
         }
@@ -523,9 +523,8 @@ $readmeSource = Join-Path $ffmpegRoot "README.txt"
 
 $env:LIBCLANG_PATH = Find-LibClangDirectory
 $env:RLIVE_FFMPEG_RUNTIME_DIR = Join-Path $ffmpegRoot "bin"
-# libquickjs-ng-sys 用字面编译器名 `clang` 调用 cc-rs。LIBCLANG_PATH
-# 供 bindgen 使用，但 cc-rs 通过 PATH 解析可执行文件，
-# 因此要把同一个 LLVM bin 目录同时暴露给两个构建步骤。
+# LIBCLANG_PATH 供 ffmpeg-next 的 bindgen 使用；cc-rs 通过 PATH 解析
+# 可执行文件，因此要把同一个 LLVM bin 目录同时暴露给两个构建步骤。
 $env:Path = $env:LIBCLANG_PATH + ";" + $env:RLIVE_FFMPEG_RUNTIME_DIR + ";" + $env:Path
 
 if ($StageDestination) {

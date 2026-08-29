@@ -99,7 +99,7 @@ rLive 是基于 Tauri 的跨平台直播客户端。它在 Rust 后端统一平�
 ### 环境要求
 
 - [Rust](https://www.rust-lang.org/tools/install)、[Bun](https://bun.sh/) 和 [Tauri 2 前置环境](https://v2.tauri.app/start/prerequisites/)
-- Rust 构建需要 clang/libclang 供 `quickjs-rusty` 与桌面 `ffmpeg-next 9.0.0` 的 bindgen 使用；桌面构建还需要匹配的 FFmpeg headers、link libraries、运行库，以及 `pkg-config` / `FFMPEG_DIR`
+- Rust 构建需要 clang/libclang 供桌面 `ffmpeg-next 9.0.0` 的 bindgen 使用；桌面构建还需要匹配的 FFmpeg headers、link libraries、运行库，以及 `pkg-config` / `FFMPEG_DIR`
 - Android 不编译桌面 FFmpeg、录制或本地 ASR 模块，环境配置见 [Android 开发文档](docs/zh/Android开发-Windows.md)
 
 ### 启动

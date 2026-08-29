@@ -68,27 +68,6 @@ impl DouyuSite {
         serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))
     }
 
-    async fn post_form(&self, url: &str, body: &str, referer: &str) -> AppResult<Value> {
-        let mut request = self
-            .client
-            .post(url)
-            .header("user-agent", UA)
-            .header("referer", referer)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body.to_string());
-        if !self.cookie.is_empty() && is_douyu_cookie_url(url) {
-            request = request.header("cookie", &self.cookie);
-        }
-        let text = request
-            .send()
-            .await
-            .map_err(|e| Self::err(format!("http post: {e}")))?
-            .text()
-            .await
-            .map_err(|e| Self::err(format!("body: {e}")))?;
-        serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))
-    }
-
     async fn room_info(&self, room_id: &str) -> AppResult<Value> {
         // betard API 返回房间字典
         let url = format!("https://www.douyu.com/betard/{room_id}");
@@ -108,6 +87,85 @@ impl DouyuSite {
     fn search_cookie(&self) -> String {
         let did = "10000000000000000000000000001501";
         merge_cookie_values(&format!("dy_did={did}; acf_did={did}"), &self.cookie)
+    }
+
+    /// 请求一次 H5 播放数据（`getH5PlayV1`）。
+    ///
+    /// 每次调用都用缓存的加密描述符重新签名（见 [`sign::get_sign`]），
+    /// 因此不会因详情页停留过久而用到陈旧时间戳。服务器拒绝签名
+    /// （HTTP 403 或 `error = -9` 时间戳错误）时，强制刷新描述符重试一次。
+    async fn request_play_data(&self, room_id: &str, rate: i64, cdn: &str) -> AppResult<Value> {
+        match self
+            .request_play_data_once(room_id, rate, cdn, false)
+            .await
+        {
+            Ok(value) => Ok(value),
+            Err(error) if error.code == sign::SIGN_REJECTED_CODE => {
+                self.request_play_data_once(room_id, rate, cdn, true)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn request_play_data_once(
+        &self,
+        room_id: &str,
+        rate: i64,
+        cdn: &str,
+        force_refresh: bool,
+    ) -> AppResult<Value> {
+        let body = sign::get_sign(&self.client, room_id, rate, cdn, force_refresh).await?;
+        let url = format!("https://www.douyu.com/lapi/live/getH5PlayV1/{room_id}");
+        let referer = format!("https://www.douyu.com/{room_id}");
+        let response = self
+            .client
+            .post(&url)
+            .header("user-agent", UA)
+            .header("referer", &referer)
+            .header("origin", "https://www.douyu.com")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header(
+                "cookie",
+                format!("dy_did={}; acf_did={}", sign::SIGN_DEVICE_ID, sign::SIGN_DEVICE_ID),
+            )
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| Self::err(format!("http post: {e}")))?;
+        let status = response.status();
+        if status.as_u16() == 403 || status.as_u16() == 401 {
+            // 服务器拒绝签名凭据：刷新描述符重签后重试。
+            return Err(AppError::new(sign::SIGN_REJECTED_CODE, "斗鱼播放签名被拒绝")
+                .with_site("douyu")
+                .retryable());
+        }
+        if !status.is_success() {
+            return Err(Self::err(format!("getH5PlayV1 http {}", status.as_u16())));
+        }
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Self::err(format!("body: {e}")))?;
+        let v: Value =
+            serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))?;
+        let error = json_i64(v.get("error").or_else(|| v.get("code")).unwrap_or(&Value::Null));
+        if error == -9 {
+            // 时间戳错误：签名已过期，重签重试。
+            return Err(AppError::new(sign::SIGN_REJECTED_CODE, "斗鱼播放签名已过期")
+                .with_site("douyu")
+                .retryable());
+        }
+        if error != 0 {
+            let msg = json_str(v.get("msg").unwrap_or(&Value::Null));
+            let reason = if msg.is_empty() {
+                format!("getH5PlayV1 error {error}")
+            } else {
+                format!("getH5PlayV1: {msg}")
+            };
+            return Err(Self::err(reason));
+        }
+        Ok(v)
     }
 }
 
@@ -514,19 +572,6 @@ impl LiveSite for DouyuSite {
                 )
             });
 
-        let enc = self
-            .get_json(
-                &format!("https://www.douyu.com/swf_api/homeH5Enc?rids={room_id}"),
-                &format!("https://www.douyu.com/{room_id}"),
-            )
-            .await?;
-        let key = format!("room{room_id}");
-        let crptext = json_str(enc.pointer(&format!("/data/{key}")).unwrap_or(&Value::Null));
-        if crptext.is_empty() {
-            return Err(Self::err("homeH5Enc empty"));
-        }
-        let sign_body = sign::get_sign(&crptext, room_id)?;
-
         let show_status = json_i64(room.get("show_status").unwrap_or(&Value::Null));
         let video_loop = json_i64(room.get("videoLoop").unwrap_or(&Value::Null));
         let hot = room
@@ -550,22 +595,14 @@ impl LiveSite for DouyuSite {
             notice: json_str(room.get("show_details").unwrap_or(&Value::Null)),
             url: format!("https://www.douyu.com/{room_id}"),
             raw: serde_json::json!({
-                "sign": sign_body,
                 "room_id": room_id,
             }),
         })
     }
 
     async fn get_play_qualities(&self, detail: &LiveRoomDetail) -> AppResult<Vec<LivePlayQuality>> {
-        let mut data = json_str(detail.raw.get("sign").unwrap_or(&Value::Null));
-        data.push_str("&cdn=&rate=-1&ver=Douyu_223061205&iar=1&ive=1&hevc=0&fa=0");
-        let room_id = detail.room_id.clone();
         let v = self
-            .post_form(
-                &format!("https://www.douyu.com/lapi/live/getH5Play/{room_id}"),
-                &data,
-                &format!("https://www.douyu.com/{room_id}"),
-            )
+            .request_play_data(&detail.room_id, -1, "")
             .await?;
         let data_obj = v.get("data").cloned().unwrap_or(Value::Null);
         let mut cdns: Vec<String> = data_obj
@@ -598,7 +635,6 @@ impl LiveSite for DouyuSite {
                     data: serde_json::json!({
                         "rate": rate,
                         "cdns": cdns,
-                        "sign": detail.raw.get("sign").cloned().unwrap_or(Value::String(String::new())),
                     }),
                 });
             }
@@ -609,7 +645,6 @@ impl LiveSite for DouyuSite {
                 data: serde_json::json!({
                     "rate": 0,
                     "cdns": cdns,
-                    "sign": detail.raw.get("sign").cloned().unwrap_or(Value::String(String::new())),
                 }),
             });
         }
@@ -622,7 +657,6 @@ impl LiveSite for DouyuSite {
         quality: &LivePlayQuality,
     ) -> AppResult<Vec<PlayUrl>> {
         let rate = json_i64(quality.data.get("rate").unwrap_or(&Value::Null));
-        let sign = json_str(quality.data.get("sign").unwrap_or(&Value::Null));
         let cdns = quality
             .data
             .get("cdns")
@@ -637,14 +671,7 @@ impl LiveSite for DouyuSite {
         let mut urls = Vec::new();
         for (index, cdn_v) in cdns.into_iter().enumerate() {
             let cdn = json_str(&cdn_v);
-            let body = format!("{sign}&cdn={cdn}&rate={rate}");
-            let v = self
-                .post_form(
-                    &format!("https://www.douyu.com/lapi/live/getH5Play/{room_id}"),
-                    &body,
-                    &format!("https://www.douyu.com/{room_id}"),
-                )
-                .await?;
+            let v = self.request_play_data(&room_id, rate, &cdn).await?;
             let data = v.get("data").cloned().unwrap_or(Value::Null);
             let rtmp_url = json_str(data.get("rtmp_url").unwrap_or(&Value::Null));
             let rtmp_live = html_unescape(&json_str(data.get("rtmp_live").unwrap_or(&Value::Null)));
@@ -793,5 +820,39 @@ mod tests {
 
         assert!(response.is_object());
         server.join().unwrap();
+    }
+
+    /// 完整链路：推荐 → 直播间 → 清晰度 → 播放地址。
+    /// 覆盖纯 Rust 签名（`getEncryption` 描述符 + MD5 链 + `getH5PlayV1`）
+    /// 的真实服务器行为。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_play_url_smoke() {
+        let site = DouyuSite::default();
+        let page = site.get_recommend_rooms(1).await.expect("recommend");
+        assert!(!page.items.is_empty());
+
+        let mut detail = None;
+        for item in page.items.iter().take(10) {
+            if let Ok(d) = site.get_room_detail(&item.room_id).await
+                && d.status
+            {
+                detail = Some(d);
+                break;
+            }
+        }
+        let detail = detail.expect("need at least one live room in recommend");
+        let qualities = site.get_play_qualities(&detail).await.expect("qualities");
+        assert!(!qualities.is_empty(), "no play qualities");
+        let urls = site
+            .get_play_urls(&detail, &qualities[0])
+            .await
+            .expect("play urls");
+        assert!(!urls.is_empty(), "no play urls");
+        assert!(
+            urls[0].url.starts_with("http"),
+            "play url should be http(s): {}",
+            urls[0].url
+        );
     }
 }
