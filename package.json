@@ -1,6 +1,6 @@
 {
   "name": "rlive",
-  "version": "2.18.3",
+  "version": "2.18.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,13 +8,13 @@
     "build": "tsc --noEmit && vite build",
     "lint": "oxlint --react-plugin src",
     "lint:fix": "oxlint --react-plugin --fix src",
-    "format": "oxfmt --write src package.json vite.config.ts tsconfig.json tsconfig.node.json",
-    "format:check": "oxfmt --check src package.json vite.config.ts tsconfig.json tsconfig.node.json",
-    "check": "bun run lint && bunx tsc --noEmit",
+    "format": "oxfmt --write src scripts/tauri.ts package.json vite.config.ts tsconfig.json tsconfig.node.json",
+    "format:check": "oxfmt --check src scripts/tauri.ts package.json vite.config.ts tsconfig.json tsconfig.node.json",
+    "check": "bun run lint && bunx tsc --noEmit && bunx tsc --noEmit -p tsconfig.node.json",
     "test:danmaku": "bun test tests/danmu-js-adapter.test.ts tests/danmaku-actions.test.ts tests/playback-failover.test.ts",
     "test:unit": "bun test tests/",
     "preview": "vite preview",
-    "tauri": "bun scripts/tauri.mjs",
+    "tauri": "bun scripts/tauri.ts",
     "bundle:linux": "bash scripts/build-linux-bundle.sh"
   },
   "dependencies": {

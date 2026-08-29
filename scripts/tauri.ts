@@ -9,7 +9,13 @@ const rawArgs = process.argv.slice(2);
 const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
 const environment = { ...process.env };
 
-const androidTargets = [
+interface AndroidTarget {
+  alias: string;
+  triple: string;
+  clangTarget: string;
+}
+
+const androidTargets: AndroidTarget[] = [
   {
     alias: "aarch64",
     triple: "aarch64-linux-android",
@@ -32,12 +38,12 @@ const androidTargets = [
   },
 ];
 
-function fail(message) {
+function fail(message: string): never {
   console.error(`Android toolchain configuration failed: ${message}`);
   process.exit(1);
 }
 
-function resolveAndroidNdk() {
+function resolveAndroidNdk(): string {
   const explicitNdk = environment.ANDROID_NDK_HOME || environment.NDK_HOME;
   if (explicitNdk) {
     return resolve(explicitNdk);
@@ -63,7 +69,7 @@ function resolveAndroidNdk() {
   return candidates[0];
 }
 
-function resolveToolchain(ndkRoot) {
+function resolveToolchain(ndkRoot: string): string {
   const hostTags = process.arch === "arm64" ? ["linux-aarch64", "linux-x86_64"] : ["linux-x86_64"];
   for (const hostTag of hostTags) {
     const candidate = join(ndkRoot, "toolchains", "llvm", "prebuilt", hostTag);
@@ -74,7 +80,7 @@ function resolveToolchain(ndkRoot) {
   fail(`NDK LLVM toolchain not found under ${ndkRoot}`);
 }
 
-function requestedAndroidTargets() {
+function requestedAndroidTargets(): AndroidTarget[] {
   const targetArgumentIndex = args.findIndex((arg) => arg === "--target");
   const targetArgument =
     targetArgumentIndex >= 0
@@ -95,7 +101,7 @@ function requestedAndroidTargets() {
   return selected;
 }
 
-function configureAndroidToolchain() {
+function configureAndroidToolchain(): void {
   if (process.platform !== "linux" || args[0] !== "android") {
     return;
   }
