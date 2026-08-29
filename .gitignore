@@ -38,6 +38,7 @@ lerna-debug.log*
 
 # Local worktrees and development tools
 /.worktrees/
+/.agents/
 /.superpowers/
 /.playwright-cli/
 /.grok/
