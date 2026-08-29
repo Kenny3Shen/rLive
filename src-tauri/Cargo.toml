@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "2.18.1"
+version = "2.18.2"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
@@ -40,18 +40,20 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream", "query", "form"] }
+# Single TLS backend everywhere: native-tls (SChannel on Windows / OpenSSL
+# elsewhere). Douyu's danmaku proxy ports offer only static-RSA suites that
+# rustls does not support, so HTTP (reqwest) and WebSocket (tokio-tungstenite)
+# both use native-tls.
+# reqwest is pinned to 0.12 so that rlive and tauri-plugin-http share one
+# compilation unit on desktop (tauri core itself needs 0.13 on mobile only).
+# `query`/`form` are built-in in 0.12, not cargo features.
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
 base64 = "0.22"
 md-5 = "0.11"
 hex = "0.4"
 percent-encoding = "2"
-# Single TLS backend everywhere: native-tls (SChannel on Windows / OpenSSL
-# elsewhere). Douyu's danmaku proxy ports offer only static-RSA suites that
-# rustls does not support, so HTTP (reqwest) and WebSocket (tokio-tungstenite)
-# both use native-tls.
-# With `native-tls` enabled on tokio-tungstenite, `None` is the native-tls backend.
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
