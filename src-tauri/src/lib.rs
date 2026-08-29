@@ -93,8 +93,10 @@ use state::AppState;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use tauri::Emitter;
 use tauri::Manager;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 const MAX_LOG_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -216,16 +218,26 @@ fn init_logging(directory: &std::path::Path) {
         }
     };
 
-    // 保持发布版持久日志只记录失败。特别是不要响应 `RUST_LOG`：
-    // 它可能把成功的认证或连接进度变成持久的本地记录。
-    let filter = EnvFilter::new("rlive_lib=warn");
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_ansi(false)
-        .with_file(true)
-        .with_line_number(true)
-        .with_writer(AppLogWriter(Arc::new(Mutex::new(file))))
+    let filter = file_log_filter();
+    let _ = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_file(true)
+                .with_line_number(true)
+                .with_writer(AppLogWriter(Arc::new(Mutex::new(file)))),
+        )
+        .with(filter)
         .try_init();
+}
+
+/// 发布版持久日志的过滤规则：仅记录 `rlive_lib` 自身的 WARN 及以上。
+/// 刻意不响应 `RUST_LOG`：它可能把成功的认证或连接进度变成持久的本地
+/// 记录。与固定串 `EnvFilter::new("rlive_lib=warn")` 语义等价
+/// （未列出的 target 全部关闭），但无需 env-filter feature
+/// 的动态过滤机制。
+fn file_log_filter() -> Targets {
+    Targets::new().with_target("rlive_lib", LevelFilter::WARN)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -446,4 +458,55 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_log_filter;
+    use std::sync::Mutex;
+    use tracing::Subscriber;
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
+
+    /// 记录穿透过滤层的事件，验证持久日志只放行 `rlive_lib` 的 WARN+。
+    #[derive(Default, Clone)]
+    struct Recorder {
+        events: std::sync::Arc<Mutex<Vec<(&'static str, tracing::Level)>>>,
+    }
+
+    impl<S: Subscriber> tracing_subscriber::Layer<S> for Recorder {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: Context<'_, S>,
+        ) {
+            let metadata = event.metadata();
+            self.events
+                .lock()
+                .unwrap()
+                .push((metadata.target(), *metadata.level()));
+        }
+    }
+
+    #[test]
+    fn file_log_filter_keeps_only_rlive_lib_warnings() {
+        let recorder = Recorder::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(file_log_filter())
+            .with(recorder.clone());
+
+        let dispatch = tracing::dispatcher::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::warn!(target: "rlive_lib", "保留：自身警告");
+            tracing::error!(target: "rlive_lib", "保留：自身错误");
+            tracing::info!(target: "rlive_lib", "丢弃：自身信息");
+            tracing::warn!(target: "reqwest", "丢弃：外部警告");
+            tracing::error!(target: "tungstenite", "丢弃：外部错误");
+        });
+
+        let events = recorder.events.lock().unwrap();
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0], ("rlive_lib", tracing::Level::WARN));
+        assert_eq!(events[1], ("rlive_lib", tracing::Level::ERROR));
+    }
 }
