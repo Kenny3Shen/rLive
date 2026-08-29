@@ -19,7 +19,7 @@ export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.13846066"
 ```
 
-`MainActivity` 在应用回到前台时会向 Android 请求同分辨率下不高于 120 Hz 的最高高刷模式。60/90 Hz 设备使用自身上限；只有 60/144 Hz 而没有 90/120 Hz 模式的面板使用 144 Hz，避免误退回 60 Hz。系统省电、温控、厂商策略与动态刷新率仍可降低实际刷新率，因此该请求不会强制所有设备固定运行在 120 FPS。Web 动画和 Canvas 仍以系统实际提供的 `requestAnimationFrame` 时间戳推进。
+刷新率完全跟随系统：应用不请求固定显示模式或刷新率偏好，系统设 60 Hz 就 60 Hz，设高刷就高刷，省电模式、温控与厂商动态刷新策略直接生效。已知取舍：部分厂商 ROM 只给「主动表达高刷意图」的应用高刷，这类设备上 rLive 可能稳定在 60 Hz。Web 动画和 Canvas 全部按时间基准推进（WAAPI/CSS 时长、`px/s` 弹幕速度、按媒体时间绘制的回放弹幕），跟随系统实际提供的 `requestAnimationFrame` 时间戳，因此不同刷新率下观感时长一致。
 
 设置 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT` 后安装工具链：
 
@@ -190,4 +190,4 @@ unzip -Z1 "$APK" | awk '/^lib\// { print }'
 
 `app-*-release.apk` 是可直接安装的 APK；`*.aab` 是应用商店格式，不能用 `adb install` 直接安装。`--ci` 未配置 release keystore 时可能生成 unsigned APK，必须先签名再安装或发布。
 
-安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。系统栏图标需覆盖四种组合：系统浅色 × 应用浅色/深色、系统深色 × 应用浅色/深色，图标始终与页面背景对比清晰；应用内切换主题即时生效，冷启动（`adb shell am force-stop` 后重开）首帧图标与上次主题一致；进入房间全屏（页面内层与视频 custom view）后下滑出的临时系统栏为白图标，退出后恢复。高刷设备可通过开发者选项的刷新率叠层确认前台目标模式；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型，也不应包含 `sherpa-onnx` / ONNX Runtime native runtime。
+安装后确认直播浏览、播放、弹幕、横竖屏与系统返回行为正常，并检查「设置 → 播放」、房间设置面板和播放器控制栏均不出现语音字幕入口。系统栏图标需覆盖四种组合：系统浅色 × 应用浅色/深色、系统深色 × 应用浅色/深色，图标始终与页面背景对比清晰；应用内切换主题即时生效，冷启动（`adb shell am force-stop` 后重开）首帧图标与上次主题一致；进入房间全屏（页面内层与视频 custom view）后下滑出的临时系统栏为白图标，退出后恢复。高刷设备可通过开发者选项的刷新率叠层确认前台刷新率与系统设置一致（60 Hz 与高刷各验证一次）；再开启省电模式验证系统降帧时动画速度不变。Android 不应下载 Zipformer、标点或 CAMPPlus 模型，也不应包含 `sherpa-onnx` / ONNX Runtime native runtime。

@@ -2,11 +2,9 @@ package com.shenss.rlive
 
 import android.os.Build
 import android.os.Bundle
-import android.view.Display
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
-import kotlin.math.abs
 
 class MainActivity : TauriActivity() {
   private lateinit var fallbackChromeClient: RustWebChromeClient
@@ -36,7 +34,6 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
-    requestHighRefreshRate()
     restoreSystemBarsUnlessFullscreen()
   }
 
@@ -112,44 +109,6 @@ class MainActivity : TauriActivity() {
       }
     }.also { callback ->
       onBackPressedDispatcher.addCallback(this, callback)
-    }
-  }
-
-  /**
-   * 向 Android 请求面板暴露的最优动画模式，不改动物理分辨率。这只是
-   * 偏好：省电、温控和设备各自的变刷新率策略都可能覆盖它。
-   */
-  private fun requestHighRefreshRate() {
-    val display = activityDisplay() ?: return
-    val currentMode = display.mode
-    val compatibleModes = display.supportedModes.filter { mode ->
-      mode.physicalWidth == currentMode.physicalWidth &&
-        mode.physicalHeight == currentMode.physicalHeight
-    }
-    val preferredRate = preferredAnimationRefreshRate(compatibleModes.map { it.refreshRate })
-      ?: return
-    val preferredMode = compatibleModes.minByOrNull { mode ->
-      abs(mode.refreshRate - preferredRate)
-    } ?: return
-    val attributes = window.attributes
-    if (
-      attributes.preferredDisplayModeId == preferredMode.modeId &&
-      abs(attributes.preferredRefreshRate - preferredMode.refreshRate) < 0.01f
-    ) {
-      return
-    }
-
-    attributes.preferredDisplayModeId = preferredMode.modeId
-    attributes.preferredRefreshRate = preferredMode.refreshRate
-    window.attributes = attributes
-  }
-
-  @Suppress("DEPRECATION")
-  private fun activityDisplay(): Display? {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      display
-    } else {
-      windowManager.defaultDisplay
     }
   }
 }
