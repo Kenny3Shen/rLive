@@ -1,5 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getVersion } from "@tauri-apps/api/app";
+import { useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -73,6 +72,8 @@ import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { ImageCacheField } from "@/features/settings/CacheSettings";
 import { AppLogField } from "@/features/settings/AppLogField";
+import { notify } from "@/components/ui/toast";
+import { useUpdateStore } from "@/shared/update/updateStore";
 import { LanSyncField } from "@/features/settings/LanSyncField";
 import {
   FfmpegSettingsFields,
@@ -1692,14 +1693,12 @@ function SettingsCategoryOverview({
 }
 
 function AboutSettings() {
-  const versionQuery = useQuery({
-    queryKey: ["app-version"],
-    queryFn: getVersion,
-    enabled: isTauri(),
-    staleTime: Infinity,
-    retry: false,
-  });
-  const appVersion = versionQuery.data ?? packageMetadata.version;
+  const appVersion = useUpdateStore((state) => state.currentVersion) || packageMetadata.version;
+  const updateStatus = useUpdateStore((state) => state.status);
+  const release = useUpdateStore((state) => state.release);
+  const checkForUpdate = useUpdateStore((state) => state.checkForUpdate);
+  const showUpdateDialog = useUpdateStore((state) => state.showDialog);
+  const [checking, setChecking] = useState(false);
 
   function openProjectHomepage() {
     void openUrl(PROJECT_HOMEPAGE_URL).catch(() => {
@@ -1707,6 +1706,23 @@ function AboutSettings() {
       // 那里刻意不提供原生 opener 插件。
       window.open(PROJECT_HOMEPAGE_URL, "_blank", "noopener,noreferrer");
     });
+  }
+
+  async function checkNow() {
+    if (checking) return;
+    setChecking(true);
+    try {
+      const nextRelease = await checkForUpdate({ force: true });
+      if (nextRelease) {
+        showUpdateDialog();
+      } else {
+        notify.success("已是最新版本", `当前版本 v${appVersion}`);
+      }
+    } catch {
+      notify.error("检查更新失败", "请检查网络连接后重试。");
+    } finally {
+      setChecking(false);
+    }
   }
 
   return (
@@ -1717,10 +1733,39 @@ function AboutSettings() {
           keywords="当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断"
         >
           <Field orientation="horizontal">
-            <FieldTitle id="app-version">当前版本</FieldTitle>
-            <Badge variant="secondary" className="tabular-nums">
-              v{appVersion}
-            </Badge>
+            <div className="min-w-0 flex-1">
+              <FieldTitle id="app-version">当前版本</FieldTitle>
+              {updateStatus === "available" && release ? (
+                <FieldDescription className="text-primary">
+                  发现新版本 v{release.version}，建议及时更新
+                </FieldDescription>
+              ) : updateStatus === "error" ? (
+                <FieldDescription>上次检查失败，可再次手动检查</FieldDescription>
+              ) : updateStatus === "up-to-date" ? (
+                <FieldDescription>已是最新版本</FieldDescription>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge
+                variant={updateStatus === "available" ? "default" : "secondary"}
+                className="tabular-nums"
+              >
+                v{appVersion}
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void checkNow()}
+                disabled={checking}
+              >
+                {checking ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <RefreshCw data-icon="inline-start" aria-hidden />
+                )}
+                {checking ? "检查中…" : "检查更新"}
+              </Button>
+            </div>
           </Field>
           <AppLogField />
           <Field orientation="horizontal">
