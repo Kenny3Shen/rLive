@@ -1,6 +1,6 @@
 [package]
 name = "rlive"
-version = "2.18.4"
+version = "3.0.0"
 description = "A Tauri App"
 authors = ["KennyShen"]
 edition = "2024"
