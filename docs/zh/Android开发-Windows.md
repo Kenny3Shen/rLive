@@ -7,17 +7,17 @@
 
 | 项 | 版本 |
 | --- | --- |
-| Android platform | `android-36` |
+| Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24） |
 | Build Tools | `36.0.0` |
 | NDK | `29.0.13846066` |
-| Rust target | `aarch64-linux-android` |
+| Rust target | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器） |
 | 其他 | Tauri 2、Bun、JDK 17 |
 
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.13846066"
 sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
-rustup target add aarch64-linux-android
+rustup target add aarch64-linux-android x86_64-linux-android
 ```
 
 Android 交叉编译必须用 NDK clang。通过仓库的 `bun run tauri` 入口构建时，`scripts/tauri.ts` 会自动探测 `ANDROID_NDK_HOME`（或 `ANDROID_HOME` 下最新 NDK），并为 bindgen、cc-rs 和 Cargo linker 注入同一套工具链。Tauri 的 Android 构建不经过 `cargo-ndk`，不要把主机 `clang` 或桌面 MSVC 工具链带进来。
@@ -30,9 +30,9 @@ bun run tauri -- android build --ci --target aarch64 --apk   # release
 bun run tauri -- android dev --target aarch64                # 开发运行
 ```
 
-产物在 `src-tauri/gen/android/app/build/outputs/apk/`。
+产物路径固定为 `src-tauri/gen/android/app/build/outputs/apk/universal/<profile>/app-universal-<profile>.apk`，`<profile>` 为 `debug` 或 `release`。
 
-`--target aarch64` 只构建 `arm64-v8a`。Tauri/Gradle 的 flavor 名可能仍显示 `universal`，这不代表 APK 含四种 ABI，以 APK 内的 `lib/arm64-v8a/` 为准。
+Gradle flavor 恒为 `universal`：`--target aarch64` 通过 Gradle 属性把构建收窄到 `arm64-v8a`，但不改变 flavor 与输出路径（除非用 `--split-per-abi`）。APK 实际包含哪些 ABI 以 `unzip -Z1 <apk> | grep '^lib/'` 为准。
 
 移动端不提供语音字幕：Android target 在条件编译阶段排除 ASR module、commands 和 state，也不编译或打包 `sherpa-onnx`、ONNX Runtime 与模型解压依赖。
 
@@ -47,7 +47,7 @@ export RANLIB_aarch64_linux_android="$NDK/bin/llvm-ranlib"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/bin/aarch64-linux-android24-clang"
 ```
 
-## Android 调试
+## 调试
 
 ### WebView 远程调试（CDP）
 
@@ -66,20 +66,25 @@ playwright-cli attach --cdp=http://localhost:9222
 playwright-cli --raw eval "location.pathname"
 ```
 
-也可用 Chrome 打开 `chrome://inspect`。
+也可用 Chrome 打开 `chrome://inspect`。WebView 的 devtools socket 只接受一个客户端，用完执行 `playwright-cli detach`；被强杀的客户端会把 socket 占死，表现为 `curl` 挂起无响应，见排错清单。
 
 ### 触摸事件探针
 
 排查触摸/手势 bug 前先在页面注入全事件探针，长按-取消类问题需要 touch/click/contextmenu/cancel 全覆盖：
 
-```js
-window.__ev = [];
-const t0 = performance.now();
-['touchstart','touchend','touchcancel','click','contextmenu','pointerdown','pointerup','pointercancel']
-  .forEach(t => document.addEventListener(t, (e) =>
-    window.__ev.push({ t: Math.round(performance.now() - t0), s: t + (e.touches ? `(${e.touches.length})` : ''),
-                       tg: (e.target.className || e.target.tagName).toString().slice(0, 20) }), true));
+```bash
+playwright-cli --raw eval '(() => {
+  window.__ev = [];
+  const t0 = performance.now();
+  ["touchstart","touchend","touchcancel","click","contextmenu","pointerdown","pointerup","pointercancel"]
+    .forEach(t => document.addEventListener(t, e =>
+      window.__ev.push({ t: Math.round(performance.now() - t0), s: t + (e.touches ? "(" + e.touches.length + ")" : ""),
+                         tg: (e.target.className || e.target.tagName).toString().slice(0, 20) }), true));
+  return "probe ready";
+})()'
 ```
+
+读取用 `playwright-cli --raw eval "JSON.stringify(window.__ev)"`。重复注入前先刷新页面，否则监听器叠加、事件会重复记录。
 
 注入手势用 `input motionevent`：
 
@@ -97,7 +102,7 @@ adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <
 
 ```bash
 bun run tauri -- android build --debug --target aarch64
-adb install -r src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
+adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
 
 ### 模拟器调试（Windows emulator + WSL 驱动）
@@ -123,7 +128,7 @@ setsid nohup ./emulator.exe -avd rlive_win -no-boot-anim > /tmp/emu-win.log 2>&1
 adb devices                      # 不需要 adb connect
 
 bun run tauri -- android build --debug --target x86_64
-adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
+adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
 
 headless 启动必须让进程彻底脱离 WSL，用 PowerShell 起：
@@ -149,13 +154,14 @@ VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Ma
 行为与限制：
 
 - H.264 硬解正常：guest 拿到 `ro.boot.qemu.hwcodec.avcdec=2`，走 `c2.goldfish.h264.decoder`，headless + 720p 直播连播 3 分钟以上正常，emulator 日志无 ERROR/FATAL。
-- `-no-window` 会让渲染退回 SwiftShader + lavapipe 软件光栅（宿主 GPU 只在带窗口时启用），冷启动约 30s，app、WebView 与播放均可用。headless 的进程名是 `qemu-system-x86_64-headless`，用 `Get-Process qemu-system-x86_64` 查不到，别据此判定模拟器已退出。
+- `-no-window` 会让渲染退回 SwiftShader + lavapipe 软件光栅（宿主 GPU 只在带窗口时启用），冷启动约 30s，app、WebView 与播放均可用。headless 的进程名是 `qemu-system-x86_64-headless`，用 `Get-Process qemu-system-x86_64` 查不到，别据此判定模拟器已退出（带窗口时进程名才是 `qemu-system-x86_64`）。
 - 带窗口启动（含 VS Code Emulate 扩展）默认加载 `default_boot` 快照，userdata 连同已装应用和 WebView 缓存回滚到快照时点 —— 表现为刚装的新版又变回旧版。需要干净状态时加 `-no-snapshot-load`（扩展侧已开 `androidColdBoot`）。
 - `adb emu <cmd>` 会静默失败：控制台 token 在 `C:\Users\shens\.emulator_console_auth_token`，而 WSL 的 adb 读 `~/.emulator_console_auth_token`。需要时 `cp /mnt/c/Users/shens/.emulator_console_auth_token ~/`。
 - 镜像仍是 WebView 133（随镜像发布，落后于真机的 149+），触摸/手势类 bug 依旧只能真机验证；镜像也无法升级到 WebView 149，官方 x86_64 WebView 无公开分发渠道，强装 arm64 WebView 会在 berberis 翻译层崩溃。
 
 ### 排错清单
 
+- **`curl http://localhost:9222/json/version` 挂起无响应**：上一个 CDP 客户端没有干净断开（如 playwright-cli 会话被强杀），WebView devtools socket 的单客户端槽位仍被占用。先 `playwright-cli detach`；已无可断开的会话时 `adb shell am force-stop com.shenss.rlive`，重开应用再重新 forward。
 - **换包后界面仍是旧版**：`versionName` 已是新的，但新控件不出现。WebView 对 `http://tauri.localhost` 的 HTTP 缓存跳不过应用升级，连 `index.html` 一起命中旧缓存，于是加载的还是上一版的 hash chunk。确诊：把运行时加载的 chunk 名与 `ls dist/assets/` 对比，不一致即是缓存。修复：
 
   ```bash
@@ -170,8 +176,7 @@ VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Ma
 - **`adb install` 静默失败**：x86_64-only APK 装不进 arm64 设备，`install -r` 可能无输出且旧包仍在。用 `unzip -Z1` 核对 ABI 后重装。
 - **INSTALL_FAILED_UPDATE_INCOMPATIBLE**：换机器构建的 debug 包签名不同。保留数据可用项目 keystore 重签（`apksigner sign --ks /home/shenss/upload-keystore.jks --ks-key-alias upload`），否则先 `adb uninstall com.shenss.rlive`。
 - **触摸整体失灵（WebView 149 实测案例）**：`<img>` 上的长按会触发原生图片菜单接管（pointercancel 先于 contextmenu 到达），应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死，后续 touch 全部不派发——页面只能滚动、点击全无反应，极像应用卡死。注入探针后 touchstart 完全消失即可确诊。规避：长按交互面内不让 `<img>` 参与命中测试（`pointer-events: none`）。
-- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下把配置路径拼上 `emulator.exe`，默认路径还是 macOS 的。正解是指向 Windows SDK：`"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`（见上文 Windows emulator 一节）。
-- **扩展列表为空但 `emulator.exe -list-avds` 有输出**：AVD 索引 `.ini` 不在 `%USERPROFILE%\.android\avd`。WSL 侧 `export ANDROID_AVD_HOME` 不会传进 `.exe`，必须把索引文件放回默认目录，只用 `path=` 把数据目录指向 D 盘。
+- **VS Code Emulate 扩展报 `Error fetching your Android emulators!` 或列表为空**：都是扩展找不到 AVD。前者是路径错了——扩展在 WSL 下把 `emulator.emulatorPathWSL` 拼上 `emulator.exe` 再 exec，默认值仍是 macOS 路径，改指向 Windows SDK 即可；后者（`emulator.exe -list-avds` 有输出但扩展列表空）是 AVD 索引 `.ini` 不在 `%USERPROFILE%\.android\avd`，把索引文件放回默认目录，只用 `path=` 把数据目录指向 D 盘。
 
 ## 真机验证
 
@@ -184,7 +189,7 @@ unzip -Z1 "$APK" | awk '/^lib\// { print }'
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
 ```
 
-`app-*-release.apk` 可直接安装；`*.aab` 是商店格式，不能 `adb install`。`--ci` 未配置 release keystore 时可能生成 unsigned APK，必须先签名。当前 arm64 APK/AAB 只应包含 `librlive_lib.so`（`jniLibs/` 是生成目录，旧本地构建可能遗留被 Git 忽略的 `.so`）。
+`app-*-release.apk` 可直接安装；`*.aab` 是商店格式，不能 `adb install`。本地未配置 release keystore（`src-tauri/gen/android/app/keystore.properties`）时生成的是 unsigned APK，必须先签名。当前 arm64 APK/AAB 只应包含 `librlive_lib.so`（`jniLibs/` 是生成目录，旧本地构建可能遗留被 Git 忽略的 `.so`）。
 
 验证项：
 
