@@ -66,4 +66,12 @@ describe("sidebar nav items per client platform", () => {
     expect(desktop.indexOf("/multi-room")).toBeLessThan(desktop.indexOf("/recordings"));
     expect(desktop.indexOf("/iptv")).toBeLessThan(desktop.indexOf("/history"));
   });
+
+  test("groups history and settings into the bottom footer cluster", () => {
+    // 桌面竖栏里历史/设置被 mt-auto 推到底部（紧跟亮暗切换），
+    // 移动端底栏里回到行内流，因此 footer 标记不改变条带顺序。
+    const footer = SIDEBAR_NAV_ITEMS.filter((item) => item.footer).map((item) => item.to);
+    expect(footer).toEqual(["/history", "/settings"]);
+    expect(SIDEBAR_NAV_ITEMS.slice(-2).map((item) => item.to)).toEqual(footer);
+  });
 });

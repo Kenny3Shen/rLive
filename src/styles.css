@@ -647,6 +647,13 @@ body {
     overflow: hidden;
   }
 
+  /* 底部分组（亮暗切换/历史/设置）在紧凑底栏里退化为行内流：
+     这类手机横屏宽度普遍超过 md 断点，Tailwind 的 max-md:contents
+     够不到这里，必须在这里显式拆开分组容器。 */
+  .app-shell [data-slot="app-sidebar-footer"] {
+    display: contents;
+  }
+
   .app-shell [data-slot="app-sidebar-link"] {
     height: auto;
     min-width: 0;

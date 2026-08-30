@@ -24,6 +24,10 @@ export type SidebarNavItem = {
    *  手机与平板横屏的视口宽度普遍超过 md 断点，
    *  仅靠 `max-md:hidden` 这类视口门控会让它们漏进移动端底部导航。 */
   desktopOnly?: boolean;
+  /** 桌面竖栏中归入底部分组（亮暗切换之后）的入口。数组顺序仍须与
+   *  SIDEBAR_DESTINATIONS 方向条带一致：移动端底栏里它们保持行内顺序，
+   *  桌面竖栏里它们被 `mt-auto` 推到底部聚类。 */
+  footer?: boolean;
 };
 
 export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
@@ -45,8 +49,8 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
     className: "max-md:hidden",
     desktopOnly: true,
   },
-  { to: "/history", label: "历史", icon: History },
-  { to: "/settings", label: "设置", icon: Settings },
+  { to: "/history", label: "历史", icon: History, footer: true },
+  { to: "/settings", label: "设置", icon: Settings, footer: true },
 ];
 
 /** 按客户端平台解析可见的侧栏导航入口。 */
