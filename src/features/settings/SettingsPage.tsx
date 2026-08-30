@@ -296,7 +296,7 @@ function Section({
             {title}
           </FieldLegend>
         </div>
-        <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
+        <FieldGroup className="gap-0 [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
           {children}
         </FieldGroup>
       </FieldSet>
@@ -1122,142 +1122,140 @@ function AsrModelField() {
     : estimatedModelSize;
   return (
     <>
-      <FieldGroup className="gap-0 divide-y divide-border-subtle [&>[data-slot=field]]:px-4 [&>[data-slot=field]]:py-3">
-        <Field
-          orientation="horizontal"
-          data-disabled={!model.supported || undefined}
-          data-invalid={invalid || undefined}
-        >
-          <FieldContent>
-            <FieldTitle id="asr-enabled-title">语音字幕</FieldTitle>
-            {invalid ? (
-              <FieldError role="status" aria-live="polite">
-                {actionError ?? presentation.message}
-              </FieldError>
-            ) : (
-              // 稳态文案（就绪/禁用摘要）保持隐藏；
-              // 这里只显示模型下载之类的瞬态进度。
-              enabled &&
-              presentation.busy && (
-                <FieldDescription role="status" aria-live="polite">
-                  {presentation.message}
-                </FieldDescription>
-              )
-            )}
-            {enabled && presentation.error && (
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                className="mt-2 w-fit"
-                disabled={pending}
-                onClick={() => void retryPreparation()}
-              >
-                <RefreshCw data-icon="inline-start" aria-hidden />
-                重试
-              </Button>
-            )}
-          </FieldContent>
-          <div className="flex shrink-0 items-center gap-2">
-            {busy && <Spinner aria-hidden />}
-            <Switch
-              aria-labelledby="asr-enabled-title"
-              aria-invalid={invalid || undefined}
-              checked={enabled}
-              disabled={!model.supported || model.isPending || pending}
-              onCheckedChange={(checked) => {
-                if (checked && model.status?.state === "not_downloaded") {
-                  setConfirmOpen(true);
-                  return;
-                }
-                void applyEnabled(checked);
-              }}
-            />
-          </div>
-        </Field>
-
-        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-          <FieldContent>
-            <FieldTitle>
-              <span id="asr-vad-title">VAD（静音端点检测）</span>
-              <FieldTip>关闭后仅按最长 20 秒切分。</FieldTip>
-            </FieldTitle>
-          </FieldContent>
-          <Switch
-            aria-labelledby="asr-vad-title"
-            checked={vadEnabled}
-            disabled={!model.supported || model.isPending || pending}
-            onCheckedChange={(checked) => void applyVadEnabled(checked)}
-          />
-        </Field>
-
-        {isWindowsDesktop() && (
-          <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-            <FieldContent>
-              <FieldTitle>
-                <span id="asr-provider-title">推理后端</span>
-                <FieldTip>自动优先使用 CUDA，不可用时回退 CPU。</FieldTip>
-              </FieldTitle>
-            </FieldContent>
-            <ToggleGroup
-              aria-labelledby="asr-provider-title"
-              value={[provider]}
+      <Field
+        orientation="horizontal"
+        data-disabled={!model.supported || undefined}
+        data-invalid={invalid || undefined}
+      >
+        <FieldContent>
+          <FieldTitle id="asr-enabled-title">语音字幕</FieldTitle>
+          {invalid ? (
+            <FieldError role="status" aria-live="polite">
+              {actionError ?? presentation.message}
+            </FieldError>
+          ) : (
+            // 稳态文案（就绪/禁用摘要）保持隐藏；
+            // 这里只显示模型下载之类的瞬态进度。
+            enabled &&
+            presentation.busy && (
+              <FieldDescription role="status" aria-live="polite">
+                {presentation.message}
+              </FieldDescription>
+            )
+          )}
+          {enabled && presentation.error && (
+            <Button
+              type="button"
               variant="outline"
-              size="sm"
-              spacing={1}
-              disabled={!model.supported || model.isPending || pending}
-              onValueChange={(values) => {
-                const next = values[0];
-                if (next === "auto" || next === "cpu" || next === "cuda") {
-                  void applyProvider(next);
-                }
-              }}
+              size="xs"
+              className="mt-2 w-fit"
+              disabled={pending}
+              onClick={() => void retryPreparation()}
             >
-              <ToggleGroupItem value="auto">自动</ToggleGroupItem>
-              <ToggleGroupItem value="cuda">CUDA</ToggleGroupItem>
-              <ToggleGroupItem value="cpu">CPU</ToggleGroupItem>
-            </ToggleGroup>
-          </Field>
-        )}
-
-        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-          <FieldContent>
-            <FieldTitle>
-              <span id="asr-punctuation-title">自动标点</span>
-              <FieldTip>关闭后保留原始文本。</FieldTip>
-            </FieldTitle>
-          </FieldContent>
+              <RefreshCw data-icon="inline-start" aria-hidden />
+              重试
+            </Button>
+          )}
+        </FieldContent>
+        <div className="flex shrink-0 items-center gap-2">
+          {busy && <Spinner aria-hidden />}
           <Switch
-            aria-labelledby="asr-punctuation-title"
-            checked={punctuationEnabled}
+            aria-labelledby="asr-enabled-title"
+            aria-invalid={invalid || undefined}
+            checked={enabled}
             disabled={!model.supported || model.isPending || pending}
-            onCheckedChange={(checked) => void applyPunctuationEnabled(checked)}
+            onCheckedChange={(checked) => {
+              if (checked && model.status?.state === "not_downloaded") {
+                setConfirmOpen(true);
+                return;
+              }
+              void applyEnabled(checked);
+            }}
           />
-        </Field>
+        </div>
+      </Field>
 
-        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-          <FieldContent>
-            <FieldTitle>
-              <span id="asr-speaker-title">说话人区分</span>
-              <FieldTip>首次启用需下载约 27 MB。</FieldTip>
-            </FieldTitle>
-          </FieldContent>
-          <Switch
-            aria-labelledby="asr-speaker-title"
-            checked={speakerEnabled}
-            disabled={!model.supported || model.isPending || pending}
-            onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
-          />
-        </Field>
-
-        <AsrHotwordsField idPrefix="settings" layout="page" disabled={!model.supported} />
-
-        <AsrChunkIntervalField
-          idPrefix="settings"
-          layout="page"
-          disabled={!model.supported || pending}
+      <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
+        <FieldContent>
+          <FieldTitle>
+            <span id="asr-vad-title">VAD（静音端点检测）</span>
+            <FieldTip>关闭后仅按最长 20 秒切分。</FieldTip>
+          </FieldTitle>
+        </FieldContent>
+        <Switch
+          aria-labelledby="asr-vad-title"
+          checked={vadEnabled}
+          disabled={!model.supported || model.isPending || pending}
+          onCheckedChange={(checked) => void applyVadEnabled(checked)}
         />
-      </FieldGroup>
+      </Field>
+
+      {isWindowsDesktop() && (
+        <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
+          <FieldContent>
+            <FieldTitle>
+              <span id="asr-provider-title">推理后端</span>
+              <FieldTip>自动优先使用 CUDA，不可用时回退 CPU。</FieldTip>
+            </FieldTitle>
+          </FieldContent>
+          <ToggleGroup
+            aria-labelledby="asr-provider-title"
+            value={[provider]}
+            variant="outline"
+            size="sm"
+            spacing={1}
+            disabled={!model.supported || model.isPending || pending}
+            onValueChange={(values) => {
+              const next = values[0];
+              if (next === "auto" || next === "cpu" || next === "cuda") {
+                void applyProvider(next);
+              }
+            }}
+          >
+            <ToggleGroupItem value="auto">自动</ToggleGroupItem>
+            <ToggleGroupItem value="cuda">CUDA</ToggleGroupItem>
+            <ToggleGroupItem value="cpu">CPU</ToggleGroupItem>
+          </ToggleGroup>
+        </Field>
+      )}
+
+      <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
+        <FieldContent>
+          <FieldTitle>
+            <span id="asr-punctuation-title">自动标点</span>
+            <FieldTip>关闭后保留原始文本。</FieldTip>
+          </FieldTitle>
+        </FieldContent>
+        <Switch
+          aria-labelledby="asr-punctuation-title"
+          checked={punctuationEnabled}
+          disabled={!model.supported || model.isPending || pending}
+          onCheckedChange={(checked) => void applyPunctuationEnabled(checked)}
+        />
+      </Field>
+
+      <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
+        <FieldContent>
+          <FieldTitle>
+            <span id="asr-speaker-title">说话人区分</span>
+            <FieldTip>首次启用需下载约 27 MB。</FieldTip>
+          </FieldTitle>
+        </FieldContent>
+        <Switch
+          aria-labelledby="asr-speaker-title"
+          checked={speakerEnabled}
+          disabled={!model.supported || model.isPending || pending}
+          onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
+        />
+      </Field>
+
+      <AsrHotwordsField idPrefix="settings" layout="page" disabled={!model.supported} />
+
+      <AsrChunkIntervalField
+        idPrefix="settings"
+        layout="page"
+        disabled={!model.supported || pending}
+      />
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
