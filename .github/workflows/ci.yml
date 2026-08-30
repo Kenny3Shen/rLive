@@ -1,17 +1,16 @@
 name: CI
 
 on:
-  pull_request:
   push:
-    branches:
-      - master
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   frontend:
