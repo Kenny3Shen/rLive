@@ -260,6 +260,14 @@ export function playerStageGesturesEnabled(fullscreenLocked: boolean): boolean {
   return !fullscreenLocked;
 }
 
+/**
+ * 锁定期间两层 chrome 始终保持收起：画面手势已全部屏蔽，控制条露出来也无从操作。
+ * 空闲唤醒态因此只作用于锁定按钮那一层。
+ */
+export function playerChromeVisible(visible: boolean, fullscreenLocked: boolean): boolean {
+  return visible && !fullscreenLocked;
+}
+
 function isRoomSideTab(value: string): value is RoomSideTab {
   return ROOM_SIDE_TABS.includes(value as RoomSideTab);
 }
@@ -561,10 +569,13 @@ export function PlayerPane({
   const controlsRef = useRef<HTMLDivElement | null>(null);
   // 全屏顶部 HUD 是同一空闲计时器上的第二层 chrome。
   const hudRef = useRef<HTMLDivElement | null>(null);
-  // 移动端全屏锁定按钮是第三层：未锁定时跟随另两层淡出，
-  // 锁定时必须单独保持可见。
+  // 移动端全屏锁定按钮是第三层：它同样跟随空闲计时器休眠，
+  // 锁定只是把另两层强制留在收起态。
   const lockRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
+  // 已写入 DOM 的锁定态。上锁与解锁都会改写 chrome 的目标可见性，
+  // 因此唤醒态没变也必须重算一次。
+  const appliedFullscreenLockRef = useRef(false);
   // 跟踪底部 chrome 内的焦点。点击的按钮也会取得 DOM 焦点，因此下方的空闲守卫
   // 在把焦点当作必须保持显示的键盘交互之前，还会额外检查 :focus-visible。
   const controlsFocusWithinRef = useRef(false);
@@ -774,6 +785,13 @@ export function PlayerPane({
   );
   const canAutoHideControls =
     showHost && player.running && !player.paused && !overlayInteractionOpen;
+  // 锁定按钮只在移动端全屏存在，因此它的层随全屏挂载与卸载。
+  const fullscreenLockMounted = showPlayerFullscreenLock(
+    mobileClient,
+    player.mode === "fullscreen",
+  );
+  // 三层 chrome 的显隐是命令式的，渲染只负责给出与 DOM 当前值相同的初始/重渲染值。
+  const fullscreenChromeVisible = playerChromeVisible(controlsVisibleRef.current, fullscreenLocked);
   const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
   const mobileDrawerOpen = compactLandscapeViewport && sidePanelOpen;
   // 网页全屏要让出右侧栏。只影响可见性，不影响挂载，因此退出后弹幕队列与滚动位置都还在。
@@ -877,26 +895,6 @@ export function PlayerPane({
     setFullscreenLocked(false);
   }, [roomSessionKey]);
 
-  useEffect(() => {
-    fullscreenLockedRef.current = fullscreenLocked;
-  }, [fullscreenLocked]);
-
-  // 房间导航前先退出全屏。这是 Android 页面内全屏唯一的 Back 处理：
-  // Activity 刻意不为它消费 Back，
-  // 使上方的浮层监听器（HUD 菜单、音量面板）能在同一事件中获得自己的机会。
-  useEffect(() => {
-    if (player.mode !== "fullscreen") return;
-    const exitOnAndroidBack = (event: Event) => {
-      event.preventDefault();
-      // 锁定就是为了屏蔽误触，Back 也不例外：消费掉事件但不退出全屏，
-      // 用户需要先点常驻的锁定按钮解锁。
-      if (fullscreenLockedRef.current) return;
-      void togglePlayerFullscreen();
-    };
-    window.addEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
-    return () => window.removeEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
-  }, [player.mode, togglePlayerFullscreen]);
-
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current !== null) {
       window.clearTimeout(controlsHideTimerRef.current);
@@ -911,34 +909,45 @@ export function PlayerPane({
     }
   }, []);
 
-  const setControlVisibility = useCallback((visible: boolean) => {
-    if (controlsVisibleRef.current === visible) return;
-    controlsVisibleRef.current = visible;
-
-    // 隐藏控件过去会更新 PlayerPane 状态。那会在动画开始的瞬间重渲染直播弹幕层
-    // 和每个保活的侧页签，繁忙弹幕流中可以感知到。这块仅限 DOM 的小状态刻意隔离在
-    // 浮层内：CSS 仍然执行合成淡出，
-    // 而视频、弹幕层和列表无需 React 协调即可继续现有工作。
-    //
-    // 两层 chrome 都从这里驱动，使全屏顶部 HUD 与底部控制条
-    // 始终作为一个整体表面出现和淡出。
-    for (const layer of [controlsRef.current, hudRef.current]) {
-      if (!layer) continue;
-      layer.dataset.visible = visible ? "true" : "false";
-      layer.setAttribute("aria-hidden", String(!visible));
-      layer.toggleAttribute("inert", !visible);
-    }
-
-    // 锁定时画面手势全部失效，锁定按钮是唯一的解锁入口，因此它绝不参与空闲淡出，
-    // 否则用户会被困在全屏里。
+  const applyFullscreenLockVisibility = useCallback((visible: boolean) => {
     const lock = lockRef.current;
-    if (lock) {
-      const lockVisible = visible || fullscreenLockedRef.current;
-      lock.dataset.visible = lockVisible ? "true" : "false";
-      lock.setAttribute("aria-hidden", String(!lockVisible));
-      lock.toggleAttribute("inert", !lockVisible);
-    }
+    if (!lock) return;
+    lock.dataset.visible = visible ? "true" : "false";
+    lock.setAttribute("aria-hidden", String(!visible));
+    lock.toggleAttribute("inert", !visible);
   }, []);
+
+  const setControlVisibility = useCallback(
+    (visible: boolean) => {
+      const locked = fullscreenLockedRef.current;
+      if (controlsVisibleRef.current === visible && appliedFullscreenLockRef.current === locked) {
+        return;
+      }
+      controlsVisibleRef.current = visible;
+      appliedFullscreenLockRef.current = locked;
+
+      // 隐藏控件过去会更新 PlayerPane 状态。那会在动画开始的瞬间重渲染直播弹幕层
+      // 和每个保活的侧页签，繁忙弹幕流中可以感知到。这块仅限 DOM 的小状态刻意隔离在
+      // 浮层内：CSS 仍然执行合成淡出，
+      // 而视频、弹幕层和列表无需 React 协调即可继续现有工作。
+      //
+      // 两层 chrome 都从这里驱动，使全屏顶部 HUD 与底部控制条
+      // 始终作为一个整体表面出现和淡出；锁定期间它们被强制留在收起态。
+      const chromeVisible = playerChromeVisible(visible, locked);
+      for (const layer of [controlsRef.current, hudRef.current]) {
+        if (!layer) continue;
+        layer.dataset.visible = chromeVisible ? "true" : "false";
+        layer.setAttribute("aria-hidden", String(!chromeVisible));
+        layer.toggleAttribute("inert", !chromeVisible);
+      }
+
+      // 锁定按钮同样跟随唤醒态休眠，不再长期遮挡画面。锁定时它是唯一的解锁入口，
+      // 因此休眠后由舞台触摸单独唤回（见 `handleStagePointerDown` / `handleStagePointerUp`），
+      // 否则用户会被困在全屏里。
+      applyFullscreenLockVisibility(visible);
+    },
+    [applyFullscreenLockVisibility],
+  );
 
   const markControlsActivity = useCallback(() => {
     lastControlsActivityAtRef.current = Date.now();
@@ -952,7 +961,10 @@ export function PlayerPane({
     }
     return (
       controlsRef.current?.contains(activeElement) === true ||
-      hudRef.current?.contains(activeElement) === true
+      hudRef.current?.contains(activeElement) === true ||
+      // 锁定按钮层也算：键盘用户把焦点停在它上面时，它是唯一的解锁入口，
+      // 不能被 idle timer 加上 `inert` 强制 blur。
+      lockRef.current?.contains(activeElement) === true
     );
   }, []);
 
@@ -1025,18 +1037,55 @@ export function PlayerPane({
 
   /**
    * 上锁时收起两层 chrome 只留锁定按钮，解锁时把 chrome 带回来。
-   * 锁定按钮的可见性由 `setControlVisibility` 单独兜底，因此这里可以放心隐藏 chrome。
+   * 两个方向都走 `revealControls`：锁定态已写入 ref，`setControlVisibility` 会据此
+   * 把 chrome 强制留在收起态，而锁定按钮先保持唤醒并重新排定空闲倒计时——
+   * 手刚离开按钮它就消失会让人以为点错了。
    */
   const handleToggleFullscreenLock = useCallback(() => {
+    // 不变量：置为锁定只走这里，且 ref 必须先于 state 赋值。渲染期的
+    // `fullscreenChromeVisible` 读 state，命令式写入读 ref，反向分叉（state 已锁定而 ref 未锁定）
+    // 会把 chrome 错误地钉在隐藏态。
     const nextLocked = !fullscreenLockedRef.current;
     fullscreenLockedRef.current = nextLocked;
     setFullscreenLocked(nextLocked);
-    if (nextLocked) {
-      hideControls();
-      return;
-    }
     revealControls();
-  }, [hideControls, revealControls]);
+  }, [revealControls]);
+
+  // 锁定态同时决定两层 chrome 的目标可见性，而解锁不只来自点按：离开全屏与切房
+  // 都会复位。因此同步 ref 后还要重算一次，否则 chrome 会停在锁定期间的收起态。
+  // Back 监听器也认这个 ref（注册在 effect 内，读 state 会捕获注册时的旧值）。
+  useEffect(() => {
+    const wasLocked = fullscreenLockedRef.current;
+    fullscreenLockedRef.current = fullscreenLocked;
+    if (fullscreenLocked || !wasLocked) return;
+    revealControls();
+  }, [fullscreenLocked, revealControls]);
+
+  // 锁定按钮层随进入全屏挂载，而双击进入全屏不经过 `revealControls`：那时两层
+  // chrome 可能已经休眠。挂载后同步一次，否则按钮会以 `data-visible="true"` 孤立常驻。
+  useEffect(() => {
+    if (!fullscreenLockMounted) return;
+    applyFullscreenLockVisibility(controlsVisibleRef.current);
+  }, [applyFullscreenLockVisibility, fullscreenLockMounted]);
+
+  // 房间导航前先退出全屏。这是 Android 页面内全屏唯一的 Back 处理：
+  // Activity 刻意不为它消费 Back，
+  // 使上方的浮层监听器（HUD 菜单、音量面板）能在同一事件中获得自己的机会。
+  useEffect(() => {
+    if (player.mode !== "fullscreen") return;
+    const exitOnAndroidBack = (event: Event) => {
+      event.preventDefault();
+      // 锁定就是为了屏蔽误触，Back 也不例外：消费掉事件但不退出全屏，
+      // 只把休眠中的锁定按钮唤回来，告知用户解锁入口在哪里。
+      if (fullscreenLockedRef.current) {
+        revealControls();
+        return;
+      }
+      void togglePlayerFullscreen();
+    };
+    window.addEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
+    return () => window.removeEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
+  }, [player.mode, revealControls, togglePlayerFullscreen]);
 
   const holdControlsVisible = useCallback(() => {
     markControlsActivity();
@@ -1109,7 +1158,8 @@ export function PlayerPane({
       if (
         nextFocused instanceof Node &&
         (controlsRef.current?.contains(nextFocused) === true ||
-          hudRef.current?.contains(nextFocused) === true)
+          hudRef.current?.contains(nextFocused) === true ||
+          lockRef.current?.contains(nextFocused) === true)
       ) {
         controlsFocusWithinRef.current = true;
         holdControlsVisible();
@@ -1483,6 +1533,9 @@ export function PlayerPane({
           startY: event.clientY,
           startedAt: Date.now(),
         };
+        // 锁定期间按下的第一时间就把休眠的锁定按钮唤回来：这时没有别的手势会跟这次
+        // 触摸抢，慢按一下也该立刻有反应，而不是等抬手后再判定是否算点按。
+        if (!playerStageGesturesEnabled(fullscreenLocked)) revealControls();
         handlePlayerEdgeGestureStart(event);
         return;
       }
@@ -1490,7 +1543,13 @@ export function PlayerPane({
       handleStagePointerActivity(event);
       handlePlayerEdgeGestureStart(event);
     },
-    [handlePlayerEdgeGestureStart, handleStagePointerActivity, mobileClient],
+    [
+      fullscreenLocked,
+      handlePlayerEdgeGestureStart,
+      handleStagePointerActivity,
+      mobileClient,
+      revealControls,
+    ],
   );
 
   const handleStagePointerMove = useCallback(
@@ -1507,25 +1566,40 @@ export function PlayerPane({
       const tap = playerStageTapRef.current;
       if (!tap || tap.pointerId !== event.pointerId) return;
       playerStageTapRef.current = null;
-      // 子级画面浮层用 preventDefault 认领已完成的点按。仍让事件到达这里以清理
-      // 待处理的边缘/点按状态，
-      // 但绝不能把那次已认领的按压变成播放或全屏 chrome 操作。
-      if (gestureConsumed || event.defaultPrevented) return;
       if (
         !mobileClient ||
-        // 锁定期间点按不得切换 chrome 或全屏；只有锁定按钮本身仍然响应。
-        !playerStageGesturesEnabled(fullscreenLocked) ||
         !isTouchPointer(event.pointerType) ||
-        !showHost ||
         isPlayerEdgeGestureIgnoredTarget(event.target)
       ) {
         return;
       }
 
       const durationMs = Date.now() - tap.startedAt;
-      if (!isPlayerStageTap(event.clientX - tap.startX, event.clientY - tap.startY, durationMs)) {
+      const isTap = isPlayerStageTap(
+        event.clientX - tap.startX,
+        event.clientY - tap.startY,
+        durationMs,
+      );
+
+      // 锁定期间点按不得切换 chrome 或全屏，但必须能把休眠的锁定按钮叫回来：
+      // 画面手势已全部失效时它是唯一的解锁入口。弹幕层等子级浮层认领过的点按同样
+      // 放行唤醒，否则落在弹幕上的一次点按会静默丢失。
+      // 唤醒刻意不看 `showHost`：加载/报错态下锁定按钮仍然挂载，此时更不能让它睡死。
+      if (!playerStageGesturesEnabled(fullscreenLocked)) {
+        // 长按与拖动同样算有意交互：从抬手时刻重排倒计时，避免手指还在屏上按钮就先睡回去。
+        // 只有点按需要 preventDefault 认领，免得祖先层把它当成自己的手势。
+        if (isTap) event.preventDefault();
+        revealControls();
         return;
       }
+
+      if (!showHost) return;
+
+      // 子级画面浮层用 preventDefault 认领已完成的点按。仍让事件到达这里以清理
+      // 待处理的边缘/点按状态，
+      // 但绝不能把那次已认领的按压变成播放或全屏 chrome 操作。
+      if (gestureConsumed || event.defaultPrevented) return;
+      if (!isTap) return;
 
       event.preventDefault();
       const now = Date.now();
@@ -1552,6 +1626,7 @@ export function PlayerPane({
       fullscreenLocked,
       handlePlayerEdgeGestureEnd,
       mobileClient,
+      revealControls,
       showHost,
       toggleControls,
       togglePlayerFullscreen,
@@ -1929,8 +2004,11 @@ export function PlayerPane({
             <div
               ref={hudRef}
               data-player-hud
-              data-visible={controlsVisibleRef.current ? "true" : "false"}
-              aria-hidden={!controlsVisibleRef.current}
+              /* 渲染值必须与 `setControlVisibility` 写入的目标值一致：React 只在渲染值
+                 变化时改写属性，两者一旦分叉，锁定期间的任何一次重渲染都会把 chrome
+                 patch 回可见。 */
+              data-visible={fullscreenChromeVisible ? "true" : "false"}
+              aria-hidden={!fullscreenChromeVisible}
               className={cn(
                 // 底部 chrome 的镜像：视频表面的 fixed 定位兄弟节点，悬浮于顶边而不占布局
                 // 高度，由同一个命令式 data 属性驱动淡入淡出，
@@ -1976,8 +2054,8 @@ export function PlayerPane({
           <div
             ref={controlsRef}
             data-player-controls
-            data-visible="true"
-            aria-hidden="false"
+            data-visible={fullscreenChromeVisible ? "true" : "false"}
+            aria-hidden={!fullscreenChromeVisible}
             className={cn(
               // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
               // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
@@ -2079,14 +2157,14 @@ export function PlayerPane({
             />
           </div>
 
-          {showPlayerFullscreenLock(mobileClient, player.mode === "fullscreen") && (
+          {fullscreenLockMounted && (
             <div
               ref={lockRef}
               data-player-fullscreen-lock
-              data-visible="true"
-              aria-hidden="false"
-              /* 锁定按钮是画面手势之外的独立表面：它与两层 chrome 共享空闲淡出，
-                 但锁定生效时由 setControlVisibility 强制保持可见。 */
+              data-visible={controlsVisibleRef.current ? "true" : "false"}
+              aria-hidden={!controlsVisibleRef.current}
+              /* 锁定按钮是画面手势之外的独立表面，但它与两层 chrome 共享同一个空闲
+                 计时器：锁定期间也会休眠淡出，随后由舞台点按唤回。 */
               className="absolute top-1/2 left-[max(0.5rem,env(safe-area-inset-left))] z-40 -translate-y-1/2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
               onPointerEnter={holdControlsVisible}
               onPointerDown={handleChromePointerDown}

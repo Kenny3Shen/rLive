@@ -23,6 +23,7 @@ import {
   isVerticalPlayerEdgeGesture,
   nextRoomSideTabForSwipe,
   playerBrightnessShadeOpacity,
+  playerChromeVisible,
   playerEdgeGestureDragExtent,
   playerEdgeGestureForStart,
   playerEdgeGestureIntent,
@@ -179,6 +180,15 @@ describe("mobile player layout", () => {
   test("locking suspends stage gestures", () => {
     expect(playerStageGesturesEnabled(false)).toBe(true);
     expect(playerStageGesturesEnabled(true)).toBe(false);
+  });
+
+  test("locking keeps both chrome layers collapsed while the lock button still sleeps", () => {
+    // 未锁定时三层共享同一个唤醒态。
+    expect(playerChromeVisible(true, false)).toBe(true);
+    expect(playerChromeVisible(false, false)).toBe(false);
+    // 锁定期间唤醒只归锁定按钮：手势已屏蔽，chrome 露出来也无从操作。
+    expect(playerChromeVisible(true, true)).toBe(false);
+    expect(playerChromeVisible(false, true)).toBe(false);
   });
 
   test("hides volume and side-panel buttons in mobile fullscreen", () => {
