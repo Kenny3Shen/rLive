@@ -100,9 +100,9 @@ bun run tauri -- android build --debug --target aarch64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
 ```
 
-### 模拟器调试（Windows emulator + WSL 驱动，推荐）
+### 模拟器调试（Windows emulator + WSL 驱动）
 
-模拟器进程跑在 Windows（WHPX），构建、`adb`、CDP 全留在 WSL。相比 WSL 内的 Linux emulator，带窗口时图形走宿主 Vulkan，H.264 硬解不再依赖 `libcuda`，也能直接用 VS Code Emulate 扩展开窗。
+模拟器进程跑在 Windows（WHPX），构建、`adb`、CDP 全留在 WSL。带窗口时图形走宿主 Vulkan，H.264 硬解不依赖 `libcuda`，也能直接用 VS Code Emulate 扩展开窗。
 
 | 项 | 位置 |
 | --- | --- |
@@ -144,28 +144,15 @@ VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Ma
 "emulator.androidExtraBootArgs": "-no-boot-anim"
 ```
 
-扩展在 WSL 下会把该路径拼上 `emulator.exe` 再 exec，所以必须指向 Windows 侧目录；旧的「给 Linux emulator 建 `emulator.exe` 软链」方案不再需要。
+扩展在 WSL 下会把该路径拼上 `emulator.exe` 再 exec，所以必须指向 Windows 侧目录。
 
 行为与限制：
 
-- H.264 不需要 Linux emulator 那套 `-feature -HardwareDecoder` 规避：guest 拿到 `ro.boot.qemu.hwcodec.avcdec=2`，走 `c2.goldfish.h264.decoder`，headless + 720p 直播连播 3 分钟以上正常，emulator 日志无 ERROR/FATAL。
+- H.264 硬解正常：guest 拿到 `ro.boot.qemu.hwcodec.avcdec=2`，走 `c2.goldfish.h264.decoder`，headless + 720p 直播连播 3 分钟以上正常，emulator 日志无 ERROR/FATAL。
 - `-no-window` 会让渲染退回 SwiftShader + lavapipe 软件光栅（宿主 GPU 只在带窗口时启用），冷启动约 30s，app、WebView 与播放均可用。headless 的进程名是 `qemu-system-x86_64-headless`，用 `Get-Process qemu-system-x86_64` 查不到，别据此判定模拟器已退出。
 - 带窗口启动（含 VS Code Emulate 扩展）默认加载 `default_boot` 快照，userdata 连同已装应用和 WebView 缓存回滚到快照时点 —— 表现为刚装的新版又变回旧版。需要干净状态时加 `-no-snapshot-load`（扩展侧已开 `androidColdBoot`）。
 - `adb emu <cmd>` 会静默失败：控制台 token 在 `C:\Users\shens\.emulator_console_auth_token`，而 WSL 的 adb 读 `~/.emulator_console_auth_token`。需要时 `cp /mnt/c/Users/shens/.emulator_console_auth_token ~/`。
 - 镜像仍是 WebView 133（随镜像发布，落后于真机的 149+），触摸/手势类 bug 依旧只能真机验证；镜像也无法升级到 WebView 149，官方 x86_64 WebView 无公开分发渠道，强装 arm64 WebView 会在 berberis 翻译层崩溃。
-
-### 模拟器调试（WSL 内 Linux emulator，备用）
-
-Windows 侧不可用时的退路，需要 KVM 权限（`sudo gpasswd -a <user> kvm` 后重新登录）：
-
-```bash
-sdkmanager "system-images;android-36-ext18;google_apis;x86_64" "emulator" "platform-tools"
-echo no | avdmanager create avd -n rlive_test -k "system-images;android-36-ext18;google_apis;x86_64" -d pixel_6
-setsid sg kvm -c "$ANDROID_HOME/emulator/emulator -avd rlive_test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -feature -HardwareDecoder" > /tmp/emu.log 2>&1 &
-adb wait-for-device && adb shell getprop sys.boot_completed   # 等待 1
-```
-
-两个 WSL 专属限制：`-feature -HardwareDecoder` 必加，否则解 H.264 时宿主 qemu 直接段错误（cuvid 走不到 `libcuda.so`），现象是进直播间后 `adb devices` 突然变空；镜像只能用到 android-36-ext18，36.1 与 37.x 的 guest gfxstream 会在 RegionSampling 断言崩溃循环。
 
 ### 排错清单
 
@@ -183,7 +170,7 @@ adb wait-for-device && adb shell getprop sys.boot_completed   # 等待 1
 - **`adb install` 静默失败**：x86_64-only APK 装不进 arm64 设备，`install -r` 可能无输出且旧包仍在。用 `unzip -Z1` 核对 ABI 后重装。
 - **INSTALL_FAILED_UPDATE_INCOMPATIBLE**：换机器构建的 debug 包签名不同。保留数据可用项目 keystore 重签（`apksigner sign --ks /home/shenss/upload-keystore.jks --ks-key-alias upload`），否则先 `adb uninstall com.shenss.rlive`。
 - **触摸整体失灵（WebView 149 实测案例）**：`<img>` 上的长按会触发原生图片菜单接管（pointercancel 先于 contextmenu 到达），应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死，后续 touch 全部不派发——页面只能滚动、点击全无反应，极像应用卡死。注入探针后 touchstart 完全消失即可确诊。规避：长按交互面内不让 `<img>` 参与命中测试（`pointer-events: none`）。
-- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下把配置路径拼上 `emulator.exe`，默认路径还是 macOS 的。正解是指向 Windows SDK：`"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`（见上文 Windows emulator 一节）。若要让它启动 WSL 内的 Linux emulator，则需 `ln -s $ANDROID_HOME/emulator/emulator $ANDROID_HOME/emulator/emulator.exe` 并把路径指到 `/home/shenss/Android/Sdk/emulator`；sdkmanager 重装或升级 emulator 包会重写 `emulator/` 目录删掉该链接，导致同一报错复发。
+- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下把配置路径拼上 `emulator.exe`，默认路径还是 macOS 的。正解是指向 Windows SDK：`"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`（见上文 Windows emulator 一节）。
 - **扩展列表为空但 `emulator.exe -list-avds` 有输出**：AVD 索引 `.ini` 不在 `%USERPROFILE%\.android\avd`。WSL 侧 `export ANDROID_AVD_HOME` 不会传进 `.exe`，必须把索引文件放回默认目录，只用 `path=` 把数据目录指向 D 盘。
 
 ## 真机验证
