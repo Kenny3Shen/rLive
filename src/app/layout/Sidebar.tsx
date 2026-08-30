@@ -3,16 +3,8 @@ import { useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  Heart,
-  History,
-  Home,
-  LayoutGrid,
-  Videotape,
   Moon,
-  PanelsTopLeft,
-  Settings,
   Sun,
-  Tv,
 } from "lucide-react";
 import { fadeTheme } from "@/app/theme";
 import { Badge } from "@/components/ui/badge";
@@ -24,26 +16,14 @@ import { activeRecordingCount, useRecordings } from "@/features/recording/record
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
 import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
-import { SIDEBAR_NAVIGATION_STATE } from "./sidebarNavigation";
-
-type NavItem = {
-  to: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  end?: boolean;
-  className?: string;
-};
-
-const navItems: NavItem[] = [
-  { to: "/", label: "首页", icon: Home, end: true },
-  { to: "/follow", label: "关注", icon: Heart },
-  { to: "/category", label: "分类", icon: LayoutGrid },
-  { to: "/iptv", label: "IPTV", icon: Tv },
-  { to: "/multi-room", label: "多画面", icon: PanelsTopLeft, className: "max-md:hidden" },
-  { to: "/recordings", label: "录制", icon: Videotape, className: "max-md:hidden" },
-];
+import {
+  SIDEBAR_NAVIGATION_STATE,
+  sidebarNavItemsFor,
+  type SidebarNavItem,
+} from "./sidebarNavigation";
 
 function SidebarLink({
   to,
@@ -54,7 +34,7 @@ function SidebarLink({
   badgeCount = 0,
   badgeLabel,
   onIntent,
-}: NavItem & {
+}: SidebarNavItem & {
   /** 大于零时以图标上的小计数徽标呈现。 */
   badgeCount?: number;
   badgeLabel?: string;
@@ -208,6 +188,9 @@ export function Sidebar() {
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(queryClient, siteId);
   }, [queryClient, siteId]);
+  // 桌面专属入口（多画面/录制）按客户端平台过滤，而不是只靠视口断点：
+  // 手机/平板横屏宽度普遍超过 md，`max-md:hidden` 会让它们漏进移动端底栏。
+  const navItems = sidebarNavItemsFor(isMobileClient());
 
   return (
     <aside
@@ -234,8 +217,6 @@ export function Sidebar() {
         <div data-slot="app-sidebar-preferences" className="mt-auto max-md:hidden">
           <AppearanceToggle />
         </div>
-        <SidebarLink to="/history" label="历史" icon={History} />
-        <SidebarLink to="/settings" label="设置" icon={Settings} />
       </nav>
     </aside>
   );
