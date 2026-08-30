@@ -12,6 +12,7 @@ import {
   showPlayerControlsCenterSlot,
   showPlayerSidePanelControl,
   showPlayerVolumeControl,
+  showPlayerWebFullscreenControl,
   showSecondaryPlayerControls,
   volumeControlPresentation,
 } from "../src/shared/components/player/PlayerControls";
@@ -26,8 +27,14 @@ import {
   playerEdgeGestureForStart,
   playerEdgeGestureIntent,
   playerEdgeGestureValue,
+  playerStageGesturesEnabled,
+  playerVolumeForKeyStep,
+  showPlayerFullscreenLock,
   PLAYER_STAGE_DOUBLE_TAP_MS,
+  PLAYER_VOLUME_KEY_STEP,
   showDanmakuComposerInPlayerControls,
+  showRoomSidePanel,
+  stageOwnsRoomTopBar,
   shouldUseLargeDanmakuActionMenu,
   shouldRetainRoomSidePanel,
   shouldRunFloatingDanmaku,
@@ -148,6 +155,32 @@ describe("mobile player layout", () => {
     expect(showSecondaryPlayerControls(false, true)).toBe(true);
   });
 
+  test("arrow keys step volume within 0-100", () => {
+    expect(playerVolumeForKeyStep(50, false, 1)).toBe(50 + PLAYER_VOLUME_KEY_STEP);
+    expect(playerVolumeForKeyStep(50, false, -1)).toBe(50 - PLAYER_VOLUME_KEY_STEP);
+    // 到达两端后继续按键必须停在边界，而不是产生越界值。
+    expect(playerVolumeForKeyStep(100, false, 1)).toBe(100);
+    expect(playerVolumeForKeyStep(0, false, -1)).toBe(0);
+  });
+
+  test("volume-up from muted leaves silence in one keypress", () => {
+    // 静音时的显示音量可能仍是旧值，按上键必须从 0 起步才能一次出声。
+    expect(playerVolumeForKeyStep(80, true, 1)).toBe(PLAYER_VOLUME_KEY_STEP);
+    expect(playerVolumeForKeyStep(80, true, -1)).toBe(0);
+  });
+
+  test("the fullscreen lock is mobile-fullscreen only", () => {
+    expect(showPlayerFullscreenLock(true, true)).toBe(true);
+    // 桌面没有误触问题；窗口化时随时可以直接离开。
+    expect(showPlayerFullscreenLock(false, true)).toBe(false);
+    expect(showPlayerFullscreenLock(true, false)).toBe(false);
+  });
+
+  test("locking suspends stage gestures", () => {
+    expect(playerStageGesturesEnabled(false)).toBe(true);
+    expect(playerStageGesturesEnabled(true)).toBe(false);
+  });
+
   test("hides volume and side-panel buttons in mobile fullscreen", () => {
     // 紧凑横屏在非全屏时仍显示这两个按钮。
     expect(showPlayerVolumeControl(true, false, false)).toBe(true);
@@ -157,9 +190,36 @@ describe("mobile player layout", () => {
     expect(showPlayerSidePanelControl(true, false, true)).toBe(false);
     expect(showPlayerVolumeControl(true, true, true)).toBe(false);
     expect(showPlayerSidePanelControl(true, true, true)).toBe(false);
-    // 桌面全屏保留它们。
+    // 桌面全屏保留音量。
     expect(showPlayerVolumeControl(false, false, true)).toBe(true);
-    expect(showPlayerSidePanelControl(false, false, true)).toBe(true);
+  });
+
+  test("desktop trades the side-panel toggle for web fullscreen", () => {
+    // 桌面窗口化只显示网页全屏：它在收起右侧栏之外还会隐藏房间页的上下栏，
+    // 单独的收起按钮成了它的子集。
+    expect(showPlayerSidePanelControl(false, false, false)).toBe(false);
+    expect(showPlayerWebFullscreenControl(false, false)).toBe(true);
+    // 移动端窗口化相反：没有上下栏可让，保留原来的侧栏开关。
+    expect(showPlayerSidePanelControl(true, false, false)).toBe(true);
+    expect(showPlayerWebFullscreenControl(true, false)).toBe(false);
+    // 原生全屏时舞台已独占窗口，网页全屏在两端都会是空操作。
+    expect(showPlayerWebFullscreenControl(false, true)).toBe(false);
+    expect(showPlayerWebFullscreenControl(true, true)).toBe(false);
+  });
+
+  test("web fullscreen yields the side panel without unmounting it", () => {
+    expect(showRoomSidePanel(true, false)).toBe(true);
+    expect(showRoomSidePanel(true, true)).toBe(false);
+    // 本来关着的面板不会被网页全屏打开。
+    expect(showRoomSidePanel(false, true)).toBe(false);
+  });
+
+  test("both kinds of fullscreen take the room top bar, so both need the HUD", () => {
+    // 原生全屏把顶栏盖在 top layer 之下，网页全屏直接卸载它 —— 缺口是同一个。
+    expect(stageOwnsRoomTopBar(true, false)).toBe(true);
+    expect(stageOwnsRoomTopBar(false, true)).toBe(true);
+    // 窗口化时顶栏就在原处，画面内不需要再补一层。
+    expect(stageOwnsRoomTopBar(false, false)).toBe(false);
   });
 
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {

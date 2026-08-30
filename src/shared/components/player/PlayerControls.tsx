@@ -3,6 +3,7 @@ import {
   Captions,
   CaptionsOff,
   Check,
+  Expand,
   Headphones,
   Maximize2,
   MessageSquareOff,
@@ -15,6 +16,7 @@ import {
   Play,
   RefreshCw,
   Settings,
+  Shrink,
   VideoOff,
   Volume2,
   VolumeX,
@@ -109,13 +111,26 @@ export function showPlayerVolumeControl(
   return showSecondaryPlayerControls(compact, portrait);
 }
 
+/**
+ * 侧面板开关只保留给移动端窗口化。桌面端这个位置改由「网页全屏」承担 ——
+ * 后者除了收起右侧栏还会隐藏房间页的上下栏，单纯的收起按钮成了它的子集。
+ */
 export function showPlayerSidePanelControl(
   compact: boolean,
   portrait: boolean,
   fullscreen: boolean,
 ): boolean {
-  if (compact && fullscreen) return false;
+  if (!compact) return false;
+  if (fullscreen) return false;
   return showSecondaryPlayerControls(compact, portrait);
+}
+
+/**
+ * 网页全屏是桌面专属：它让出的是应用窗口内的上下栏与右侧栏，而移动端窗口化没有这些栏。
+ * 原生全屏时舞台已独占窗口，再显示它只会是个空操作。
+ */
+export function showPlayerWebFullscreenControl(compact: boolean, fullscreen: boolean): boolean {
+  return !compact && !fullscreen;
 }
 
 export function showPlayerControlsCenterSlot(compact: boolean, fullscreen: boolean): boolean {
@@ -147,6 +162,8 @@ export type PlayerControlsProps = {
   sidePanelOpen?: boolean;
   /** 随响应式侧面板形态（侧栏 vs 抽屉）变化。 */
   sidePanelLabel?: string;
+  /** 桌面端网页全屏：舞台占满应用窗口，但不进入原生全屏。 */
+  webFullscreen?: boolean;
   osdOn?: boolean;
   asrVisible?: boolean;
   asrOn?: boolean;
@@ -209,6 +226,7 @@ export type PlayerControlsProps = {
   onToggleMute: () => void;
   onToggleAudioOnly?: () => void;
   onToggleSidePanel?: () => void;
+  onToggleWebFullscreen?: () => void;
   onToggleOsd?: () => void;
   onToggleAsr?: () => void;
   onAsrTranslationEnabledChange?: (enabled: boolean) => void;
@@ -291,6 +309,7 @@ export function PlayerControls({
   audioOnly = false,
   sidePanelOpen = false,
   sidePanelLabel,
+  webFullscreen = false,
   osdOn,
   asrVisible = false,
   asrOn = false,
@@ -331,6 +350,7 @@ export function PlayerControls({
   onToggleMute,
   onToggleAudioOnly,
   onToggleSidePanel,
+  onToggleWebFullscreen,
   onToggleOsd,
   onToggleAsr,
   onAsrTranslationEnabledChange,
@@ -353,6 +373,7 @@ export function PlayerControls({
   const showSecondaryControls = showSecondaryPlayerControls(compact, portrait);
   const showVolumeControl = showPlayerVolumeControl(compact, portrait, fullscreen);
   const showSidePanelControl = showPlayerSidePanelControl(compact, portrait, fullscreen);
+  const showWebFullscreenControl = showPlayerWebFullscreenControl(compact, fullscreen);
   const avoidSystemGestureBar = playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer);
   const mobilePortrait = !showSecondaryControls;
   const volumeControl = volumeControlPresentation(volume, muted);
@@ -961,6 +982,19 @@ export function PlayerControls({
               tooltip={!compact}
             >
               {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            </ControlButton>
+          )}
+          {showWebFullscreenControl && onToggleWebFullscreen && (
+            <ControlButton
+              label={webFullscreen ? "退出网页全屏" : "网页全屏"}
+              variant={overlay ? "ghost" : webFullscreen ? "secondary" : "ghost"}
+              className={overlayButtonClass}
+              tooltipContainer={portalContainer}
+              aria-pressed={webFullscreen}
+              onClick={onToggleWebFullscreen}
+              tooltip={!compact}
+            >
+              {webFullscreen ? <Shrink /> : <Expand />}
             </ControlButton>
           )}
           {showSecondaryControls && pictureInPictureSupported && onTogglePictureInPicture && (
