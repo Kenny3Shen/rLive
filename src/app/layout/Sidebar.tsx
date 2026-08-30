@@ -164,7 +164,7 @@ function AppearanceToggle() {
             data-slot="appearance-toggle"
             variant="ghost"
             size="icon-sm"
-            className="size-8 max-md:size-11 max-md:rounded-lg"
+            className="size-8"
             aria-label={label}
             aria-pressed={isDark}
             onClick={handleThemeToggle}
@@ -188,9 +188,12 @@ export function Sidebar() {
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(queryClient, siteId);
   }, [queryClient, siteId]);
-  // 桌面专属入口（多画面/录制）按客户端平台过滤，而不是只靠视口断点：
-  // 手机/平板横屏宽度普遍超过 md，`max-md:hidden` 会让它们漏进移动端底栏。
-  const navItems = sidebarNavItemsFor(isMobileClient());
+  // 桌面专属入口（多画面/录制）与亮暗模式快捷切换都按客户端平台门控，
+  // 而不是只靠视口断点：手机/平板横屏宽度普遍超过 md，
+  // `max-md:hidden` 会让它们漏进移动端底栏。移动端的亮暗切换
+  // 统一放在设置页外观分区。
+  const mobileClient = isMobileClient();
+  const navItems = sidebarNavItemsFor(mobileClient);
 
   return (
     <aside
@@ -214,9 +217,11 @@ export function Sidebar() {
             />
           );
         })}
-        <div data-slot="app-sidebar-preferences" className="mt-auto max-md:hidden">
-          <AppearanceToggle />
-        </div>
+        {!mobileClient && (
+          <div data-slot="app-sidebar-preferences" className="mt-auto max-md:hidden">
+            <AppearanceToggle />
+          </div>
+        )}
       </nav>
     </aside>
   );
