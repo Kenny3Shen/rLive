@@ -32,6 +32,7 @@ import { HomePage } from "../features/home/HomePage";
 import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
 import { useFollowAutoRecording } from "../features/recording/followRecording";
 import { RecordingExitGuard } from "../features/recording/RecordingExitGuard";
+import { UpdateChecker } from "../features/update/UpdatePrompt";
 
 // 让发现页保持在关键路径上，把次要页面（尤其是播放器及其弹幕渲染器）
 // 推迟到路由真正需要时再加载。
@@ -71,6 +72,7 @@ function AppRuntime() {
   return (
     <>
       <AndroidBackNavigator />
+      <UpdateChecker />
       <IptvStartupWarmup />
       <RouteModulePreloader />
       <RecordingExitGuard />

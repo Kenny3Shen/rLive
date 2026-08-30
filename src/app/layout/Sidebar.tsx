@@ -1,11 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
-import {
-  Moon,
-  Sun,
-} from "lucide-react";
+import { ArrowUp, Moon, Sun } from "lucide-react";
 import { fadeTheme } from "@/app/theme";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +15,7 @@ import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
 import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { useUpdateStore } from "@/shared/update/updateStore";
 import { cn } from "@/lib/utils";
 import {
   SIDEBAR_NAVIGATION_STATE,
@@ -33,11 +31,13 @@ function SidebarLink({
   className,
   badgeCount = 0,
   badgeLabel,
+  badgeContent,
   onIntent,
 }: SidebarNavItem & {
   /** 大于零时以图标上的小计数徽标呈现。 */
   badgeCount?: number;
   badgeLabel?: string;
+  badgeContent?: ReactNode;
   onIntent?: () => void;
 }) {
   const navigate = useNavigate();
@@ -89,7 +89,7 @@ function SidebarLink({
                 // 上保持可读，侧栏色的描边让它与图标脱开。
                 className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
               >
-                {badgeCount > 99 ? "99+" : badgeCount}
+                {badgeContent ?? (badgeCount > 99 ? "99+" : badgeCount)}
               </Badge>
             )}
           </span>
@@ -185,6 +185,7 @@ export function Sidebar() {
   // 又不必增加第二个轮询源。
   const recordings = useRecordings();
   const activeRecordings = activeRecordingCount(recordings.data);
+  const updateAvailable = useUpdateStore((state) => state.status === "available");
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(queryClient, siteId);
   }, [queryClient, siteId]);
@@ -205,8 +206,21 @@ export function Sidebar() {
       <SidebarLink
         key={item.to}
         {...item}
-        badgeCount={recordingBadge}
-        badgeLabel={recordingBadge > 0 ? `${recordingBadge} 项录制进行中` : undefined}
+        badgeCount={
+          item.to === "/settings" && !mobileClient && updateAvailable ? 1 : recordingBadge
+        }
+        badgeContent={
+          item.to === "/settings" && !mobileClient && updateAvailable ? (
+            <ArrowUp className="size-3" aria-hidden />
+          ) : undefined
+        }
+        badgeLabel={
+          item.to === "/settings" && !mobileClient && updateAvailable
+            ? "有新版本可用"
+            : recordingBadge > 0
+              ? `${recordingBadge} 项录制进行中`
+              : undefined
+        }
         onIntent={item.to === "/" ? preloadHome : undefined}
       />
     );

@@ -21,7 +21,10 @@
     "dialog:allow-save",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://translate.google.com/**" }]
+      "allow": [
+        { "url": "https://translate.google.com/**" },
+        { "url": "https://api.github.com/repos/Kenny3Shen/rLive/releases/latest" }
+      ]
     }
   ]
 }
