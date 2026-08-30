@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 13+ 主题图标单色层；由 bun run icons 生成，请勿手工编辑 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M79.098,43.86 A27.069,27.069 0 1 1 64.14,28.902"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.483"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M70.21,34.859 a2.931,2.931 0 1 0 5.862,0 a2.931,2.931 0 1 0 -5.862,0Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M41.759,39.517 L41.759,68.483 L67.621,54Z"
+        android:fillColor="#FFFFFFFF"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3.793"
+        android:strokeLineJoin="round" />
+</vector>

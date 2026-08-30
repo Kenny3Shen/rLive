@@ -1,6 +1,6 @@
 {
   "name": "rlive",
-  "version": "3.1.3",
+  "version": "3.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,13 +8,15 @@
     "build": "tsc --noEmit && vite build",
     "lint": "oxlint --react-plugin src",
     "lint:fix": "oxlint --react-plugin --fix src",
-    "format": "oxfmt --write src scripts/tauri.ts package.json vite.config.ts tsconfig.json tsconfig.node.json",
-    "format:check": "oxfmt --check src scripts/tauri.ts package.json vite.config.ts tsconfig.json tsconfig.node.json",
+    "format": "oxfmt --write src scripts package.json vite.config.ts tsconfig.json tsconfig.node.json",
+    "format:check": "oxfmt --check src scripts package.json vite.config.ts tsconfig.json tsconfig.node.json",
     "check": "bun run lint && bunx tsc --noEmit && bunx tsc --noEmit -p tsconfig.node.json",
     "test:danmaku": "bun test tests/danmu-js-adapter.test.ts tests/danmaku-actions.test.ts tests/playback-failover.test.ts",
     "test:unit": "bun test tests/",
     "preview": "vite preview",
     "tauri": "bun scripts/tauri.ts",
+    "icons": "bun scripts/generate-icons.ts",
+    "icons:preview": "bun scripts/icon-preview.ts",
     "bundle:linux": "bash scripts/build-linux-bundle.sh"
   },
   "dependencies": {
@@ -43,6 +45,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^26.2.0",
