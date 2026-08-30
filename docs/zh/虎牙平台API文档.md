@@ -1,6 +1,7 @@
 # 虎牙平台 API 文档
 
-更新时间：2026-07-27。本页说明 rLive 对虎牙的浏览、播放、账号与弹幕适配范围。
+面向要修改虎牙适配器的开发者，说明浏览、播放、账号与弹幕的接入范围，以及发送所需的房间与凭据字段。
+当前状态：浏览、播放、弹幕接收、扫码/Cookie 登录、普通弹幕发送与会话级自动发送均已支持，发送已在测试直播间完成受控验证。
 
 ## 能力总览
 
@@ -15,32 +16,43 @@
 
 ## rLive 接入接口
 
-虎牙实现统一站点接口：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。播放适配器会从房间数据提取多条线路与码率，并在使用时处理防盗链参数；播放地址不应被当作长期稳定的外部 API。
+虎牙实现统一站点接口：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。
 
-`danmaku_connect` 负责接收房间消息。`huya_danmaku_send_status` 和 `huya_danmaku_send` 是 rLive 内发送一个普通文本片段的接口，手动发送和房间内会话级自动发送均复用；发送前会再次解析房间元数据，以取得网关所需的内部房间参数。
+`danmaku_connect` 负责接收房间消息。`huya_danmaku_send_status` 和 `huya_danmaku_send` 是发送一个普通文本片段的接口，手动发送和会话级自动发送均复用；发送前会再次解析房间元数据，以取得网关所需的内部房间参数。
 
-## 账号与发送边界
+## 上游数据与播放
 
-在「设置 → 账号 → 虎牙」中可扫码登录或手动保存本机 Cookie。扫码走公开 UDB 流程（`udblgn.huya.com/qrLgn/getQrId` → `getQrImg` → `tryQrLogin`），确认后把会话 Cookie 只写入本机；发送路径至少要求数字账号标识（`yyuid` 或 `udb_uid`）及登录凭据（`udb_n`、`udb_cred` 或扫码产生的 `udb_biztoken`），同时需要默认关闭的 `danmaku_send_enabled` 开关、有效房间、非空单行文本和按房间 3 秒本机冷却。
+播放适配器从房间数据提取多条线路与码率，并在使用时处理防盗链参数；播放地址不应被当作长期稳定的外部 API。
 
-手动发送每次提交一条普通文字。B 站、斗鱼和虎牙房间标题栏右侧、移动端「更多房间操作」和全屏「更多操作」提供默认关闭、不持久化的会话级「自动发送弹幕」；只有共用本机授权、当前 Cookie/可发送状态和文本校验均有效时才可开启。开启时立即发送首段，将换行与连续空白压缩为一个空格，再按 grapheme 拆成每段最多 20 个用户可见字符且不超过虎牙 UTF-16 上限的片段；按顺序发送，末段后从首段继续。请求不重叠，后续发送起始至少相隔当前会话设置的发送间隔；编辑文本、切换房间、离开页面、关闭应用或任意发送失败都会停用，失败不会自动重试。单个 grapheme 无法容纳在平台上限内时会显示校验错误。rLive 不提供批量发送、自动回复、礼物、支付或未知结果自动重试。写入返回不会在 UI 里生成假消息；仅当正常房间连接收到平台真实回显时，消息才会进入列表和飘屏。
+房间解析的关键约定：
 
-## 2026-07-27 发送诊断与验证
+- 用户保存的虎牙 Cookie 只在 `m.huya.com` 与 `www.huya.com` 的房间页请求中携带，不会重放给列表、搜索或 CDN 主机。
+- 信令频道号取自桌面页的 `TT_PROFILE_INFO.lp`、`TT_ROOM_DATA` 中的非零频道字段，并以 `privateHost` / `yyid` 回退；公开短房间号永不进入 TARS 频道字段（离线个人房间可能没有 `lChannelId` / `lSubChannelId`）。
+- 发送链路与当前网页播放器对齐：当前 H5 信令 UA、`WSConnectParaInfo.sCookie`、`WSVerifyCookieReq` 和单条 `liveui.sendMessage` WUP 请求。`tRsp` 内容还包着 TARS tag 0 的 `SendMessageRsp` 结构，需先解开外层结构再读取状态和安全提示文本。
 
-在测试直播间完成了受控发送验证。首次问题并非 Cookie 已失效：信令已完成登录校验，并返回 `liveui.sendMessage` 的 WUP 回包；rLive 却把回包误报为“响应格式异常”。
+## 账号与弹幕发送
 
-排查和修复如下：
+在「设置 → 账号 → 虎牙」中可扫码登录或手动保存本机 Cookie。扫码走公开 UDB 流程（`udblgn.huya.com/qrLgn/getQrId` → `getQrImg` → `tryQrLogin`），确认后把会话 Cookie 只写入本机。
 
-- 站点工厂此前没有把用户保存的虎牙 Cookie 交给房间解析器，导致发送前重新解析房间时始终使用匿名上下文。现仅在 `m.huya.com` 与 `www.huya.com` 的房间页请求中携带该 Cookie，不会重放给列表、搜索或 CDN 主机。
-- 离线个人房间的页面可能没有 `lChannelId` / `lSubChannelId`。旧路径把公开短房间号当作信令频道号；现在使用桌面页的 `TT_PROFILE_INFO.lp`、`TT_ROOM_DATA` 中的非零频道字段和 `privateHost` / `yyid` 回退，公开短号永不进入 TARS 频道字段。
-- 发送链路与当前网页播放器对齐：使用当前 H5 信令 UA、`WSConnectParaInfo.sCookie`、`WSVerifyCookieReq` 和单条 `liveui.sendMessage` WUP 请求。Cookie 值和原始帧均不记录。
-- `tRsp` 的内容本身还包着 TARS tag 0 的 `SendMessageRsp` 结构；旧解析器直接把外层结构当作 `iStatus`，因此即使平台已确认也会失败。现在先解开外层结构，再读取状态和安全提示文本。
+发送前必须同时满足：
 
-修复后的受控测试已收到平台成功状态。平台确认仍不等于 UI 展示确认：rLive 依旧只在正常收弹幕连接出现真实回显时新增列表和飘屏，未知状态也不会自动重发。
+1. 默认关闭的 `danmaku_send_enabled` 开关已开启。
+2. 数字账号标识（`yyuid` 或 `udb_uid`）及登录凭据（`udb_n`、`udb_cred` 或扫码产生的 `udb_biztoken`）齐备。
+3. 有效房间、非空单行文本，并满足按房间 3 秒本机冷却。
 
-## 运行约束与代码位置
+会话级自动发送入口在房间标题栏右侧、移动端「更多房间操作」和全屏「更多操作」，默认关闭且不持久化，需共用本机授权、当前 Cookie/可发送状态和文本校验都有效才可开启。开启时立即发送首段，把换行与连续空白压缩为一个空格，再按 grapheme 拆成每段最多 20 个用户可见字符且不超过虎牙 UTF-16 上限的片段，顺序发送、末段后回到首段循环。请求不重叠，后续发送起始至少相隔当前会话设置的发送间隔。
 
-虎牙网页协议、线路和登录条件可能随时变更。手动 Cookie 仅保存在当前设备，不记录、不导出也不上传。
+结果语义：平台确认不等于 UI 展示确认。写入返回不会在 UI 里生成假消息，只有正常收弹幕连接收到平台真实回显时消息才进入列表和飘屏；未知状态不会自动重发。
+
+## 已知限制
+
+- 编辑文本、切换房间、离开页面、关闭应用或任意发送失败都会停用自动发送；失败不自动重试。
+- 单个 grapheme 无法容纳在平台上限内时显示校验错误。
+- 不提供批量发送、自动回复、礼物、支付或未知结果自动重试。
+- 虎牙网页协议、线路和登录条件可能随时变更。
+- 手动 Cookie 仅保存在当前设备，Cookie 值和原始帧均不记录、不导出也不上传。
+
+## 代码位置
 
 - 站点与播放：`src-tauri/src/sites/huya/`
 - 扫码登录：`src-tauri/src/account/huya_qr.rs`

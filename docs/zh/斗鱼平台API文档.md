@@ -1,6 +1,7 @@
 # 斗鱼平台 API 文档
 
-更新时间：2026-08-29。本页记录 rLive 的斗鱼浏览、播放、账号与实时弹幕接入，以及发送状态机的修复与验证。
+面向要修改斗鱼适配器的开发者，说明浏览、播放签名、账号与实时弹幕的接入方式，以及发送结果如何判定。
+当前状态：浏览、播放、弹幕接收、扫码/Cookie 登录、普通弹幕发送与会话级自动发送均已支持，发送已在测试直播间完成端到端验证。
 
 ## 能力总览
 
@@ -15,35 +16,35 @@
 
 ## rLive 接入接口
 
-读取能力通过统一适配器接口提供：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。播放签名由 `sites/douyu/sign.rs` 以纯 Rust 计算：从 `wgapi/livenc/liveweb/websec/getEncryption` 拉取短时效加密描述符（进程内缓存并单飞刷新），`auth` 由描述符的 `key` / `rand_str` / `enc_time` 迭代 MD5 链得到，每次播放请求都用当前时间戳重新计算；签名只在内存中短暂使用。播放请求发往 `lapi/live/getH5PlayV1`，旧 `getH5Play` 端点已被上游下线（HTTP 403）。
+读取能力通过统一适配器接口提供：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。
 
-实时能力由 `danmaku_connect` 和 `douyu_danmaku_send_status` / `douyu_danmaku_send` 提供。后两者是当前账号发送一个文本片段的接口，手动发送与房间内会话级自动发送均复用；接收与发送使用不同网关职责：接收链路负责房间事件，发送链路负责当前账号的一条文字消息；两者都遵守应用代理设置。
+实时能力由 `danmaku_connect`（接收房间事件）和 `douyu_danmaku_send_status` / `douyu_danmaku_send`（当前账号发送一个文本片段）提供；手动发送与会话级自动发送复用后两者。接收链路与发送链路是不同网关职责，两者都遵守应用代理设置。
 
-## 发送协议修复记录
+## 上游数据与播放
 
-此前 rLive 使用旧版 `loginreq` 和旧聊天载荷，并在 WebSocket 写入后立即报告成功。当前网页发送链路还要求登录后的加密协商；只要漏掉其中任一步，socket 可写也不等于平台接收。
+播放签名由 `sites/douyu/sign.rs` 以纯 Rust 计算，不依赖 JS 运行时：
 
-当前发送状态机为：
+1. 从 `wgapi/livenc/liveweb/websec/getEncryption` 拉取短时效加密描述符（进程内缓存并单飞刷新）。
+2. `auth` 由描述符的 `key` / `rand_str` / `enc_time` 迭代 MD5 链得到，每次播放请求都用当前时间戳重新计算。
+3. 签名只在内存中短暂使用；播放请求发往 `lapi/live/getH5PlayV1`。旧 `getH5Play` 端点已被上游下线（HTTP 403）。
+
+## 账号与弹幕发送
+
+发送前需要开启默认关闭的本机 `danmaku_send_enabled`，并保存完整的当前账号 Cookie；缺失必要 Cookie 时直接拒绝，不随机生成设备 ID，也不把普通 JWT 当作弹幕 JWT。发送只接受数字房间号、非空单行文本和按房间 3 秒本机冷却。
+
+当前发送状态机（socket 可写不等于平台接收，必须走完加密协商）：
 
 ```text
 loginreq → loginres → getEncryption → livreq → livres → lsigreq → chatmessage → chatres / error
 ```
 
-修复内容包括：
+实现要点：使用当前网页形态的登录字段、稳定设备身份和弹幕会话 JWT；按服务端下发的加密配置完成 `livreq` / `lsigreq` 协商，并限制不可信响应的迭代次数、长度和字符集；WSS 与 HTTP 发现共享代理策略，支持安全的 HTTP CONNECT 隧道。
 
-- 使用当前网页形态的登录字段、稳定设备身份和弹幕会话 JWT；缺失必要 Cookie 时直接拒绝，不随机生成设备 ID，也不把普通 JWT 当作弹幕 JWT。
-- 根据服务端下发的加密配置完成 `livreq` / `lsigreq` 协商，并限制不可信响应的迭代次数、长度和字符集。
-- 使用当前网页的 `chatmessage` 字段组；签名、Cookie、JWT、消息正文和原始回包不会写入日志。
-- WSS 与 HTTP 发现共享代理策略，支持安全的 HTTP CONNECT 隧道。
-- 仅 `chatres(res=0)` 表示平台确认接收；`error` 或非零 `res` 是明确拒绝；写后超时、关闭或读失败是“已提交但未确认”，不会自动重试。
+会话级自动发送入口在房间标题栏右侧、移动端「更多房间操作」和全屏「更多操作」，默认关闭且不持久化，需共用授权、当前 Cookie/可发送状态和文本校验都有效才可开启。开启时立即发送首段，把换行和连续空白压缩为一个空格，再按 grapheme 拆成每段最多 20 个用户可见字符且不超过斗鱼 UTF-16 上限的有序片段，末段后从首段循环。请求不重叠，后续发送起始至少相隔当前会话设置的发送间隔。
 
-已在测试直播间完成端到端发送验证。该结果覆盖当前网页流程与测试环境；Cookie、房间条件和上游版本变化仍可能影响结果。
+### 结果语义
 
-## 使用前提与结果语义
-
-发送前需要开启默认关闭的本机 `danmaku_send_enabled`，并保存完整的当前账号 Cookie。发送只接受数字房间号、非空单行文本和按房间 3 秒本机冷却。B 站、斗鱼和虎牙房间标题栏右侧、移动端「更多房间操作」和全屏「更多操作」提供默认关闭、不持久化的会话级「自动发送弹幕」：仅当共用授权、当前 Cookie/可发送状态和文本校验都有效时可开启。开启时立即发送首段，将换行和连续空白压缩为一个空格，再按 grapheme 拆成每段最多 20 个用户可见字符且不超过斗鱼 UTF-16 上限的有序片段；末段后从首段循环。请求不重叠，后续发送起始至少相隔当前会话设置的发送间隔。编辑文本、切换房间、离开页面、关闭应用或任意发送失败都会停用；失败或未知写入不会自动重试。单个 grapheme 无法容纳在平台上限内时会显示校验错误。rLive 不提供批量发送、自动回复、礼物、支付或自动重试。
-
-每一次发送仍应区分三个阶段：
+每次发送必须区分三个阶段，不能以本地提交当作成功：
 
 | 阶段 | 含义 |
 | --- | --- |
@@ -51,12 +52,19 @@ loginreq → loginres → getEncryption → livreq → livres → lsigreq → ch
 | `chatres(res=0)` | 斗鱼网关已确认接收。 |
 | 房间真实回显 | 正常收弹幕连接收到该消息，才会显示在 rLive 列表与飘屏中。 |
 
-前端不会根据 command 返回值合成消息。遇到未知结果时，不要连续重复点击发送；应以直播间的真实状态为准。
+`error` 或非零 `res` 是明确拒绝；写后超时、关闭或读失败属于「已提交但未确认」，不会自动重试。前端不会根据 command 返回值合成消息；遇到未知结果不要连续重复点击发送，应以直播间真实状态为准。
 
-## 数据处理与代码位置
+## 已知限制
 
-斗鱼 Cookie 只保存在本机 SQLite，不能记录、导出或上传。
+- 编辑文本、切换房间、离开页面、关闭应用或任意发送失败都会停用自动发送；失败或未知写入不自动重试。
+- 单个 grapheme 无法容纳在平台上限内时显示校验错误。
+- 不提供批量发送、自动回复、礼物、支付或自动重试。
+- 已验证结果覆盖当前网页流程与测试环境；Cookie、房间条件和上游版本变化仍可能影响结果。
+- 斗鱼 Cookie 只保存在本机 SQLite；签名、Cookie、JWT、消息正文和原始回包不写入日志，不导出、不上传。
 
-- 站点与播放：`src-tauri/src/sites/douyu/`
+## 代码位置
+
+- 站点与播放：`src-tauri/src/sites/douyu/`（签名 `sign.rs`）
 - 弹幕接收与发送状态机：`src-tauri/src/danmu_rs/douyu.rs`
+- 扫码登录：`src-tauri/src/account/douyu_qr.rs`
 - command、授权与本机冷却：`src-tauri/src/commands/danmaku.rs`
