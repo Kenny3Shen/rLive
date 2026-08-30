@@ -12,7 +12,7 @@
 - 提交标题使用 `type(scope): 中文摘要` 的 Conventional Commit 格式；`scope` 指向功能域，不使用文件名。一次提交只表达一个主题，标题直接描述结果，不写句号或模糊表述。
 - 非平凡提交在标题后空一行，用正文说明背景/根因、行为变化、关键实现和验证结果；多项改动使用项目符号。提交前检查暂存区内容与说明是否一致。
 - 提交正文使用真实换行，避免将 `\n` 写成字面量。
-- 提交代码时需要更新版本号，遵循语义化版本规范（SemVer）。
+- 普通提交不改版本号。`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.lock` 的版本只在打 tag 发布 release 时按 SemVer 统一递增，规则见 `docs/zh/发布流程.md`。
 
 ## 项目结构与实现边界
 
