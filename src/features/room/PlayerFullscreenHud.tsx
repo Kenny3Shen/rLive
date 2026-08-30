@@ -72,6 +72,13 @@ export type PlayerFullscreenHudProps = {
     device: string | null;
     onDeviceChange: (deviceName: string | null) => void;
   };
+  /**
+   * 房间页自己的控件（录制），直接摆在溢出菜单左侧。
+   *
+   * 只有网页全屏能用：这些控件的 popover 默认 portal 到 `<body>`，
+   * 而原生全屏的 stage 位于 top layer，会把它们整个压在下面。
+   */
+  toolsSlot?: ReactNode;
   /** 紧凑视口（竖屏手机或较矮的横屏）。 */
   compact?: boolean;
   /** Portal 目标 —— `:fullscreen` 祖先拥有 top layer。 */
@@ -91,6 +98,9 @@ export function playerHudOnlineLabel(online: number | undefined): string | null 
 /**
  * HUD 是否有东西可画。仅全屏还不够：没有解析出的标题、主播和菜单条目的房间
  * 会在画面顶部渲染一条空的遮罩带。
+ *
+ * `fullscreen` 指「舞台已经吃掉了 `RoomTopBar`」，两种方式都算：原生全屏把它盖在
+ * top layer 之下，桌面网页全屏直接把它卸载。两者都需要 HUD 把房间身份与工具补回画面内。
  */
 export function showPlayerFullscreenHud({
   fullscreen,
@@ -122,6 +132,7 @@ export function PlayerFullscreenHud({
   autoSend,
   sleepTimer,
   cast,
+  toolsSlot,
   compact = false,
   portalContainer,
   onOverlayInteractionChange,
@@ -289,6 +300,8 @@ export function PlayerFullscreenHud({
         compact={compact}
         className="flex-1"
       />
+
+      {toolsSlot}
 
       {hasMenu &&
         (compact ? (

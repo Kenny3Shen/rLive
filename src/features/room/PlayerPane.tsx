@@ -14,10 +14,12 @@ import {
   Captions,
   CaptionsOff,
   Headphones,
+  Lock,
   MessageSquareOff,
   MessageSquareText,
   PictureInPicture2,
   SunMedium,
+  Unlock,
   VideoOff,
   Volume2,
   VolumeX,
@@ -40,6 +42,9 @@ import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   PlayerControls,
+  PLAYER_CONTROL_BUTTON_CLASS,
+  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { DanmuJsDanmaku } from "./danmaku/DanmuJsDanmaku";
@@ -226,6 +231,35 @@ export function isPlayerStageDoubleTap(lastTapAt: number, now: number): boolean 
   return lastTapAt > 0 && now - lastTapAt <= PLAYER_STAGE_DOUBLE_TAP_MS;
 }
 
+/** 方向键每次调节的音量百分点。 */
+export const PLAYER_VOLUME_KEY_STEP = 5;
+
+/**
+ * 上/下方向键的下一个音量值。静音时按上键从 0 起步，
+ * 因此一次按键就能出声，而不是先要求手动取消静音。
+ */
+export function playerVolumeForKeyStep(volume: number, muted: boolean, direction: 1 | -1): number {
+  const current = muted ? 0 : volume;
+  const next = current + direction * PLAYER_VOLUME_KEY_STEP;
+  return Math.max(0, Math.min(100, Math.round(next)));
+}
+
+/**
+ * 全屏锁定只在移动端全屏出现：它要挡掉的正是单击/双击/边缘滑动这套触摸手势，
+ * 桌面端没有误触问题，窗口化时也随时可以直接离开。
+ */
+export function showPlayerFullscreenLock(mobileClient: boolean, fullscreen: boolean): boolean {
+  return mobileClient && fullscreen;
+}
+
+/**
+ * 锁定期间画面手势全部让位给锁定按钮本身，否则用户既解不开锁、
+ * 又会继续误触发音量和全屏。
+ */
+export function playerStageGesturesEnabled(fullscreenLocked: boolean): boolean {
+  return !fullscreenLocked;
+}
+
 function isRoomSideTab(value: string): value is RoomSideTab {
   return ROOM_SIDE_TABS.includes(value as RoomSideTab);
 }
@@ -298,6 +332,29 @@ export function shouldShowRoomDanmakuPanel(
   activeSideTab: RoomSideTab,
 ): boolean {
   return sidePanelOpen && !fullscreen && activeSideTab === "chat";
+}
+
+/**
+ * 右侧栏是否可见。
+ *
+ * 只看网页全屏：原生全屏下舞台已经盘据浏览器 top layer，侧栏自然被盖住，
+ * 无需（也不应）再给它加 `hidden` —— 那会把已挂载面板变成零尺寸，
+ * 干扰弹幕列表的高度测量与钉住判定。网页全屏没有这层覆盖，必须真的从布局里拿掉。
+ *
+ * 隐藏不等于卸载：挂载仍由 `shouldRetainRoomSidePanel` 控制，因此退出后弹幕队列与滚动位置都还在。
+ */
+export function showRoomSidePanel(sidePanelOpen: boolean, webFullscreen: boolean): boolean {
+  return sidePanelOpen && !webFullscreen;
+}
+
+/**
+ * 舞台是否已经吃掉了 `RoomTopBar`，因此需要 HUD 把房间身份与工具补回画面内。
+ *
+ * 两种方式都算，缺口是同一个：原生全屏把顶栏盖在 top layer 之下，
+ * 桌面网页全屏直接把它从布局里卸载。
+ */
+export function stageOwnsRoomTopBar(fullscreen: boolean, webFullscreen: boolean): boolean {
+  return fullscreen || webFullscreen;
 }
 
 /**
@@ -395,6 +452,19 @@ type PlayerPaneProps = {
    * 因此由页面把它们传递下来。
    */
   fullscreenRoomActions?: readonly PlayerHudRoomAction[];
+  /**
+   * 网页全屏（桌面）：画面占满应用窗口但不进入原生全屏。
+   * 由 RoomPage 持有，因为一同让位的上下两条栏属于那一层；这里只负责隐藏右侧栏与提供开关。
+   */
+  webFullscreen?: boolean;
+  onWebFullscreenChange?: (webFullscreen: boolean) => void;
+  /**
+   * 网页全屏时补进 HUD 的房间页控件（录制）。
+   *
+   * 刻意不在原生全屏使用：这些控件的 popover 默认 portal 到 `<body>`，
+   * 会被位于 top layer 的 stage 压住，因此原生全屏仍只提供溢出菜单里的条目。
+   */
+  hudToolsSlot?: ReactNode;
   /** 把仅竖屏显示的次要控件发布到 RoomPage 的房间操作菜单。 */
   onMobileRoomActionsChange?: (actions: readonly PlayerMobileRoomAction[]) => void;
 };
@@ -436,6 +506,9 @@ export function PlayerPane({
   autoDanmakuSend,
   sleepTimer,
   fullscreenRoomActions = [],
+  webFullscreen = false,
+  onWebFullscreenChange,
+  hudToolsSlot,
   onMobileRoomActionsChange,
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
@@ -464,6 +537,10 @@ export function PlayerPane({
   const [osdOn, setOsdOn] = useState(true);
   const [audioOnly, setAudioOnly] = useState(false);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
+  const [fullscreenLocked, setFullscreenLocked] = useState(false);
+  // Android Back 监听器在 effect 中注册，读 state 会捕获注册时的旧值；
+  // 锁定状态改由 ref 读取，使监听器身份保持稳定。
+  const fullscreenLockedRef = useRef(false);
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
@@ -484,6 +561,9 @@ export function PlayerPane({
   const controlsRef = useRef<HTMLDivElement | null>(null);
   // 全屏顶部 HUD 是同一空闲计时器上的第二层 chrome。
   const hudRef = useRef<HTMLDivElement | null>(null);
+  // 移动端全屏锁定按钮是第三层：未锁定时跟随另两层淡出，
+  // 锁定时必须单独保持可见。
+  const lockRef = useRef<HTMLDivElement | null>(null);
   const controlsVisibleRef = useRef(true);
   // 跟踪底部 chrome 内的焦点。点击的按钮也会取得 DOM 焦点，因此下方的空闲守卫
   // 在把焦点当作必须保持显示的键盘交互之前，还会额外检查 :focus-visible。
@@ -582,6 +662,26 @@ export function PlayerPane({
     },
     [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive],
   );
+  /**
+   * 键盘调节音量。刻意不复用 `handlePlayerVolumeChange`：它底下的 `changeVolume`
+   * 在 video 处于 paused 时会补一次 `play()`（用于协议插件就绪但尚未起播的情况），
+   * 于是暂停看画面时按方向键会意外恢复播放。这里改用 `setAudio`，
+   * 与边缘滑动手势落盘时相同 —— 只写音量，不碰播放状态。
+   */
+  const handlePlayerVolumeKeyStep = useCallback(
+    (direction: 1 | -1) => {
+      const next = playerVolumeForKeyStep(playerControlVolume, playerControlMuted, direction);
+      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(next)) return;
+      setPlayerAudio(next, next === 0);
+    },
+    [
+      androidPlayerControls,
+      nativePlayerControlsActive,
+      playerControlMuted,
+      playerControlVolume,
+      setPlayerAudio,
+    ],
+  );
   const handleToggleAudioOnly = useCallback(() => {
     const nextAudioOnly = !audioOnly;
     if (nextAudioOnly && player.pictureInPictureActive) {
@@ -676,6 +776,8 @@ export function PlayerPane({
     showHost && player.running && !player.paused && !overlayInteractionOpen;
   const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
   const mobileDrawerOpen = compactLandscapeViewport && sidePanelOpen;
+  // 网页全屏要让出右侧栏。只影响可见性，不影响挂载，因此退出后弹幕队列与滚动位置都还在。
+  const sidePanelVisible = showRoomSidePanel(sidePanelOpen, webFullscreen);
   const floatingDanmakuActive = shouldRunFloatingDanmaku({
     danmakuActive,
     osdOn,
@@ -688,14 +790,17 @@ export function PlayerPane({
     portraitStackLayout,
     player.mode === "fullscreen",
   );
+  // 网页全屏卸载了 `RoomTopBar`，与原生全屏盖住它是同一处缺口：房间身份与工具都得在画面内补回。
+  const stageOwnsTopBar = stageOwnsRoomTopBar(player.mode === "fullscreen", webFullscreen);
   const fullscreenHudVisible = showPlayerFullscreenHud({
-    fullscreen: player.mode === "fullscreen",
+    fullscreen: stageOwnsTopBar,
     hasRoomIdentity: Boolean(roomTitle?.trim() || roomUserName?.trim()),
     hasActions:
       fullscreenRoomActions.length > 0 ||
       mobileRoomActions.length > 0 ||
       autoDanmakuSend !== undefined ||
-      sleepTimer !== undefined,
+      sleepTimer !== undefined ||
+      hudToolsSlot !== undefined,
   });
 
   // 进入较矮横屏时切换为浮层抽屉；转回竖屏恢复立即可用的视频+弹幕堆叠。
@@ -733,6 +838,22 @@ export function PlayerPane({
     };
   }, [mobileDrawerOpen]);
 
+  // 网页全屏没有浏览器代管的退出路径（原生全屏由 UA 自己响应 Escape），
+  // 因此在这里补上同一个按键习惯。
+  //
+  // 刻意跳过 `player.mode === "fullscreen"`：那种情况下 `useWebPlayer` 已经监听 Escape 去退出原生全屏，
+  // 两个监听器同时响应会让一次按键连退两层。此时先退原生全屏，网页全屏留给下一次按键。
+  useEffect(() => {
+    if (!webFullscreen || player.mode === "fullscreen") return;
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onWebFullscreenChange?.(false);
+    };
+    window.addEventListener("keydown", exitOnEscape);
+    return () => window.removeEventListener("keydown", exitOnEscape);
+  }, [onWebFullscreenChange, player.mode, webFullscreen]);
+
   // toast 默认经 `<body>` portal，两条路径下都会被全屏舞台盖住
   // （浏览器 top layer，以及桌面原生窗口使用的页面内固定层）。
   // 只要本播放器拥有屏幕，就把 viewport 迁移过去，
@@ -745,6 +866,21 @@ export function PlayerPane({
     return () => setToastPortalContainer(null);
   }, [player.mode, player.stageRef]);
 
+  // 锁定属于全屏会话。离开全屏（含直接切房、路由变更）必须解锁，
+  // 否则窗口化播放器会带着一个不可见的手势屏蔽状态。
+  useEffect(() => {
+    if (player.mode !== "fullscreen") setFullscreenLocked(false);
+  }, [player.mode]);
+
+  // 切房是新的观看会话，不继承上一间的锁定。
+  useEffect(() => {
+    setFullscreenLocked(false);
+  }, [roomSessionKey]);
+
+  useEffect(() => {
+    fullscreenLockedRef.current = fullscreenLocked;
+  }, [fullscreenLocked]);
+
   // 房间导航前先退出全屏。这是 Android 页面内全屏唯一的 Back 处理：
   // Activity 刻意不为它消费 Back，
   // 使上方的浮层监听器（HUD 菜单、音量面板）能在同一事件中获得自己的机会。
@@ -752,6 +888,9 @@ export function PlayerPane({
     if (player.mode !== "fullscreen") return;
     const exitOnAndroidBack = (event: Event) => {
       event.preventDefault();
+      // 锁定就是为了屏蔽误触，Back 也不例外：消费掉事件但不退出全屏，
+      // 用户需要先点常驻的锁定按钮解锁。
+      if (fullscreenLockedRef.current) return;
       void togglePlayerFullscreen();
     };
     window.addEventListener(ANDROID_BACK_EVENT, exitOnAndroidBack);
@@ -788,6 +927,16 @@ export function PlayerPane({
       layer.dataset.visible = visible ? "true" : "false";
       layer.setAttribute("aria-hidden", String(!visible));
       layer.toggleAttribute("inert", !visible);
+    }
+
+    // 锁定时画面手势全部失效，锁定按钮是唯一的解锁入口，因此它绝不参与空闲淡出，
+    // 否则用户会被困在全屏里。
+    const lock = lockRef.current;
+    if (lock) {
+      const lockVisible = visible || fullscreenLockedRef.current;
+      lock.dataset.visible = lockVisible ? "true" : "false";
+      lock.setAttribute("aria-hidden", String(!lockVisible));
+      lock.toggleAttribute("inert", !lockVisible);
     }
   }, []);
 
@@ -874,6 +1023,21 @@ export function PlayerPane({
     revealControls();
   }, [hideControls, revealControls]);
 
+  /**
+   * 上锁时收起两层 chrome 只留锁定按钮，解锁时把 chrome 带回来。
+   * 锁定按钮的可见性由 `setControlVisibility` 单独兜底，因此这里可以放心隐藏 chrome。
+   */
+  const handleToggleFullscreenLock = useCallback(() => {
+    const nextLocked = !fullscreenLockedRef.current;
+    fullscreenLockedRef.current = nextLocked;
+    setFullscreenLocked(nextLocked);
+    if (nextLocked) {
+      hideControls();
+      return;
+    }
+    revealControls();
+  }, [hideControls, revealControls]);
+
   const holdControlsVisible = useCallback(() => {
     markControlsActivity();
     clearControlsHideTimer();
@@ -913,6 +1077,16 @@ export function PlayerPane({
     (open: boolean) => handleOverlayInteractionChange("hud", open),
     [handleOverlayInteractionChange],
   );
+
+  /**
+   * 带 `exitsFullscreen` 的 HUD 动作要靠应用层 chrome（对话框、toast、另一条路由）应答，
+   * 因此必须退出「当前那一种」全屏：原生全屏交给播放器，网页全屏交给 RoomPage 把两条栏装回来。
+   * 只退其中一种会让确认框继续被另一种盖住。
+   */
+  const handleExitAnyFullscreen = useCallback(async () => {
+    if (webFullscreen) onWebFullscreenChange?.(false);
+    await player.exitFullscreen();
+  }, [onWebFullscreenChange, player, webFullscreen]);
 
   // 指针或键盘焦点位于其中时，两层 chrome 保持自身可见，
   // 且在两者之间 Tab 不得重启空闲倒计时。
@@ -1112,6 +1286,7 @@ export function PlayerPane({
       if (
         !mobileClient ||
         !showHost ||
+        !playerStageGesturesEnabled(fullscreenLocked) ||
         !isTouchPointer(event.pointerType) ||
         !event.isPrimary ||
         isPlayerEdgeGestureIgnoredTarget(event.target)
@@ -1155,6 +1330,7 @@ export function PlayerPane({
       };
     },
     [
+      fullscreenLocked,
       mobileClient,
       nativePlayerControlsActive,
       nativePlayerControlState,
@@ -1337,6 +1513,8 @@ export function PlayerPane({
       if (gestureConsumed || event.defaultPrevented) return;
       if (
         !mobileClient ||
+        // 锁定期间点按不得切换 chrome 或全屏；只有锁定按钮本身仍然响应。
+        !playerStageGesturesEnabled(fullscreenLocked) ||
         !isTouchPointer(event.pointerType) ||
         !showHost ||
         isPlayerEdgeGestureIgnoredTarget(event.target)
@@ -1371,6 +1549,7 @@ export function PlayerPane({
     },
     [
       clearPlayerStageTapTimer,
+      fullscreenLocked,
       handlePlayerEdgeGestureEnd,
       mobileClient,
       showHost,
@@ -1448,8 +1627,19 @@ export function PlayerPane({
         return;
       }
 
+      // 音量键在 repeat 守卫之前处理：按住方向键连续调节是音量控件的预期行为，
+      // 而播放/静音/全屏这类切换必须每次按下只触发一次。
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        if (transportDisabled) return;
+        event.preventDefault();
+        revealControls();
+        handlePlayerVolumeKeyStep(event.key === "ArrowUp" ? 1 : -1);
+        return;
+      }
+
       if (event.repeat) return;
       const key = event.key.toLowerCase();
+
       if (key !== " " && key !== "k" && key !== "m" && key !== "f") return;
 
       event.preventDefault();
@@ -1462,7 +1652,7 @@ export function PlayerPane({
         void player.toggleFullscreen();
       }
     },
-    [focusFirstControl, player, revealControls],
+    [focusFirstControl, handlePlayerVolumeKeyStep, player, revealControls, transportDisabled],
   );
 
   // 直播播放默认不受遮挡，而任何指针、触摸或键盘交互都会立即带回底部 chrome。
@@ -1545,10 +1735,10 @@ export function PlayerPane({
           tabIndex={0}
           aria-label={
             mobileClient
-              ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏"
-              : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏"
+              ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
+              : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
           }
-          aria-keyshortcuts="Space K M F"
+          aria-keyshortcuts="Space K M F ArrowUp ArrowDown"
           onPointerEnter={handleStagePointerActivity}
           onPointerMove={handleStagePointerMove}
           onPointerDown={handleStagePointerDown}
@@ -1771,10 +1961,14 @@ export function PlayerPane({
                   device: castingDevice,
                   onDeviceChange: setCastingDevice,
                 }}
+                toolsSlot={webFullscreen ? hudToolsSlot : undefined}
                 compact={compactViewport}
-                portalContainer={player.stageRef}
+                // 只有原生全屏需要把菜单塞进 stage：它位于 top layer，portal 到 `<body>`
+                // 会被整个压住。网页全屏没有这层，走默认 portal 反而不会被 stage 的
+                // `overflow-hidden` 裁掉。
+                portalContainer={player.mode === "fullscreen" ? player.stageRef : undefined}
                 onOverlayInteractionChange={handleHudOverlayInteractionChange}
-                onExitFullscreen={player.exitFullscreen}
+                onExitFullscreen={handleExitAnyFullscreen}
               />
             </div>
           )}
@@ -1806,6 +2000,7 @@ export function PlayerPane({
               sidePanelLabel={
                 compactViewport ? (sidePanelOpen ? "收起直播间面板" : "打开直播间面板") : undefined
               }
+              webFullscreen={webFullscreen}
               osdOn={osdOn}
               asrVisible={asr.desktopClient}
               asrOn={asr.captionsOn}
@@ -1868,6 +2063,9 @@ export function PlayerPane({
               onToggleMute={handleToggleMute}
               onToggleAudioOnly={handleToggleAudioOnly}
               onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
+              onToggleWebFullscreen={
+                onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined
+              }
               onToggleOsd={handleToggleOsd}
               onToggleAsr={asr.toggle}
               onAsrTranslationEnabledChange={setAsrTranslationEnabled}
@@ -1880,6 +2078,41 @@ export function PlayerPane({
               onToggleFullscreen={() => void player.toggleFullscreen()}
             />
           </div>
+
+          {showPlayerFullscreenLock(mobileClient, player.mode === "fullscreen") && (
+            <div
+              ref={lockRef}
+              data-player-fullscreen-lock
+              data-visible="true"
+              aria-hidden="false"
+              /* 锁定按钮是画面手势之外的独立表面：它与两层 chrome 共享空闲淡出，
+                 但锁定生效时由 setControlVisibility 强制保持可见。 */
+              className="absolute top-1/2 left-[max(0.5rem,env(safe-area-inset-left))] z-40 -translate-y-1/2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+              onPointerEnter={holdControlsVisible}
+              onPointerDown={handleChromePointerDown}
+              onPointerLeave={resumeControlsAutoHide}
+              onFocusCapture={handleChromeFocusCapture}
+              onBlurCapture={handleChromeBlurCapture}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={fullscreenLocked ? "解锁全屏手势" : "锁定全屏手势"}
+                aria-pressed={fullscreenLocked}
+                className={cn(
+                  PLAYER_CONTROL_BUTTON_CLASS,
+                  PLAYER_CONTROL_ICON_CLASS,
+                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                  "bg-black/40 hover:bg-black/55",
+                  fullscreenLocked && "bg-black/60",
+                )}
+                onClick={handleToggleFullscreenLock}
+              >
+                {fullscreenLocked ? <Lock /> : <Unlock />}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1896,7 +2129,7 @@ export function PlayerPane({
 
       {shouldMountSidePanel && (
         <aside
-          aria-hidden={!sidePanelOpen}
+          aria-hidden={!sidePanelVisible}
           aria-labelledby={mobileDrawerOpen ? "room-side-panel-title" : undefined}
           aria-modal={mobileDrawerOpen ? true : undefined}
           role={mobileDrawerOpen ? "dialog" : undefined}
@@ -1909,7 +2142,7 @@ export function PlayerPane({
               : compactLandscapeViewport
                 ? `${compactLandscapeSidePanelClassName} shrink-0`
                 : "w-[300px] shrink-0 border-l border-border/80 lg:w-[320px]",
-            !sidePanelOpen && "hidden",
+            !sidePanelVisible && "hidden",
           )}
           onPointerDownCapture={sideTabSwipe.onPointerDownCapture}
           onPointerMoveCapture={sideTabSwipe.onPointerMoveCapture}
@@ -1968,7 +2201,7 @@ export function PlayerPane({
                     roomTitle={roomTitle}
                     roomUserName={roomUserName}
                     visible={shouldShowRoomDanmakuPanel(
-                      sidePanelOpen,
+                      sidePanelVisible,
                       player.mode === "fullscreen",
                       activeSideTab,
                     )}

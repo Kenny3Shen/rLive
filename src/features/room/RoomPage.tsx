@@ -90,6 +90,9 @@ export function RoomPage() {
   const [playerMobileActions, setPlayerMobileActions] = useState<readonly PlayerMobileRoomAction[]>(
     [],
   );
+  // 网页全屏（桌面）：画面占满应用窗口，不进入原生全屏。状态留在本页而不是 PlayerPane，
+  // 因为要让位的上下两条栏属于本页；右侧栏那部分由 PlayerPane 自己根据此值隐藏。
+  const [webFullscreen, setWebFullscreen] = useState(false);
 
   // 普通房间导航从聊天开始，而由 FollowPanel 发起的导航保持关注选择器打开。
   // 这也覆盖了参数变化时复用 RoomPage 而不重新挂载的路由配置。
@@ -369,74 +372,76 @@ export function RoomPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <RoomTopBar
-        title={detail.title || "直播间"}
-        backTarget={backTarget}
-        rightSlot={
-          <div className="flex items-center gap-1">
-            <RecordingControl context={recordingContext} />
-            <div className="hidden md:flex md:items-center md:gap-1">
-              <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
-                <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
-              </RoomToolPopover>
-              <RoomToolPopover icon={Cast} label="投屏" active={castingDevice != null}>
-                <CastMenu
-                  castUrl={playback.playUrl?.url ?? null}
-                  headers={playback.playUrl?.headers ?? {}}
-                  title={detail.title || "rLive 直播"}
-                  showHeader={false}
-                  onCastingDeviceChange={setCastingDevice}
-                />
-              </RoomToolPopover>
-              <RoomToolPopover
-                icon={Car}
-                label="自动发送弹幕"
-                wide
-                active={autoDanmakuSend.enabled}
-              >
-                <AutoDanmakuSendMenu
-                  autoSend={autoDanmakuSend}
-                  idPrefix="title-auto-danmaku"
-                  showHeader={false}
-                />
-              </RoomToolPopover>
-            </div>
-            <div className="hidden md:block">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="加入并打开多画面"
-                      onClick={openInMultiRoom}
-                    />
-                  }
+      {!webFullscreen && (
+        <RoomTopBar
+          title={detail.title || "直播间"}
+          backTarget={backTarget}
+          rightSlot={
+            <div className="flex items-center gap-1">
+              <RecordingControl context={recordingContext} />
+              <div className="hidden md:flex md:items-center md:gap-1">
+                <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
+                  <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
+                </RoomToolPopover>
+                <RoomToolPopover icon={Cast} label="投屏" active={castingDevice != null}>
+                  <CastMenu
+                    castUrl={playback.playUrl?.url ?? null}
+                    headers={playback.playUrl?.headers ?? {}}
+                    title={detail.title || "rLive 直播"}
+                    showHeader={false}
+                    onCastingDeviceChange={setCastingDevice}
+                  />
+                </RoomToolPopover>
+                <RoomToolPopover
+                  icon={Car}
+                  label="自动发送弹幕"
+                  wide
+                  active={autoDanmakuSend.enabled}
                 >
-                  <PanelsTopLeft data-icon="inline-start" aria-hidden />
-                </TooltipTrigger>
-                <TooltipContent side="bottom">加入并打开多画面</TooltipContent>
-              </Tooltip>
+                  <AutoDanmakuSendMenu
+                    autoSend={autoDanmakuSend}
+                    idPrefix="title-auto-danmaku"
+                    showHeader={false}
+                  />
+                </RoomToolPopover>
+              </div>
+              <div className="hidden md:block">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="加入并打开多画面"
+                        onClick={openInMultiRoom}
+                      />
+                    }
+                  >
+                    <PanelsTopLeft data-icon="inline-start" aria-hidden />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">加入并打开多画面</TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="md:hidden">
+                <RoomMobileActions
+                  roomUrl={detail.url || window.location.href}
+                  playbackUrl={playback.playUrl?.url}
+                  castUrl={playback.playUrl?.url ?? null}
+                  castHeaders={playback.playUrl?.headers ?? {}}
+                  castTitle={detail.title || "rLive 直播"}
+                  castingDevice={castingDevice}
+                  onCastingDeviceChange={setCastingDevice}
+                  playerActions={playerMobileActions}
+                  autoSend={autoDanmakuSend}
+                  sleepTimer={sleepTimer}
+                  onCopy={copyRoomValue}
+                />
+              </div>
             </div>
-            <div className="md:hidden">
-              <RoomMobileActions
-                roomUrl={detail.url || window.location.href}
-                playbackUrl={playback.playUrl?.url}
-                castUrl={playback.playUrl?.url ?? null}
-                castHeaders={playback.playUrl?.headers ?? {}}
-                castTitle={detail.title || "rLive 直播"}
-                castingDevice={castingDevice}
-                onCastingDeviceChange={setCastingDevice}
-                playerActions={playerMobileActions}
-                autoSend={autoDanmakuSend}
-                sleepTimer={sleepTimer}
-                onCopy={copyRoomValue}
-              />
-            </div>
-          </div>
-        }
-      />
+          }
+        />
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col">
         <PlayerPane
@@ -470,35 +475,41 @@ export function RoomPage() {
           autoDanmakuSend={autoDanmakuSend}
           sleepTimer={sleepTimer}
           fullscreenRoomActions={fullscreenRoomActions}
+          webFullscreen={webFullscreen}
+          onWebFullscreenChange={setWebFullscreen}
+          // 顶栏隐藏后录制入口会跟着消失，因此把同一个控件补进画面内的 HUD。
+          hudToolsSlot={<RecordingControl context={recordingContext} />}
           onMobileRoomActionsChange={setPlayerMobileActions}
         />
       </div>
 
-      <div className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="max-md:h-11 max-md:touch-manipulation"
-          onClick={() => void copyRoomValue(detail.url || window.location.href, "已复制房间链接")}
-        >
-          <Link2 data-icon="inline-start" />
-          复制链接
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="max-md:h-11 max-md:touch-manipulation"
-          disabled={!playback.playUrl?.url}
-          onClick={() => {
-            if (playback.playUrl?.url) {
-              void copyRoomValue(playback.playUrl.url, "已复制播放直链");
-            }
-          }}
-        >
-          <Share2 data-icon="inline-start" />
-          复制直链
-        </Button>
-      </div>
+      {!webFullscreen && (
+        <div className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="max-md:h-11 max-md:touch-manipulation"
+            onClick={() => void copyRoomValue(detail.url || window.location.href, "已复制房间链接")}
+          >
+            <Link2 data-icon="inline-start" />
+            复制链接
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="max-md:h-11 max-md:touch-manipulation"
+            disabled={!playback.playUrl?.url}
+            onClick={() => {
+              if (playback.playUrl?.url) {
+                void copyRoomValue(playback.playUrl.url, "已复制播放直链");
+              }
+            }}
+          >
+            <Share2 data-icon="inline-start" />
+            复制直链
+          </Button>
+        </div>
+      )}
 
       <AlertDialog
         open={confirmUnfollowOpen}
