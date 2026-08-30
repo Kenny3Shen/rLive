@@ -23,7 +23,7 @@
 
 ## Android 调试
 
-- 排查 Android 端问题时优先用模拟器复现，触摸/手势类 bug 必须在真机验证（模拟器注入的输入没有真实手指微抖，且镜像 WebView 版本落后于真机）。详细流程见 `docs/zh/Android开发-Windows.md` 的「Android 调试」一节。
+- 排查 Android 端问题时优先用模拟器复现，触摸/手势类 bug 必须在真机验证（模拟器注入的输入没有真实手指微抖，且镜像 WebView 版本落后于真机）。详细流程见 `docs/zh/Android开发-Windows.md` 的「调试」一节。
 - 远程调试前端必须安装 **debug 构建且 ABI 匹配** 的 APK：真机用 `bun run tauri -- android build --debug --target aarch64`，x86_64 模拟器用 `--target x86_64`；用 `unzip -Z1 <apk> | grep lib/` 和 `adb shell pm dump com.shenss.rlive | grep primaryCpuAbi` 双向核对。release 包不会创建 `webview_devtools_remote_<pid>` socket，CDP 无法接入。
 - 连接方式：`adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com.shenss.rlive)` 后用 `playwright-cli attach --cdp=http://localhost:9222`。真机需已授权 USB 调试且保持亮屏（熄屏时 WebView 挂起）。
 - 注入手势用 `adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <y>"`（物理坐标 = CSS 坐标 × devicePixelRatio）；分析触摸问题时先在页面注入 touch/click/contextmenu/cancel 全事件探针再操作，探针模板见 Android 开发文档。
