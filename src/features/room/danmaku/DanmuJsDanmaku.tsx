@@ -318,10 +318,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
-  const blockedUserMatcher = useMemo(
-    () => createBlockedUserMatcher(blockedUsers),
-    [blockedUsers],
-  );
+  const blockedUserMatcher = useMemo(() => createBlockedUserMatcher(blockedUsers), [blockedUsers]);
   const normalizedArea = clampDanmuArea(area);
   const laneHeight = danmuLaneHeight(fontSize);
   const sizeReady = stageSize.width > 0 && stageSize.height > 0;

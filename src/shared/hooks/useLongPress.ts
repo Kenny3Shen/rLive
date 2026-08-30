@@ -65,26 +65,26 @@ export function useLongPress({ enabled, onTrigger }: UseLongPressOptions) {
    */
   const armWindowGuard = useCallback(() => {
     detachWindowGuard();
-      const onMove = (event: PointerEvent) => {
-        const start = startRef.current;
-        if (!start || event.pointerId !== start.pointerId) return;
-        if (hasLongPressMovedBeyondSlop(start.x, start.y, event.clientX, event.clientY)) {
-          cancel();
-        }
-      };
-      const onEnd = (event: PointerEvent) => {
-        const start = startRef.current;
-        if (!start || event.pointerId !== start.pointerId) return;
+    const onMove = (event: PointerEvent) => {
+      const start = startRef.current;
+      if (!start || event.pointerId !== start.pointerId) return;
+      if (hasLongPressMovedBeyondSlop(start.x, start.y, event.clientX, event.clientY)) {
         cancel();
-      };
-      window.addEventListener("pointermove", onMove, { capture: true });
-      window.addEventListener("pointerup", onEnd, { capture: true });
-      window.addEventListener("pointercancel", onEnd, { capture: true });
-      detachWindowGuardRef.current = () => {
-        window.removeEventListener("pointermove", onMove, { capture: true });
-        window.removeEventListener("pointerup", onEnd, { capture: true });
-        window.removeEventListener("pointercancel", onEnd, { capture: true });
-      };
+      }
+    };
+    const onEnd = (event: PointerEvent) => {
+      const start = startRef.current;
+      if (!start || event.pointerId !== start.pointerId) return;
+      cancel();
+    };
+    window.addEventListener("pointermove", onMove, { capture: true });
+    window.addEventListener("pointerup", onEnd, { capture: true });
+    window.addEventListener("pointercancel", onEnd, { capture: true });
+    detachWindowGuardRef.current = () => {
+      window.removeEventListener("pointermove", onMove, { capture: true });
+      window.removeEventListener("pointerup", onEnd, { capture: true });
+      window.removeEventListener("pointercancel", onEnd, { capture: true });
+    };
   }, [cancel, detachWindowGuard]);
 
   /** 立即终止计时并触发，供原生 contextmenu 等外部长按信号复用。 */
@@ -125,9 +125,21 @@ export function useLongPress({ enabled, onTrigger }: UseLongPressOptions) {
    * contextmenu（如遮罩退出期间的重定向信号）不应再触发长按。
    */
   const ownsActivePress = useCallback(
-    () => isContextMenuOwnedByPress(startRef.current != null, lastTriggeredAtRef.current, performance.now()),
+    () =>
+      isContextMenuOwnedByPress(
+        startRef.current != null,
+        lastTriggeredAtRef.current,
+        performance.now(),
+      ),
     [],
   );
 
-  return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, triggerNow, ownsActivePress };
+  return {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    triggerNow,
+    ownsActivePress,
+  };
 }

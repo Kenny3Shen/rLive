@@ -71,7 +71,7 @@ export function pickRoomCardPreviewQuality(
 /** 预览没有线路探测数据,直接取适配器优先级最高的一条,失败就放弃。 */
 export function pickRoomCardPreviewSource(lines: readonly PlayUrl[]): PlayUrl | null {
   const index = rankPlaybackSourceIndices(lines, [])[0];
-  return index === undefined ? null : lines[index] ?? null;
+  return index === undefined ? null : (lines[index] ?? null);
 }
 
 /** 预览缓冲窗口比房间播放器窄一个量级:只求快速出画并尽早丢弃已播片段。 */

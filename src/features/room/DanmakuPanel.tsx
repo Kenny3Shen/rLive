@@ -298,10 +298,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   const filterGifts = useSettingsStore((s) => s.danmakuFilterGifts);
   const blockedUsers = useSettingsStore((s) => s.danmakuBlockedUsers);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
-  const blockedUserMatcher = useMemo(
-    () => createBlockedUserMatcher(blockedUsers),
-    [blockedUsers],
-  );
+  const blockedUserMatcher = useMemo(() => createBlockedUserMatcher(blockedUsers), [blockedUsers]);
   const matchersRef = useRef({ shieldMatcher, blockedUserMatcher, filterGifts });
   const [prefersDark, setPrefersDark] = useState(() =>
     typeof window !== "undefined"
