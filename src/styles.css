@@ -662,13 +662,6 @@ body {
     padding-bottom: 0.125rem;
   }
 
-  .app-shell [data-slot="app-sidebar-preferences"] {
-    display: flex;
-    width: 2.75rem;
-    flex: 0 0 2.75rem;
-    margin-bottom: 0;
-  }
-
   .app-shell [data-slot="app-sidebar-label"] {
     display: none;
   }
