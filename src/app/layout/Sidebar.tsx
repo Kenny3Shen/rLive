@@ -194,6 +194,23 @@ export function Sidebar() {
   // 统一放在设置页外观分区。
   const mobileClient = isMobileClient();
   const navItems = sidebarNavItemsFor(mobileClient);
+  // 历史/设置归入底部分组：桌面竖栏里与亮暗切换一起被 mt-auto 推到底部，
+  // 移动端底栏里该分组退化为 display:contents，条目回到行内流。
+  const mainNavItems = navItems.filter((item) => !item.footer);
+  const footerNavItems = navItems.filter((item) => item.footer);
+
+  const renderNavItem = (item: SidebarNavItem) => {
+    const recordingBadge = item.to === "/recordings" ? activeRecordings : 0;
+    return (
+      <SidebarLink
+        key={item.to}
+        {...item}
+        badgeCount={recordingBadge}
+        badgeLabel={recordingBadge > 0 ? `${recordingBadge} 项录制进行中` : undefined}
+        onIntent={item.to === "/" ? preloadHome : undefined}
+      />
+    );
+  };
 
   return (
     <aside
@@ -205,23 +222,18 @@ export function Sidebar() {
         className="flex w-full flex-1 flex-col items-center gap-2 max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden"
         aria-label="主导航"
       >
-        {navItems.map((item) => {
-          const recordingBadge = item.to === "/recordings" ? activeRecordings : 0;
-          return (
-            <SidebarLink
-              key={item.to}
-              {...item}
-              badgeCount={recordingBadge}
-              badgeLabel={recordingBadge > 0 ? `${recordingBadge} 项录制进行中` : undefined}
-              onIntent={item.to === "/" ? preloadHome : undefined}
-            />
-          );
-        })}
-        {!mobileClient && (
-          <div data-slot="app-sidebar-preferences" className="mt-auto max-md:hidden">
-            <AppearanceToggle />
-          </div>
-        )}
+        {mainNavItems.map(renderNavItem)}
+        <div
+          data-slot="app-sidebar-footer"
+          className="mt-auto flex flex-col items-center gap-2 max-md:contents"
+        >
+          {!mobileClient && (
+            <div data-slot="app-sidebar-preferences" className="max-md:hidden">
+              <AppearanceToggle />
+            </div>
+          )}
+          {footerNavItems.map(renderNavItem)}
+        </div>
       </nav>
     </aside>
   );
