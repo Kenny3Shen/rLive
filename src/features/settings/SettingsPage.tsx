@@ -1904,7 +1904,10 @@ export function SettingsPage() {
           <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
-        <Section title="消息过滤" keywords="弹幕 消息 过滤 屏蔽词 屏蔽用户 重复 礼物 合并 醒目留言 sc">
+        <Section
+          title="消息过滤"
+          keywords="弹幕 消息 过滤 屏蔽词 屏蔽用户 重复 礼物 合并 醒目留言 sc"
+        >
           <DanmakuFilterSettingsFields idPrefix="settings" layout="page" showSuperChat />
         </Section>
         <Section title="恢复默认" keywords="恢复 默认 重置 reset">

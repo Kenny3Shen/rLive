@@ -1,10 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getClientPlatform } from "@/shared/clientPlatform";
 
-type NativeSystemBarsInvoke = <T>(
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<T>;
+type NativeSystemBarsInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 const SET_APPEARANCE_COMMAND = "android_system_bars_set_appearance";
 

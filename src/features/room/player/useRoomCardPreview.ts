@@ -61,8 +61,7 @@ export function useRoomCardPreview(target: { siteId: SiteId; roomId: string }): 
           fetchDetail: () =>
             queryClient.fetchQuery({
               queryKey: ["room_detail", siteId, roomId],
-              queryFn: () =>
-                invokeCmd<LiveRoomDetail>("site_get_room_detail", { siteId, roomId }),
+              queryFn: () => invokeCmd<LiveRoomDetail>("site_get_room_detail", { siteId, roomId }),
               staleTime: 60_000,
             }),
           fetchQualities: (detail) =>
