@@ -27,7 +27,7 @@
 - 远程调试前端必须安装 **debug 构建且 ABI 匹配** 的 APK：真机用 `bun run tauri -- android build --debug --target aarch64`，x86_64 模拟器用 `--target x86_64`；用 `unzip -Z1 <apk> | grep lib/` 和 `adb shell pm dump com.shenss.rlive | grep primaryCpuAbi` 双向核对。release 包不会创建 `webview_devtools_remote_<pid>` socket，CDP 无法接入。
 - 连接方式：`adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com.shenss.rlive)` 后用 `playwright-cli attach --cdp=http://localhost:9222`。真机需已授权 USB 调试且保持亮屏（熄屏时 WebView 挂起）。
 - 注入手势用 `adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <y>"`（物理坐标 = CSS 坐标 × devicePixelRatio）；分析触摸问题时先在页面注入 touch/click/contextmenu/cancel 全事件探针再操作，探针模板见 Android 开发文档。
-- 模拟器环境：SDK 在 `~/Android/Sdk`，headless 启动需 KVM 权限（`sg kvm`）；VS Code Emulate 扩展依赖 `emulator.emulatorPathWSL` 设置与 `$ANDROID_HOME/emulator/emulator.exe` 符号链接（指向 Linux 原生 emulator）。
+- 模拟器优先用 Windows 原生 emulator（`D:\dev\android-sdk`，AVD `rlive_win`）：带窗口用 `setsid nohup /mnt/d/dev/android-sdk/emulator/emulator.exe -avd rlive_win &`，headless 必须用 PowerShell `Start-Process` 启动（`setsid` 起的进程会随 WSL 会话被回收）。Mirrored 网络下会自动出现在 WSL `adb devices`（另有模拟器占 5554 时它是 `emulator-5556`，命令需带 `-s`），且不需要 Linux 侧那套 `-feature -HardwareDecoder` 规避；VS Code Emulate 扩展设 `"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`。备用是 WSL 内 Linux emulator（SDK 在 `~/Android/Sdk`，headless 启动需 KVM 权限 `sg kvm`，必须加 `-feature -HardwareDecoder`）。
 
 ## 播放与功能边界
 
