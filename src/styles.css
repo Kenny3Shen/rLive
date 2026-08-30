@@ -309,6 +309,60 @@ body {
   letter-spacing: 0.01em;
 }
 
+/* 设置条统一高度。开关/滑杆只有 18–20px 高，而按钮、选项卡（ToggleGroup）、Select 和
+   输入框是 28–32px，加上行内边距后同一列表里会出现 44px 与 56px 两种行高。给每个
+   设置条一个统一的最小高度，短控件在其中居中，行高不再随控件类型跳变。 */
+.settings-section [data-slot="field-group"] > [data-slot="field"] {
+  position: relative;
+  min-height: 3.5rem;
+}
+
+/* 分割线用绝对定位的伪元素而不是 `divide-y` 的真边框：边框会占 1px 布局高度，
+   让“带分割线的行”比最后一行高 1px；而若把这 1px 从下内边距里扣掉，上下间距就变成
+   12px 与 11px，控件不再垂直居中。伪元素不参与布局，于是所有行都是 12px 上下对称
+   内边距、总高 56px。 */
+.settings-section [data-slot="field-group"] > [data-slot="field"]:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background-color: var(--border-subtle);
+}
+
+/* 粗指针下控件的 `min-h-11` 触摸目标还会把单行设置条推到 68px，差异比桌面更明显。
+   这里让控件保留与桌面一致的视觉高度，触摸热区改由 `::after` 向上下撑开（与
+   Switch、Slider 的做法一致）：56px 行高里 32px 控件上下各有 12px 空余，热区不会
+   越出设置条。horizontal 与 responsive 都要处理：responsive 在 @md 容器宽度下也是
+   左标题右控件的单行布局（录制页的“视频分辨率”“弹幕字体”就是）。
+   竖排行（代理地址、保存位置、局域网同步）本身已远高于 56px，而且其全宽控件纵向
+   相邻，撑开的热区会互相遮盖，因此排除。
+   Switch 自带更宽的 `::after`，input-group 内部的小按钮热区会盖住输入框，均排除。 */
+@media (pointer: coarse) {
+  .settings-section
+    [data-slot="field-group"]
+    > [data-slot="field"]:is([data-orientation="horizontal"], [data-orientation="responsive"])
+    :is(button, input, textarea, [data-slot="input-group"]) {
+    min-height: 0;
+  }
+
+  .settings-section
+    [data-slot="field-group"]
+    > [data-slot="field"]:is([data-orientation="horizontal"], [data-orientation="responsive"])
+    button:not([data-slot="switch"], [data-slot="input-group"] *) {
+    position: relative;
+  }
+
+  .settings-section
+    [data-slot="field-group"]
+    > [data-slot="field"]:is([data-orientation="horizontal"], [data-orientation="responsive"])
+    button:not([data-slot="switch"], [data-slot="input-group"] *)::after {
+    content: "";
+    position: absolute;
+    inset: -0.5rem 0;
+  }
+}
+
 .settings-category-group-label {
   letter-spacing: 0.02em;
 }

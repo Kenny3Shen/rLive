@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
 import {
+  ASR_HOTWORD_MAX_LENGTH,
+  ASR_HOTWORDS_MAX,
   DANMAKU_AREA_DEFAULT,
   DANMAKU_BLOCKED_USERS_MAX,
   DANMAKU_FONT_STROKE_DEFAULT,
@@ -32,14 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-  FieldTitle,
-} from "@/components/ui/field";
+import { Field, FieldContent, FieldError, FieldTitle } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -50,7 +45,7 @@ import { Separator } from "@/components/ui/separator";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { notify } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
 export type PlaybackSettingsFieldLayout = "page" | "panel";
@@ -152,10 +147,6 @@ function persist(patch: Partial<AppSettings>) {
   void useSettingsStore.getState().persistToBackend(patch);
 }
 
-function sameWords(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((word, index) => word === right[index]);
-}
-
 type SettingsEntryListProps = {
   id: string;
   label: string;
@@ -170,11 +161,14 @@ type SettingsEntryListProps = {
   caseInsensitive?: boolean;
   /** 列表容量上限；省略表示不限。 */
   maxEntries?: number;
+  /** 单条长度上限；省略按屏蔽词口径。 */
+  entryMaxLength?: number;
+  disabled?: boolean;
   onCommit: (entries: string[]) => void;
 };
 
 /**
- * 屏蔽词与屏蔽用户共享的逐条编辑列表。每行可以单独改写或删除，写入是离散
+ * 屏蔽词、屏蔽用户与本地热词共享的逐条编辑列表。每行可以单独改写或删除，写入是离散
  * 提交而不是逐字符草稿：新增、保存、删除都立即落到 store 并持久化，因此不需要
  * 防抖或卸载冲刷。校验（空值、长度、重复、容量）在提交前拦截并就地提示。
  */
@@ -189,6 +183,8 @@ function SettingsEntryList({
   emptyText,
   caseInsensitive = false,
   maxEntries,
+  entryMaxLength = DANMAKU_SHIELD_ENTRY_MAX_LENGTH,
+  disabled = false,
   onCommit,
 }: SettingsEntryListProps) {
   const [draft, setDraft] = useState("");
@@ -209,8 +205,8 @@ function SettingsEntryList({
     }
     // 点击屏蔽写入的昵称长度由平台决定，可能超过手输上限。原值未改动时放行，
     // 否则这类条目在列表里既改不动也存不回。
-    if (entry !== replacing && Array.from(entry).length > DANMAKU_SHIELD_ENTRY_MAX_LENGTH) {
-      setError(`${noun}最多 ${DANMAKU_SHIELD_ENTRY_MAX_LENGTH} 个字符`);
+    if (entry !== replacing && Array.from(entry).length > entryMaxLength) {
+      setError(`${noun}最多 ${entryMaxLength} 个字符`);
       return null;
     }
     const key = caseInsensitive ? entry.toLowerCase() : entry;
@@ -270,7 +266,11 @@ function SettingsEntryList({
   }
 
   return (
-    <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
+    <Field
+      orientation="horizontal"
+      data-disabled={disabled || undefined}
+      className={fieldSurfaceClass(layout)}
+    >
       <FieldContent className="min-w-0">
         <FieldTitle>
           <span id={labelId}>{label}</span>
@@ -287,6 +287,7 @@ function SettingsEntryList({
         variant="outline"
         size="sm"
         aria-labelledby={labelId}
+        disabled={disabled}
         onClick={() => setOpen(true)}
       >
         管理
@@ -300,7 +301,7 @@ function SettingsEntryList({
             <InputGroupInput
               id={id}
               value={draft}
-              maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
+              maxLength={entryMaxLength}
               spellCheck={false}
               placeholder={addPlaceholder}
               onChange={(event) => {
@@ -337,7 +338,7 @@ function SettingsEntryList({
                       <InputGroup className="min-w-0 flex-1">
                         <InputGroupInput
                           value={editingDraft}
-                          maxLength={DANMAKU_SHIELD_ENTRY_MAX_LENGTH}
+                          maxLength={entryMaxLength}
                           autoFocus
                           spellCheck={false}
                           aria-label={`编辑${noun}`}
@@ -486,20 +487,6 @@ export function AsrChunkIntervalField({
   );
 }
 
-function normalizeAsrHotwords(value: string): string[] {
-  const seen = new Set<string>();
-  return value
-    .split(/\r?\n|,/)
-    .map((word) => word.replace(/[\t]/g, " ").trim())
-    .filter((word) => {
-      const key = word.toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 100);
-}
-
 export function AsrHotwordsField({
   idPrefix,
   layout,
@@ -511,113 +498,29 @@ export function AsrHotwordsField({
 }) {
   const hotwords = useSettingsStore((state) => state.asrHotwords);
   const setHotwords = useSettingsStore((state) => state.setAsrHotwords);
-  const [draft, setDraft] = useState(hotwords.join("\n"));
-  const [status, setStatus] = useState<string | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const pendingWordsRef = useRef(hotwords);
-  const editingRef = useRef(false);
-  const composingRef = useRef(false);
-  const revisionRef = useRef(0);
-  const savePendingRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    if (!editingRef.current) {
-      pendingWordsRef.current = hotwords;
-      setDraft(hotwords.join("\n"));
-    }
-  }, [hotwords]);
-
-  function clearSaveTimer() {
-    if (saveTimerRef.current === null) return;
-    window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = null;
-  }
-
-  function savePending(revision: number) {
-    if (revision !== revisionRef.current || composingRef.current) return;
-    const next = pendingWordsRef.current;
-    const current = useSettingsStore.getState().asrHotwords;
-    if (sameWords(next, current)) return;
-
-    setStatus("正在保存热词…");
-    void setHotwords(next)
-      .then(() => {
-        if (revision === revisionRef.current) {
-          editingRef.current = false;
-          setDraft(next.join("\n"));
-          setStatus(next.length > 0 ? `已自动保存 ${next.length} 个热词` : "热词已清空");
-        }
-      })
-      .catch(() => {
-        if (revision === revisionRef.current) {
-          setStatus("热词保存失败，请重试");
-        }
-      });
-  }
-
-  savePendingRef.current = () => savePending(revisionRef.current);
-
-  function scheduleSave() {
-    clearSaveTimer();
-    if (composingRef.current) return;
-    const revision = revisionRef.current;
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      savePending(revision);
-    }, 350);
-  }
-
-  useEffect(
-    () => () => {
-      clearSaveTimer();
-      if (!composingRef.current) savePendingRef.current?.();
-    },
-    [],
-  );
-
-  function update(value: string) {
-    editingRef.current = true;
-    revisionRef.current += 1;
-    pendingWordsRef.current = normalizeAsrHotwords(value);
-    setDraft(value);
-    setStatus(composingRef.current ? "输入完成后自动保存" : "修改后将自动保存");
-    scheduleSave();
-  }
 
   return (
-    <Field data-disabled={disabled || undefined} className={fieldSurfaceClass(layout)}>
-      <div className="flex items-center gap-1.5">
-        <FieldLabel htmlFor={`${idPrefix}-asr-hotwords`}>本地热词</FieldLabel>
-        {layout === "page" && <FieldTip>每行一个，最多 100 个。</FieldTip>}
-      </div>
-      <FieldContent>
-        <Textarea
-          id={`${idPrefix}-asr-hotwords`}
-          value={draft}
-          rows={layout === "page" ? 5 : 4}
-          placeholder="每行一个词，也可用逗号分隔"
-          className="resize-y"
-          disabled={disabled}
-          spellCheck={false}
-          onCompositionStart={() => {
-            composingRef.current = true;
-            clearSaveTimer();
-            setStatus("输入完成后自动保存");
-          }}
-          onCompositionEnd={() => {
-            composingRef.current = false;
-            scheduleSave();
-          }}
-          onChange={(event) => update(event.target.value)}
-          onBlur={() => {
-            if (composingRef.current) return;
-            clearSaveTimer();
-            savePending(revisionRef.current);
-          }}
-        />
-        {status && <FieldDescription role="status">{status}</FieldDescription>}
-      </FieldContent>
-    </Field>
+    <SettingsEntryList
+      id={`${idPrefix}-asr-hotwords`}
+      label="本地热词"
+      noun="热词"
+      hint="识别时优先匹配这些词，适合主播名、游戏名和黑话。"
+      entries={hotwords}
+      layout={layout}
+      addPlaceholder="输入热词，回车添加"
+      emptyText="还没有热词。"
+      caseInsensitive
+      maxEntries={ASR_HOTWORDS_MAX}
+      entryMaxLength={ASR_HOTWORD_MAX_LENGTH}
+      disabled={disabled}
+      onCommit={(words) => {
+        // 失败时 store 会回退列表并重抛；列表直接读 store，回退自然反映到界面，
+        // 这里只补一条提示，避免失败静悄悄地发生。
+        void setHotwords(words).catch(() => {
+          notify.error("热词保存失败", "请重试。");
+        });
+      }}
+    />
   );
 }
 

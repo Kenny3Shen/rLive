@@ -308,6 +308,13 @@ export function recordingPreferencesFromAppSettings(
   };
 }
 
+/**
+ * 本地热词列表的容量上限，与单条热词的最大长度。sherpa-onnx 把热词当作解码时的
+ * 加权候选，过长的条目不可能被一整句识别命中，反而拖慢每一帧解码。
+ */
+export const ASR_HOTWORDS_MAX = 100;
+export const ASR_HOTWORD_MAX_LENGTH = 80;
+
 function parseAsrFontSize(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric)) return ASR_FONT_SIZE_DEFAULT;
@@ -754,9 +761,11 @@ export const useSettingsStore = create<SettingsState>()(
           new Set(
             asrHotwords
               .map((word) => word.replace(/[\r\n\t]/g, " ").trim())
-              .filter((word) => word.length > 0 && Array.from(word).length <= 80),
+              .filter(
+                (word) => word.length > 0 && Array.from(word).length <= ASR_HOTWORD_MAX_LENGTH,
+              ),
           ),
-        ).slice(0, 100);
+        ).slice(0, ASR_HOTWORDS_MAX);
         const previous = get().asrHotwords;
         if (JSON.stringify(normalized) === JSON.stringify(previous)) return;
         const epoch = ++asrSettingEpoch;
