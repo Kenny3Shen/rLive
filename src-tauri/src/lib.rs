@@ -21,9 +21,12 @@ mod sites;
 mod state;
 mod stream_proxy;
 
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use chrono::Local;
 
 use app_paths::AppDirectories;
 use commands::account::{
@@ -95,6 +98,7 @@ use tauri::Emitter;
 use tauri::Manager;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
@@ -192,6 +196,31 @@ impl<'a> MakeWriter<'a> for AppLogWriter {
     }
 }
 
+/// 日志时间戳格式：本地时间 + 明确的 UTC 偏移，例如
+/// `2026-08-30T22:51:31.577554+08:00`。保留 ISO-8601 的字段顺序，
+/// 因此按字符串排序仍等价于按时间排序；带上偏移量则让用户在跨时区
+/// 提交日志时不会丢失原始时区信息。
+const LOG_TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6f%:z";
+
+/// 按系统时区渲染事件时间的计时器。
+///
+/// `tracing_subscriber` 默认的 `SystemTime` 只输出 UTC（末尾 `Z`），
+/// 用户对着本地时钟读日志时会凭空偏移一个时区（例如 CST 差 8 小时），
+/// 无法与录制文件名或用户描述的故障时刻对齐。
+///
+/// 这里用 chrono 而不是 `tracing-subscriber` 的 `local-time` feature：
+/// 后者依赖的 `time` crate 在多线程进程中拒绝解析本地时区并静默退回 UTC，
+/// 而日志初始化发生在 Tauri 启动 runtime 线程之后。chrono 经
+/// `iana-time-zone` 读取系统时区，在桌面端与 Android 上都成立。
+#[derive(Clone, Copy, Default)]
+struct LocalTimeFormat;
+
+impl FormatTime for LocalTimeFormat {
+    fn format_time(&self, writer: &mut tracing_subscriber::fmt::format::Writer<'_>) -> fmt::Result {
+        write!(writer, "{}", Local::now().format(LOG_TIME_FORMAT))
+    }
+}
+
 /// 把失败诊断持久化到本地，因为 Windows 发布版没有控制台窗口。
 /// 刻意只记录结构化的错误状态：Cookie 值、token、发出的聊天文本
 /// 以及成功操作的进度都绝不能写盘。
@@ -223,6 +252,7 @@ fn init_logging(directory: &std::path::Path) {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
+                .with_timer(LocalTimeFormat)
                 .with_file(true)
                 .with_line_number(true)
                 .with_writer(AppLogWriter(Arc::new(Mutex::new(file)))),
@@ -462,9 +492,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::file_log_filter;
+    use super::{LOG_TIME_FORMAT, LocalTimeFormat, file_log_filter, init_logging};
+    use chrono::{Local, Utc};
     use std::sync::Mutex;
     use tracing::Subscriber;
+    use tracing_subscriber::fmt::time::FormatTime;
     use tracing_subscriber::layer::Context;
     use tracing_subscriber::prelude::*;
 
@@ -508,5 +540,62 @@ mod tests {
         assert_eq!(events.len(), 2, "{events:?}");
         assert_eq!(events[0], ("rlive_lib", tracing::Level::WARN));
         assert_eq!(events[1], ("rlive_lib", tracing::Level::ERROR));
+    }
+
+    /// 日志时间戳必须是本地时间并带上偏移量，而不是 `SystemTime` 默认的 UTC。
+    /// 在 UTC 偏移非零的机器上，这条断言直接覆盖原始 bug：写下的墙钟
+    /// 与 UTC 墙钟不同。
+    #[test]
+    fn log_timestamps_follow_the_system_time_zone() {
+        let mut buffer = String::new();
+        let mut writer = tracing_subscriber::fmt::format::Writer::new(&mut buffer);
+
+        LocalTimeFormat.format_time(&mut writer).unwrap();
+
+        let offset = Local::now().offset().to_string();
+        assert!(
+            buffer.ends_with(&offset),
+            "时间戳 {buffer} 应以本地偏移 {offset} 结尾"
+        );
+        assert!(!buffer.ends_with('Z'), "时间戳 {buffer} 不应是 UTC");
+
+        // 同一时刻的本地与 UTC 渲染只在偏移为 0 时相同。
+        let now = Utc::now();
+        let local_wall_clock = now
+            .with_timezone(&Local)
+            .format(LOG_TIME_FORMAT)
+            .to_string();
+        let utc_wall_clock = now.format(LOG_TIME_FORMAT).to_string();
+        if Local::now().offset().to_string() == "+00:00" {
+            assert_eq!(local_wall_clock, utc_wall_clock);
+        } else {
+            assert_ne!(local_wall_clock, utc_wall_clock);
+        }
+    }
+
+    /// 计时器确实被接入写盘的 fmt 层：只验证 `LocalTimeFormat` 本身不能
+    /// 防止有人日后删掉 `with_timer`，因此这里直接走 `init_logging` 并
+    /// 回读 `rlive.log`。
+    #[test]
+    fn written_log_lines_carry_the_local_time_offset() {
+        let directory =
+            std::env::temp_dir().join(format!("rlive-log-timer-{}", uuid::Uuid::new_v4().simple()));
+
+        init_logging(&directory);
+        tracing::warn!(target: "rlive_lib", "时区写盘校验");
+
+        let text = std::fs::read_to_string(directory.join("rlive.log")).unwrap();
+        let line = text
+            .lines()
+            .find(|line| line.contains("时区写盘校验"))
+            .expect("警告应已写入日志文件");
+        let timestamp = line.split_whitespace().next().unwrap();
+        let offset = Local::now().offset().to_string();
+        assert!(
+            timestamp.ends_with(&offset),
+            "日志行 {line} 的时间戳应带本地偏移 {offset}"
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
