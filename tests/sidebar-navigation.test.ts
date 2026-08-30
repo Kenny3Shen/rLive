@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SIDEBAR_NAV_ITEMS,
   SIDEBAR_NAVIGATION_STATE,
   isSidebarNavigation,
   routeScopedPreviousGroup,
+  sidebarNavItemsFor,
   sidebarNavigationDirection,
 } from "../src/app/layout/sidebarNavigation";
 
@@ -42,5 +44,26 @@ describe("route-scoped platform panels", () => {
 
   test("starts a new destination from its own active platform", () => {
     expect(routeScopedPreviousGroup("/", "huya", "/follow", "all")).toBe("all");
+  });
+});
+
+describe("sidebar nav items per client platform", () => {
+  test("keeps every desktop-only entry out of the mobile navigation", () => {
+    // 手机与平板横屏的视口宽度普遍超过 md 断点，
+    // 视口门控（max-md:hidden）无法再阻止桌面专属入口出现在移动端。
+    const mobileDestinations = sidebarNavItemsFor(true).map((item) => item.to);
+    expect(mobileDestinations).toEqual(["/", "/follow", "/category", "/iptv", "/history", "/settings"]);
+  });
+
+  test("serves desktop clients the full destination list", () => {
+    expect(sidebarNavItemsFor(false)).toEqual(SIDEBAR_NAV_ITEMS);
+    expect(SIDEBAR_NAV_ITEMS.map((item) => item.to)).toContain("/multi-room");
+    expect(SIDEBAR_NAV_ITEMS.map((item) => item.to)).toContain("/recordings");
+  });
+
+  test("keeps the visual order aligned with the navigation direction strip", () => {
+    const desktop = sidebarNavItemsFor(false).map((item) => item.to);
+    expect(desktop.indexOf("/multi-room")).toBeLessThan(desktop.indexOf("/recordings"));
+    expect(desktop.indexOf("/iptv")).toBeLessThan(desktop.indexOf("/history"));
   });
 });

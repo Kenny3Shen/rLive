@@ -1,6 +1,60 @@
+import type { ComponentType } from "react";
+import {
+  Heart,
+  History,
+  Home,
+  LayoutGrid,
+  PanelsTopLeft,
+  Settings,
+  Tv,
+  Videotape,
+} from "lucide-react";
+
 export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",
 } as const;
+
+export type SidebarNavItem = {
+  to: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  end?: boolean;
+  className?: string;
+  /** 桌面级客户端专属入口。移动客户端在任何视口宽度下都不渲染它：
+   *  手机与平板横屏的视口宽度普遍超过 md 断点，
+   *  仅靠 `max-md:hidden` 这类视口门控会让它们漏进移动端底部导航。 */
+  desktopOnly?: boolean;
+};
+
+export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
+  { to: "/", label: "首页", icon: Home, end: true },
+  { to: "/follow", label: "关注", icon: Heart },
+  { to: "/category", label: "分类", icon: LayoutGrid },
+  { to: "/iptv", label: "IPTV", icon: Tv },
+  {
+    to: "/multi-room",
+    label: "多画面",
+    icon: PanelsTopLeft,
+    className: "max-md:hidden",
+    desktopOnly: true,
+  },
+  {
+    to: "/recordings",
+    label: "录制",
+    icon: Videotape,
+    className: "max-md:hidden",
+    desktopOnly: true,
+  },
+  { to: "/history", label: "历史", icon: History },
+  { to: "/settings", label: "设置", icon: Settings },
+];
+
+/** 按客户端平台解析可见的侧栏导航入口。 */
+export function sidebarNavItemsFor(mobileClient: boolean): SidebarNavItem[] {
+  return mobileClient
+    ? SIDEBAR_NAV_ITEMS.filter((item) => !item.desktopOnly)
+    : SIDEBAR_NAV_ITEMS;
+}
 
 const SIDEBAR_DESTINATIONS = [
   "/",
