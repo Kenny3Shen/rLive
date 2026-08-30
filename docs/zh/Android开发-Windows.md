@@ -100,28 +100,72 @@ bun run tauri -- android build --debug --target aarch64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/aarch64/debug/app-aarch64-debug.apk
 ```
 
-### 模拟器调试（WSL）
+### 模拟器调试（Windows emulator + WSL 驱动，推荐）
+
+模拟器进程跑在 Windows（WHPX），构建、`adb`、CDP 全留在 WSL。相比 WSL 内的 Linux emulator，带窗口时图形走宿主 Vulkan，H.264 硬解不再依赖 `libcuda`，也能直接用 VS Code Emulate 扩展开窗。
+
+| 项 | 位置 |
+| --- | --- |
+| Windows SDK | `D:\dev\android-sdk`（emulator 36.6.11、platform-tools 37.0.0） |
+| 系统镜像 | `system-images;android-36-ext18;google_apis;x86_64` |
+| AVD 索引 | `C:\Users\shens\.android\avd\rlive_win.ini` |
+| AVD 数据 | `D:\dev\android-sdk\avd\rlive_win.avd`（4G RAM、6G data、`hw.gpu.enabled=yes`、`hw.keyboard=yes`） |
+
+AVD 索引必须留在 `%USERPROFILE%\.android\avd`：WSL 里 export 的环境变量不会传进 `.exe`（除非写入 `WSLENV`），`ANDROID_AVD_HOME` 靠不住。索引 `.ini` 只有三行，镜像与 userdata 由其中的 `path=` 指到 D 盘，磁盘占用仍全在 `D:\dev`。
+
+Windows SDK 的 cmdline-tools 只有 `.bat`（需要 Windows JDK），新建 AVD 用 WSL 的 `avdmanager` 生成到临时目录，再把 `.avd` 拷到 D 盘、把索引 `.ini` 的 `path=` 改成 Windows 路径即可；`config.ini` 里的 `image.sysdir.1` 是相对 SDK 根的路径，跨平台通用。
+
+带窗口启动（日常调试）：
 
 ```bash
-sdkmanager "system-images;android-36-ext18;google_apis;x86_64" "emulator" "platform-tools"
-echo no | avdmanager create avd -n rlive_test -k "system-images;android-36-ext18;google_apis;x86_64" -d pixel_6
-
-# headless 启动（KVM 权限：sudo gpasswd -a <user> kvm 后重新登录）
-setsid sg kvm -c "$ANDROID_HOME/emulator/emulator -avd rlive_test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -feature -HardwareDecoder" > /tmp/emu.log 2>&1 &
-adb wait-for-device && adb shell getprop sys.boot_completed   # 等待 1
-adb shell settings put global window_animation_scale 0
+cd /mnt/d/dev/android-sdk/emulator
+setsid nohup ./emulator.exe -avd rlive_win -no-boot-anim > /tmp/emu-win.log 2>&1 &
+adb devices                      # 不需要 adb connect
 
 bun run tauri -- android build --debug --target x86_64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
 ```
 
-`-feature -HardwareDecoder` 不是可选优化：不加它时模拟器会在解 H.264 时整台段错误崩掉（`/tmp/emu.log` 尾部为 `dlopen "libcuda.so" failed!` → `Failed to call cuInit, cannot use nvidia cuvid decoder for h264 stream` → `Segmentation fault`）。进直播间就发，现象是 `adb devices` 突然变空，很像应用卡死或崩溃，实际是宿主 qemu 进程死了。加上该 flag 后模拟器不再向 guest 注入 `qemu.hwcodec.avcdec=2`（该属性变为空），转软解，代价是高码率流更卡，但可稳定播完。还需注意崩溃会丢掉未落盘的 userdata 写入，刚装的 APK 可能随之消失。
+headless 启动必须让进程彻底脱离 WSL，用 PowerShell 起：
 
-带 GUI 启动（包括 VS Code Emulate 扩展）默认会加载 `default_boot` 快照，userdata 连同已装应用和 WebView 缓存一起回滚到快照时点 —— 表现为刚装的新版又变回旧版。需要干净状态时加 `-no-snapshot-load` 冷启。
+```bash
+cd /mnt/c && powershell.exe -NoProfile -Command "Start-Process -FilePath 'D:\dev\android-sdk\emulator\emulator.exe' -ArgumentList @('-avd','rlive_win','-no-window','-no-audio','-no-boot-anim','-gpu','swiftshader_indirect') -RedirectStandardOutput 'D:\Temp\emu.log' -RedirectStandardError 'D:\Temp\emu.err' -WindowStyle Hidden"
+```
 
-模拟器 WebView 版本随镜像发布（API 36-ext18 为 WebView 133），落后于真机（如 149+），因此**触摸/手势类 bug 必须在真机验证**。
+`setsid nohup ./emulator.exe ... &` 起的进程会跟着 WSL 侧调用方（终端或 agent 会话）一起被回收 —— 实测两次在会话结束时模拟器无声消失，日志停在半行。`Start-Process` 起的进程挂在 Windows 侧，跨会话存活。
 
-镜像兼容性上限（WSL + emulator 37.x 实测）：android-36-ext18 稳定可用；android-36.1 与 android-37.0/37.1 的 guest gfxstream 驱动会在 RegionSampling 触发 `Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma` 崩溃循环，使 system_server 反复重启，各种 GLDMA/Vulkan 开关均无法绕过，需等上游修复。模拟器也无法升级到 WebView 149：官方 x86_64 WebView 无公开分发渠道，强装 arm64 WebView 会在 berberis 翻译层崩溃。
+`.wslconfig` 为 `networkingMode=Mirrored` + `hostAddressLoopback=true`，WSL 与 Windows 共享 loopback，Windows 模拟器会自己注册到 WSL 的 adb server，`adb devices` 直接列出，无需 `adb connect`。端口从 5554 起取第一对空闲端口：另有模拟器占用 5554/5555 时它是 `emulator-5556`，命令要带 `-s`。装包后的 CDP 流程与真机完全一致。
+
+VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Machine/settings.json`）：
+
+```json
+"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator",
+"emulator.androidColdBoot": true,
+"emulator.androidExtraBootArgs": "-no-boot-anim"
+```
+
+扩展在 WSL 下会把该路径拼上 `emulator.exe` 再 exec，所以必须指向 Windows 侧目录；旧的「给 Linux emulator 建 `emulator.exe` 软链」方案不再需要。
+
+行为与限制：
+
+- H.264 不需要 Linux emulator 那套 `-feature -HardwareDecoder` 规避：guest 拿到 `ro.boot.qemu.hwcodec.avcdec=2`，走 `c2.goldfish.h264.decoder`，headless + 720p 直播连播 3 分钟以上正常，emulator 日志无 ERROR/FATAL。
+- `-no-window` 会让渲染退回 SwiftShader + lavapipe 软件光栅（宿主 GPU 只在带窗口时启用），冷启动约 30s，app、WebView 与播放均可用。headless 的进程名是 `qemu-system-x86_64-headless`，用 `Get-Process qemu-system-x86_64` 查不到，别据此判定模拟器已退出。
+- 带窗口启动（含 VS Code Emulate 扩展）默认加载 `default_boot` 快照，userdata 连同已装应用和 WebView 缓存回滚到快照时点 —— 表现为刚装的新版又变回旧版。需要干净状态时加 `-no-snapshot-load`（扩展侧已开 `androidColdBoot`）。
+- `adb emu <cmd>` 会静默失败：控制台 token 在 `C:\Users\shens\.emulator_console_auth_token`，而 WSL 的 adb 读 `~/.emulator_console_auth_token`。需要时 `cp /mnt/c/Users/shens/.emulator_console_auth_token ~/`。
+- 镜像仍是 WebView 133（随镜像发布，落后于真机的 149+），触摸/手势类 bug 依旧只能真机验证；镜像也无法升级到 WebView 149，官方 x86_64 WebView 无公开分发渠道，强装 arm64 WebView 会在 berberis 翻译层崩溃。
+
+### 模拟器调试（WSL 内 Linux emulator，备用）
+
+Windows 侧不可用时的退路，需要 KVM 权限（`sudo gpasswd -a <user> kvm` 后重新登录）：
+
+```bash
+sdkmanager "system-images;android-36-ext18;google_apis;x86_64" "emulator" "platform-tools"
+echo no | avdmanager create avd -n rlive_test -k "system-images;android-36-ext18;google_apis;x86_64" -d pixel_6
+setsid sg kvm -c "$ANDROID_HOME/emulator/emulator -avd rlive_test -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -feature -HardwareDecoder" > /tmp/emu.log 2>&1 &
+adb wait-for-device && adb shell getprop sys.boot_completed   # 等待 1
+```
+
+两个 WSL 专属限制：`-feature -HardwareDecoder` 必加，否则解 H.264 时宿主 qemu 直接段错误（cuvid 走不到 `libcuda.so`），现象是进直播间后 `adb devices` 突然变空；镜像只能用到 android-36-ext18，36.1 与 37.x 的 guest gfxstream 会在 RegionSampling 断言崩溃循环。
 
 ### 排错清单
 
@@ -134,12 +178,13 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_
   ```
 
   `adb shell pm clear com.shenss.rlive` 也行，但会连设置、Cookie 和本地数据库一起清掉。
-- **模拟器在进直播间时整台消失**：H.264 硬解崩溃，不是应用问题。启动时加 `-feature -HardwareDecoder`，详见上文模拟器调试。
+- **模拟器启动 FATAL `Running multiple emulators with the same AVD`**：上次非正常退出留下了 `hardware-qemu.ini.lock/` 和 `multiinstance.lock`。残留进程还活着时 WSL 侧删不掉这两个锁（drvfs 报 Permission denied），先 `Stop-Process` 掉 `emulator`/`qemu-system-x86_64-headless`/`netsimd`，再 `rm -rf` 锁文件。
 - **无 devtools socket**：装的是 release/不可调试构建（`adb shell pm dump com.shenss.rlive | grep pkgFlags` 无 `DEBUGGABLE`），或 ABI 不匹配导致仍是旧包。重新 `--debug --target aarch64`。
 - **`adb install` 静默失败**：x86_64-only APK 装不进 arm64 设备，`install -r` 可能无输出且旧包仍在。用 `unzip -Z1` 核对 ABI 后重装。
 - **INSTALL_FAILED_UPDATE_INCOMPATIBLE**：换机器构建的 debug 包签名不同。保留数据可用项目 keystore 重签（`apksigner sign --ks /home/shenss/upload-keystore.jks --ks-key-alias upload`），否则先 `adb uninstall com.shenss.rlive`。
 - **触摸整体失灵（WebView 149 实测案例）**：`<img>` 上的长按会触发原生图片菜单接管（pointercancel 先于 contextmenu 到达），应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死，后续 touch 全部不派发——页面只能滚动、点击全无反应，极像应用卡死。注入探针后 touchstart 完全消失即可确诊。规避：长按交互面内不让 `<img>` 参与命中测试（`pointer-events: none`）。
-- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下拼接 `emulator.exe`，默认路径还是 macOS 的。修复：`ln -s $ANDROID_HOME/emulator/emulator $ANDROID_HOME/emulator/emulator.exe`，并设置 `"emulator.emulatorPathWSL": "/home/shenss/Android/Sdk/emulator"`。sdkmanager 重装或升级 emulator 包会重写 `emulator/` 目录并删掉该链接，导致同一报错复发，重建即可。
+- **VS Code Emulate 扩展报 `Error fetching your Android emulators!`**：该扩展在 WSL 下把配置路径拼上 `emulator.exe`，默认路径还是 macOS 的。正解是指向 Windows SDK：`"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`（见上文 Windows emulator 一节）。若要让它启动 WSL 内的 Linux emulator，则需 `ln -s $ANDROID_HOME/emulator/emulator $ANDROID_HOME/emulator/emulator.exe` 并把路径指到 `/home/shenss/Android/Sdk/emulator`；sdkmanager 重装或升级 emulator 包会重写 `emulator/` 目录删掉该链接，导致同一报错复发。
+- **扩展列表为空但 `emulator.exe -list-avds` 有输出**：AVD 索引 `.ini` 不在 `%USERPROFILE%\.android\avd`。WSL 侧 `export ANDROID_AVD_HOME` 不会传进 `.exe`，必须把索引文件放回默认目录，只用 `path=` 把数据目录指向 D 盘。
 
 ## 真机验证
 
