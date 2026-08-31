@@ -173,25 +173,43 @@ fn remux(
     let mut stream_mapping = vec![-1_i32; input.nb_streams() as usize];
     let mut input_time_bases = vec![Rational(0, 1); input.nb_streams() as usize];
     let mut output_index = 0_i32;
-    for (input_index, stream) in input.streams().enumerate() {
-        let medium = stream.parameters().medium();
-        if !matches!(medium, media::Type::Audio | media::Type::Video) {
-            continue;
-        }
-        if source_protocol == super::PlaybackProtocol::Hls
-            && !matches!(
-                medium,
-                media::Type::Video if best_video == Some(input_index)
-            )
-            && !matches!(
-                medium,
-                media::Type::Audio if best_audio == Some(input_index)
-            )
-        {
-            continue;
-        }
+    // 只有 flv 封装器会因缺少画面尺寸拒绝写头；mpegts 声明了 `AVFMT_NODIMENSIONS`。
+    let require_dimensions = output_protocol == super::PlaybackProtocol::Flv;
+    let candidates: Vec<TrackCandidate> = input
+        .streams()
+        .map(|stream| {
+            let parameters = stream.parameters();
+            TrackCandidate {
+                index: stream.index(),
+                medium: parameters.medium(),
+                unusable: unusable_parameters(&parameters, require_dimensions),
+            }
+        })
+        .collect();
+    let selection = select_tracks(
+        &candidates,
+        best_video,
+        best_audio,
+        source_protocol == super::PlaybackProtocol::Hls,
+        output_protocol == super::PlaybackProtocol::Flv,
+    );
+    for excluded in &selection.unusable {
+        tracing::warn!(track = %excluded, "直播流轨道参数不完整，已排除在录制之外");
+    }
+    if let Some(error) = selection.failure() {
+        drop(output);
+        remove_part(&part);
+        return failed(error);
+    }
+    for input_index in selection.selected {
+        let Some(stream) = input.stream(input_index) else {
+            drop(output);
+            remove_part(&part);
+            return failed("Rust FFmpeg 输入轨道索引失效".into());
+        };
         stream_mapping[input_index] = output_index;
         input_time_bases[input_index] = stream.time_base();
+        let parameters = stream.parameters();
         let mut output_stream = match output.add_stream(encoder::find(codec::Id::None)) {
             Ok(stream) => stream,
             Err(error) => {
@@ -200,7 +218,7 @@ fn remux(
                 return failed(format!("Rust FFmpeg 创建输出轨道失败: {error}"));
             }
         };
-        output_stream.set_parameters(stream.parameters());
+        output_stream.set_parameters(parameters);
         // 来自输入的容器特定 codec tag 不一定能直接用于新建的输出上下文，
         // 即使容器类型相同。
         unsafe {
@@ -208,15 +226,11 @@ fn remux(
         }
         output_index += 1;
     }
-    if output_index == 0 {
-        drop(output);
-        remove_part(&part);
-        return failed("Rust FFmpeg 未发现可录制的音视频轨道".into());
-    }
     let write_header = if output_protocol == super::PlaybackProtocol::Flv {
         let mut output_options = Dictionary::new();
         // 只有当 FLV 元数据包含关键帧字节位置时，mpegts.js 才能把无缓冲的 VOD seek
-        // 转换为 HTTP Range 请求。
+        // 转换为 HTTP Range 请求。上面的映射保证最多只有一条视频轨，
+        // 这正是该 flag 的前置条件。
         output_options.set("flvflags", "add_keyframe_index");
         output.write_header_with(output_options).map(|_| ())
     } else {
@@ -803,6 +817,163 @@ fn discard_unselected_hls_streams(
     }
 }
 
+/// 一条候选输入轨，及其能否被封装器接受。
+///
+/// 把选轨决策与 libav 上下文解耦：`remux` 只负责把 `Input` 摊平成候选列表，
+/// 判断规则则可以在没有真实直播流的情况下直接测试。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrackCandidate {
+    index: usize,
+    medium: media::Type,
+    /// 该轨缺少的封装必需参数；`None` 表示可以录制。
+    unusable: Option<&'static str>,
+}
+
+/// 本场录制要写进输出容器的轨道。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TrackSelection {
+    /// 按输出顺序排列的输入轨索引。
+    selected: Vec<usize>,
+    /// 被排除的轨道及原因，用于失败消息。
+    unusable: Vec<String>,
+    /// 源里是否存在视频轨，用于区分「纯音频源」与「视频轨全部不可用」。
+    source_has_video: bool,
+    /// 是否有视频轨进入输出。
+    video_selected: bool,
+}
+
+impl TrackSelection {
+    /// 这次选轨为什么无法产出可用录制（可以录制时为 `None`）。
+    fn failure(&self) -> Option<String> {
+        // 源带有视频，却没有一条视频轨能写进容器：继续下去只会产出没有画面的
+        // 文件，不如把原因说清楚。源里本来就只有音频不算这种情况。
+        let lost_all_video = self.source_has_video && !self.video_selected;
+        if !self.selected.is_empty() && !lost_all_video {
+            return None;
+        }
+        Some(unusable_track_error(&self.unusable))
+    }
+}
+
+/// 挑出要写进输出容器的轨道。
+///
+/// 纯函数：`remux` 先把 libav 的 `Input` 摊平成 `TrackCandidate`，规则本身便可以
+/// 脱离真实直播流直接测试 —— 触发这个 bug 的多视频轨直播源无法做成小体积夹具。
+fn select_tracks(
+    candidates: &[TrackCandidate],
+    best_video: Option<usize>,
+    best_audio: Option<usize>,
+    hls_source: bool,
+    single_video_output: bool,
+) -> TrackSelection {
+    let usable_video = |index: usize| {
+        candidates.iter().any(|candidate| {
+            candidate.index == index
+                && candidate.medium == media::Type::Video
+                && candidate.unusable.is_none()
+        })
+    };
+    // FLV 只能挂一条视频轨。首选轨自身不可用时退到第一条可用视频轨，
+    // 而不是放弃全部画面。
+    let chosen_video = single_video_output
+        .then(|| {
+            best_video.filter(|&index| usable_video(index)).or_else(|| {
+                candidates
+                    .iter()
+                    .find(|candidate| {
+                        candidate.medium == media::Type::Video && candidate.unusable.is_none()
+                    })
+                    .map(|candidate| candidate.index)
+            })
+        })
+        .flatten();
+
+    let mut selection = TrackSelection::default();
+    for candidate in candidates {
+        if !matches!(candidate.medium, media::Type::Audio | media::Type::Video) {
+            continue;
+        }
+        selection.source_has_video |= candidate.medium == media::Type::Video;
+        // HLS 变体已在解复用器层被丢弃，这里只保留选中的那一路。
+        if hls_source
+            && Some(candidate.index)
+                != match candidate.medium {
+                    media::Type::Video => best_video,
+                    _ => best_audio,
+                }
+        {
+            continue;
+        }
+        // 半成品轨道要在提交给封装器之前挡掉，否则只会换来一句无法行动的
+        // "Invalid argument"。这一步要先于单视频轨筛选：否则当全部视频轨都不可用
+        // 时，它们会先被筛掉而不留下原因，失败消息反而退回泛泛的「未发现可录制
+        // 的音视频轨道」。
+        if let Some(reason) = candidate.unusable {
+            selection.unusable.push(format!(
+                "{}轨 {} {reason}",
+                medium_label(candidate.medium),
+                candidate.index
+            ));
+            continue;
+        }
+        if single_video_output
+            && candidate.medium == media::Type::Video
+            && Some(candidate.index) != chosen_video
+        {
+            continue;
+        }
+        selection.selected.push(candidate.index);
+        selection.video_selected |= candidate.medium == media::Type::Video;
+    }
+    selection
+}
+
+fn medium_label(medium: media::Type) -> &'static str {
+    match medium {
+        media::Type::Video => "视频",
+        media::Type::Audio => "音频",
+        _ => "未知",
+    }
+}
+
+/// 封装器写头时要求、而这条轨道没有提供的参数。
+///
+/// libavformat 的 `init_muxer` 对缺失的视频画面尺寸和音频采样率一律只返回
+/// `EINVAL`，对外表现为一句无法行动的 "Invalid argument"。直播源在探测预算耗尽或
+/// CDN 切换后确实会给出这种半成品轨道（例如序列头迟到，画面尺寸仍为 0），
+/// 因此在交给封装器之前先判断，才能把原因归到具体轨道上。
+///
+/// `require_dimensions` 必须跟随目标封装器：`init_muxer` 只在封装器没有声明
+/// `AVFMT_NODIMENSIONS` 时才要求画面尺寸。flv 没有声明，mpegts 声明了，因此
+/// MPEG-TS 输出不能因缺尺寸拒绝轨道 —— 那会把封装器本可接受的 IPTV 流挡掉。
+fn unusable_parameters(
+    parameters: &codec::Parameters,
+    require_dimensions: bool,
+) -> Option<&'static str> {
+    if parameters.id() == codec::Id::None {
+        return Some("缺少编解码器信息");
+    }
+    let raw = unsafe { &*parameters.as_ptr() };
+    match parameters.medium() {
+        media::Type::Video if require_dimensions && (raw.width <= 0 || raw.height <= 0) => {
+            Some("缺少画面尺寸")
+        }
+        media::Type::Audio if raw.sample_rate <= 0 => Some("缺少采样率"),
+        _ => None,
+    }
+}
+
+/// 在没有一条轨道能写进容器时给出可行动的原因。
+fn unusable_track_error(unusable_tracks: &[String]) -> String {
+    if unusable_tracks.is_empty() {
+        return "Rust FFmpeg 未发现可录制的音视频轨道".into();
+    }
+    format!(
+        "Rust FFmpeg 无法录制该直播流，轨道参数不完整（{}），请稍后重试或更换线路/画质",
+        unusable_tracks.join("；")
+    )
+}
+
 /// 把 FFmpeg 打开输入失败的错误转换为用户可见消息。
 ///
 /// HTTPS 直播流经代理录制时，libavformat 的 tls 协议会把连接交给
@@ -907,8 +1078,9 @@ mod tests {
     use super::super::PlaybackProtocol;
     use super::{
         FfmpegRecordingOptions, MAX_INVALID_READS, PacketTimeline, PlayUrl, ReadFailure,
-        STREAM_STALL_TIMEOUT, StopReason, build_input_options, classify_read_failure,
-        open_failure_message, publish_part,
+        STREAM_STALL_TIMEOUT, StopReason, TrackCandidate, build_input_options,
+        classify_read_failure, open_failure_message, publish_part, select_tracks,
+        unusable_parameters, unusable_track_error,
     };
     use ffmpeg_next::{Error, Packet, Rational};
     use std::fs;
@@ -1279,6 +1451,202 @@ mod tests {
         // 其他错误即使发生在代理下也不改写。
         let message = open_failure_message(url, Some("http://127.0.0.1:7897/"), Error::InvalidData);
         assert!(!message.contains("httpproxy"), "仅 ProtocolNotFound 补充成因: {message}");
+    }
+
+    /// 探测预算耗尽或 CDN 切换后，直播源会给出画面尺寸仍为 0 的视频轨。这类轨道
+    /// 交给封装器只会换来 `EINVAL`，即用户看到的「写入容器头失败: Invalid
+    /// argument」，所以必须在写头之前就被判为不可用。
+    #[test]
+    fn a_video_track_without_dimensions_is_unusable() {
+        let mut parameters = ffmpeg_next::codec::Parameters::new();
+        parameters.set_medium(ffmpeg_next::media::Type::Video);
+        parameters.set_id(ffmpeg_next::codec::Id::H264);
+        assert_eq!(unusable_parameters(&parameters, true), Some("缺少画面尺寸"));
+
+        unsafe {
+            (*parameters.as_mut_ptr()).width = 1920;
+            (*parameters.as_mut_ptr()).height = 1080;
+        }
+        assert_eq!(unusable_parameters(&parameters, true), None);
+    }
+
+    /// mpegts 封装器声明了 `AVFMT_NODIMENSIONS`，缺画面尺寸照样能写头。若在这里
+    /// 也要求尺寸，IPTV 录制会被挡在封装器本可接受的轨道上。
+    #[test]
+    fn mpegts_output_accepts_a_video_track_without_dimensions() {
+        let mut parameters = ffmpeg_next::codec::Parameters::new();
+        parameters.set_medium(ffmpeg_next::media::Type::Video);
+        parameters.set_id(ffmpeg_next::codec::Id::H264);
+        assert_eq!(unusable_parameters(&parameters, false), None);
+    }
+
+    /// 音频缺采样率同样只会得到 `EINVAL`，与视频缺尺寸走的是 `init_muxer` 里同一
+    /// 类检查。
+    #[test]
+    fn an_audio_track_without_a_sample_rate_is_unusable() {
+        let mut parameters = ffmpeg_next::codec::Parameters::new();
+        parameters.set_medium(ffmpeg_next::media::Type::Audio);
+        parameters.set_id(ffmpeg_next::codec::Id::AAC);
+        assert_eq!(unusable_parameters(&parameters, true), Some("缺少采样率"));
+
+        unsafe {
+            (*parameters.as_mut_ptr()).sample_rate = 44_100;
+        }
+        assert_eq!(unusable_parameters(&parameters, true), None);
+    }
+
+    /// 没有编解码器信息的轨道无法被任何封装器接受，且它的尺寸/采样率检查也没有
+    /// 意义，因此先于两者判定。
+    #[test]
+    fn a_track_without_a_codec_is_unusable() {
+        let mut parameters = ffmpeg_next::codec::Parameters::new();
+        parameters.set_medium(ffmpeg_next::media::Type::Video);
+        assert_eq!(
+            unusable_parameters(&parameters, false),
+            Some("缺少编解码器信息")
+        );
+    }
+
+    /// 录制失败时要说清是哪条轨道的哪个参数缺失，而不是转述 FFmpeg 的
+    /// "Invalid argument"。
+    #[test]
+    fn an_unusable_track_error_names_the_track_and_the_missing_parameter() {
+        let message = unusable_track_error(&["视频轨 0 缺少画面尺寸".to_string()]);
+        assert!(
+            message.contains("视频轨 0 缺少画面尺寸"),
+            "应指明轨道与成因: {message}"
+        );
+        assert!(
+            !message.contains("Invalid argument"),
+            "不应转述原始错误: {message}"
+        );
+
+        // 没有任何轨道被排除时，说明源里本来就没有音视频，保持原来的说法。
+        assert_eq!(
+            unusable_track_error(&[]),
+            "Rust FFmpeg 未发现可录制的音视频轨道"
+        );
+    }
+
+    /// 触发这个 bug 的形状：CDN 在同一地址上多挂了一条视频轨。
+    ///
+    /// FLV 输出在 `add_keyframe_index` 下只能挂一条视频轨，flvenc 会直接以 `EINVAL`
+    /// 拒绝写头，此前整场录制因此以「写入容器头失败: Invalid argument」收场。
+    /// 现在只带走首选的那一条，录制照旧进行。
+    #[test]
+    fn flv_output_keeps_only_one_video_track() {
+        let candidates = [
+            video_candidate(0, None),
+            video_candidate(1, None),
+            audio_candidate(2, None),
+        ];
+        let selection = select_tracks(&candidates, Some(0), Some(2), false, true);
+
+        assert_eq!(selection.selected, vec![0, 2], "FLV 只能带一条视频轨");
+        assert_eq!(selection.failure(), None, "多余视频轨不应让录制失败");
+    }
+
+    /// MPEG-TS 没有 FLV 的单视频轨限制，IPTV 的多语言声道必须继续全部保留。
+    #[test]
+    fn mpegts_output_keeps_every_audio_track() {
+        let candidates = [
+            video_candidate(0, None),
+            audio_candidate(1, None),
+            audio_candidate(2, None),
+        ];
+        let selection = select_tracks(&candidates, Some(0), Some(1), false, false);
+
+        assert_eq!(
+            selection.selected,
+            vec![0, 1, 2],
+            "MPEG-TS 应保留多语言声道"
+        );
+        assert_eq!(selection.failure(), None);
+    }
+
+    /// HLS 只带选中的那一路，未使用的变体不能流进输出。
+    #[test]
+    fn hls_source_keeps_only_the_selected_variant() {
+        let candidates = [
+            video_candidate(0, None),
+            video_candidate(1, None),
+            audio_candidate(2, None),
+            audio_candidate(3, None),
+        ];
+        let selection = select_tracks(&candidates, Some(1), Some(3), true, false);
+
+        assert_eq!(selection.selected, vec![1, 3]);
+        assert_eq!(selection.failure(), None);
+    }
+
+    /// 参数不完整的音频轨被排除后，画面仍能录下来 —— 比整场失败好。
+    #[test]
+    fn an_unusable_audio_track_still_records_the_video() {
+        let candidates = [
+            video_candidate(0, None),
+            audio_candidate(1, Some("缺少采样率")),
+        ];
+        let selection = select_tracks(&candidates, Some(0), Some(1), false, true);
+
+        assert_eq!(selection.selected, vec![0]);
+        assert_eq!(selection.failure(), None, "丢音频不应让录制失败");
+        assert_eq!(selection.unusable, vec!["音频轨 1 缺少采样率".to_string()]);
+    }
+
+    /// 首选视频轨不可用时退到可用的那一条，而不是放弃全部画面。
+    #[test]
+    fn an_unusable_preferred_video_track_falls_back_to_a_usable_one() {
+        let candidates = [
+            video_candidate(0, Some("缺少画面尺寸")),
+            video_candidate(1, None),
+            audio_candidate(2, None),
+        ];
+        let selection = select_tracks(&candidates, Some(0), Some(2), false, true);
+
+        assert_eq!(selection.selected, vec![1, 2], "应退到可用的视频轨");
+        assert_eq!(selection.failure(), None);
+    }
+
+    /// 源带有视频却没一条可用时，不能默不作声录成一个只有音频的文件。
+    #[test]
+    fn losing_every_video_track_fails_instead_of_recording_audio_only() {
+        let candidates = [
+            video_candidate(0, Some("缺少画面尺寸")),
+            audio_candidate(1, None),
+        ];
+        let selection = select_tracks(&candidates, Some(0), Some(1), false, true);
+
+        let failure = selection.failure().expect("丢失全部画面应报错");
+        assert!(
+            failure.contains("视频轨 0 缺少画面尺寸"),
+            "应说清成因: {failure}"
+        );
+    }
+
+    /// 纯音频源本来就没有画面，不属于「丢失视频」，应继续录制。
+    #[test]
+    fn an_audio_only_source_still_records() {
+        let candidates = [audio_candidate(0, None)];
+        let selection = select_tracks(&candidates, None, Some(0), false, true);
+
+        assert_eq!(selection.selected, vec![0]);
+        assert_eq!(selection.failure(), None);
+    }
+
+    fn video_candidate(index: usize, unusable: Option<&'static str>) -> TrackCandidate {
+        TrackCandidate {
+            index,
+            medium: ffmpeg_next::media::Type::Video,
+            unusable,
+        }
+    }
+
+    fn audio_candidate(index: usize, unusable: Option<&'static str>) -> TrackCandidate {
+        TrackCandidate {
+            index,
+            medium: ffmpeg_next::media::Type::Audio,
+            unusable,
+        }
     }
 
     fn packet(stream: usize, dts: i64, pts: i64) -> Packet {
