@@ -7,7 +7,7 @@
 
 | 能力 | 状态 | rLive 行为 |
 | --- | --- | --- |
-| 分类、推荐、分区房间、搜索 | 已支持 | 解析虎牙网页与公开配置数据，按上游分页结果展示。 |
+| 分类、推荐、分区房间、搜索 | 已支持 | 分类走两级目录接口，其余解析虎牙网页与公开配置数据，按上游分页结果展示。 |
 | 房间详情 | 已支持 | 解析主播、封面、热度、直播状态、公告和播放元数据。 |
 | 播放与清晰度 | 已支持 | 处理虎牙线路、码率和防盗链参数，优先交给本机代理和网页播放器。 |
 | 实时弹幕接收 | 已支持 | 使用 TARS/WebSocket 房间流量解析普通消息和常见事件。 |
@@ -19,6 +19,39 @@
 虎牙实现统一站点接口：`get_categories`、`get_recommend_rooms`、`get_category_rooms`、`search_rooms`、`get_room_detail`、`get_play_qualities` 与 `get_play_urls`。
 
 `danmaku_connect` 负责接收房间消息。`huya_danmaku_send_status` 和 `huya_danmaku_send` 是发送一个普通文本片段的接口，手动发送和会话级自动发送均复用；发送前会再次解析房间元数据，以取得网关所需的内部房间参数。
+
+## 分类目录
+
+分类首选 `https://www.huya.com/cache.php?m=Game&do=getGameList`，它一次返回完整两级结构，不需要解析 `/g` 页的 SSR HTML，也不需要再逐个抓 `/g_ol`、`/g_pc`、`/g_yl`、`/g_sy` 四个筛选页。响应为 gzip 传输（`reqwest` 自动解压），顶层字段：
+
+- `gameList`：全部游戏平铺，约 350 余项，**只有这里带 `imgUrl`**（形如 `https://huyaimg.msstatic.com/cdnimage/game/1-L.jpg`）。
+- `bussTypeGameList`：以 `bussType` 为 key 的四个二级分组，条目字段与 `gameList` 同构但**不含 `imgUrl`**。
+- `status`、`total`、`bussType`：状态与计数字段，解析时不依赖。
+
+条目关键字段是 `gid`（JSON number，不是字符串）、`gameFullName`、`bussType` 和 `isHide`。`gameType` 有 0/3/4/6 几种取值，与分组无关，忽略。`isHide` 实测全为 0，仍然过滤非 0 项以防上游后续隐藏分区。
+
+### 四个聚合 gid 常量
+
+每个分组的聚合入口自身也混在该组数组里，且与普通子分区字段完全同构（同为 gid ≥ 100000 的六位数），没有任何字段能区分它。例如 `bussTypeGameList["1"]` 里的「网游竞技」和同组的「暴雪专区」(100043)、「棋牌休闲」(100301) 看起来一模一样。因此必须用站点级常量把聚合项提取成父分区，否则父分区的 children 里会出现一个同名子项。这四个 gid 由 `/g` 页的筛选条和左侧栏导航硬编码：
+
+| bussType | 聚合 gid | 父分区名 |
+| --- | --- | --- |
+| 1 | 100023 | 网游竞技 |
+| 2 | 100002 | 单机热游 |
+| 8 | 100022 | 娱乐 |
+| 3 | 100004 | 手游休闲 |
+
+表的行顺序即 `/g` 页筛选条的排布顺序（网游 / 单机 / 娱乐 / 手游），输出父分区按此顺序，不按 bussType 数值排序。
+
+### 解析约定
+
+- 先用 `gameList` 建一张 `gid` → `imgUrl` 映射，再回填给子分类的 `pic`。不按 gid 拼 `{gid}-MS.jpg`：拼接地址对新分类可能 404，上游给出的 `-L.jpg` 才是实际存在的资源。
+- 子分类过滤掉聚合项本身、`isHide != 0`、空 `gameFullName` 和空/零 `gid`；children 为空的父分区跳过。
+- 聚合 gid 可以直接拉房间列表：`?m=LiveList&do=getLiveListByPage&gameId=100023&tagAll=0&page=1` 返回跨子分区混排的房间，因此父分区入口是真实可用的浏览目标。前端为每个父分区合成的「全部X」磁贴形如 `{ id: "0", parent_id: 父分区 id }`，`get_category_rooms` 遇到 `id == "0"` 时改用 `parent_id` 作为 `gameId`，与斗鱼、抖音、Twitch 的既有跨平台约定一致。
+
+### bussLive 回落
+
+新接口请求失败或解析不出任何父分区时，回落到旧的单层实现 `https://live.cdn.huya.com/liveconfig/game/bussLive`，把全部游戏塞进一个合成的「热门分类」父分区。二级结构会退化，但分类浏览不会因为上游接口变动而整体空掉。
 
 ## 上游数据与播放
 
