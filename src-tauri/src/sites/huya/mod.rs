@@ -48,6 +48,47 @@ impl HuyaSite {
         }
     }
 
+    /// 单层 `bussLive` 目录，作为两级 `getGameList` 接口不可用时的回落。
+    /// 它把全部游戏塞进一个合成的「热门分类」父分区，二级结构会退化，
+    /// 但分类浏览不会整体空掉。
+    async fn legacy_flat_categories(&self) -> AppResult<Vec<LiveCategory>> {
+        let v = self
+            .get_json("https://live.cdn.huya.com/liveconfig/game/bussLive")
+            .await
+            .unwrap_or(Value::Null);
+        let mut children = Vec::new();
+        if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
+            for item in arr {
+                let gid = json_str(item.get("gid").unwrap_or(&Value::Null));
+                let name = json_str(item.get("gameFullName").unwrap_or(&Value::Null));
+                if gid.is_empty() || name.is_empty() {
+                    continue;
+                }
+                children.push(LiveSubCategory {
+                    id: gid.clone(),
+                    name,
+                    parent_id: "0".into(),
+                    pic: Some(format!(
+                        "https://huyaimg.msstatic.com/cdnimage/game/{gid}-MS.jpg"
+                    )),
+                });
+            }
+        }
+        if children.is_empty() {
+            children.push(LiveSubCategory {
+                id: "1".into(),
+                name: "网游竞技".into(),
+                parent_id: "0".into(),
+                pic: None,
+            });
+        }
+        Ok(vec![LiveCategory {
+            id: "0".into(),
+            name: "热门分类".into(),
+            children,
+        }])
+    }
+
     fn err(msg: impl Into<String>) -> AppError {
         AppError::new("huya_api_error", msg)
             .with_site("huya")
@@ -423,6 +464,102 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
+/// 虎牙 `/g` 页筛选条的四个二级分组。`bussTypeGameList` 的 key 就是 `bussType`，
+/// 而每组的聚合入口自身也混在该组数组里，且与普通子分区字段完全同构
+/// （同为 gid >= 100000 的六位数），没有任何字段可区分。因此这里用站点级常量
+/// 把聚合项提取成父分区，否则父分区会在自己的 children 里出现一个同名条目。
+/// 顺序与 `/g` 页筛选条一致（网游 / 单机 / 娱乐 / 手游），不按 bussType 数值排序。
+const HUYA_BUSS_GROUPS: [(&str, i64, &str); 4] = [
+    ("1", 100023, "网游竞技"),
+    ("2", 100002, "单机热游"),
+    ("8", 100022, "娱乐"),
+    ("3", 100004, "手游休闲"),
+];
+
+/// 解析 `m=Game&do=getGameList` 的两级分类。
+///
+/// 图片只在平铺的 `gameList` 里带 `imgUrl`；`bussTypeGameList` 的条目没有该字段，
+/// 所以先用 `gameList` 建一张 gid -> imgUrl 映射再回填。不按 gid 拼
+/// `{gid}-MS.jpg`：拼接地址对新分类可能 404，上游给的 `-L.jpg` 才是实际存在的。
+fn parse_game_list(v: &Value) -> AppResult<Vec<LiveCategory>> {
+    let mut images: HashMap<i64, String> = HashMap::new();
+    if let Some(arr) = v.get("gameList").and_then(|x| x.as_array()) {
+        for item in arr {
+            let gid = json_i64(item.get("gid").unwrap_or(&Value::Null));
+            let img = json_str(item.get("imgUrl").unwrap_or(&Value::Null));
+            if gid != 0 && !img.is_empty() {
+                images.insert(gid, img);
+            }
+        }
+    }
+
+    let groups = v.get("bussTypeGameList").unwrap_or(&Value::Null);
+    let mut categories = Vec::new();
+    for (key, parent_gid, fallback_name) in HUYA_BUSS_GROUPS {
+        let items = groups
+            .get(key)
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let parent_id = parent_gid.to_string();
+        let mut parent_name = String::new();
+        let mut children = Vec::new();
+        for item in &items {
+            let gid = json_i64(item.get("gid").unwrap_or(&Value::Null));
+            let name = json_str(item.get("gameFullName").unwrap_or(&Value::Null));
+            if gid == parent_gid {
+                // 聚合项本身升格为父分区，不再作为子分类出现。
+                if !name.is_empty() {
+                    parent_name = name;
+                }
+                continue;
+            }
+            if gid == 0 || name.is_empty() {
+                continue;
+            }
+            // `isHide` 实测全为 0，仍然过滤以防上游后续隐藏分区。
+            if json_i64(item.get("isHide").unwrap_or(&Value::Null)) != 0 {
+                continue;
+            }
+            children.push(LiveSubCategory {
+                id: gid.to_string(),
+                name,
+                parent_id: parent_id.clone(),
+                pic: images.get(&gid).cloned(),
+            });
+        }
+        if children.is_empty() {
+            continue;
+        }
+        categories.push(LiveCategory {
+            id: parent_id,
+            name: if parent_name.is_empty() {
+                fallback_name.to_string()
+            } else {
+                parent_name
+            },
+            children,
+        });
+    }
+
+    if categories.is_empty() {
+        return Err(HuyaSite::err("huya game list has no categories"));
+    }
+    Ok(categories)
+}
+
+/// 分类浏览器会给每个父分区合成一个 id 为 `0` 的「全部X」磁贴，它不是真实分区。
+/// 虎牙的父分区聚合 gid 本身就能拉房间列表（实测 `gameId=100023` 返回跨子分区的
+/// 混排结果），所以这里把哨兵值换成父分区 id。与斗鱼/抖音/Twitch 的约定一致。
+fn category_game_id(category: &LiveSubCategory) -> &str {
+    let id = category.id.trim();
+    if id == "0" {
+        category.parent_id.trim()
+    } else {
+        id
+    }
+}
+
 fn parse_huya_room_list(v: &Value) -> AppResult<RoomListPage> {
     let data = v.get("data").cloned().unwrap_or(Value::Null);
     let mut items = Vec::new();
@@ -481,41 +618,19 @@ fn live_status_from_room_info(info: &Value) -> LiveRoomStatus {
 #[async_trait::async_trait]
 impl LiveSite for HuyaSite {
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
-        let v = self
-            .get_json("https://live.cdn.huya.com/liveconfig/game/bussLive")
+        // 首选带二级结构的目录接口；失败时回落到单层 bussLive，
+        // 保证分类浏览不会因为上游接口变动而整体空掉。
+        match self
+            .get_json("https://www.huya.com/cache.php?m=Game&do=getGameList")
             .await
-            .unwrap_or(Value::Null);
-        let mut children = Vec::new();
-        if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
-            for item in arr {
-                let gid = json_str(item.get("gid").unwrap_or(&Value::Null));
-                let name = json_str(item.get("gameFullName").unwrap_or(&Value::Null));
-                if gid.is_empty() || name.is_empty() {
-                    continue;
-                }
-                children.push(LiveSubCategory {
-                    id: gid.clone(),
-                    name,
-                    parent_id: "0".into(),
-                    pic: Some(format!(
-                        "https://huyaimg.msstatic.com/cdnimage/game/{gid}-MS.jpg"
-                    )),
-                });
+            .and_then(|v| parse_game_list(&v))
+        {
+            Ok(categories) => return Ok(categories),
+            Err(err) => {
+                tracing::debug!("huya game list unavailable; falling back to bussLive: {err}");
             }
         }
-        if children.is_empty() {
-            children.push(LiveSubCategory {
-                id: "1".into(),
-                name: "网游竞技".into(),
-                parent_id: "0".into(),
-                pic: None,
-            });
-        }
-        Ok(vec![LiveCategory {
-            id: "0".into(),
-            name: "热门分类".into(),
-            children,
-        }])
+        self.legacy_flat_categories().await
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
@@ -534,7 +649,7 @@ impl LiveSite for HuyaSite {
         let page = page.max(1);
         let url = format!(
             "https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage&gameId={}&tagAll=0&page={page}",
-            category.id
+            category_game_id(category)
         );
         parse_huya_room_list(&self.get_json(&url).await?)
     }
@@ -899,6 +1014,151 @@ mod tests {
             "https://live.cdn.huya.com/liveconfig/game/bussLive"
         ));
         assert!(!is_room_page_url("https://search.cdn.huya.com/?q=test"));
+    }
+
+    /// 精简 fixture：保留真实响应的结构特征（平铺 `gameList` 带 `imgUrl`、
+    /// `bussTypeGameList` 的条目不带 `imgUrl`、聚合项混在组内、`gid` 是 JSON number）。
+    fn game_list_fixture() -> Value {
+        serde_json::json!({
+            "status": 200,
+            "total": 8,
+            "gameList": [
+                {"gid": 1, "gameFullName": "英雄联盟", "isHide": 0,
+                 "imgUrl": "https://huyaimg.msstatic.com/cdnimage/game/1-L.jpg"},
+                {"gid": 100023, "gameFullName": "网游竞技", "isHide": 0,
+                 "imgUrl": "https://huyaimg.msstatic.com/cdnimage/game/100023-L.jpg"},
+                {"gid": 100043, "gameFullName": "暴雪专区", "isHide": 0,
+                 "imgUrl": "https://huyaimg.msstatic.com/cdnimage/game/100043-L.jpg"},
+                {"gid": 2793, "gameFullName": "天天吃鸡", "isHide": 0,
+                 "imgUrl": "https://huyaimg.msstatic.com/cdnimage/game/2793-L.jpg"},
+                {"gid": 2168, "gameFullName": "星秀", "isHide": 0,
+                 "imgUrl": "https://huyaimg.msstatic.com/cdnimage/game/2168-L.jpg"},
+                {"gid": 3203, "gameFullName": "王者荣耀", "isHide": 0,
+                 "imgUrl": "https://huyaimg.msstatic.com/cdnimage/game/3203-L.jpg"}
+            ],
+            "bussTypeGameList": {
+                "1": [
+                    {"gid": 1, "gameFullName": "英雄联盟", "isHide": 0},
+                    {"gid": 100023, "gameFullName": "网游竞技", "isHide": 0},
+                    {"gid": 100043, "gameFullName": "暴雪专区", "isHide": 0},
+                    {"gid": 999001, "gameFullName": "已隐藏分区", "isHide": 1},
+                    {"gid": 0, "gameFullName": "零 gid", "isHide": 0},
+                    {"gid": 999002, "gameFullName": "", "isHide": 0}
+                ],
+                "2": [
+                    {"gid": 100002, "gameFullName": "单机热游", "isHide": 0},
+                    {"gid": 2793, "gameFullName": "天天吃鸡", "isHide": 0}
+                ],
+                "3": [
+                    {"gid": 100004, "gameFullName": "手游休闲", "isHide": 0},
+                    {"gid": 3203, "gameFullName": "王者荣耀", "isHide": 0}
+                ],
+                "8": [
+                    {"gid": 100022, "gameFullName": "娱乐", "isHide": 0},
+                    {"gid": 2168, "gameFullName": "星秀", "isHide": 0}
+                ]
+            },
+            "bussType": 0
+        })
+    }
+
+    #[test]
+    fn game_list_orders_parents_like_the_site_filter_bar() {
+        let categories = parse_game_list(&game_list_fixture()).unwrap();
+        // 顺序跟随 `/g` 页筛选条（网游 / 单机 / 娱乐 / 手游），不按 bussType 数值排序。
+        assert_eq!(
+            categories
+                .iter()
+                .map(|c| (c.id.as_str(), c.name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("100023", "网游竞技"),
+                ("100002", "单机热游"),
+                ("100022", "娱乐"),
+                ("100004", "手游休闲"),
+            ]
+        );
+    }
+
+    #[test]
+    fn game_list_promotes_aggregate_entry_and_filters_noise() {
+        let categories = parse_game_list(&game_list_fixture()).unwrap();
+        // 聚合项升格为父分区后不得再出现在自己的 children 里；
+        // isHide != 0、零 gid 和空名称也要一并剔除。数字 gid 转成字符串。
+        assert_eq!(
+            categories[0]
+                .children
+                .iter()
+                .map(|c| (c.id.as_str(), c.name.as_str(), c.parent_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "英雄联盟", "100023"),
+                ("100043", "暴雪专区", "100023"),
+            ]
+        );
+    }
+
+    #[test]
+    fn game_list_takes_pic_from_flat_game_list_img_url() {
+        let categories = parse_game_list(&game_list_fixture()).unwrap();
+        // 图片只在平铺 `gameList` 里，按 gid 回填上游 `-L.jpg`，不拼 `{gid}-MS.jpg`。
+        assert_eq!(
+            categories[0].children[0].pic.as_deref(),
+            Some("https://huyaimg.msstatic.com/cdnimage/game/1-L.jpg")
+        );
+        assert_eq!(categories[3].children[0].id, "3203");
+        assert_eq!(
+            categories[3].children[0].pic.as_deref(),
+            Some("https://huyaimg.msstatic.com/cdnimage/game/3203-L.jpg")
+        );
+    }
+
+    #[test]
+    fn game_list_falls_back_to_constant_parent_name_and_omits_missing_pic() {
+        let v = serde_json::json!({
+            "gameList": [],
+            "bussTypeGameList": {
+                "1": [{"gid": 1, "gameFullName": "英雄联盟", "isHide": 0}]
+            }
+        });
+        let categories = parse_game_list(&v).unwrap();
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].id, "100023");
+        assert_eq!(categories[0].name, "网游竞技");
+        assert_eq!(categories[0].children[0].pic, None);
+    }
+
+    #[test]
+    fn game_list_errors_so_caller_can_fall_back_to_buss_live() {
+        // 只有聚合项、没有任何子分区，以及响应完全不可用时都必须报错。
+        let only_aggregate = serde_json::json!({
+            "bussTypeGameList": {
+                "1": [{"gid": 100023, "gameFullName": "网游竞技", "isHide": 0}]
+            }
+        });
+        assert!(parse_game_list(&only_aggregate).is_err());
+        assert!(parse_game_list(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn category_game_id_routes_synthetic_all_tile_to_parent() {
+        // 前端为每个父分区合成的「全部X」磁贴形如 { id: "0", parent_id: 父分区 id }，
+        // 聚合 gid 可以直接拉跨子分区的房间列表。
+        let all = LiveSubCategory {
+            id: "0".into(),
+            name: "全部网游竞技".into(),
+            parent_id: "100023".into(),
+            pic: None,
+        };
+        assert_eq!(category_game_id(&all), "100023");
+
+        let normal = LiveSubCategory {
+            id: "1".into(),
+            name: "英雄联盟".into(),
+            parent_id: "100023".into(),
+            pic: None,
+        };
+        assert_eq!(category_game_id(&normal), "1");
     }
 
     #[test]
