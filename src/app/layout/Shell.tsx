@@ -37,11 +37,11 @@ import {
 } from "@/features/recording/RecordingHeaderControls";
 import { recordingSupported } from "@/features/recording/recording";
 import { useRecordingHeaderSnapshot } from "@/features/recording/recordingHeaderState";
-import { canSearchNavigateBack } from "@/features/search/search";
+import { CATEGORY_BROWSE_PATH } from "@/features/category/categorySelection";
+import { canNavigateBackInApp } from "@/shared/appHistory";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
-import { categoryHomePathAfterSiteChange } from "@/features/category/categoryRoute";
 import {
   FOLLOW_PLATFORM_PARAM,
   FOLLOW_VIEW_PARAM,
@@ -139,6 +139,7 @@ export function Shell() {
   const isIptv = pathname === "/iptv";
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
   const isSearch = pathname === "/search";
+  const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
   // 录制仅限桌面端，因此移动端深链接保持普通头部加上页面自己的
@@ -208,8 +209,8 @@ export function Shell() {
   const iptvFollowGroup = isIptvFollow ? searchParams.get(FOLLOW_IPTV_GROUP_PARAM) : null;
   // 携带直播平台条的各路由。关注拥有独立的顶层 直播/IPTV 页签，
   // 并把平台过滤保留在页面侧栏内部。
-  const showSiteSwitcher =
-    pathname === "/" || pathname.startsWith("/category") || pathname.startsWith("/search");
+  // 分类页也在列：分区 id 属于具体平台，没有平台条就无法在那一屏里换平台看分区。
+  const showSiteSwitcher = pathname === "/" || isCategoryBrowse || pathname.startsWith("/search");
   // 两个关注视图共用同一个内容容器，切换 直播/IPTV 页签时不会重新挂载
   // FollowPage、丢失其过渡状态。IPTV 关注分组的动画
   // 发生在 IptvFollowView 内部而不是这一层。
@@ -250,7 +251,6 @@ export function Shell() {
   // 滚动子树 —— 网格、滚动容器，全部。保持外壳存活，
   // 查询缓存就能只替换路由内容。
   const pageMotionKey = pathname;
-  const categoryHomePath = categoryHomePathAfterSiteChange(pathname);
   const platformStrip: readonly PlatformScopeValue[] = sitePlatforms;
   // 每个表面一条有序条带，按字符串比较，
   // 使平台 id 与 IPTV 来源 id 共用同一个方向规则。
@@ -279,11 +279,10 @@ export function Shell() {
     (nextSiteId: SiteId) => {
       if (nextSiteId === activeSiteId) return;
       setSiteId(nextSiteId);
-      if (categoryHomePath) {
-        navigate(categoryHomePath, { replace: true });
-      }
     },
-    [activeSiteId, categoryHomePath, navigate, setSiteId],
+    // 首页的分区选择不需要在这里清理：`?cat=` 自带 siteId，切平台后新平台的面板
+    // 解析不到属于自己的选择，自然回落推荐态，切回去时原选择还在。
+    [activeSiteId, setSiteId],
   );
 
   const handleIptvSourceChange = useCallback(
@@ -296,8 +295,8 @@ export function Shell() {
     [iptvSource.url, iptvSources, navigate],
   );
 
-  const goBackFromSearch = useCallback(() => {
-    if (canSearchNavigateBack(window.history.state)) {
+  const goBackToDiscovery = useCallback(() => {
+    if (canNavigateBackInApp(window.history.state)) {
       navigate(-1);
       return;
     }
@@ -618,7 +617,9 @@ export function Shell() {
                     !showTopNavigation && "max-md:hidden",
                   )}
                 >
-                  {isSearch && (
+                  {/* 搜索与「全部分类」都是从别处 push 出来的取向表面，侧栏里没有对应
+                      条目可点回去，所以头部给一个显式返回口。 */}
+                  {(isSearch || isCategoryBrowse) && (
                     <div className="relative z-10 flex shrink-0 items-center max-md:hidden">
                       <Button
                         type="button"
@@ -626,7 +627,7 @@ export function Shell() {
                         size="icon"
                         aria-label="返回上一页"
                         title="返回上一页"
-                        onClick={goBackFromSearch}
+                        onClick={goBackToDiscovery}
                       >
                         <ArrowLeft aria-hidden />
                       </Button>

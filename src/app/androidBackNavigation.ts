@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
+import { CATEGORY_PARAM } from "@/features/category/categorySelection";
 
 /**
  * 可取消的应用内事件，在 Android 返回键进入路由导航之前触发。
@@ -12,14 +13,7 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 export const ANDROID_BACK_EVENT = "rlive:android-back";
 
 /** 底部导航根路由，Back 在它们上面的语义是回到系统桌面。 */
-const ANDROID_HOME_TAB_PATHS = new Set([
-  "/",
-  "/follow",
-  "/category",
-  "/history",
-  "/iptv",
-  "/settings",
-]);
+const ANDROID_HOME_TAB_PATHS = new Set(["/", "/follow", "/history", "/iptv", "/settings"]);
 
 type AndroidBackRegistrationInput = {
   userAgent: string;
@@ -33,15 +27,24 @@ export function hasBrowserHistoryEntry(state: unknown): boolean {
 }
 
 /**
- * 底部导航根路由。设置二级页（带非空 `section` 查询参数）与房间、
- * 分类子页、搜索等钻入路由一样按历史回退。
+ * 底部导航根路由。带查询参数钻进二级状态的表面不算根路由：设置二级页
+ * （非空 `section`）与首页的分区态（非空 `cat`）都按历史回退，与房间、
+ * 搜索等钻入路由一致。
+ *
+ * 首页分区态尤其不能算根路由 —— 分类页合并进首页后，「浏览某个分区」不再有
+ * 自己的 pathname，只体现为 `/?cat=...`。若只看 pathname，用户在分区里按一次
+ * Back 会直接退回系统桌面，而不是回到推荐流。
  */
 export function isAndroidHomeTabRoot(pathname: string, search: string): boolean {
-  if (pathname === "/settings") {
-    const section = new URLSearchParams(search).get("section");
-    if (section != null && section.trim() !== "") return false;
-  }
+  if (pathname === "/settings" && hasMeaningfulParam(search, "section")) return false;
+  if (pathname === "/" && hasMeaningfulParam(search, CATEGORY_PARAM)) return false;
   return ANDROID_HOME_TAB_PATHS.has(pathname);
+}
+
+/** 参数存在且不只是空白。空值等同于未钻入，仍按根路由处理。 */
+function hasMeaningfulParam(search: string, name: string): boolean {
+  const value = new URLSearchParams(search).get(name);
+  return value != null && value.trim() !== "";
 }
 
 export function shouldRegisterAndroidBackHandler({

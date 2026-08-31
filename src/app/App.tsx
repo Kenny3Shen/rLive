@@ -8,15 +8,14 @@ import {
   RouterProvider,
   useParams,
 } from "react-router-dom";
-import { isSiteEnabled, isSiteId } from "@/shared/siteId";
+import { isSiteEnabled, isSiteId, resolveEnabledSiteId } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Shell } from "./layout/Shell";
 import { AndroidBackNavigator } from "./androidBackNavigation";
 import { RouteModulePreloader } from "./RouteModulePreloader";
 import {
-  loadCategoryPage,
-  loadCategoryRoomsPage,
+  loadCategoryBrowsePage,
   loadFollowPage,
   loadHistoryPage,
   loadIptvPage,
@@ -29,6 +28,7 @@ import {
   loadSettingsPage,
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
+import { homeCategoryPath } from "../features/category/categorySelection";
 import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
 import { useFollowAutoRecording } from "../features/recording/followRecording";
 import { RecordingExitGuard } from "../features/recording/RecordingExitGuard";
@@ -37,8 +37,7 @@ import { UpdateChecker } from "../features/update/UpdatePrompt";
 // 让发现页保持在关键路径上，把次要页面（尤其是播放器及其弹幕渲染器）
 // 推迟到路由真正需要时再加载。
 // 这能显著减少首屏房间网格绘制前需要解析的 JS 量。
-const CategoryPage = lazy(loadCategoryPage);
-const CategoryRoomsPage = lazy(loadCategoryRoomsPage);
+const CategoryBrowsePage = lazy(loadCategoryBrowsePage);
 const SearchPage = lazy(loadSearchPage);
 const FollowPage = lazy(loadFollowPage);
 const HistoryPage = lazy(loadHistoryPage);
@@ -49,6 +48,34 @@ const IptvPage = lazy(loadIptvPage);
 const IptvPlayerPage = lazy(loadIptvPlayerPage);
 const MultiRoomPage = lazy(loadMultiRoomPage);
 const RoomPage = lazy(loadRoomPage);
+
+/**
+ * 分区房间列表曾是独立路由，现已并入首页的分区选择态。
+ *
+ * 旧链接（含用户存下的书签与外部分享）重定向到等价的首页参数。分区 id 属于特定
+ * 平台而 URL 里没带平台，因此沿用当前设置的平台解释它 —— 与这些链接原先的行为
+ * 一致：过去打开 `/category/7/101` 同样是在当前平台上解析这对 id。
+ *
+ * 分类名不再进 URL（首页从分类树缓存解析），所以旧的 `?name=` 直接丢弃。
+ */
+function LegacyCategoryRedirect() {
+  const { parentId, categoryId } = useParams<{ parentId: string; categoryId: string }>();
+  const siteId = useSettingsStore((state) => state.siteId);
+  const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
+
+  if (!parentId || !categoryId) return <Navigate to="/" replace />;
+
+  return (
+    <Navigate
+      to={homeCategoryPath({
+        siteId: resolveEnabledSiteId(siteId, disabledSiteIds),
+        parentId,
+        categoryId,
+      })}
+      replace
+    />
+  );
+}
 
 /** 防止过期链接打开用户已选择隐藏的平台。 */
 function EnabledRoomRoute() {
@@ -86,8 +113,8 @@ const router = createBrowserRouter(
     <Route element={<AppRuntime />}>
       <Route element={<Shell />}>
         <Route index element={<HomePage />} />
-        <Route path="category" element={<CategoryPage />} />
-        <Route path="category/:parentId/:categoryId" element={<CategoryRoomsPage />} />
+        <Route path="category" element={<CategoryBrowsePage />} />
+        <Route path="category/:parentId/:categoryId" element={<LegacyCategoryRedirect />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="follow" element={<FollowPage />} />
         <Route path="history" element={<HistoryPage />} />

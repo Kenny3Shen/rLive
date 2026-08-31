@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { shouldSkipIdleRoutePreloading } from "../src/app/RouteModulePreloader";
 import {
   createCachedRouteLoader,
-  loadCategoryPage,
-  loadCategoryRoomsPage,
+  loadCategoryBrowsePage,
   loadFollowPage,
   loadHistoryPage,
   loadIptvPage,
@@ -49,10 +48,6 @@ describe("route module loading", () => {
   });
 
   test("maps every secondary route to its exact cached loader", () => {
-    expect(routeModuleLoaderForPath("/category")).toBe(loadCategoryPage);
-    expect(routeModuleLoaderForPath("/category/parent/child?site=huya")).toBe(
-      loadCategoryRoomsPage,
-    );
     expect(routeModuleLoaderForPath("/search?q=test")).toBe(loadSearchPage);
     expect(routeModuleLoaderForPath("/follow")).toBe(loadFollowPage);
     expect(routeModuleLoaderForPath("/history?platform=all")).toBe(loadHistoryPage);
@@ -69,6 +64,15 @@ describe("route module loading", () => {
     expect(routeModuleLoaderForPath("/room/bilibili/1")).toBe(loadRoomPage);
     expect(routeModuleLoaderForPath("/")).toBeNull();
     expect(routeModuleLoaderForPath("/unknown")).toBeNull();
+  });
+
+  test("resolves the desktop category page but leaves merged surfaces to the home route", () => {
+    // `/category` 是桌面端的分类墙，一条真实路由。`/category/:parent/:child` 只剩
+    // 一个重定向元素（随主 chunk 下发），而首页的分区态是查询参数、不换 pathname，
+    // 两者都没有专属的惰求模块。
+    expect(routeModuleLoaderForPath("/category")).toBe(loadCategoryBrowsePage);
+    expect(routeModuleLoaderForPath("/category/parent/child")).toBeNull();
+    expect(routeModuleLoaderForPath("/?cat=huya:100023:1")).toBeNull();
   });
 });
 
