@@ -219,6 +219,12 @@ fn merge_cookie_values(base: &str, updates: &str) -> String {
         .join("; ")
 }
 
+/// 分类浏览器为每个父分区合成的「全部X」入口保留了 id `0`。斗鱼的真实分区 id
+/// 都是正数字字符串，因此这个哨兵值绝不会被当作二级分区发出去。
+fn is_all_categories_entry(value: &str) -> bool {
+    value.trim() == "0"
+}
+
 fn has_more_page(
     page: u32,
     upstream_page_count: i64,
@@ -438,6 +444,23 @@ impl LiveSite for DouyuSite {
         page: u32,
     ) -> AppResult<RoomListPage> {
         let page = page.max(1);
+        // 分类浏览器给每个父分区合成一个 id 为 `0` 的「全部X」入口。斗鱼的目录接口
+        // 按层级分开寻址：`2_{cate2Id}` 是二级分区，一级聚合要走 `1_{cate1Id}`。
+        // 实测 `2_0` 返回 `rl: []`/`pgcnt: 0`，移动端接口也不接受一级聚合
+        // （`cate1`/`cate2=0` 一律回 `error: 1`），因此聚合请求直接走 Web 端一级地址。
+        if is_all_categories_entry(&category.id) {
+            let url = format!(
+                "https://www.douyu.com/gapi/rkc/directory/mixList/1_{}/{page}",
+                category.parent_id.trim()
+            );
+            let v = self.get_json(&url, "https://www.douyu.com/").await?;
+            let mut page_data = parse_mix_list(&v)?;
+            let pgcnt = json_i64(v.pointer("/data/pgcnt").unwrap_or(&Value::Null));
+            page_data.has_more =
+                has_more_page(page, pgcnt, page_data.items.len(), DIRECTORY_PAGE_SIZE);
+            return Ok(page_data);
+        }
+
         // 移动端 API 是第一方 App 来源：它返回明确的 `total`，只需 iPhone UA，
         // 且通常比桌面 Web 目录的限制更少。地区受限网络会以 `error: 1` 拒绝它，
         // 此时回退到 Web 端的 `mixList` 接口。
@@ -713,6 +736,16 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn all_categories_entry_is_recognised_by_the_shared_sentinel() {
+        assert!(is_all_categories_entry("0"));
+        assert!(is_all_categories_entry(" 0 "));
+        // 真实的斗鱼二级分区 id 绝不会撞上这个哨兵值。
+        assert!(!is_all_categories_entry("1"));
+        assert!(!is_all_categories_entry("201"));
+        assert!(!is_all_categories_entry(""));
+    }
 
     #[test]
     fn recommendation_pagination_uses_full_page_fallback_when_pgcnt_is_zero() {
