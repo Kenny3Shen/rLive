@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Car, Cast, Ellipsis, Timer, type LucideIcon } from "lucide-react";
+import { Car, Cast, ChevronLeft, Ellipsis, Timer, type LucideIcon } from "lucide-react";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -87,6 +87,10 @@ export type PlayerFullscreenHudProps = {
   onOverlayInteractionChange?: (open: boolean) => void;
   /** 应答存在于舞台之外的操作之前先退出全屏。 */
   onExitFullscreen?: () => void | Promise<void>;
+  /** 左上角返回箭头：退出当前全屏层回到窗口化布局；不提供则不渲染。 */
+  onBack?: () => void;
+  /** 返回箭头的无障碍标签，由调用方按当前全屏形态给出。 */
+  backLabel?: string;
 };
 
 /** 只有平台真的上报了数值时，热度才值得占一行。 */
@@ -115,9 +119,9 @@ export function showPlayerFullscreenHud({
 }
 
 /**
- * 全屏顶部 chrome，普通直播视频网站的画法：左侧房间标题与主播身份，
- * 右侧溢出菜单，覆盖一段向下渐隐入画面的遮罩。它是播放器舞台内底部控制条的
- * 兄弟节点，并共享其命令式可见性状态，
+ * 全屏顶部 chrome，普通直播视频网站的画法：最左侧返回箭头（可选）退出全屏，
+ * 其后是房间标题与主播身份，右侧溢出菜单，覆盖一段向下渐隐入画面的遮罩。
+ * 它是播放器舞台内底部控制条的兄弟节点，并共享其命令式可见性状态，
  * 因此两层一起随空闲计时器淡出。
  */
 export function PlayerFullscreenHud({
@@ -137,6 +141,8 @@ export function PlayerFullscreenHud({
   portalContainer,
   onOverlayInteractionChange,
   onExitFullscreen,
+  onBack,
+  backLabel,
 }: PlayerFullscreenHudProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [autoSendExpanded, setAutoSendExpanded] = useState(false);
@@ -290,6 +296,24 @@ export function PlayerFullscreenHud({
         compact ? "pt-[max(0.375rem,env(safe-area-inset-top))] pb-3" : "pt-2.5 pb-6",
       )}
     >
+      {onBack && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={backLabel ?? "退出全屏"}
+          className={cn(
+            PLAYER_CONTROL_BUTTON_CLASS,
+            PLAYER_CONTROL_ICON_CLASS,
+            PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+            "shrink-0",
+          )}
+          onClick={onBack}
+        >
+          <ChevronLeft data-icon="inline-start" aria-hidden />
+        </Button>
+      )}
+
       <RoomIdentityLine
         siteId={siteId}
         roomId={roomId}

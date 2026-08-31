@@ -36,6 +36,7 @@ import {
   showDanmakuComposerInPlayerControls,
   showRoomSidePanel,
   stageOwnsRoomTopBar,
+  nextFullscreenLayerToExit,
   shouldUseLargeDanmakuActionMenu,
   shouldRetainRoomSidePanel,
   shouldRunFloatingDanmaku,
@@ -457,6 +458,14 @@ describe("fullscreen top HUD", () => {
     expect(
       showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: true, hasActions: false }),
     ).toBe(true);
+  });
+
+  test("back arrow peels one fullscreen layer at a time, native first", () => {
+    // 与 Escape 的按键习惯一致：两种全屏叠加时先退原生层，网页全屏留给下一次点击。
+    expect(nextFullscreenLayerToExit(true, true)).toBe("fullscreen");
+    expect(nextFullscreenLayerToExit(true, false)).toBe("fullscreen");
+    expect(nextFullscreenLayerToExit(false, true)).toBe("webFullscreen");
+    expect(nextFullscreenLayerToExit(false, false)).toBeNull();
   });
 
   test("keeps an action-only HUD, so the overflow menu survives an unnamed room", () => {

@@ -366,6 +366,19 @@ export function stageOwnsRoomTopBar(fullscreen: boolean, webFullscreen: boolean)
 }
 
 /**
+ * HUD 返回箭头先退哪一层全屏。与 Escape 的按键习惯一致：原生全屏优先，
+ * 两种全屏叠加时一次点击只收一层，网页全屏留给下一次。
+ */
+export function nextFullscreenLayerToExit(
+  fullscreen: boolean,
+  webFullscreen: boolean,
+): "fullscreen" | "webFullscreen" | null {
+  if (fullscreen) return "fullscreen";
+  if (webFullscreen) return "webFullscreen";
+  return null;
+}
+
+/**
  * 窗口化时该播放器是否把画面堆叠在聊天上方。
  *
  * 刻意与全屏无关。`player.mode` 派生自 `fullscreenchange` 状态更新，
@@ -1135,6 +1148,19 @@ export function PlayerPane({
   const handleExitAnyFullscreen = useCallback(async () => {
     if (webFullscreen) onWebFullscreenChange?.(false);
     await player.exitFullscreen();
+  }, [onWebFullscreenChange, player, webFullscreen]);
+
+  /**
+   * HUD 返回箭头：按层退出全屏，与 Escape 的习惯一致 —— 原生全屏先退，
+   * 两种全屏叠加时网页全屏留给下一次点击，避免一次点击连退两层。
+   */
+  const handleHudBack = useCallback(() => {
+    const layer = nextFullscreenLayerToExit(player.mode === "fullscreen", webFullscreen);
+    if (layer === "fullscreen") {
+      void player.exitFullscreen();
+      return;
+    }
+    if (layer === "webFullscreen") onWebFullscreenChange?.(false);
   }, [onWebFullscreenChange, player, webFullscreen]);
 
   // 指针或键盘焦点位于其中时，两层 chrome 保持自身可见，
@@ -2022,6 +2048,8 @@ export function PlayerPane({
               onBlurCapture={handleChromeBlurCapture}
             >
               <PlayerFullscreenHud
+                onBack={handleHudBack}
+                backLabel={player.mode === "fullscreen" ? "退出全屏" : "退出网页全屏"}
                 siteId={siteId}
                 roomId={roomId}
                 roomTitle={roomTitle}
