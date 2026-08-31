@@ -781,6 +781,7 @@ export function RecordingPlayer({
           onBlurCapture={scheduleControlsHide}
         >
           <PlayerFullscreenHud
+            onBack={() => void fullscreen.exit()}
             siteId={(item.site_id as SiteId | null) ?? undefined}
             roomId={item.room_id ?? undefined}
             roomTitle={item.title}

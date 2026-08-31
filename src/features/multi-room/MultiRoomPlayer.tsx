@@ -11,7 +11,17 @@ import {
   type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CircleAlert, Maximize2, Pause, Play, RefreshCw, Volume2, VolumeX, X } from "lucide-react";
+import {
+  ChevronLeft,
+  CircleAlert,
+  Maximize2,
+  Pause,
+  Play,
+  RefreshCw,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -836,6 +846,15 @@ export function MultiRoomPlayer({
         onBlurCapture={main ? handleChromeBlurCapture : undefined}
       >
         <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
+          {fullscreen && (
+            <OverlayIconButton
+              label="退出全屏"
+              portalContainer={player.stageRef}
+              onClick={() => void exitPlayerFullscreen()}
+            >
+              <ChevronLeft aria-hidden />
+            </OverlayIconButton>
+          )}
           {dragHandle}
           {main && <Badge variant="secondary">主画面</Badge>}
           <RoomIdentityLine

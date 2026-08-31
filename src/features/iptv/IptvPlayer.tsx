@@ -6,12 +6,18 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { AlertCircle, Radio, Tv } from "lucide-react";
+import { AlertCircle, ChevronLeft, Radio, Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
-import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import {
+  PLAYER_CONTROL_BUTTON_CLASS,
+  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  PlayerControls,
+} from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import type { PlayUrl } from "@/shared/types/live";
@@ -192,7 +198,8 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     profile: IPTV_MEDIA_LIFECYCLE_PROFILE,
   });
   const fullscreen = player.mode === "fullscreen";
-  const { exitPictureInPicture, toggleFullscreen, toggleMute, togglePause } = player;
+  const { exitFullscreen, exitPictureInPicture, toggleFullscreen, toggleMute, togglePause } =
+    player;
   const androidPlayerControls = useAndroidPlayerControls(
     androidClient,
     channelId ? `iptv:${channelId}` : "iptv:none",
@@ -432,6 +439,25 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             aria-hidden={!controlsVisibleRef.current}
             className="pointer-events-none absolute top-3 left-3 z-20 flex items-center gap-2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:opacity-0"
           >
+            {fullscreen && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="退出全屏"
+                className={cn(
+                  PLAYER_CONTROL_BUTTON_CLASS,
+                  PLAYER_CONTROL_ICON_CLASS,
+                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                  "pointer-events-auto",
+                )}
+                onPointerEnter={holdControlsVisible}
+                onPointerLeave={scheduleControlsHide}
+                onClick={() => void exitFullscreen()}
+              >
+                <ChevronLeft data-icon="inline-start" aria-hidden />
+              </Button>
+            )}
             <Badge
               variant="destructive"
               className="gap-1.5 bg-destructive text-destructive-foreground"
