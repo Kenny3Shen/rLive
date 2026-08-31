@@ -1,14 +1,5 @@
 import type { ComponentType } from "react";
-import {
-  Heart,
-  History,
-  Home,
-  LayoutGrid,
-  PanelsTopLeft,
-  Settings,
-  Tv,
-  Videotape,
-} from "lucide-react";
+import { Heart, History, Home, PanelsTopLeft, Settings, Tv, Videotape } from "lucide-react";
 
 export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",
@@ -31,9 +22,9 @@ export type SidebarNavItem = {
 };
 
 export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
+  // 分类浏览已合并进首页的 sticky 分类条，不再占一个导航目的地。
   { to: "/", label: "首页", icon: Home, end: true },
   { to: "/follow", label: "关注", icon: Heart },
-  { to: "/category", label: "分类", icon: LayoutGrid },
   { to: "/iptv", label: "IPTV", icon: Tv },
   {
     to: "/multi-room",
@@ -55,15 +46,12 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
 
 /** 按客户端平台解析可见的侧栏导航入口。 */
 export function sidebarNavItemsFor(mobileClient: boolean): SidebarNavItem[] {
-  return mobileClient
-    ? SIDEBAR_NAV_ITEMS.filter((item) => !item.desktopOnly)
-    : SIDEBAR_NAV_ITEMS;
+  return mobileClient ? SIDEBAR_NAV_ITEMS.filter((item) => !item.desktopOnly) : SIDEBAR_NAV_ITEMS;
 }
 
 const SIDEBAR_DESTINATIONS = [
   "/",
   "/follow",
-  "/category",
   "/iptv",
   "/multi-room",
   "/recordings",

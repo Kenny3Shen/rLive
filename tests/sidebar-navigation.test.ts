@@ -26,7 +26,7 @@ describe("sidebar navigation transitions", () => {
   test("follows the sidebar's vertical destination order", () => {
     expect(sidebarNavigationDirection("/", "/history")).toBe(1);
     expect(sidebarNavigationDirection("/settings", "/follow")).toBe(-1);
-    expect(sidebarNavigationDirection("/category/game", "/iptv")).toBe(1);
+    expect(sidebarNavigationDirection("/follow", "/iptv")).toBe(1);
     expect(sidebarNavigationDirection("/iptv", "/history")).toBe(1);
     expect(sidebarNavigationDirection("/multi-room", "/recordings")).toBe(1);
     expect(sidebarNavigationDirection("/recordings", "/history")).toBe(1);
@@ -52,7 +52,11 @@ describe("sidebar nav items per client platform", () => {
     // 手机与平板横屏的视口宽度普遍超过 md 断点，
     // 视口门控（max-md:hidden）无法再阻止桌面专属入口出现在移动端。
     const mobileDestinations = sidebarNavItemsFor(true).map((item) => item.to);
-    expect(mobileDestinations).toEqual(["/", "/follow", "/category", "/iptv", "/history", "/settings"]);
+    expect(mobileDestinations).toEqual(["/", "/follow", "/iptv", "/history", "/settings"]);
+  });
+
+  test("drops the category entry now that browsing lives on the home page", () => {
+    expect(SIDEBAR_NAV_ITEMS.map((item) => item.to)).not.toContain("/category");
   });
 
   test("serves desktop clients the full destination list", () => {

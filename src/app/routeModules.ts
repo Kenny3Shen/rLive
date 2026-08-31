@@ -16,15 +16,12 @@ export function createCachedRouteLoader(load: RouteModuleLoader): RouteModuleLoa
   };
 }
 
-export const loadCategoryPage = createCachedRouteLoader(() =>
-  import("../features/category/CategoryPage").then(({ CategoryPage }) => ({
-    default: CategoryPage,
-  })),
-);
-
-export const loadCategoryRoomsPage = createCachedRouteLoader(() =>
-  import("../features/category/CategoryRoomsPage").then(({ CategoryRoomsPage }) => ({
-    default: CategoryRoomsPage,
+// 移动端的分类抽屉不在这里出现：它随首页静态导入（触摸端的「全部分类」是同页
+// 展开而不是路由跳转）。桌面端那条 `/category` 才是真正的路由目的地，见下方
+// `loadCategoryBrowsePage`。
+export const loadCategoryBrowsePage = createCachedRouteLoader(() =>
+  import("../features/category/CategoryBrowsePage").then(({ CategoryBrowsePage }) => ({
+    default: CategoryBrowsePage,
   })),
 );
 
@@ -82,10 +79,9 @@ export const loadMultiRoomPage = createCachedRouteLoader(() =>
 
 /** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
 export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
-  loadCategoryPage,
-  loadCategoryRoomsPage,
   loadIptvPage,
   loadSearchPage,
+  loadCategoryBrowsePage,
   loadFollowPage,
   loadHistoryPage,
   loadRecordingsPage,
@@ -107,8 +103,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   const pathname = pathnameFromTarget(target);
   if (!pathname || pathname === "/") return null;
 
-  if (pathname === "/category") return loadCategoryPage;
-  if (pathname.startsWith("/category/")) return loadCategoryRoomsPage;
+  if (pathname === "/category") return loadCategoryBrowsePage;
   if (pathname === "/search") return loadSearchPage;
   if (pathname === "/follow") return loadFollowPage;
   if (pathname === "/history") return loadHistoryPage;

@@ -23,21 +23,6 @@ export function searchPath(keyword: string, scope: SearchScope = "all"): string 
   return `/search?${params.toString()}`;
 }
 
-/**
- * React Router 把应用内位置记录在浏览器历史状态里。只有该状态证明存在更早的
- * 应用内页面时才使用浏览器 Back；
- * 否则直链安全地返回发现页。
- */
-export function canSearchNavigateBack(historyState: unknown): boolean {
-  return (
-    !!historyState &&
-    typeof historyState === "object" &&
-    "idx" in historyState &&
-    typeof historyState.idx === "number" &&
-    historyState.idx > 0
-  );
-}
-
 export function searchScopeLabel(scope: SearchScope): string {
   return SEARCH_SCOPES.find((item) => item.value === scope)?.label ?? "全部";
 }
