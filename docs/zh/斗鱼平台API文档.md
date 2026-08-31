@@ -20,6 +20,17 @@
 
 实时能力由 `danmaku_connect`（接收房间事件）和 `douyu_danmaku_send_status` / `douyu_danmaku_send`（当前账号发送一个文本片段）提供；手动发送与会话级自动发送复用后两者。接收链路与发送链路是不同网关职责，两者都遵守应用代理设置。
 
+## 分区寻址
+
+斗鱼的目录接口按层级分开寻址，两级不能混用：
+
+| 目标 | 地址 |
+| --- | --- |
+| 二级分区（`cate2Id`） | `m.douyu.com/hgapi/live/cate/newRecList?cate2={id}`，被拒时回落 `www.douyu.com/gapi/rkc/directory/mixList/2_{id}/{page}` |
+| 一级聚合（`cate1Id`） | `www.douyu.com/gapi/rkc/directory/mixList/1_{cate1Id}/{page}` |
+
+前端为每个父分区合成的「全部X」入口形如 `{ id: "0", parent_id: cate1Id }`，这个哨兵值必须走一级地址：`mixList/2_0` 返回 `rl: []` 与 `pgcnt: 0`，移动端接口也不接受一级聚合（传 `cate1` 或 `cate2=0` 一律回 `error: 1`），因此聚合请求直接用 Web 端 `1_{cate1Id}`、不尝试移动端。二级分区维持原有的移动端优先、Web 回落顺序。
+
 ## 上游数据与播放
 
 播放签名由 `sites/douyu/sign.rs` 以纯 Rust 计算，不依赖 JS 运行时：
