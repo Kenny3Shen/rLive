@@ -8,8 +8,28 @@
 # 并把许可审计范围限定在 FFmpeg 自身。
 #
 # 只启用 `recording_ffmpeg.rs` 实际用到的能力：它解复用 FLV/HLS/MPEG-TS
-# 并重新封装为 FLV 或 MPEG-TS，从不解码或编码。`configure` 会自行拉入
-# 这些封装/解封装器所需的解析器和比特流过滤器，故此处不再列出。
+# 并重新封装为 FLV 或 MPEG-TS，自身从不解码或编码。比特流过滤器确实由
+# `configure` 的 `*_muxer_select` 自动拉入，但解析器和解码器都不是：除
+# `ac3_parser` 之外，没有任何启用的封装/解封装器会 select `h264_parser`。
+#
+# 解析器和音频解码器缺一个，录制就会在写头时以 `EINVAL` 失败，
+# 用户看到的就是「写入容器头失败: Invalid argument」。两者补的是不同的参数：
+#
+# - 解析器补画面尺寸。裸流容器（FLV/MPEG-TS）不在容器层声明尺寸，
+#   `avformat_find_stream_info` 只能靠解析器从 H.264 SPS 读出 `width`/`height`。
+#   缺失时 `codecpar` 保持 0，而 flv 封装器没有 `AVFMT_NODIMENSIONS`，
+#   `avformat_write_header` 直接拒绝（libavformat/mux.c 的 init_muxer）。
+# - 音频解码器补采样率。`aac_parser` 刻意不设 `sample_rate`：
+#   为兼容 HE-AAC，ADTS 头里的采样率和声道数都不可信
+#   （libavcodec/aac_ac3_parser.c 中的注释），所以该值只能由解码器给出。
+#   而 init_muxer 对音频轨要求 `sample_rate > 0`，且没有类似
+#   `AVFMT_NODIMENSIONS` 的豁免 —— flv 和 mpegts 都会以 `EINVAL` 拒绝。
+#   同时 `avformat_find_stream_info` 的 has_codec_parameters 也要求采样率，
+#   缺失会让它一直探测到上限，HLS 录制表现为长时间卡在开流阶段。
+#
+# 解码器只启用音频：视频尺寸由解析器解决，无需解码视频。刻意不含 opus —— 它是
+# 三个平台里唯一 `deps="swresample"` 的音频解码器，而 Windows 构建关闭了
+# swresample，启用只会被 configure 静默丢掉，反而让三个平台的组件集出现偏差。
 #
 # 构建结果为 LGPL：刻意不传 `--enable-gpl`。TLS 后端有意选择 OpenSSL
 # 而非 GnuTLS —— 原因见下面的 configure 调用。
@@ -170,6 +190,8 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} -> $prefix"
     --disable-everything \
     --enable-demuxer=flv,live_flv,hls,mpegts,mov,matroska \
     --enable-muxer=flv,mpegts \
+    --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio,av1,vp9,vvc,opus,flac \
+    --enable-decoder=aac,aac_latm,ac3,eac3,mp3,mp2,flac,vorbis \
     --enable-protocol=file,http,https,tls,tcp,crypto,httpproxy \
     --pkg-config-flags=--static
 
@@ -184,7 +206,9 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} -> $prefix"
     HTTPS_PROTOCOL TLS_PROTOCOL HTTP_PROTOCOL FILE_PROTOCOL CRYPTO_PROTOCOL \
     HTTPPROXY_PROTOCOL \
     FLV_DEMUXER LIVE_FLV_DEMUXER HLS_DEMUXER MPEGTS_DEMUXER MOV_DEMUXER \
-    FLV_MUXER MPEGTS_MUXER; do
+    FLV_MUXER MPEGTS_MUXER \
+    H264_PARSER HEVC_PARSER AAC_PARSER AAC_LATM_PARSER AC3_PARSER \
+    AAC_DECODER AAC_LATM_DECODER AC3_DECODER EAC3_DECODER MP3_DECODER; do
     if ! grep -qx "#define CONFIG_${component} 1" config_components.h; then
       echo "FFmpeg configure 未启用 CONFIG_${component}，录制功能会缺失" >&2
       grep -E "^#define CONFIG_${component} " config_components.h >&2 || true

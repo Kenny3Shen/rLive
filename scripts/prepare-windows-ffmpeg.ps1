@@ -5,12 +5,18 @@
 # Windows 过去下载 Gyan 的 `full_build-shared` 压缩包。那个构建开启了 103 个
 # `--enable-*` 选项，包括 `--enable-gpl` 和 `--enable-version3`，使四个运行时
 # DLL 达到 116 MB —— 超过安装后应用体积的 88%，其中仅 avcodec 就超过 93 MB ——
-# 并把产品置于 GPLv3 合规审计之下。rLive 从不解码或编码：录制只解复用
+# 并把产品置于 GPLv3 合规审计之下。rLive 自身从不解码或编码：录制只解复用
 # FLV/HLS/MPEG-TS 并重新封装为 FLV 或 MPEG-TS
-# （`src-tauri/src/recording_ffmpeg.rs`），那一整片能力都不可达。
+# （`src-tauri/src/recording_ffmpeg.rs`），绝大部分编解码能力都不可达。
 # 改用与 `prepare-macos-ffmpeg.sh`、`prepare-linux-ffmpeg.sh` 相同的组件白名单
-# 构建后，DLL 缩小到约 2.4 MB，三个桌面平台行为一致，
+# 构建后，DLL 大幅缩小，三个桌面平台行为一致，
 # 且构建结果只是普通的 `LGPL version 2.1 or later`。
+#
+# 白名单仍必须包含解析器和音频解码器：它们不参与转码，只是
+# `avformat_find_stream_info` 探出封装器必需参数的唯一途径。缺少解析器时
+# 视频轨没有画面尺寸，缺少音频解码器时音频轨没有采样率，
+# `avformat_write_header` 会以 `EINVAL` 拒绝，用户看到
+# 「写入容器头失败: Invalid argument」。详细机理见 prepare-linux-ffmpeg.sh 顶部注释。
 
 param(
     [string]$ProjectRoot = (Get-Location).Path,
@@ -38,7 +44,9 @@ $FfmpegArchiveSha256 = "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77c
 $RequiredComponents = @(
     "HTTPS_PROTOCOL", "TLS_PROTOCOL", "HTTP_PROTOCOL", "FILE_PROTOCOL",
     "CRYPTO_PROTOCOL", "HTTPPROXY_PROTOCOL", "FLV_DEMUXER", "LIVE_FLV_DEMUXER",
-    "HLS_DEMUXER", "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER"
+    "HLS_DEMUXER", "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER",
+    "H264_PARSER", "HEVC_PARSER", "AAC_PARSER", "AAC_LATM_PARSER", "AC3_PARSER",
+    "AAC_DECODER", "AAC_LATM_DECODER", "AC3_DECODER", "EAC3_DECODER", "MP3_DECODER"
 )
 
 # `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
@@ -48,9 +56,11 @@ $RequiredComponents = @(
 # 不会给审计引入任何第三方代码。
 #
 # 禁用 swresample 是因为没有任何路径会用到它：Gyan 完整构建的 avcodec
-# 为音频重采样导入了它，但在关闭编解码器后，导入关系只剩
+# 为音频重采样导入了它，但录制只重封装、不重采样，导入关系只剩
 # avformat -> avcodec -> avutil，而 `ffmpeg-sys-next` 只链接
-# avcodec 和 avformat。
+# avcodec 和 avformat。下面启用的音频解码器都不依赖 swresample；
+# `opus_decoder` 是唯一 `deps="swresample"` 的一项，因此三个平台
+# 都不启用它，避免 configure 静默丢弃后只在运行时暴露。
 #
 # zlib 被刻意关闭，这与 macOS 和 Linux 不同 —— 那两个平台系统已自带。
 # 启用它意味着要再固定并审计一个依赖，却只服务两条实时重封装不可能走到的
@@ -67,6 +77,8 @@ $ConfigureOptions = @(
     "--disable-everything",
     "--enable-demuxer=flv,live_flv,hls,mpegts,mov,matroska",
     "--enable-muxer=flv,mpegts",
+    "--enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio,av1,vp9,vvc,opus,flac",
+    "--enable-decoder=aac,aac_latm,ac3,eac3,mp3,mp2,flac,vorbis",
     "--enable-protocol=file,http,https,tls,tcp,crypto,httpproxy"
 )
 
