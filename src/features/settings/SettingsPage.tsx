@@ -1791,11 +1791,7 @@ function AboutSettings() {
           <Field orientation="horizontal">
             <div className="min-w-0 flex-1">
               <FieldTitle id="app-version">当前版本</FieldTitle>
-              {updateStatus === "available" && release ? (
-                <FieldDescription className="text-primary">
-                  发现新版本 v{release.version}，建议及时更新
-                </FieldDescription>
-              ) : updateStatus === "error" ? (
+              {updateStatus === "error" ? (
                 <FieldDescription>上次检查失败，可再次手动检查</FieldDescription>
               ) : updateStatus === "up-to-date" ? (
                 <FieldDescription>已是最新版本</FieldDescription>
@@ -1808,6 +1804,18 @@ function AboutSettings() {
               >
                 v{appVersion}
               </Badge>
+              {updateStatus === "available" && release ? (
+                <Button
+                  size="icon-sm"
+                  onClick={showUpdateDialog}
+                  title={`发现新版本 v${release.version}`}
+                  aria-label={`发现新版本 v${release.version}，查看更新内容`}
+                >
+                  <span aria-hidden className="text-base leading-none">
+                    ⬆️
+                  </span>
+                </Button>
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"
