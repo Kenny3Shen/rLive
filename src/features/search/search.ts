@@ -74,8 +74,21 @@ function rank(room: LiveRoomItem, keyword: string, scope: SearchScope): number {
 }
 
 /**
+ * 未开播的房间排在最后。
+ *
+ * 只有明确为 `false` 才降权：缺省表示平台没告知开播状态（分类/推荐列表，
+ * 以及抖音这类搜索接口只返回在播房间的平台），把它当成未开播会凭空
+ * 把结果压到末尾。
+ */
+function offlineRank(room: LiveRoomItem): number {
+  return room.live_status === false ? 1 : 0;
+}
+
+/**
  * 站点返回宽泛的搜索响应。这里让用户选择的字段显式生效、去除重复页，
- * 并把精确匹配提前。
+ * 把在播房间提到未开播之前，并在同一档内把精确匹配提前。
+ *
+ * 排序作用于已加载的全部页，因此翻页取回的在播房间会插到既有未开播结果之前。
  */
 export function prepareSearchResults(
   rooms: LiveRoomItem[],
@@ -90,7 +103,11 @@ export function prepareSearchResults(
     return true;
   });
 
-  return filtered.sort((left, right) => rank(left, keyword, scope) - rank(right, keyword, scope));
+  return filtered.sort((left, right) => {
+    const liveDifference = offlineRank(left) - offlineRank(right);
+    if (liveDifference !== 0) return liveDifference;
+    return rank(left, keyword, scope) - rank(right, keyword, scope);
+  });
 }
 
 export function roomFromDetail(detail: {
@@ -100,6 +117,7 @@ export function roomFromDetail(detail: {
   cover: string;
   user_name: string;
   online: number;
+  status: boolean;
 }): LiveRoomItem {
   return {
     site_id: detail.site_id,
@@ -108,5 +126,7 @@ export function roomFromDetail(detail: {
     cover: detail.cover,
     user_name: detail.user_name,
     online: detail.online,
+    // 房间详情始终带真实开播状态，直接透传，让房间号直查也能显示未开播角标。
+    live_status: detail.status,
   };
 }

@@ -63,4 +63,22 @@ describe("search routes and result fields", () => {
       prepareSearchResults([...rooms, rooms[0]], "7788", "all").map((room) => room.room_id),
     ).toEqual(["7788", "1001", "1002"]);
   });
+
+  test("puts offline rooms last without demoting rooms of unknown status", () => {
+    const mixed: LiveRoomItem[] = [
+      { ...rooms[1], room_id: "2001", user_name: "游戏甲", live_status: false },
+      // 精确命中但未开播，仍然排在任何在播房间之后。
+      { ...rooms[1], room_id: "2002", user_name: "游戏", live_status: false },
+      { ...rooms[1], room_id: "2003", user_name: "游戏乙", live_status: true },
+      // 缺省表示平台没告知开播状态，不能当成未开播压到末尾。
+      { ...rooms[1], room_id: "2004", user_name: "游戏丙" },
+    ];
+
+    expect(prepareSearchResults(mixed, "游戏", "user").map((room) => room.room_id)).toEqual([
+      "2003",
+      "2004",
+      "2002",
+      "2001",
+    ]);
+  });
 });

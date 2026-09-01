@@ -9,7 +9,22 @@
           "title": "搜索<em class=\"keyword\">结果</em>房间",
           "cover": "//i0.hdslb.com/bfs/live/s1.jpg",
           "uname": "搜索主播",
-          "online": 88
+          "online": 88,
+          "live_status": 1
+        }
+      ],
+      "live_user": [
+        {
+          "roomid": 555,
+          "uname": "搜索<em class=\"keyword\">主播</em>",
+          "uface": "//i0.hdslb.com/bfs/face/dup.jpg",
+          "live_status": 1
+        },
+        {
+          "roomid": 777,
+          "uname": "未开播<em class=\"keyword\">主播</em>",
+          "uface": "//i0.hdslb.com/bfs/face/off.jpg",
+          "live_status": 0
         }
       ]
     }

@@ -1,6 +1,6 @@
 //! 虎牙直播站点客户端（移动页 + 传统 anticode，无 TARS 依赖）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use md5::{Digest, Md5};
@@ -17,6 +17,9 @@ use crate::sites::traits::LiveSite;
 
 const UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/109.0.0.0";
 const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+/// 搜索每页取多少条。上游按 `floor(start / rows)` 归桶，改这个值必须同步
+/// 用 `start = rows * (page - 1)` 计算偏移，否则会重复返回同一页。
+const SEARCH_ROWS: usize = 40;
 
 pub struct HuyaSite {
     client: Client,
@@ -560,6 +563,108 @@ fn category_game_id(category: &LiveSubCategory) -> &str {
     }
 }
 
+/// 取搜索响应里某一路索引的 `docs` 数组。
+fn search_docs(v: &Value, index: &str) -> Vec<Value> {
+    v.pointer(&format!("/response/{index}/docs"))
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// 取搜索结果封面。主播索引没有直播截图，退回主播头像；
+/// 在播索引偶尔也缺截图，同样退回头像，避免卡片空一块。
+fn search_cover(item: &Value) -> String {
+    for key in [
+        "game_screenshot",
+        "game_imgUrl",
+        "game_avatarUrl180",
+        "game_avatarUrl52",
+    ] {
+        let value = json_str(item.get(key).unwrap_or(&Value::Null));
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    String::new()
+}
+
+/// 第 `page` 页对应的上游偏移。上游按 `floor(start / rows)` 归桶，
+/// 因此偏移必须是 `SEARCH_ROWS` 的整数倍，否则会重复返回同一页。
+fn search_start(page: u32) -> usize {
+    SEARCH_ROWS * (page.max(1) as usize - 1)
+}
+
+/// 把一次搜索响应解析成一页结果。
+///
+/// 响应是多路索引：`3` 只含在播房间，带真实观看人数与直播截图；
+/// `1` 是主播索引，覆盖未开播主播并用 `gameLiveOn` 标出开播状态。
+fn parse_search_page(v: &Value, page: u32) -> RoomListPage {
+    let live_docs = search_docs(v, "3");
+    let anchor_docs = search_docs(v, "1");
+
+    let mut items = Vec::with_capacity(live_docs.len() + anchor_docs.len());
+    let mut seen = HashSet::new();
+    // 在播索引优先：它的封面和人数比主播索引完整。它不响应 `start`，
+    // 只在第一页取，后续页的在播房间由主播索引补上。
+    if page <= 1 {
+        for item in &live_docs {
+            let room_id = json_str(item.get("room_id").unwrap_or(&Value::Null));
+            if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+                continue;
+            }
+            items.push(LiveRoomItem {
+                site_id: SiteId::Huya,
+                room_id,
+                title: json_str(item.get("game_introduction").unwrap_or(&Value::Null)),
+                cover: search_cover(item),
+                user_name: json_str(item.get("game_nick").unwrap_or(&Value::Null))
+                    .trim()
+                    .to_string(),
+                online: json_i64(item.get("game_total_count").unwrap_or(&Value::Null)),
+                live_status: Some(true),
+            });
+        }
+    }
+    for item in &anchor_docs {
+        let room_id = json_str(item.get("room_id").unwrap_or(&Value::Null));
+        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+            continue;
+        }
+        let live = item
+            .get("gameLiveOn")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        // 主播索引没有观看人数字段（`game_activityCount` 是累计活跃度，
+        // 与在播索引的当前人数不同量纲），留 0 表示未知，不硬凑一个数。
+        items.push(LiveRoomItem {
+            site_id: SiteId::Huya,
+            room_id,
+            // 未开播主播的 `live_intro` 是上一场或预告的标题（实测「解说一下今天的比赛！」），
+            // 拿它当直播标题会让卡片看起来还在播，因此留空由展示层退回主播名，
+            // 与另外三个平台的未开播条目一致。
+            title: if live {
+                json_str(item.get("live_intro").unwrap_or(&Value::Null))
+            } else {
+                String::new()
+            },
+            cover: search_cover(item),
+            user_name: json_str(item.get("game_nick").unwrap_or(&Value::Null))
+                .trim()
+                .to_string(),
+            online: 0,
+            live_status: Some(live),
+        });
+    }
+
+    // 翻页只看主播索引：它是唯一响应 `start` 的索引。
+    let found = json_i64(v.pointer("/response/1/numFound").unwrap_or(&Value::Null));
+    let consumed = (SEARCH_ROWS * page.max(1) as usize) as i64;
+    RoomListPage {
+        has_more: anchor_docs.len() >= SEARCH_ROWS && consumed < found,
+        items,
+    }
+}
+
 fn parse_huya_room_list(v: &Value) -> AppResult<RoomListPage> {
     let data = v.get("data").cloned().unwrap_or(Value::Null);
     let mut items = Vec::new();
@@ -580,6 +685,7 @@ fn parse_huya_room_list(v: &Value) -> AppResult<RoomListPage> {
                 cover,
                 user_name: json_str(item.get("nick").unwrap_or(&Value::Null)),
                 online: json_i64(item.get("totalCount").unwrap_or(&Value::Null)),
+                live_status: None,
             });
         }
     }
@@ -656,36 +762,24 @@ impl LiveSite for HuyaSite {
 
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        let url = format!(
-            "https://search.cdn.huya.com/?m=Search&do=getSearchContent&q={}&uid=0&v=1&typ=-5&startPage={page}&rows=20",
-            urlencoding_encode(keyword)
-        );
-        let v = self.get_json(&url).await?;
-        let mut items = Vec::new();
-        let docs = v
-            .pointer("/response/3/docs")
-            .or_else(|| v.pointer("/response/1/docs"))
-            .and_then(|x| x.as_array())
-            .cloned()
-            .unwrap_or_default();
-        for item in docs {
-            let room_id = json_str(item.get("room_id").unwrap_or(&Value::Null));
-            if room_id.is_empty() {
-                continue;
-            }
-            items.push(LiveRoomItem {
-                site_id: SiteId::Huya,
-                room_id,
-                title: json_str(item.get("game_introduction").unwrap_or(&Value::Null)),
-                cover: json_str(item.get("game_screenshot").unwrap_or(&Value::Null)),
-                user_name: json_str(item.get("game_nick").unwrap_or(&Value::Null)),
-                online: json_i64(item.get("game_total_count").unwrap_or(&Value::Null)),
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Ok(RoomListPage {
+                has_more: false,
+                items: Vec::new(),
             });
         }
-        Ok(RoomListPage {
-            has_more: items.len() >= 20,
-            items,
-        })
+        // `startPage` 是空转参数（任何取值都返回第一页），真正生效的偏移是
+        // `start`，并且上游按 `floor(start / rows)` 归桶，所以 `start` 必须是
+        // `rows` 的整数倍。实测 `rows=SEARCH_ROWS` 配 `start = rows * (page-1)`
+        // 连续七页零重复。
+        let url = format!(
+            "https://search.cdn.huya.com/?m=Search&do=getSearchContent&q={}&uid=0&v=1&typ=-5&start={}&rows={SEARCH_ROWS}",
+            urlencoding_encode(keyword),
+            search_start(page)
+        );
+        let v = self.get_json(&url).await?;
+        Ok(parse_search_page(&v, page))
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
@@ -965,6 +1059,129 @@ impl LiveSite for HuyaSite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 真实演练搜索分页：`startPage` 曾经空转，所有页都返回第一页。
+    /// 只有真实请求能证明 `start = rows * (page - 1)` 的偏移生效，
+    /// 并且未开播主播确实出现在结果里。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_search_pagination_and_offline_anchors_smoke() {
+        let site = HuyaSite::default();
+        let first = site.search_rooms("英雄联盟", 1).await.expect("page 1");
+        assert!(!first.items.is_empty(), "search page 1 returned no rooms");
+        assert!(first.has_more, "search page 1 should offer another page");
+        let offline = first
+            .items
+            .iter()
+            .find(|item| item.live_status == Some(false))
+            .expect("search page 1 returned no offline anchors");
+        // 未开播条目的 `live_intro` 是旧标题，必须已经被丢掉。
+        assert!(
+            offline.title.is_empty(),
+            "offline anchors must not carry a stale stream title"
+        );
+        assert!(
+            first
+                .items
+                .iter()
+                .any(|item| item.live_status == Some(true)),
+            "search page 1 returned no live rooms"
+        );
+
+        let second = site.search_rooms("英雄联盟", 2).await.expect("page 2");
+        assert!(!second.items.is_empty(), "search page 2 returned no rooms");
+        let first_ids: Vec<_> = first.items.iter().map(|item| &item.room_id).collect();
+        assert!(
+            second
+                .items
+                .iter()
+                .any(|item| !first_ids.contains(&&item.room_id)),
+            "search page 2 repeated page 1 — the start offset is not taking effect"
+        );
+    }
+
+    #[test]
+    fn search_start_snaps_to_row_buckets() {
+        // 上游按 `floor(start / rows)` 归桶，偏移必须是 SEARCH_ROWS 的整数倍。
+        assert_eq!(search_start(1), 0);
+        assert_eq!(search_start(2), SEARCH_ROWS);
+        assert_eq!(search_start(7), SEARCH_ROWS * 6);
+        // page 0 不是合法页码，按第一页处理而不是算出负偏移。
+        assert_eq!(search_start(0), 0);
+    }
+
+    fn search_response(anchor_count: usize, num_found: i64) -> Value {
+        // 未开播主播的 `live_intro` 在真实响应里也是有内容的（上一场或预告的标题），
+        // 因此夹具不能用空串糊过去。
+        let anchors: Vec<Value> = (0..anchor_count)
+            .map(|i| {
+                serde_json::json!({
+                    "room_id": (2000 + i).to_string(),
+                    "game_nick": format!("主播{i}"),
+                    "live_intro": format!("上一场标题{i}"),
+                    "game_avatarUrl180": "https://img.example/a.jpg",
+                    "gameLiveOn": i % 2 == 1
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "response": {
+                "1": {"numFound": num_found, "docs": anchors},
+                "3": {"numFound": 1, "docs": [{
+                    "room_id": "1001",
+                    "game_nick": " 在播主播 ",
+                    "game_introduction": "今天打排位",
+                    "game_screenshot": "https://img.example/live.jpg",
+                    "game_total_count": 12345,
+                    "gameLiveOn": true
+                }]}
+            }
+        })
+    }
+
+    #[test]
+    fn search_page_one_merges_live_index_before_anchors() {
+        let page = parse_search_page(&search_response(2, 100), 1);
+        let ids: Vec<&str> = page.items.iter().map(|x| x.room_id.as_str()).collect();
+        assert_eq!(ids, ["1001", "2000", "2001"]);
+
+        let live = &page.items[0];
+        assert_eq!(live.live_status, Some(true));
+        assert_eq!(live.title, "今天打排位");
+        assert_eq!(live.cover, "https://img.example/live.jpg");
+        assert_eq!(live.user_name, "在播主播");
+        assert_eq!(live.online, 12345);
+
+        // 主播索引没有当前人数字段，留 0 表示未知。
+        let offline = &page.items[1];
+        assert_eq!(offline.live_status, Some(false));
+        assert_eq!(offline.online, 0);
+        assert_eq!(offline.cover, "https://img.example/a.jpg");
+        // 未开播主播的 `live_intro` 是旧标题，不能当成正在播的直播标题。
+        assert_eq!(offline.title, "");
+
+        // 主播索引里正在播的条目仍然用它的直播标题。
+        assert_eq!(page.items[2].live_status, Some(true));
+        assert_eq!(page.items[2].title, "上一场标题1");
+    }
+
+    #[test]
+    fn search_skips_the_live_index_after_the_first_page() {
+        // 在播索引不响应 `start`，第二页再读会把第一页的房间重复带出来。
+        let page = parse_search_page(&search_response(2, 100), 2);
+        let ids: Vec<&str> = page.items.iter().map(|x| x.room_id.as_str()).collect();
+        assert_eq!(ids, ["2000", "2001"]);
+    }
+
+    #[test]
+    fn search_has_more_tracks_the_anchor_index_only() {
+        // 满页且总数还有剩余才继续翻。
+        assert!(parse_search_page(&search_response(SEARCH_ROWS, 1560), 1).has_more);
+        // 不满一页说明主播索引到底了。
+        assert!(!parse_search_page(&search_response(SEARCH_ROWS - 1, 1560), 1).has_more);
+        // 已取满 numFound 时停下。
+        assert!(!parse_search_page(&search_response(SEARCH_ROWS, SEARCH_ROWS as i64), 1).has_more);
+    }
 
     #[test]
     fn strip_js_functions_handles_chinese_utf8() {
