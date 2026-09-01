@@ -64,6 +64,16 @@ describe("category selection encoding", () => {
     expect(parseCategorySelection(encoded, "douyin")).toEqual(selection);
   });
 
+  test("round-trips a uuid parent id", () => {
+    // Twitch 的父分区是游戏类型标签的 UUID，比其他平台的数字 id 长且带连字符。
+    const selection = {
+      siteId: "twitch",
+      parentId: "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3",
+      categoryId: "valorant",
+    } as const;
+    expect(parseCategorySelection(encodeCategorySelection(selection), "twitch")).toEqual(selection);
+  });
+
   test("keeps colons inside the trailing category id", () => {
     expect(parseCategorySelection("bilibili:1:a:b", "bilibili")).toEqual({
       siteId: "bilibili",

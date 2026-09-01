@@ -54,6 +54,25 @@ const LANGUAGE_SHARDS: &[&str] = &[
 /// 三个 30 条的分片大约落在 70-80 个去重房间。
 const SHARD_WINDOW: usize = 3;
 
+/// 标签聚合视图一页并发拉取的分区数。与语言分片同样取三：突发请求量相当，
+/// 三个分区约落在 70-90 个去重房间，够填满一页。
+const DIRECTORY_SHARD_WINDOW: usize = 3;
+
+/// 一次取回的分类标签数。上游 `searchCategoryTags` 实测返回 41 个，
+/// 取 100 留出余量，同时避免上游哪天放开时一次拉回过多。
+const CATEGORY_TAG_LIMIT: u32 = 100;
+
+/// 每个标签下取回的分区数。`games(first:)` 服务端上限为 100，且游标翻页过不了
+/// 完整性校验，所以这个值就是单个标签的可见深度，同时决定两件事：
+///
+/// - 分类树的 IPC 体积。取满 100 时 41 个标签共 2800 余项、约 500 KiB，是另外
+///   三个平台整棵树（B站 454 项 / 斗鱼 502 项 / 虎牙 356 项，40-65 KiB）的近十倍；
+///   取 30 落在 1000 项上下、约 185 KiB，覆盖 638 个去重游戏，仍比任何一个平台的
+///   分区总数多。
+/// - 「全部X」聚合视图的可翻深度：30 个分区按每页 3 个分片即 10 页，
+///   与语言分片的 9 页（27 个分片）同量级。
+const DIRECTORY_PAGE_SIZE: u32 = 30;
+
 /// Twitch 按播放 token 在服务端决定广告拼接，而签发 token 时使用的 `playerType`
 /// 是决策的一部分。`site` 保持首选，因为它既干净又是全画质：
 /// 在 `kaicenat` 上实测，它携带频道的完整清晰度阶梯
@@ -138,6 +157,13 @@ pub struct TwitchSite {
 fn shard_window_start(page: u32) -> Option<usize> {
     let start = (page.max(1) as usize - 1).checked_mul(SHARD_WINDOW)?;
     (start < LANGUAGE_SHARDS.len()).then_some(start)
+}
+
+/// 标签聚合视图里第 `page` 页对应的分区窗口起点。分区数由上游决定，
+/// 因此上界不是常量，走完就返回 `None` 让翻页自然终止。
+fn directory_window_start(page: u32, directory_count: usize) -> Option<usize> {
+    let start = (page.max(1) as usize - 1).checked_mul(DIRECTORY_SHARD_WINDOW)?;
+    (start < directory_count).then_some(start)
 }
 
 /// 按语言分片的信息流：每种信息流类型（推荐、分类）都知道如何向 Twitch 请求
@@ -447,6 +473,70 @@ impl TwitchSite {
         Ok(())
     }
 
+    /// 取一级分类：Twitch 目录自身的游戏类型标签（FPS、RPG、IRL……）。
+    ///
+    /// 这些标签是 Twitch 网页端「浏览」页左侧筛选器的数据源，也是 `games(tags:)`
+    /// 唯一接受的取值：只认标签 UUID，传 `"FPS"` 这样的名字会得到空结果。
+    async fn category_tags(&self) -> AppResult<Vec<TwitchCategoryTag>> {
+        let data = self
+            .graphql(
+                "RLiveTwitchCategoryTags",
+                r#"
+                query RLiveTwitchCategoryTags($query: String!, $limit: Int!) {
+                  searchCategoryTags(userQuery: $query, limit: $limit) {
+                    id
+                    tagName
+                    isLanguageTag
+                  }
+                }
+                "#,
+                json!({ "query": "", "limit": CATEGORY_TAG_LIMIT }),
+            )
+            .await?;
+        let tags: Vec<TwitchCategoryTag> = data
+            .get("searchCategoryTags")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(parse_category_tag)
+            .collect();
+        if tags.is_empty() {
+            return Err(Self::parse_err("Twitch 未返回可用分类标签"));
+        }
+        Ok(tags)
+    }
+
+    /// 取某个标签下的二级分区（具体游戏）。
+    ///
+    /// `first` 服务端上限 100，且 `after:` 游标同样过不了完整性校验（实测 `games`、
+    /// `streams`、`game.streams` 三个连接，连真实 `Client-Integrity` 令牌也一样被拒），
+    /// 所以这里只取第一页 100 条，不做游标翻页。实测 41 个标签合计约 1600 个
+    /// 去重分区，远多于过去单层的 30 个。
+    async fn tag_directories(&self, tag_id: &str) -> AppResult<Vec<LiveSubCategory>> {
+        let data = self
+            .graphql(
+                "RLiveTwitchTagDirectories",
+                r#"
+                query RLiveTwitchTagDirectories($first: Int!, $tags: [String!]) {
+                  games(first: $first, tags: $tags) {
+                    edges {
+                      node {
+                        id
+                        slug
+                        name
+                        displayName
+                        boxArtURL(width: 285, height: 380)
+                      }
+                    }
+                  }
+                }
+                "#,
+                json!({ "first": DIRECTORY_PAGE_SIZE, "tags": [tag_id] }),
+            )
+            .await?;
+        Ok(parse_tag_directories(&data, tag_id))
+    }
+
     async fn recommend_page(&self, page: u32) -> AppResult<RoomListPage> {
         self.shard_page(RecommendFeed, page).await
     }
@@ -454,6 +544,53 @@ impl TwitchSite {
     async fn category_page(&self, category_id: &str, page: u32) -> AppResult<RoomListPage> {
         let slug = normalize_category_slug(category_id)?;
         self.shard_page(CategoryFeed { slug: &slug }, page).await
+    }
+
+    /// 「全部X」磁贴的房间列表：把该游戏类型标签下的分区横向聚合。
+    ///
+    /// 不能像虎牙那样直接拿父分区 id 请求房间：`streams` 的两种标签入参
+    /// （顶层 `tags:` 与 `options.tags`）实测都是空转 —— 传 FPS 标签、传全 f 的
+    /// 伪造 UUID、和完全不传，返回的频道列表一模一样，结果里混着 Just Chatting
+    /// 和 IRL。标签只在 `games(tags:)`（分区目录）上真正生效。
+    ///
+    /// 因此这里换一条分片轴：先取标签下的分区，再按 `DIRECTORY_SHARD_WINDOW`
+    /// 个分区为一页并发拉房间。翻页仍是纯算术（第 N 页对应分区
+    /// `w(N-1)..wN`），不需要游标，也不需要跨请求状态。分区已按热度排序，
+    /// 所以前几页仍是该类型下最热的内容。
+    async fn tag_page(&self, tag_id: &str, page: u32) -> AppResult<RoomListPage> {
+        let tag_id = normalize_tag_id(tag_id).ok_or_else(|| {
+            AppError::new("twitch_invalid_category_id", "无效的 Twitch 分类标识")
+                .with_site("twitch")
+        })?;
+        let page = page.max(1);
+        let directories = self.tag_directories(&tag_id).await?;
+        let Some(start) = directory_window_start(page, directories.len()) else {
+            return Ok(empty_page());
+        };
+        let window = &directories[start..(start + DIRECTORY_SHARD_WINDOW).min(directories.len())];
+
+        let requests = window.iter().map(|directory| {
+            let feed = CategoryFeed {
+                slug: &directory.id,
+            };
+            // 聚合视图不再按语言收窄：分片轴已经是分区，再叠一层语言只会让
+            // 每个分区都只剩它的一个语言切片。
+            self.graphql(feed.operation_name(), feed.query(), feed.variables(""))
+        });
+        let edges_path = CategoryFeed { slug: "" }.edges_path();
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for data in future::try_join_all(requests).await? {
+            for item in parse_stream_edges(&data, edges_path, &self.site_id) {
+                if seen.insert(item.room_id.to_ascii_lowercase()) {
+                    items.push(item);
+                }
+            }
+        }
+        Ok(RoomListPage {
+            has_more: directory_window_start(page + 1, directories.len()).is_some(),
+            items,
+        })
     }
 
     async fn search_page(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
@@ -662,58 +799,25 @@ pub(crate) async fn twitch_ad_fallback_url(
 #[async_trait::async_trait]
 impl LiveSite for TwitchSite {
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
-        let data = self
-            .graphql(
-                "RLiveTwitchGames",
-                r#"
-                    query RLiveTwitchGames($first: Int!) {
-                      games(first: $first) {
-                        edges {
-                          node {
-                            id
-                            slug
-                            name
-                            displayName
-                            boxArtURL(width: 285, height: 380)
-                          }
-                        }
-                      }
-                    }
-                "#,
-                json!({ "first": PAGE_SIZE }),
-            )
-            .await?;
-        let mut children = Vec::new();
-        for node in data
-            .pointer("/games/edges")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|edge| edge.get("node"))
-        {
-            let id = json_string(node.get("slug"));
-            let name = first_non_empty([
-                json_string(node.get("displayName")),
-                json_string(node.get("name")),
-            ]);
-            if normalize_category_slug(&id).is_err() || name.is_empty() {
+        // 先预热共享上下文，否则下面的扇出会让每个标签各自去引导一次 Client-ID。
+        self.public_web_context().await?;
+        let tags = self.category_tags().await?;
+        let requests = tags.iter().map(|tag| self.tag_directories(&tag.id));
+        let mut categories = Vec::new();
+        for (tag, children) in tags.iter().zip(future::try_join_all(requests).await?) {
+            if children.is_empty() {
                 continue;
             }
-            children.push(LiveSubCategory {
-                id,
-                name,
-                parent_id: "twitch".into(),
-                pic: non_empty(json_string(node.get("boxArtURL"))),
+            categories.push(LiveCategory {
+                id: tag.id.clone(),
+                name: tag.name.clone(),
+                children,
             });
         }
-        if children.is_empty() {
+        if categories.is_empty() {
             return Err(Self::parse_err("Twitch 未返回可用直播分类"));
         }
-        Ok(vec![LiveCategory {
-            id: "twitch".into(),
-            name: "热门分类".into(),
-            children,
-        }])
+        Ok(categories)
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
@@ -725,11 +829,11 @@ impl LiveSite for TwitchSite {
         category: &LiveSubCategory,
         page: u32,
     ) -> AppResult<RoomListPage> {
-        // CategoryPage 为每个平台提供 ID 为 "0" 的合成"全部热门分类"磁贴。Twitch 没有
-        // 对应的 game id，因此把这个通用 UI 入口重新路由到常规直播推荐流，
-        // 而不是返回空的 `game(id: "0")` 结果。
+        // 分类页给每个父分区合成一个 id 为 "0" 的「全部X」磁贴，它不是真实分区。
+        // 虎牙的父分区聚合 gid 能直接拉房间，Twitch 没有等价物，因此按标签下的
+        // 分区分片聚合，详见 `tag_page`。
         if is_all_categories_entry(&category.id) {
-            return self.get_recommend_rooms(page).await;
+            return self.tag_page(&category.parent_id, page).await;
         }
         self.category_page(&category.id, page).await
     }
@@ -914,6 +1018,76 @@ fn normalize_login(value: &str) -> AppResult<String> {
         );
     }
     Ok(login)
+}
+
+/// Twitch 目录的游戏类型标签，充当 rLive 分类树的一级分区。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TwitchCategoryTag {
+    /// 标签 UUID。`games(tags:)` 只认这个值，不认标签名。
+    id: String,
+    name: String,
+}
+
+/// 解析一个分类标签。语言标签（`isLanguageTag`）会和 rLive 既有的语言分片翻页
+/// 轴重叠，混进分类树只会让用户在两个地方筛同一件事，因此丢掉。
+fn parse_category_tag(value: &Value) -> Option<TwitchCategoryTag> {
+    if value
+        .get("isLanguageTag")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let id = normalize_tag_id(&json_string(value.get("id")))?;
+    let name = json_string(value.get("tagName"));
+    if name.is_empty() {
+        return None;
+    }
+    Some(TwitchCategoryTag { id, name })
+}
+
+/// 解析一个标签下的分区列表。子分区 id 沿用 `slug`（`game(slug:)` 与语言分片
+/// 翻页都用它），`parent_id` 存标签 UUID。
+fn parse_tag_directories(data: &Value, tag_id: &str) -> Vec<LiveSubCategory> {
+    data.pointer("/games/edges")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|edge| edge.get("node"))
+        .filter_map(|node| {
+            let id = normalize_category_slug(&json_string(node.get("slug"))).ok()?;
+            let name = first_non_empty([
+                json_string(node.get("displayName")),
+                json_string(node.get("name")),
+            ]);
+            if name.is_empty() {
+                return None;
+            }
+            Some(LiveSubCategory {
+                id,
+                name,
+                parent_id: tag_id.to_string(),
+                pic: non_empty(json_string(node.get("boxArtURL"))),
+            })
+        })
+        .collect()
+}
+
+/// 校验标签 UUID。它会作为 `parent_id` 回到 `tags:` 查询变量里，
+/// 因此只接受 UUID 的字面形状，不让任意字符串原样回流到上游。
+fn normalize_tag_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.len() != 36 {
+        return None;
+    }
+    let shaped = value.bytes().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    });
+    shaped.then(|| value.to_ascii_lowercase())
 }
 
 fn normalize_category_slug(value: &str) -> AppResult<String> {
@@ -1453,6 +1627,111 @@ mod tests {
     }
 
     #[test]
+    fn directory_windows_tile_the_tag_directories_and_then_stop() {
+        // 与语言分片同构：第 N 页对应分区 w(N-1)..wN，纯算术、无跨请求状态。
+        assert_eq!(directory_window_start(1, 100), Some(0));
+        assert_eq!(directory_window_start(2, 100), Some(DIRECTORY_SHARD_WINDOW));
+        assert_eq!(
+            directory_window_start(4, 100),
+            Some(DIRECTORY_SHARD_WINDOW * 3)
+        );
+        // 页码 0 视作第 1 页，而不是下溢。
+        assert_eq!(directory_window_start(0, 100), Some(0));
+
+        // 上界随上游返回的分区数变化：走完就终止，不像语言分片那样是常量。
+        assert_eq!(directory_window_start(1, 2), Some(0));
+        assert_eq!(directory_window_start(2, 2), None);
+        assert_eq!(directory_window_start(2, 3), None);
+        assert_eq!(directory_window_start(2, 4), Some(DIRECTORY_SHARD_WINDOW));
+        // 标签下没有分区时任何页都是空的。
+        assert_eq!(directory_window_start(1, 0), None);
+    }
+
+    #[test]
+    fn category_tags_drop_language_tags_and_malformed_ids() {
+        let tag = parse_category_tag(&json!({
+            "id": "A69F7FFB-DDDA-4C05-8D7D-F0B24975A2C3",
+            "tagName": "FPS",
+            "isLanguageTag": false
+        }))
+        .expect("a usable category tag");
+        // UUID 归一化成小写，`tags:` 变量里两种写法不会当成两个标签。
+        assert_eq!(tag.id, "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3");
+        assert_eq!(tag.name, "FPS");
+
+        // 语言标签与既有的语言分片翻页轴重叠，混进分类树只会让用户在两处筛同一件事。
+        assert!(
+            parse_category_tag(&json!({
+                "id": "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3",
+                "tagName": "Chinese",
+                "isLanguageTag": true
+            }))
+            .is_none()
+        );
+        // 缺 `isLanguageTag` 时按非语言标签处理，不因为字段缺失整棵树都空掉。
+        assert!(
+            parse_category_tag(&json!({
+                "id": "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3",
+                "tagName": "FPS"
+            }))
+            .is_some()
+        );
+        // 标签 id 会作为 parent_id 回流到 `tags:` 查询变量，形状不对就不要。
+        assert!(parse_category_tag(&json!({ "id": "FPS", "tagName": "FPS" })).is_none());
+        assert!(
+            parse_category_tag(&json!({
+                "id": "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3",
+                "tagName": ""
+            }))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn tag_id_accepts_only_uuid_shaped_values() {
+        assert_eq!(
+            normalize_tag_id(" A69F7FFB-DDDA-4C05-8D7D-F0B24975A2C3 ").as_deref(),
+            Some("a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3")
+        );
+        // 长度对但分隔符位置不对。
+        assert!(normalize_tag_id("a69f7ffb0ddda-4c05-8d7d-f0b24975a2c3").is_none());
+        // 非十六进制字符。
+        assert!(normalize_tag_id("z69f7ffb-ddda-4c05-8d7d-f0b24975a2c3").is_none());
+        assert!(normalize_tag_id("").is_none());
+        assert!(normalize_tag_id("0").is_none());
+    }
+
+    #[test]
+    fn tag_directories_become_sub_categories_under_their_tag() {
+        let data = json!({
+            "games": {
+                "edges": [
+                    { "node": {
+                        "slug": "valorant",
+                        "displayName": "VALORANT",
+                        "name": "Valorant",
+                        "boxArtURL": "https://img.example/box.jpg"
+                    }},
+                    // 大写 slug 不能作为 `game(slug:)` 的取值，丢掉而不是原样上送。
+                    { "node": { "slug": "Not A Slug", "displayName": "Bad" }},
+                    // 没有可用名字的分区在 UI 上是一个空格子。
+                    { "node": { "slug": "nameless" }},
+                    // 只有 `name` 时用它兜底。
+                    { "node": { "slug": "fallback", "name": "Fallback Game" }}
+                ]
+            }
+        });
+        let subs = parse_tag_directories(&data, "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3");
+        let ids: Vec<&str> = subs.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(ids, ["valorant", "fallback"]);
+        assert_eq!(subs[0].name, "VALORANT");
+        assert_eq!(subs[0].parent_id, "a69f7ffb-ddda-4c05-8d7d-f0b24975a2c3");
+        assert_eq!(subs[0].pic.as_deref(), Some("https://img.example/box.jpg"));
+        assert_eq!(subs[1].name, "Fallback Game");
+        assert!(subs[1].pic.is_none());
+    }
+
+    #[test]
     fn recognizes_shared_all_categories_sentinel() {
         assert!(is_all_categories_entry("0"));
         assert!(is_all_categories_entry(" 0 "));
@@ -1778,6 +2057,24 @@ mod tests {
         assert!(page.has_more, "official browse connection lost its cursor");
 
         let categories = site.get_categories().await.expect("categories");
+        // 分类树是「游戏类型标签 → 具体分区」两级，不是过去单层的 30 个热门游戏。
+        assert!(
+            categories.len() > 1,
+            "expected multiple tag parents, got {}",
+            categories.len()
+        );
+        for parent in &categories {
+            normalize_tag_id(&parent.id).expect("parent id is a tag uuid");
+            assert!(!parent.children.is_empty(), "tag parent has no directories");
+        }
+        // 过去是单层 30 个热门游戏。实测 41 个标签 × 每标签 30 个分区约 1000 项，
+        // 断言取一半留出上游波动余量。
+        let total: usize = categories.iter().map(|parent| parent.children.len()).sum();
+        assert!(
+            total > 500,
+            "tag directories should go far deeper than the old flat list, got {total}"
+        );
+
         let category = categories[0].children.first().expect("category");
         normalize_category_slug(&category.id).expect("category slug");
         let category_page = site
@@ -1787,6 +2084,43 @@ mod tests {
         assert!(
             !category_page.items.is_empty(),
             "category returned no rooms"
+        );
+
+        // 「全部X」磁贴按标签下的分区聚合，且能继续翻页。它必须与全站推荐不同 ——
+        // 早先 `streams` 的标签入参空转时，两者返回的是同一批房间。
+        let aggregate = LiveSubCategory {
+            id: "0".into(),
+            name: format!("全部{}", categories[0].name),
+            parent_id: categories[0].id.clone(),
+            pic: None,
+        };
+        let aggregate_page = site
+            .get_category_rooms(&aggregate, 1)
+            .await
+            .expect("aggregate tile page");
+        assert!(
+            !aggregate_page.items.is_empty(),
+            "aggregate tile returned no rooms"
+        );
+        assert!(
+            aggregate_page.has_more,
+            "aggregate tile should offer another page"
+        );
+        let first_ids: HashSet<&str> = aggregate_page
+            .items
+            .iter()
+            .map(|item| item.room_id.as_str())
+            .collect();
+        let second_page = site
+            .get_category_rooms(&aggregate, 2)
+            .await
+            .expect("aggregate page 2");
+        assert!(
+            second_page
+                .items
+                .iter()
+                .any(|item| !first_ids.contains(item.room_id.as_str())),
+            "aggregate page 2 repeated page 1 — the directory window is not advancing"
         );
 
         let search = site.search_rooms("music", 1).await.expect("search page");
