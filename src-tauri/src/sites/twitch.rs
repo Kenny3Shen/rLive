@@ -176,6 +176,10 @@ fn shard_window_start(page: u32) -> Option<usize> {
     (start < LANGUAGE_SHARDS.len()).then_some(start)
 }
 
+/// 分区信息流里房间边界在响应中的位置。`CategoryFeed::edges_path` 与按分区
+/// 聚合的 `tag_page` 都用它，后者没有单个 feed 可问。
+const CATEGORY_EDGES_PATH: &str = "/game/streams/edges";
+
 /// 标签聚合视图里第 `page` 页对应的分区窗口起点。分区数由上游决定，
 /// 因此上界不是常量，走完就返回 `None` 让翻页自然终止。
 fn directory_window_start(page: u32, directory_count: usize) -> Option<usize> {
@@ -269,7 +273,7 @@ impl ShardFeed for CategoryFeed<'_> {
     }
 
     fn edges_path(&self) -> &'static str {
-        "/game/streams/edges"
+        CATEGORY_EDGES_PATH
     }
 }
 
@@ -649,11 +653,10 @@ impl TwitchSite {
             // 每个分区都只剩它的一个语言切片。
             self.graphql(feed.operation_name(), feed.query(), feed.variables(""))
         });
-        let edges_path = CategoryFeed { slug: "" }.edges_path();
         let mut items = Vec::new();
         let mut seen = HashSet::new();
         for data in future::try_join_all(requests).await? {
-            for item in parse_stream_edges(&data, edges_path, &self.site_id) {
+            for item in parse_stream_edges(&data, CATEGORY_EDGES_PATH, &self.site_id) {
                 if seen.insert(item.room_id.to_ascii_lowercase()) {
                     items.push(item);
                 }
