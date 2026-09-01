@@ -1,6 +1,6 @@
 //! Bilibili 直播 API 的纯解析器与底层辅助函数。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use md5::{Digest, Md5};
@@ -189,6 +189,7 @@ fn room_item_from_list_obj(item: &Value) -> LiveRoomItem {
         cover,
         user_name: as_str(item.get("uname").unwrap_or(&Value::Null)),
         online: as_i64(item.get("online").unwrap_or(&Value::Null)),
+        live_status: None,
     }
 }
 
@@ -264,30 +265,63 @@ pub fn parse_account_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
 }
 
 /// 解析搜索 `live` 类型 body。
-pub fn parse_search_rooms(raw: &str) -> AppResult<RoomListPage> {
+///
+/// 响应携带两个互不相交的数组：`live_room` 只含在播房间，`live_user` 则是命中
+/// 关键词的主播，多数未开播。两者都收，用 `live_status` 显式区分，让调用方能把
+/// 在播房间排在前面。`live_user` 不带直播标题和封面，这里退回主播头像，
+/// 避免卡片只剩一个空白方块。
+///
+/// `live_user` 不随 `page` 变化（实测同一关键词的第 1~3 页返回完全相同的一批
+/// 主播），所以只在第一页读它，后续页只追加新的在播房间。
+pub fn parse_search_rooms(raw: &str, page: u32) -> AppResult<RoomListPage> {
     let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("search: {e}")))?;
-    let list = root
-        .pointer("/data/result/live_room")
-        .and_then(|d| d.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut items = Vec::with_capacity(list.len());
-    for item in &list {
-        let title = strip_em_tags(&as_str(item.get("title").unwrap_or(&Value::Null)));
+    let rooms = search_result_array(&root, "live_room");
+    let users = if page <= 1 {
+        search_result_array(&root, "live_user")
+    } else {
+        Vec::new()
+    };
+    let mut items = Vec::with_capacity(rooms.len() + users.len());
+    let mut seen = BTreeSet::new();
+
+    for item in rooms.iter().chain(users.iter()) {
+        let room_id = as_str(item.get("roomid").unwrap_or(&Value::Null));
+        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+            continue;
+        }
+        // 按响应里的取值判断，而不是按来自哪个数组：`live_room` 目前全是在播，
+        // 但上游哪天开始混排时，这里不该静默说谎。
+        let live = as_i64(item.get("live_status").unwrap_or(&Value::Null)) == 1;
         let cover_raw = as_str(item.get("cover").unwrap_or(&Value::Null));
+        let cover = if cover_raw.is_empty() {
+            avatar_thumb(&as_str(item.get("uface").unwrap_or(&Value::Null)))
+        } else {
+            cover_thumb(&cover_raw, "@400w.jpg")
+        };
         items.push(LiveRoomItem {
             site_id: SiteId::Bilibili,
-            room_id: as_str(item.get("roomid").unwrap_or(&Value::Null)),
-            title,
-            cover: cover_thumb(&cover_raw, "@400w.jpg"),
-            user_name: as_str(item.get("uname").unwrap_or(&Value::Null)),
+            room_id,
+            title: strip_em_tags(&as_str(item.get("title").unwrap_or(&Value::Null))),
+            cover,
+            user_name: strip_em_tags(&as_str(item.get("uname").unwrap_or(&Value::Null))),
             online: as_i64(item.get("online").unwrap_or(&Value::Null)),
+            live_status: Some(live),
         });
     }
+
+    // 翻页只看在播房间数组：`live_user` 只在第一页读，把它算进翻页条件
+    // 会让滚动永不停止。
     Ok(RoomListPage {
-        has_more: items.len() >= 40,
+        has_more: rooms.len() >= 40,
         items,
     })
+}
+
+fn search_result_array(root: &Value, key: &str) -> Vec<Value> {
+    root.pointer(&format!("/data/result/{key}"))
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// 把 `getInfoByRoom` 的 data 对象解析为 LiveRoomDetail。
@@ -715,12 +749,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_search_strips_em() {
+    fn parse_search_merges_live_rooms_and_offline_users() {
         let raw = include_str!("../../../tests/fixtures/bilibili_search_rooms.json");
-        let page = parse_search_rooms(raw).unwrap();
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].title, "搜索结果房间");
-        assert!(page.items[0].cover.starts_with("https://"));
+        let page = parse_search_rooms(raw, 1).unwrap();
+        let ids: Vec<&str> = page.items.iter().map(|x| x.room_id.as_str()).collect();
+        // 同一个 roomid 在两个数组里都出现时只保留房间数组那份（带标题和封面）。
+        assert_eq!(ids, ["555", "777"]);
+
+        let live = &page.items[0];
+        assert_eq!(live.title, "搜索结果房间");
+        assert!(live.cover.starts_with("https://"));
+        assert_eq!(live.user_name, "搜索主播");
+        assert_eq!(live.live_status, Some(true));
+        assert_eq!(live.online, 88);
+
+        // `live_user` 不带标题和封面，退回主播头像，状态取响应里的 live_status。
+        let offline = &page.items[1];
+        assert_eq!(offline.live_status, Some(false));
+        assert_eq!(offline.title, "");
+        assert_eq!(offline.user_name, "未开播主播");
+        assert!(offline.cover.contains("off.jpg"));
+        assert_eq!(offline.online, 0);
+
+        // `live_user` 只在第一页读，翻页只看在播房间数量。
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn parse_search_skips_matched_users_after_the_first_page() {
+        let raw = include_str!("../../../tests/fixtures/bilibili_search_rooms.json");
+        let page = parse_search_rooms(raw, 2).unwrap();
+        let ids: Vec<&str> = page.items.iter().map(|x| x.room_id.as_str()).collect();
+        assert_eq!(ids, ["555"]);
     }
 
     #[test]

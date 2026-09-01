@@ -28,6 +28,12 @@ export type LiveRoomItem = {
   cover: string;
   user_name: string;
   online: number;
+  /**
+   * 该房间此刻是否在播。只有搜索这类同时返回在播与未开播主播的接口才带这个字段；
+   * 分类和推荐列表天然只含在播房间，缺省表示「平台未告知」，
+   * 不能当成未开播。
+   */
+  live_status?: boolean | null;
 };
 
 export type LiveRoomDetail = {

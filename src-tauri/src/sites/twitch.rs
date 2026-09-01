@@ -961,6 +961,7 @@ fn stream_to_item(stream: &Value, site_id: &SiteId) -> Option<LiveRoomItem> {
             json_string(broadcaster.get("login")),
         ]),
         online: json_i64(stream.get("viewersCount")),
+        live_status: None,
     })
 }
 
@@ -979,18 +980,30 @@ fn parse_search_items(data: &Value, site_id: &SiteId) -> Vec<LiveRoomItem> {
         );
     users
         .filter_map(|user| {
-            let stream = user.get("stream").filter(|stream| stream.is_object())?;
             let room_id = normalize_login(&json_string(user.get("login"))).ok()?;
+            // 搜索会同时返回在播和未开播的频道，`stream` 只在开播时是对象。
+            // 未开播的频道照样收下并用 `live_status` 标出来，让调用方决定怎么排。
+            let stream = user.get("stream").filter(|stream| stream.is_object());
+            let user_name = first_non_empty([
+                json_string(user.get("displayName")),
+                json_string(user.get("login")),
+            ]);
             Some(LiveRoomItem {
                 site_id: site_id.clone(),
                 room_id,
-                title: json_string(stream.get("title")),
-                cover: json_string(stream.get("previewImageURL")),
-                user_name: first_non_empty([
-                    json_string(user.get("displayName")),
-                    json_string(user.get("login")),
+                // 未开播的频道没有直播标题，留空由展示层退回频道名。
+                title: stream.map_or_else(String::new, |stream| json_string(stream.get("title"))),
+                cover: first_non_empty([
+                    stream.map_or_else(String::new, |stream| {
+                        json_string(stream.get("previewImageURL"))
+                    }),
+                    json_string(user.get("profileImageURL")),
                 ]),
-                online: json_i64(stream.get("viewersCount")),
+                user_name,
+                // 未开播没有观看人数，退回粉丝数只会和在播人数混成一个量纲，
+                // 因此留 0 表示未知。
+                online: stream.map_or(0, |stream| json_i64(stream.get("viewersCount"))),
+                live_status: Some(stream.is_some()),
             })
         })
         .collect()
@@ -1524,15 +1537,21 @@ mod tests {
     }
 
     #[test]
-    fn search_skips_offline_channels() {
+    fn search_keeps_offline_channels_with_status() {
         let data = json!({
             "searchFor": {
                 "channels": {
                     "items": [
-                        { "login": "offline", "displayName": "Offline", "stream": null },
+                        {
+                            "login": "offline",
+                            "displayName": "Offline",
+                            "profileImageURL": "https://img.example/avatar.png",
+                            "stream": null
+                        },
                         {
                             "login": "online",
                             "displayName": "Online",
+                            "profileImageURL": "https://img.example/online-avatar.png",
                             "stream": {
                                 "title": "Live",
                                 "viewersCount": 7,
@@ -1544,8 +1563,18 @@ mod tests {
             }
         });
         let items = parse_search_items(&data, &SiteId::Bilibili);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].room_id, "online");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].room_id, "offline");
+        assert_eq!(items[0].live_status, Some(false));
+        // 未开播没有直播标题和截图：标题留空由展示层兜底，封面退回头像。
+        assert_eq!(items[0].title, "");
+        assert_eq!(items[0].cover, "https://img.example/avatar.png");
+        assert_eq!(items[0].online, 0);
+        assert_eq!(items[1].room_id, "online");
+        assert_eq!(items[1].live_status, Some(true));
+        assert_eq!(items[1].title, "Live");
+        assert_eq!(items[1].cover, "https://img.example/live.jpg");
+        assert_eq!(items[1].online, 7);
     }
 
     #[test]
@@ -1764,6 +1793,37 @@ mod tests {
         assert!(
             search.has_more,
             "official search connection lost its cursor"
+        );
+    }
+
+    /// 真实演练搜索里的未开播频道：`searchFor` 的 CHANNEL target 同时返回在播和
+    /// 未开播频道，`stream` 为 `null` 就是未开播。关键词刻意用主播名而不是分区名，
+    /// 分区名命中的多是在播频道，覆盖不到未开播分支。
+    #[tokio::test]
+    #[ignore = "live Twitch public-web smoke; requires external network"]
+    async fn live_search_keeps_offline_channels_smoke() {
+        let site = TwitchSite::new(reqwest::Client::new());
+        let page = site.search_rooms("ninja", 1).await.expect("search page");
+        assert!(
+            page.items
+                .iter()
+                .any(|item| item.live_status == Some(true) && !item.title.is_empty()),
+            "search page 1 returned no live channel with a title"
+        );
+        let offline = page
+            .items
+            .iter()
+            .find(|item| item.live_status == Some(false))
+            .expect("search page 1 returned no offline channels");
+        assert!(
+            offline.title.is_empty(),
+            "offline channels carry no stream title"
+        );
+        assert_eq!(offline.online, 0, "offline channels report unknown viewers");
+        assert!(
+            offline.cover.contains("profile_image"),
+            "offline channels fall back to the avatar, got: {}",
+            offline.cover
         );
     }
 

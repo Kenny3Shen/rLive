@@ -1341,6 +1341,7 @@ fn room_item_from_value(room: &Value) -> Option<LiveRoomItem> {
             room.get("user_count"),
             room.get("user_count_str"),
         ]),
+        live_status: None,
     })
 }
 
@@ -2123,6 +2124,7 @@ mod tests {
                     cover: String::new(),
                     user_name: "主播".into(),
                     online: 1,
+                    live_status: None,
                 })
                 .collect(),
         };

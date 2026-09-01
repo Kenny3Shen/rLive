@@ -37,6 +37,7 @@ import { preloadRouteModule } from "@/app/routeModules";
 import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
+import { roomCardLabels } from "./roomCardLabels";
 
 type RoomCardProps = {
   room: LiveRoomItem;
@@ -52,6 +53,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   // 桌面端继续使用右键菜单。
   const mobile = isMobileClient();
   const cardDrawer = useLongPressDrawer({ enabled: mobile });
+  const { offline, primaryText, secondaryText, showOnline } = roomCardLabels(room);
   const {
     mountRef: previewMountRef,
     phase: previewPhase,
@@ -223,19 +225,32 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           </span>
         )}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
-        <span
-          data-mobile-static-backdrop
-          className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm"
-        >
-          <Flame className="size-3 text-orange-400" aria-hidden />
-          {formatOnline(room.online)}
-        </span>
+        {/* 未开播时热度没有意义（多数平台干脆不返回），角标改说开播状态。 */}
+        {offline ? (
+          <span
+            data-mobile-static-backdrop
+            className="absolute bottom-2 right-2 inline-flex items-center rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white/85 backdrop-blur-sm"
+          >
+            未开播
+          </span>
+        ) : (
+          showOnline && (
+            <span
+              data-mobile-static-backdrop
+              className="absolute bottom-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm"
+            >
+              <Flame className="size-3 text-orange-400" aria-hidden />
+              {formatOnline(room.online)}
+            </span>
+          )
+        )}
       </div>
       <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
         <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
-          {room.title || "未命名直播间"}
+          {primaryText}
         </p>
-        <p className="truncate text-xs text-muted-foreground">{room.user_name || "未知主播"}</p>
+        {/* 副行始终占位，保证网格里在播与未开播卡片的高度一致。 */}
+        <p className="min-h-4 truncate text-xs text-muted-foreground">{secondaryText}</p>
       </div>
     </>
   );
@@ -245,7 +260,8 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     onClick: openRoom,
     onPointerEnter: (event) => {
       preloadRouteModule(roomPath);
-      onPreviewPointerEnter(event);
+      // 未开播的房间取不到流，预览只会白跑一轮 detail/qualities 请求。
+      if (!offline) onPreviewPointerEnter(event);
     },
     onPointerLeave: stopPreview,
     onPointerDown: (event) => {

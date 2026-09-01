@@ -767,7 +767,7 @@ impl LiveSite for BilibiliSite {
                 ],
             )
             .await?;
-        parse_search_rooms(&text)
+        parse_search_rooms(&text, page)
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
@@ -934,6 +934,34 @@ mod live_tests {
             .expect("signed getDanmuInfo should succeed");
         let data = danmaku_data_with_token(&text).expect("signed response carries a token");
         assert!(!data["host_list"].as_array().unwrap().is_empty());
+    }
+
+    /// 关键词刻意用主播名而不是游戏名：`live_user` 索引只在关键词命中主播昵称时
+    /// 才有内容，游戏名只会撞出一堆在播房间，覆盖不到未开播分支。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_search_covers_offline_users_smoke() {
+        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+        let page = site.search_rooms("旭旭宝宝", 1).await.unwrap();
+
+        assert!(
+            page.items.iter().any(|item| item.live_status == Some(true)),
+            "search page 1 returned no live rooms"
+        );
+        let offline = page
+            .items
+            .iter()
+            .find(|item| item.live_status == Some(false))
+            .expect("search page 1 returned no offline anchors");
+        assert!(
+            offline.title.is_empty(),
+            "offline anchors carry no room title"
+        );
+        assert!(!offline.user_name.is_empty());
+        assert!(
+            !offline.cover.is_empty(),
+            "offline anchors fall back to the avatar"
+        );
     }
 
     #[tokio::test]

@@ -57,6 +57,11 @@ pub struct LiveRoomItem {
     pub cover: String,
     pub user_name: String,
     pub online: i64,
+    /// 该房间此刻是否在播。只有搜索这类会同时返回在播与未开播主播的接口才填充；
+    /// 分类和推荐列表天然只含在播房间，保持 `None` 表示“平台未告知”，
+    /// 调用方不得把 `None` 当成未开播。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_status: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

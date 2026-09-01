@@ -2,7 +2,7 @@
 
 mod sign;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use reqwest::{Client, Url};
 use serde_json::Value;
@@ -18,6 +18,7 @@ use crate::sites::traits::LiveSite;
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43";
 const RECOMMEND_PAGE_SIZE: usize = 40;
 const DIRECTORY_PAGE_SIZE: usize = 20;
+const SEARCH_PAGE_SIZE: usize = 20;
 
 pub struct DouyuSite {
     client: Client,
@@ -87,6 +88,44 @@ impl DouyuSite {
     fn search_cookie(&self) -> String {
         let did = "10000000000000000000000000001501";
         merge_cookie_values(&format!("dy_did={did}; acf_did={did}"), &self.cookie)
+    }
+
+    /// 请求一次搜索索引。`endpoint` 取 `searchShow`（只含在播房间）
+    /// 或 `searchAnchor`（全部主播，带开播标记）。
+    ///
+    /// 触发风控时上游返回 `error != 0` 且 `data` 为空对象（如 `error = 8`
+    /// 「请完成验证」）。这里当成错误上抛，不能与「没有结果」混为一谈。
+    async fn search_json(&self, endpoint: &str, keyword: &str, page: u32) -> AppResult<Value> {
+        let url = format!(
+            "https://www.douyu.com/japi/search/api/{endpoint}?kw={}&page={page}&pageSize={SEARCH_PAGE_SIZE}",
+            urlencoding_encode(keyword)
+        );
+        let mut request = self
+            .client
+            .get(&url)
+            .header("user-agent", UA)
+            .header("referer", "https://www.douyu.com/search/");
+        let cookie = self.search_cookie();
+        if !cookie.is_empty() {
+            request = request.header("cookie", cookie);
+        }
+        let text = request
+            .send()
+            .await
+            .map_err(|e| Self::err(format!("http: {e}")))?
+            .text()
+            .await
+            .map_err(|e| Self::err(format!("body: {e}")))?;
+        let value: Value =
+            serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))?;
+        let error = json_i64(value.get("error").unwrap_or(&Value::Null));
+        if error != 0 {
+            return Err(Self::err(format!(
+                "{endpoint}: error={error} {}",
+                json_str(value.get("msg").unwrap_or(&Value::Null))
+            )));
+        }
+        Ok(value)
     }
 
     /// 请求一次 H5 播放数据（`getH5PlayV1`）。
@@ -279,6 +318,7 @@ fn parse_mix_list(v: &Value) -> AppResult<RoomListPage> {
                 cover: json_str(item.get("rs16").unwrap_or(&Value::Null)),
                 user_name: json_str(item.get("nn").unwrap_or(&Value::Null)),
                 online: json_i64(item.get("ol").unwrap_or(&Value::Null)),
+                live_status: None,
             });
         }
     }
@@ -329,6 +369,7 @@ fn parse_mobile_recommend_list(v: &Value, page: u32, page_size: usize) -> AppRes
                         .or_else(|| item.get("ol"))
                         .unwrap_or(&Value::Null),
                 )),
+                live_status: None,
             });
         }
     }
@@ -352,6 +393,140 @@ fn parse_online_label(value: String) -> i64 {
         return (num.trim().parse::<f64>().unwrap_or(0.0) * 1_000.0) as i64;
     }
     value.parse().unwrap_or(0)
+}
+
+/// 把斗鱼两路搜索索引合并成一页结果。
+///
+/// 在播房间排在未开播主播之前，同一个 `rid` 只保留一次；`shows` 或 `anchors`
+/// 为 `Value::Null` 表示那一路索引这次不可用，按空结果处理。
+fn merge_search_indexes(shows: &Value, anchors: &Value, page: u32) -> RoomListPage {
+    let show_items = shows
+        .pointer("/data/relateShow")
+        .or_else(|| shows.pointer("/data/list"))
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let anchor_items = anchors
+        .pointer("/data/relateAnchor")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // 主播索引额外带 `isLoop`，能识别视频轮播房间；房间索引没有这个字段。
+    // 先记下主播索引的判定，让同一个 rid 在两处出现时以更完整的那份为准，
+    // 与 `live_status_from_room_info` 把轮播视为未开播的口径保持一致。
+    let anchor_live: HashMap<String, bool> = anchor_items
+        .iter()
+        .map(|item| {
+            (
+                json_str(item.get("rid").unwrap_or(&Value::Null)),
+                is_search_live(item),
+            )
+        })
+        .collect();
+
+    let mut items = Vec::with_capacity(show_items.len() + anchor_items.len());
+    let mut seen = HashSet::new();
+    // 在播房间先入列：它们带真实的直播标题，主播索引只有昵称和签名。
+    for item in &show_items {
+        let room_id = json_str(
+            item.get("rid")
+                .or_else(|| item.get("roomId"))
+                .unwrap_or(&Value::Null),
+        );
+        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+            continue;
+        }
+        let live = anchor_live
+            .get(&room_id)
+            .copied()
+            .unwrap_or_else(|| is_search_live(item));
+        items.push(LiveRoomItem {
+            site_id: SiteId::Douyu,
+            room_id,
+            title: json_str(
+                item.get("roomName")
+                    .or_else(|| item.get("rn"))
+                    .unwrap_or(&Value::Null),
+            ),
+            cover: search_cover(item),
+            user_name: json_str(
+                item.get("nickName")
+                    .or_else(|| item.get("nn"))
+                    .unwrap_or(&Value::Null),
+            ),
+            // `hot` 是本地化标签（如 `237.2万`），不是原始数字。
+            online: parse_online_label(json_str(
+                item.get("hot")
+                    .or_else(|| item.get("ol"))
+                    .unwrap_or(&Value::Null),
+            )),
+            live_status: Some(live),
+        });
+    }
+
+    for item in &anchor_items {
+        let room_id = json_str(item.get("rid").unwrap_or(&Value::Null));
+        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+            continue;
+        }
+        // 主播索引的 `description` 是主播签名而非房间标题，因此标题留空，
+        // 由展示层退回主播名，避免把签名当成直播标题展示。
+        items.push(LiveRoomItem {
+            site_id: SiteId::Douyu,
+            room_id,
+            title: String::new(),
+            cover: search_cover(item),
+            user_name: json_str(item.get("nickName").unwrap_or(&Value::Null)),
+            online: parse_online_label(json_str(item.get("hot").unwrap_or(&Value::Null))),
+            live_status: Some(is_search_live(item)),
+        });
+    }
+
+    // 只要任一索引还有下一页就继续翻。主播索引比房间索引深得多，
+    // 房间索引先耗尽时不该把滚动停在那里。
+    let has_more = search_has_more(
+        page,
+        json_i64(shows.pointer("/data/total").unwrap_or(&Value::Null)),
+        show_items.len(),
+    ) || search_has_more(
+        page,
+        json_i64(anchors.pointer("/data/total").unwrap_or(&Value::Null)),
+        anchor_items.len(),
+    );
+    RoomListPage { has_more, items }
+}
+
+/// 判断搜索结果条目此刻是否在播。
+///
+/// 两个搜索索引都用 `isLive`（1 在播 / 2 未开播）。主播索引额外带 `isLoop`，
+/// 视频轮播房间会同时给出 `isLive = 1`；这里把轮播算作未开播，
+/// 与 [`live_status_from_room_info`] 的口径一致，避免搜索角标和房间页互相打脸。
+fn is_search_live(item: &Value) -> bool {
+    json_i64(item.get("isLive").unwrap_or(&Value::Null)) == 1
+        && json_i64(item.get("isLoop").unwrap_or(&Value::Null)) != 1
+}
+
+/// 取搜索结果封面。未开播房间的 `roomSrc` 常是过期截图或占位图，
+/// 缺失时退回主播头像，至少不让卡片空一块。
+fn search_cover(item: &Value) -> String {
+    let cover = json_str(item.get("roomSrc").unwrap_or(&Value::Null));
+    if cover.is_empty() {
+        json_str(item.get("avatar").unwrap_or(&Value::Null))
+    } else {
+        cover
+    }
+}
+
+/// 搜索索引的翻页判定。
+///
+/// 上游 `total` 是命中总数而非可翻页数，实测会比真正能取到的结果多，
+/// 因此以「本页是否取满」为主，`total` 只作上界，避免在尾部空转翻页。
+fn search_has_more(page: u32, total: i64, item_count: usize) -> bool {
+    if item_count < SEARCH_PAGE_SIZE {
+        return false;
+    }
+    total <= 0 || i64::from(page) * (SEARCH_PAGE_SIZE as i64) < total
 }
 
 /// 选取斗鱼轻量 `betard` 接口返回的房间对象，
@@ -489,72 +664,40 @@ impl LiveSite for DouyuSite {
 
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
-        let url = format!(
-            "https://www.douyu.com/japi/search/api/searchShow?kw={}&page={page}&pageSize=20",
-            urlencoding_encode(keyword)
-        );
-        let mut request = self
-            .client
-            .get(&url)
-            .header("user-agent", UA)
-            .header("referer", "https://www.douyu.com/search/");
-        let cookie = self.search_cookie();
-        if !cookie.is_empty() {
-            request = request.header("cookie", cookie);
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Ok(RoomListPage {
+                has_more: false,
+                items: Vec::new(),
+            });
         }
-        let text = request
-            .send()
-            .await
-            .map_err(|e| Self::err(format!("http: {e}")))?
-            .text()
-            .await
-            .map_err(|e| Self::err(format!("body: {e}")))?;
-        let v: Value = serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))?;
-        let mut items = Vec::new();
-        if let Some(arr) = v
-            .pointer("/data/relateShow")
-            .or_else(|| v.pointer("/data/list"))
-            .and_then(|x| x.as_array())
-        {
-            for item in arr {
-                let room_id = json_str(
-                    item.get("rid")
-                        .or_else(|| item.get("roomId"))
-                        .unwrap_or(&Value::Null),
-                );
-                if room_id.is_empty() {
-                    continue;
-                }
-                items.push(LiveRoomItem {
-                    site_id: SiteId::Douyu,
-                    room_id,
-                    title: json_str(
-                        item.get("roomName")
-                            .or_else(|| item.get("rn"))
-                            .unwrap_or(&Value::Null),
-                    ),
-                    cover: json_str(
-                        item.get("roomSrc")
-                            .or_else(|| item.get("rs16"))
-                            .unwrap_or(&Value::Null),
-                    ),
-                    user_name: json_str(
-                        item.get("nickName")
-                            .or_else(|| item.get("nn"))
-                            .unwrap_or(&Value::Null),
-                    ),
-                    online: json_i64(
-                        item.get("hot")
-                            .or_else(|| item.get("ol"))
-                            .unwrap_or(&Value::Null),
-                    ),
-                });
+        // `searchShow` 只索引正在直播的房间，`searchAnchor` 覆盖全部主播并用
+        // `isLive` 标出开播状态。两条一起取，搜索才能命中未开播的主播；
+        // 两个索引都按同一个 `page` 翻页，页码可以同步推进。
+        //
+        // 一页发两个请求，撞上斗鱼搜索风控（`error: 8` 要求过验证码）的概率也翻倍，
+        // 因此只在两个索引都失败时才报错：一个能用就先把它的结果给出来。
+        let (shows, anchors) = futures_util::future::join(
+            self.search_json("searchShow", keyword, page),
+            self.search_json("searchAnchor", keyword, page),
+        )
+        .await;
+        if let (Err(show_error), Err(_)) = (&shows, &anchors) {
+            return Err(show_error.clone());
+        }
+        for (endpoint, result) in [
+            ("searchShow", shows.as_ref()),
+            ("searchAnchor", anchors.as_ref()),
+        ] {
+            if let Err(error) = result {
+                tracing::debug!("douyu {endpoint} unavailable, using the other index: {error:?}");
             }
         }
-        Ok(RoomListPage {
-            has_more: items.len() >= 20,
-            items,
-        })
+        Ok(merge_search_indexes(
+            &shows.unwrap_or(Value::Null),
+            &anchors.unwrap_or(Value::Null),
+            page,
+        ))
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
@@ -736,6 +879,128 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    /// 真实演练两路搜索索引：只有真实请求能证明 `searchAnchor` 覆盖未开播主播、
+    /// `searchShow` 提供直播标题，且两路都能翻到第二页。
+    ///
+    /// 关键词刻意用主播名而不是游戏名：游戏名命中的主播索引按热度排序，
+    /// 首页可能全是在播主播，覆盖不到未开播分支。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_search_covers_offline_anchors_smoke() {
+        let site = DouyuSite::default();
+        let first = site.search_rooms("旭旭宝宝", 1).await.expect("page 1");
+        assert!(!first.items.is_empty(), "search page 1 returned no rooms");
+        assert!(first.has_more, "search page 1 should offer another page");
+        // 未开播条目里必须有来自主播索引的那部分：它们的 `description` 是签名
+        // 而不是直播标题，因此标题留空。轮播房间（`isLoop = 1`）同样算未开播，
+        // 但它来自房间索引、带真实房间名，所以这里不能要求所有未开播条目都没标题。
+        assert!(
+            first
+                .items
+                .iter()
+                .any(|item| item.live_status == Some(false) && item.title.is_empty()),
+            "search page 1 returned no offline anchors from the anchor index"
+        );
+        assert!(
+            first
+                .items
+                .iter()
+                .any(|item| item.live_status == Some(true) && !item.title.is_empty()),
+            "search page 1 returned no live room with a title"
+        );
+
+        let second = site.search_rooms("旭旭宝宝", 2).await.expect("page 2");
+        assert!(!second.items.is_empty(), "search page 2 returned no rooms");
+        let first_ids: Vec<_> = first.items.iter().map(|item| &item.room_id).collect();
+        assert!(
+            second
+                .items
+                .iter()
+                .any(|item| !first_ids.contains(&&item.room_id)),
+            "search page 2 repeated page 1 exactly"
+        );
+    }
+
+    #[test]
+    fn search_merges_live_rooms_before_offline_anchors() {
+        let shows = serde_json::json!({
+            "error": 0,
+            "data": {
+                "total": 909,
+                "relateShow": [
+                    {"rid": "288016", "roomName": "斗鱼一姐", "nickName": "旭旭宝宝",
+                     "roomSrc": "https://img.example/live.jpg", "hot": "237.2万", "isLive": 1}
+                ]
+            }
+        });
+        let anchors = serde_json::json!({
+            "error": 0,
+            "data": {
+                "total": 909,
+                "relateAnchor": [
+                    // 与房间索引重复的 rid 只保留一次，且沿用主播索引的开播判定。
+                    {"rid": "288016", "nickName": "旭旭宝宝", "isLive": 1, "isLoop": 0},
+                    {"rid": "9804176", "nickName": "轮播间", "isLive": 1, "isLoop": 1,
+                     "avatar": "https://img.example/loop.jpg", "description": "个人签名"},
+                    {"rid": "70000", "nickName": "未开播主播", "isLive": 2,
+                     "avatar": "https://img.example/off.jpg"}
+                ]
+            }
+        });
+
+        let page = merge_search_indexes(&shows, &anchors, 1);
+        let ids: Vec<&str> = page.items.iter().map(|x| x.room_id.as_str()).collect();
+        assert_eq!(ids, ["288016", "9804176", "70000"]);
+
+        let live = &page.items[0];
+        assert_eq!(live.live_status, Some(true));
+        assert_eq!(live.title, "斗鱼一姐");
+        assert_eq!(live.online, 2_372_000);
+
+        // `isLoop: 1` 是视频轮播，与 `live_status_from_room_info` 一致按未开播算。
+        assert_eq!(page.items[1].live_status, Some(false));
+        // 主播索引的 description 是签名不是标题，标题必须留空交给展示层退回昵称。
+        assert_eq!(page.items[1].title, "");
+        assert_eq!(page.items[1].cover, "https://img.example/loop.jpg");
+        assert_eq!(page.items[1].online, 0);
+
+        assert_eq!(page.items[2].live_status, Some(false));
+        assert_eq!(page.items[2].user_name, "未开播主播");
+    }
+
+    #[test]
+    fn search_survives_one_unavailable_index() {
+        // 一路索引撞上风控时按空结果处理，另一路仍要出结果。
+        let anchors = serde_json::json!({
+            "data": {"total": 3, "relateAnchor": [{"rid": "1", "nickName": "甲", "isLive": 2}]}
+        });
+        let page = merge_search_indexes(&Value::Null, &anchors, 1);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].live_status, Some(false));
+        assert!(!page.has_more);
+        // 两路都不可用时是空页，而不是 panic。
+        assert!(
+            merge_search_indexes(&Value::Null, &Value::Null, 1)
+                .items
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_has_more_needs_a_full_page_and_room_below_total() {
+        // 不满一页说明已经到底，`total` 再大也不翻。
+        assert!(!search_has_more(1, 900, SEARCH_PAGE_SIZE - 1));
+        assert!(search_has_more(1, 900, SEARCH_PAGE_SIZE));
+        // 正好取完 total 就停。
+        assert!(!search_has_more(
+            2,
+            (SEARCH_PAGE_SIZE * 2) as i64,
+            SEARCH_PAGE_SIZE
+        ));
+        // 接口没给 total 时以满页为准继续翻。
+        assert!(search_has_more(5, 0, SEARCH_PAGE_SIZE));
+    }
 
     #[test]
     fn all_categories_entry_is_recognised_by_the_shared_sentinel() {
