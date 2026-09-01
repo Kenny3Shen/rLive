@@ -428,11 +428,19 @@ export function CategoryBar({
             左侧一条分隔线：它是通往整棵分类树的唯一入口，紧贴横滚区最后一个 chip 时
             读起来像条带的第 42 项，而移动端右边缘正是横滑起手的位置。
 
+            粗指针下 `-mr-3.5` 配收紧的 `pl-0.5` 是一组光学对齐：44px 按钮盒里
+            16px 图标两侧各藏 14px 空白，负右外边距把盒子拉进条带的右侧内边距
+            （溢出可见，命中区到屏幕边缘仅剩 2px），图标右缘于是落在内容右缘上，
+            与下方房间卡片的右缘齐平，也与头部搜索入口的图标共线；分隔线随盒
+            子右移并收紧到图标左侧的 16px 可见留白恰好等于图标右侧到屏幕边缘
+            的留白，按钮两侧的空白因此一致。细指针下按钮只有 32px 宽，这组
+            偏移不成立，桌面端维持原位。
+
             这个按钮与头部搜索入口上下相邻且同尺寸，两者的竖直中线要对齐：本条带的
             横向内边距靠 `-mx-4 px-4 md:-mx-5 md:px-5` 跟住内容容器，头部也用同一档，
-            改动任一侧的内边距都会让这对按钮错开。 */}
+            且两处的光学偏移共用 `-mr-3.5` 一档；改动任一侧都会让这对按钮错开。 */}
         {showPanelEntry && (
-          <div className="flex shrink-0 items-center border-l border-border-subtle pl-1.5">
+          <div className="flex shrink-0 items-center border-l border-border-subtle pl-1.5 [@media(pointer:coarse)]:pl-0.5 [@media(pointer:coarse)]:-mr-3.5">
             <Tooltip>
               <TooltipTrigger
                 render={

@@ -621,7 +621,9 @@ export function Shell() {
                   className={cn(
                     // 横向内边距跟随内容容器（`p-4 md:p-5`），不另取一档：头部右端的搜索入口与
                     // 分类条右端的「全部分类」是上下相邻的两个 44px 图标按钮，内边距差一档
-                    // 就会让它们的竖直中线错开那一档的宽度。
+                    // 就会让它们的竖直中线错开那一档的宽度。两处入口在粗指针下还共用同一档
+                    // `-mr-3.5` 光学右移（图标右缘对齐内容卡片右缘，见各自组件），
+                    // 偏移量不同样会让这对图标错开。
                     "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 md:px-5",
                     !showTopNavigation && "max-md:hidden",
                   )}
