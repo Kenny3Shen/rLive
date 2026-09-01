@@ -619,7 +619,10 @@ export function Shell() {
                   data-slot="app-header"
                   data-mobile-empty={showTopNavigation ? undefined : "true"}
                   className={cn(
-                    "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 max-md:px-3",
+                    // 横向内边距跟随内容容器（`p-4 md:p-5`），不另取一档：头部右端的搜索入口与
+                    // 分类条右端的「全部分类」是上下相邻的两个 44px 图标按钮，内边距差一档
+                    // 就会让它们的竖直中线错开那一档的宽度。
+                    "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 md:px-5",
                     !showTopNavigation && "max-md:hidden",
                   )}
                 >

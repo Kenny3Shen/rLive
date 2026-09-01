@@ -17,21 +17,58 @@ import {
 const RECOMMEND_KEY = "__recommend__";
 
 /**
- * chip 的高度。
+ * chip 的可见高度。
  *
- * 粗指针下取 44px（`h-11`），与设计系统给 button / tabs / toggle / select / input 的
- * `min-h-11` 一致。原先压到 32px 想把像素还给房间网格，但同一行里的「全部分类」按钮是
- * `size="icon"`，它继承那条 44px 下限且 `hasHiddenCategories` 对五个平台全部为真，
- * 于是 `items-center` 容器的高度本就由它决定 —— chip 压矮一个像素也省不到，只是让移动端
- * 最高频的点击目标成了全应用唯一低于 44px 的交互控件。
+ * 粗指针下 36px，不是 44px：strip 被 `h-12` 锁在 48px，44px 的 chip 只剩 `py-0.5`
+ * 那 2px 缝，实心背景几乎顶满整条 bar，读起来像 bar 自己换了底色而不是里面放着一排
+ * 按钮。36px 留出上下各 6px，chip 重新成为浮在 bar 上的东西 —— bar 高度不变，
+ * 让出来的是 chip 自己的像素。
+ *
+ * 44px 的触摸下限没有放弃，它挪到了 `CHIP_TOUCH_TARGET` 的透明外扩里。
+ *
+ * 附带的 `min-h-0` 是给条带里那些基于 `Button` 的成员用的（错误态的重试按钮）：
+ * button variant 自带 `[@media(pointer:coarse)]:min-h-11`，而 `min-height` 压得住
+ * `height`，不撤掉它那颗按钮会独自长到 44px 顶满内容盒。它靠 tailwind-merge 起作用 ——
+ * 同组同修饰符只留最后一个，`min-h-11` 因此直接从 class 列表里消失，不依赖两条规则
+ * 在生成的 CSS 里谁先谁后。这与 `styles.css` 里设置页的做法同源：视觉高度归控件，
+ * 触摸高度归 `::after`。
+ *
+ * 水平方向取 `px-2.5`：对 12.8px 的标签足够，且与设计系统里 input / select 的同名
+ * 档位一致。B 站 13 个分区因此从 814px 收到 762px。
  */
-const CHIP_HEIGHT = "h-7 [@media(pointer:coarse)]:h-11";
+const CHIP_HEIGHT = "h-7 [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:min-h-0";
 
 /**
- * 骨架 chip 的宽度序列。刻意错落：真实标签在中文平台约 50–76px、Twitch 的英文标签
- * 51–150px，等宽骨架会在数据落地那一帧让整条重新排布。
+ * 粗指针下把命中区补回 44px。
+ *
+ * 一层透明的 `::after` 纵向外扩 4px：视觉框、背景与焦点描边仍是 36px，手指能碰到的
+ * 范围与 `h-11` 时相同，于是 chip 不会成为全应用唯一低于设计系统 `min-h-11` 的
+ * 交互控件。4px 正好填满 strip 的内容盒（`h-12` 48px 减 `py-0.5` 两侧共 4px 得
+ * 44px，36px 的 chip 居中后上下各余 4px），命中区不越过 padding 边缘，
+ * 因此不会触发纵向溢出。
  */
-const SKELETON_WIDTHS = ["w-14", "w-20", "w-16", "w-24", "w-16", "w-20"] as const;
+const CHIP_TOUCH_TARGET =
+  "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:-inset-y-1 [@media(pointer:coarse)]:after:content-['']";
+
+/**
+ * chip 的圆角。
+ *
+ * 不用 `rounded-full`：胶囊形在粗指针下尤其不划算 —— 全圆角两端各吃掉半个高度只
+ * 用于弧线，而同一行里的「全部分类」按钮是圆角矩形，两种形状并排读起来像两套控件。
+ *
+ * 取设计系统 `size="sm"` 那一档的半径（实测 9.6px）。chip 的其余尺寸（`px-2.5`、
+ * `text-[0.8rem]`，细指针下连 `h-7` 都对得上）本来就是那一档，`toggle` 里同款尺寸的
+ * 按钮用的也正是这个值，形状没有理由自己另开一路。隔壁「全部分类」是 `rounded-lg`
+ * 的 12px：设计系统里半径随控件档位走，图标按钮那一档本就比 `sm` 大一点，两者
+ * 因此不是同一个数 —— 要对齐的是「都是圆角矩形」，不是精确到小数点的同一半径。
+ */
+const CHIP_RADIUS = "rounded-[min(var(--radius-md),12px)]";
+
+/**
+ * 骨架 chip 的宽度序列。刻意错落：真实标签在中文平台约 45–71px、Twitch 的英文标签
+ * 46–145px，等宽骨架会在数据落地那一帧让整条重新排布。
+ */
+const SKELETON_WIDTHS = ["w-12", "w-18", "w-14", "w-22", "w-14", "w-18"] as const;
 
 /**
  * 一次箭头点击滚过的可见宽度比例。不取满屏：留一截重叠，跨越处那个被切成两半的
@@ -39,10 +76,17 @@ const SKELETON_WIDTHS = ["w-14", "w-20", "w-16", "w-24", "w-16", "w-20"] as cons
  */
 const ARROW_SCROLL_RATIO = 0.8;
 
-/** 两端是否还能继续滚。驱动边缘渐隐与桌面箭头的出现。 */
-type StripEdges = Readonly<{ start: boolean; end: boolean }>;
+/**
+ * 条带的滚动余量。
+ *
+ * `overflowing` 决定桌面箭头是否登场，`start` / `end` 决定各自那一侧是否还能按。
+ * 三者分开而不是只留两端：箭头占布局宽度，只按「这一侧还有内容」显隐会让 chip 在
+ * 滚到两端的那一刻左右跳动；按「整条是否溢出」显隐，则滚动过程中宽度恒定，
+ * 只在换平台或缩窗口改变溢出状态时变一次。
+ */
+type StripEdges = Readonly<{ overflowing: boolean; start: boolean; end: boolean }>;
 
-const NO_EDGES: StripEdges = { start: false, end: false };
+const NO_EDGES: StripEdges = { overflowing: false, start: false, end: false };
 
 /**
  * 把某个 chip 滚到条带中央。
@@ -57,6 +101,8 @@ const NO_EDGES: StripEdges = { start: false, end: false };
  * 目标位置而不用 `offsetLeft`，免得依赖 `offsetParent` 恰好是哪一层。
  */
 function centerChip(strip: HTMLElement, chip: HTMLElement) {
+  // 条带没溢出时没有横向滚动可做，`scrollLeft` 恒为 0。
+  if (strip.scrollWidth <= strip.clientWidth) return;
   const stripBox = strip.getBoundingClientRect();
   const chipBox = chip.getBoundingClientRect();
   const delta = chipBox.left - stripBox.left - (stripBox.width - chipBox.width) / 2;
@@ -67,16 +113,19 @@ function centerChip(strip: HTMLElement, chip: HTMLElement) {
 }
 
 /**
- * 跟踪条带两端是否还有内容。
+ * 跟踪条带的滚动余量。
  *
- * 横滚是这条 bar 的主要浏览动作，而滚动条被显式隐藏（一条 8px 的水平滚动条会把
- * 高度再撑一截，而这东西整个浏览过程都钉在顶部）。没有替代提示时，Twitch 的 41 个
- * chip 在移动端只能看到约一成、桌面约四成，剩下的内容不可发现。
+ * 横滚是这条 bar 的主要浏览动作，而滚动条被显式隐藏（经典滚动条会把这条常驻顶部的
+ * bar 再撑一截）。移动端还有横滑手势兜着，桌面只剩滚轮 —— 没有替代提示时 Twitch 的
+ * 41 个 chip 在桌面只能看到约四成，剩下的内容不可发现，箭头就是那个替代提示。
  *
  * 用 `scrollLeft` 与 `scrollWidth` 直接算而不监听 IntersectionObserver：条带内容随
- * 平台切换整体替换，观察者要跟着重建；这里只有两个布尔值，滚动与尺寸变化时重算一次
+ * 平台切换整体替换，观察者要跟着重建；这里只有三个布尔值，滚动与尺寸变化时重算一次
  * 即可。四舍五入留 1px 容差 —— 子像素布局下 `scrollLeft` 到不了精确的
  * `scrollWidth - clientWidth`。
+ *
+ * 箭头登场会让条带变窄，`ResizeObserver` 于是再测一轮 —— 但更窄只会让溢出更多，
+ * `overflowing` 不会翻回 false，因此没有「出现 → 不溢出 → 消失」的抖动。
  */
 function useStripEdges(ref: React.RefObject<HTMLElement | null>, contentKey: string): StripEdges {
   const [edges, setEdges] = useState<StripEdges>(NO_EDGES);
@@ -89,8 +138,12 @@ function useStripEdges(ref: React.RefObject<HTMLElement | null>, contentKey: str
       const max = strip.scrollWidth - strip.clientWidth;
       const left = strip.scrollLeft;
       setEdges((current) => {
-        const next = { start: left > 1, end: left < max - 1 };
-        return current.start === next.start && current.end === next.end ? current : next;
+        const next = { overflowing: max > 1, start: left > 1, end: left < max - 1 };
+        return current.overflowing === next.overflowing &&
+          current.start === next.start &&
+          current.end === next.end
+          ? current
+          : next;
       });
     };
 
@@ -163,7 +216,7 @@ export function CategoryBar({
     : RECOMMEND_KEY;
   const showPanelEntry = hasHiddenCategories(categories);
   // chip 集合的身份。换平台、分类树到达、插入深层选中项都会改变它，
-  // 正是需要重新测量两端与重置首帧标记的时机。
+  // 正是需要重置首帧标记的时机。
   const contentKey = chips.map((chip) => chip.key).join("|");
   const edges = useStripEdges(stripRef, contentKey);
 
@@ -254,15 +307,6 @@ export function CategoryBar({
       ? selectedKey
       : RECOMMEND_KEY;
 
-  // 边缘渐隐。遮罩画在滚动容器自身上，因此淡出的是视口两侧而不是内容的首尾两项。
-  // 只在那一侧真的还有内容时才淡，否则静止的条带会无缘无故缺一角。
-  //
-  // 遮罩会连带淡化贴在边缘那个 chip 的焦点描边，但键盘路径到不了那里：方向键移动焦点
-  // 时 `centerChip` 会把它带到中间，而 Tab 进来时落在的是已被居中的选中项。
-  const fadeMask = `linear-gradient(to right, ${
-    edges.start ? "transparent 0, #000 2rem" : "#000 0"
-  }, ${edges.end ? "#000 calc(100% - 2rem), transparent 100%" : "#000 100%"})`;
-
   return (
     <div
       // sticky 的坑：Shell 的滚动容器带 `p-4 md:p-5`，`top-0` 会把条带钉在内边距
@@ -277,8 +321,20 @@ export function CategoryBar({
         "border-b border-border-subtle bg-background",
       )}
     >
-      <div className="flex items-center gap-2 py-2.5">
-        <div className="relative flex min-w-0 flex-1 items-center">
+      <div className="flex items-center gap-2 py-0 md:py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {/* 桌面横滚辅助。移动端不出：那里滑动是直接手势，两个按钮只会占掉 chip 的
+              宽度。它们是 strip 的 flex 兄弟而非绝对定位的浮层 —— 边缘渐隐已经撤掉，
+              浮在 chip 上的实底按钮会盖掉半个分区名，也让「按下去是翻页还是选分区」
+              变得可疑。占布局的代价是溢出出现时 chip 区窄掉两颗按钮的宽度，
+              但按 `overflowing` 显隐（而不是按各自那侧还有没有内容），滚动过程中
+              宽度恒定，只在换平台或缩窗口时变一次。 */}
+          <StripArrow
+            side="start"
+            mounted={edges.overflowing}
+            enabled={edges.start}
+            onClick={() => scrollByPage(-1)}
+          />
           <div
             ref={stripRef}
             role="tablist"
@@ -287,9 +343,15 @@ export function CategoryBar({
             onKeyDown={onStripKeyDown}
             // 纵向滚动仍归页面，横向留给这条 strip；同时声明成横滑手势的自有表面，
             // 使 Shell 的平台切换手势不会把这里的横向滚动抢走。
+            //
+            // `h-12` 锁死高度：`py-0.5` 两侧各 2px 加 44px 内容盒，正好等于头部平台
+            // bar 的 48px。36px 的 chip 居中后，焦点描边（1.9px 描边 + 2px offset）
+            // 落在 99–143px，刚好贴着内容盒的上下沿而不越界，`py-0.5` 那 2px 是留给
+            // 描边的最后一道余量。移动端滚动条是覆盖式的（实测占 0px）不影响布局，
+            // 桌面经典滚动条会另吃十几像素并把 chip 压扁，所以两条隐藏规则都留着 ——
+            // 高度由 `h-12` 声明，不再靠「滚动条恰好不占位」这件事撑着。
             data-horizontal-swipe-surface
-            className="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 py-0.5 touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            style={{ maskImage: fadeMask, WebkitMaskImage: fadeMask }}
+            className="-mx-1 flex h-12 min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 py-0.5 touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             <CategoryChipButton
               label="推荐"
@@ -300,12 +362,10 @@ export function CategoryBar({
 
             {loading && !error && (
               <>
-                {/* 宽度错落而非一律 `w-16`：真实 chip 在中文平台约 50–76px、Twitch
-                    的英文标签 51–150px，等宽骨架会在数据落地那一帧整条重新排布。 */}
                 {SKELETON_WIDTHS.map((width, index) => (
                   <Skeleton
                     key={index}
-                    className={cn(CHIP_HEIGHT, "shrink-0 rounded-full", width)}
+                    className={cn(CHIP_HEIGHT, CHIP_RADIUS, "shrink-0", width)}
                   />
                 ))}
               </>
@@ -328,7 +388,15 @@ export function CategoryBar({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="shrink-0 rounded-full text-muted-foreground"
+                // 借 chip 的三件套让它与相邻 chip 同高同形 —— 它在错误态里顶的正是
+                // chip 的位置。`border-0` 撤掉 button variant 那圈透明边框：`::after`
+                // 以 padding 盒定位，1px 边框会把命中区从 44px 削到 42.5px。
+                className={cn(
+                  CHIP_HEIGHT,
+                  CHIP_RADIUS,
+                  CHIP_TOUCH_TARGET,
+                  "relative shrink-0 border-0 text-muted-foreground",
+                )}
                 onClick={onRetry}
               >
                 <RotateCcw data-icon="inline-start" aria-hidden />
@@ -336,13 +404,12 @@ export function CategoryBar({
               </Button>
             )}
           </div>
-
-          {/* 桌面横滚辅助。触摸端不出：那里滑动是直接手势，两个按钮只会占掉 chip 的
-              宽度。它们落在渐隐带上、绝对定位不参与布局，因此出现与消失不会让 chip
-              左右跳动。`aria-hidden` + 不可聚焦：键盘已有方向键与 Home/End，
-              tablist 里多两个 tab stop 只是噪音。 */}
-          <StripArrow side="start" visible={edges.start} onClick={() => scrollByPage(-1)} />
-          <StripArrow side="end" visible={edges.end} onClick={() => scrollByPage(1)} />
+          <StripArrow
+            side="end"
+            mounted={edges.overflowing}
+            enabled={edges.end}
+            onClick={() => scrollByPage(1)}
+          />
         </div>
 
         {/* 与头部搜索入口同款：ghost + icon，标签退到 `aria-label` 与 tooltip。
@@ -351,7 +418,11 @@ export function CategoryBar({
             而不是这里手写一个动效。桌面端这里是一次跳转，因此不带该属性。
 
             左侧一条分隔线：它是通往整棵分类树的唯一入口，紧贴横滚区最后一个 chip 时
-            读起来像条带的第 42 项，而移动端右边缘正是横滑起手的位置。 */}
+            读起来像条带的第 42 项，而移动端右边缘正是横滑起手的位置。
+
+            这个按钮与头部搜索入口上下相邻且同尺寸，两者的竖直中线要对齐：本条带的
+            横向内边距靠 `-mx-4 px-4 md:-mx-5 md:px-5` 跟住内容容器，头部也用同一档，
+            改动任一侧的内边距都会让这对按钮错开。 */}
         {showPanelEntry && (
           <div className="flex shrink-0 items-center border-l border-border-subtle pl-1.5">
             <Tooltip>
@@ -384,36 +455,43 @@ export function CategoryBar({
 
 type StripArrowProps = {
   side: "start" | "end";
-  visible: boolean;
+  /** 整条是否溢出。为假时不渲染，桌面窗口够宽的常态下这两个按钮不存在。 */
+  mounted: boolean;
+  /** 这一侧是否还有内容可滚。为假时禁用而不卸载，避免按到端点时布局跳动。 */
+  enabled: boolean;
   onClick: () => void;
 };
 
 /**
  * 桌面端的横滚箭头。
  *
- * 只在细指针下渲染（`[@media(pointer:fine)]`），且只在那一侧还有内容时可见。用
- * `opacity` 与 `pointer-events` 而不是条件渲染：淡入淡出跟着渐隐带一起变化，
- * 不会在到达两端的那一刻插入一次布局变动。
+ * 只在细指针下渲染（`[@media(pointer:fine)]:flex` 配 `hidden`）：触摸端滑动是直接
+ * 手势，两个按钮只会占掉 chip 的宽度。
+ *
+ * `aria-hidden` + 不可聚焦：键盘已有方向键与 Home/End 走遍整条，tablist 的可达性
+ * 不依赖这两个按钮，把它们塞进 Tab 序列只是给键盘用户多两个空站。这也意味着它们
+ * 纯属指针辅助 —— 读屏用户看到的仍是一条完整的 tablist。
+ *
+ * 尺寸对齐右侧的「全部分类」：`size="icon"` 在粗指针下有 44px 下限，但这两个按钮
+ * 只在细指针下出现，那里两者都是 32px。
  */
-function StripArrow({ side, visible, onClick }: StripArrowProps) {
+function StripArrow({ side, mounted, enabled, onClick }: StripArrowProps) {
+  if (!mounted) return null;
   const Icon = side === "start" ? ChevronLeft : ChevronRight;
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon"
       aria-hidden
       tabIndex={-1}
+      disabled={!enabled}
       onClick={onClick}
-      className={cn(
-        "absolute top-1/2 z-10 hidden size-7 -translate-y-1/2 items-center justify-center rounded-full",
-        "border border-border-subtle bg-background text-muted-foreground shadow-sm",
-        "transition-opacity duration-150 hover:text-foreground",
-        "[@media(pointer:fine)]:flex",
-        side === "start" ? "left-0" : "right-0",
-        visible ? "opacity-100" : "pointer-events-none opacity-0",
-      )}
+      // `disabled:opacity-50` 来自 button variant；`shrink-0` 免得箭头被 chip 挤扁。
+      className="hidden shrink-0 text-muted-foreground [@media(pointer:fine)]:flex"
     >
-      <Icon className="size-4" aria-hidden />
-    </button>
+      <Icon aria-hidden />
+    </Button>
   );
 }
 
@@ -448,7 +526,9 @@ function CategoryChipButton({
       onClick={onClick}
       className={cn(
         CHIP_HEIGHT,
-        "flex shrink-0 items-center gap-1 rounded-full px-3 text-[0.8rem] font-medium whitespace-nowrap transition-colors focus-ring",
+        CHIP_RADIUS,
+        CHIP_TOUCH_TARGET,
+        "relative flex shrink-0 items-center gap-1 px-2.5 text-[0.8rem] font-medium whitespace-nowrap transition-colors focus-ring",
         active
           ? "bg-primary text-primary-foreground"
           : "bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground",
@@ -459,7 +539,10 @@ function CategoryChipButton({
           <span className={cn(active ? "text-primary-foreground/75" : "text-muted-foreground/70")}>
             {parentLabel}
           </span>
-          <span aria-hidden className={cn(active ? "text-primary-foreground/45" : "text-muted-foreground/45")}>
+          <span
+            aria-hidden
+            className={cn(active ? "text-primary-foreground/45" : "text-muted-foreground/45")}
+          >
             /
           </span>
         </>
