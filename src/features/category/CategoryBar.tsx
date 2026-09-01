@@ -321,7 +321,10 @@ export function CategoryBar({
         "border-b border-border-subtle bg-background",
       )}
     >
-      <div className="flex items-center gap-2 py-0 md:py-2.5">
+      {/* 整条 bar 的高度就是条带的 `h-12`，这一行不再另加竖直内边距：桌面与
+          移动端同高，箭头与「全部分类」靠 `items-center` 与 chip 共用同一条
+          竖直中线。 */}
+      <div className="flex items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-1">
           {/* 桌面横滚辅助。移动端不出：那里滑动是直接手势，两个按钮只会占掉 chip 的
               宽度。它们是 strip 的 flex 兄弟而非绝对定位的浮层 —— 边缘渐隐已经撤掉，
@@ -350,6 +353,11 @@ export function CategoryBar({
             // 描边的最后一道余量。移动端滚动条是覆盖式的（实测占 0px）不影响布局，
             // 桌面经典滚动条会另吃十几像素并把 chip 压扁，所以两条隐藏规则都留着 ——
             // 高度由 `h-12` 声明，不再靠「滚动条恰好不占位」这件事撑着。
+            //
+            // 隐藏规则生效的前提：styles.css 里全局 `* { scrollbar-width: thin }` 住在
+            // `@layer base`。它若留在层外，会压过 `@layer utilities` 里的这两条（未分层
+            // 样式在级联中赢过一切 layer），且 Chromium 一旦 `scrollbar-width` 非
+            // `auto` 就会连带忽略 `::-webkit-scrollbar` 自定义，两条路同时堵死。
             data-horizontal-swipe-surface
             className="-mx-1 flex h-12 min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 py-0.5 touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
