@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use futures_util::future;
+use futures_util::stream::{self, StreamExt};
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 
@@ -57,6 +58,11 @@ const SHARD_WINDOW: usize = 3;
 /// 标签聚合视图一页并发拉取的分区数。与语言分片同样取三：突发请求量相当，
 /// 三个分区约落在 70-90 个去重房间，够填满一页。
 const DIRECTORY_SHARD_WINDOW: usize = 3;
+
+/// 取分类树时同时在飞的标签数。实测 41 个标签，无上限扇出会一次打出 41 个
+/// 并发请求；取 8 与仓库其他扇出（IPTV 探测 12、关注刷新 5）同量级，
+/// 首次取树约 6 个往返，之后由 `TAG_DIRECTORIES` 缓存兜住。
+const DIRECTORY_FANOUT: usize = 8;
 
 /// 一次取回的分类标签数。上游 `searchCategoryTags` 实测返回 41 个，
 /// 取 100 留出余量，同时避免上游哪天放开时一次拉回过多。
@@ -120,6 +126,17 @@ struct PublicWebContext {
 }
 
 static PUBLIC_WEB_CONTEXT: OnceLock<Mutex<Option<PublicWebContext>>> = OnceLock::new();
+
+/// 每个标签下的分区列表按标签 UUID 缓存。分类树是慢变数据，而它同时被两条
+/// 路径要用：`get_categories` 一次要取全部标签的分区，`tag_page` 每翻一页
+/// 都要同一个标签的分区来算窗口。没有缓存时前者每次打开分类条要发数十个请求、
+/// 后者每页多付一个串行往返。
+static TAG_DIRECTORIES: OnceLock<Mutex<HashMap<String, (Instant, Vec<LiveSubCategory>)>>> =
+    OnceLock::new();
+
+/// 分区缓存的存活时间。取半小时：分类树的增减以天计，而这个值同时决定
+/// 「全部X」翻页期间窗口切片的稳定性。
+const TAG_DIRECTORIES_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// Twitch 的 Web 客户端在每个 GraphQL 请求中都发送设备标识符。省略它会把调用方
 /// 标记为未识别客户端，这是决定播放 token 是否被服务端拼接广告的信号之一。
@@ -427,7 +444,7 @@ impl TwitchSite {
     async fn shard_page(&self, feed: impl ShardFeed, page: u32) -> AppResult<RoomListPage> {
         let page = page.max(1);
         let Some(start) = shard_window_start(page) else {
-            return Ok(empty_page());
+            return Ok(RoomListPage::empty());
         };
         let window_end = (start + SHARD_WINDOW).min(LANGUAGE_SHARDS.len());
 
@@ -513,6 +530,15 @@ impl TwitchSite {
     /// 所以这里只取第一页 100 条，不做游标翻页。实测 41 个标签合计约 1600 个
     /// 去重分区，远多于过去单层的 30 个。
     async fn tag_directories(&self, tag_id: &str) -> AppResult<Vec<LiveSubCategory>> {
+        if let Some(cached) = Self::tag_directories_cache()
+            .lock()
+            .map_err(|_| Self::parse_err("Twitch tag directory mutex poisoned"))?
+            .get(tag_id)
+            .filter(|(fetched_at, _)| fetched_at.elapsed() < TAG_DIRECTORIES_TTL)
+            .map(|(_, directories)| directories.clone())
+        {
+            return Ok(cached);
+        }
         let data = self
             .graphql(
                 "RLiveTwitchTagDirectories",
@@ -534,7 +560,53 @@ impl TwitchSite {
                 json!({ "first": DIRECTORY_PAGE_SIZE, "tags": [tag_id] }),
             )
             .await?;
-        Ok(parse_tag_directories(&data, tag_id))
+        let directories = parse_tag_directories(&data, tag_id);
+        Self::tag_directories_cache()
+            .lock()
+            .map_err(|_| Self::parse_err("Twitch tag directory mutex poisoned"))?
+            .insert(tag_id.to_string(), (Instant::now(), directories.clone()));
+        Ok(directories)
+    }
+
+    fn tag_directories_cache() -> &'static Mutex<HashMap<String, (Instant, Vec<LiveSubCategory>)>> {
+        TAG_DIRECTORIES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// 装配分类树：一级是游戏类型标签，二级是标签下的分区。
+    async fn category_tree(&self) -> AppResult<Vec<LiveCategory>> {
+        // `category_tags` 自己就会走 graphql 并填好共享上下文缓存，
+        // 因此下面的扇出不会再各自引导一次 Client-ID。
+        let tags = self.category_tags().await?;
+        // 逐个标签取分区，但必须设闸：实测 41 个标签，无上限时一次打开分类条
+        // 就是 41 个并发请求，远超同文件语言分片自定的 `SHARD_WINDOW`。
+        // `buffered` 保序，因此下面能直接和 `tags` 对拉链。
+        let mut children_by_tag = Vec::with_capacity(tags.len());
+        let mut pending = stream::iter(
+            tags.iter()
+                .map(|tag| self.tag_directories(&tag.id))
+                .collect::<Vec<_>>(),
+        )
+        .buffered(DIRECTORY_FANOUT);
+        while let Some(children) = pending.next().await {
+            children_by_tag.push(children?);
+        }
+        drop(pending);
+
+        let mut categories = Vec::new();
+        for (tag, children) in tags.iter().zip(children_by_tag) {
+            if children.is_empty() {
+                continue;
+            }
+            categories.push(LiveCategory {
+                id: tag.id.clone(),
+                name: tag.name.clone(),
+                children,
+            });
+        }
+        if categories.is_empty() {
+            return Err(Self::parse_err("Twitch 未返回可用直播分类"));
+        }
+        Ok(categories)
     }
 
     async fn recommend_page(&self, page: u32) -> AppResult<RoomListPage> {
@@ -565,7 +637,7 @@ impl TwitchSite {
         let page = page.max(1);
         let directories = self.tag_directories(&tag_id).await?;
         let Some(start) = directory_window_start(page, directories.len()) else {
-            return Ok(empty_page());
+            return Ok(RoomListPage::empty());
         };
         let window = &directories[start..(start + DIRECTORY_SHARD_WINDOW).min(directories.len())];
 
@@ -799,25 +871,7 @@ pub(crate) async fn twitch_ad_fallback_url(
 #[async_trait::async_trait]
 impl LiveSite for TwitchSite {
     async fn get_categories(&self) -> AppResult<Vec<LiveCategory>> {
-        // 先预热共享上下文，否则下面的扇出会让每个标签各自去引导一次 Client-ID。
-        self.public_web_context().await?;
-        let tags = self.category_tags().await?;
-        let requests = tags.iter().map(|tag| self.tag_directories(&tag.id));
-        let mut categories = Vec::new();
-        for (tag, children) in tags.iter().zip(future::try_join_all(requests).await?) {
-            if children.is_empty() {
-                continue;
-            }
-            categories.push(LiveCategory {
-                id: tag.id.clone(),
-                name: tag.name.clone(),
-                children,
-            });
-        }
-        if categories.is_empty() {
-            return Err(Self::parse_err("Twitch 未返回可用直播分类"));
-        }
-        Ok(categories)
+        self.category_tree().await
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
@@ -841,7 +895,7 @@ impl LiveSite for TwitchSite {
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let keyword = keyword.trim();
         if keyword.is_empty() {
-            return Ok(empty_page());
+            return Ok(RoomListPage::empty());
         }
         self.search_page(keyword, page).await
     }
@@ -968,13 +1022,6 @@ impl LiveSite for TwitchSite {
                 variant.frame_rate_milli,
             ),
         ])
-    }
-}
-
-fn empty_page() -> RoomListPage {
-    RoomListPage {
-        has_more: false,
-        items: Vec::new(),
     }
 }
 

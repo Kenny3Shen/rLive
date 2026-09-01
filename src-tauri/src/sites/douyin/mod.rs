@@ -578,10 +578,7 @@ impl LiveSite for DouyinSite {
     async fn search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
         let keyword = keyword.trim();
         if keyword.is_empty() {
-            return Ok(RoomListPage {
-                has_more: false,
-                items: Vec::new(),
-            });
+            return Ok(RoomListPage::empty());
         }
         self.ensure_web_session().await?;
         let page = page.max(1);

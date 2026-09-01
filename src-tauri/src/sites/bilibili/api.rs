@@ -1,6 +1,6 @@
 //! Bilibili 直播 API 的纯解析器与底层辅助函数。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use md5::{Digest, Md5};
@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
-    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
+    PlayUrl, RoomListPage, SiteId, accept_room_id, parse_live_started_at,
 };
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
@@ -282,11 +282,11 @@ pub fn parse_search_rooms(raw: &str, page: u32) -> AppResult<RoomListPage> {
         Vec::new()
     };
     let mut items = Vec::with_capacity(rooms.len() + users.len());
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::new();
 
     for item in rooms.iter().chain(users.iter()) {
         let room_id = as_str(item.get("roomid").unwrap_or(&Value::Null));
-        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+        if !accept_room_id(&room_id, &mut seen) {
             continue;
         }
         // 按响应里的取值判断，而不是按来自哪个数组：`live_room` 目前全是在播，

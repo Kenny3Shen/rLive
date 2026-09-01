@@ -87,11 +87,14 @@ export type CategoryChip = Readonly<{
   key: string;
   label: string;
   /**
-   * 该 chip 是否为父分区的「全部X」聚合入口。多父分区平台的条带上会混排聚合项与
-   * （被选中而插入的）深层子分类，二者语义不同层级，组件需要据此做视觉区分，
-   * 否则用户无法分辨自己点的是一整个父分区还是其中一个子分类。
+   * 所属父分区名，仅深层子分类有。
+   *
+   * 条带上绝大多数项是父分区的「全部X」聚合入口，唯一的例外是从展开面板选进来、被
+   * `categoryChips` 插到自己父项之后的那一个深层子分类。它光显示子分类名看不出隶属
+   * 关系（「原神」插在「手游」之后，读起来像又一个平级分区），所以带上父分区名构成
+   * 复合标签。聚合项不需要：它的标签本身就是父分区名。
    */
-  aggregate: boolean;
+  parentLabel?: string;
   category: LiveSubCategory;
 }>;
 
@@ -119,13 +122,15 @@ export function categoryChipKey(parentId: string, categoryId: string): string {
  * 名叫「网游」的子分类；而条带上父分区之间横向并列，前缀对每一项都成立，纯属
  * 复读 —— 一行「全部网游 全部手游 全部娱乐」把宽度让给了没有信息量的两个字。
  */
-function chipOf(category: LiveSubCategory, label = category.name): CategoryChip {
+function chipOf(
+  category: LiveSubCategory,
+  label = category.name,
+  parentLabel?: string,
+): CategoryChip {
   return {
     key: categoryChipKey(category.parent_id, category.id),
     label,
-    // 后端约定 id "0" 即按 parent_id 聚合，聚合性因此可以直接从 id 读出，
-    // 不需要生成侧额外传标记。
-    aggregate: category.id === "0",
+    ...(parentLabel ? { parentLabel } : {}),
     category,
   };
 }
@@ -204,7 +209,11 @@ export function categoryChips(
   // 紧随父项插入：视觉上仍属于那个父分区，滑动方向也符合直觉。
   const parentIndex = chips.findIndex((chip) => chip.category.parent_id === parent.id);
   const inserted = [...chips];
-  inserted.splice(parentIndex < 0 ? inserted.length : parentIndex + 1, 0, chipOf(child));
+  inserted.splice(
+    parentIndex < 0 ? inserted.length : parentIndex + 1,
+    0,
+    chipOf(child, child.name, parent.name),
+  );
   return inserted;
 }
 

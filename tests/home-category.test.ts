@@ -207,15 +207,20 @@ describe("category chips flattening", () => {
     expect(categoryChipKey("2", "101,2")).toBe("2:101,2");
   });
 
-  test("marks aggregate entries so the bar can separate them from deep children", () => {
-    expect(categoryChips(multiParent, null).every((chip) => chip.aggregate)).toBe(true);
+  test("attaches parent labels to inserted deep selections", () => {
+    expect(categoryChips(multiParent, null).every((chip) => !chip.parentLabel)).toBe(true);
 
     const withDeep = categoryChips(multiParent, {
       siteId: "douyin",
       parentId: "2",
       categoryId: "202",
     });
-    expect(withDeep.map((chip) => chip.aggregate)).toEqual([true, true, false, true]);
+    expect(withDeep.map((chip) => chip.parentLabel)).toEqual([
+      undefined,
+      undefined,
+      "手游",
+      undefined,
+    ]);
   });
 });
 
