@@ -197,8 +197,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   dismissDialog: () => set({ dialogOpen: false }),
 }));
 
+/** 更新说明正文（Markdown）；为空时返回通用回退文案。 */
 export function releaseNotes(release: UpdateRelease): string {
-  const notes = release.body.trim();
-  if (!notes) return "此版本包含功能改进与问题修复。";
-  return notes.length > 420 ? `${notes.slice(0, 417).trimEnd()}…` : notes;
+  return release.body.trim() || "此版本包含功能改进与问题修复。";
 }

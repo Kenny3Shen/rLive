@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useUpdateStore, releaseNotes } from "@/shared/update/updateStore";
+import { Markdown } from "@/shared/markdown/Markdown";
 
 const PROJECT_RELEASES_URL = "https://github.com/Kenny3Shen/rLive/releases";
 
@@ -27,7 +28,7 @@ export function UpdatePrompt() {
 
   return (
     <Dialog open={dialogOpen} onOpenChange={(open) => !open && dismissDialog()}>
-      <DialogContent className="gap-5 sm:max-w-md">
+      <DialogContent className="gap-5 sm:max-w-lg">
         <DialogHeader className="gap-3">
           <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/12 text-primary ring-1 ring-primary/15">
             <ArrowUpCircle className="size-6" aria-hidden />
@@ -45,8 +46,8 @@ export function UpdatePrompt() {
           </DialogDescription>
         </DialogHeader>
         {release && (
-          <div className="max-h-44 overflow-y-auto rounded-lg border border-border-subtle bg-muted/25 px-3 py-2.5 text-sm leading-relaxed whitespace-pre-line text-muted-foreground">
-            {releaseNotes(release)}
+          <div className="max-h-60 overflow-y-auto rounded-lg border border-border-subtle bg-muted/25 px-3.5 py-3 text-sm text-muted-foreground">
+            <Markdown>{releaseNotes(release)}</Markdown>
           </div>
         )}
         <DialogFooter>
