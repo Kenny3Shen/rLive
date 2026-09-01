@@ -295,13 +295,19 @@ export function Shell() {
     [iptvSource.url, iptvSources, navigate],
   );
 
-  const goBackToDiscovery = useCallback(() => {
-    if (canNavigateBackInApp(window.history.state)) {
-      navigate(-1);
-      return;
-    }
-    navigate("/", { replace: true });
-  }, [navigate]);
+  const goBackOr = useCallback(
+    (fallback: string) => {
+      if (canNavigateBackInApp(window.history.state)) {
+        navigate(-1);
+        return;
+      }
+      navigate(fallback, { replace: true });
+    },
+    [navigate],
+  );
+  const goBackToDiscovery = useCallback(() => goBackOr("/"), [goBackOr]);
+  // 历史页在移动端只从设置进入，深链接直达时回到那个入口而不是首页。
+  const goBackFromHistory = useCallback(() => goBackOr("/settings"), [goBackOr]);
 
   // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
   // Shell 不与这些路由争夺横向手势。
@@ -618,16 +624,24 @@ export function Shell() {
                   )}
                 >
                   {/* 搜索与「全部分类」都是从别处 push 出来的取向表面，侧栏里没有对应
-                      条目可点回去，所以头部给一个显式返回口。 */}
-                  {(isSearch || isCategoryBrowse) && (
-                    <div className="relative z-10 flex shrink-0 items-center max-md:hidden">
+                      条目可点回去，所以头部给一个显式返回口。移动端的历史页同理 ——
+                      它的入口收进了设置，底栏里没有历史目的地；桌面端侧栏仍有历史，
+                      因此那里不需要这个按钮。 */}
+                  {(isSearch || isCategoryBrowse || (isHistory && mobileClient)) && (
+                    <div
+                      className={cn(
+                        "relative z-10 flex shrink-0 items-center",
+                        !isHistory && "max-md:hidden",
+                      )}
+                    >
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
+                        className="max-md:size-9"
                         aria-label="返回上一页"
                         title="返回上一页"
-                        onClick={goBackToDiscovery}
+                        onClick={isHistory ? goBackFromHistory : goBackToDiscovery}
                       >
                         <ArrowLeft aria-hidden />
                       </Button>

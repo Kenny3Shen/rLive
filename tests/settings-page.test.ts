@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   settingsCategoryValuesForClient,
+  settingsOverviewGroupedKeys,
+  settingsOverviewKeysForClient,
   settingsPageMotion,
 } from "../src/features/settings/SettingsPage";
 import { TAURI_UNAVAILABLE_ERROR_CODE, invokeCmd } from "../src/shared/api/tauri";
@@ -42,6 +44,34 @@ describe("settings platform presentation", () => {
       key: "settings:overview",
       direction: -1,
     });
+  });
+
+  test("lists the history route entry in the overview on every client", () => {
+    // 历史仍是独立路由（有自己的时间线与头部控件），概览只提供入口而非二级面板。
+    expect(settingsOverviewKeysForClient(true)).toContain("history");
+    expect(settingsOverviewKeysForClient(false)).toContain("history");
+    expect(settingsPageMotion("history")).toEqual({
+      category: null,
+      key: "settings:overview",
+      direction: -1,
+    });
+  });
+
+  test("keeps every category panel reachable from the overview", () => {
+    for (const mobileClient of [true, false]) {
+      const keys = settingsOverviewKeysForClient(mobileClient);
+      for (const category of settingsCategoryValuesForClient(mobileClient)) {
+        expect(keys).toContain(category);
+      }
+    }
+    expect(settingsOverviewKeysForClient(true)).not.toContain("recording");
+  });
+
+  test("files every overview entry into exactly one group", () => {
+    // 分组的 values 是字符串，写错的 key 只会让条目从概览里消失而不报错。
+    const grouped = settingsOverviewGroupedKeys();
+    expect([...grouped].sort()).toEqual([...settingsOverviewKeysForClient(false)].sort());
+    expect(new Set(grouped).size).toBe(grouped.length);
   });
 
   test("treats an unknown section as the overview", () => {

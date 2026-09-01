@@ -40,7 +40,16 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
     className: "max-md:hidden",
     desktopOnly: true,
   },
-  { to: "/history", label: "历史", icon: History, footer: true },
+  // 历史已收进「设置 → 观看记录」，移动端不再占一个底栏目的地；
+  // 桌面端保留这个快捷入口，点击直达 `/history`。
+  {
+    to: "/history",
+    label: "历史",
+    icon: History,
+    className: "max-md:hidden",
+    desktopOnly: true,
+    footer: true,
+  },
   { to: "/settings", label: "设置", icon: Settings, footer: true },
 ];
 
