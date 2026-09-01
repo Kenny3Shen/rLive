@@ -292,6 +292,25 @@ pub struct RoomListPage {
     pub items: Vec<LiveRoomItem>,
 }
 
+/// 房间号级去重守卫：空号、占位 `"0"` 和本页已出现过的房间都跳过。
+///
+/// 返回 `true` 表示这条应当收下。搜索会把同一个房间同时放进「在播」与
+/// 「全部主播」两路索引，各站点合并两路结果时都要这一层判断。
+pub fn accept_room_id(room_id: &str, seen: &mut std::collections::HashSet<String>) -> bool {
+    !room_id.is_empty() && room_id != "0" && seen.insert(room_id.to_string())
+}
+
+impl RoomListPage {
+    /// 没有结果的一页。空关键词、翻页越界等情况都用它，
+    /// 避免各站点各写一遍同样的字面量。
+    pub fn empty() -> Self {
+        Self {
+            has_more: false,
+            items: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DanmakuKind {

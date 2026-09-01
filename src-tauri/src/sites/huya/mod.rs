@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
-    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
+    PlayUrl, RoomListPage, SiteId, accept_room_id, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -574,18 +574,16 @@ fn search_docs(v: &Value, index: &str) -> Vec<Value> {
 /// 取搜索结果封面。主播索引没有直播截图，退回主播头像；
 /// 在播索引偶尔也缺截图，同样退回头像，避免卡片空一块。
 fn search_cover(item: &Value) -> String {
-    for key in [
+    [
         "game_screenshot",
         "game_imgUrl",
         "game_avatarUrl180",
         "game_avatarUrl52",
-    ] {
-        let value = json_str(item.get(key).unwrap_or(&Value::Null));
-        if !value.is_empty() {
-            return value;
-        }
-    }
-    String::new()
+    ]
+    .into_iter()
+    .map(|key| json_str(item.get(key).unwrap_or(&Value::Null)))
+    .find(|value| !value.is_empty())
+    .unwrap_or_default()
 }
 
 /// 第 `page` 页对应的上游偏移。上游按 `floor(start / rows)` 归桶，
@@ -609,7 +607,7 @@ fn parse_search_page(v: &Value, page: u32) -> RoomListPage {
     if page <= 1 {
         for item in &live_docs {
             let room_id = json_str(item.get("room_id").unwrap_or(&Value::Null));
-            if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+            if !accept_room_id(&room_id, &mut seen) {
                 continue;
             }
             items.push(LiveRoomItem {
@@ -627,7 +625,7 @@ fn parse_search_page(v: &Value, page: u32) -> RoomListPage {
     }
     for item in &anchor_docs {
         let room_id = json_str(item.get("room_id").unwrap_or(&Value::Null));
-        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+        if !accept_room_id(&room_id, &mut seen) {
             continue;
         }
         let live = item
@@ -764,10 +762,7 @@ impl LiveSite for HuyaSite {
         let page = page.max(1);
         let keyword = keyword.trim();
         if keyword.is_empty() {
-            return Ok(RoomListPage {
-                has_more: false,
-                items: Vec::new(),
-            });
+            return Ok(RoomListPage::empty());
         }
         // `startPage` 是空转参数（任何取值都返回第一页），真正生效的偏移是
         // `start`，并且上游按 `floor(start / rows)` 归桶，所以 `start` 必须是

@@ -670,10 +670,7 @@ impl BilibiliSite {
     /// 只有存在已保存 Cookie 时调用方才会走到这个辅助函数。
     async fn get_account_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
         if page.max(1) > 1 {
-            return Ok(RoomListPage {
-                has_more: false,
-                items: Vec::new(),
-            });
+            return Ok(RoomListPage::empty());
         }
         let text = self
             .get_json(

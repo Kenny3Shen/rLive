@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
-    PlayUrl, RoomListPage, SiteId, parse_live_started_at,
+    PlayUrl, RoomListPage, SiteId, accept_room_id, parse_live_started_at,
 };
 use crate::sites::traits::LiveSite;
 
@@ -413,7 +413,8 @@ fn merge_search_indexes(shows: &Value, anchors: &Value, page: u32) -> RoomListPa
         .unwrap_or_default();
 
     // 主播索引额外带 `isLoop`，能识别视频轮播房间；房间索引没有这个字段。
-    // 先记下主播索引的判定，让同一个 rid 在两处出现时以更完整的那份为准，
+    // 先记下主播索引的判定，让同一个 rid 在两处出现时以更完整的那份为准
+    // （包括主播索引说未开播、房间索引说在播的情形），
     // 与 `live_status_from_room_info` 把轮播视为未开播的口径保持一致。
     let anchor_live: HashMap<String, bool> = anchor_items
         .iter()
@@ -427,28 +428,34 @@ fn merge_search_indexes(shows: &Value, anchors: &Value, page: u32) -> RoomListPa
 
     let mut items = Vec::with_capacity(show_items.len() + anchor_items.len());
     let mut seen = HashSet::new();
-    // 在播房间先入列：它们带真实的直播标题，主播索引只有昵称和签名。
-    for item in &show_items {
+    // 房间索引先入列：只有它带真实的直播标题，主播索引只有昵称和签名。
+    for (item, from_show_index) in show_items
+        .iter()
+        .map(|item| (item, true))
+        .chain(anchor_items.iter().map(|item| (item, false)))
+    {
         let room_id = json_str(
             item.get("rid")
                 .or_else(|| item.get("roomId"))
                 .unwrap_or(&Value::Null),
         );
-        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
+        if !accept_room_id(&room_id, &mut seen) {
             continue;
         }
-        let live = anchor_live
-            .get(&room_id)
-            .copied()
-            .unwrap_or_else(|| is_search_live(item));
         items.push(LiveRoomItem {
             site_id: SiteId::Douyu,
-            room_id,
-            title: json_str(
-                item.get("roomName")
-                    .or_else(|| item.get("rn"))
-                    .unwrap_or(&Value::Null),
-            ),
+            room_id: room_id.clone(),
+            // 主播索引的 `description` 是主播签名而非房间标题，因此标题留空，
+            // 由展示层退回主播名，避免把签名当成直播标题展示。
+            title: if from_show_index {
+                json_str(
+                    item.get("roomName")
+                        .or_else(|| item.get("rn"))
+                        .unwrap_or(&Value::Null),
+                )
+            } else {
+                String::new()
+            },
             cover: search_cover(item),
             user_name: json_str(
                 item.get("nickName")
@@ -461,25 +468,12 @@ fn merge_search_indexes(shows: &Value, anchors: &Value, page: u32) -> RoomListPa
                     .or_else(|| item.get("ol"))
                     .unwrap_or(&Value::Null),
             )),
-            live_status: Some(live),
-        });
-    }
-
-    for item in &anchor_items {
-        let room_id = json_str(item.get("rid").unwrap_or(&Value::Null));
-        if room_id.is_empty() || room_id == "0" || !seen.insert(room_id.clone()) {
-            continue;
-        }
-        // 主播索引的 `description` 是主播签名而非房间标题，因此标题留空，
-        // 由展示层退回主播名，避免把签名当成直播标题展示。
-        items.push(LiveRoomItem {
-            site_id: SiteId::Douyu,
-            room_id,
-            title: String::new(),
-            cover: search_cover(item),
-            user_name: json_str(item.get("nickName").unwrap_or(&Value::Null)),
-            online: parse_online_label(json_str(item.get("hot").unwrap_or(&Value::Null))),
-            live_status: Some(is_search_live(item)),
+            live_status: Some(
+                anchor_live
+                    .get(&room_id)
+                    .copied()
+                    .unwrap_or_else(|| is_search_live(item)),
+            ),
         });
     }
 
@@ -507,15 +501,14 @@ fn is_search_live(item: &Value) -> bool {
         && json_i64(item.get("isLoop").unwrap_or(&Value::Null)) != 1
 }
 
-/// 取搜索结果封面。未开播房间的 `roomSrc` 常是过期截图或占位图，
-/// 缺失时退回主播头像，至少不让卡片空一块。
+/// 取搜索结果封面。房间索引的 `/data/list` 分支用 `rs16` 而不是 `roomSrc`；
+/// 主播索引两者都没有，退回主播头像，至少不让卡片空一块。
 fn search_cover(item: &Value) -> String {
-    let cover = json_str(item.get("roomSrc").unwrap_or(&Value::Null));
-    if cover.is_empty() {
-        json_str(item.get("avatar").unwrap_or(&Value::Null))
-    } else {
-        cover
-    }
+    ["roomSrc", "rs16", "avatar"]
+        .into_iter()
+        .map(|key| json_str(item.get(key).unwrap_or(&Value::Null)))
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
 }
 
 /// 搜索索引的翻页判定。
@@ -666,10 +659,7 @@ impl LiveSite for DouyuSite {
         let page = page.max(1);
         let keyword = keyword.trim();
         if keyword.is_empty() {
-            return Ok(RoomListPage {
-                has_more: false,
-                items: Vec::new(),
-            });
+            return Ok(RoomListPage::empty());
         }
         // `searchShow` 只索引正在直播的房间，`searchAnchor` 覆盖全部主播并用
         // `isLive` 标出开播状态。两条一起取，搜索才能命中未开播的主播；
