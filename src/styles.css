@@ -73,6 +73,7 @@
   --settings-recording: oklch(0.62 0.18 28);
   --settings-account: oklch(0.65 0.16 55);
   --settings-data: oklch(0.58 0.16 205);
+  --settings-history: oklch(0.58 0.15 100);
   --settings-about: oklch(0.6 0.15 305);
   /* 物理调光层：它保持中性，
      其下每个表面继续来自活动的明/暗 token 集。 */
@@ -121,6 +122,7 @@
   --settings-recording: oklch(0.75 0.16 28);
   --settings-account: oklch(0.77 0.14 75);
   --settings-data: oklch(0.72 0.15 205);
+  --settings-history: oklch(0.74 0.14 100);
   --settings-about: oklch(0.74 0.14 305);
 }
 
@@ -187,6 +189,7 @@
   --color-settings-recording: var(--settings-recording);
   --color-settings-account: var(--settings-account);
   --color-settings-data: var(--settings-data);
+  --color-settings-history: var(--settings-history);
   --color-settings-about: var(--settings-about);
   --color-ring: var(--ring);
   --color-input: var(--input);

@@ -13,7 +13,9 @@ import { CATEGORY_PARAM } from "@/features/category/categorySelection";
 export const ANDROID_BACK_EVENT = "rlive:android-back";
 
 /** 底部导航根路由，Back 在它们上面的语义是回到系统桌面。 */
-const ANDROID_HOME_TAB_PATHS = new Set(["/", "/follow", "/history", "/iptv", "/settings"]);
+// 历史不在其中：移动端底栏没有历史目的地，它只从「设置 → 观看记录」钻入，
+// 一次 Back 应该回到那个入口。
+const ANDROID_HOME_TAB_PATHS = new Set(["/", "/follow", "/iptv", "/settings"]);
 
 type AndroidBackRegistrationInput = {
   userAgent: string;

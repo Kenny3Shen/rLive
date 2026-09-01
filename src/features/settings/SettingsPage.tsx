@@ -23,6 +23,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  History,
   Info,
   LogOut,
   MonitorPlay,
@@ -43,6 +44,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { fadeTheme } from "@/app/theme";
+import { preloadRouteModule } from "@/app/routeModules";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
@@ -237,6 +239,44 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案 缓存 图片缓存 图片 头像 封面 清除 清理 占用 空间 cache",
   about: "关于 rLive 当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断",
 };
+
+/**
+ * 概览列表里的一个条目。带 `to` 的条目是独立路由页（历史有自己的时间线、筛选与
+ * 头部控件，塞进设置二级面板只会复制一遍那套外壳），其余条目仍是本页的二级面板。
+ */
+type SettingsOverviewEntry = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  tone: string;
+  searchText: string;
+  category?: SettingsCategory;
+  to?: string;
+};
+
+const settingsOverviewEntries: SettingsOverviewEntry[] = [
+  ...settingsCategories.map((category) => ({
+    key: category.value,
+    label: category.label,
+    icon: category.icon,
+    tone: category.tone,
+    searchText: settingsCategorySearchText[category.value],
+    category: category.value,
+  })),
+  {
+    key: "history",
+    label: "观看记录",
+    icon: History,
+    tone: "text-settings-history bg-settings-history/12",
+    searchText:
+      "历史 观看 观看历史 弹幕历史 记录 观看记录 时间线 日期 筛选 清空 删除 直播间 history",
+    to: "/history",
+  },
+];
+
+function settingsOverviewEntry(key: string): SettingsOverviewEntry | undefined {
+  return settingsOverviewEntries.find((entry) => entry.key === key);
+}
 
 const SettingsSearchContext = createContext("");
 
@@ -1551,11 +1591,12 @@ export function settingsPageMotion(
 
 const settingsCategoryGroups: {
   label: string;
-  values: SettingsCategory[];
+  /** `settingsOverviewEntries` 的 key：分类面板用分类名，路由入口用自己的 key。 */
+  values: string[];
 }[] = [
   { label: "通用", values: ["appearance"] },
   { label: "观看体验", values: ["playback", "platform", "network"] },
-  { label: "账号与数据", values: ["account", "recording", "data"] },
+  { label: "账号与数据", values: ["history", "account", "recording", "data"] },
   { label: "应用信息", values: ["about"] },
 ];
 
@@ -1565,32 +1606,51 @@ export function settingsCategoryValuesForClient(mobileClient: boolean): Settings
     .filter((value) => !mobileClient || value !== "recording");
 }
 
-function SettingsCategoryButton({
-  category,
+/** 概览里对客户端可见的条目 key，顺序与 `settingsOverviewEntries` 一致。 */
+export function settingsOverviewKeysForClient(mobileClient: boolean): string[] {
+  const visibleCategories = settingsCategoryValuesForClient(mobileClient);
+  return settingsOverviewEntries
+    .filter((entry) => !entry.category || visibleCategories.includes(entry.category))
+    .map((entry) => entry.key);
+}
+
+/** 分组条带里排到的 key。写错的 key 在概览里会静默消失，因此由测试比对这两侧。 */
+export function settingsOverviewGroupedKeys(): string[] {
+  return settingsCategoryGroups.flatMap((group) => group.values);
+}
+
+function SettingsOverviewButton({
+  entry,
   onOpen,
 }: {
-  category: (typeof settingsCategories)[number];
-  onOpen: (value: SettingsCategory) => void;
+  entry: SettingsOverviewEntry;
+  onOpen: (entry: SettingsOverviewEntry) => void;
 }) {
-  const Icon = category.icon;
+  const Icon = entry.icon;
 
   return (
     <button
       type="button"
       data-motion-press
-      onClick={() => onOpen(category.value)}
+      onPointerEnter={() => {
+        if (entry.to) preloadRouteModule(entry.to);
+      }}
+      onPointerDown={() => {
+        if (entry.to) preloadRouteModule(entry.to);
+      }}
+      onFocus={() => {
+        if (entry.to) preloadRouteModule(entry.to);
+      }}
+      onClick={() => onOpen(entry)}
       className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40 focus-visible:bg-muted/40 focus-ring"
     >
       <span
-        className={cn(
-          "flex size-10 shrink-0 items-center justify-center rounded-lg",
-          category.tone,
-        )}
+        className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg", entry.tone)}
       >
         <Icon className="size-5" aria-hidden />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-        {category.label}
+        {entry.label}
       </span>
       <ChevronRight
         className="motion-disclosure-icon size-4 shrink-0 text-muted-foreground transition-[transform,color] duration-150 ease-[var(--motion-ease-out)] group-hover:text-foreground motion-reduced:transition-colors"
@@ -1608,23 +1668,23 @@ function SettingsCategoryOverview({
 }: {
   query: string;
   onQueryChange: (value: string) => void;
-  onOpen: (value: SettingsCategory) => void;
+  onOpen: (entry: SettingsOverviewEntry) => void;
   mobileClient: boolean;
 }) {
-  const visibleCategoryValues = settingsCategoryValuesForClient(mobileClient);
+  const visibleKeys = settingsOverviewKeysForClient(mobileClient);
   const visibleGroups = settingsCategoryGroups
     .map((group) => ({
       ...group,
-      categories: group.values
-        .map((value) => settingsCategories.find((category) => category.value === value))
+      entries: group.values
+        .map((value) => settingsOverviewEntry(value))
         .filter(
-          (category): category is (typeof settingsCategories)[number] =>
-            category !== undefined &&
-            visibleCategoryValues.includes(category.value) &&
-            matchesSearch(`${category.label} ${settingsCategorySearchText[category.value]}`, query),
+          (entry): entry is SettingsOverviewEntry =>
+            entry !== undefined &&
+            visibleKeys.includes(entry.key) &&
+            matchesSearch(`${entry.label} ${entry.searchText}`, query),
         ),
     }))
-    .filter((group) => group.categories.length > 0);
+    .filter((group) => group.entries.length > 0);
 
   return (
     <div className="settings-overview flex min-h-full flex-col gap-6">
@@ -1665,12 +1725,8 @@ function SettingsCategoryOverview({
               </p>
               <Card className="settings-category-list overflow-hidden rounded-xl bg-card/85 p-0 ring-border-subtle shadow-sm shadow-black/10">
                 <CardContent className="divide-y divide-border-subtle p-0">
-                  {group.categories.map((category) => (
-                    <SettingsCategoryButton
-                      key={category.value}
-                      category={category}
-                      onOpen={onOpen}
-                    />
+                  {group.entries.map((entry) => (
+                    <SettingsOverviewButton key={entry.key} entry={entry} onOpen={onOpen} />
                   ))}
                 </CardContent>
               </Card>
@@ -2270,9 +2326,10 @@ export function SettingsPage() {
               query={searchQuery}
               onQueryChange={setSearchQuery}
               mobileClient={mobileClient}
-              onOpen={(value) => {
+              onOpen={(entry) => {
                 setSearchQuery("");
-                setCategory(value);
+                if (entry.to) navigate(entry.to);
+                else if (entry.category) setCategory(entry.category);
               }}
             />
           )}

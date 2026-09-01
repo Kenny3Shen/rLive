@@ -52,7 +52,7 @@ describe("sidebar nav items per client platform", () => {
     // 手机与平板横屏的视口宽度普遍超过 md 断点，
     // 视口门控（max-md:hidden）无法再阻止桌面专属入口出现在移动端。
     const mobileDestinations = sidebarNavItemsFor(true).map((item) => item.to);
-    expect(mobileDestinations).toEqual(["/", "/follow", "/iptv", "/history", "/settings"]);
+    expect(mobileDestinations).toEqual(["/", "/follow", "/iptv", "/settings"]);
   });
 
   test("drops the category entry now that browsing lives on the home page", () => {
@@ -63,6 +63,13 @@ describe("sidebar nav items per client platform", () => {
     expect(sidebarNavItemsFor(false)).toEqual(SIDEBAR_NAV_ITEMS);
     expect(SIDEBAR_NAV_ITEMS.map((item) => item.to)).toContain("/multi-room");
     expect(SIDEBAR_NAV_ITEMS.map((item) => item.to)).toContain("/recordings");
+  });
+
+  test("keeps the history shortcut on desktop only now that settings owns the entry", () => {
+    // 历史收进「设置 → 观看记录」后，移动端底栏不再为它留目的地；
+    // 桌面竖栏仍保留快捷入口。
+    expect(SIDEBAR_NAV_ITEMS.map((item) => item.to)).toContain("/history");
+    expect(sidebarNavItemsFor(true).map((item) => item.to)).not.toContain("/history");
   });
 
   test("keeps the visual order aligned with the navigation direction strip", () => {

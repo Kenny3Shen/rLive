@@ -33,7 +33,6 @@ describe("Android Back navigation", () => {
   test("bottom-nav roots send Back to the system home screen", () => {
     expect(isAndroidHomeTabRoot("/", "")).toBe(true);
     expect(isAndroidHomeTabRoot("/follow", "")).toBe(true);
-    expect(isAndroidHomeTabRoot("/history", "")).toBe(true);
     expect(isAndroidHomeTabRoot("/iptv", "")).toBe(true);
     expect(isAndroidHomeTabRoot("/settings", "")).toBe(true);
     // 空白 section 仍是设置根页。
@@ -50,6 +49,8 @@ describe("Android Back navigation", () => {
     // 首页的分区选择态是钻入层：一次 Back 回到推荐流，再一次才退回系统桌面。
     expect(isAndroidHomeTabRoot("/", "?cat=bilibili:1:101")).toBe(false);
     expect(isAndroidHomeTabRoot("/search", "")).toBe(false);
+    // 历史的入口收进设置后不再是底栏根路由：一次 Back 回到「设置 → 观看记录」。
+    expect(isAndroidHomeTabRoot("/history", "")).toBe(false);
     expect(isAndroidHomeTabRoot("/iptv/play", "")).toBe(false);
     expect(isAndroidHomeTabRoot("/recordings", "")).toBe(false);
   });
