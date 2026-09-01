@@ -912,9 +912,17 @@ html.overlay-window #root {
   background-image: none !important;
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent) transparent;
+/* 全局滚动条默认样式。必须在 `@layer base` 里：Tailwind v4 的 utilities
+   全住在 `@layer utilities`，而未分层样式在级联中压过一切 layer ——
+   留在层外的话，组件里 `[scrollbar-width:none]` 这类工具类永远赢不了它
+   （Chromium 里 `scrollbar-width` 非 `auto` 时还会连带使
+   `::-webkit-scrollbar` 自定义失效，两条隐藏路都堵死）。进 base 后
+   无覆盖的元素照旧拿到细滚动条，显式声明 none 的元素才真正隐藏。 */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 40%, transparent) transparent;
+  }
 }
 
 /* 紧凑播放器 chrome 刻意比全局 44px 触摸下限更密。它贴着视频边缘且只包含熟悉的
