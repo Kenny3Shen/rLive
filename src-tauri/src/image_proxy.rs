@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
+use percent_encoding::percent_decode_str;
 use reqwest::Url;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -413,33 +414,9 @@ fn parse_image_url(raw: &str) -> Option<Url> {
 
 /// 解码 `%XX` 转义（与前端 `encodeURIComponent` 产生的集合一致）。
 /// 下方的 URL 解析器会拒绝任何不该出现的控制字节。
+/// `+` 不是空格，无效或截断的转义序列原样保留，无效 UTF-8 替换为 U+FFFD。
 fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) =
-                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-        {
-            out.push((high << 4) | low);
-            index += 3;
-            continue;
-        }
-        out.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    percent_decode_str(s).decode_utf8_lossy().into_owned()
 }
 
 async fn write_response_bytes(
@@ -489,7 +466,10 @@ async fn write_response_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::{ALLOWED_IMAGE_HOSTS, ImageProxy, host_is_allowed, parse_image_url, referer_for};
+    use super::{
+        ALLOWED_IMAGE_HOSTS, ImageProxy, host_is_allowed, parse_image_url, percent_decode,
+        referer_for,
+    };
 
     #[test]
     fn allowed_host_matching_uses_suffixes() {
@@ -534,6 +514,24 @@ mod tests {
         assert!(parse_image_url("file%3A%2F%2F%2Fetc%2Fpasswd").is_none());
         assert!(parse_image_url("").is_none());
     }
+
+    #[test]
+    fn percent_decoding_keeps_plus_and_invalid_escapes() {
+        assert_eq!(
+            percent_decode("https%3A%2F%2Fi0.hdslb.com%2Fpic.png"),
+            "https://i0.hdslb.com/pic.png"
+        );
+        // `+` 不是空格，与 query-string 解码不同。
+        assert_eq!(percent_decode("a+b%2Bc"), "a+b+c");
+        // 无效与截断的转义序列原样保留。
+        assert_eq!(percent_decode("100%ZZ"), "100%ZZ");
+        assert_eq!(percent_decode("tail%2"), "tail%2");
+        assert_eq!(percent_decode("solo%"), "solo%");
+        // 非 ASCII 与无效 UTF-8。
+        assert_eq!(percent_decode("%E4%B8%AD"), "中");
+        assert_eq!(percent_decode("%FF"), "\u{FFFD}");
+    }
+
     #[tokio::test]
     async fn proxy_returns_buffered_body_and_closes() {
         use std::io::{Read, Write};
