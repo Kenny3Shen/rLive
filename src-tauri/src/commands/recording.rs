@@ -15,10 +15,7 @@ use crate::state::AppState;
 fn configured_recording_options(
     state: &AppState,
 ) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool)> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+    let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     Ok((
         settings.proxy,
@@ -118,10 +115,7 @@ pub async fn recording_danmaku_export_ass(
     id: String,
 ) -> AppResult<String> {
     let options = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let conn = state.conn()?;
         AssExportOptions::try_from_settings(&crate::settings::get(&conn)?).map_err(|error| {
             AppError::new(
                 "recording_ass_invalid_regex",

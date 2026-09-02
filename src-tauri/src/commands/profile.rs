@@ -7,17 +7,10 @@ use crate::error::{AppError, AppResult};
 use crate::profile::{self, ProfileImportResult};
 use crate::state::AppState;
 
-fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Connection>> {
-    state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
-}
-
 #[tauri::command]
 pub fn profile_export(app: AppHandle, state: State<'_, AppState>, path: FilePath) -> AppResult<()> {
     let path_display = path.to_string();
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     let package = profile::export_package(&conn)?;
     let text = profile::encode_package(&package)?;
     drop(conn);
@@ -50,6 +43,6 @@ pub fn profile_import(
             format!("open {} for reading: {e}", path_display),
         )
     })?;
-    let mut conn = lock_db(&state)?;
+    let mut conn = state.conn()?;
     profile::import_package_reader(&mut conn, file)
 }

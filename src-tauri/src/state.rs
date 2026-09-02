@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -27,9 +27,9 @@ pub struct AppState {
     #[cfg(not(target_os = "android"))]
     pub asr: AsrManager,
     pub danmaku: DanmakuManager,
-    pub bilibili_send_limiter: BilibiliDanmakuSendLimiter,
-    pub douyu_send_limiter: DouyuDanmakuSendLimiter,
-    pub huya_send_limiter: HuyaDanmakuSendLimiter,
+    pub bilibili_send_limiter: DanmakuSendLimiter,
+    pub douyu_send_limiter: DanmakuSendLimiter,
+    pub huya_send_limiter: DanmakuSendLimiter,
     pub stream_proxy: StreamProxy,
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub recording: RecordingManager,
@@ -38,18 +38,31 @@ pub struct AppState {
     pub lan_sync: LanSyncManager,
 }
 
-/// Bilibili 发送方的保守房间级写入闸门。它刻意只作用于进程内部：
-/// 这是 UX/安全层面的冷却，
-/// 不是为了绕过或镜像 Bilibili 自身权威的频率限制。
-pub struct BilibiliDanmakuSendLimiter {
+/// 手动弹幕发送的保守房间级写入闸门，每个站点一个实例。它刻意只作用于
+/// 进程内部：这是 UX/安全层面的冷却，不是为了绕过或镜像平台自身权威的
+/// 频率限制。站点差异（错误码前缀、展示名与出站消息规范化）随实例携带。
+pub struct DanmakuSendLimiter {
+    /// 站点 id：错误码前缀，并回填到错误的 `site` 字段。
+    pub site: &'static str,
+    /// 面向用户的站点展示名（"B站"、"斗鱼"、"虎牙"）。
+    pub label: &'static str,
+    /// 该站点的出站消息规范化函数。
+    pub normalize: fn(&str) -> AppResult<String>,
     sent_at: Mutex<HashMap<String, Instant>>,
 }
 
-impl BilibiliDanmakuSendLimiter {
+impl DanmakuSendLimiter {
     const COOLDOWN: Duration = Duration::from_secs(3);
 
-    pub fn new() -> Self {
+    pub fn new(
+        site: &'static str,
+        label: &'static str,
+        normalize: fn(&str) -> AppResult<String>,
+    ) -> Self {
         Self {
+            site,
+            label,
+            normalize,
             sent_at: Mutex::new(HashMap::new()),
         }
     }
@@ -68,91 +81,10 @@ impl BilibiliDanmakuSendLimiter {
             if elapsed < Self::COOLDOWN {
                 let remaining = (Self::COOLDOWN - elapsed).as_secs().max(1);
                 return Err(AppError::new(
-                    "bilibili_send_cooldown",
+                    format!("{}_send_cooldown", self.site),
                     format!("发送过快，请在约 {remaining} 秒后再试"),
                 )
-                .with_site("bilibili")
-                .retryable());
-            }
-        }
-        sent_at.insert(room_id.to_string(), now);
-        Ok(())
-    }
-}
-
-/// 斗鱼发送方的保守房间级写入闸门。
-///
-/// 这刻意只是本地 UX/安全冷却，不能替代斗鱼权威的房间与账号频率限制。
-/// 每次占用都发生在网络写入之前，
-/// 因为超时仍可能意味着远端服务已接受该消息。
-pub struct DouyuDanmakuSendLimiter {
-    sent_at: Mutex<HashMap<String, Instant>>,
-}
-
-impl DouyuDanmakuSendLimiter {
-    const COOLDOWN: Duration = Duration::from_secs(3);
-
-    pub fn new() -> Self {
-        Self {
-            sent_at: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn reserve(&self, room_id: &str) -> AppResult<()> {
-        let now = Instant::now();
-        let mut sent_at = self
-            .sent_at
-            .lock()
-            .map_err(|_| AppError::new("send_limiter_lock", "发送状态暂不可用"))?;
-        sent_at.retain(|_, sent| now.duration_since(*sent) < Duration::from_secs(90));
-        if let Some(previous) = sent_at.get(room_id) {
-            let elapsed = now.duration_since(*previous);
-            if elapsed < Self::COOLDOWN {
-                let remaining = (Self::COOLDOWN - elapsed).as_secs().max(1);
-                return Err(AppError::new(
-                    "douyu_send_cooldown",
-                    format!("发送过快，请在约 {remaining} 秒后再试"),
-                )
-                .with_site("douyu")
-                .retryable());
-            }
-        }
-        sent_at.insert(room_id.to_string(), now);
-        Ok(())
-    }
-}
-
-/// 虎牙发送方的保守房间级写入闸门。它只保护显式的本地 UI 免受意外的快速
-/// 重复发送；账号/房间限制与内容审核的权威始终在平台一侧。
-pub struct HuyaDanmakuSendLimiter {
-    sent_at: Mutex<HashMap<String, Instant>>,
-}
-
-impl HuyaDanmakuSendLimiter {
-    const COOLDOWN: Duration = Duration::from_secs(3);
-
-    pub fn new() -> Self {
-        Self {
-            sent_at: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn reserve(&self, room_id: &str) -> AppResult<()> {
-        let now = Instant::now();
-        let mut sent_at = self
-            .sent_at
-            .lock()
-            .map_err(|_| AppError::new("send_limiter_lock", "发送状态暂不可用"))?;
-        sent_at.retain(|_, sent| now.duration_since(*sent) < Duration::from_secs(90));
-        if let Some(previous) = sent_at.get(room_id) {
-            let elapsed = now.duration_since(*previous);
-            if elapsed < Self::COOLDOWN {
-                let remaining = (Self::COOLDOWN - elapsed).as_secs().max(1);
-                return Err(AppError::new(
-                    "huya_send_cooldown",
-                    format!("发送过快，请在约 {remaining} 秒后再试"),
-                )
-                .with_site("huya")
+                .with_site(self.site)
                 .retryable());
             }
         }
@@ -162,6 +94,13 @@ impl HuyaDanmakuSendLimiter {
 }
 
 impl AppState {
+    /// 以统一的错误语义锁定数据库连接。
+    pub fn conn(&self) -> AppResult<MutexGuard<'_, Connection>> {
+        self.db
+            .lock()
+            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
+    }
+
     pub fn init(directories: &AppDirectories) -> AppResult<Self> {
         let app_directory = &directories.root;
         let path = create_db_path(app_directory.to_path_buf())?;
@@ -172,9 +111,21 @@ impl AppState {
             #[cfg(not(target_os = "android"))]
             asr: AsrManager::new(app_directory),
             danmaku: DanmakuManager::new(),
-            bilibili_send_limiter: BilibiliDanmakuSendLimiter::new(),
-            douyu_send_limiter: DouyuDanmakuSendLimiter::new(),
-            huya_send_limiter: HuyaDanmakuSendLimiter::new(),
+            bilibili_send_limiter: DanmakuSendLimiter::new(
+                "bilibili",
+                "B站",
+                crate::danmu_rs::bilibili::normalize_outgoing_message,
+            ),
+            douyu_send_limiter: DanmakuSendLimiter::new(
+                "douyu",
+                "斗鱼",
+                crate::danmu_rs::douyu::normalize_outgoing_message,
+            ),
+            huya_send_limiter: DanmakuSendLimiter::new(
+                "huya",
+                "虎牙",
+                crate::danmu_rs::huya::normalize_outgoing_message,
+            ),
             stream_proxy: StreamProxy::new(),
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording: RecordingManager::new(app_directory)?,
@@ -197,29 +148,37 @@ fn create_db_path(dir: PathBuf) -> AppResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BilibiliDanmakuSendLimiter, DouyuDanmakuSendLimiter, HuyaDanmakuSendLimiter};
+    use super::DanmakuSendLimiter;
+    use crate::danmu_rs;
 
     #[test]
-    fn send_limiter_holds_the_same_room() {
-        let limiter = BilibiliDanmakuSendLimiter::new();
-        limiter.reserve("1").unwrap();
-        assert!(limiter.reserve("1").is_err());
-        assert!(limiter.reserve("2").is_ok());
-    }
+    fn send_limiter_holds_the_same_room_and_keeps_site_error_codes() {
+        // 合并前三个结构体各自硬编码自己的错误码，写错不可能；现在 site 是
+        // 构造时传入的数据，参数写反或接错实例编译器不会报。逐站点锁住。
+        for (site, label, normalize) in [
+            (
+                "bilibili",
+                "B站",
+                danmu_rs::bilibili::normalize_outgoing_message
+                    as fn(&str) -> crate::error::AppResult<String>,
+            ),
+            (
+                "douyu",
+                "斗鱼",
+                danmu_rs::douyu::normalize_outgoing_message,
+            ),
+            ("huya", "虎牙", danmu_rs::huya::normalize_outgoing_message),
+        ] {
+            let limiter = DanmakuSendLimiter::new(site, label, normalize);
+            assert_eq!(limiter.site, site);
+            assert_eq!(limiter.label, label);
 
-    #[test]
-    fn douyu_send_limiter_holds_the_same_room() {
-        let limiter = DouyuDanmakuSendLimiter::new();
-        limiter.reserve("1").unwrap();
-        assert!(limiter.reserve("1").is_err());
-        assert!(limiter.reserve("2").is_ok());
-    }
-
-    #[test]
-    fn huya_send_limiter_holds_the_same_room() {
-        let limiter = HuyaDanmakuSendLimiter::new();
-        limiter.reserve("1").unwrap();
-        assert!(limiter.reserve("1").is_err());
-        assert!(limiter.reserve("2").is_ok());
+            limiter.reserve("1").unwrap();
+            assert!(limiter.reserve("2").is_ok());
+            let error = limiter.reserve("1").unwrap_err();
+            assert_eq!(error.code, format!("{site}_send_cooldown"));
+            assert_eq!(error.site.as_deref(), Some(site));
+            assert!(error.retryable);
+        }
     }
 }

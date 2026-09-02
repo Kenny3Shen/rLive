@@ -7,18 +7,8 @@ use crate::error::{AppError, AppResult};
 use crate::iptv::{self, IptvChannel, IptvChannelAvailability, IptvChannelCheck};
 use crate::state::AppState;
 
-fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Connection>> {
-    state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
-}
-
 fn configured_proxy(state: &AppState) -> AppResult<Option<String>> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| crate::error::AppError::new("db_lock_error", "database mutex poisoned"))?;
+    let conn = state.conn()?;
     Ok(crate::settings::get(&conn)?.proxy)
 }
 
@@ -45,7 +35,7 @@ pub fn iptv_favorite_list(
     state: State<'_, AppState>,
     source_id: Option<String>,
 ) -> AppResult<Vec<IptvFavoriteRecord>> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     match source_id {
         Some(source_id) => iptv_favorite::list(&conn, source_id.trim()),
         None => iptv_favorite::list_all(&conn),
@@ -71,7 +61,7 @@ pub fn iptv_favorite_add(
     if favorite.updated_at == 0 {
         favorite.updated_at = chrono::Utc::now().timestamp_millis();
     }
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     iptv_favorite::upsert(&conn, favorite)
 }
 
@@ -81,7 +71,7 @@ pub fn iptv_favorite_remove(
     source_id: String,
     channel_url: String,
 ) -> AppResult<()> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     iptv_favorite::remove(&conn, source_id.trim(), channel_url.trim())
 }
 
@@ -89,7 +79,7 @@ pub fn iptv_favorite_remove(
 pub fn iptv_favorite_group_list(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<IptvFavoriteGroupRecord>> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     iptv_favorite::list_groups(&conn)
 }
 
@@ -116,14 +106,14 @@ pub fn iptv_favorite_group_upsert(
         ));
     }
 
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     iptv_favorite::upsert_group(&conn, group.clone())?;
     Ok(group)
 }
 
 #[tauri::command]
 pub fn iptv_favorite_group_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    let mut conn = lock_db(&state)?;
+    let mut conn = state.conn()?;
     iptv_favorite::remove_group(&mut conn, id.trim())
 }
 
@@ -138,6 +128,6 @@ pub fn iptv_favorite_set_group(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty());
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     iptv_favorite::set_group(&conn, source_id.trim(), channel_url.trim(), group_id)
 }
