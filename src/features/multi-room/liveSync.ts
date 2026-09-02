@@ -65,7 +65,6 @@ export type LiveSyncSample = {
   epochAtMediaZeroMs: number | null;
   /** 每条流的用户偏移（秒）；正值延迟该流。 */
   offsetSeconds: number;
-  playbackRate: number;
 };
 
 export type LiveSyncAction =

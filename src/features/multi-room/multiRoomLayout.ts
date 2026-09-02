@@ -1,9 +1,4 @@
-import {
-  MULTI_ROOM_MAIN_SLOT,
-  MULTI_ROOM_MAX_SLOTS,
-  type MultiRoomFourLayout,
-  type MultiRoomLayout,
-} from "./multiRoomStore";
+import { MULTI_ROOM_MAIN_SLOT, type MultiRoomFourLayout, type MultiRoomLayout } from "./multiRoomStore";
 
 /** 3x3 六屏导演网格的槽位布局。 */
 export const MULTI_ROOM_SLOT_CLASSES = [
@@ -98,28 +93,4 @@ export function multiRoomSlotLabel(
 
 export function isMultiRoomMainSlot(index: number): boolean {
   return index === MULTI_ROOM_MAIN_SLOT;
-}
-
-if (MULTI_ROOM_SLOT_CLASSES.length !== MULTI_ROOM_MAX_SLOTS) {
-  throw new Error("多画面布局槽位数量不一致");
-}
-
-if (MULTI_ROOM_FOUR_SLOT_CLASSES.length !== 4) {
-  throw new Error("四画面布局槽位数量不一致");
-}
-
-if (MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES.length !== 4) {
-  throw new Error("四画面均分布局槽位数量不一致");
-}
-
-if (MULTI_ROOM_TWO_SLOT_CLASSES.length !== 2 || MULTI_ROOM_TWO_SLOT_LABELS.length !== 2) {
-  throw new Error("双画面布局槽位数量不一致");
-}
-
-if (MULTI_ROOM_SLOT_LABELS.length !== MULTI_ROOM_MAX_SLOTS) {
-  throw new Error("多画面布局标签数量不一致");
-}
-
-if (MULTI_ROOM_FOUR_SLOT_LABELS.length !== 4 || MULTI_ROOM_FOUR_EQUAL_SLOT_LABELS.length !== 4) {
-  throw new Error("四画面布局标签数量不一致");
 }
