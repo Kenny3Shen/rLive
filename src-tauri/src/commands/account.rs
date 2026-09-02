@@ -3,6 +3,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
+use crate::account::qr::QrLoginPoll;
 use crate::account::{bilibili_qr, douyin_qr, douyu_qr, huya_qr};
 use crate::error::AppResult;
 use crate::models::live::SiteId;
@@ -54,13 +55,6 @@ pub enum AccountStatus {
     Expired,
     /// 无法验证该会话（网络失败或平台不支持）。
     Unknown,
-}
-
-enum QrLoginPollResult {
-    Pending,
-    Scanned,
-    Expired,
-    Success { cookie: String },
 }
 
 #[tauri::command]
@@ -207,26 +201,26 @@ pub async fn account_qr_login_poll(
     qr_key: String,
 ) -> AppResult<AccountQrLoginPoll> {
     let result = match &site_id {
-        SiteId::Bilibili => map_bilibili_qr_poll(bilibili_qr::poll(&qr_key).await?),
-        SiteId::Douyin => map_douyin_qr_poll(douyin_qr::poll(&qr_key).await?),
-        SiteId::Douyu => map_douyu_qr_poll(douyu_qr::poll(&qr_key).await?),
-        SiteId::Huya => map_huya_qr_poll(huya_qr::poll(&qr_key).await?),
+        SiteId::Bilibili => bilibili_qr::poll(&qr_key).await?,
+        SiteId::Douyin => douyin_qr::poll(&qr_key).await?,
+        SiteId::Douyu => douyu_qr::poll(&qr_key).await?,
+        SiteId::Huya => huya_qr::poll(&qr_key).await?,
         _ => return Err(qr_login_unsupported(&site_id)),
     };
     match result {
-        QrLoginPollResult::Pending => Ok(AccountQrLoginPoll {
+        QrLoginPoll::Pending => Ok(AccountQrLoginPoll {
             status: AccountQrLoginStatus::Pending,
             message: format!("请使用{} App 扫描二维码", qr_login_site_name(&site_id)),
         }),
-        QrLoginPollResult::Scanned => Ok(AccountQrLoginPoll {
+        QrLoginPoll::Scanned => Ok(AccountQrLoginPoll {
             status: AccountQrLoginStatus::Scanned,
             message: "已扫描，请在手机上确认登录".into(),
         }),
-        QrLoginPollResult::Expired => Ok(AccountQrLoginPoll {
+        QrLoginPoll::Expired => Ok(AccountQrLoginPoll {
             status: AccountQrLoginStatus::Expired,
             message: "二维码已失效，请刷新后重新扫描".into(),
         }),
-        QrLoginPollResult::Success { cookie } => {
+        QrLoginPoll::Success { cookie } => {
             let conn = state.db.lock().map_err(|e| {
                 crate::error::AppError::new("db_lock_error", format!("account_qr_login_poll: {e}"))
             })?;
@@ -236,42 +230,6 @@ pub async fn account_qr_login_poll(
                 message: "登录成功，Cookie 已安全保存到本机".into(),
             })
         }
-    }
-}
-
-fn map_bilibili_qr_poll(result: bilibili_qr::QrLoginPoll) -> QrLoginPollResult {
-    match result {
-        bilibili_qr::QrLoginPoll::Pending => QrLoginPollResult::Pending,
-        bilibili_qr::QrLoginPoll::Scanned => QrLoginPollResult::Scanned,
-        bilibili_qr::QrLoginPoll::Expired => QrLoginPollResult::Expired,
-        bilibili_qr::QrLoginPoll::Success { cookie } => QrLoginPollResult::Success { cookie },
-    }
-}
-
-fn map_douyin_qr_poll(result: douyin_qr::QrLoginPoll) -> QrLoginPollResult {
-    match result {
-        douyin_qr::QrLoginPoll::Pending => QrLoginPollResult::Pending,
-        douyin_qr::QrLoginPoll::Scanned => QrLoginPollResult::Scanned,
-        douyin_qr::QrLoginPoll::Expired => QrLoginPollResult::Expired,
-        douyin_qr::QrLoginPoll::Success { cookie } => QrLoginPollResult::Success { cookie },
-    }
-}
-
-fn map_douyu_qr_poll(result: douyu_qr::QrLoginPoll) -> QrLoginPollResult {
-    match result {
-        douyu_qr::QrLoginPoll::Pending => QrLoginPollResult::Pending,
-        douyu_qr::QrLoginPoll::Scanned => QrLoginPollResult::Scanned,
-        douyu_qr::QrLoginPoll::Expired => QrLoginPollResult::Expired,
-        douyu_qr::QrLoginPoll::Success { cookie } => QrLoginPollResult::Success { cookie },
-    }
-}
-
-fn map_huya_qr_poll(result: huya_qr::QrLoginPoll) -> QrLoginPollResult {
-    match result {
-        huya_qr::QrLoginPoll::Pending => QrLoginPollResult::Pending,
-        huya_qr::QrLoginPoll::Scanned => QrLoginPollResult::Scanned,
-        huya_qr::QrLoginPoll::Expired => QrLoginPollResult::Expired,
-        huya_qr::QrLoginPoll::Success { cookie } => QrLoginPollResult::Success { cookie },
     }
 }
 

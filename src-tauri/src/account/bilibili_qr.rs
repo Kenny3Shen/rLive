@@ -7,8 +7,7 @@
 //! 二维码 key 与 cookie 都不会写入日志。
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
@@ -16,7 +15,19 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::account::qr::{
+    build_login_client, is_valid_session_key, QrSessionStore, QrSite,
+};
 use crate::error::{AppError, AppResult};
+
+pub use crate::account::qr::{QrLoginPoll, QrLoginStart};
+
+/// B 站的历史错误文案不带站名，因此 `display` 为空串。
+const SITE: QrSite = QrSite {
+    id: "bilibili",
+    display: "",
+};
+const TRUSTED_SUFFIXES: &[&str] = &["bilibili.com"];
 
 const PASSPORT_ORIGIN: &str = "https://passport.bilibili.com/";
 const WEB_ORIGIN: &str = "https://www.bilibili.com/";
@@ -24,9 +35,6 @@ const QR_GENERATE_URL: &str = "https://passport.bilibili.com/x/passport-login/we
 const QR_POLL_URL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
 const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
-const MAX_ACTIVE_SESSIONS: usize = 16;
-const MAX_REDIRECTS: usize = 8;
 const MAX_QR_KEY_LEN: usize = 512;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 
@@ -41,35 +49,14 @@ const COOKIE_KEYS: &[&str] = &[
     "buvid4",
 ];
 
-/// 客户端渲染 Bilibili 登录二维码所需的数据。
-pub struct QrLoginStart {
-    pub qr_code_url: String,
-    /// 不透明的进程内句柄，而不是 Bilibili 真正的 `qrcode_key`。
-    pub qr_key: String,
-}
-
-/// 一次轮询结果。Cookie 内容只在 Rust 进程内返回，
-/// 以便命令层直接把它持久化到本地 SQLite 账号存储。
-pub enum QrLoginPoll {
-    Pending,
-    Scanned,
-    Expired,
-    Success { cookie: String },
-}
-
 #[derive(Clone)]
 struct QrSession {
     qrcode_key: String,
     client: Client,
     jar: Arc<Jar>,
-    created_at: Instant,
 }
 
-static ACTIVE_SESSIONS: OnceLock<Mutex<HashMap<String, QrSession>>> = OnceLock::new();
-
-fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
-    ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static BILIBILI_SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse<T> {
@@ -94,7 +81,7 @@ struct PollData {
 
 pub async fn start() -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(Arc::clone(&jar))?;
+    let client = build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, true, None)?;
     let response = client
         .get(QR_GENERATE_URL)
         .header(ACCEPT, "application/json, text/plain, */*")
@@ -103,41 +90,35 @@ pub async fn start() -> AppResult<QrLoginStart> {
         .header(USER_AGENT, USER_AGENT_VALUE)
         .send()
         .await
-        .map_err(|_| qr_network_error("bilibili_qr_generate"))?;
+        .map_err(|_| SITE.network_error("bilibili_qr_generate"))?;
 
     let response: ApiResponse<GenerateData> = response.json().await.map_err(|_| {
-        AppError::new("bilibili_qr_generate", "二维码服务返回了无法识别的数据")
-            .with_site("bilibili")
-            .retryable()
+        SITE.retryable_error("generate", "二维码服务返回了无法识别的数据")
     })?;
     if response.code != 0 {
-        return Err(qr_api_error("bilibili_qr_generate", &response.message));
+        return Err(qr_api_error("generate", &response.message));
     }
 
-    let data = response.data.ok_or_else(|| {
-        AppError::new("bilibili_qr_generate", "二维码服务未返回登录地址")
-            .with_site("bilibili")
-            .retryable()
-    })?;
+    let data = response
+        .data
+        .ok_or_else(|| SITE.retryable_error("generate", "二维码服务未返回登录地址"))?;
     if data.url.trim().is_empty()
         || data.qrcode_key.trim().is_empty()
         || data.qrcode_key.len() > MAX_QR_KEY_LEN
     {
-        return Err(
-            AppError::new("bilibili_qr_generate", "二维码服务返回了不完整的登录信息")
-                .with_site("bilibili")
-                .retryable(),
-        );
+        return Err(SITE.retryable_error(
+            "generate",
+            "二维码服务返回了不完整的登录信息",
+        ));
     }
 
     let qr_key = Uuid::new_v4().simple().to_string();
-    insert_session(
+    BILIBILI_SESSIONS.insert(
         qr_key.clone(),
         QrSession {
             qrcode_key: data.qrcode_key,
             client,
             jar,
-            created_at: Instant::now(),
         },
     )?;
 
@@ -149,14 +130,13 @@ pub async fn start() -> AppResult<QrLoginStart> {
 
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
-        return Err(AppError::new(
-            "bilibili_qr_invalid_key",
+        return Err(SITE.error(
+            "invalid_key",
             "二维码登录凭据无效，请刷新二维码",
-        )
-        .with_site("bilibili"));
+        ));
     }
 
-    let session = get_session(qr_key)?;
+    let session = BILIBILI_SESSIONS.get(qr_key)?;
     let response = session
         .client
         .get(QR_POLL_URL)
@@ -167,95 +147,52 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
         .header(USER_AGENT, USER_AGENT_VALUE)
         .send()
         .await
-        .map_err(|_| qr_network_error("bilibili_qr_poll"))?;
+        .map_err(|_| SITE.network_error("bilibili_qr_poll"))?;
 
     // 读取 body 会消费掉响应，所以此时 jar 中必须已经持有 `Set-Cookie` 字段；
     // reqwest 的 cookie store 之所以能在此之前填充完毕，
     // 正是因为客户端在构建时带上了 cookie provider。
     let response: ApiResponse<PollData> = response.json().await.map_err(|_| {
-        AppError::new("bilibili_qr_poll", "二维码状态服务返回了无法识别的数据")
-            .with_site("bilibili")
-            .retryable()
+        SITE.retryable_error("poll", "二维码状态服务返回了无法识别的数据")
     })?;
     if response.code != 0 {
-        return Err(qr_api_error("bilibili_qr_poll", &response.message));
+        return Err(qr_api_error("poll", &response.message));
     }
 
-    let data = response.data.ok_or_else(|| {
-        AppError::new("bilibili_qr_poll", "二维码状态服务未返回登录状态")
-            .with_site("bilibili")
-            .retryable()
-    })?;
+    let data = response
+        .data
+        .ok_or_else(|| SITE.retryable_error("poll", "二维码状态服务未返回登录状态"))?;
     match data.code {
         0 => {
             let cookie = login_cookie(&session.jar, &data.url).ok_or_else(|| {
-                AppError::new(
-                    "bilibili_qr_cookie_missing",
+                SITE.retryable_error(
+                    "cookie_missing",
                     "登录已确认，但未取得可用 Cookie；请刷新二维码后重试",
                 )
-                .with_site("bilibili")
-                .retryable()
             })?;
-            remove_session(qr_key)?;
+            BILIBILI_SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Success { cookie })
         }
         86_101 => Ok(QrLoginPoll::Pending),
         86_090 => Ok(QrLoginPoll::Scanned),
         86_038 => {
-            remove_session(qr_key)?;
+            BILIBILI_SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Expired)
         }
-        _ => Err(
-            AppError::new("bilibili_qr_poll", "二维码登录暂不可用，请刷新二维码后重试")
-                .with_site("bilibili")
-                .retryable(),
-        ),
+        _ => Err(SITE.retryable_error(
+            "poll",
+            "二维码登录暂不可用，请刷新二维码后重试",
+        )),
     }
 }
 
-fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
-    Client::builder()
-        .use_native_tls()
-        .cookie_provider(jar)
-        // 扫码认证携带的是临时登录会话。不要让它走进程级 HTTP(S) 代理
-        // 或应用的浏览代理。
-        .no_proxy()
-        .gzip(true)
-        .brotli(true)
-        .timeout(Duration::from_secs(20))
-        .connect_timeout(Duration::from_secs(10))
-        // 登录完成过程只允许在 Bilibili 自有的 HTTPS 主机之间跳转，
-        // 这样服务端返回的 URL 就无法把该客户端变成
-        // 指向任意目标的已认证请求。
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if can_follow_redirect(attempt.url(), attempt.previous().len()) {
-                attempt.follow()
-            } else {
-                attempt.stop()
-            }
-        }))
-        .build()
-        .map_err(|_| {
-            AppError::new("bilibili_qr_client", "二维码登录网络客户端初始化失败")
-                .with_site("bilibili")
-        })
-}
-
-fn qr_network_error(code: &str) -> AppError {
-    AppError::new(code, "无法连接二维码登录服务，请检查网络后重试")
-        .with_site("bilibili")
-        .retryable()
-}
-
-fn qr_api_error(code: &str, message: &str) -> AppError {
+fn qr_api_error(suffix: &str, message: &str) -> AppError {
     let message = if message.trim().is_empty() {
         "二维码登录服务暂不可用，请稍后重试"
     } else {
         "二维码登录服务拒绝了请求，请刷新二维码后重试"
     };
-    AppError::new(code, message)
-        .with_site("bilibili")
-        .retryable()
+    SITE.retryable_error(suffix, message)
 }
 
 /// 合并 Bilibili 两种下发途径中已确认登录的 Cookie。
@@ -365,74 +302,6 @@ fn is_safe_cookie_value(value: &str) -> bool {
         })
 }
 
-fn is_trusted_bilibili_url(url: &Url) -> bool {
-    if url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.to_ascii_lowercase();
-    host == "bilibili.com" || host.ends_with(".bilibili.com")
-}
-
-fn can_follow_redirect(url: &Url, prior_redirects: usize) -> bool {
-    prior_redirects < MAX_REDIRECTS && is_trusted_bilibili_url(url)
-}
-
-fn is_valid_session_key(value: &str) -> bool {
-    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn insert_session(key: String, session: QrSession) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("bilibili_qr_session", "二维码登录会话初始化失败，请重试")
-            .with_site("bilibili")
-    })?;
-    prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS
-        && let Some(oldest_key) = sessions
-            .iter()
-            .min_by_key(|(_, session)| session.created_at)
-            .map(|(key, _)| key.clone())
-    {
-        sessions.remove(&oldest_key);
-    }
-    sessions.insert(key, session);
-    Ok(())
-}
-
-fn get_session(key: &str) -> AppResult<QrSession> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("bilibili_qr_session", "二维码登录会话读取失败，请重试").with_site("bilibili")
-    })?;
-    prune_sessions(&mut sessions);
-    sessions.get(key).cloned().ok_or_else(|| {
-        AppError::new(
-            "bilibili_qr_expired",
-            "二维码登录会话已过期，请刷新二维码后重试",
-        )
-        .with_site("bilibili")
-    })
-}
-
-fn remove_session(key: &str) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("bilibili_qr_session", "二维码登录会话清理失败，请重试").with_site("bilibili")
-    })?;
-    sessions.remove(key);
-    Ok(())
-}
-
-fn prune_sessions(sessions: &mut HashMap<String, QrSession>) {
-    let now = Instant::now();
-    sessions.retain(|_, session| now.duration_since(session.created_at) < SESSION_TTL);
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -441,9 +310,9 @@ mod tests {
     use reqwest::cookie::Jar;
 
     use super::{
-        PASSPORT_ORIGIN, can_follow_redirect, cookies_from_jar, is_safe_cookie_value,
-        is_trusted_bilibili_url, is_valid_session_key, login_cookie,
+        PASSPORT_ORIGIN, TRUSTED_SUFFIXES, cookies_from_jar, is_safe_cookie_value, login_cookie,
     };
+    use crate::account::qr::{can_follow_redirect, is_trusted_url};
 
     /// 这个修复依赖 reqwest 在 body 被消费之前就把 `Set-Cookie` 存入 jar。
     /// 用真实响应验证这一点，而不是假定它成立。
@@ -609,22 +478,16 @@ mod tests {
     #[test]
     fn only_bilibili_https_hosts_are_followed() {
         let trusted = Url::parse("https://passport.bilibili.com/x/").unwrap();
-        assert!(is_trusted_bilibili_url(&trusted));
-        assert!(can_follow_redirect(&trusted, 0));
-        assert!(!can_follow_redirect(&trusted, 8));
-        assert!(!is_trusted_bilibili_url(
-            &Url::parse("http://passport.bilibili.com/").unwrap()
+        assert!(is_trusted_url(&trusted, TRUSTED_SUFFIXES));
+        assert!(can_follow_redirect(&trusted, 0, TRUSTED_SUFFIXES));
+        assert!(!can_follow_redirect(&trusted, 8, TRUSTED_SUFFIXES));
+        assert!(!is_trusted_url(
+            &Url::parse("http://passport.bilibili.com/").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_bilibili_url(
-            &Url::parse("https://bilibili.com.evil.test/").unwrap()
+        assert!(!is_trusted_url(
+            &Url::parse("https://bilibili.com.evil.test/").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-    }
-
-    #[test]
-    fn session_keys_are_local_uuid_handles() {
-        assert!(is_valid_session_key("0123456789abcdef0123456789abcdef"));
-        // Bilibili 自身的 `qrcode_key` 不再被接受作为句柄。
-        assert!(!is_valid_session_key("short"));
-        assert!(!is_valid_session_key("0123456789abcdef0123456789abcdeZ"));
     }
 }
