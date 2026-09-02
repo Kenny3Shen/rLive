@@ -22,6 +22,8 @@ import {
   FFMPEG_RW_TIMEOUT_SECONDS_MIN,
   RECORDING_AUTO_SPLIT_MINUTES_MAX,
   RECORDING_AUTO_SPLIT_MINUTES_MIN,
+  RECORDING_MAX_CONCURRENT_MAX,
+  RECORDING_MAX_CONCURRENT_MIN,
   RECORDING_ASS_DEFAULT_SETTINGS,
   RECORDING_ASS_DISPLAY_AREA_PERCENT_MAX,
   RECORDING_ASS_DISPLAY_AREA_PERCENT_MIN,
@@ -44,6 +46,7 @@ import {
   parseFfmpegReconnectDelayMaxSeconds,
   parseFfmpegRwTimeoutSeconds,
   parseRecordingAutoSplitMinutes,
+  parseRecordingMaxConcurrent,
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
 
@@ -484,8 +487,10 @@ export function RecordingAssSettingsFields() {
 export function RecordingDefaultsFields() {
   const includeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
   const autoSplitMinutes = useSettingsStore((state) => state.recordingAutoSplitMinutes);
+  const maxConcurrent = useSettingsStore((state) => state.recordingMaxConcurrent);
   const setIncludeDanmaku = useSettingsStore((state) => state.setRecordingIncludeDanmaku);
   const setAutoSplitMinutes = useSettingsStore((state) => state.setRecordingAutoSplitMinutes);
+  const setMaxConcurrent = useSettingsStore((state) => state.setRecordingMaxConcurrent);
 
   return (
     <>
@@ -495,6 +500,17 @@ export function RecordingDefaultsFields() {
         className="self-center"
         checked={includeDanmaku}
         onCheckedChange={setIncludeDanmaku}
+      />
+      <NumberSettingField
+        id="recording-max-concurrent"
+        title="最大同时录制"
+        description="同时进行的录制任务上限。路数越多占用的带宽、CPU 和磁盘写入越高。已在录的任务不受调小影响。"
+        value={maxConcurrent}
+        min={RECORDING_MAX_CONCURRENT_MIN}
+        max={RECORDING_MAX_CONCURRENT_MAX}
+        unit="路"
+        normalize={parseRecordingMaxConcurrent}
+        onCommit={setMaxConcurrent}
       />
       <NumberSettingField
         id="recording-auto-split-minutes"

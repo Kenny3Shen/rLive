@@ -19,6 +19,8 @@ const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN: u32 = 1;
 const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX: u32 = 60;
 const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX: u32 = 20;
 const RECORDING_AUTO_SPLIT_MINUTES_MAX: u32 = 24 * 60;
+const RECORDING_MAX_CONCURRENT_MIN: u32 = 1;
+const RECORDING_MAX_CONCURRENT_MAX: u32 = 6;
 const RECORDING_ASS_RESOLUTION_WIDTH_MIN: u32 = 320;
 const RECORDING_ASS_RESOLUTION_WIDTH_MAX: u32 = 7_680;
 const RECORDING_ASS_RESOLUTION_HEIGHT_MIN: u32 = 240;
@@ -180,6 +182,9 @@ fn normalize_recording_preferences(settings: &mut AppSettings) {
     settings.recording_auto_split_minutes = settings
         .recording_auto_split_minutes
         .min(RECORDING_AUTO_SPLIT_MINUTES_MAX);
+    settings.recording_max_concurrent = settings
+        .recording_max_concurrent
+        .clamp(RECORDING_MAX_CONCURRENT_MIN, RECORDING_MAX_CONCURRENT_MAX);
     settings.ffmpeg_rw_timeout_seconds = settings
         .ffmpeg_rw_timeout_seconds
         .clamp(FFMPEG_RW_TIMEOUT_SECONDS_MIN, FFMPEG_RW_TIMEOUT_SECONDS_MAX);
@@ -489,6 +494,7 @@ mod tests {
             ffmpeg_reconnect_delay_max_seconds: 100,
             ffmpeg_hls_segment_retry_count: 99,
             recording_auto_split_minutes: 10_000,
+            recording_max_concurrent: 99,
             ..AppSettings::default()
         };
 
@@ -498,6 +504,10 @@ mod tests {
         assert_eq!(stored.ffmpeg_reconnect_delay_max_seconds, 60);
         assert_eq!(stored.ffmpeg_hls_segment_retry_count, 20);
         assert_eq!(stored.recording_auto_split_minutes, 24 * 60);
+        assert_eq!(
+            stored.recording_max_concurrent,
+            RECORDING_MAX_CONCURRENT_MAX
+        );
     }
 
     #[test]
@@ -696,6 +706,7 @@ mod tests {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         let object = value.as_object_mut().unwrap();
         object.remove("room_card_preview_enabled");
+        object.remove("recording_max_concurrent");
         object.insert("danmaku_font_size".into(), serde_json::json!(18));
         conn.execute(
             "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
@@ -706,6 +717,7 @@ mod tests {
         let (settings, saved) = get_with_status(&conn).unwrap();
         assert!(saved);
         assert!(settings.room_card_preview_enabled);
+        assert_eq!(settings.recording_max_concurrent, 4);
         assert_eq!(settings.danmaku_font_size, 18);
     }
 }

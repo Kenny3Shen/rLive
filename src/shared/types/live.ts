@@ -273,6 +273,8 @@ export type AppSettings = {
   recording_include_danmaku: boolean;
   /** FFmpeg 录制按分钟大小分卷自动收尾并继续；0 关闭。 */
   recording_auto_split_minutes: number;
+  /** 同时进行的录制任务上限，1..=6。 */
+  recording_max_concurrent: number;
   /** FFmpeg 网络读写超时秒数，3..=60。 */
   ffmpeg_rw_timeout_seconds: number;
   /** FFmpeg 重连最大延迟秒数，1..=60。 */

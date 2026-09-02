@@ -14,7 +14,7 @@ use crate::state::AppState;
 
 fn configured_recording_options(
     state: &AppState,
-) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool)> {
+) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool, usize)> {
     let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     Ok((
@@ -28,6 +28,7 @@ fn configured_recording_options(
             }),
         },
         settings.recording_include_danmaku,
+        settings.recording_max_concurrent as usize,
     ))
 }
 
@@ -48,12 +49,12 @@ pub async fn recording_start(
         input.source_key.trim(),
         input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
     );
-    let (proxy, ffmpeg_options, default_include_danmaku) =
+    let (proxy, ffmpeg_options, default_include_danmaku, max_concurrent) =
         configured_recording_options(state.inner())?;
     let input = input.with_recording_defaults(default_include_danmaku);
     state
         .recording
-        .start_with_ffmpeg_options(input, proxy.as_deref(), ffmpeg_options)
+        .start_with_ffmpeg_options(input, proxy.as_deref(), ffmpeg_options, max_concurrent)
         .await
 }
 

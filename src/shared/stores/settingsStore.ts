@@ -100,6 +100,9 @@ export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = true;
 export const RECORDING_AUTO_SPLIT_MINUTES_MIN = 0;
 export const RECORDING_AUTO_SPLIT_MINUTES_MAX = 24 * 60;
 export const RECORDING_AUTO_SPLIT_MINUTES_DEFAULT = 0;
+export const RECORDING_MAX_CONCURRENT_MIN = 1;
+export const RECORDING_MAX_CONCURRENT_MAX = 6;
+export const RECORDING_MAX_CONCURRENT_DEFAULT = 4;
 export const FFMPEG_RW_TIMEOUT_SECONDS_MIN = 3;
 export const FFMPEG_RW_TIMEOUT_SECONDS_MAX = 60;
 export const FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT = 10;
@@ -281,11 +284,21 @@ export function parseRecordingAutoSplitMinutes(value: unknown): number {
   );
 }
 
+export function parseRecordingMaxConcurrent(value: unknown): number {
+  return parseBoundedInteger(
+    value,
+    RECORDING_MAX_CONCURRENT_MIN,
+    RECORDING_MAX_CONCURRENT_MAX,
+    RECORDING_MAX_CONCURRENT_DEFAULT,
+  );
+}
+
 export function recordingPreferencesFromAppSettings(
   settings: Pick<
     AppSettings,
     | "recording_include_danmaku"
     | "recording_auto_split_minutes"
+    | "recording_max_concurrent"
     | "ffmpeg_rw_timeout_seconds"
     | "ffmpeg_reconnect_delay_max_seconds"
     | "ffmpeg_hls_segment_retry_count"
@@ -297,6 +310,7 @@ export function recordingPreferencesFromAppSettings(
     recordingAutoSplitMinutes: parseRecordingAutoSplitMinutes(
       settings.recording_auto_split_minutes,
     ),
+    recordingMaxConcurrent: parseRecordingMaxConcurrent(settings.recording_max_concurrent),
     ffmpegRwTimeoutSeconds: parseFfmpegRwTimeoutSeconds(settings.ffmpeg_rw_timeout_seconds),
     ffmpegReconnectDelayMaxSeconds: parseFfmpegReconnectDelayMaxSeconds(
       settings.ffmpeg_reconnect_delay_max_seconds,
@@ -418,6 +432,7 @@ type SettingsState = {
   iptvCustomM3uUrl: string | null;
   recordingIncludeDanmaku: boolean;
   recordingAutoSplitMinutes: number;
+  recordingMaxConcurrent: number;
   ffmpegRwTimeoutSeconds: number;
   ffmpegReconnectDelayMaxSeconds: number;
   ffmpegHlsSegmentRetryCount: number;
@@ -451,6 +466,7 @@ type SettingsState = {
   setIptvCustomM3uUrl: (url: string | null) => void;
   setRecordingIncludeDanmaku: (enabled: boolean) => void;
   setRecordingAutoSplitMinutes: (minutes: number) => void;
+  setRecordingMaxConcurrent: (count: number) => void;
   setFfmpegRwTimeoutSeconds: (seconds: number) => void;
   setFfmpegReconnectDelayMaxSeconds: (seconds: number) => void;
   setFfmpegHlsSegmentRetryCount: (count: number) => void;
@@ -495,6 +511,7 @@ const defaultSettings: AppSettings = {
   iptv_custom_m3u_url: null,
   recording_include_danmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
   recording_auto_split_minutes: RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
+  recording_max_concurrent: RECORDING_MAX_CONCURRENT_DEFAULT,
   ffmpeg_rw_timeout_seconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
   ffmpeg_reconnect_delay_max_seconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
   ffmpeg_hls_segment_retry_count: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
@@ -535,6 +552,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     iptv_custom_m3u_url: state.iptvCustomM3uUrl,
     recording_include_danmaku: state.recordingIncludeDanmaku,
     recording_auto_split_minutes: state.recordingAutoSplitMinutes,
+    recording_max_concurrent: state.recordingMaxConcurrent,
     ffmpeg_rw_timeout_seconds: state.ffmpegRwTimeoutSeconds,
     ffmpeg_reconnect_delay_max_seconds: state.ffmpegReconnectDelayMaxSeconds,
     ffmpeg_hls_segment_retry_count: state.ffmpegHlsSegmentRetryCount,
@@ -654,6 +672,7 @@ export const useSettingsStore = create<SettingsState>()(
       iptvCustomM3uUrl: null,
       recordingIncludeDanmaku: RECORDING_INCLUDE_DANMAKU_DEFAULT,
       recordingAutoSplitMinutes: RECORDING_AUTO_SPLIT_MINUTES_DEFAULT,
+      recordingMaxConcurrent: RECORDING_MAX_CONCURRENT_DEFAULT,
       ffmpegRwTimeoutSeconds: FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT,
       ffmpegReconnectDelayMaxSeconds: FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT,
       ffmpegHlsSegmentRetryCount: FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT,
@@ -794,6 +813,11 @@ export const useSettingsStore = create<SettingsState>()(
         void get().persistToBackend({
           recording_auto_split_minutes: recordingAutoSplitMinutes,
         });
+      },
+      setRecordingMaxConcurrent: (count) => {
+        const recordingMaxConcurrent = parseRecordingMaxConcurrent(count);
+        set({ recordingMaxConcurrent });
+        void get().persistToBackend({ recording_max_concurrent: recordingMaxConcurrent });
       },
       setFfmpegRwTimeoutSeconds: (seconds) => {
         const ffmpegRwTimeoutSeconds = parseFfmpegRwTimeoutSeconds(seconds);
