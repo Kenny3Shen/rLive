@@ -19,19 +19,9 @@ import {
   UserRound,
 } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Card,
   CardAction,
@@ -886,42 +876,22 @@ export function RecordingsPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
+      <ConfirmDialog
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => {
           if (!open && !deleteMutation.isPending) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <Trash2 aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>删除这段录制？</AlertDialogTitle>
-            <AlertDialogDescription>
-              将永久删除“{deleteTarget?.title}”及其本地媒体文件，此操作无法恢复。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteMutation.isPending}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              type="button"
-              variant="destructive"
-              disabled={!deleteTarget || deleteMutation.isPending}
-              onClick={() => {
-                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
-              }}
-            >
-              {deleteMutation.isPending ? (
-                <Spinner data-icon="inline-start" aria-hidden />
-              ) : (
-                <Trash2 data-icon="inline-start" aria-hidden />
-              )}
-              {deleteMutation.isPending ? "正在删除…" : "删除"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        icon={<Trash2 aria-hidden />}
+        title="删除这段录制？"
+        description={<>将永久删除“{deleteTarget?.title}”及其本地媒体文件，此操作无法恢复。</>}
+        busy={deleteMutation.isPending}
+        busyText="正在删除…"
+        actionIcon={<Trash2 data-icon="inline-start" aria-hidden />}
+        confirmText="删除"
+        onConfirm={() => {
+          if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+        }}
+      />
     </div>
   );
 }
