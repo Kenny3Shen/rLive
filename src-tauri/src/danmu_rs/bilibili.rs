@@ -420,15 +420,7 @@ fn inflate_brotli(body: &[u8]) -> Option<Vec<u8>> {
     if reader.read_to_end(&mut out).is_ok() && !out.is_empty() {
         Some(out)
     } else {
-        // 兜底：流式解压失败时改用整缓冲区 API。
-        out.clear();
-        if brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut out).is_ok()
-            && !out.is_empty()
-        {
-            Some(out)
-        } else {
-            None
-        }
+        None
     }
 }
 
@@ -729,14 +721,6 @@ fn safe_css_hex_color(value: Option<&Value>) -> Option<String> {
     Some(format!("#{hex}"))
 }
 
-fn safe_currency(value: Option<&Value>) -> Option<String> {
-    let currency = value?.as_str()?.trim();
-    if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_alphabetic()) {
-        return None;
-    }
-    Some(currency.to_ascii_uppercase())
-}
-
 fn safe_super_chat_id(data: &Value) -> Option<String> {
     let value = data.get("id").or_else(|| data.get("id_str"))?;
     let id = match value {
@@ -783,7 +767,6 @@ fn parse_super_chat_info(data: &Value) -> SuperChatInfo {
     SuperChatInfo {
         id: safe_super_chat_id(data),
         price: safe_super_chat_price(data.get("price")),
-        currency: safe_currency(data.get("currency").or_else(|| data.get("currency_type"))),
         background_color: safe_css_hex_color(
             data.get("background_color")
                 .or_else(|| data.get("background_color_start")),
@@ -792,11 +775,6 @@ fn parse_super_chat_info(data: &Value) -> SuperChatInfo {
             data.get("background_bottom_color")
                 .or_else(|| data.get("background_color_end")),
         ),
-        avatar_url: data
-            .get("user_info")
-            .and_then(|user_info| user_info.get("face"))
-            .and_then(Value::as_str)
-            .and_then(safe_bilibili_image_url),
         duration: safe_super_chat_duration(data.get("time").or_else(|| data.get("duration"))),
     }
 }
@@ -1638,13 +1616,8 @@ mod tests {
         let info = ev.super_chat.as_ref().unwrap();
         assert_eq!(info.id.as_deref(), Some("123456"));
         assert_eq!(info.price, Some(30.0));
-        assert_eq!(info.currency.as_deref(), Some("CNY"));
         assert_eq!(info.background_color.as_deref(), Some("#2A60B2"));
         assert_eq!(info.background_bottom_color.as_deref(), Some("#1D4A92"));
-        assert_eq!(
-            info.avatar_url.as_deref(),
-            Some("https://i0.hdslb.com/bfs/face/sc-user.jpg")
-        );
         assert_eq!(info.duration, Some(60));
     }
 

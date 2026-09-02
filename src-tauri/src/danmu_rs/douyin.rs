@@ -71,17 +71,6 @@ pub struct DouyinDanmakuArgs {
 }
 
 fn douyin_ws_hosts() -> Vec<String> {
-    if let Ok(raw) = std::env::var("RLIVE_DOUYIN_WS_HOSTS") {
-        let hosts: Vec<String> = raw
-            .split(',')
-            .map(str::trim)
-            .filter(|host| !host.is_empty())
-            .map(str::to_string)
-            .collect();
-        if !hosts.is_empty() {
-            return hosts;
-        }
-    }
     DOUYIN_WS_HOSTS
         .iter()
         .map(|host| (*host).to_string())
@@ -1160,16 +1149,6 @@ mod tests {
             args.internal_ext
                 .contains(&format!("wss_push_did:{}", args.user_unique_id))
         );
-    }
-
-    #[test]
-    fn default_ws_hosts_lead_with_the_primary_edge() {
-        let hosts = douyin_ws_hosts();
-        assert_eq!(
-            hosts.first().map(String::as_str),
-            Some("webcast3-ws-web-lq.douyin.com")
-        );
-        assert!(hosts.len() >= 3);
     }
 
     /// 握手状态决定重试类别，因此凭据被拒时直接停止，
