@@ -24,7 +24,6 @@ type IptvAvailabilityStoreState = {
   lastCheckedAt: number | null;
   /** 缓存的 byUrl/lastCheckedAt 所描述的来源 URL；不匹配则强制重置。 */
   sourceUrl: string | null;
-  setAvailability: (url: string, state: IptvAvailabilityState) => void;
   setManyAvailability: (entries: readonly AvailabilityEntry[]) => void;
   setProgress: (progress: IptvAvailabilityProgress | null) => void;
   /** 记录给定来源的一次已完成运行；加守卫防止过期的调用方拨动时钟。 */
@@ -45,12 +44,6 @@ export const useIptvAvailabilityStore = create<IptvAvailabilityStoreState>((set)
   progress: null,
   lastCheckedAt: null,
   sourceUrl: null,
-  setAvailability: (url, state) =>
-    set((current) => {
-      const next = new Map(current.byUrl);
-      next.set(url, state);
-      return { byUrl: next };
-    }),
   setManyAvailability: (entries) =>
     set((current) => {
       const next = new Map(current.byUrl);
