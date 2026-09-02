@@ -3,6 +3,7 @@ pub mod douyin_qr;
 pub mod douyu_qr;
 pub mod huya_qr;
 
+use percent_encoding::percent_decode_str;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::schema::map_db_err;
@@ -103,29 +104,26 @@ fn normalize_display_name(value: String) -> Option<String> {
 /// 浏览器 Cookie 值使用的是字面加号，且多个平台会用百分号转义
 /// 编码中文账号名。
 fn percent_decode_cookie_value(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let high = (bytes[index + 1] as char).to_digit(16);
-            let low = (bytes[index + 2] as char).to_digit(16);
-            if let (Some(high), Some(low)) = (high, low) {
-                decoded.push((high * 16 + low) as u8);
-                index += 3;
-                continue;
-            }
-        }
-        decoded.push(bytes[index]);
-        index += 1;
+    match percent_decode_str(value).decode_utf8() {
+        Ok(decoded) => decoded.into_owned(),
+        // 解码结果不是合法 UTF-8 时回退到原始值。
+        Err(_) => value.to_owned(),
     }
-    String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::schema::open_in_memory;
+
+    /// 等价性锚点：Cookie 值解码不把 `+` 当空格；解码出非法 UTF-8 时回退原值。
+    #[test]
+    fn cookie_percent_decode_semantics() {
+        assert_eq!(percent_decode_cookie_value("a+b"), "a+b");
+        assert_eq!(percent_decode_cookie_value("%E5%B0%8F%E6%98%8E"), "小明");
+        assert_eq!(percent_decode_cookie_value("%FF"), "%FF");
+        assert_eq!(percent_decode_cookie_value("50%"), "50%");
+    }
 
     #[test]
     fn cookie_set_get_clear() {

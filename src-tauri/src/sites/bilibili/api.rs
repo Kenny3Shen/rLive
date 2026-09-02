@@ -1,9 +1,12 @@
 //! Bilibili 直播 API 的纯解析器与底层辅助函数。
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use md5::{Digest, Md5};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use regex::Regex;
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
@@ -47,29 +50,11 @@ fn json_err(msg: impl Into<String>) -> AppError {
 }
 
 /// 去除 Bilibili 搜索结果中的高亮标签，如 `<em class="keyword">`。
+/// 与原手写扫描一致：任何包含 `em`（不区分 ASCII 大小写）的标签都会被剥除。
 pub fn strip_em_tags(s: &str) -> String {
-    // 避免引入 `regex` crate；字符扫描足以处理 `<...em...>`。
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(start) = rest.find('<') {
-        out.push_str(&rest[..start]);
-        let after = &rest[start..];
-        if let Some(end) = after.find('>') {
-            let tag = &after[..=end];
-            let lower = tag.to_ascii_lowercase();
-            if lower.contains("em") {
-                rest = &after[end + 1..];
-                continue;
-            }
-            out.push_str(tag);
-            rest = &after[end + 1..];
-        } else {
-            out.push_str(after);
-            return out;
-        }
-    }
-    out.push_str(rest);
-    out
+    static EM_TAG: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"<[^>]*[eE][mM][^>]*>").unwrap());
+    EM_TAG.replace_all(s, "").into_owned()
 }
 
 fn cover_thumb(cover: &str, suffix: &str) -> String {
@@ -648,20 +633,16 @@ pub fn wbi_sign_params(
 
 /// 按 Uri.encodeQueryComponent 的方式做百分号编码（空格编码为 %20）。
 fn urlencoding_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.as_bytes() {
-        match *b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*b as char);
-            }
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{b:02X}"));
-            }
-        }
-    }
-    out
+    utf8_percent_encode(s, UNRESERVED).collect()
 }
+
+/// 与原手写实现逐字节等价的 unreserved 集合：字母数字与 `-._~` 之外
+/// 一律 `%XX`（大写十六进制）。
+const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 pub fn now_unix() -> i64 {
     SystemTime::now()
@@ -899,5 +880,23 @@ mod tests {
     fn strip_em_basic() {
         assert_eq!(strip_em_tags("a<em>b</em>c"), "abc");
         assert_eq!(strip_em_tags(r#"搜<em class="keyword">索</em>"#), "搜索");
+    }
+
+    /// 等价性锚点：原手写扫描剥除一切「包含 em（不区分 ASCII 大小写）」的标签，
+    /// 未闭合的 `<` 原样保留。
+    #[test]
+    fn strip_em_matches_any_tag_containing_em() {
+        assert_eq!(strip_em_tags("<item>x</item>"), "x");
+        assert_eq!(strip_em_tags("<EM>x</EM>"), "x");
+        assert_eq!(strip_em_tags("<a href=\"em\">y</a>"), "y</a>");
+        assert_eq!(strip_em_tags("a<em"), "a<em");
+        assert_eq!(strip_em_tags("<a>b</a>"), "<a>b</a>");
+    }
+
+    /// 等价性锚点：query 组件编码只保留 unreserved 集合，十六进制为大写。
+    #[test]
+    fn urlencoding_encode_keeps_unreserved_and_uppercase_hex() {
+        assert_eq!(urlencoding_encode("aZ09-_.~"), "aZ09-_.~");
+        assert_eq!(urlencoding_encode("a b+c/dé"), "a%20b%2Bc%2Fd%C3%A9");
     }
 }

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -299,19 +300,41 @@ impl BilibiliSite {
         Ok(headers)
     }
 
-    async fn get_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
-        let headers = self.headers().await?;
+    /// 五个 GET JSON 包装共享的传输与校验实现：header 注入、逐对追加 query、
+    /// 429 检查、HTTP 状态检查与 `code != 0` 解包。
+    ///
+    /// `public_headers = true` 时不引导 buvid 也不携带 cookie（见
+    /// [`Self::get_public_json`]）；`checks` 决定校验档位。
+    async fn get_json_request<T>(
+        &self,
+        url: &str,
+        query: &[T],
+        public_headers: bool,
+        checks: ResponseChecks,
+    ) -> AppResult<String>
+    where
+        T: Serialize,
+    {
+        let headers = if public_headers {
+            vec![
+                ("user-agent", DEFAULT_USER_AGENT.to_string()),
+                ("referer", DEFAULT_REFERER.to_string()),
+            ]
+        } else {
+            self.headers().await?
+        };
         let mut req = self.client.get(url);
         for (k, v) in headers {
             req = req.header(k, v);
         }
-        for (k, v) in query {
-            req = req.query(&[(k, v)]);
+        for pair in query {
+            req = req.query(&[pair]);
         }
         let resp = req.send().await.map_err(map_http)?;
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;
-        if status.as_u16() == 429 {
+        let strict = !matches!(checks, ResponseChecks::Raw);
+        if strict && status.as_u16() == 429 {
             return Err(
                 AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
                     .with_site("bilibili")
@@ -319,17 +342,20 @@ impl BilibiliSite {
             );
         }
         if !status.is_success() {
-            return Err(AppError::new(
-                "bilibili_http_error",
-                format!(
+            let message = match checks {
+                ResponseChecks::Full => format!(
                     "HTTP {status}: {}",
                     text.chars().take(200).collect::<String>()
                 ),
-            )
-            .with_site("bilibili"));
+                _ => format!("HTTP {status}"),
+            };
+            return Err(
+                AppError::new("bilibili_http_error", message).with_site("bilibili"),
+            );
         }
         // Bilibili 经常在 HTTP 200 的 body 中返回 code != 0。
-        if let Ok(v) = serde_json::from_str::<Value>(&text)
+        if strict
+            && let Ok(v) = serde_json::from_str::<Value>(&text)
             && let Some(code) = v.get("code").and_then(|c| c.as_i64())
             && code != 0
         {
@@ -346,6 +372,11 @@ impl BilibiliSite {
         Ok(text)
     }
 
+    async fn get_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
+        self.get_json_request(url, query, false, ResponseChecks::Full)
+            .await
+    }
+
     /// 不引导设备 id，直接获取公开的 Bilibili 响应。
     ///
     /// 关注列表刷新只需要房间的开播/下播状态。调用普通的 JSON 辅助函数会先执行
@@ -353,51 +384,8 @@ impl BilibiliSite {
     /// UA 与 Referer 已足够，
     /// 使这次探测保持为单个请求。
     async fn get_public_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
-        let mut request = self
-            .client
-            .get(url)
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .header("referer", DEFAULT_REFERER);
-        for (key, value) in query {
-            request = request.query(&[(key, value)]);
-        }
-
-        let response = request.send().await.map_err(map_http)?;
-        let status = response.status();
-        let text = response.text().await.map_err(map_http)?;
-        if status.as_u16() == 429 {
-            return Err(
-                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
-                    .with_site("bilibili")
-                    .retryable(),
-            );
-        }
-        if !status.is_success() {
-            return Err(AppError::new(
-                "bilibili_http_error",
-                format!(
-                    "HTTP {status}: {}",
-                    text.chars().take(200).collect::<String>()
-                ),
-            )
-            .with_site("bilibili"));
-        }
-        if let Ok(response) = serde_json::from_str::<Value>(&text)
-            && let Some(code) = response.get("code").and_then(Value::as_i64)
-            && code != 0
-        {
-            let message = response
-                .get("message")
-                .or_else(|| response.get("msg"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            return Err(AppError::new(
-                "bilibili_api_error",
-                format!("code={code} message={message}"),
-            )
-            .with_site("bilibili"));
-        }
-        Ok(text)
+        self.get_json_request(url, query, true, ResponseChecks::Full)
+            .await
     }
 
     async fn ensure_wbi_keys(&self) -> AppResult<(String, String)> {
@@ -424,24 +412,8 @@ impl BilibiliSite {
 
     /// 不要求 API `code == 0` 的 HTTP GET（用于 nav / WBI 密钥）。
     async fn get_json_raw(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
-        let headers = self.headers().await?;
-        let mut req = self.client.get(url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        for (k, v) in query {
-            req = req.query(&[(k, v)]);
-        }
-        let resp = req.send().await.map_err(map_http)?;
-        let status = resp.status();
-        let text = resp.text().await.map_err(map_http)?;
-        if !status.is_success() {
-            return Err(
-                AppError::new("bilibili_http_error", format!("HTTP {status}"))
-                    .with_site("bilibili"),
-            );
-        }
-        Ok(text)
+        self.get_json_request(url, query, false, ResponseChecks::Raw)
+            .await
     }
 
     async fn signed_query(
@@ -459,45 +431,8 @@ impl BilibiliSite {
         params: BTreeMap<String, String>,
     ) -> AppResult<String> {
         let signed = self.signed_query(params).await?;
-        let headers = self.headers().await?;
-        let mut req = self.client.get(url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        for (k, v) in &signed {
-            req = req.query(&[(k.as_str(), v.as_str())]);
-        }
-        let resp = req.send().await.map_err(map_http)?;
-        let status = resp.status();
-        let text = resp.text().await.map_err(map_http)?;
-        if status.as_u16() == 429 {
-            return Err(
-                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
-                    .with_site("bilibili")
-                    .retryable(),
-            );
-        }
-        if !status.is_success() {
-            return Err(
-                AppError::new("bilibili_http_error", format!("HTTP {status}"))
-                    .with_site("bilibili"),
-            );
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(&text)
-            && let Some(code) = v.get("code").and_then(|c| c.as_i64())
-            && code != 0
-        {
-            let msg = v
-                .get("message")
-                .or_else(|| v.get("msg"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown");
-            return Err(
-                AppError::new("bilibili_api_error", format!("code={code} message={msg}"))
-                    .with_site("bilibili"),
-            );
-        }
-        Ok(text)
+        self.get_json_request(url, &signed, false, ResponseChecks::Standard)
+            .await
     }
 
     /// 为房间聊天 WebSocket 解析 token 与 websocket 主机列表。
@@ -604,45 +539,12 @@ impl BilibiliSite {
         url: &str,
         query: &BTreeMap<String, String>,
     ) -> AppResult<String> {
-        let headers = self.headers().await?;
-        let mut req = self.client.get(url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        for (k, v) in query {
-            req = req.query(&[(k.as_str(), v.as_str())]);
-        }
-        let resp = req.send().await.map_err(map_http)?;
-        let status = resp.status();
-        let text = resp.text().await.map_err(map_http)?;
-        if status.as_u16() == 429 {
-            return Err(
-                AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
-                    .with_site("bilibili")
-                    .retryable(),
-            );
-        }
-        if !status.is_success() {
-            return Err(
-                AppError::new("bilibili_http_error", format!("HTTP {status}"))
-                    .with_site("bilibili"),
-            );
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(&text)
-            && let Some(code) = v.get("code").and_then(|c| c.as_i64())
-            && code != 0
-        {
-            let msg = v
-                .get("message")
-                .or_else(|| v.get("msg"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown");
-            return Err(
-                AppError::new("bilibili_api_error", format!("code={code} message={msg}"))
-                    .with_site("bilibili"),
-            );
-        }
-        Ok(text)
+        let pairs: Vec<(&str, &str)> = query
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        self.get_json_request(url, &pairs, false, ResponseChecks::Standard)
+            .await
     }
 
     async fn get_public_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
@@ -680,6 +582,16 @@ fn map_http(e: reqwest::Error) -> AppError {
     AppError::new("bilibili_http_error", e.to_string())
         .with_site("bilibili")
         .retryable()
+}
+
+/// GET JSON 包装的响应校验档位。
+enum ResponseChecks {
+    /// 429 → `bilibili_rate_limit`；HTTP 错误信息附带响应体摘要；解包 `code != 0`。
+    Full,
+    /// 429 → `bilibili_rate_limit`；HTTP 错误信息不带摘要；解包 `code != 0`。
+    Standard,
+    /// 仅要求 HTTP 成功：不检查 429，也不解包 `code`（nav / WBI 密钥路径）。
+    Raw,
 }
 
 #[async_trait::async_trait]
