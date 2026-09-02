@@ -74,6 +74,6 @@ const TOUCH_PROFILE: MotionProfile = {
   roomZoom: { duration: 0.22, ease: EASE_OUT },
 };
 
-export function motionProfile(mobile: boolean = isMobileClient()): MotionProfile {
-  return mobile ? TOUCH_PROFILE : DESKTOP_PROFILE;
+export function motionProfile(): MotionProfile {
+  return isMobileClient() ? TOUCH_PROFILE : DESKTOP_PROFILE;
 }
