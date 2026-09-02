@@ -2103,7 +2103,6 @@ export function PlayerPane({
               }
               loadError={loadError}
               disabled={transportDisabled}
-              overlay
               // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
               // 那里没有手势栏 inset。
               stackedBelowPlayer={portraitStackedPlayer}
