@@ -23,7 +23,7 @@ use crate::danmu_rs::proxy::{ProxyCredentialErrors, connect_request, proxy_autho
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
-use crate::models::live::{DanmakuEvent, DanmakuKind};
+use crate::models::live::{DanmakuContentSpan, DanmakuEvent, DanmakuKind};
 
 const IRC_WS_URL: &str = "wss://irc-ws.chat.twitch.tv:443";
 const IRC_CONNECT_AUTHORITY: &str = "irc-ws.chat.twitch.tv:443";
@@ -105,6 +105,67 @@ fn tag_value<'a>(tags: Option<&'a str>, key: &str) -> Option<&'a str> {
     })
 }
 
+/// 表情图片的官方 CDN 模板。`2.0` 是双倍尺寸（56px），
+/// 在聊天字号的 1.35 倍下仍然清晰。
+const EMOTE_CDN_BASE: &str = "https://static-cdn.jtvnw.net/emoticons/v2";
+const MAX_EMOTE_ID_BYTES: usize = 64;
+const MAX_CONTENT_SPANS: usize = 32;
+
+/// 把 IRC `emotes` 标签（`25:0-4,12-16/1902:6-10`）展开为有序的文本/图片片段。
+///
+/// 标签里的下标按 code point 计数且可能与实际消息不一致（`/me` 动作消息带有
+/// `\x01ACTION` 包裹）。任何越界、重叠或过长的负载都返回 `None`，
+/// 让调用方回退到纯文本，而不是切出错位的片段。
+fn emote_spans(tags: Option<&str>, content: &str) -> Option<Vec<DanmakuContentSpan>> {
+    let raw = tag_value(tags, "emotes").filter(|value| !value.is_empty())?;
+    let mut ranges = Vec::new();
+    for entry in raw.split('/') {
+        let (id, positions) = entry.split_once(':')?;
+        if id.is_empty()
+            || id.len() > MAX_EMOTE_ID_BYTES
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        {
+            return None;
+        }
+        for position in positions.split(',') {
+            let (start, end) = position.split_once('-')?;
+            let start = start.parse::<usize>().ok()?;
+            let end = end.parse::<usize>().ok()?;
+            if end < start {
+                return None;
+            }
+            ranges.push((start, end, id));
+        }
+    }
+    ranges.sort_unstable_by_key(|(start, _, _)| *start);
+
+    let offsets: Vec<usize> = content.char_indices().map(|(index, _)| index).collect();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    for (start, end, id) in ranges {
+        if start < cursor || end >= offsets.len() {
+            return None;
+        }
+        if start > cursor {
+            spans.push(DanmakuContentSpan::Text {
+                text: content[offsets[cursor]..offsets[start]].to_owned(),
+            });
+        }
+        spans.push(DanmakuContentSpan::Image {
+            image_url: format!("{EMOTE_CDN_BASE}/{id}/default/dark/2.0"),
+        });
+        cursor = end + 1;
+    }
+    if cursor < offsets.len() {
+        spans.push(DanmakuContentSpan::Text {
+            text: content[offsets[cursor]..].to_owned(),
+        });
+    }
+    (spans.len() <= MAX_CONTENT_SPANS).then_some(spans)
+}
+
 fn safe_color(value: Option<&str>) -> Option<String> {
     let value = value?;
     (value.len() == 7
@@ -149,7 +210,7 @@ pub fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
             .filter(|value| !value.is_empty() && value != "0"),
         content: content.to_owned(),
         color: safe_color(tag_value(tags, "color")),
-        spans: None,
+        spans: emote_spans(tags, content),
         super_chat: None,
         ts: chrono::Utc::now().timestamp_millis(),
     })
@@ -522,6 +583,57 @@ mod tests {
         assert_eq!(event.user_id.as_deref(), Some("42"));
         assert_eq!(event.content, "hello Twitch");
         assert_eq!(event.color.as_deref(), Some("#1E90FF"));
+    }
+
+    #[test]
+    fn builds_image_spans_from_the_emotes_tag() {
+        let line = "@display-name=viewer;emotes=1902:6-10,12-16/25:0-4 :viewer!x PRIVMSG #channel :Kappa Keepo Keepo";
+        assert_eq!(
+            parse_privmsg(line).unwrap().spans.unwrap(),
+            vec![
+                DanmakuContentSpan::Image {
+                    image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
+                },
+                DanmakuContentSpan::Text { text: " ".into() },
+                DanmakuContentSpan::Image {
+                    image_url: format!("{EMOTE_CDN_BASE}/1902/default/dark/2.0"),
+                },
+                DanmakuContentSpan::Text { text: " ".into() },
+                DanmakuContentSpan::Image {
+                    image_url: format!("{EMOTE_CDN_BASE}/1902/default/dark/2.0"),
+                },
+            ],
+        );
+
+        // 尾部文本、多字节前缀与缺失标签都各自保持稳定。
+        let trailing = "@display-name=viewer;emotes=25:2-6 :viewer!x PRIVMSG #channel :好 Kappa 呀";
+        assert_eq!(
+            parse_privmsg(trailing).unwrap().spans.unwrap(),
+            vec![
+                DanmakuContentSpan::Text { text: "好 ".into() },
+                DanmakuContentSpan::Image {
+                    image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
+                },
+                DanmakuContentSpan::Text { text: " 呀".into() },
+            ],
+        );
+        let line = "@display-name=viewer;emotes= :viewer!x PRIVMSG #channel :hello";
+        assert!(parse_privmsg(line).unwrap().spans.is_none());
+    }
+
+    #[test]
+    fn drops_emote_spans_for_out_of_range_or_hostile_tags() {
+        for tags in [
+            "emotes=25:0-99",
+            "emotes=25:5-1",
+            "emotes=25:0-4,2-6",
+            "emotes=../evil:0-4",
+            "emotes=25:zero-four",
+        ] {
+            let line =
+                format!("@display-name=viewer;{tags} :viewer!x PRIVMSG #channel :Kappa Keepo");
+            assert!(parse_privmsg(&line).unwrap().spans.is_none(), "{tags}");
+        }
     }
 
     #[test]

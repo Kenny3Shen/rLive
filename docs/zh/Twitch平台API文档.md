@@ -11,7 +11,7 @@
 | 房间详情 | 已支持 | 通过主播 login 解析直播标题、游戏、观众数、封面与开播状态。 |
 | HLS 播放与清晰度 | 已支持 | 取得短时播放访问令牌并解析 HLS master playlist；切换清晰度会重新获取，长时间录制在清单异常时也会刷新目标清晰度或最接近档位的 URL。 |
 | 广告占位规避 | 尽力支持 | 检测服务端插播后依次尝试备用播放器类型；`popout` 可在保留完整清晰度的前提下避开，`autoplay` 干净但上限 `360p`。 |
-| 实时弹幕接收 | 已支持 | 匿名 IRC WebSocket 接收普通频道聊天。 |
+| 实时弹幕接收 | 已支持 | 匿名 IRC WebSocket 接收普通频道聊天，并把 `emotes` 标签展开为图片表情片段。 |
 | 账号与登录 | 未接入 | 当前没有 Twitch Cookie/OAuth 登录或账户操作。 |
 | 弹幕发送 | 未支持 | 匿名 IRC 仅用于接收；不发送聊天。 |
 
@@ -102,6 +102,8 @@ Twitch 拒绝所有没有浏览器完整性上下文的 Relay 游标：只要请
 ## 账号与弹幕边界
 
 `danmaku_connect` 使用匿名 IRC WebSocket 加入当前频道并接收聊天。匿名身份没有账号写入权限，因此 rLive 不提供 Twitch 弹幕发送、订阅、礼物、支付或频道管理功能。
+
+图片表情不需额外请求：IRC `emotes` 标签已携带 `<emote_id>:<start>-<end>` 位置（按 code point 计数），解析器据此把消息拆为有序的文本/图片 `DanmakuContentSpan`，图片指向 `https://static-cdn.jtvnw.net/emoticons/v2/<id>/default/dark/2.0`。位置越界、重叠或 id 含非法字符时整条丢弃片段并回退纯文本（`/me` 动作消息的 `\x01ACTION` 包裹会让下标错位，属于该回退路径）。前端复用与 B 站表情相同的渲染与本机图片代理缓存路径。
 
 ## 已知限制
 
