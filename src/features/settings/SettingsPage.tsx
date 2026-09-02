@@ -6,11 +6,9 @@ import { flushSync } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import packageMetadata from "../../../package.json";
 import {
-  createContext,
   type FormEvent,
   type ReactNode,
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -278,8 +276,6 @@ function settingsOverviewEntry(key: string): SettingsOverviewEntry | undefined {
   return settingsOverviewEntries.find((entry) => entry.key === key);
 }
 
-const SettingsSearchContext = createContext("");
-
 function searchTokens(value: string): string[] {
   return value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
 }
@@ -314,18 +310,7 @@ function isHostedQrImageUrl(value: string): boolean {
   }
 }
 
-function Section({
-  title,
-  keywords,
-  children,
-}: {
-  title: string;
-  keywords?: string;
-  children: React.ReactNode;
-}) {
-  const query = useContext(SettingsSearchContext);
-  if (!matchesSearch(`${title} ${keywords ?? ""}`, query)) return null;
-
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section
       data-slot="settings-section"
@@ -1493,7 +1478,7 @@ function PlatformEnablementField() {
   const enabled = enabledSiteIds(disabledSiteIds);
 
   return (
-    <Section title="直播平台" keywords="bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch">
+    <Section title="直播平台">
       {LIVE_SITE_IDS.map((siteId) => {
         const isEnabled = enabled.includes(siteId);
         const isLastEnabled = isEnabled && enabled.length === 1;
@@ -1536,7 +1521,7 @@ function AppearanceSettings() {
   }
 
   return (
-    <Section title="外观" keywords="主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统">
+    <Section title="外观">
       <Field orientation="horizontal">
         <FieldContent>
           <FieldTitle>
@@ -1784,10 +1769,7 @@ function AboutSettings() {
   return (
     <div className="flex flex-col gap-4">
       <AlertDialog>
-        <Section
-          title="关于 rLive"
-          keywords="当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断"
-        >
+        <Section title="关于 rLive">
           <Field orientation="horizontal">
             <div className="min-w-0 flex-1">
               <FieldTitle id="app-version">当前版本</FieldTitle>
@@ -1942,7 +1924,7 @@ export function SettingsPage() {
     ),
     playback: (
       <SettingsContent title="播放">
-        <Section title="播放质量" keywords="清晰度 线路记忆 软切换 线路">
+        <Section title="播放质量">
           <Field orientation="horizontal">
             <FieldTitle id="quality-label">优先清晰度</FieldTitle>
             <ToggleGroup
@@ -1980,7 +1962,7 @@ export function SettingsPage() {
           </Field>
         </Section>
         {!mobileClient && (
-          <Section title="浏览页" keywords="悬停 预览 卡片 封面 试看 静音 直播间 浏览">
+          <Section title="浏览页">
             <Field orientation="horizontal">
               <FieldContent>
                 <FieldTitle>
@@ -1999,25 +1981,19 @@ export function SettingsPage() {
           </Section>
         )}
         {!mobileClient && (
-          <Section
-            title="语音字幕"
-            keywords="语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端"
-          >
+          <Section title="语音字幕">
             <AsrModelField />
             <AsrCaptionFontSizeField idPrefix="settings" layout="page" />
           </Section>
         )}
-        <Section title="弹幕设置" keywords="弹幕 轨道 区域 文字 透明度 字号 描边 速度">
+        <Section title="弹幕设置">
           <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
-        <Section
-          title="消息过滤"
-          keywords="弹幕 消息 过滤 屏蔽词 屏蔽用户 重复 礼物 合并 醒目留言 sc"
-        >
+        <Section title="消息过滤">
           <DanmakuFilterSettingsFields idPrefix="settings" layout="page" showSuperChat />
         </Section>
-        <Section title="恢复默认" keywords="恢复 默认 重置 reset">
+        <Section title="恢复默认">
           <PlaybackSettingsResetField />
         </Section>
       </SettingsContent>
@@ -2029,7 +2005,7 @@ export function SettingsPage() {
     ),
     network: (
       <SettingsContent title="网络">
-        <Section title="代理" keywords="代理 地址">
+        <Section title="代理">
           <Field data-invalid={proxyError ? true : undefined}>
             <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
             <FieldContent>
@@ -2074,23 +2050,20 @@ export function SettingsPage() {
             </FieldContent>
           </Field>
         </Section>
-        <Section title="IPTV 源" keywords="iptv IPTV M3U 源 地址">
+        <Section title="IPTV 源">
           <IptvCustomM3uUrlField />
         </Section>
-        <Section title="直链播放" keywords="直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4">
+        <Section title="直链播放">
           <DirectPlaybackField />
         </Section>
       </SettingsContent>
     ),
     account: (
       <SettingsContent title="账号">
-        <Section title="发送权限" keywords="发送 弹幕 权限">
+        <Section title="发送权限">
           <DanmakuSendField />
         </Section>
-        <Section
-          title="平台账号"
-          keywords="账号 平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码"
-        >
+        <Section title="平台账号">
           <AccountCard
             siteId="bilibili"
             title="哔哩哔哩"
@@ -2120,29 +2093,26 @@ export function SettingsPage() {
     ),
     recording: (
       <SettingsContent title="录制">
-        <Section title="录制设置" keywords="录制 默认 弹幕 后台 离开 自动 分割 时长">
+        <Section title="录制设置">
           <RecordingDefaultsFields />
         </Section>
-        <Section title="保存位置" keywords="录制 保存 路径 目录">
+        <Section title="保存位置">
           <RecordingStoragePathField />
         </Section>
-        <Section
-          title="导出 ASS 弹幕"
-          keywords="ASS 弹幕 导出 配置 选项 分辨率 字体 字号 不透明度 描边 阴影 粗体 滚动 显示区域 合并 礼物 醒目留言 屏蔽 关键词 正则"
-        >
+        <Section title="导出 ASS 弹幕">
           <RecordingAssSettingsFields />
         </Section>
-        <Section title="FFmpeg" keywords="FFmpeg 超时 重连 HLS 分片 重试">
+        <Section title="FFmpeg">
           <FfmpegSettingsFields />
         </Section>
       </SettingsContent>
     ),
     data: (
       <SettingsContent title="数据">
-        <Section title="局域网同步" keywords="局域网 同步 Wi-Fi 配对 发送 接收">
+        <Section title="局域网同步">
           <LanSyncField />
         </Section>
-        <Section title="导入 / 导出" keywords="数据 导入 导出 配置 档案">
+        <Section title="导入 / 导出">
           <Field orientation="horizontal" data-invalid={profileError ? true : undefined}>
             <FieldContent>
               <FieldTitle>配置档案</FieldTitle>
@@ -2183,7 +2153,7 @@ export function SettingsPage() {
             </div>
           </Field>
         </Section>
-        <Section title="本地缓存" keywords="缓存 图片 头像 封面 清除 清理 占用 空间">
+        <Section title="本地缓存">
           <ImageCacheField />
         </Section>
       </SettingsContent>
@@ -2194,7 +2164,6 @@ export function SettingsPage() {
       </SettingsContent>
     ),
   };
-  const normalizedSearchQuery = searchQuery.trim();
   const categoryMetadata = category
     ? settingsCategories.find((item) => item.value === category)
     : undefined;
@@ -2296,99 +2265,60 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col">
-      <SettingsSearchContext.Provider value={normalizedSearchQuery}>
-        <PagePan
-          panKey={settingsMotionKey}
-          direction={settingsMotionDirection}
-          className="min-h-full"
-          contentClassName="min-h-full overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y"
-        >
-          {category && categoryMetadata ? (
-            <div className="settings-detail flex min-h-full flex-col gap-5">
-              <div className="settings-detail-header flex items-center gap-3 border-b border-border-subtle pb-4">
-                <div className="settings-back-slot shrink-0">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-lg"
-                    className="motion-back-button"
-                    aria-label="返回设置首页"
-                    onClick={returnToOverview}
-                  >
-                    <ArrowLeft
-                      className="transition-transform duration-150 ease-[var(--motion-ease-out)]"
-                      aria-hidden
-                    />
-                  </Button>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h1 className="truncate text-xl font-semibold text-foreground">
-                    {categoryMetadata.label}
-                  </h1>
-                </div>
+      <PagePan
+        panKey={settingsMotionKey}
+        direction={settingsMotionDirection}
+        className="min-h-full"
+        contentClassName="min-h-full overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y"
+      >
+        {category && categoryMetadata ? (
+          <div className="settings-detail flex min-h-full flex-col gap-5">
+            <div className="settings-detail-header flex items-center gap-3 border-b border-border-subtle pb-4">
+              <div className="settings-back-slot shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-lg"
+                  className="motion-back-button"
+                  aria-label="返回设置首页"
+                  onClick={returnToOverview}
+                >
+                  <ArrowLeft
+                    className="transition-transform duration-150 ease-[var(--motion-ease-out)]"
+                    aria-hidden
+                  />
+                </Button>
               </div>
-              <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-xl font-semibold text-foreground">
+                  {categoryMetadata.label}
+                </h1>
+              </div>
             </div>
-          ) : (
-            <SettingsCategoryOverview
-              query={searchQuery}
-              onQueryChange={setSearchQuery}
-              mobileClient={mobileClient}
-              onOpen={(entry) => {
-                setSearchQuery("");
-                if (entry.to) navigate(entry.to);
-                else if (entry.category) setCategory(entry.category);
-              }}
-            />
-          )}
-        </PagePan>
-      </SettingsSearchContext.Provider>
+            <div className="min-w-0 max-w-4xl">{settingsCategoryPanels[category]}</div>
+          </div>
+        ) : (
+          <SettingsCategoryOverview
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            mobileClient={mobileClient}
+            onOpen={(entry) => {
+              setSearchQuery("");
+              if (entry.to) navigate(entry.to);
+              else if (entry.category) setCategory(entry.category);
+            }}
+          />
+        )}
+      </PagePan>
     </div>
   );
 }
 
 function SettingsContent({ title, children }: { title: string; children: React.ReactNode }) {
-  const query = useContext(SettingsSearchContext);
-  const hasCategoryMatch = matchesSearch(settingsCategorySearchText[titleToCategory(title)], query);
-
   return (
     <div data-slot="settings-content" className="flex min-h-full min-w-0 flex-col gap-4">
       <h2 className="sr-only">{title}</h2>
-      {query && <p className="text-xs text-muted-foreground">当前分类的筛选结果</p>}
-      {hasCategoryMatch ? (
-        children
-      ) : (
-        <Empty className="min-h-64 border border-dashed border-border-subtle bg-muted/10">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <SearchX aria-hidden />
-            </EmptyMedia>
-            <EmptyTitle>没有匹配的设置</EmptyTitle>
-            <EmptyDescription>试试其他关键词，或清除搜索继续浏览。</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      )}
+      {children}
     </div>
   );
-}
-
-function titleToCategory(title: string): SettingsCategory {
-  switch (title) {
-    case "外观":
-      return "appearance";
-    case "播放":
-      return "playback";
-    case "平台":
-      return "platform";
-    case "网络":
-      return "network";
-    case "账号":
-      return "account";
-    case "录制":
-      return "recording";
-    case "数据":
-      return "data";
-    default:
-      return "about";
-  }
 }
