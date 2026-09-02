@@ -108,6 +108,7 @@ describe("FFmpeg recording settings", () => {
       recordingPreferencesFromAppSettings({
         recording_include_danmaku: true,
         recording_auto_split_minutes: 90,
+        recording_max_concurrent: 9,
         ffmpeg_rw_timeout_seconds: 18,
         ffmpeg_reconnect_delay_max_seconds: 12,
         ffmpeg_hls_segment_retry_count: 7,
@@ -120,6 +121,8 @@ describe("FFmpeg recording settings", () => {
     ).toEqual({
       recordingIncludeDanmaku: true,
       recordingAutoSplitMinutes: 90,
+      // 设置层上限是 6，入参超出时前端也要钳住而不是直传给后端。
+      recordingMaxConcurrent: 6,
       ffmpegRwTimeoutSeconds: 18,
       ffmpegReconnectDelayMaxSeconds: 12,
       ffmpegHlsSegmentRetryCount: 7,

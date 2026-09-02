@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 /// 已保存设置与配置包对其余字段仍然严格必填：缺字段说明记录不是当前 schema，
 /// 用默认值静默掩盖会丢掉用户的真实选择。只有纯新增的字段进入这份名单，
 /// 因为旧记录不可能表达过对它的偏好。
-pub const BACKFILLED_SETTINGS_FIELDS: &[&str] =
-    &["room_card_preview_enabled", "danmaku_blocked_users"];
+pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
+    "room_card_preview_enabled",
+    "danmaku_blocked_users",
+    "recording_max_concurrent",
+];
 
 /// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -177,6 +180,12 @@ pub struct AppSettings {
     /// 单个 FFmpeg 录制分卷的最大时长，单位为分钟。
     /// 为零表示任务停止前一直使用同一个分卷。
     pub recording_auto_split_minutes: u32,
+    /// 同时进行的录制任务上限，在设置持久化边界处钳制到 1 ..= 6。
+    ///
+    /// 比它更早的设置记录与配置包里没有它，serde default 补齐旧的固定上限；
+    /// 必填校验把它列入 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default = "default_recording_max_concurrent")]
+    pub recording_max_concurrent: u32,
     /// FFmpeg/libavformat 阻塞读取超时，单位为秒。
     pub ffmpeg_rw_timeout_seconds: u32,
     /// FFmpeg 网络重连尝试之间的最大延迟，单位为秒。
@@ -188,6 +197,10 @@ pub struct AppSettings {
 
 fn default_room_card_preview_enabled() -> bool {
     true
+}
+
+fn default_recording_max_concurrent() -> u32 {
+    4
 }
 
 impl Default for AppSettings {
@@ -226,6 +239,7 @@ impl Default for AppSettings {
             legacy_recording_continue_after_leave: false,
             recording_include_danmaku: true,
             recording_auto_split_minutes: 0,
+            recording_max_concurrent: default_recording_max_concurrent(),
             ffmpeg_rw_timeout_seconds: 10,
             ffmpeg_reconnect_delay_max_seconds: 8,
             ffmpeg_hls_segment_retry_count: 5,
@@ -249,6 +263,7 @@ mod tests {
         assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
         assert!(back.recording_include_danmaku);
         assert_eq!(back.recording_auto_split_minutes, 0);
+        assert_eq!(back.recording_max_concurrent, 4);
         assert!(back.room_card_preview_enabled);
         assert!(back.danmaku_shield_words.is_empty());
         assert!(back.danmaku_blocked_users.is_empty());

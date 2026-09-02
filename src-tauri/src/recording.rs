@@ -44,7 +44,6 @@ const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage-v2.json";
 const RECORDING_STORAGE_CONFIG_VERSION: u32 = 2;
 const RECORDING_METADATA_VERSION: u32 = 2;
 const RECORDING_MANAGER_LOCK_FILE: &str = ".recording-manager.lock";
-const MAX_ACTIVE_RECORDINGS: usize = 4;
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const TASK_ABORT_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 const MINIMUM_FREE_SPACE_BYTES: u64 = 512 * 1024 * 1024;
@@ -873,11 +872,15 @@ impl RecordingManager {
         Ok(items)
     }
 
+    /// `max_active` 是本次启动允许的并发录制数，来自设置 `recording_max_concurrent`。
+    /// 它随每次启动传入而不是缓存在 manager 上：用户可能在两次启动之间改设置，
+    /// 读一次就地用掉最不容易读到旧值。上限本身由设置层钳制到 1 ..= 6。
     pub async fn start_with_ffmpeg_options(
         &self,
         input: RecordingStartInput,
         proxy: Option<&str>,
         ffmpeg_options: FfmpegRecordingOptions,
+        max_active: usize,
     ) -> AppResult<RecordingItem> {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(AppError::new(
@@ -924,10 +927,11 @@ impl RecordingManager {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         Self::reap_finalizing_locked(&mut finalizing);
-        if sessions.len() + finalizing.len() >= MAX_ACTIVE_RECORDINGS {
+        let max_active = max_active.max(1);
+        if sessions.len() + finalizing.len() >= max_active {
             return Err(AppError::new(
                 "recording_limit_reached",
-                format!("最多同时录制 {MAX_ACTIVE_RECORDINGS} 路直播"),
+                format!("最多同时录制 {max_active} 路直播"),
             ));
         }
         if sessions
@@ -3891,6 +3895,9 @@ mod tests {
     use tokio::sync::{oneshot, watch};
     use uuid::Uuid;
 
+    /// 不校验并发上限的用例统一用这个值，与设置默认值一致。
+    const DEFAULT_MAX_ACTIVE_RECORDINGS: usize = 4;
+
     /// 磁盘形态的录制 id：`<platform>_<room>/<user>_<time>`。
     /// 手工创建分卷的测试必须自行 `create_dir_all`，
     /// 因为 id 现在跨越房间目录与会话目录。
@@ -4914,6 +4921,7 @@ mod tests {
                 },
                 None,
                 FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap_err();
@@ -5557,7 +5565,12 @@ mod tests {
             .headers
             .insert("X-Recording-Test".into(), "ffmpeg".into());
         let active = manager
-            .start_with_ffmpeg_options(input, None, FfmpegRecordingOptions::default())
+            .start_with_ffmpeg_options(
+                input,
+                None,
+                FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
+            )
             .await
             .unwrap();
         wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
@@ -5608,6 +5621,7 @@ mod tests {
                     split_duration: Some(std::time::Duration::from_millis(500)),
                     ..FfmpegRecordingOptions::default()
                 },
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap();
@@ -5762,6 +5776,7 @@ mod tests {
                 ),
                 None,
                 FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap();
@@ -5918,6 +5933,7 @@ mod tests {
                 ),
                 None,
                 FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap();
@@ -5966,6 +5982,7 @@ mod tests {
                 manager_lifecycle_test_input(&url, "live:bilibili:manager-start-stop", "100"),
                 None,
                 FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap();
@@ -6018,6 +6035,7 @@ mod tests {
                 manager_lifecycle_test_input(&url, source_key, "100"),
                 None,
                 FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap();
@@ -6026,6 +6044,7 @@ mod tests {
                 manager_lifecycle_test_input(&url, source_key, "different-room"),
                 None,
                 FfmpegRecordingOptions::default(),
+                DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
             .await
             .unwrap_err();
@@ -6043,6 +6062,55 @@ mod tests {
 
         wait_for_manager_recording_bytes(&manager, &first.id, 1).await;
         manager.stop(&first.id).await.unwrap();
+        server.abort();
+        let _ = server.await;
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_enforces_the_configured_concurrency_limit() {
+        let body = manager_test_flv_body();
+        let (url, server) = spawn_manager_test_flv_server(body.clone()).await;
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-limit-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+
+        let first = manager
+            .start_with_ffmpeg_options(
+                manager_lifecycle_test_input(&url, "live:bilibili:limit-1", "1"),
+                None,
+                FfmpegRecordingOptions::default(),
+                1,
+            )
+            .await
+            .unwrap();
+        // 上限为 1 时第二路被拒；同一个 manager 把上限改到 2 后立即放行，
+        // 证明上限每次启动重读而不是固定在进程启动时。
+        let rejected = manager
+            .start_with_ffmpeg_options(
+                manager_lifecycle_test_input(&url, "live:bilibili:limit-2", "2"),
+                None,
+                FfmpegRecordingOptions::default(),
+                1,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(rejected.code, "recording_limit_reached");
+
+        let second = manager
+            .start_with_ffmpeg_options(
+                manager_lifecycle_test_input(&url, "live:bilibili:limit-2", "2"),
+                None,
+                FfmpegRecordingOptions::default(),
+                2,
+            )
+            .await
+            .unwrap();
+
+        wait_for_manager_recording_bytes(&manager, &first.id, 1).await;
+        manager.stop(&first.id).await.unwrap();
+        manager.stop(&second.id).await.unwrap();
         server.abort();
         let _ = server.await;
         drop(manager);
