@@ -39,27 +39,27 @@ export function glassPanelClass(context: GlassSurfaceContext = {}): string {
 }
 
 /**
- * 视频之上玻璃面板内的交互行。选中态用显式填充承载而不是 `secondary` 按钮
+ * 玻璃面板内的交互行。选中态用显式填充承载而不是 `secondary` 按钮
  * 变体 —— 后者的不透明 token 会在材质上凿出一个洞。
+ *
+ * 只在视频之上的面板里使用，因此不接上下文参数。
  */
-export function glassOptionClass({ overlay = false }: GlassSurfaceContext = {}): string {
-  return overlay
-    ? "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18"
-    : "";
+export function glassOptionClass(): string {
+  return "text-white hover:bg-white/12 hover:text-white data-highlighted:bg-white/12 data-highlighted:text-white data-selected:bg-white/18 data-selected:text-white data-selected:hover:bg-white/18 data-selected:data-highlighted:bg-white/18";
 }
 
 /** 视频之上玻璃面板中某一行的选中填充。 */
-export function glassOptionSelectedClass({ overlay = false }: GlassSurfaceContext = {}): string {
-  return overlay ? "bg-white/18 text-white" : "";
+export function glassOptionSelectedClass(): string {
+  return "bg-white/18 text-white";
 }
 
 /** 分隔线与弱化标签需要在更深的叠加填充上提亮。 */
-export function glassSeparatorClass({ overlay = false }: GlassSurfaceContext = {}): string {
-  return overlay ? "bg-white/10" : "";
+export function glassSeparatorClass(): string {
+  return "bg-white/10";
 }
 
-export function glassMutedTextClass({ overlay = false }: GlassSurfaceContext = {}): string {
-  return overlay ? "text-white/60" : "";
+export function glassMutedTextClass(): string {
+  return "text-white/60";
 }
 
 /**

@@ -387,7 +387,7 @@ export function PlayerControls({
       : "全屏（F）";
   const overlayButtonClass = PLAYER_OVERLAY_CONTROL_BUTTON_CLASS;
   // 选项行来自共享玻璃模块，使播放器弹窗、设置抽屉与房间抽屉不会漂移。
-  const overlayStreamSettingsOptionClass = glassOptionClass({ overlay: true });
+  const overlayStreamSettingsOptionClass = glassOptionClass();
   const overlayInteractionOpen = volumeOpen || streamSettingsOpen || asrSettingsOpen;
 
   useEffect(() => {
@@ -472,7 +472,7 @@ export function PlayerControls({
           <span
             className={cn(
               "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              glassMutedTextClass({ overlay: true }),
+              glassMutedTextClass(),
             )}
           >
             清晰度
@@ -487,7 +487,7 @@ export function PlayerControls({
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
-                  selected && glassOptionSelectedClass({ overlay: true }),
+                  selected && glassOptionSelectedClass(),
                 )}
                 aria-pressed={selected}
                 onClick={() => {
@@ -504,7 +504,7 @@ export function PlayerControls({
       )}
 
       {qualities.length > 0 && lines.length > 0 && (
-        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay: true }))} />
+        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass())} />
       )}
 
       {lines.length > 0 && (
@@ -512,7 +512,7 @@ export function PlayerControls({
           <span
             className={cn(
               "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              glassMutedTextClass({ overlay: true }),
+              glassMutedTextClass(),
             )}
           >
             线路
@@ -527,7 +527,7 @@ export function PlayerControls({
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
-                  selected && glassOptionSelectedClass({ overlay: true }),
+                  selected && glassOptionSelectedClass(),
                 )}
                 aria-pressed={selected}
                 onClick={() => {
@@ -546,7 +546,7 @@ export function PlayerControls({
       )}
 
       {hasStreamSettings && hasCustomPlaybackSettings && (
-        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay: true }))} />
+        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass())} />
       )}
       {playbackSettings}
     </>
@@ -578,7 +578,7 @@ export function PlayerControls({
         </p>
       )}
 
-      <Separator className={cn(glassSeparatorClass({ overlay: true }))} />
+      <Separator className={cn(glassSeparatorClass())} />
 
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
@@ -591,7 +591,7 @@ export function PlayerControls({
         />
       </Field>
 
-      <Separator className={cn(glassSeparatorClass({ overlay: true }))} />
+      <Separator className={cn(glassSeparatorClass())} />
 
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
@@ -769,7 +769,7 @@ export function PlayerControls({
                     onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
                   }}
                 />
-                <Separator className={cn("w-8", glassSeparatorClass({ overlay: true }))} />
+                <Separator className={cn("w-8", glassSeparatorClass())} />
                 <Button
                   type="button"
                   variant="ghost"
@@ -778,7 +778,7 @@ export function PlayerControls({
                     "size-8",
                     CONTROL_ICON_CLASS,
                     "text-white/90 hover:bg-white/12 hover:text-white",
-                    isMuted && glassOptionSelectedClass({ overlay: true }),
+                    isMuted && glassOptionSelectedClass(),
                   )}
                   aria-label={muteLabel}
                   aria-pressed={isMuted}
