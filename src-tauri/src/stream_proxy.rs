@@ -2253,7 +2253,10 @@ fn resolve_upstream_target(
         .ok_or("HLS resource is no longer available")
 }
 
-fn request_header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+/// 从请求头文本里取一个 header 值，忽略大小写并跳过请求行。空值视为缺失。
+///
+/// `recording.rs` 的本机回放服务器共用它——两处此前是逐字节相同的两份。
+pub(crate) fn request_header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
     head.lines().skip(1).find_map(|line| {
         let (key, value) = line.split_once(':')?;
         key.trim()

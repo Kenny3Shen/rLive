@@ -29,6 +29,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol};
+use crate::stream_proxy::request_header;
 
 #[path = "recording_ffmpeg.rs"]
 mod ffmpeg_backend;
@@ -3705,16 +3706,6 @@ fn safe_relative_path(path: &Path) -> bool {
                         && value != "metadata.json.tmp"
             )
         })
-}
-
-fn request_header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
-    head.lines().skip(1).find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        key.trim()
-            .eq_ignore_ascii_case(name)
-            .then_some(value.trim())
-            .filter(|value| !value.is_empty())
-    })
 }
 
 async fn serve_file(
