@@ -813,7 +813,6 @@ export function RecordingPlayer({
           disabled={loading}
           refreshDisabled={loading}
           loadError={fullscreen.error}
-          overlay
           stackedBelowPlayer={fill ? compact : true}
           compact={compact}
           portalContainer={stageRef}

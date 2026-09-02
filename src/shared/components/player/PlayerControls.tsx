@@ -185,8 +185,6 @@ export type PlayerControlsProps = {
   pictureInPictureActive?: boolean;
   pictureInPictureDisabled?: boolean;
   disabled?: boolean;
-  /** 控件绘制在视频底边之上时使用。 */
-  overlay?: boolean;
   /**
    * 当内容（竖屏弹幕面板、页面页脚）堆叠在播放器下方时设置，
    * 使控件不落在窗口底边，
@@ -331,7 +329,6 @@ export function PlayerControls({
   pictureInPictureActive = false,
   pictureInPictureDisabled = false,
   disabled = false,
-  overlay = false,
   stackedBelowPlayer = false,
   compact = false,
   centerSlot,
@@ -388,9 +385,9 @@ export function PlayerControls({
     : fullscreen
       ? "退出全屏（F）"
       : "全屏（F）";
-  const overlayButtonClass = overlay ? PLAYER_OVERLAY_CONTROL_BUTTON_CLASS : undefined;
+  const overlayButtonClass = PLAYER_OVERLAY_CONTROL_BUTTON_CLASS;
   // 选项行来自共享玻璃模块，使播放器弹窗、设置抽屉与房间抽屉不会漂移。
-  const overlayStreamSettingsOptionClass = glassOptionClass({ overlay }) || undefined;
+  const overlayStreamSettingsOptionClass = glassOptionClass({ overlay: true });
   const overlayInteractionOpen = volumeOpen || streamSettingsOpen || asrSettingsOpen;
 
   useEffect(() => {
@@ -475,7 +472,7 @@ export function PlayerControls({
           <span
             className={cn(
               "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              glassMutedTextClass({ overlay }),
+              glassMutedTextClass({ overlay: true }),
             )}
           >
             清晰度
@@ -485,12 +482,12 @@ export function PlayerControls({
             return (
               <Button
                 key={`${quality.quality}-${index}`}
-                variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
+                variant="ghost"
                 size="sm"
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
-                  selected && glassOptionSelectedClass({ overlay }),
+                  selected && glassOptionSelectedClass({ overlay: true }),
                 )}
                 aria-pressed={selected}
                 onClick={() => {
@@ -507,7 +504,7 @@ export function PlayerControls({
       )}
 
       {qualities.length > 0 && lines.length > 0 && (
-        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay }))} />
+        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay: true }))} />
       )}
 
       {lines.length > 0 && (
@@ -515,7 +512,7 @@ export function PlayerControls({
           <span
             className={cn(
               "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              glassMutedTextClass({ overlay }),
+              glassMutedTextClass({ overlay: true }),
             )}
           >
             线路
@@ -525,12 +522,12 @@ export function PlayerControls({
             return (
               <Button
                 key={`${line.url}-${index}`}
-                variant={overlay ? "ghost" : selected ? "secondary" : "ghost"}
+                variant="ghost"
                 size="sm"
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
-                  selected && glassOptionSelectedClass({ overlay }),
+                  selected && glassOptionSelectedClass({ overlay: true }),
                 )}
                 aria-pressed={selected}
                 onClick={() => {
@@ -549,7 +546,7 @@ export function PlayerControls({
       )}
 
       {hasStreamSettings && hasCustomPlaybackSettings && (
-        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay }))} />
+        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass({ overlay: true }))} />
       )}
       {playbackSettings}
     </>
@@ -581,7 +578,7 @@ export function PlayerControls({
         </p>
       )}
 
-      <Separator className={cn(glassSeparatorClass({ overlay }))} />
+      <Separator className={cn(glassSeparatorClass({ overlay: true }))} />
 
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
@@ -594,7 +591,7 @@ export function PlayerControls({
         />
       </Field>
 
-      <Separator className={cn(glassSeparatorClass({ overlay }))} />
+      <Separator className={cn(glassSeparatorClass({ overlay: true }))} />
 
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
@@ -608,7 +605,7 @@ export function PlayerControls({
           <SelectTrigger
             id="player-caption-translation-from"
             size="sm"
-            className={cn("w-32", overlay && "hover:bg-white/12 focus-ring-overlay")}
+            className="w-32 hover:bg-white/12 focus-ring-overlay"
           >
             <SelectValue />
           </SelectTrigger>
@@ -616,8 +613,8 @@ export function PlayerControls({
             container={portalContainer}
             side="top"
             align="end"
-            glass={overlay}
-            className={cn("max-h-64", overlay && glassPanelClass({ overlay }))}
+            glass
+            className={cn("max-h-64", glassPanelClass({ overlay: true }))}
           >
             <SelectGroup>
               {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
@@ -647,7 +644,7 @@ export function PlayerControls({
           <SelectTrigger
             id="player-caption-translation-to"
             size="sm"
-            className={cn("w-32", overlay && "hover:bg-white/12 focus-ring-overlay")}
+            className="w-32 hover:bg-white/12 focus-ring-overlay"
           >
             <SelectValue />
           </SelectTrigger>
@@ -655,8 +652,8 @@ export function PlayerControls({
             container={portalContainer}
             side="top"
             align="end"
-            glass={overlay}
-            className={cn("max-h-64", overlay && glassPanelClass({ overlay }))}
+            glass
+            className={cn("max-h-64", glassPanelClass({ overlay: true }))}
           >
             <SelectGroup>
               {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
@@ -683,25 +680,22 @@ export function PlayerControls({
         "flex min-w-0 shrink-0",
         timeline ? "flex-col items-stretch gap-0" : "items-center gap-1",
         compact && !timeline && "justify-between gap-0.5",
-        overlay
-          ? // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部， 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效 （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距 给渐变留出在第一个控件之前化解的空间。
-            // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、
-            // 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部，
-            // 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效
-            // （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距
-            // 给渐变留出在第一个控件之前化解的空间。
-            cn(
-              "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
-              compact ? "pt-1.5" : "pt-3",
-              avoidSystemGestureBar
-                ? compact
-                  ? "pb-[max(1px,env(safe-area-inset-bottom))]"
-                  : "pb-[max(0.25rem,env(safe-area-inset-bottom))]"
-                : compact
-                  ? "pb-px"
-                  : "pb-1",
-            )
-          : "border-t border-border bg-card px-1.5 py-1",
+        // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、
+        // 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部，
+        // 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效
+        // （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距
+        // 给渐变留出在第一个控件之前化解的空间。
+        cn(
+          "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
+          compact ? "pt-1.5" : "pt-3",
+          avoidSystemGestureBar
+            ? compact
+              ? "pb-[max(1px,env(safe-area-inset-bottom))]"
+              : "pb-[max(0.25rem,env(safe-area-inset-bottom))]"
+            : compact
+              ? "pb-px"
+              : "pb-1",
+        ),
       )}
     >
       {timeline && <div className="min-w-0 px-1 pt-1">{timeline}</div>}
@@ -715,7 +709,7 @@ export function PlayerControls({
           {onRefresh && (
             <ControlButton
               label="刷新播放"
-              className={cn(overlayButtonClass)}
+              className={overlayButtonClass}
               tooltipContainer={portalContainer}
               disabled={refreshDisabled}
               onClick={onRefresh}
@@ -758,7 +752,7 @@ export function PlayerControls({
                 className={cn(
                   "w-auto items-center gap-2 p-2.5",
                   // 与其旁的设置弹窗相同材质，使两个控制条弹窗看起来属于同一家族。
-                  glassPanelClass({ overlay }),
+                  glassPanelClass({ overlay: true }),
                 )}
               >
                 <PopoverTitle className="sr-only">音量</PopoverTitle>
@@ -775,16 +769,16 @@ export function PlayerControls({
                     onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
                   }}
                 />
-                <Separator className={cn("w-8", glassSeparatorClass({ overlay }))} />
+                <Separator className={cn("w-8", glassSeparatorClass({ overlay: true }))} />
                 <Button
                   type="button"
-                  variant={overlay ? "ghost" : isMuted ? "secondary" : "ghost"}
+                  variant="ghost"
                   size="icon-sm"
                   className={cn(
                     "size-8",
                     CONTROL_ICON_CLASS,
-                    overlay && "text-white/90 hover:bg-white/12 hover:text-white",
-                    isMuted && glassOptionSelectedClass({ overlay }),
+                    "text-white/90 hover:bg-white/12 hover:text-white",
+                    isMuted && glassOptionSelectedClass({ overlay: true }),
                   )}
                   aria-label={muteLabel}
                   aria-pressed={isMuted}
@@ -799,8 +793,8 @@ export function PlayerControls({
           {showSecondaryControls && onToggleAudioOnly && (
             <ControlButton
               label={audioOnlyControl.label}
-              variant={overlay ? "ghost" : audioOnly ? "secondary" : "ghost"}
-              className={cn(overlayButtonClass, audioOnly && overlay && "bg-white/18 text-white")}
+              variant="ghost"
+              className={cn(overlayButtonClass, audioOnly && "bg-white/18 text-white")}
               tooltipContainer={portalContainer}
               disabled={disabled && !audioOnly}
               aria-pressed={audioOnlyControl.enabled}
@@ -814,10 +808,7 @@ export function PlayerControls({
 
         {loadError && (
           <span
-            className={cn(
-              "min-w-0 max-w-28 truncate px-1 text-xs",
-              overlay ? "text-red-200" : "text-destructive",
-            )}
+            className="min-w-0 max-w-28 truncate px-1 text-xs text-red-200"
           >
             {loadError}
           </span>
@@ -846,10 +837,10 @@ export function PlayerControls({
                     className={cn(
                       // 视频之上抽屉需要更深色调；两种上下文现在都经由辅助函数提供材质，
                       // 因此 `glass` 是无条件的，只去掉 `bg-popover`。
-                      glassPanelClass({ overlay }),
+                      glassPanelClass({ overlay: true }),
                     )}
                   >
-                    <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay }))}>
+                    <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay: true }))}>
                       {playbackSettingsTitle}
                     </DrawerTitle>
                     {streamSettingsBody}
@@ -888,11 +879,11 @@ export function PlayerControls({
                     hasCustomPlaybackSettings
                       ? "w-[min(24rem,calc(100vw-1.5rem))]"
                       : "w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))]",
-                    glassPanelClass({ overlay }),
+                    glassPanelClass({ overlay: true }),
                   )}
                 >
                   <PopoverTitle
-                    className={cn("px-2 py-1 max-md:py-0.5", glassTitleClass({ overlay }))}
+                    className={cn("px-2 py-1 max-md:py-0.5", glassTitleClass({ overlay: true }))}
                   >
                     {playbackSettingsTitle}
                   </PopoverTitle>
@@ -932,7 +923,6 @@ export function PlayerControls({
                       CONTROL_ICON_CLASS,
                       overlayButtonClass,
                       asrDisabled && "pointer-events-auto opacity-50",
-                      asrOn && !overlay && "text-primary",
                     )}
                     aria-label={asrLabel}
                     aria-disabled={asrDisabled}
@@ -959,10 +949,10 @@ export function PlayerControls({
                 collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
                 sticky
                 glass
-                className={cn("w-72", glassPanelClass({ overlay }))}
+                className={cn("w-72", glassPanelClass({ overlay: true }))}
               >
                 <div className="flex items-center justify-between gap-2 px-0.5">
-                  <PopoverTitle className={glassTitleClass({ overlay })}>字幕设置</PopoverTitle>
+                  <PopoverTitle className={glassTitleClass({ overlay: true })}>字幕设置</PopoverTitle>
                   {(asrSettingsPending || asrTranslationBusy) && (
                     <Spinner aria-label="正在更新字幕设置" />
                   )}
@@ -974,7 +964,7 @@ export function PlayerControls({
           {showSidePanelControl && onToggleSidePanel && (
             <ControlButton
               label={resolvedSidePanelLabel}
-              variant={overlay ? "ghost" : sidePanelOpen ? "secondary" : "ghost"}
+              variant="ghost"
               className={overlayButtonClass}
               tooltipContainer={portalContainer}
               aria-pressed={sidePanelOpen}
@@ -987,7 +977,7 @@ export function PlayerControls({
           {showWebFullscreenControl && onToggleWebFullscreen && (
             <ControlButton
               label={webFullscreen ? "退出网页全屏" : "网页全屏"}
-              variant={overlay ? "ghost" : webFullscreen ? "secondary" : "ghost"}
+              variant="ghost"
               className={overlayButtonClass}
               tooltipContainer={portalContainer}
               aria-pressed={webFullscreen}

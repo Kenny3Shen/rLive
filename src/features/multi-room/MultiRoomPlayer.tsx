@@ -379,7 +379,6 @@ function MainMultiRoomControls({
           disabled={!showHost}
           refreshDisabled={loading || !playback.playUrl}
           loadError={loadError}
-          overlay
           // 导演网格的一个单元：非全屏时下方总有更多网格，
           // 因此控制元素不在窗口底边。
           stackedBelowPlayer

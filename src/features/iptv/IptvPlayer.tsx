@@ -507,7 +507,6 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             pictureInPictureActive={player.pictureInPictureActive}
             pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
             disabled={!channel || !player.mediaAvailable || status === "error"}
-            overlay
             stackedBelowPlayer
             compact={compactViewport}
             portalContainer={player.stageRef}
