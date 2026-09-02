@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
-import { EASE_OUT, motionProfile, prefersReducedMotion } from "./tokens";
+import { EASE_OUT, motionProfile, PAGE_PAN_PERCENT, prefersReducedMotion } from "./tokens";
 
 // Web Animations 可以在 React 忙于主线程时由 Chromium 合成器推进这个 transform。
 const PAGE_PAN_EASING = EASE_OUT;
@@ -95,7 +95,9 @@ export function PagePan({
     const currentAxis = transition.axis;
     // 垂直路由层恰好铺满裁剪视口，因此 100% 使两页贴合。页内水平平移保留
     // 配置中小小的清槽越冲量。
-    const travel = currentAxis === "vertical" ? 100 : profile.tabTravel;
+    // 整面平移：两页作为一个连续视口一起移动。竖向不需要那道超行程：
+    // 它不跑 PagePan 的水平裁切沟槽。
+    const travel = currentAxis === "vertical" ? 100 : PAGE_PAN_PERCENT;
     const transform = (distance: number) =>
       currentAxis === "vertical"
         ? `translate3d(0, ${distance}%, 0)`
