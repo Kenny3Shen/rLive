@@ -186,80 +186,8 @@ pub struct AppSettings {
     pub recording_ass: RecordingAssSettings,
 }
 
-fn default_quality_level() -> String {
-    "high".into()
-}
-
-fn default_playback_soft_switch_enabled() -> bool {
-    true
-}
-
 fn default_room_card_preview_enabled() -> bool {
     true
-}
-
-fn default_danmaku_area() -> f32 {
-    0.25
-}
-
-fn default_danmaku_speed() -> u32 {
-    100
-}
-
-fn default_danmaku_font_stroke() -> f32 {
-    0.0
-}
-
-fn default_danmaku_filter_gifts() -> bool {
-    true
-}
-
-fn default_danmaku_merge_window_seconds() -> u32 {
-    10
-}
-
-fn default_asr_font_size() -> u32 {
-    20
-}
-
-fn default_asr_window_seconds() -> f32 {
-    0.2
-}
-
-fn default_asr_provider() -> String {
-    "auto".into()
-}
-
-fn default_asr_translation_from() -> String {
-    "auto".into()
-}
-
-fn default_asr_translation_to() -> String {
-    "zh-CN".into()
-}
-
-fn default_asr_punctuation_enabled() -> bool {
-    true
-}
-
-fn default_asr_vad_enabled() -> bool {
-    true
-}
-
-fn default_super_chat_enabled() -> bool {
-    true
-}
-
-fn default_ffmpeg_rw_timeout_seconds() -> u32 {
-    10
-}
-
-fn default_ffmpeg_reconnect_delay_max_seconds() -> u32 {
-    8
-}
-
-fn default_ffmpeg_hls_segment_retry_count() -> u32 {
-    5
 }
 
 impl Default for AppSettings {
@@ -270,37 +198,37 @@ impl Default for AppSettings {
             disabled_site_ids: Vec::new(),
             proxy: None,
             danmaku_opacity: 0.8,
-            danmaku_font_stroke: default_danmaku_font_stroke(),
+            danmaku_font_stroke: 0.0,
             danmaku_font_size: 20,
-            danmaku_speed: default_danmaku_speed(),
-            danmaku_area: default_danmaku_area(),
-            danmaku_filter_gifts: default_danmaku_filter_gifts(),
-            danmaku_merge_window_seconds: default_danmaku_merge_window_seconds(),
-            super_chat_enabled: default_super_chat_enabled(),
+            danmaku_speed: 100,
+            danmaku_area: 0.25,
+            danmaku_filter_gifts: true,
+            danmaku_merge_window_seconds: 10,
+            super_chat_enabled: true,
             danmaku_shield_words: Vec::new(),
             danmaku_blocked_users: Vec::new(),
-            quality_level: default_quality_level(),
-            playback_soft_switch_enabled: default_playback_soft_switch_enabled(),
+            quality_level: "high".into(),
+            playback_soft_switch_enabled: true,
             room_card_preview_enabled: default_room_card_preview_enabled(),
             danmaku_send_enabled: false,
             asr_enabled: false,
-            asr_provider: default_asr_provider(),
-            asr_vad_enabled: default_asr_vad_enabled(),
-            asr_punctuation_enabled: default_asr_punctuation_enabled(),
+            asr_provider: "auto".into(),
+            asr_vad_enabled: true,
+            asr_punctuation_enabled: true,
             asr_speaker_diarization_enabled: false,
             asr_hotwords: Vec::new(),
-            asr_window_seconds: default_asr_window_seconds(),
-            asr_font_size: default_asr_font_size(),
+            asr_window_seconds: 0.2,
+            asr_font_size: 20,
             asr_translation_enabled: false,
-            asr_translation_from: default_asr_translation_from(),
-            asr_translation_to: default_asr_translation_to(),
+            asr_translation_from: "auto".into(),
+            asr_translation_to: "zh-CN".into(),
             iptv_custom_m3u_url: None,
             legacy_recording_continue_after_leave: false,
             recording_include_danmaku: true,
             recording_auto_split_minutes: 0,
-            ffmpeg_rw_timeout_seconds: default_ffmpeg_rw_timeout_seconds(),
-            ffmpeg_reconnect_delay_max_seconds: default_ffmpeg_reconnect_delay_max_seconds(),
-            ffmpeg_hls_segment_retry_count: default_ffmpeg_hls_segment_retry_count(),
+            ffmpeg_rw_timeout_seconds: 10,
+            ffmpeg_reconnect_delay_max_seconds: 8,
+            ffmpeg_hls_segment_retry_count: 5,
             recording_ass: RecordingAssSettings::default(),
         }
     }
