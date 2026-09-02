@@ -227,8 +227,6 @@ export type LivePlayerTimeline = {
   clockKind: LivePlayerClockKind;
   /** 与 `mediaTime === 0` 对应的纪元（毫秒）；无时钟时为 null。 */
   epochAtMediaZeroMs: number | null;
-  playbackRate: number;
-  paused: boolean;
 };
 
 /**
@@ -1733,8 +1731,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       bufferEnd: 0,
       clockKind: "none",
       epochAtMediaZeroMs: null,
-      playbackRate: video?.playbackRate ?? 1,
-      paused: video?.paused ?? true,
     };
     if (!video || video.buffered.length === 0) return idle;
 
@@ -1763,8 +1759,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       mediaTime,
       bufferStart,
       bufferEnd,
-      playbackRate: video.playbackRate,
-      paused: video.paused,
       ...clock,
     };
   }, []);
