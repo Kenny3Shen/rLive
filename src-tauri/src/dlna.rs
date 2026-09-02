@@ -373,7 +373,7 @@ fn is_private_ipv4(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
     match octets {
         [192, 168, _, _] | [10, ..] => true,
-        [172, second, ..] => (16..=32).contains(&second),
+        [172, second, ..] => (16..=31).contains(&second),
         _ => false,
     }
 }
@@ -680,6 +680,11 @@ mod tests {
         assert!(is_private_ipv4(Ipv4Addr::new(192, 168, 1, 20)));
         assert!(is_private_ipv4(Ipv4Addr::new(10, 0, 0, 2)));
         assert!(is_private_ipv4(Ipv4Addr::new(172, 20, 0, 1)));
+        // 172.16.0.0/12 到 172.31 为止。边界两侧都锁住，
+        // 否则 `(16..=32)` 这类越界写法会把公网地址认成局域网。
+        assert!(is_private_ipv4(Ipv4Addr::new(172, 31, 255, 254)));
+        assert!(!is_private_ipv4(Ipv4Addr::new(172, 32, 0, 1)));
+        assert!(!is_private_ipv4(Ipv4Addr::new(172, 15, 0, 1)));
         assert!(!is_private_ipv4(Ipv4Addr::new(172, 33, 0, 1)));
         assert!(!is_private_ipv4(Ipv4Addr::new(8, 8, 8, 8)));
     }
