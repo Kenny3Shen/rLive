@@ -224,7 +224,11 @@ fn collect_seven_tv_set(emotes: &mut SevenTvEmotes, set: &Value) {
         let Some(base) = host
             .get("url")
             .and_then(Value::as_str)
-            .map(|url| url.trim().trim_start_matches("https:").trim_start_matches("//"))
+            .map(|url| {
+                url.trim()
+                    .trim_start_matches("https:")
+                    .trim_start_matches("//")
+            })
             .map(|url| format!("https://{url}"))
             .filter(|url| url.starts_with(SEVEN_TV_CDN_PREFIX) && !url.contains(['?', '#', '\\']))
         else {
@@ -235,9 +239,9 @@ fn collect_seven_tv_set(emotes: &mut SevenTvEmotes, set: &Value) {
             host.get("files")
                 .and_then(Value::as_array)
                 .is_some_and(|files| {
-                    files.iter().any(|file| {
-                        file.get("name").and_then(Value::as_str) == Some(wanted)
-                    })
+                    files
+                        .iter()
+                        .any(|file| file.get("name").and_then(Value::as_str) == Some(wanted))
                 })
         };
         let file = if has_file("2x.webp") {
@@ -256,10 +260,7 @@ fn collect_seven_tv_set(emotes: &mut SevenTvEmotes, set: &Value) {
 /// 两个请求都是尽力而为：7TV 是 Twitch 之外的第三方服务，任一失败只会让对应
 /// 表情退回文本显示，不影响聊天连接。多数频道没有 7TV 账号，频道集返回 404
 /// 属于正常情况。
-async fn fetch_seven_tv_emotes(
-    broadcaster_id: Option<&str>,
-    proxy: Option<&str>,
-) -> SevenTvEmotes {
+async fn fetch_seven_tv_emotes(broadcaster_id: Option<&str>, proxy: Option<&str>) -> SevenTvEmotes {
     let Ok(client) = crate::http_client::client_for_proxy(proxy) else {
         return SevenTvEmotes::new();
     };
@@ -280,8 +281,7 @@ async fn fetch_seven_tv_emotes(
         }
     };
 
-    let channel_url =
-        broadcaster_id.map(|id| format!("https://7tv.io/v3/users/twitch/{id}"));
+    let channel_url = broadcaster_id.map(|id| format!("https://7tv.io/v3/users/twitch/{id}"));
     let (global, channel) = match channel_url {
         Some(url) => {
             let (global, channel) = tokio::join!(get(SEVEN_TV_GLOBAL_SET_URL.to_owned()), get(url));
@@ -319,7 +319,10 @@ fn apply_seven_tv_spans(
             output.push(span);
             continue;
         };
-        if !text.split_whitespace().any(|word| emotes.contains_key(word)) {
+        if !text
+            .split_whitespace()
+            .any(|word| emotes.contains_key(word))
+        {
             output.push(span);
             continue;
         }
@@ -332,9 +335,7 @@ fn apply_seven_tv_spans(
                 .find(|c: char| !c.is_whitespace())
                 .unwrap_or(rest.len());
             let (separator, after) = rest.split_at(word_start);
-            let word_end = after
-                .find(char::is_whitespace)
-                .unwrap_or(after.len());
+            let word_end = after.find(char::is_whitespace).unwrap_or(after.len());
             let (word, tail) = after.split_at(word_end);
             match emotes.get(word) {
                 Some(image_url) => {
@@ -528,7 +529,7 @@ fn proxy_from_setting(proxy: Option<&str>) -> AppResult<Option<ConnectProxy>> {
                 invalid_encoding: || proxy_error("Twitch 弹幕代理账号编码无效"),
                 incomplete_credentials: || {
                     proxy_error("Twitch 弹幕代理账号需同时提供用户名和密码，或移除账号信息")
-                }
+                },
             },
         )?,
     }))
@@ -587,12 +588,9 @@ where
 {
     let mut stream = BufStream::new(stream);
     let request = connect_request(IRC_CONNECT_AUTHORITY, proxy.authorization.as_deref());
-    stream
-        .write_all(&request)
-        .await
-        .map_err(|error| {
-            proxy_connection_error(format!("Twitch 弹幕代理 CONNECT 请求发送失败: {error}"))
-        })?;
+    stream.write_all(&request).await.map_err(|error| {
+        proxy_connection_error(format!("Twitch 弹幕代理 CONNECT 请求发送失败: {error}"))
+    })?;
     stream.flush().await.map_err(|error| {
         proxy_connection_error(format!("Twitch 弹幕代理 CONNECT 请求发送失败: {error}"))
     })?;
@@ -706,7 +704,10 @@ where
             Ok(_) => {}
         }
     }
-    emit_system(events, format!("Twitch 弹幕连接结束（已收 {message_count} 条）"));
+    emit_system(
+        events,
+        format!("Twitch 弹幕连接结束（已收 {message_count} 条）"),
+    );
     Ok(SessionEnd {
         messages: message_count,
         connected_for: connected_at.elapsed(),
@@ -732,8 +733,8 @@ pub async fn run_loop(
     // 7TV 表情表每个会话取一次，重连时复用：一两小时内主播改表情集的概率很低，
     // 不值得让每次断线重试都多背两个第三方请求。与 Twitch 请求走同一份代理
     // 设置：需要代理才能访问 Twitch 的网络环境里，7TV 同样访问不到。
-    let seven_tv = fetch_seven_tv_emotes(args.broadcaster_id.as_deref(), proxy_setting.as_deref())
-        .await;
+    let seven_tv =
+        fetch_seven_tv_emotes(args.broadcaster_id.as_deref(), proxy_setting.as_deref()).await;
 
     let mut policy = ReconnectPolicy::with_defaults("twitch");
     loop {
@@ -849,11 +850,15 @@ mod tests {
         assert_eq!(
             parse_privmsg(trailing).unwrap().spans.unwrap(),
             vec![
-                DanmakuContentSpan::Text { text: "好 ".into() },
+                DanmakuContentSpan::Text {
+                    text: "好 ".into()
+                },
                 DanmakuContentSpan::Image {
                     image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
                 },
-                DanmakuContentSpan::Text { text: " 呀".into() },
+                DanmakuContentSpan::Text {
+                    text: " 呀".into()
+                },
             ],
         );
         let line = "@display-name=viewer;emotes= :viewer!x PRIVMSG #channel :hello";
@@ -902,7 +907,10 @@ mod tests {
     #[test]
     fn collects_seven_tv_emotes_and_prefers_the_2x_webp_file() {
         let mut emotes = SevenTvEmotes::new();
-        collect_seven_tv_set(&mut emotes, &seven_tv_set("GAMBA", "//cdn.7tv.app/emote/01G3"));
+        collect_seven_tv_set(
+            &mut emotes,
+            &seven_tv_set("GAMBA", "//cdn.7tv.app/emote/01G3"),
+        );
         assert_eq!(
             emotes.get("GAMBA").map(String::as_str),
             Some("https://cdn.7tv.app/emote/01G3/2x.webp"),
@@ -924,7 +932,10 @@ mod tests {
 
         // 名字带空白永远匹配不到切词结果，不收。
         let mut emotes = SevenTvEmotes::new();
-        collect_seven_tv_set(&mut emotes, &seven_tv_set("two words", "//cdn.7tv.app/emote/1"));
+        collect_seven_tv_set(
+            &mut emotes,
+            &seven_tv_set("two words", "//cdn.7tv.app/emote/1"),
+        );
         assert!(emotes.is_empty());
 
         // 没有可用的 webp 档时跳过该表情。
@@ -982,8 +993,7 @@ mod tests {
             "GAMBA".to_owned(),
             "https://cdn.7tv.app/emote/2/2x.webp".to_owned(),
         )]);
-        let line =
-            "@display-name=viewer;emotes=25:0-4 :viewer!x PRIVMSG #channel :Kappa and GAMBA";
+        let line = "@display-name=viewer;emotes=25:0-4 :viewer!x PRIVMSG #channel :Kappa and GAMBA";
         assert_eq!(
             super::parse_privmsg(line, &emotes).unwrap().spans.unwrap(),
             vec![

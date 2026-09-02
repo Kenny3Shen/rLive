@@ -976,7 +976,10 @@ fn unusable_track_error(unusable_tracks: &[String]) -> String {
 /// 翻译出来，避免用户面对无法行动的错误。
 fn open_failure_message(url: &str, proxy: Option<&str>, error: Error) -> String {
     let through_https_proxy_tunnel = proxy.is_some()
-        && url.trim_start().to_ascii_lowercase().starts_with("https://");
+        && url
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("https://");
     if through_https_proxy_tunnel && matches!(error, Error::ProtocolNotFound) {
         format!(
             "Rust FFmpeg 打开直播流失败: {error}（当前 FFmpeg 缺少 httpproxy 协议，\
@@ -1347,7 +1350,8 @@ mod tests {
     #[test]
     fn protocol_not_found_through_an_https_proxy_names_the_missing_protocol() {
         let url = "https://example.com/live.flv";
-        let message = open_failure_message(url, Some("http://127.0.0.1:7897/"), Error::ProtocolNotFound);
+        let message =
+            open_failure_message(url, Some("http://127.0.0.1:7897/"), Error::ProtocolNotFound);
         assert!(
             message.contains("httpproxy"),
             "应指出缺失的协议名: {message}"
@@ -1356,7 +1360,10 @@ mod tests {
         // 没有代理或非 HTTPS 地址时不追加误导性提示。
         for (url, proxy) in [
             (url, None),
-            ("http://example.com/live.flv", Some("http://127.0.0.1:7897/")),
+            (
+                "http://example.com/live.flv",
+                Some("http://127.0.0.1:7897/"),
+            ),
         ] {
             let message = open_failure_message(url, proxy, Error::ProtocolNotFound);
             assert!(
@@ -1367,7 +1374,10 @@ mod tests {
 
         // 其他错误即使发生在代理下也不改写。
         let message = open_failure_message(url, Some("http://127.0.0.1:7897/"), Error::InvalidData);
-        assert!(!message.contains("httpproxy"), "仅 ProtocolNotFound 补充成因: {message}");
+        assert!(
+            !message.contains("httpproxy"),
+            "仅 ProtocolNotFound 补充成因: {message}"
+        );
     }
 
     /// 探测预算耗尽或 CDN 切换后，直播源会给出画面尺寸仍为 0 的视频轨。这类轨道

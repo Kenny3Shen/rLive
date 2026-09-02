@@ -790,7 +790,10 @@ mod tests {
     fn percent_decode_cookie_value_decodes_without_form_semantics() {
         // 期望值取自替换前的手写实现：`+` 是字面字符，
         // 非法或截断的转义序列原样保留，解码出非 UTF-8 字节时回退原串。
-        assert_eq!(super::percent_decode_cookie_value("%E5%BC%A0%E4%B8%89"), "张三");
+        assert_eq!(
+            super::percent_decode_cookie_value("%E5%BC%A0%E4%B8%89"),
+            "张三"
+        );
         assert_eq!(super::percent_decode_cookie_value("a+b%20c"), "a+b c");
         assert_eq!(super::percent_decode_cookie_value("%zz"), "%zz");
         assert_eq!(super::percent_decode_cookie_value("100%"), "100%");

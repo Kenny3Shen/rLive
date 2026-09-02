@@ -873,12 +873,8 @@ mod tests {
             .expect("live room in feed");
 
         // 3) 纯 Rust X-Bogus 签名 + WSS 握手。
-        let args = build_connection(
-            &room_id,
-            &serde_json::json!({ "room_id": room_id }),
-            "",
-        )
-        .expect("connection args");
+        let args = build_connection(&room_id, &serde_json::json!({ "room_id": room_id }), "")
+            .expect("connection args");
         let url = build_wss_url(DOUYIN_WS_HOSTS[0], &args).expect("wss url");
         let mut request = url.into_client_request().expect("request");
         for (name, value) in &args.headers {

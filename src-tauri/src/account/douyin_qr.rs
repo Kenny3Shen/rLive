@@ -63,11 +63,7 @@ pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
     // 把它与引导用的 cookie jar 保存在一起，
     // 可以在 SSO 把 token 绑定到该临时会话时让轮询请求依然可用。
     let qr_key = Uuid::new_v4().simple().to_string();
-    let session = QrSession {
-        token,
-        client,
-        jar,
-    };
+    let session = QrSession { token, client, jar };
     SESSIONS.insert(qr_key.clone(), session)?;
 
     Ok(QrLoginStart {
@@ -192,7 +188,8 @@ enum PollState {
 
 fn parse_poll_response(response: &Value) -> AppResult<PollState> {
     let data = successful_data(response, "douyin_qr_poll")?;
-    let redirect_url = qr::optional_text(data, &["redirect_url", "redirectUrl"], MAX_QR_PAYLOAD_LEN);
+    let redirect_url =
+        qr::optional_text(data, &["redirect_url", "redirectUrl"], MAX_QR_PAYLOAD_LEN);
     if let Some(redirect_url) = redirect_url {
         // 抖音只在用户确认登录之后才提供这个字段。它比数值状态更可靠，
         // 因为后者可能随 Web SSO 版本变化。
@@ -212,10 +209,7 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
             "redirect_missing",
             "已确认登录但未取得跳转地址，请刷新二维码后重试",
         )),
-        _ => Err(SITE.retryable_error(
-            "poll",
-            "二维码登录状态异常，请刷新二维码后重试",
-        )),
+        _ => Err(SITE.retryable_error("poll", "二维码登录状态异常，请刷新二维码后重试")),
     }
 }
 
@@ -247,10 +241,7 @@ async fn finish_login(session: &QrSession, redirect_url: &str) -> AppResult<Stri
         .await
         .map_err(|_| SITE.network_error("douyin_qr_complete"))?;
     if !response.status().is_success() {
-        return Err(SITE.retryable_error(
-            "complete",
-            "抖音登录确认失败，请刷新二维码后重试",
-        ));
+        return Err(SITE.retryable_error("complete", "抖音登录确认失败，请刷新二维码后重试"));
     }
 
     cookie_from_jar(&session.jar).ok_or_else(|| {

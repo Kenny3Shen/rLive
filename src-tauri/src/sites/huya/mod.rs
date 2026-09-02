@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use base64::Engine as _;
+use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use md5::{Digest, Md5};
 use percent_encoding::percent_decode_str;
 use reqwest::Client;
@@ -1072,10 +1072,16 @@ mod tests {
     #[test]
     fn base64_decode_lenient_like_handwritten() {
         assert_eq!(base64_decode("QQ==").as_deref(), Some(b"A".as_slice()));
-        assert_eq!(base64_decode("U3RyZWFt").as_deref(), Some(b"Stream".as_slice()));
+        assert_eq!(
+            base64_decode("U3RyZWFt").as_deref(),
+            Some(b"Stream".as_slice())
+        );
         // `fm` 先经 percent_decode（`+` → 空格），空白必须被忽略。
         assert_eq!(base64_decode("QSBJ").as_deref(), Some(b"A I".as_slice()));
-        assert_eq!(base64_decode("U3Ry\nZWFt =").as_deref(), Some(b"Stream".as_slice()));
+        assert_eq!(
+            base64_decode("U3Ry\nZWFt =").as_deref(),
+            Some(b"Stream".as_slice())
+        );
         // 2 字符块的余数位被丢弃而不是报错。
         assert_eq!(base64_decode("QR").as_deref(), Some(b"A".as_slice()));
         assert_eq!(base64_decode("!!"), None);

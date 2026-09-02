@@ -409,7 +409,9 @@ async fn start_relay(headers: HashMap<String, String>) -> Result<RelayHandle, St
     let accept_tasks = Arc::clone(&tasks);
     let accept_task = tokio::spawn(async move {
         loop {
-            let Ok((socket, _addr)) = listener.accept().await else { break };
+            let Ok((socket, _addr)) = listener.accept().await else {
+                break;
+            };
             let config = Arc::clone(&config);
             let task = tokio::spawn(async move {
                 handle_relay_connection(socket, config).await;
@@ -424,11 +426,7 @@ async fn start_relay(headers: HashMap<String, String>) -> Result<RelayHandle, St
         tasks.push(accept_task);
     }
 
-    Ok(RelayHandle {
-        port,
-        token,
-        tasks,
-    })
+    Ok(RelayHandle { port, token, tasks })
 }
 
 async fn stop_relay(relay: &RelayHandle) {

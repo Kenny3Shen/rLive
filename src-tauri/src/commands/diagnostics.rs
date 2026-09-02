@@ -157,10 +157,7 @@ mod tests {
     use uuid::Uuid;
 
     fn temp_directory(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "rlive-app-log-{label}-{}",
-            Uuid::new_v4().simple()
-        ))
+        std::env::temp_dir().join(format!("rlive-app-log-{label}-{}", Uuid::new_v4().simple()))
     }
 
     #[test]
@@ -188,10 +185,7 @@ mod tests {
         assert!(snapshot.current.exists);
         assert!(snapshot.previous.exists);
         assert_eq!(snapshot.current.text, "current log");
-        assert_eq!(
-            snapshot.current.size_bytes,
-            "current log".len() as u64
-        );
+        assert_eq!(snapshot.current.size_bytes, "current log".len() as u64);
         assert_eq!(snapshot.previous.text, "previous log");
 
         fs::remove_dir_all(directory).unwrap();

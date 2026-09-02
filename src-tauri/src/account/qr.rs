@@ -72,10 +72,7 @@ impl QrSite {
     pub fn network_error(self, code: &str) -> AppError {
         AppError::new(
             code,
-            format!(
-                "无法连接{}二维码登录服务，请检查网络后重试",
-                self.display
-            ),
+            format!("无法连接{}二维码登录服务，请检查网络后重试", self.display),
         )
         .with_site(self.id)
         .retryable()
@@ -116,10 +113,10 @@ impl<P: Clone + Send + 'static> QrSessionStore<P> {
 
     /// 存入新会话。超过上限时驱逐最旧的一路，并顺带清掉已过期的。
     pub fn insert(&self, key: String, payload: P) -> AppResult<()> {
-        let mut sessions = self
-            .map()
-            .lock()
-            .map_err(|_| self.site.error("session", "二维码登录会话初始化失败，请重试"))?;
+        let mut sessions = self.map().lock().map_err(|_| {
+            self.site
+                .error("session", "二维码登录会话初始化失败，请重试")
+        })?;
         Self::prune(&mut sessions);
         if sessions.len() >= MAX_ACTIVE_SESSIONS
             && let Some(oldest_key) = sessions
@@ -164,7 +161,10 @@ impl<P: Clone + Send + 'static> QrSessionStore<P> {
 
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.map().lock().map(|sessions| sessions.len()).unwrap_or(0)
+        self.map()
+            .lock()
+            .map(|sessions| sessions.len())
+            .unwrap_or(0)
     }
 }
 
@@ -393,11 +393,7 @@ mod tests {
         let untrusted = Url::parse("https://example.test/").unwrap();
 
         assert!(can_follow_redirect(&trusted, 0, &bilibili));
-        assert!(can_follow_redirect(
-            &trusted,
-            MAX_REDIRECTS - 1,
-            &bilibili
-        ));
+        assert!(can_follow_redirect(&trusted, MAX_REDIRECTS - 1, &bilibili));
         assert!(!can_follow_redirect(&trusted, MAX_REDIRECTS, &bilibili));
         assert!(!can_follow_redirect(&untrusted, 0, &bilibili));
     }

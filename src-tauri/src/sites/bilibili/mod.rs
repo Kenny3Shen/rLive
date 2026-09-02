@@ -349,9 +349,7 @@ impl BilibiliSite {
                 ),
                 _ => format!("HTTP {status}"),
             };
-            return Err(
-                AppError::new("bilibili_http_error", message).with_site("bilibili"),
-            );
+            return Err(AppError::new("bilibili_http_error", message).with_site("bilibili"));
         }
         // Bilibili 经常在 HTTP 200 的 body 中返回 code != 0。
         if strict

@@ -162,11 +162,7 @@ mod tests {
                 danmu_rs::bilibili::normalize_outgoing_message
                     as fn(&str) -> crate::error::AppResult<String>,
             ),
-            (
-                "douyu",
-                "斗鱼",
-                danmu_rs::douyu::normalize_outgoing_message,
-            ),
+            ("douyu", "斗鱼", danmu_rs::douyu::normalize_outgoing_message),
             ("huya", "虎牙", danmu_rs::huya::normalize_outgoing_message),
         ] {
             let limiter = DanmakuSendLimiter::new(site, label, normalize);

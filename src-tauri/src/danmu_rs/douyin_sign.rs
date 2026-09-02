@@ -16,10 +16,10 @@ use md5::{Digest, Md5};
 use crate::error::{AppError, AppResult};
 
 /// X-Bogus 输出使用的抖音专用 Base64 字母表。
-const X_BOGUS_ALPHABET: &[u8] =
-    b"Dkdpgh4ZKsQB80/Mfvw36XI1R25+WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe";
+const X_BOGUS_ALPHABET: &[u8] = b"Dkdpgh4ZKsQB80/Mfvw36XI1R25+WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe";
 /// 标准 Base64 字母表；编码时先按它取 6 位索引，再映射到上表。
-const STANDARD_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const STANDARD_ALPHABET: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 /// 签名负载中固定的两个字节（对空 MD5 的常量引用）。
 const EMPTY_MD5_BYTES: [u8; 2] = [0x45, 0x3f];
 
