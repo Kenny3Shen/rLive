@@ -49,6 +49,12 @@ describe("rich danmaku content", () => {
     ).toBe("https://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png");
   });
 
+  test("accepts Twitch emote CDN URLs", () => {
+    const emote = "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0";
+    expect(normalizeDanmakuImageUrl(emote)).toBe(emote);
+    expect(shouldProxyHost("static-cdn.jtvnw.net")).toBe(true);
+  });
+
   test("rejects image URLs outside Bilibili CDN hosts or with credentials", () => {
     expect(normalizeDanmakuImageUrl("https://example.invalid/emote.png")).toBeNull();
     expect(normalizeDanmakuImageUrl("https://user:pass@i0.hdslb.com/emote.png")).toBeNull();

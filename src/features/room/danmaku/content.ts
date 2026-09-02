@@ -17,15 +17,10 @@ export const BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY = "no-referrer" as const;
 const MAX_DANMAKU_CONTENT_SPANS = 32;
 const MAX_DANMAKU_IMAGE_URL_LENGTH = 2_048;
 
-function isTrustedBilibiliImageHost(hostname: string): boolean {
+function isTrustedDanmakuImageHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
-  return (
-    host === "hdslb.com" ||
-    host.endsWith(".hdslb.com") ||
-    host === "bilibili.com" ||
-    host.endsWith(".bilibili.com") ||
-    host === "biliimg.com" ||
-    host.endsWith(".biliimg.com")
+  return ["hdslb.com", "bilibili.com", "biliimg.com", "jtvnw.net"].some(
+    (suffix) => host === suffix || host.endsWith(`.${suffix}`),
   );
 }
 
@@ -44,7 +39,7 @@ export function normalizeDanmakuImageUrl(value: unknown): string | null {
       (url.protocol !== "http:" && url.protocol !== "https:") ||
       url.username ||
       url.password ||
-      !isTrustedBilibiliImageHost(url.hostname)
+      !isTrustedDanmakuImageHost(url.hostname)
     ) {
       return null;
     }
