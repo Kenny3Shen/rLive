@@ -238,8 +238,8 @@ export function SleepTimerMenu({
     variant === "overlay"
       ? cn(
           "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
-          glassOptionClass({ overlay: true }),
-          (expanded || timer.active) && glassOptionSelectedClass({ overlay: true }),
+          glassOptionClass(),
+          (expanded || timer.active) && glassOptionSelectedClass(),
         )
       : "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal";
 
@@ -290,7 +290,7 @@ export function SleepTimerMenu({
                 type="button"
                 size="xs"
                 variant="ghost"
-                className={variant === "overlay" ? glassOptionClass({ overlay: true }) : undefined}
+                className={variant === "overlay" ? glassOptionClass() : undefined}
                 onClick={timer.cancel}
               >
                 取消
@@ -311,10 +311,10 @@ export function SleepTimerMenu({
                     variant="ghost"
                     className={cn(
                       "min-w-0 px-0.5 text-xs font-medium",
-                      variant === "overlay" && glassOptionClass({ overlay: true }),
+                      variant === "overlay" && glassOptionClass(),
                       variant === "overlay" &&
                         minutesDraft === String(minutes) &&
-                        glassOptionSelectedClass({ overlay: true }),
+                        glassOptionSelectedClass(),
                     )}
                     onClick={() => {
                       setMinutesDraft(String(minutes));

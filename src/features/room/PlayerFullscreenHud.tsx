@@ -199,7 +199,7 @@ export function PlayerFullscreenHud({
         </div>
       )}
       {roomActions.length > 0 && (playerActions.length > 0 || autoSend || sleepTimer) && (
-        <Separator className={cn("my-2", glassSeparatorClass({ overlay: true }))} />
+        <Separator className={cn("my-2", glassSeparatorClass())} />
       )}
       {(playerActions.length > 0 || autoSend || sleepTimer) && (
         <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
@@ -394,8 +394,8 @@ function HudActionTile({
       variant="ghost"
       className={cn(
         "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
-        glassOptionClass({ overlay: true }),
-        action.pressed && glassOptionSelectedClass({ overlay: true }),
+        glassOptionClass(),
+        action.pressed && glassOptionSelectedClass(),
       )}
       disabled={action.disabled}
       aria-pressed={action.pressed}
@@ -429,8 +429,8 @@ function RoomToolTile({
       disabled={disabled}
       className={cn(
         "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
-        glassOptionClass({ overlay: true }),
-        pressed && glassOptionSelectedClass({ overlay: true }),
+        glassOptionClass(),
+        pressed && glassOptionSelectedClass(),
       )}
       aria-pressed={pressed}
       onClick={onClick}

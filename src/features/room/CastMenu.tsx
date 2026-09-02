@@ -201,7 +201,7 @@ export function CastMenu({
                 key={`${idPrefix}-${device.usn || device.location}`}
                 variant={overlay ? "ghost" : "outline"}
                 size="sm"
-                className={cn("justify-start", overlay && glassOptionClass({ overlay }))}
+                className={cn("justify-start", overlay && glassOptionClass())}
                 disabled={pendingName != null}
                 onClick={() => void cast(device)}
               >
