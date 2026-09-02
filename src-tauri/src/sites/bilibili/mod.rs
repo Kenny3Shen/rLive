@@ -459,11 +459,6 @@ impl BilibiliSite {
         params: BTreeMap<String, String>,
     ) -> AppResult<String> {
         let signed = self.signed_query(params).await?;
-        let query: Vec<(&str, String)> = signed
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.clone()))
-            .collect();
-        // 生命周期限制：通过 query builder 用持有所有权的键值对重建
         let headers = self.headers().await?;
         let mut req = self.client.get(url);
         for (k, v) in headers {
@@ -472,7 +467,6 @@ impl BilibiliSite {
         for (k, v) in &signed {
             req = req.query(&[(k.as_str(), v.as_str())]);
         }
-        let _ = query; // 重建后未使用则静默处理
         let resp = req.send().await.map_err(map_http)?;
         let status = resp.status();
         let text = resp.text().await.map_err(map_http)?;

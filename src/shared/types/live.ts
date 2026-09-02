@@ -5,7 +5,6 @@ export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "twitch";
 export type SiteInfo = {
   id: SiteId;
   name: string;
-  ready: boolean;
 };
 
 export type LiveSubCategory = {

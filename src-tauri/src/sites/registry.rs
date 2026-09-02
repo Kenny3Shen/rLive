@@ -75,14 +75,6 @@ fn site_with_client(
     }
 }
 
-/// 某站点的 LiveSite 方法是否完整实现（HTTP 等）。
-pub fn is_ready(id: &SiteId) -> bool {
-    matches!(
-        id,
-        SiteId::Bilibili | SiteId::Huya | SiteId::Douyu | SiteId::Douyin | SiteId::Twitch
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,14 +89,5 @@ mod tests {
         for m in all_meta() {
             site_with_proxy(&m.id, None, None).expect("site must resolve");
         }
-    }
-
-    #[test]
-    fn ready_sites() {
-        assert!(is_ready(&SiteId::Bilibili));
-        assert!(is_ready(&SiteId::Huya));
-        assert!(is_ready(&SiteId::Douyu));
-        assert!(is_ready(&SiteId::Douyin));
-        assert!(is_ready(&SiteId::Twitch));
     }
 }
