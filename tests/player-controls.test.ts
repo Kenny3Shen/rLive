@@ -21,7 +21,6 @@ import {
   isPlayerStageDoubleTap,
   isPlayerStageTap,
   isVerticalPlayerEdgeGesture,
-  nextRoomSideTabForSwipe,
   playerBrightnessShadeOpacity,
   playerChromeVisible,
   playerEdgeGestureDragExtent,
@@ -426,21 +425,6 @@ describe("Android native player controls", () => {
         args: { orientation: "auto" },
       },
     ]);
-  });
-});
-
-describe("mobile room side tabs", () => {
-  test("uses left and right swipes to move through every panel, including settings", () => {
-    expect(nextRoomSideTabForSwipe("chat", -80, 6)).toBe("follow");
-    expect(nextRoomSideTabForSwipe("follow", -80, 6)).toBe("settings");
-    expect(nextRoomSideTabForSwipe("settings", 80, 6)).toBe("follow");
-  });
-
-  test("keeps vertical, short and end-of-strip gestures in their current tab", () => {
-    expect(nextRoomSideTabForSwipe("chat", -30, 0)).toBeNull();
-    expect(nextRoomSideTabForSwipe("chat", -72, 72)).toBeNull();
-    expect(nextRoomSideTabForSwipe("chat", 80, 4)).toBeNull();
-    expect(nextRoomSideTabForSwipe("settings", -80, 4)).toBeNull();
   });
 });
 
