@@ -23,6 +23,10 @@ const CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
 const CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const TOUCH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// `put` 最多写 `MAX_IMAGE_BYTES` 就立即 rename 提交，因此早于该时限的临时
+/// 文件不可能属于进行中的写入，而是某次写入死在 write 与 rename 之间
+/// 留下的残余。不加这道年龄阀就会把别人正在写的临时文件当残余回收。
+const ORPHAN_TTL: Duration = Duration::from_secs(60 * 60);
 const TEMPORARY_SUFFIX: &str = ".tmp";
 const SWEEP_WRITE_INTERVAL: u64 = 64;
 const SWEEP_TARGET_PERCENT: u64 = 80;
@@ -45,6 +49,9 @@ struct CacheEntry {
     path: PathBuf,
     bytes: u64,
     modified: SystemTime,
+    /// 文件名是 32 位十六进制，即 rename 已经提交。`usage` 只报告这些；
+    /// 其余是中断写入留下的临时文件，只有 sweep 才有权回收。
+    committed: bool,
 }
 
 impl ImageCache {
@@ -147,11 +154,12 @@ impl ImageCache {
     /// 不是用户能受益的缓存内容。
     pub async fn usage(&self) -> CacheUsage {
         let entries = self.snapshot().await;
+        let committed = entries.iter().filter(|entry| entry.committed);
         CacheUsage {
-            bytes: entries
-                .iter()
+            bytes: committed
+                .clone()
                 .fold(0_u64, |total, entry| total.saturating_add(entry.bytes)),
-            files: entries.len() as u64,
+            files: committed.count() as u64,
             // 根目录已被规范化，因此在 Windows 上带有 `\\?\` verbatim 前缀，
             // 不能让它进入 UI 或原生对话框。
             path: crate::app_paths::path_to_string(&self.root),
@@ -191,11 +199,19 @@ impl ImageCache {
     async fn sweep_inner(&self, budget: u64) {
         let now = SystemTime::now();
         let cutoff = now.checked_sub(CACHE_TTL).unwrap_or(SystemTime::UNIX_EPOCH);
+        let orphan_cutoff = now.checked_sub(ORPHAN_TTL).unwrap_or(SystemTime::UNIX_EPOCH);
         let snapshot = self.snapshot().await;
         let mut survivors = Vec::new();
         let mut total = 0_u64;
 
         for entry in snapshot {
+            // 未提交的临时文件不占预算（它们不是可用缓存），够老就回收。
+            if !entry.committed {
+                if entry.modified < orphan_cutoff {
+                    remove_entry(&entry.path).await;
+                }
+                continue;
+            }
             if entry.modified < cutoff && remove_entry(&entry.path).await {
                 continue;
             }
@@ -287,13 +303,10 @@ fn collect_snapshot(root: &Path) -> Vec<CacheEntry> {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            // 缓存根目录为本模块独占（`clear` 直接整目录删除）：
-            // 凡不是 32 位十六进制缓存名的文件（中断写入的临时文件等）
-            // 都是残余，直接回收，无需 TTL 或命名协议跟踪。
-            if !is_cache_file_name(name) {
-                let _ = std::fs::remove_file(file.path());
-                continue;
-            }
+            // 遍历是纯读路径：`usage` 也走这里，在这里删文件会把别人正在写入的
+            // 临时文件删掉，导致其 rename 拿到 NotFound、缓存条目永不出现。
+            // 回收只在 `sweep_inner` 里做，且带年龄阈值。
+            let committed = is_cache_file_name(name);
             let metadata = match file.metadata() {
                 Ok(metadata) if metadata.is_file() => metadata,
                 Ok(_) => continue,
@@ -306,6 +319,7 @@ fn collect_snapshot(root: &Path) -> Vec<CacheEntry> {
                 path: file.path(),
                 bytes: metadata.len(),
                 modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                committed,
             });
         }
     }
@@ -471,35 +485,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sweep_reclaims_all_files_without_cache_names() {
+    async fn usage_never_reclaims_and_sweep_only_reclaims_old_orphans() {
         let root = test_root();
         let cache = ImageCache::new(root.clone());
         cache
             .put("https://example.com/kept.png", b"\x89PNG\r\n\x1a\ncache")
             .await;
 
-        let key = cache_key("https://example.com/interrupted.png");
-        let directory = root.join(&key[..2]);
+        let stale_key = cache_key("https://example.com/interrupted.png");
+        let fresh_key = cache_key("https://example.com/in-flight.png");
+        let directory = root.join(&stale_key[..2]);
         std::fs::create_dir_all(&directory).unwrap();
-        let stale = directory.join(temporary_file_name(&key));
-        let fresh = directory.join(temporary_file_name(&key));
+        let stale = directory.join(temporary_file_name(&stale_key));
+        // 与 stale 同目录，以便一次遍历就能同时看到两者。
+        let fresh = directory.join(temporary_file_name(&fresh_key));
         let unrelated = directory.join("keep-me.txt");
         for path in [&stale, &fresh, &unrelated] {
             std::fs::write(path, b"partial").unwrap();
         }
         set_modified(&stale, Duration::from_secs(2 * 60 * 60));
+        set_modified(&unrelated, Duration::from_secs(2 * 60 * 60));
 
-        // 缓存目录为本模块独占：非缓存命名的文件全部回收，
-        // 不区分残余年龄或来源。代价是重叠写入可能被清扫提前回收，
-        // `put` 的 rename 会静默失败，下次请求重新拉取。
-        cache.sweep().await;
-        assert!(!stale.exists(), "stale temporary file survived the sweep");
-        assert!(!fresh.exists(), "fresh temporary file survived the sweep");
-        assert!(!unrelated.exists(), "sweep kept a file without a cache name");
-
+        // `usage` 是纯读路径。它曾经在遍历里直接删非缓存命名的文件，
+        // 于是设置页刷一次缓存占用就会删掉此刻正在写入的临时文件，
+        // 让那次 `put` 的 rename 静默拿到 NotFound。
         let usage = cache.usage().await;
-        assert_eq!(usage.files, 1);
+        assert_eq!(usage.files, 1, "usage 不得把临时文件计入已提交条目");
         assert_eq!(usage.bytes, b"\x89PNG\r\n\x1a\ncache".len() as u64);
+        assert!(stale.exists(), "usage 回收了陈旧临时文件，该职责只属于 sweep");
+        assert!(fresh.exists(), "usage 删掉了正在写入的临时文件");
+        assert!(unrelated.exists(), "usage 删掉了非缓存命名的文件");
+
+        // sweep 才有回收权，且只回收早于 ORPHAN_TTL 的残余：
+        // 新鲜的临时文件可能属于并发进行中的写入。
+        cache.sweep().await;
+        assert!(!stale.exists(), "陈旧临时文件未被 sweep 回收");
+        assert!(fresh.exists(), "sweep 回收了可能正在写入的新鲜临时文件");
+        assert!(!unrelated.exists(), "sweep 保留了无缓存命名的陈旧文件");
+
+        assert_eq!(cache.usage().await.files, 1);
         assert!(cache.get("https://example.com/kept.png").await.is_some());
         let _ = std::fs::remove_dir_all(root);
     }
