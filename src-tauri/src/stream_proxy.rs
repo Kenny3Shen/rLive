@@ -862,8 +862,8 @@ mod tests {
         HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, TwitchAdRecoverySession,
         hls_path_extension, is_twitch_ad_manifest, looks_like_hls_manifest,
         manifest_has_playable_segment, mark_all_hls_segments_as_gaps,
-        mark_twitch_ad_segments_as_gaps, resolve_upstream_target,
-        rewrite_hls_manifest, twitch_wait_manifest,
+        mark_twitch_ad_segments_as_gaps, resolve_upstream_target, rewrite_hls_manifest,
+        twitch_wait_manifest,
     };
     use crate::models::live::TwitchAdRecovery;
     use tokio::sync::{oneshot, watch};

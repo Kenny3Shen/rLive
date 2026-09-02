@@ -504,11 +504,7 @@ mod tests {
     }
 
     impl<S: Subscriber> tracing_subscriber::Layer<S> for Recorder {
-        fn on_event(
-            &self,
-            event: &tracing::Event<'_>,
-            _ctx: Context<'_, S>,
-        ) {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
             let metadata = event.metadata();
             self.events
                 .lock()

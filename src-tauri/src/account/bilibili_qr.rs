@@ -15,9 +15,7 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::account::qr::{
-    build_login_client, is_valid_session_key, QrSessionStore, QrSite,
-};
+use crate::account::qr::{QrSessionStore, QrSite, build_login_client, is_valid_session_key};
 use crate::error::{AppError, AppResult};
 
 pub use crate::account::qr::{QrLoginPoll, QrLoginStart};
@@ -92,9 +90,10 @@ pub async fn start() -> AppResult<QrLoginStart> {
         .await
         .map_err(|_| SITE.network_error("bilibili_qr_generate"))?;
 
-    let response: ApiResponse<GenerateData> = response.json().await.map_err(|_| {
-        SITE.retryable_error("generate", "二维码服务返回了无法识别的数据")
-    })?;
+    let response: ApiResponse<GenerateData> = response
+        .json()
+        .await
+        .map_err(|_| SITE.retryable_error("generate", "二维码服务返回了无法识别的数据"))?;
     if response.code != 0 {
         return Err(qr_api_error("generate", &response.message));
     }
@@ -106,10 +105,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
         || data.qrcode_key.trim().is_empty()
         || data.qrcode_key.len() > MAX_QR_KEY_LEN
     {
-        return Err(SITE.retryable_error(
-            "generate",
-            "二维码服务返回了不完整的登录信息",
-        ));
+        return Err(SITE.retryable_error("generate", "二维码服务返回了不完整的登录信息"));
     }
 
     let qr_key = Uuid::new_v4().simple().to_string();
@@ -130,10 +126,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
 
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
-        return Err(SITE.error(
-            "invalid_key",
-            "二维码登录凭据无效，请刷新二维码",
-        ));
+        return Err(SITE.error("invalid_key", "二维码登录凭据无效，请刷新二维码"));
     }
 
     let session = BILIBILI_SESSIONS.get(qr_key)?;
@@ -152,9 +145,10 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     // 读取 body 会消费掉响应，所以此时 jar 中必须已经持有 `Set-Cookie` 字段；
     // reqwest 的 cookie store 之所以能在此之前填充完毕，
     // 正是因为客户端在构建时带上了 cookie provider。
-    let response: ApiResponse<PollData> = response.json().await.map_err(|_| {
-        SITE.retryable_error("poll", "二维码状态服务返回了无法识别的数据")
-    })?;
+    let response: ApiResponse<PollData> = response
+        .json()
+        .await
+        .map_err(|_| SITE.retryable_error("poll", "二维码状态服务返回了无法识别的数据"))?;
     if response.code != 0 {
         return Err(qr_api_error("poll", &response.message));
     }
@@ -179,10 +173,7 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
             BILIBILI_SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Expired)
         }
-        _ => Err(SITE.retryable_error(
-            "poll",
-            "二维码登录暂不可用，请刷新二维码后重试",
-        )),
+        _ => Err(SITE.retryable_error("poll", "二维码登录暂不可用，请刷新二维码后重试")),
     }
 }
 

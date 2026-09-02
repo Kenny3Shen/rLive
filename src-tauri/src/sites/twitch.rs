@@ -131,8 +131,10 @@ static PUBLIC_WEB_CONTEXT: OnceLock<Mutex<Option<PublicWebContext>>> = OnceLock:
 /// 路径要用：`get_categories` 一次要取全部标签的分区，`tag_page` 每翻一页
 /// 都要同一个标签的分区来算窗口。没有缓存时前者每次打开分类条要发数十个请求、
 /// 后者每页多付一个串行往返。
-static TAG_DIRECTORIES: OnceLock<Mutex<HashMap<String, (Instant, Vec<LiveSubCategory>)>>> =
-    OnceLock::new();
+static TAG_DIRECTORIES: TagDirectoryCache = OnceLock::new();
+
+/// `TAG_DIRECTORIES` 的静态类型：标签 UUID → (抓取时间, 分区列表)。
+type TagDirectoryCache = OnceLock<Mutex<HashMap<String, (Instant, Vec<LiveSubCategory>)>>>;
 
 /// 分区缓存的存活时间。取半小时：分类树的增减以天计，而这个值同时决定
 /// 「全部X」翻页期间窗口切片的稳定性。

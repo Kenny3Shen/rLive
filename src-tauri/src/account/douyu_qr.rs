@@ -15,8 +15,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::account::qr::{
-    build_login_client, is_trusted_url, is_valid_session_key, optional_text, value_as_i64,
-    QrSessionStore, QrSite,
+    QrSessionStore, QrSite, build_login_client, is_trusted_url, is_valid_session_key,
+    optional_text, value_as_i64,
 };
 use crate::error::{AppError, AppResult};
 
@@ -87,10 +87,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
 /// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
-        return Err(SITE.error(
-            "invalid_key",
-            "二维码登录凭据无效，请刷新二维码",
-        ));
+        return Err(SITE.error("invalid_key", "二维码登录凭据无效，请刷新二维码"));
     }
 
     let session = DOUYU_SESSIONS.get(qr_key)?;
@@ -186,10 +183,7 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
             let completion_url = required_text(data, &["url", "login_url"], MAX_QR_PAYLOAD_LEN)?;
             Ok(PollState::Success { completion_url })
         }
-        _ => Err(SITE.retryable_error(
-            "poll",
-            "二维码登录状态异常，请刷新二维码后重试",
-        )),
+        _ => Err(SITE.retryable_error("poll", "二维码登录状态异常，请刷新二维码后重试")),
     }
 }
 
@@ -222,16 +216,10 @@ async fn finish_login(session: &QrSession, completion_url: &str) -> AppResult<St
         .await
         .map_err(|_| SITE.network_error("douyu_qr_complete"))?;
     if !response.status().is_success() {
-        return Err(SITE.retryable_error(
-            "complete",
-            "斗鱼登录确认失败，请刷新二维码后重试",
-        ));
+        return Err(SITE.retryable_error("complete", "斗鱼登录确认失败，请刷新二维码后重试"));
     }
     let body = response.text().await.map_err(|_| {
-        SITE.retryable_error(
-            "complete",
-            "斗鱼登录确认响应读取失败，请刷新二维码后重试",
-        )
+        SITE.retryable_error("complete", "斗鱼登录确认响应读取失败，请刷新二维码后重试")
     })?;
     let response = parse_json_or_jsonp(&body, JSONP_CALLBACK)?;
     ensure_api_success(&response, "douyu_qr_complete")?;
@@ -283,9 +271,7 @@ fn parse_json_or_jsonp(body: &str, callback: &str) -> AppResult<Value> {
             .map(str::trim)
     });
     json.and_then(|json| serde_json::from_str(json).ok())
-        .ok_or_else(|| {
-            SITE.retryable_error("complete", "斗鱼登录确认服务返回了无法识别的数据")
-        })
+        .ok_or_else(|| SITE.retryable_error("complete", "斗鱼登录确认服务返回了无法识别的数据"))
 }
 
 fn cookie_from_jar(jar: &Arc<Jar>) -> Option<String> {

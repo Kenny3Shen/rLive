@@ -338,15 +338,7 @@ async fn handle_image_request(
         .to_string();
 
     if method == "HEAD" {
-        return write_response_bytes(
-            socket,
-            status,
-            status_reason,
-            &content_type,
-            &[],
-            None,
-        )
-        .await;
+        return write_response_bytes(socket, status, status_reason, &content_type, &[], None).await;
     }
 
     if !upstream.status().is_success() {

@@ -767,9 +767,11 @@ mod tests {
     #[test]
     fn merge_unions_shield_words_and_blocked_users() {
         let mut conn = open_in_memory().unwrap();
-        let mut local = AppSettings::default();
-        local.danmaku_shield_words = vec!["本地词".into()];
-        local.danmaku_blocked_users = vec!["本地用户".into()];
+        let local = AppSettings {
+            danmaku_shield_words: vec!["本地词".into()],
+            danmaku_blocked_users: vec!["本地用户".into()],
+            ..Default::default()
+        };
         settings::set(&conn, &local).unwrap();
 
         let mut package = ProfilePackage::sample();

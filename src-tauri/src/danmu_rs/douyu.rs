@@ -1106,7 +1106,7 @@ fn configured_http_proxy(proxy: Option<&str>) -> AppResult<Option<SendHttpProxy>
                 invalid_encoding: || proxy_error("斗鱼弹幕代理账号编码无效"),
                 incomplete_credentials: || {
                     proxy_error("斗鱼弹幕代理账号需同时提供用户名和密码，或移除账号信息")
-                }
+                },
             },
         )?,
     }))
@@ -2170,12 +2170,11 @@ mod tests {
             .expect("proxy");
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 7890);
-        let request =
-            String::from_utf8(connect_request(
-                "wsproxy.douyu.com:6671",
-                proxy.authorization.as_deref(),
-            ))
-            .unwrap();
+        let request = String::from_utf8(connect_request(
+            "wsproxy.douyu.com:6671",
+            proxy.authorization.as_deref(),
+        ))
+        .unwrap();
         assert!(request.starts_with("CONNECT wsproxy.douyu.com:6671 HTTP/1.1\r\n"));
         assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYTpzcw==\r\n"));
         assert!(configured_http_proxy(Some("https://127.0.0.1:7890")).is_err());

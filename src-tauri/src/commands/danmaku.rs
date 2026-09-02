@@ -92,29 +92,29 @@ fn record_successful_danmaku_send(
 ) {
     let sent_at = chrono::Utc::now().timestamp_millis();
     let result = state.conn().and_then(|conn| {
-            let mut title = room_title.unwrap_or_default().trim().to_owned();
-            let mut user_name = room_user_name.unwrap_or_default().trim().to_owned();
-            if (title.is_empty() || user_name.is_empty())
-                && let Some((history_title, history_user_name)) =
-                    history::metadata_for_room(&conn, site_id.as_str(), room_id).unwrap_or_default()
-            {
-                if title.is_empty() {
-                    title = history_title;
-                }
-                if user_name.is_empty() {
-                    user_name = history_user_name;
-                }
+        let mut title = room_title.unwrap_or_default().trim().to_owned();
+        let mut user_name = room_user_name.unwrap_or_default().trim().to_owned();
+        if (title.is_empty() || user_name.is_empty())
+            && let Some((history_title, history_user_name)) =
+                history::metadata_for_room(&conn, site_id.as_str(), room_id).unwrap_or_default()
+        {
+            if title.is_empty() {
+                title = history_title;
             }
-            danmaku_send_history::record(
-                &conn,
-                site_id.as_str(),
-                content,
-                room_id,
-                &title,
-                &user_name,
-                sent_at,
-            )
-        });
+            if user_name.is_empty() {
+                user_name = history_user_name;
+            }
+        }
+        danmaku_send_history::record(
+            &conn,
+            site_id.as_str(),
+            content,
+            room_id,
+            &title,
+            &user_name,
+            sent_at,
+        )
+    });
     if let Err(error) = result {
         // 不要把发出的内容写入日志。它可能涉及个人信息，
         // 而应用的发布版日志刻意只记录失败。
@@ -391,15 +391,16 @@ pub async fn douyu_danmaku_send(
         .with_site("douyu"));
     }
     let (room_id, message) =
-        validate_and_reserve_send(&state.douyu_send_limiter, &room_id, &message)
-            .inspect_err(|error| {
+        validate_and_reserve_send(&state.douyu_send_limiter, &room_id, &message).inspect_err(
+            |error| {
                 tracing::warn!(
                     room_id = %room_id.trim(),
                     stage = "preflight",
                     error_code = %error.code,
                     "douyu send rejected by local validation"
                 );
-            })?;
+            },
+        )?;
     danmu_rs::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
     record_successful_danmaku_send(
         state.inner(),
@@ -548,11 +549,8 @@ mod tests {
 
     #[test]
     fn invalid_douyu_draft_does_not_consume_room_cooldown() {
-        let limiter = DanmakuSendLimiter::new(
-            "douyu",
-            "斗鱼",
-            danmu_rs::douyu::normalize_outgoing_message,
-        );
+        let limiter =
+            DanmakuSendLimiter::new("douyu", "斗鱼", danmu_rs::douyu::normalize_outgoing_message);
 
         assert!(validate_and_reserve_send(&limiter, "123", "\n").is_err());
         assert!(validate_and_reserve_send(&limiter, "123", "你好").is_ok());
@@ -564,11 +562,8 @@ mod tests {
 
     #[test]
     fn invalid_huya_draft_does_not_consume_room_cooldown() {
-        let limiter = DanmakuSendLimiter::new(
-            "huya",
-            "虎牙",
-            danmu_rs::huya::normalize_outgoing_message,
-        );
+        let limiter =
+            DanmakuSendLimiter::new("huya", "虎牙", danmu_rs::huya::normalize_outgoing_message);
 
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "\n").is_err());
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "你好").is_ok());

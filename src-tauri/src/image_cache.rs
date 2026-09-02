@@ -199,7 +199,9 @@ impl ImageCache {
     async fn sweep_inner(&self, budget: u64) {
         let now = SystemTime::now();
         let cutoff = now.checked_sub(CACHE_TTL).unwrap_or(SystemTime::UNIX_EPOCH);
-        let orphan_cutoff = now.checked_sub(ORPHAN_TTL).unwrap_or(SystemTime::UNIX_EPOCH);
+        let orphan_cutoff = now
+            .checked_sub(ORPHAN_TTL)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
         let snapshot = self.snapshot().await;
         let mut survivors = Vec::new();
         let mut total = 0_u64;
@@ -512,7 +514,10 @@ mod tests {
         let usage = cache.usage().await;
         assert_eq!(usage.files, 1, "usage 不得把临时文件计入已提交条目");
         assert_eq!(usage.bytes, b"\x89PNG\r\n\x1a\ncache".len() as u64);
-        assert!(stale.exists(), "usage 回收了陈旧临时文件，该职责只属于 sweep");
+        assert!(
+            stale.exists(),
+            "usage 回收了陈旧临时文件，该职责只属于 sweep"
+        );
         assert!(fresh.exists(), "usage 删掉了正在写入的临时文件");
         assert!(unrelated.exists(), "usage 删掉了非缓存命名的文件");
 

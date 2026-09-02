@@ -52,8 +52,7 @@ fn json_err(msg: impl Into<String>) -> AppError {
 /// 去除 Bilibili 搜索结果中的高亮标签，如 `<em class="keyword">`。
 /// 与原手写扫描一致：任何包含 `em`（不区分 ASCII 大小写）的标签都会被剥除。
 pub fn strip_em_tags(s: &str) -> String {
-    static EM_TAG: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"<[^>]*[eE][mM][^>]*>").unwrap());
+    static EM_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*[eE][mM][^>]*>").unwrap());
     EM_TAG.replace_all(s, "").into_owned()
 }
 

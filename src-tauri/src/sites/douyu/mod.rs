@@ -134,14 +134,10 @@ impl DouyuSite {
     /// 因此不会因详情页停留过久而用到陈旧时间戳。服务器拒绝签名
     /// （HTTP 403 或 `error = -9` 时间戳错误）时，强制刷新描述符重试一次。
     async fn request_play_data(&self, room_id: &str, rate: i64, cdn: &str) -> AppResult<Value> {
-        match self
-            .request_play_data_once(room_id, rate, cdn, false)
-            .await
-        {
+        match self.request_play_data_once(room_id, rate, cdn, false).await {
             Ok(value) => Ok(value),
             Err(error) if error.code == sign::SIGN_REJECTED_CODE => {
-                self.request_play_data_once(room_id, rate, cdn, true)
-                    .await
+                self.request_play_data_once(room_id, rate, cdn, true).await
             }
             Err(error) => Err(error),
         }
@@ -166,7 +162,11 @@ impl DouyuSite {
             .header("content-type", "application/x-www-form-urlencoded")
             .header(
                 "cookie",
-                format!("dy_did={}; acf_did={}", sign::SIGN_DEVICE_ID, sign::SIGN_DEVICE_ID),
+                format!(
+                    "dy_did={}; acf_did={}",
+                    sign::SIGN_DEVICE_ID,
+                    sign::SIGN_DEVICE_ID
+                ),
             )
             .body(body)
             .send()
@@ -175,9 +175,11 @@ impl DouyuSite {
         let status = response.status();
         if status.as_u16() == 403 || status.as_u16() == 401 {
             // 服务器拒绝签名凭据：刷新描述符重签后重试。
-            return Err(AppError::new(sign::SIGN_REJECTED_CODE, "斗鱼播放签名被拒绝")
-                .with_site("douyu")
-                .retryable());
+            return Err(
+                AppError::new(sign::SIGN_REJECTED_CODE, "斗鱼播放签名被拒绝")
+                    .with_site("douyu")
+                    .retryable(),
+            );
         }
         if !status.is_success() {
             return Err(Self::err(format!("getH5PlayV1 http {}", status.as_u16())));
@@ -186,14 +188,19 @@ impl DouyuSite {
             .text()
             .await
             .map_err(|e| Self::err(format!("body: {e}")))?;
-        let v: Value =
-            serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))?;
-        let error = json_i64(v.get("error").or_else(|| v.get("code")).unwrap_or(&Value::Null));
+        let v: Value = serde_json::from_str(&text).map_err(|e| Self::err(format!("json: {e}")))?;
+        let error = json_i64(
+            v.get("error")
+                .or_else(|| v.get("code"))
+                .unwrap_or(&Value::Null),
+        );
         if error == -9 {
             // 时间戳错误：签名已过期，重签重试。
-            return Err(AppError::new(sign::SIGN_REJECTED_CODE, "斗鱼播放签名已过期")
-                .with_site("douyu")
-                .retryable());
+            return Err(
+                AppError::new(sign::SIGN_REJECTED_CODE, "斗鱼播放签名已过期")
+                    .with_site("douyu")
+                    .retryable(),
+            );
         }
         if error != 0 {
             let msg = json_str(v.get("msg").unwrap_or(&Value::Null));
@@ -757,9 +764,7 @@ impl LiveSite for DouyuSite {
     }
 
     async fn get_play_qualities(&self, detail: &LiveRoomDetail) -> AppResult<Vec<LivePlayQuality>> {
-        let v = self
-            .request_play_data(&detail.room_id, -1, "")
-            .await?;
+        let v = self.request_play_data(&detail.room_id, -1, "").await?;
         let data_obj = v.get("data").cloned().unwrap_or(Value::Null);
         let mut cdns: Vec<String> = data_obj
             .get("cdnsWithName")

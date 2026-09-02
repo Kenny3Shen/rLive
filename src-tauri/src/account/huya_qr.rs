@@ -87,14 +87,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
     let qr_code_url = format!("{GET_QR_IMG_PATH}?k={qr_id}");
 
     let qr_key = Uuid::new_v4().simple().to_string();
-    SESSIONS.insert(
-        qr_key.clone(),
-        QrSession {
-            qr_id,
-            client,
-            jar,
-        },
-    )?;
+    SESSIONS.insert(qr_key.clone(), QrSession { qr_id, client, jar })?;
 
     Ok(QrLoginStart {
         qr_code_url,

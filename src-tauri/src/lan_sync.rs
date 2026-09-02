@@ -433,8 +433,7 @@ fn normalized_receive_url(endpoint: &str) -> AppResult<reqwest::Url> {
             "仅支持带端口的 HTTP 局域网同步地址",
         ));
     }
-    url
-        .host_str()
+    url.host_str()
         .map(|host| host.trim_start_matches('[').trim_end_matches(']'))
         .and_then(|host| host.parse::<IpAddr>().ok())
         .filter(|address| is_lan_ip(*address))
