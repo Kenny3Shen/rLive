@@ -1,4 +1,4 @@
-export const FULL_MOTION_MODE = "full" as const;
+const FULL_MOTION_MODE = "full" as const;
 
 /** 在 React 绘制之前应用完整的动态效果配置。 */
 export function applyFullMotion() {
