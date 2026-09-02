@@ -55,6 +55,14 @@ describe("rich danmaku content", () => {
     expect(shouldProxyHost("static-cdn.jtvnw.net")).toBe(true);
   });
 
+  test("accepts 7TV emote CDN URLs", () => {
+    const emote = "https://cdn.7tv.app/emote/01G3WEGZN0000ET2J0MQP5YJ0G/2x.webp";
+    expect(normalizeDanmakuImageUrl(emote)).toBe(emote);
+    expect(shouldProxyHost("cdn.7tv.app")).toBe(true);
+    // 后缀拼接不能把仿冒域放进来。
+    expect(normalizeDanmakuImageUrl("https://cdn.7tv.app.evil.invalid/e.webp")).toBeNull();
+  });
+
   test("rejects image URLs outside Bilibili CDN hosts or with credentials", () => {
     expect(normalizeDanmakuImageUrl("https://example.invalid/emote.png")).toBeNull();
     expect(normalizeDanmakuImageUrl("https://user:pass@i0.hdslb.com/emote.png")).toBeNull();

@@ -19,7 +19,7 @@ const MAX_DANMAKU_IMAGE_URL_LENGTH = 2_048;
 
 function isTrustedDanmakuImageHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
-  return ["hdslb.com", "bilibili.com", "biliimg.com", "jtvnw.net"].some(
+  return ["hdslb.com", "bilibili.com", "biliimg.com", "jtvnw.net", "7tv.app"].some(
     (suffix) => host === suffix || host.endsWith(`.${suffix}`),
   );
 }
