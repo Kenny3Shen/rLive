@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::account;
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveSubCategory, PlayUrl, RoomListPage, SiteId,
 };
@@ -20,10 +20,7 @@ fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::
     // 房间数据，然后是它的 HLS master playlist）。把 cookie 和代理一起快照，
     // 使这条链上的每个请求都遵循同一份设置。
     let (cookie, proxy) = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let conn = state.conn()?;
         (
             account::get_cookie(&conn, site_id)?,
             crate::settings::get(&conn)?.proxy,

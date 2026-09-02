@@ -8,13 +8,6 @@ use crate::models::live::{LiveRoomStatus, SiteId};
 use crate::sites;
 use crate::state::AppState;
 
-fn lock_db(state: &AppState) -> AppResult<std::sync::MutexGuard<'_, rusqlite::Connection>> {
-    state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
-}
-
 /// 应用一次关注列表状态探测，同时不让上一场直播的开播时间
 /// 渗入新的一场。
 ///
@@ -92,7 +85,7 @@ impl From<FollowUserDto> for FollowRecord {
 
 #[tauri::command]
 pub fn follow_list(state: State<'_, AppState>) -> AppResult<Vec<FollowUserDto>> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     Ok(follow::list(&conn)?.into_iter().map(Into::into).collect())
 }
 
@@ -102,7 +95,7 @@ pub fn follow_add(state: State<'_, AppState>, user: FollowUserDto) -> AppResult<
     if rec.updated_at == 0 {
         rec.updated_at = chrono::Utc::now().timestamp_millis();
     }
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     follow::upsert(&conn, rec)
 }
 
@@ -112,7 +105,7 @@ pub fn follow_remove(
     site_id: String,
     room_id: String,
 ) -> AppResult<()> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     follow::remove(&conn, &site_id, &room_id)
 }
 
@@ -123,7 +116,7 @@ pub fn follow_set_tags(
     room_id: String,
     tag_ids: Vec<String>,
 ) -> AppResult<()> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     follow::set_tags(&conn, &site_id, &room_id, &tag_ids)
 }
 
@@ -134,13 +127,13 @@ pub fn follow_set_auto_record(
     room_id: String,
     auto_record: bool,
 ) -> AppResult<()> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     follow::set_auto_record(&conn, &site_id, &room_id, auto_record)
 }
 
 #[tauri::command]
 pub fn tag_list(state: State<'_, AppState>) -> AppResult<Vec<TagRecord>> {
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     follow::list_tags(&conn)
 }
 
@@ -161,14 +154,14 @@ pub fn tag_upsert(
     if tag.name.chars().count() > 32 {
         return Err(AppError::new("invalid_tag", "tag name is too long"));
     }
-    let conn = lock_db(&state)?;
+    let conn = state.conn()?;
     follow::upsert_tag(&conn, tag.clone())?;
     Ok(tag)
 }
 
 #[tauri::command]
 pub fn tag_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    let mut conn = lock_db(&state)?;
+    let mut conn = state.conn()?;
     follow::remove_tag(&mut conn, &id)
 }
 
@@ -177,7 +170,7 @@ async fn refresh_follows(
     auto_record_only: bool,
 ) -> AppResult<Vec<FollowUserDto>> {
     let (follows, proxy) = {
-        let conn = lock_db(state)?;
+        let conn = state.conn()?;
         let follows = if auto_record_only {
             follow::list_auto_record(&conn)?
         } else {
@@ -199,7 +192,7 @@ async fn refresh_follows(
             .map_err(|_| AppError::new("refresh_error", "semaphore closed"))?;
         let cookie = {
             let sid = SiteId::from_str_loose(&site_id);
-            let conn = lock_db(state)?;
+            let conn = state.conn()?;
             match sid {
                 Some(s) => account::get_cookie(&conn, &s)?,
                 None => None,
@@ -228,7 +221,7 @@ async fn refresh_follows(
 
     let mut updated = Vec::new();
     {
-        let conn = lock_db(state)?;
+        let conn = state.conn()?;
         let mut list = if auto_record_only {
             follow::list_auto_record(&conn)?
         } else {

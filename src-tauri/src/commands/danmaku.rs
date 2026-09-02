@@ -7,15 +7,15 @@ use crate::db::{danmaku_send_history, history};
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::sites;
-use crate::state::{
-    AppState, BilibiliDanmakuSendLimiter, DouyuDanmakuSendLimiter, HuyaDanmakuSendLimiter,
-};
+use crate::state::{AppState, DanmakuSendLimiter};
 
+/// 手动发送单条弹幕前的本地预检结果。用户提交之前，需要同时具备共享的
+/// 本机发送权限和已认证的 Cookie；这只是本地预检，并不是认证结论。
 #[derive(Debug, Serialize)]
-pub struct BilibiliDanmakuSendStatus {
+pub struct DanmakuSendStatus {
     /// 用户已启用这项仅限本机的写入能力。
     pub send_enabled: bool,
-    /// 本地账号同时具备所需的 session 与 CSRF cookie 值。
+    /// 本地账号同时具备发送所需的凭据字段。
     pub cookie_ready: bool,
     /// 两项检查都通过；输入框可以接受消息。
     pub available: bool,
@@ -23,33 +23,12 @@ pub struct BilibiliDanmakuSendStatus {
     pub message: String,
 }
 
-/// 本地保存的斗鱼账号对一条由用户发起的普通文本消息是否可用。
-/// 用户提交之前，需要同时具备共享的本机发送权限
-/// 和已认证的 Cookie。
-#[derive(Debug, Serialize)]
-pub struct DouyuDanmakuSendStatus {
-    pub send_enabled: bool,
-    pub cookie_ready: bool,
-    pub available: bool,
-    pub message: String,
-}
-
-/// 本地保存的虎牙 Web 会话对一条明确的普通文本消息是否可用。
-/// websocket 在每次写入前都会校验 Cookie，
-/// 因此这个状态只是本地预检，并不是认证结论。
-#[derive(Debug, Serialize)]
-pub struct HuyaDanmakuSendStatus {
-    pub send_enabled: bool,
-    pub cookie_ready: bool,
-    pub available: bool,
-    pub message: String,
-}
-
 /// 在占用短暂的手动发送冷却之前，先完成所有确定性的本地校验。这样既能让
 /// 无效草稿不表现为一次网络尝试，又能为每个真正到达远端 API 的请求
-/// （包括结果不明的失败）都占用冷却。
-fn validate_and_reserve_bilibili_send(
-    limiter: &BilibiliDanmakuSendLimiter,
+/// （包括结果不明的失败）都占用冷却。Bilibili 与斗鱼共用数字房间号规则；
+/// 站点差异（错误码与文案、消息规范化）由 limiter 实例携带。
+fn validate_and_reserve_send(
+    limiter: &DanmakuSendLimiter,
     room_id: &str,
     message: &str,
 ) -> AppResult<(String, String)> {
@@ -58,30 +37,13 @@ fn validate_and_reserve_bilibili_send(
         || room_id.len() > 32
         || !room_id.bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err(
-            AppError::new("bilibili_send_invalid_room", "B站直播间号无效").with_site("bilibili"),
-        );
+        return Err(AppError::new(
+            format!("{}_send_invalid_room", limiter.site),
+            format!("{}直播间号无效", limiter.label),
+        )
+        .with_site(limiter.site));
     }
-    let message = danmu_rs::bilibili::normalize_outgoing_message(message)?;
-    limiter.reserve(room_id)?;
-    Ok((room_id.to_string(), message))
-}
-
-/// 在占用手动发送冷却之前先完成确定性的本地校验。特别是无效草稿
-/// 不得消耗掉下一次有效用户操作的冷却额度。
-fn validate_and_reserve_douyu_send(
-    limiter: &DouyuDanmakuSendLimiter,
-    room_id: &str,
-    message: &str,
-) -> AppResult<(String, String)> {
-    let room_id = room_id.trim();
-    if room_id.is_empty()
-        || room_id.len() > 32
-        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(AppError::new("douyu_send_invalid_room", "斗鱼直播间号无效").with_site("douyu"));
-    }
-    let message = danmu_rs::douyu::normalize_outgoing_message(message)?;
+    let message = (limiter.normalize)(message)?;
     limiter.reserve(room_id)?;
     Ok((room_id.to_string(), message))
 }
@@ -103,12 +65,12 @@ fn validate_huya_send_room(room_id: &str) -> AppResult<String> {
 /// 房间，都不会走到已认证的信令写入，
 /// 因此不应让下一次有效操作等待。
 fn validate_and_reserve_huya_send(
-    limiter: &HuyaDanmakuSendLimiter,
+    limiter: &DanmakuSendLimiter,
     room_id: &str,
     message: &str,
 ) -> AppResult<(String, String)> {
     let room_id = validate_huya_send_room(room_id)?;
-    let message = danmu_rs::huya::normalize_outgoing_message(message)?;
+    let message = (limiter.normalize)(message)?;
     limiter.reserve(&room_id)?;
     Ok((room_id, message))
 }
@@ -129,11 +91,7 @@ fn record_successful_danmaku_send(
     room_user_name: Option<&str>,
 ) {
     let sent_at = chrono::Utc::now().timestamp_millis();
-    let result = state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))
-        .and_then(|conn| {
+    let result = state.conn().and_then(|conn| {
             let mut title = room_title.unwrap_or_default().trim().to_owned();
             let mut user_name = room_user_name.unwrap_or_default().trim().to_owned();
             if (title.is_empty() || user_name.is_empty())
@@ -200,10 +158,7 @@ pub async fn danmaku_connect(
     // 临时的 Web 会话，因此没有任何锁会跨越 HTTP 或
     // WebSocket 操作。
     let (cookie, settings) = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let conn = state.conn()?;
         (
             account::get_cookie(&conn, &site_id)?,
             crate::settings::get(&conn)?,
@@ -310,13 +265,8 @@ pub fn danmaku_disconnect(
 }
 
 #[tauri::command]
-pub fn bilibili_danmaku_send_status(
-    state: State<'_, AppState>,
-) -> AppResult<BilibiliDanmakuSendStatus> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+pub fn bilibili_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
+    let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
     let cookie_ready = danmu_rs::bilibili::has_send_credentials(&cookie);
@@ -328,7 +278,7 @@ pub fn bilibili_danmaku_send_status(
     } else {
         "可发送单条弹幕。".into()
     };
-    Ok(BilibiliDanmakuSendStatus {
+    Ok(DanmakuSendStatus {
         send_enabled,
         cookie_ready,
         available: send_enabled && cookie_ready,
@@ -345,10 +295,7 @@ pub async fn bilibili_danmaku_send(
     room_user_name: Option<String>,
 ) -> AppResult<()> {
     let (settings, cookie) = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let conn = state.conn()?;
         (
             crate::settings::get(&conn)?,
             account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
@@ -369,7 +316,7 @@ pub async fn bilibili_danmaku_send(
         .with_site("bilibili"));
     }
     let (room_id, message) =
-        validate_and_reserve_bilibili_send(&state.bilibili_send_limiter, &room_id, &message)?;
+        validate_and_reserve_send(&state.bilibili_send_limiter, &room_id, &message)?;
     // 该请求携带用户的浏览器 Cookie。重定向目标绝不能收到它，
     // 因此写入路径对代理请求和直连请求都刻意关闭了重定向跟随。
     let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
@@ -386,11 +333,8 @@ pub async fn bilibili_danmaku_send(
 }
 
 #[tauri::command]
-pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DouyuDanmakuSendStatus> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
+    let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default();
     let cookie_ready = danmu_rs::douyu::has_send_credentials(&cookie);
@@ -402,7 +346,7 @@ pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DouyuD
     } else {
         "请先在设置中扫码登录，或保存含账号、设备和弹幕令牌字段的完整斗鱼 Cookie".into()
     };
-    Ok(DouyuDanmakuSendStatus {
+    Ok(DanmakuSendStatus {
         send_enabled,
         cookie_ready,
         available: send_enabled && cookie_ready,
@@ -419,10 +363,7 @@ pub async fn douyu_danmaku_send(
     room_user_name: Option<String>,
 ) -> AppResult<()> {
     let (send_enabled, cookie, proxy) = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
         (
             settings.danmaku_send_enabled,
@@ -450,7 +391,7 @@ pub async fn douyu_danmaku_send(
         .with_site("douyu"));
     }
     let (room_id, message) =
-        validate_and_reserve_douyu_send(&state.douyu_send_limiter, &room_id, &message)
+        validate_and_reserve_send(&state.douyu_send_limiter, &room_id, &message)
             .inspect_err(|error| {
                 tracing::warn!(
                     room_id = %room_id.trim(),
@@ -472,11 +413,8 @@ pub async fn douyu_danmaku_send(
 }
 
 #[tauri::command]
-pub fn huya_danmaku_send_status(state: State<'_, AppState>) -> AppResult<HuyaDanmakuSendStatus> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+pub fn huya_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
+    let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default();
     let cookie_ready = danmu_rs::huya::has_send_credentials(&cookie);
@@ -488,7 +426,7 @@ pub fn huya_danmaku_send_status(state: State<'_, AppState>) -> AppResult<HuyaDan
     } else {
         "请先在设置中保存含 yyuid 或 udb_uid，且含 udb_n 或 udb_cred 的完整虎牙 Cookie".into()
     };
-    Ok(HuyaDanmakuSendStatus {
+    Ok(DanmakuSendStatus {
         send_enabled,
         cookie_ready,
         available: send_enabled && cookie_ready,
@@ -505,10 +443,7 @@ pub async fn huya_danmaku_send(
     room_user_name: Option<String>,
 ) -> AppResult<()> {
     let (send_enabled, cookie, proxy) = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| AppError::new("db_lock_error", "database mutex poisoned"))?;
+        let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
         (
             settings.danmaku_send_enabled,
@@ -567,22 +502,27 @@ pub async fn huya_danmaku_send(
 #[cfg(test)]
 mod tests {
     use super::{
-        strip_bilibili_danmaku_cookie, validate_and_reserve_bilibili_send,
-        validate_and_reserve_douyu_send, validate_and_reserve_huya_send,
+        strip_bilibili_danmaku_cookie, validate_and_reserve_huya_send, validate_and_reserve_send,
     };
-    use crate::state::{
-        BilibiliDanmakuSendLimiter, DouyuDanmakuSendLimiter, HuyaDanmakuSendLimiter,
-    };
+    use crate::danmu_rs;
+    use crate::state::DanmakuSendLimiter;
 
     #[test]
     fn invalid_bilibili_draft_does_not_consume_room_cooldown() {
-        let limiter = BilibiliDanmakuSendLimiter::new();
+        let limiter = DanmakuSendLimiter::new(
+            "bilibili",
+            "B站",
+            danmu_rs::bilibili::normalize_outgoing_message,
+        );
 
-        assert!(validate_and_reserve_bilibili_send(&limiter, "123", "\n").is_err());
+        assert!(validate_and_reserve_send(&limiter, "123", "\n").is_err());
         // 随后的有效尝试没有理由等待：
         // 上面那份无效草稿并没有向上游发起任何发送。
-        assert!(validate_and_reserve_bilibili_send(&limiter, "123", "你好").is_ok());
-        assert!(validate_and_reserve_bilibili_send(&limiter, "123", "第二条").is_err());
+        assert!(validate_and_reserve_send(&limiter, "123", "你好").is_ok());
+        assert!(validate_and_reserve_send(&limiter, "123", "第二条").is_err());
+        let error = validate_and_reserve_send(&limiter, "abc", "你好").unwrap_err();
+        assert_eq!(error.code, "bilibili_send_invalid_room");
+        assert_eq!(error.site.as_deref(), Some("bilibili"));
     }
 
     #[test]
@@ -608,16 +548,27 @@ mod tests {
 
     #[test]
     fn invalid_douyu_draft_does_not_consume_room_cooldown() {
-        let limiter = DouyuDanmakuSendLimiter::new();
+        let limiter = DanmakuSendLimiter::new(
+            "douyu",
+            "斗鱼",
+            danmu_rs::douyu::normalize_outgoing_message,
+        );
 
-        assert!(validate_and_reserve_douyu_send(&limiter, "123", "\n").is_err());
-        assert!(validate_and_reserve_douyu_send(&limiter, "123", "你好").is_ok());
-        assert!(validate_and_reserve_douyu_send(&limiter, "123", "第二条").is_err());
+        assert!(validate_and_reserve_send(&limiter, "123", "\n").is_err());
+        assert!(validate_and_reserve_send(&limiter, "123", "你好").is_ok());
+        assert!(validate_and_reserve_send(&limiter, "123", "第二条").is_err());
+        let error = validate_and_reserve_send(&limiter, "abc", "你好").unwrap_err();
+        assert_eq!(error.code, "douyu_send_invalid_room");
+        assert_eq!(error.site.as_deref(), Some("douyu"));
     }
 
     #[test]
     fn invalid_huya_draft_does_not_consume_room_cooldown() {
-        let limiter = HuyaDanmakuSendLimiter::new();
+        let limiter = DanmakuSendLimiter::new(
+            "huya",
+            "虎牙",
+            danmu_rs::huya::normalize_outgoing_message,
+        );
 
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "\n").is_err());
         assert!(validate_and_reserve_huya_send(&limiter, "room-1", "你好").is_ok());

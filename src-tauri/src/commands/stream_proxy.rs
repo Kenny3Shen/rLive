@@ -10,10 +10,7 @@ use crate::state::AppState;
 use crate::stream_proxy::StreamProxyTelemetry;
 
 fn configured_proxy(state: &State<'_, AppState>) -> AppResult<Option<String>> {
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| crate::error::AppError::new("db_lock_error", "database mutex poisoned"))?;
+    let conn = state.conn()?;
     Ok(crate::settings::get(&conn)?.proxy)
 }
 
