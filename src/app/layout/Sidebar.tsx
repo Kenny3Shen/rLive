@@ -1,8 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef, type ReactNode } from "react";
+import { useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
-import { ArrowUp, Moon, Sun } from "lucide-react";
+import { ArrowUpCircle, Moon, Sun } from "lucide-react";
 import { fadeTheme } from "@/app/theme";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,13 +31,11 @@ function SidebarLink({
   className,
   badgeCount = 0,
   badgeLabel,
-  badgeContent,
   onIntent,
 }: SidebarNavItem & {
   /** 大于零时以图标上的小计数徽标呈现。 */
   badgeCount?: number;
   badgeLabel?: string;
-  badgeContent?: ReactNode;
   onIntent?: () => void;
 }) {
   const navigate = useNavigate();
@@ -89,7 +87,7 @@ function SidebarLink({
                 // 上保持可读，侧栏色的描边让它与图标脱开。
                 className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
               >
-                {badgeContent ?? (badgeCount > 99 ? "99+" : badgeCount)}
+                {badgeCount > 99 ? "99+" : badgeCount}
               </Badge>
             )}
           </span>
@@ -110,6 +108,36 @@ function SidebarLink({
       <TooltipContent side="right" className="max-md:hidden">
         {label}
       </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** 有新版本时出现的独立入口；点开更新对话框，不再借设置图标的徽标提示。 */
+function UpdateButton() {
+  const updateAvailable = useUpdateStore((state) => state.status === "available");
+  const version = useUpdateStore((state) => state.release?.version);
+  const showDialog = useUpdateStore((state) => state.showDialog);
+
+  if (!updateAvailable) return null;
+  const label = version ? `发现新版本 v${version}` : "发现新版本";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            data-slot="update-entry"
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 bg-primary/12 text-primary ring-1 ring-primary/15 hover:bg-primary/20 hover:text-primary"
+            aria-label={label}
+            onClick={showDialog}
+          />
+        }
+      >
+        <ArrowUpCircle data-icon="inline-start" aria-hidden />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -185,11 +213,10 @@ export function Sidebar() {
   // 又不必增加第二个轮询源。
   const recordings = useRecordings();
   const activeRecordings = activeRecordingCount(recordings.data);
-  const updateAvailable = useUpdateStore((state) => state.status === "available");
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(queryClient, siteId);
   }, [queryClient, siteId]);
-  // 桌面专属入口（多画面/录制）与亮暗模式快捷切换都按客户端平台门控，
+  // 桌面专属入口（多画面/录制）、更新入口与亮暗模式快捷切换都按客户端平台门控，
   // 而不是只靠视口断点：手机/平板横屏宽度普遍超过 md，
   // `max-md:hidden` 会让它们漏进移动端底栏。移动端的亮暗切换
   // 统一放在设置页外观分区。
@@ -206,21 +233,8 @@ export function Sidebar() {
       <SidebarLink
         key={item.to}
         {...item}
-        badgeCount={
-          item.to === "/settings" && !mobileClient && updateAvailable ? 1 : recordingBadge
-        }
-        badgeContent={
-          item.to === "/settings" && !mobileClient && updateAvailable ? (
-            <ArrowUp className="size-3" aria-hidden />
-          ) : undefined
-        }
-        badgeLabel={
-          item.to === "/settings" && !mobileClient && updateAvailable
-            ? "有新版本可用"
-            : recordingBadge > 0
-              ? `${recordingBadge} 项录制进行中`
-              : undefined
-        }
+        badgeCount={recordingBadge}
+        badgeLabel={recordingBadge > 0 ? `${recordingBadge} 项录制进行中` : undefined}
         onIntent={item.to === "/" ? preloadHome : undefined}
       />
     );
@@ -242,7 +256,11 @@ export function Sidebar() {
           className="mt-auto flex flex-col items-center gap-2 max-md:contents"
         >
           {!mobileClient && (
-            <div data-slot="app-sidebar-preferences" className="max-md:hidden">
+            <div
+              data-slot="app-sidebar-preferences"
+              className="flex flex-col items-center gap-2 max-md:hidden"
+            >
+              <UpdateButton />
               <AppearanceToggle />
             </div>
           )}
