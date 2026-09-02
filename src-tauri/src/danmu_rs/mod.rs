@@ -3,6 +3,7 @@ pub mod douyin;
 pub mod douyin_sign;
 pub mod douyu;
 pub mod huya;
+mod proxy;
 pub mod reconnect;
 pub mod tars;
 pub mod twitch;
@@ -11,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use percent_encoding::percent_decode_str;
 use serde::Serialize;
 #[cfg(not(target_os = "android"))]
 use tauri::Manager;
@@ -125,24 +127,10 @@ fn cookie_values(cookie: &str, names: &[&str]) -> Vec<String> {
 }
 
 /// 在多个 Web 登录流程中，Cookie 值会用百分号转义编码显示名。
-/// 与 URL 表单不同，Cookie 编码把 `+` 当作字面字符。
+/// 与 URL 表单不同，Cookie 编码把 `+` 当作字面字符；非法或截断的
+/// 转义序列原样保留，解码出非 UTF-8 字节时回退到原字符串。
 fn percent_decode_cookie_value(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let high = (bytes[index + 1] as char).to_digit(16);
-            let low = (bytes[index + 2] as char).to_digit(16);
-            if let (Some(high), Some(low)) = (high, low) {
-                decoded.push((high * 16 + low) as u8);
-                index += 3;
-                continue;
-            }
-        }
-        decoded.push(bytes[index]);
-        index += 1;
-    }
+    let decoded = percent_decode_str(value).collect::<Vec<u8>>();
     String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
 }
 
@@ -552,37 +540,11 @@ fn spawn_loop<F, Fut>(
         // 账号级通知（例如"Cookie 已过期，进入匿名模式"）是新房间最先看到的内容，
         // 早于任何来自网络的聊天消息。
         if let Some(content) = notice {
-            emit_event(
-                &sender,
-                DanmakuEvent {
-                    kind: crate::models::live::DanmakuKind::System,
-                    user: "system".into(),
-                    is_self: false,
-                    user_id: None,
-                    content,
-                    color: None,
-                    spans: None,
-                    super_chat: None,
-                    ts: chrono::Utc::now().timestamp_millis(),
-                },
-            );
+            emit_system(&sender, content);
         }
         if let Err(e) = fut(sender).await {
             tracing::warn!("{site} danmaku ended: {e}");
-            emit_event(
-                &error_sender,
-                DanmakuEvent {
-                    kind: crate::models::live::DanmakuKind::System,
-                    user: "system".into(),
-                    is_self: false,
-                    user_id: None,
-                    content: format!("弹幕连接断开: {e}"),
-                    color: None,
-                    spans: None,
-                    super_chat: None,
-                    ts: chrono::Utc::now().timestamp_millis(),
-                },
-            );
+            emit_system(&error_sender, format!("弹幕连接断开: {e}"));
         }
     });
     if manager.set_tasks_if_current(generation, connection_task, batch_task, batch_control_tx) {
@@ -795,6 +757,25 @@ pub fn emit_event(sender: &DanmakuEventSender, event: DanmakuEvent) {
     sender.send(event);
 }
 
+/// 发送一条系统消息。各平台原先各自手写了一份完全相同的构造，收敛于此；
+/// 事件名、payload 字段与字段值与合并前逐字一致。
+pub(crate) fn emit_system(sender: &DanmakuEventSender, content: impl Into<String>) {
+    emit_event(
+        sender,
+        DanmakuEvent {
+            kind: DanmakuKind::System,
+            user: "system".into(),
+            is_self: false,
+            user_id: None,
+            content: content.into(),
+            color: None,
+            spans: None,
+            super_chat: None,
+            ts: chrono::Utc::now().timestamp_millis(),
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -804,6 +785,19 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::mpsc;
+
+    #[test]
+    fn percent_decode_cookie_value_decodes_without_form_semantics() {
+        // 期望值取自替换前的手写实现：`+` 是字面字符，
+        // 非法或截断的转义序列原样保留，解码出非 UTF-8 字节时回退原串。
+        assert_eq!(super::percent_decode_cookie_value("%E5%BC%A0%E4%B8%89"), "张三");
+        assert_eq!(super::percent_decode_cookie_value("a+b%20c"), "a+b c");
+        assert_eq!(super::percent_decode_cookie_value("%zz"), "%zz");
+        assert_eq!(super::percent_decode_cookie_value("100%"), "100%");
+        assert_eq!(super::percent_decode_cookie_value("bad%F"), "bad%F");
+        assert_eq!(super::percent_decode_cookie_value("a%FFb"), "a%FFb");
+        assert_eq!(super::percent_decode_cookie_value("%C3%A9"), "é");
+    }
 
     #[test]
     fn newer_connection_epochs_fence_stale_connects_and_cleanups() {

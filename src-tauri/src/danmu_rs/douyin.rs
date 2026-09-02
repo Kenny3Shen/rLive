@@ -24,7 +24,7 @@ use tokio_tungstenite::{
 
 use crate::danmu_rs::douyin_sign;
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmu_rs::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 use crate::sites::douyin::DEFAULT_USER_AGENT;
@@ -425,23 +425,6 @@ fn connect_failure(error: &WsError) -> ConnectFailure {
         http_status,
         message: error.to_string(),
     }
-}
-
-fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: content.into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
 }
 
 #[derive(Debug)]

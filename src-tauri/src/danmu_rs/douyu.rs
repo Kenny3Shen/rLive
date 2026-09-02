@@ -9,7 +9,6 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -28,8 +27,9 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
+use crate::danmu_rs::proxy::{ProxyCredentialErrors, connect_request, proxy_authorization};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmu_rs::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 
@@ -1053,54 +1053,6 @@ fn proxy_connection_error(message: impl Into<String>) -> AppError {
     proxy_error(message).retryable()
 }
 
-/// 解码 URL 的 user-info 部分且不把 `+` 当作空格。代理凭据属于 URL 组成部分
-/// 而非表单数据，下面的 Basic 认证会安全地对结果字节重新编码。
-fn percent_decode_proxy_credential(value: &str) -> AppResult<Vec<u8>> {
-    fn hex(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }
-    }
-
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            decoded.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        let Some(high) = bytes.get(index + 1).and_then(|byte| hex(*byte)) else {
-            return Err(proxy_error("斗鱼弹幕代理账号编码无效"));
-        };
-        let Some(low) = bytes.get(index + 2).and_then(|byte| hex(*byte)) else {
-            return Err(proxy_error("斗鱼弹幕代理账号编码无效"));
-        };
-        decoded.push((high << 4) | low);
-        index += 3;
-    }
-    Ok(decoded)
-}
-
-fn proxy_authorization(proxy: &Url) -> AppResult<Option<String>> {
-    let username = proxy.username();
-    let password = proxy.password();
-    if username.is_empty() && password.is_none() {
-        return Ok(None);
-    }
-    let password = password
-        .ok_or_else(|| proxy_error("斗鱼弹幕代理账号需同时提供用户名和密码，或移除账号信息"))?;
-
-    let mut credential = percent_decode_proxy_credential(username)?;
-    credential.push(b':');
-    credential.extend(percent_decode_proxy_credential(password)?);
-    Ok(Some(STANDARD.encode(credential)))
-}
-
 /// 解析与普通 HTTP 请求相同的、面向用户的代理设置。websocket 传输是
 /// HTTP CONNECT 隧道，因此 SOCKS 与 HTTPS 代理端点会被明确拒绝，
 /// 而不是静默绕过该设置。缺少 scheme 的旧式 `127.0.0.1:7890` 仍视为 HTTP。
@@ -1148,7 +1100,15 @@ fn configured_http_proxy(proxy: Option<&str>) -> AppResult<Option<SendHttpProxy>
     Ok(Some(SendHttpProxy {
         host,
         port,
-        authorization: proxy_authorization(&proxy)?,
+        authorization: proxy_authorization(
+            &proxy,
+            &ProxyCredentialErrors {
+                invalid_encoding: || proxy_error("斗鱼弹幕代理账号编码无效"),
+                incomplete_credentials: || {
+                    proxy_error("斗鱼弹幕代理账号需同时提供用户名和密码，或移除账号信息")
+                }
+            },
+        )?,
     }))
 }
 
@@ -1167,18 +1127,6 @@ async fn open_send_tcp(address: String) -> AppResult<TcpStream> {
         })?;
     let _ = stream.set_nodelay(true);
     Ok(stream)
-}
-
-fn http_connect_request(proxy: &SendHttpProxy, target: &str) -> Vec<u8> {
-    let mut request =
-        format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Connection: Keep-Alive\r\n");
-    if let Some(credential) = &proxy.authorization {
-        request.push_str("Proxy-Authorization: Basic ");
-        request.push_str(credential);
-        request.push_str("\r\n");
-    }
-    request.push_str("\r\n");
-    request.into_bytes()
 }
 
 fn parse_http_connect_response(response: &[u8]) -> AppResult<()> {
@@ -1211,7 +1159,7 @@ async fn connect_via_http_proxy(
     let mut stream = open_send_tcp(socket_address(&proxy.host, proxy.port)).await?;
     let target = socket_address(target_host, target_port);
     stream
-        .write_all(&http_connect_request(proxy, &target))
+        .write_all(&connect_request(&target, proxy.authorization.as_deref()))
         .await
         .map_err(|_| proxy_connection_error("无法向代理建立斗鱼弹幕连接"))?;
     stream
@@ -1890,23 +1838,6 @@ pub async fn send_chat(
     }
 }
 
-fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: content.into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
-}
-
 pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> AppResult<()> {
     let mut policy = ReconnectPolicy::with_defaults("douyu");
     loop {
@@ -1940,20 +1871,7 @@ async fn connect_and_read(
     events: &DanmakuEventSender,
     args: &DouyuDanmakuArgs,
 ) -> Result<DisconnectReason, AppError> {
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: "正在连接弹幕服务器…".into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
+    emit_system(events, "正在连接弹幕服务器…");
 
     let ws = connect_douyu_ws().await?;
     let (mut write, mut read) = ws.split();
@@ -1974,20 +1892,7 @@ async fn connect_and_read(
             AppError::new("danmaku_ws_error", format!("join send: {e}")).with_site("douyu")
         })?;
 
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: "弹幕服务器连接成功".into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
+    emit_system(events, "弹幕服务器连接成功");
 
     let connected_at = Instant::now();
     let mut heartbeat = time::interval(Duration::from_secs(HEARTBEAT_SECS));
@@ -2266,7 +2171,11 @@ mod tests {
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 7890);
         let request =
-            String::from_utf8(http_connect_request(&proxy, "wsproxy.douyu.com:6671")).unwrap();
+            String::from_utf8(connect_request(
+                "wsproxy.douyu.com:6671",
+                proxy.authorization.as_deref(),
+            ))
+            .unwrap();
         assert!(request.starts_with("CONNECT wsproxy.douyu.com:6671 HTTP/1.1\r\n"));
         assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYTpzcw==\r\n"));
         assert!(configured_http_proxy(Some("https://127.0.0.1:7890")).is_err());

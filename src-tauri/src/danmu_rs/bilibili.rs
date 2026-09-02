@@ -13,7 +13,7 @@ use tokio_tungstenite::{
 };
 
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmu_rs::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuContentSpan, DanmakuEvent, DanmakuKind, SuperChatInfo};
 
@@ -395,12 +395,14 @@ pub fn encode_packet(body: &[u8], operation: u32) -> Vec<u8> {
 
 fn read_u16(data: &[u8], start: usize) -> Option<u16> {
     data.get(start..start + 2)
-        .map(|b| u16::from_be_bytes([b[0], b[1]]))
+        .and_then(|b| b.try_into().ok())
+        .map(u16::from_be_bytes)
 }
 
 fn read_u32(data: &[u8], start: usize) -> Option<u32> {
     data.get(start..start + 4)
-        .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        .and_then(|b| b.try_into().ok())
+        .map(u32::from_be_bytes)
 }
 
 fn inflate_zlib(body: &[u8]) -> Option<Vec<u8>> {
@@ -935,23 +937,6 @@ struct ConnectionEnd {
     auth_rejected: bool,
     reason: String,
     connected_for: Duration,
-}
-
-fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: content.into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
 }
 
 /// 从 `nav` 获取 WBI 签名密钥。

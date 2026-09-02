@@ -5,7 +5,6 @@
 
 use std::time::{Duration, Instant};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use native_tls::TlsConnector as NativeTlsConnector;
 use reqwest::Url;
@@ -20,8 +19,9 @@ use tokio_tungstenite::{
     WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
 };
 
+use crate::danmu_rs::proxy::{ProxyCredentialErrors, connect_request, proxy_authorization};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmu_rs::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 
@@ -155,20 +155,6 @@ pub fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
     })
 }
 
-fn system_event(content: impl Into<String>) -> DanmakuEvent {
-    DanmakuEvent {
-        kind: DanmakuKind::System,
-        user: "system".into(),
-        is_self: false,
-        user_id: None,
-        content: content.into(),
-        color: None,
-        spans: None,
-        super_chat: None,
-        ts: chrono::Utc::now().timestamp_millis(),
-    }
-}
-
 async fn send_irc<S>(
     write: &mut futures_util::stream::SplitSink<WebSocketStream<S>, Message>,
     line: String,
@@ -204,54 +190,6 @@ fn websocket_connection_error(error: impl std::fmt::Display) -> AppError {
     )
     .with_site("twitch")
     .retryable()
-}
-
-/// 解码 URL 的 user-info 部分中的百分号编码，且不把 `+` 当作空格
-/// （URL 中的凭据不是表单数据）。
-fn percent_decode_proxy_credential(value: &str) -> AppResult<Vec<u8>> {
-    fn hex(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }
-    }
-
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            decoded.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        let Some(high) = bytes.get(index + 1).and_then(|byte| hex(*byte)) else {
-            return Err(proxy_error("Twitch 弹幕代理账号编码无效"));
-        };
-        let Some(low) = bytes.get(index + 2).and_then(|byte| hex(*byte)) else {
-            return Err(proxy_error("Twitch 弹幕代理账号编码无效"));
-        };
-        decoded.push((high << 4) | low);
-        index += 3;
-    }
-    Ok(decoded)
-}
-
-fn proxy_authorization(url: &Url) -> AppResult<Option<String>> {
-    let username = url.username();
-    let password = url.password();
-    if username.is_empty() && password.is_none() {
-        return Ok(None);
-    }
-    let password = password
-        .ok_or_else(|| proxy_error("Twitch 弹幕代理账号需同时提供用户名和密码，或移除账号信息"))?;
-
-    let mut credentials = percent_decode_proxy_credential(username)?;
-    credentials.push(b':');
-    credentials.extend(percent_decode_proxy_credential(password)?);
-    Ok(Some(STANDARD.encode(credentials)))
 }
 
 /// 解析与站点请求相同的、面向用户的 HTTP(S) 代理设置。
@@ -298,7 +236,15 @@ fn proxy_from_setting(proxy: Option<&str>) -> AppResult<Option<ConnectProxy>> {
         scheme,
         host,
         port,
-        authorization: proxy_authorization(&url)?,
+        authorization: proxy_authorization(
+            &url,
+            &ProxyCredentialErrors {
+                invalid_encoding: || proxy_error("Twitch 弹幕代理账号编码无效"),
+                incomplete_credentials: || {
+                    proxy_error("Twitch 弹幕代理账号需同时提供用户名和密码，或移除账号信息")
+                }
+            },
+        )?,
     }))
 }
 
@@ -354,17 +300,9 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut stream = BufStream::new(stream);
-    let mut request = format!(
-        "CONNECT {IRC_CONNECT_AUTHORITY} HTTP/1.1\r\nHost: {IRC_CONNECT_AUTHORITY}\r\nProxy-Connection: Keep-Alive\r\n"
-    );
-    if let Some(authorization) = &proxy.authorization {
-        request.push_str("Proxy-Authorization: Basic ");
-        request.push_str(authorization);
-        request.push_str("\r\n");
-    }
-    request.push_str("\r\n");
+    let request = connect_request(IRC_CONNECT_AUTHORITY, proxy.authorization.as_deref());
     stream
-        .write_all(request.as_bytes())
+        .write_all(&request)
         .await
         .map_err(|error| {
             proxy_connection_error(format!("Twitch 弹幕代理 CONNECT 请求发送失败: {error}"))
@@ -450,7 +388,7 @@ where
     send_irc(&mut write, format!("NICK justinfan{guest_number}")).await?;
     send_irc(&mut write, format!("JOIN #{}", args.channel_login)).await?;
 
-    emit_event(events, system_event("Twitch 弹幕服务器连接成功"));
+    emit_system(events, "Twitch 弹幕服务器连接成功");
     let connected_at = Instant::now();
     let mut message_count = 0_u64;
     while let Some(message) = read.next().await {
@@ -481,10 +419,7 @@ where
             Ok(_) => {}
         }
     }
-    emit_event(
-        events,
-        system_event(format!("Twitch 弹幕连接结束（已收 {message_count} 条）")),
-    );
+    emit_system(events, format!("Twitch 弹幕连接结束（已收 {message_count} 条）"));
     Ok(SessionEnd {
         messages: message_count,
         connected_for: connected_at.elapsed(),
@@ -521,11 +456,11 @@ pub async fn run_loop(
         };
         match policy.on_disconnect(reason) {
             Decision::Retry { delay, notice } => {
-                emit_event(&events, system_event(notice));
+                emit_system(&events, notice);
                 time::sleep(delay).await;
             }
             Decision::Stop { notice, .. } => {
-                emit_event(&events, system_event(notice));
+                emit_system(&events, notice);
                 return Ok(());
             }
         }
@@ -537,7 +472,7 @@ async fn connect_and_run(
     args: &TwitchDanmakuArgs,
     proxy: Option<&ConnectProxy>,
 ) -> AppResult<SessionEnd> {
-    emit_event(events, system_event("正在连接 Twitch 弹幕服务器…"));
+    emit_system(events, "正在连接 Twitch 弹幕服务器…");
     match proxy {
         None => {
             let (socket, _) = connect_async(IRC_WS_URL)
