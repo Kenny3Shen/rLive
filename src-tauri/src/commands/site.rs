@@ -13,7 +13,6 @@ use crate::state::AppState;
 pub struct SiteInfo {
     pub id: SiteId,
     pub name: String,
-    pub ready: bool,
 }
 
 fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::traits::LiveSite>> {
@@ -40,7 +39,6 @@ pub fn site_list() -> Vec<SiteInfo> {
         .map(|s| SiteInfo {
             id: s.id.clone(),
             name: s.name.to_string(),
-            ready: sites::is_ready(&s.id),
         })
         .collect()
 }

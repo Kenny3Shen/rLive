@@ -6,4 +6,4 @@ pub mod registry;
 pub mod traits;
 pub mod twitch;
 
-pub use registry::{all_meta, is_ready, site_with_proxy};
+pub use registry::{all_meta, site_with_proxy};

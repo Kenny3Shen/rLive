@@ -10,11 +10,11 @@ import { cn, SITE_ACCENT, SITE_LABELS } from "@/lib/utils";
 const FALLBACK_SITES: SiteInfo[] = [
   // 这些是随应用分发的平台。保持兜底可用可避免轻量 `site_list` IPC 解析期间出现
   // 明显禁用的首帧，切换平台时尤其明显。
-  { id: "bilibili", name: "Bilibili", ready: true },
-  { id: "douyu", name: "Douyu", ready: true },
-  { id: "huya", name: "Huya", ready: true },
-  { id: "douyin", name: "Douyin", ready: true },
-  { id: "twitch", name: "Twitch", ready: true },
+  { id: "bilibili", name: "Bilibili" },
+  { id: "douyu", name: "Douyu" },
+  { id: "huya", name: "Huya" },
+  { id: "douyin", name: "Douyin" },
+  { id: "twitch", name: "Twitch" },
 ];
 
 const PLATFORM_ORDER: readonly SiteId[] = ["bilibili", "douyu", "huya", "douyin", "twitch"];
@@ -64,8 +64,8 @@ export function SiteSwitcher({
     [disabledSiteIds, sites],
   );
 
-  const entries: Array<SiteInfo | { id: "all"; name: string; ready: true }> = includeAll
-    ? [{ id: "all", name: "全部平台", ready: true }, ...visibleSites]
+  const entries: Array<SiteInfo | { id: "all"; name: string }> = includeAll
+    ? [{ id: "all", name: "全部平台" }, ...visibleSites]
     : visibleSites;
 
   useEffect(() => {
@@ -93,7 +93,6 @@ export function SiteSwitcher({
     >
       {entries.map((site) => {
         const active = site.id === selectedValue;
-        const disabled = !site.ready && !filterMode;
         const accent = site.id === "all" ? undefined : (SITE_ACCENT[site.id] ?? "#6c8cff");
         const label = site.id === "all" ? site.name : (SITE_LABELS[site.id] ?? site.name);
 
@@ -104,14 +103,11 @@ export function SiteSwitcher({
             role="tab"
             data-motion-control
             aria-selected={active}
-            aria-disabled={disabled}
-            disabled={disabled}
-            title={site.ready ? label : `${label}（即将支持）`}
+            title={label}
             onPointerEnter={() => onValueIntent?.(site.id)}
             onPointerDown={() => onValueIntent?.(site.id)}
             onFocus={() => onValueIntent?.(site.id)}
             onClick={() => {
-              if (disabled) return;
               if (value === undefined && site.id !== "all") setSiteId(site.id);
               onValueChange?.(site.id);
             }}
@@ -120,7 +116,6 @@ export function SiteSwitcher({
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
-              disabled && "cursor-not-allowed opacity-35",
             )}
           >
             {site.id === "all" ? (
