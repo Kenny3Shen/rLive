@@ -40,7 +40,6 @@ pub use ass::AssExportOptions;
 
 const RECORDINGS_DIRECTORY: &str = "recordings";
 const RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage-v2.json";
-const LEGACY_RECORDING_STORAGE_CONFIG_FILE: &str = "recording-storage.json";
 const RECORDING_STORAGE_CONFIG_VERSION: u32 = 2;
 const RECORDING_METADATA_VERSION: u32 = 2;
 const RECORDING_MANAGER_LOCK_FILE: &str = ".recording-manager.lock";
@@ -871,16 +870,6 @@ impl RecordingManager {
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(items)
-    }
-
-    #[cfg(test)]
-    pub async fn start(
-        &self,
-        input: RecordingStartInput,
-        proxy: Option<&str>,
-    ) -> AppResult<RecordingItem> {
-        self.start_with_ffmpeg_options(input, proxy, FfmpegRecordingOptions::default())
-            .await
     }
 
     pub async fn start_with_ffmpeg_options(
@@ -2629,13 +2618,6 @@ fn acquire_recording_manager_lock(app_directory: &Path) -> AppResult<File> {
 fn load_storage_state(app_directory: &Path) -> AppResult<RecordingStorageState> {
     let default_root = prepare_storage_root(&app_directory.join(RECORDINGS_DIRECTORY))?;
     let config_path = app_directory.join(RECORDING_STORAGE_CONFIG_FILE);
-    let legacy_config_path = app_directory.join(LEGACY_RECORDING_STORAGE_CONFIG_FILE);
-    if legacy_config_path.is_file() {
-        tracing::warn!(
-            path = %legacy_config_path.display(),
-            "忽略不再支持的旧录制目录设置"
-        );
-    }
     crate::app_paths::recover_recoverable_file(&config_path, valid_recording_storage_config)
         .map_err(|error| {
             AppError::new(
@@ -2900,10 +2882,6 @@ fn write_storage_config(storage: &RecordingStorageState) -> AppResult<()> {
             format!("保存录制目录设置失败: {error}"),
         )
     })
-}
-
-fn find_bundle(roots: &[PathBuf], id: &str) -> Option<PathBuf> {
-    find_bundle_in_root(roots, id).map(|(_root, bundle)| bundle)
 }
 
 /// 定位一场录制，并报告它位于哪个存储根。
@@ -3676,7 +3654,7 @@ async fn handle_playback_client(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .roots
         .clone();
-    let Some(bundle) = find_bundle(&roots, id) else {
+    let Some((_root, bundle)) = find_bundle_in_root(&roots, id) else {
         write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
@@ -3906,7 +3884,7 @@ mod tests {
         RECORDING_STORAGE_CONFIG_VERSION, RecordingEventSink, RecordingLibraryIndex,
         RecordingManager, RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session,
         SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
-        decode_playback_relative_path, find_bundle, finish_session, is_safe_recording_id,
+        decode_playback_relative_path, find_bundle_in_root, finish_session, is_safe_recording_id,
         load_storage_state, local_playback_url, media_file_name, parse_range, prepare_storage_root,
         read_stored, recording_bundle_room_dir, recording_bundle_session_dir, recording_file_stem,
         recording_timestamp, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
@@ -4042,10 +4020,10 @@ mod tests {
         // 两个会话都能通过 id 解析回各自的分卷。
         let roots = [root.clone()];
         assert_eq!(
-            find_bundle(&roots, &first_id).unwrap(),
+            find_bundle_in_root(&roots, &first_id).unwrap().1,
             root.join(&first_id)
         );
-        assert!(find_bundle(&roots, "bilibili_legacy").is_none());
+        assert!(find_bundle_in_root(&roots, "bilibili_legacy").is_none());
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -4927,7 +4905,7 @@ mod tests {
         task.abort();
 
         let duplicate = manager
-            .start(
+            .start_with_ffmpeg_options(
                 RecordingStartInput {
                     source: crate::models::live::PlayUrl::inferred(
                         "test:shutdown",
@@ -4948,6 +4926,7 @@ mod tests {
                     continue_on_leave: Some(false),
                 },
                 None,
+                FfmpegRecordingOptions::default(),
             )
             .await
             .unwrap_err();
@@ -5590,7 +5569,10 @@ mod tests {
             .source
             .headers
             .insert("X-Recording-Test".into(), "ffmpeg".into());
-        let active = manager.start(input, None).await.unwrap();
+        let active = manager
+            .start_with_ffmpeg_options(input, None, FfmpegRecordingOptions::default())
+            .await
+            .unwrap();
         wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
 
         let stopped = manager.stop(&active.id).await.unwrap();
@@ -5785,13 +5767,14 @@ mod tests {
             std::env::temp_dir().join(format!("rlive-recording-hls-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let active = manager
-            .start(
+            .start_with_ffmpeg_options(
                 manager_test_input(
                     &format!("http://{address}/master.m3u8"),
                     "live:bilibili:hls-manager",
                     "hls",
                 ),
                 None,
+                FfmpegRecordingOptions::default(),
             )
             .await
             .unwrap();
@@ -5940,13 +5923,14 @@ mod tests {
             std::env::temp_dir().join(format!("rlive-recording-hls-stop-{}", Uuid::new_v4()));
         let manager = RecordingManager::new(&app_directory).unwrap();
         let active = manager
-            .start(
+            .start_with_ffmpeg_options(
                 manager_test_input(
                     &format!("http://{address}/live.m3u8"),
                     "live:bilibili:hls-stop",
                     "hls-stop",
                 ),
                 None,
+                FfmpegRecordingOptions::default(),
             )
             .await
             .unwrap();
@@ -5991,9 +5975,10 @@ mod tests {
         let manager = RecordingManager::new(&app_directory).unwrap();
 
         let active = manager
-            .start(
+            .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, "live:bilibili:manager-start-stop", "100"),
                 None,
+                FfmpegRecordingOptions::default(),
             )
             .await
             .unwrap();
@@ -6042,13 +6027,18 @@ mod tests {
         let source_key = "live:stable:duplicate";
 
         let first = manager
-            .start(manager_lifecycle_test_input(&url, source_key, "100"), None)
+            .start_with_ffmpeg_options(
+                manager_lifecycle_test_input(&url, source_key, "100"),
+                None,
+                FfmpegRecordingOptions::default(),
+            )
             .await
             .unwrap();
         let duplicate = manager
-            .start(
+            .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, source_key, "different-room"),
                 None,
+                FfmpegRecordingOptions::default(),
             )
             .await
             .unwrap_err();
