@@ -68,9 +68,9 @@ export function pickRoomCardPreviewQuality(
   return qualities[pickDefaultQualityIndex(qualities.length, "low")] ?? null;
 }
 
-/** 预览没有线路探测数据,直接取适配器优先级最高的一条,失败就放弃。 */
+/** 预览直接取适配器优先级最高的一条,失败就放弃。 */
 export function pickRoomCardPreviewSource(lines: readonly PlayUrl[]): PlayUrl | null {
-  const index = rankPlaybackSourceIndices(lines, [])[0];
+  const index = rankPlaybackSourceIndices(lines)[0];
   return index === undefined ? null : (lines[index] ?? null);
 }
 
