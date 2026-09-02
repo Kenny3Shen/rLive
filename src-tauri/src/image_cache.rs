@@ -6,13 +6,12 @@
 //! 且纯十六进制的路径不可能包含用户可控的路径分隔符。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use md5::{Digest, Md5};
 use serde::Serialize;
 use tokio::fs;
-use uuid::Uuid;
 
 /// 让图片代理的内存响应上限与缓存条目上限保持一致。
 pub const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -24,11 +23,7 @@ const CACHE_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 
 const CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const TOUCH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-/// `put` 至多写 `MAX_IMAGE_BYTES` 并立即提交，因此早于该时限的临时文件
-/// 不可能属于进行中的写入：它是某个进程死在 `write` 与 `rename`
-/// 之间留下的残余。
-const ORPHAN_TTL: Duration = Duration::from_secs(60 * 60);
-const TEMPORARY_SUFFIX: &str = ".tmp-";
+const TEMPORARY_SUFFIX: &str = ".tmp";
 const SWEEP_WRITE_INTERVAL: u64 = 64;
 const SWEEP_TARGET_PERCENT: u64 = 80;
 
@@ -43,7 +38,6 @@ pub struct CacheUsage {
 pub struct ImageCache {
     root: PathBuf,
     writes: AtomicU64,
-    sweeping: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -53,20 +47,11 @@ struct CacheEntry {
     modified: SystemTime,
 }
 
-/// 缓存目录中的全部内容。已提交条目是 `usage` 报告并受预算约束的部分；
-/// 孤儿文件是中断写入产生的临时文件，单独跟踪以便清扫时回收。
-#[derive(Debug, Default)]
-struct CacheSnapshot {
-    entries: Vec<CacheEntry>,
-    orphans: Vec<CacheEntry>,
-}
-
 impl ImageCache {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             writes: AtomicU64::new(0),
-            sweeping: AtomicBool::new(false),
         }
     }
 
@@ -161,7 +146,7 @@ impl ImageCache {
     /// 它们是下一次清扫会回收的垃圾，
     /// 不是用户能受益的缓存内容。
     pub async fn usage(&self) -> CacheUsage {
-        let entries = self.snapshot().await.entries;
+        let entries = self.snapshot().await;
         CacheUsage {
             bytes: entries
                 .iter()
@@ -200,41 +185,17 @@ impl ImageCache {
     }
 
     pub(crate) async fn sweep(&self) {
-        self.sweep_with_budget(CACHE_BUDGET_BYTES).await;
-    }
-
-    async fn sweep_with_budget(&self, budget: u64) {
-        if self
-            .sweeping
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            return;
-        }
-        // 即使清扫 panic 或任务被中止也要清除该标志，
-        // 这样一次失败不会禁用进程剩余生命周期的淘汰机制。
-        let _guard = SweepGuard(&self.sweeping);
-
-        self.sweep_inner(budget).await;
+        self.sweep_inner(CACHE_BUDGET_BYTES).await;
     }
 
     async fn sweep_inner(&self, budget: u64) {
         let now = SystemTime::now();
         let cutoff = now.checked_sub(CACHE_TTL).unwrap_or(SystemTime::UNIX_EPOCH);
-        let orphan_cutoff = now
-            .checked_sub(ORPHAN_TTL)
-            .unwrap_or(SystemTime::UNIX_EPOCH);
         let snapshot = self.snapshot().await;
         let mut survivors = Vec::new();
         let mut total = 0_u64;
 
-        for orphan in snapshot.orphans {
-            if orphan.modified < orphan_cutoff {
-                remove_entry(&orphan.path).await;
-            }
-        }
-
-        for entry in snapshot.entries {
+        for entry in snapshot {
             if entry.modified < cutoff && remove_entry(&entry.path).await {
                 continue;
             }
@@ -269,7 +230,7 @@ impl ImageCache {
     /// 在一个阻塞任务里遍历两层缓存树。目录可能持有数千个文件，
     /// 而 `tokio::fs` 遍历会为每次 `read_dir` 和每次 `metadata`
     /// 分别派发一个阻塞任务。
-    async fn snapshot(&self) -> CacheSnapshot {
+    async fn snapshot(&self) -> Vec<CacheEntry> {
         let root = self.root.clone();
         tokio::task::spawn_blocking(move || collect_snapshot(&root))
             .await
@@ -277,14 +238,14 @@ impl ImageCache {
     }
 }
 
-fn collect_snapshot(root: &Path) -> CacheSnapshot {
-    let mut snapshot = CacheSnapshot::default();
+fn collect_snapshot(root: &Path) -> Vec<CacheEntry> {
+    let mut entries = Vec::new();
     let directories = match std::fs::read_dir(root) {
         Ok(directories) => directories,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return snapshot,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return entries,
         Err(error) => {
             tracing::debug!(error = %error, "read image cache directory failed");
-            return snapshot;
+            return entries;
         }
     };
 
@@ -326,13 +287,13 @@ fn collect_snapshot(root: &Path) -> CacheSnapshot {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let committed = if is_cache_file_name(name) {
-                true
-            } else if is_orphan_file_name(name) {
-                false
-            } else {
+            // 缓存根目录为本模块独占（`clear` 直接整目录删除）：
+            // 凡不是 32 位十六进制缓存名的文件（中断写入的临时文件等）
+            // 都是残余，直接回收，无需 TTL 或命名协议跟踪。
+            if !is_cache_file_name(name) {
+                let _ = std::fs::remove_file(file.path());
                 continue;
-            };
+            }
             let metadata = match file.metadata() {
                 Ok(metadata) if metadata.is_file() => metadata,
                 Ok(_) => continue,
@@ -341,19 +302,14 @@ fn collect_snapshot(root: &Path) -> CacheSnapshot {
                     continue;
                 }
             };
-            let entry = CacheEntry {
+            entries.push(CacheEntry {
                 path: file.path(),
                 bytes: metadata.len(),
                 modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-            };
-            if committed {
-                snapshot.entries.push(entry);
-            } else {
-                snapshot.orphans.push(entry);
-            }
+            });
         }
     }
-    snapshot
+    entries
 }
 
 fn cache_key(url: &str) -> String {
@@ -365,27 +321,7 @@ fn is_cache_file_name(value: &str) -> bool {
 }
 
 fn temporary_file_name(key: &str) -> String {
-    format!("{key}{TEMPORARY_SUFFIX}{}", Uuid::new_v4().simple())
-}
-
-/// 匹配 `temporary_file_name` 生成的名字。缓存树中的其他内容一概不动：
-/// 本模块只能回收自己的文件。
-fn is_orphan_file_name(value: &str) -> bool {
-    let Some((key, suffix)) = value.split_once(TEMPORARY_SUFFIX) else {
-        return false;
-    };
-    is_cache_file_name(key)
-        && suffix.len() == 32
-        && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-/// 在每条退出路径（包括 unwind）上都释放清扫标志。
-struct SweepGuard<'a>(&'a AtomicBool);
-
-impl Drop for SweepGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
+    format!("{key}{TEMPORARY_SUFFIX}")
 }
 
 pub(crate) fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
@@ -432,10 +368,7 @@ async fn remove_entry(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ImageCache, cache_key, is_cache_file_name, is_orphan_file_name, sniff_image_type,
-        temporary_file_name,
-    };
+    use super::{ImageCache, cache_key, is_cache_file_name, sniff_image_type, temporary_file_name};
     use std::fs::OpenOptions;
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
@@ -463,20 +396,6 @@ mod tests {
         assert!(is_cache_file_name(&key));
         assert!(!key.contains('/'));
         assert!(!key.contains('\\'));
-    }
-
-    #[test]
-    fn orphan_names_match_only_this_modules_temporary_files() {
-        let key = cache_key("https://example.com/a.png");
-        let temporary = temporary_file_name(&key);
-        assert!(is_orphan_file_name(&temporary));
-        assert!(!is_cache_file_name(&temporary));
-        assert!(!is_orphan_file_name(&key));
-        assert!(!is_orphan_file_name(&format!("{key}.tmp-short")));
-        assert!(!is_orphan_file_name(
-            "notes.tmp-00000000000000000000000000000000"
-        ));
-        assert!(!is_orphan_file_name("rlive.db"));
     }
 
     #[test]
@@ -544,7 +463,7 @@ mod tests {
             &cache.path_for("https://example.com/new"),
             Duration::from_secs(60),
         );
-        cache.sweep_with_budget(16).await;
+        cache.sweep_inner(16).await;
         assert_eq!(cache.get("https://example.com/old").await, None);
         assert_eq!(cache.get("https://example.com/middle").await, None);
         assert!(cache.get("https://example.com/new").await.is_some());
@@ -552,7 +471,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sweep_reclaims_stale_temporary_files_only() {
+    async fn sweep_reclaims_all_files_without_cache_names() {
         let root = test_root();
         let cache = ImageCache::new(root.clone());
         cache
@@ -570,15 +489,17 @@ mod tests {
         }
         set_modified(&stale, Duration::from_secs(2 * 60 * 60));
 
-        // 临时文件占用磁盘，但不属于缓存内容。
+        // 缓存目录为本模块独占：非缓存命名的文件全部回收，
+        // 不区分残余年龄或来源。代价是重叠写入可能被清扫提前回收，
+        // `put` 的 rename 会静默失败，下次请求重新拉取。
+        cache.sweep().await;
+        assert!(!stale.exists(), "stale temporary file survived the sweep");
+        assert!(!fresh.exists(), "fresh temporary file survived the sweep");
+        assert!(!unrelated.exists(), "sweep kept a file without a cache name");
+
         let usage = cache.usage().await;
         assert_eq!(usage.files, 1);
         assert_eq!(usage.bytes, b"\x89PNG\r\n\x1a\ncache".len() as u64);
-
-        cache.sweep().await;
-        assert!(!stale.exists(), "stale temporary file survived the sweep");
-        assert!(fresh.exists(), "an in-flight write was reclaimed too early");
-        assert!(unrelated.exists(), "sweep touched a file it does not own");
         assert!(cache.get("https://example.com/kept.png").await.is_some());
         let _ = std::fs::remove_dir_all(root);
     }

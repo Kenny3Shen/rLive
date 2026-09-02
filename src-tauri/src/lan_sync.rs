@@ -433,7 +433,7 @@ fn normalized_receive_url(endpoint: &str) -> AppResult<reqwest::Url> {
             "仅支持带端口的 HTTP 局域网同步地址",
         ));
     }
-    let host = url
+    url
         .host_str()
         .map(|host| host.trim_start_matches('[').trim_end_matches(']'))
         .and_then(|host| host.parse::<IpAddr>().ok())
@@ -450,7 +450,7 @@ fn normalized_receive_url(endpoint: &str) -> AppResult<reqwest::Url> {
             "目标地址使用了不再支持的 rLive 局域网同步协议",
         ));
     }
-    if !is_lan_ip(host) || !matches!(url.path(), "" | "/" | PROFILE_PATH) {
+    if !matches!(url.path(), "" | "/" | PROFILE_PATH) {
         return Err(AppError::new(
             "lan_sync_invalid_address",
             "同步地址路径无效，请直接使用发送设备显示的地址",
