@@ -250,7 +250,7 @@ async fn handle_image_request(
             "No Content",
             "text/plain; charset=utf-8",
             &[],
-            ImageFreshness::NoStore,
+            None,
         )
         .await;
     }
@@ -261,7 +261,7 @@ async fn handle_image_request(
             "Method Not Allowed",
             "text/plain; charset=utf-8",
             &[],
-            ImageFreshness::NoStore,
+            None,
         )
         .await;
     }
@@ -287,7 +287,7 @@ async fn handle_image_request(
                 "Bad Request",
                 "text/plain; charset=utf-8",
                 &[],
-                ImageFreshness::NoStore,
+                None,
             )
             .await;
         }
@@ -300,7 +300,7 @@ async fn handle_image_request(
             "Forbidden",
             "text/plain; charset=utf-8",
             &[],
-            ImageFreshness::NoStore,
+            None,
         )
         .await;
     }
@@ -315,7 +315,7 @@ async fn handle_image_request(
             "OK",
             content_type,
             &bytes,
-            ImageFreshness::Seconds(CACHED_IMAGE_MAX_AGE),
+            Some(CACHED_IMAGE_MAX_AGE),
         )
         .await;
     }
@@ -342,7 +342,7 @@ async fn handle_image_request(
             status_reason,
             &content_type,
             &[],
-            ImageFreshness::NoStore,
+            None,
         )
         .await;
     }
@@ -356,7 +356,7 @@ async fn handle_image_request(
             status_reason,
             "text/plain; charset=utf-8",
             body.as_bytes(),
-            ImageFreshness::NoStore,
+            None,
         )
         .await;
     }
@@ -369,17 +369,17 @@ async fn handle_image_request(
             "Bad Gateway",
             "text/plain; charset=utf-8",
             b"image too large",
-            ImageFreshness::NoStore,
+            None,
         )
         .await;
     }
 
     // 以显式 Content-Length 写出完整 body：
     // 小图片快速到达时，Windows WebView 可能截断分块响应。
-    let freshness = if use_cache {
-        ImageFreshness::Seconds(CACHED_IMAGE_MAX_AGE)
+    let max_age = if use_cache {
+        CACHED_IMAGE_MAX_AGE
     } else {
-        ImageFreshness::Seconds(COVER_MAX_AGE)
+        COVER_MAX_AGE
     };
     write_response_bytes(
         socket,
@@ -387,7 +387,7 @@ async fn handle_image_request(
         status_reason,
         &content_type,
         &bytes,
-        freshness,
+        Some(max_age),
     )
     .await?;
 
@@ -442,31 +442,20 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-/// 代理图片的 WebView 缓存生存期。只有成功的图片 body 才会获得；
-/// 错误与空 body 绝不能被记住。
-#[derive(Clone, Copy)]
-enum ImageFreshness {
-    NoStore,
-    Seconds(u32),
-}
-
-impl ImageFreshness {
-    fn header(self) -> String {
-        match self {
-            Self::NoStore => "Cache-Control: no-store\r\n".to_string(),
-            Self::Seconds(seconds) => format!("Cache-Control: private, max-age={seconds}\r\n"),
-        }
-    }
-}
-
 async fn write_response_bytes(
     socket: &mut tokio::net::TcpStream,
     status: u16,
     reason: &str,
     content_type: &str,
     body: &[u8],
-    freshness: ImageFreshness,
+    max_age: Option<u32>,
 ) -> Result<(), String> {
+    // 只有成功的图片 body 才能获得缓存生存期；
+    // 错误与空 body 绝不能被 WebView 记住。
+    let cache_control = match max_age {
+        Some(seconds) => format!("Cache-Control: private, max-age={seconds}\r\n"),
+        None => "Cache-Control: no-store\r\n".to_string(),
+    };
     let header = if status == 204 {
         "HTTP/1.1 204 No Content\r\n\
          Access-Control-Allow-Origin: *\r\n\
@@ -480,7 +469,7 @@ async fn write_response_bytes(
              {}\
              Connection: close\r\n\
              Content-Length: {}\r\n\r\n",
-            freshness.header(),
+            cache_control,
             body.len()
         )
     };

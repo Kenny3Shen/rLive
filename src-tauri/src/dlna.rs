@@ -386,7 +386,6 @@ pub struct RelayHandle {
     port: u16,
     token: String,
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-    shutdown: Arc<tokio::sync::watch::Sender<bool>>,
 }
 
 struct RelayConfig {
@@ -405,26 +404,19 @@ async fn start_relay(headers: HashMap<String, String>) -> Result<RelayHandle, St
         headers,
         token: token.clone(),
     });
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
-    let mut shutdown_rx = shutdown_rx;
     let accept_tasks = Arc::clone(&tasks);
     let accept_task = tokio::spawn(async move {
         loop {
-            tokio::select! {
-                _ = shutdown_rx.changed() => break,
-                accepted = listener.accept() => {
-                    let Ok((socket, _addr)) = accepted else { break };
-                    let config = Arc::clone(&config);
-                    let task = tokio::spawn(async move {
-                        handle_relay_connection(socket, config).await;
-                    });
-                    if let Ok(mut tasks) = accept_tasks.lock() {
-                        tasks.push(task);
-                        tasks.retain(|task| !task.is_finished());
-                    }
-                }
+            let Ok((socket, _addr)) = listener.accept().await else { break };
+            let config = Arc::clone(&config);
+            let task = tokio::spawn(async move {
+                handle_relay_connection(socket, config).await;
+            });
+            if let Ok(mut tasks) = accept_tasks.lock() {
+                tasks.push(task);
+                tasks.retain(|task| !task.is_finished());
             }
         }
     });
@@ -436,13 +428,12 @@ async fn start_relay(headers: HashMap<String, String>) -> Result<RelayHandle, St
         port,
         token,
         tasks,
-        shutdown: Arc::new(shutdown_tx),
     })
 }
 
 async fn stop_relay(relay: &RelayHandle) {
-    let _ = relay.shutdown.send(true);
-    // 中继连接多为长连接（FLV 直播流），直接 abort 任务组即可。
+    // 中继连接多为长连接（FLV 直播流），直接 abort 任务组即可；
+    // accept loop 也在任务组里，它的结束即代表关闭。
     if let Ok(mut tasks) = relay.tasks.lock() {
         for task in tasks.drain(..) {
             task.abort();
