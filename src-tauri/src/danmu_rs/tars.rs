@@ -29,14 +29,6 @@ pub struct Head {
 #[derive(Debug)]
 pub struct TarsError(pub String);
 
-impl std::fmt::Display for TarsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "tars: {}", self.0)
-    }
-}
-
-impl std::error::Error for TarsError {}
-
 type Result<T> = std::result::Result<T, TarsError>;
 
 fn err(msg: impl Into<String>) -> TarsError {
@@ -57,10 +49,6 @@ impl TarsWriter {
 
     pub fn into_bytes(self) -> Vec<u8> {
         self.buf
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        &self.buf
     }
 
     pub fn write_head(&mut self, typ: u8, tag: u8) {
@@ -169,10 +157,6 @@ pub struct TarsReader<'a> {
 impl<'a> TarsReader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
-    }
-
-    pub fn remaining(&self) -> usize {
-        self.data.len().saturating_sub(self.pos)
     }
 
     fn ensure(&self, n: usize) -> Result<()> {
@@ -398,32 +382,6 @@ impl<'a> TarsReader<'a> {
         Ok(self.read_bytes_cow(tag, required)?.into_owned())
     }
 
-    pub fn read_map_string_string(
-        &mut self,
-        tag: u8,
-        required: bool,
-    ) -> Result<Vec<(String, String)>> {
-        if !self.skip_to_tag(tag)? {
-            if required {
-                return Err(err(format!("required map tag {tag} missing")));
-            }
-            return Ok(Vec::new());
-        }
-        let hd = self.read_head()?;
-        if hd.typ != ty::MAP {
-            return Err(err(format!("map type mismatch {}", hd.typ)));
-        }
-        let size = self.read_i64(0, true)?;
-        if !(0..=16_384).contains(&size) {
-            return Err(err(format!("invalid map size {size}")));
-        }
-        let mut out = Vec::with_capacity(size as usize);
-        for _ in 0..size {
-            out.push((self.read_string(0, true)?, self.read_string(1, true)?));
-        }
-        Ok(out)
-    }
-
     pub fn read_map_string_bytes(
         &mut self,
         tag: u8,
@@ -556,9 +514,6 @@ pub fn decode_wup_v3(packet: &[u8]) -> Result<WupV3Response> {
     let servant = envelope.read_string(5, true)?;
     let function = envelope.read_string(6, true)?;
     let buffer = envelope.read_bytes(7, true)?;
-    let _timeout = envelope.read_i64(8, true)?;
-    let _context = envelope.read_map_string_string(9, true)?;
-    let _status = envelope.read_map_string_string(10, true)?;
 
     let mut fields = TarsReader::new(&buffer);
     let data = fields.read_map_string_bytes(0, true)?;

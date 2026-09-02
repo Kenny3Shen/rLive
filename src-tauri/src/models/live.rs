@@ -337,14 +337,10 @@ pub struct SuperChatInfo {
     pub id: Option<String>,
     /// Super Chat 的付费金额。
     pub price: Option<f64>,
-    /// 上游负载提供时的 ISO 风格货币代码。
-    pub currency: Option<String>,
     /// 安全的 CSS 十六进制主背景色。
     pub background_color: Option<String>,
     /// 安全的 CSS 十六进制次背景色（若提供）。
     pub background_bottom_color: Option<String>,
-    /// 经校验的 Super Chat 发送者 Bilibili CDN 头像 URL。
-    pub avatar_url: Option<String>,
     /// 高亮时长，单位为秒。
     pub duration: Option<u32>,
 }

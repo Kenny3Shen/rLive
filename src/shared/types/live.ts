@@ -96,10 +96,8 @@ export type DanmakuKind = "chat" | "gift" | "enter" | "social" | "super_chat" | 
 export type SuperChatInfo = {
   id?: string | null;
   price?: number | null;
-  currency?: string | null;
   background_color?: string | null;
   background_bottom_color?: string | null;
-  avatar_url?: string | null;
   duration?: number | null;
 };
 

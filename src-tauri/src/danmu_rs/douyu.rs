@@ -4,8 +4,7 @@
 //! 登录／加入／心跳都是被封装成小端数据包的 STT 字符串。
 //!
 //! 注意：斗鱼的弹幕代理端口只提供静态 RSA 的 AES-GCM 套件，因此这里的
-//! `None` 始终意味着 native-tls 连接器（参见
-//! [`ASSERT_NATIVE_TLS_ENABLED`]）。
+//! `None` 始终意味着 native-tls 连接器。
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -25,7 +24,7 @@ use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{
-    Connector, WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
+    WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
 };
 use uuid::Uuid;
 
@@ -33,13 +32,6 @@ use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
-
-/// 如果 tokio-tungstenite 的 `native-tls` feature 被关闭，这里会编译失败。
-/// 斗鱼弹幕代理端口只提供 rustls 拒绝的静态 RSA AES-GCM 套件，而在该 feature
-/// 关闭时，`None` 连接器会悄悄解析为 rustls 并让每次握手都失败。
-/// 下方有引用它，以避免这道守卫被死代码裁剪掉。
-const ASSERT_NATIVE_TLS_ENABLED: fn(&Connector) -> bool =
-    |connector| matches!(connector, Connector::NativeTls(_));
 
 /// 官方代理端口（默认 8506，失败时轮换）。
 const SERVER_PORTS: &[u16] = &[8506, 8505, 8504, 8503, 8502, 8501];
@@ -1355,7 +1347,6 @@ async fn connect_douyu_ws() -> AppResult<
         // 这里绝不要提供 `Sec-WebSocket-Protocol` 子协议：弹幕代理从不回显它，
         // 而 tungstenite（遵循 RFC 6455）随后会以
         // `SecWebSocketSubProtocolError::NoSubProtocol` 拒绝握手。
-        let _ = ASSERT_NATIVE_TLS_ENABLED;
         match connect_async(req).await {
             Ok((ws, _)) => return Ok(ws),
             Err(e) => {
@@ -1385,7 +1376,6 @@ enum SendGatewayReply {
     EncryptionChallenge(SendGatewayChallenge),
     EncryptionChallengeInvalid,
     ChatAccepted,
-    ChatSubmitted,
     Rejected(Option<String>),
 }
 
@@ -1445,7 +1435,7 @@ fn send_gateway_reply_from_stt(stt: &str) -> Option<SendGatewayReply> {
         "chatres" => match stt_field(stt, "res").map(str::trim) {
             Some("0") => Some(SendGatewayReply::ChatAccepted),
             Some(_) => Some(SendGatewayReply::Rejected(safe_gateway_code(stt))),
-            None => Some(SendGatewayReply::ChatSubmitted),
+            None => None,
         },
         _ => None,
     }
@@ -2182,10 +2172,7 @@ mod tests {
             send_gateway_reply_from_stt("type@=chatres/res@=308/cd@=1/"),
             Some(SendGatewayReply::Rejected(Some("308".into())))
         );
-        assert_eq!(
-            send_gateway_reply_from_stt("type@=chatres/cd@=1/"),
-            Some(SendGatewayReply::ChatSubmitted)
-        );
+        assert_eq!(send_gateway_reply_from_stt("type@=chatres/cd@=1/"), None);
     }
 
     #[test]
