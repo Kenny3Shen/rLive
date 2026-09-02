@@ -19,11 +19,9 @@ use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
-use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
+use crate::models::live::TwitchAdRecovery;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_PROBE_SOURCES: usize = 12;
-const MAX_PROBE_SAMPLE_BYTES: usize = 64 * 1024;
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
 // 留出足够时间交付一份 gap 播放列表。
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
@@ -40,123 +38,6 @@ pub const TWITCH_RECORDING_WARMUP_BUDGET: Duration = Duration::from_secs(20);
 /// 比这更快地重复轮询不会带来尚不存在的媒体。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const TWITCH_RECORDING_WARMUP_INTERVAL: Duration = Duration::from_millis(1_000);
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct StreamProxyProbe {
-    pub source_id: String,
-    pub index: usize,
-    pub available: bool,
-    pub status: Option<u16>,
-    pub ttfb_ms: Option<u64>,
-    pub content_type: Option<String>,
-    pub sampled_bytes: u64,
-    pub error_code: Option<String>,
-}
-
-/// 经由真实中继所用的同一上游代理探测播放候选。结果按输入顺序返回，
-/// 且不包含 URL、Cookie、Referer、重定向目标或传输错误文本。
-pub async fn probe_sources(
-    sources: Vec<PlayUrl>,
-    proxy: Option<&str>,
-) -> AppResult<Vec<StreamProxyProbe>> {
-    let client = build_probe_client(proxy)?;
-    let probes =
-        futures_util::stream::iter(sources.into_iter().take(MAX_PROBE_SOURCES).enumerate().map(
-            |(index, source)| {
-                let client = client.clone();
-                async move { (index, probe_source(&client, index, source).await) }
-            },
-        ))
-        .buffer_unordered(4)
-        .collect::<Vec<_>>()
-        .await;
-    let mut probes = probes;
-    probes.sort_by_key(|(index, _)| *index);
-    Ok(probes.into_iter().map(|(_, probe)| probe).collect())
-}
-
-async fn probe_source(client: &Client, index: usize, source: PlayUrl) -> StreamProxyProbe {
-    let mut result = StreamProxyProbe {
-        source_id: source.source_id.clone(),
-        index,
-        available: false,
-        status: None,
-        ttfb_ms: None,
-        content_type: None,
-        sampled_bytes: 0,
-        error_code: None,
-    };
-    let started = Instant::now();
-    let request = async {
-        let mut request = client.get(&source.url);
-        for (name, value) in &source.headers {
-            request = request.header(name.as_str(), value.as_str());
-        }
-        request = request.header(reqwest::header::ACCEPT_ENCODING, "identity");
-        let response = request.send().await.map_err(|_| "network")?;
-        result.status = Some(response.status().as_u16());
-        result.content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| {
-                value
-                    .split(';')
-                    .next()
-                    .unwrap_or(value)
-                    .trim()
-                    .to_ascii_lowercase()
-            })
-            .filter(|value| !value.is_empty());
-        if !response.status().is_success() {
-            return Err("http_status");
-        }
-
-        let mut body = response.bytes_stream();
-        let Some(chunk) = body.next().await else {
-            return Err("empty_body");
-        };
-        let chunk = chunk.map_err(|_| "network")?;
-        let sample = &chunk[..chunk.len().min(MAX_PROBE_SAMPLE_BYTES)];
-        result.sampled_bytes = sample.len() as u64;
-        result.ttfb_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
-        validate_probe_sample(source.protocol, result.content_type.as_deref(), sample)
-    };
-
-    match tokio::time::timeout(PROBE_TIMEOUT, request).await {
-        Ok(Ok(())) => result.available = true,
-        Ok(Err(code)) => result.error_code = Some(code.to_string()),
-        Err(_) => result.error_code = Some("timeout".into()),
-    }
-    result
-}
-
-fn validate_probe_sample(
-    protocol: PlaybackProtocol,
-    content_type: Option<&str>,
-    sample: &[u8],
-) -> Result<(), &'static str> {
-    if sample.is_empty() {
-        return Err("empty_body");
-    }
-    if content_type.is_some_and(|value| value.contains("text/html"))
-        || sample
-            .iter()
-            .copied()
-            .skip_while(u8::is_ascii_whitespace)
-            .take(16)
-            .collect::<Vec<_>>()
-            .starts_with(b"<!DOCTYPE")
-    {
-        return Err("html_response");
-    }
-    match protocol {
-        PlaybackProtocol::Hls if !looks_like_hls_manifest(sample) => Err("invalid_hls"),
-        PlaybackProtocol::Flv if !sample.starts_with(b"FLV") => Err("invalid_flv"),
-        PlaybackProtocol::MpegTs if sample.first() != Some(&0x47) => Err("invalid_mpeg_ts"),
-        _ => Ok(()),
-    }
-}
 
 /// 按前端播放会话索引的活动代理端点。
 ///
@@ -676,10 +557,7 @@ impl HlsResources {
             return id;
         }
 
-        let mut id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        if id == 0 {
-            id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         entries.by_id.insert(id, url.clone());
         entries.by_url.insert(url, id);
         Self::touch(&mut entries, id);
@@ -956,11 +834,6 @@ impl StreamProxy {
 
     fn advance_generation(state: &mut ProxyState) -> u64 {
         state.generation = state.generation.wrapping_add(1);
-        // 如今 `0` 并无特殊含义，但让生成的取值保持非零，
-        // 可在回绕后减少未来诊断和可选 id 的意外。
-        if state.generation == 0 {
-            state.generation = 1;
-        }
         state.generation
     }
 
@@ -989,10 +862,10 @@ mod tests {
         HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, TwitchAdRecoverySession,
         hls_path_extension, is_twitch_ad_manifest, looks_like_hls_manifest,
         manifest_has_playable_segment, mark_all_hls_segments_as_gaps,
-        mark_twitch_ad_segments_as_gaps, probe_sources, resolve_upstream_target,
-        rewrite_hls_manifest, twitch_wait_manifest, validate_probe_sample,
+        mark_twitch_ad_segments_as_gaps, resolve_upstream_target,
+        rewrite_hls_manifest, twitch_wait_manifest,
     };
-    use crate::models::live::{PlayUrl, PlaybackProtocol, TwitchAdRecovery};
+    use crate::models::live::TwitchAdRecovery;
     use tokio::sync::{oneshot, watch};
 
     #[test]
@@ -1849,34 +1722,6 @@ mod tests {
         proxy_server.abort();
     }
 
-    #[test]
-    fn probe_validation_rejects_login_pages_and_wrong_containers() {
-        assert_eq!(
-            validate_probe_sample(
-                PlaybackProtocol::Hls,
-                Some("application/vnd.apple.mpegurl"),
-                b"#EXTM3U\n#EXT-X-VERSION:3\n"
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            validate_probe_sample(PlaybackProtocol::Flv, Some("video/x-flv"), b"FLV\x01"),
-            Ok(())
-        );
-        assert_eq!(
-            validate_probe_sample(
-                PlaybackProtocol::Unknown,
-                Some("text/html"),
-                b"<!DOCTYPE html>"
-            ),
-            Err("html_response")
-        );
-        assert_eq!(
-            validate_probe_sample(PlaybackProtocol::Hls, None, &[0x47, 0x40, 0, 0x10]),
-            Err("invalid_hls")
-        );
-    }
-
     #[tokio::test]
     async fn media_relay_uses_configured_http_proxy_for_upstream_streams() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1996,59 +1841,6 @@ mod tests {
         .unwrap();
         upstream.await.unwrap();
     }
-
-    #[tokio::test]
-    async fn source_probe_uses_configured_proxy_without_exposing_source_secrets() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let length = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..length]);
-            assert!(
-                request
-                    .starts_with("GET http://media.invalid/live.flv?token=probe-secret HTTP/1.1")
-            );
-            assert!(
-                request
-                    .to_ascii_lowercase()
-                    .contains("cookie: session=private")
-            );
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: 5\r\nConnection: close\r\n\r\nFLV\x01\x05",
-                )
-                .unwrap();
-        });
-        let mut headers = HashMap::new();
-        headers.insert("cookie".into(), "session=private".into());
-
-        let probes = probe_sources(
-            vec![PlayUrl {
-                source_id: "probe:1".into(),
-                label: "测试线路".into(),
-                protocol: PlaybackProtocol::Flv,
-                priority: 0,
-                url: "http://media.invalid/live.flv?token=probe-secret".into(),
-                headers,
-                twitch_ad_recovery: None,
-            }],
-            Some(&format!("http://{address}")),
-        )
-        .await
-        .unwrap();
-
-        server.join().unwrap();
-        assert_eq!(probes.len(), 1);
-        assert!(probes[0].available);
-        assert_eq!(probes[0].source_id, "probe:1");
-        assert_eq!(probes[0].sampled_bytes, 5);
-        let serialized = serde_json::to_string(&probes).unwrap();
-        assert!(!serialized.contains("media.invalid"));
-        assert!(!serialized.contains("probe-secret"));
-        assert!(!serialized.contains("session=private"));
-    }
 }
 
 /// 流式传输刻意不设整体请求超时：健康的直播响应可以无限期保持打开。
@@ -2064,20 +1856,6 @@ fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
     )?
     .build()
     .map_err(|_| AppError::new("stream_proxy_client", "媒体代理网络客户端初始化失败"))
-}
-
-fn build_probe_client(proxy: Option<&str>) -> AppResult<Client> {
-    crate::http_client::with_proxy(
-        Client::builder()
-            .use_native_tls()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(PROBE_TIMEOUT)
-            .pool_max_idle_per_host(4)
-            .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT),
-        proxy,
-    )?
-    .build()
-    .map_err(|_| AppError::new("stream_proxy_probe_client", "线路探测网络客户端初始化失败"))
 }
 
 async fn run_proxy_loop(

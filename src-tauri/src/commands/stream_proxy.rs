@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::models::live::{PlayUrl, TwitchAdRecovery};
+use crate::models::live::TwitchAdRecovery;
 use crate::state::AppState;
-use crate::stream_proxy::{StreamProxyProbe, StreamProxyTelemetry};
+use crate::stream_proxy::StreamProxyTelemetry;
 
 fn configured_proxy(state: &State<'_, AppState>) -> AppResult<Option<String>> {
     let conn = state
@@ -52,15 +52,6 @@ pub async fn stream_proxy_start(
             twitch_ad_recovery,
         )
         .await
-}
-
-#[tauri::command(async)]
-pub async fn stream_proxy_probe_sources(
-    state: State<'_, AppState>,
-    sources: Vec<PlayUrl>,
-) -> AppResult<Vec<StreamProxyProbe>> {
-    let proxy = configured_proxy(&state)?;
-    crate::stream_proxy::probe_sources(sources, proxy.as_deref()).await
 }
 
 #[tauri::command]

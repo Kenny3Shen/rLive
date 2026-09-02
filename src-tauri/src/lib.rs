@@ -88,9 +88,7 @@ use commands::site::{
     site_get_categories, site_get_category_rooms, site_get_play_qualities, site_get_play_urls,
     site_get_recommend, site_get_room_detail, site_list, site_search_rooms,
 };
-use commands::stream_proxy::{
-    stream_proxy_probe_sources, stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry,
-};
+use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry};
 use state::AppState;
 // 只有桌面端的关闭处理器会发出事件；Android 没有退出确认框。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -375,7 +373,6 @@ pub fn run() {
             iptv_favorite_set_group,
             stream_proxy_start,
             stream_proxy_stop,
-            stream_proxy_probe_sources,
             stream_proxy_telemetry,
             image_proxy_url,
             cache_usage,
