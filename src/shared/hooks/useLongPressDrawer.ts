@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent } from "react";
-import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { useLongPress } from "@/shared/hooks/useLongPress";
 
 /**
  * 「长按卡片弹出底部操作抽屉」的公共接线。
  *
- * 封装长按检测、抽屉开关、Android Back 收起与触发后松手合成 click 的抑制，
- * 由直播卡片（`RoomCard`）与关注页的直播/频道卡片共用。桌面端
- * （`enabled: false`）所有处理器均为空操作，卡片继续使用右键菜单；
- * 长按计时与原生 contextmenu 触发的细节见 `useLongPress`。
+ * 封装长按检测、抽屉开关与触发后松手合成 click 的抑制，由直播卡片
+ * （`RoomCard`）与关注页的直播/频道卡片共用。桌面端（`enabled: false`）
+ * 所有处理器均为空操作，卡片继续使用右键菜单；长按计时与原生 contextmenu
+ * 触发的细节见 `useLongPress`。Android Back 收起抽屉由 `AndroidBackNavigator`
+ * 统一处理（抽屉是 base-ui 弹窗），这里不再自己监听。
  */
 export function useLongPressDrawer({ enabled }: { enabled: boolean }) {
   const [open, setOpen] = useState(false);
@@ -29,17 +29,6 @@ export function useLongPressDrawer({ enabled }: { enabled: boolean }) {
       setOpen(true);
     },
   });
-
-  useEffect(() => {
-    if (!open) return;
-    // 按一次 Android Back 先收起操作抽屉，而不是离开当前页面。
-    const closeOnAndroidBack = (event: Event) => {
-      event.preventDefault();
-      setOpen(false);
-    };
-    window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-    return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-  }, [open]);
 
   /**
    * 新一次按压开始：清掉上一次长按遗留的点按抑制，并武装长按计时。
