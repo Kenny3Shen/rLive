@@ -3,7 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+use base64::Engine as _;
 use md5::{Digest, Md5};
+use percent_encoding::percent_decode_str;
 use reqwest::Client;
 use serde_json::Value;
 
@@ -376,65 +379,25 @@ fn md5_hex(s: &str) -> String {
 }
 
 fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let (Some(a), Some(b)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2]))
-        {
-            out.push((a << 4) | b);
-            i += 3;
-            continue;
-        }
-        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn from_hex(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
+    percent_decode_str(&s.replace('+', " "))
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut inv = [255u8; 256];
-    for (i, &c) in T.iter().enumerate() {
-        inv[c as usize] = i as u8;
-    }
-    let s: Vec<u8> = s
+    // 输入来自 `percent_decode`（`+` → 空格），可能带空白；与原手写实现一致：
+    // 忽略空白、剥除所有 `=`、丢弃非零 trailing bits。
+    const LENIENT: GeneralPurpose = GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        GeneralPurposeConfig::new()
+            .with_decode_padding_mode(DecodePaddingMode::Indifferent)
+            .with_decode_allow_trailing_bits(true),
+    );
+    let filtered: Vec<u8> = s
         .bytes()
         .filter(|c| !c.is_ascii_whitespace() && *c != b'=')
         .collect();
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    for chunk in s.chunks(4) {
-        if chunk.len() < 2 {
-            break;
-        }
-        let mut n = 0u32;
-        let mut bits = 0;
-        for &c in chunk {
-            let v = inv[c as usize];
-            if v == 255 {
-                return None;
-            }
-            n = (n << 6) | u32::from(v);
-            bits += 6;
-        }
-        while bits >= 8 {
-            bits -= 8;
-            out.push((n >> bits) as u8);
-            n &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
+    LENIENT.decode(filtered).ok()
 }
 
 fn json_i64(v: &Value) -> i64 {
@@ -1093,6 +1056,29 @@ mod tests {
                 .any(|item| !first_ids.contains(&&item.room_id)),
             "search page 2 repeated page 1 — the start offset is not taking effect"
         );
+    }
+
+    /// 等价性锚点：原手写实现把 `+` 解码为空格，截断/非法转义按字面保留。
+    #[test]
+    fn percent_decode_form_style() {
+        assert_eq!(percent_decode("a%20b+c%2Bd"), "a b c+d");
+        assert_eq!(percent_decode("%E4%B8%AD"), "中");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%G1b"), "a%G1b");
+        assert_eq!(percent_decode("a%2"), "a%2");
+    }
+
+    /// 等价性锚点：原手写实现忽略空白与 `=`、丢弃非零 trailing bits。
+    #[test]
+    fn base64_decode_lenient_like_handwritten() {
+        assert_eq!(base64_decode("QQ==").as_deref(), Some(b"A".as_slice()));
+        assert_eq!(base64_decode("U3RyZWFt").as_deref(), Some(b"Stream".as_slice()));
+        // `fm` 先经 percent_decode（`+` → 空格），空白必须被忽略。
+        assert_eq!(base64_decode("QSBJ").as_deref(), Some(b"A I".as_slice()));
+        assert_eq!(base64_decode("U3Ry\nZWFt =").as_deref(), Some(b"Stream".as_slice()));
+        // 2 字符块的余数位被丢弃而不是报错。
+        assert_eq!(base64_decode("QR").as_deref(), Some(b"A".as_slice()));
+        assert_eq!(base64_decode("!!"), None);
     }
 
     #[test]

@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use reqwest::header::{COOKIE, HeaderMap, REFERER, SET_COOKIE, USER_AGENT};
 use reqwest::{Client, Url};
 use serde_json::Value;
@@ -793,17 +794,16 @@ fn is_safe_session_value(value: &str) -> bool {
 /// `a_bogus` 签的是字面 query 字符串，因此被签名的取值与实际发送的取值
 /// 必须采用完全相同的编码。放在这里可以让两侧共用同一个实现。
 fn url_encode(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
+    utf8_percent_encode(value, UNRESERVED).collect()
 }
+
+/// 与原手写实现逐字节等价的 unreserved 集合：字母数字与 `-._~` 之外
+/// 一律 `%XX`（大写十六进制）。
+const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 fn encode_query(params: &[(String, String)]) -> String {
     params
@@ -1467,23 +1467,7 @@ fn parse_render_data_web_id(html: &str) -> Option<String> {
 /// 百分号解码但不套用 URL 表单的 `+` → 空格规则；`RENDER_DATA` 只用百分号
 /// 转义，而字面加号是合法 JSON。
 fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let high = (bytes[index + 1] as char).to_digit(16);
-            let low = (bytes[index + 2] as char).to_digit(16);
-            if let (Some(high), Some(low)) = (high, low) {
-                decoded.push((high * 16 + low) as u8);
-                index += 3;
-                continue;
-            }
-        }
-        decoded.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
+    percent_decode_str(value).decode_utf8_lossy().into_owned()
 }
 
 /// 兜底 web id：`s_v_web_id` cookie 是同一会话的真实浏览器指纹，
@@ -2272,6 +2256,22 @@ mod tests {
         ]);
 
         assert_eq!(query, "partition=1010032&keyword=a%20b%26c%3Dd");
+    }
+
+    /// 等价性锚点：编码只保留 unreserved 集合，十六进制为大写。
+    #[test]
+    fn url_encode_keeps_unreserved_and_uppercase_hex() {
+        assert_eq!(url_encode("aZ09-_.~"), "aZ09-_.~");
+        assert_eq!(url_encode("a b+c/dé"), "a%20b%2Bc%2Fd%C3%A9");
+        assert_eq!(url_encode("中文"), "%E4%B8%AD%E6%96%87");
+    }
+
+    /// 等价性锚点：RENDER_DATA 解码不把 `+` 当空格，非法转义按字面保留。
+    #[test]
+    fn render_data_percent_decode_keeps_plus_literal() {
+        assert_eq!(percent_decode("a+b%20c%2B"), "a+b c+");
+        assert_eq!(percent_decode("%E4%B8%AD"), "中");
+        assert_eq!(percent_decode("50%"), "50%");
     }
 
     #[test]
