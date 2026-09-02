@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use md5::{Digest, Md5};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 use serde_json::Value;
 use tokio::time;
 use tokio_tungstenite::{
@@ -20,14 +21,14 @@ use uuid::Uuid;
 
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
-use crate::danmu_rs::{DanmakuEventSender, emit_event};
+use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 /// 心跳负载：base64 `ABQdAAwsNgBM`
 const SERVER_URL: &str = "wss://cdnws.api.huya.com";
 const HEARTBEAT_SECS: u64 = 60;
-/// 心跳负载：base64 `ABQdAAwsNgBM`
-const HEARTBEAT_B64: &str = "ABQdAAwsNgBM";
+/// 心跳负载（base64 `ABQdAAwsNgBM` 解码后的 9 字节，与原先的兜底数组一致）。
+const HEARTBEAT: [u8; 9] = [0x00, 0x14, 0x1d, 0x00, 0x0c, 0x2c, 0x36, 0x00, 0x4c];
 
 // 经过认证的 Web 信令服务与上面的匿名房间订阅接口是分开的。
 // 不要把接收连接复用于用户发起的写入：它刻意不附带浏览器 Cookie。
@@ -163,42 +164,7 @@ pub fn encode_join(ayyuid: i64, tid: i64, sid: i64) -> Vec<u8> {
 }
 
 pub fn heartbeat_bytes() -> Vec<u8> {
-    base64_decode(HEARTBEAT_B64)
-        .unwrap_or_else(|| vec![0x00, 0x14, 0x1d, 0x00, 0x0c, 0x2c, 0x36, 0x00, 0x4c])
-}
-
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut inv = [255u8; 256];
-    for (i, &c) in T.iter().enumerate() {
-        inv[c as usize] = i as u8;
-    }
-    let s: Vec<u8> = s
-        .bytes()
-        .filter(|c| !c.is_ascii_whitespace() && *c != b'=')
-        .collect();
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    for chunk in s.chunks(4) {
-        if chunk.len() < 2 {
-            break;
-        }
-        let mut n = 0u32;
-        let mut bits = 0;
-        for &c in chunk {
-            let v = inv[c as usize];
-            if v == 255 {
-                return None;
-            }
-            n = (n << 6) | u32::from(v);
-            bits += 6;
-        }
-        while bits >= 8 {
-            bits -= 8;
-            out.push((n >> bits) as u8);
-            n &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
+    HEARTBEAT.to_vec()
 }
 
 /// 用于单次明确的虎牙聊天发送的完整本地浏览器会话。
@@ -289,19 +255,17 @@ pub(crate) fn normalize_outgoing_message(value: &str) -> AppResult<String> {
     Ok(message.to_owned())
 }
 
+/// 仅 RFC 3986 的未保留字符 `A-Za-z0-9-._~` 免转义；
+/// base64 输出中的 `+`、`/`、`=` 等其余字节转为大写十六进制，
+/// 与第一方 H5 播放器的行为一致。
+const QUERY_UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
 fn percent_encode_query(value: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(value.len());
-    for &byte in value {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push('%');
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-    }
-    out
+    percent_encode(value, QUERY_UNRESERVED).to_string()
 }
 
 /// 完全按第一方 H5 播放器为经过认证的信令连接所做的方式，
@@ -807,23 +771,6 @@ fn decode_message(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
-fn emit_system(events: &DanmakuEventSender, content: impl Into<String>) {
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: content.into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
-}
-
 pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppResult<()> {
     // 频道 id 来自房间元数据；没有它加入包就无法指向任何频道，
     // 因此这里是本地拒绝而不是发起拨号。
@@ -853,20 +800,7 @@ async fn run_connection_once(
     events: &DanmakuEventSender,
     args: &HuyaDanmakuArgs,
 ) -> DisconnectReason {
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: "正在连接弹幕服务器…".into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
+    emit_system(events, "正在连接弹幕服务器…");
 
     let (ws, _) = match connect_async(SERVER_URL).await {
         Ok(ws) => ws,
@@ -889,20 +823,7 @@ async fn run_connection_once(
         return DisconnectReason::transient("加入虎牙弹幕频道失败");
     }
 
-    emit_event(
-        events,
-        DanmakuEvent {
-            kind: DanmakuKind::System,
-            user: "system".into(),
-            is_self: false,
-            user_id: None,
-            content: "弹幕服务器连接成功".into(),
-            color: None,
-            spans: None,
-            super_chat: None,
-            ts: chrono::Utc::now().timestamp_millis(),
-        },
-    );
+    emit_system(events, "弹幕服务器连接成功");
 
     let hb_payload = heartbeat_bytes();
     let mut heartbeat = time::interval(Duration::from_secs(HEARTBEAT_SECS));
@@ -951,6 +872,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn percent_encode_query_keeps_unreserved_and_uppercases_hex() {
+        // 期望值取自替换前的手写实现：仅 A-Za-z0-9-._~ 免转义，
+        // 其余字节输出大写十六进制。
+        assert_eq!(percent_encode_query(b"abcXYZ019-._~"), "abcXYZ019-._~");
+        assert_eq!(percent_encode_query(b"QWJjZA=="), "QWJjZA%3D%3D");
+        assert_eq!(percent_encode_query(b"+/"), "%2B%2F");
+        assert_eq!(percent_encode_query(b"a b"), "a%20b");
+    }
+
+    #[test]
     fn join_packet_non_empty() {
         let p = encode_join(1_346_609_715, 1_346_609_715, 1_346_609_715);
         assert!(p.len() > 10);
@@ -963,8 +894,11 @@ mod tests {
 
     #[test]
     fn heartbeat_matches_simple_live() {
-        let hb = heartbeat_bytes();
-        assert_eq!(hb, base64_decode(HEARTBEAT_B64).unwrap());
+        // 与 base64 `ABQdAAwsNgBM` 的解码结果逐字节一致。
+        assert_eq!(
+            heartbeat_bytes(),
+            vec![0x00, 0x14, 0x1d, 0x00, 0x0c, 0x2c, 0x36, 0x00, 0x4c]
+        );
     }
 
     #[tokio::test]

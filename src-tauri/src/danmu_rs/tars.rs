@@ -592,46 +592,4 @@ mod tests {
         packet[3] = packet[3].saturating_sub(1);
         assert!(decode_wup_v3(&packet).is_err());
     }
-
-    #[test]
-    fn heartbeat_base64_decodes() {
-        // 心跳负载：base64 "ABQdAAwsNgBM"
-        let raw = base64_decode_std("ABQdAAwsNgBM").unwrap();
-        assert!(!raw.is_empty());
-        assert_eq!(raw[0], 0x00);
-    }
-
-    fn base64_decode_std(s: &str) -> Option<Vec<u8>> {
-        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut inv = [255u8; 256];
-        for (i, &c) in T.iter().enumerate() {
-            inv[c as usize] = i as u8;
-        }
-        let s: Vec<u8> = s
-            .bytes()
-            .filter(|c| !c.is_ascii_whitespace() && *c != b'=')
-            .collect();
-        let mut out = Vec::with_capacity(s.len() * 3 / 4);
-        for chunk in s.chunks(4) {
-            if chunk.len() < 2 {
-                break;
-            }
-            let mut n = 0u32;
-            let mut bits = 0;
-            for &c in chunk {
-                let v = inv[c as usize];
-                if v == 255 {
-                    return None;
-                }
-                n = (n << 6) | u32::from(v);
-                bits += 6;
-            }
-            while bits >= 8 {
-                bits -= 8;
-                out.push((n >> bits) as u8);
-                n &= (1 << bits) - 1;
-            }
-        }
-        Some(out)
-    }
 }
