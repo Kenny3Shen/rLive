@@ -3,10 +3,11 @@
 //! 整个流程只与抖音的 Web SSO 接口通信。二维码内容由客户端渲染，
 //! 但上游 token 和临时 cookie jar 都留在本进程内。确认登录后，
 //! 生成的 Cookie 返回给账号命令，仅用于持久化到本地账号数据库。
+//!
+//! 会话表、客户端构建、可信主机判定与文本提取由共享的 `super::qr` 提供，
+//! 这里只保留抖音 SSO 协议本身。
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
@@ -14,51 +15,37 @@ use reqwest::{Client, Url};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::account::qr::{self, QrSessionStore, QrSite};
 use crate::error::{AppError, AppResult};
 use crate::sites::douyin::DEFAULT_USER_AGENT;
+
+pub use crate::account::qr::{QrLoginPoll, QrLoginStart};
 
 const QR_GENERATE_URL: &str = "https://sso.douyin.com/get_qrcode/";
 const QR_POLL_URL: &str = "https://sso.douyin.com/check_qrconnect/";
 const WEB_ORIGIN: &str = "https://www.douyin.com/";
-const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
-const MAX_ACTIVE_SESSIONS: usize = 16;
-const MAX_REDIRECTS: usize = 8;
 const MAX_QR_PAYLOAD_LEN: usize = 8 * 1024;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 
-/// 客户端渲染抖音登录二维码所需的数据。
-pub struct QrLoginStart {
-    pub qr_code_url: String,
-    /// 不透明的进程内句柄，而不是抖音真正的登录 token。
-    pub qr_key: String,
-}
-
-/// 一次扫码轮询结果。Cookie 内容绝不跨出 webview 边界。
-pub enum QrLoginPoll {
-    Pending,
-    Scanned,
-    Expired,
-    Success { cookie: String },
-}
+const SITE: QrSite = QrSite {
+    id: "douyin",
+    display: "抖音",
+};
+const TRUSTED_SUFFIXES: &[&str] = &["douyin.com"];
 
 #[derive(Clone)]
 struct QrSession {
     token: String,
     client: Client,
     jar: Arc<Jar>,
-    created_at: Instant,
 }
 
-static ACTIVE_SESSIONS: OnceLock<Mutex<HashMap<String, QrSession>>> = OnceLock::new();
-
-fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
-    ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 /// 通过抖音公开的 Web SSO API 创建二维码内容。
 pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(Arc::clone(&jar), proxy)?;
+    let client = qr::build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, proxy)?;
     let response = client
         .get(QR_GENERATE_URL)
         .query(&web_sso_params())
@@ -68,7 +55,7 @@ pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
         .header(USER_AGENT, DEFAULT_USER_AGENT)
         .send()
         .await
-        .map_err(|_| qr_network_error("douyin_qr_generate"))?;
+        .map_err(|_| SITE.network_error("douyin_qr_generate"))?;
     let response = parse_json_response(response, "douyin_qr_generate").await?;
     let (qr_code_url, token) = parse_start_response(&response)?;
 
@@ -80,9 +67,8 @@ pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
         token,
         client,
         jar,
-        created_at: Instant::now(),
     };
-    insert_session(qr_key.clone(), session)?;
+    SESSIONS.insert(qr_key.clone(), session)?;
 
     Ok(QrLoginStart {
         qr_code_url,
@@ -92,14 +78,11 @@ pub async fn start(proxy: Option<&str>) -> AppResult<QrLoginStart> {
 
 /// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
-    if !is_valid_session_key(qr_key) {
-        return Err(
-            AppError::new("douyin_qr_invalid_key", "二维码登录凭据无效，请刷新二维码")
-                .with_site("douyin"),
-        );
+    if !qr::is_valid_session_key(qr_key) {
+        return Err(SITE.error("invalid_key", "二维码登录凭据无效，请刷新二维码"));
     }
 
-    let session = get_session(qr_key)?;
+    let session = SESSIONS.get(qr_key)?;
     let mut params = web_sso_params();
     params.push(("token", session.token.clone()));
     let response = session
@@ -112,19 +95,19 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
         .header(USER_AGENT, DEFAULT_USER_AGENT)
         .send()
         .await
-        .map_err(|_| qr_network_error("douyin_qr_poll"))?;
+        .map_err(|_| SITE.network_error("douyin_qr_poll"))?;
     let response = parse_json_response(response, "douyin_qr_poll").await?;
 
     match parse_poll_response(&response)? {
         PollState::Pending => Ok(QrLoginPoll::Pending),
         PollState::Scanned => Ok(QrLoginPoll::Scanned),
         PollState::Expired => {
-            remove_session(qr_key)?;
+            SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Expired)
         }
         PollState::Success { redirect_url } => {
             let cookie = finish_login(&session, &redirect_url).await?;
-            remove_session(qr_key)?;
+            SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Success { cookie })
         }
     }
@@ -143,32 +126,6 @@ fn web_sso_params() -> Vec<(&'static str, String)> {
         ("sdk_version", "2.2.5".to_string()),
         ("language", "zh".to_string()),
     ]
-}
-
-fn build_login_client(jar: Arc<Jar>, proxy: Option<&str>) -> AppResult<Client> {
-    // 只使用应用中显式配置的代理。这样可避免扫码会话意外继承无关的
-    // HTTP(S)_PROXY 进程变量，同时仍允许必须经代理上网的用户
-    // 访问抖音的 SSO 服务。
-    let builder = Client::builder()
-        .use_native_tls()
-        .cookie_provider(jar)
-        .no_proxy()
-        .timeout(Duration::from_secs(20))
-        .connect_timeout(Duration::from_secs(10))
-        // 已完成的扫码流程预期只在抖音 Web SSO 主机之间跳转。跳出抖音时直接停止
-        // 而不是跟随重定向，从而保证这个临时会话绝不会被用于发起任意请求。
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if can_follow_redirect(attempt.url(), attempt.previous().len()) {
-                attempt.follow()
-            } else {
-                attempt.stop()
-            }
-        }));
-    crate::http_client::with_proxy(builder, proxy)?
-        .build()
-        .map_err(|_| {
-            AppError::new("douyin_qr_client", "二维码登录网络客户端初始化失败").with_site("douyin")
-        })
 }
 
 async fn parse_json_response(response: reqwest::Response, code: &str) -> AppResult<Value> {
@@ -214,20 +171,13 @@ fn parse_start_response(response: &Value) -> AppResult<(String, String)> {
     let data = successful_data(response, "douyin_qr_generate")?;
     let qr_code_url = required_text(data, &["qrcode", "qr_code", "qrcode_url"], "二维码地址")?;
     let parsed_qr_url = Url::parse(&qr_code_url).map_err(|_| {
-        AppError::new(
-            "douyin_qr_response_invalid",
-            "抖音二维码服务返回了无效二维码地址",
-        )
-        .with_site("douyin")
-        .retryable()
+        SITE.retryable_error("response_invalid", "抖音二维码服务返回了无效二维码地址")
     })?;
-    if !is_trusted_douyin_url(&parsed_qr_url) {
-        return Err(AppError::new(
-            "douyin_qr_response_invalid",
+    if !qr::is_trusted_url(&parsed_qr_url, TRUSTED_SUFFIXES) {
+        return Err(SITE.retryable_error(
+            "response_invalid",
             "抖音二维码服务返回了不受信任的二维码地址",
-        )
-        .with_site("douyin")
-        .retryable());
+        ));
     }
     let token = required_text(data, &["token", "qr_token"], "二维码登录凭据")?;
     Ok((qr_code_url, token))
@@ -242,14 +192,14 @@ enum PollState {
 
 fn parse_poll_response(response: &Value) -> AppResult<PollState> {
     let data = successful_data(response, "douyin_qr_poll")?;
-    let redirect_url = optional_text(data, &["redirect_url", "redirectUrl"]);
+    let redirect_url = qr::optional_text(data, &["redirect_url", "redirectUrl"], MAX_QR_PAYLOAD_LEN);
     if let Some(redirect_url) = redirect_url {
         // 抖音只在用户确认登录之后才提供这个字段。它比数值状态更可靠，
         // 因为后者可能随 Web SSO 版本变化。
         return Ok(PollState::Success { redirect_url });
     }
 
-    let status = optional_text(data, &["status", "status_code"])
+    let status = qr::optional_text(data, &["status", "status_code"], MAX_QR_PAYLOAD_LEN)
         .or_else(|| optional_number_as_text(data, &["status", "status_code"]))
         .unwrap_or_default();
     match status.trim().to_ascii_lowercase().as_str() {
@@ -258,36 +208,29 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
         "" | "0" | "1" | "pending" | "waiting" | "wait" => Ok(PollState::Pending),
         "2" | "scanned" | "scan" => Ok(PollState::Scanned),
         "4" | "5" | "expired" | "cancelled" | "canceled" => Ok(PollState::Expired),
-        "3" | "success" | "confirmed" | "confirm" => Err(AppError::new(
-            "douyin_qr_redirect_missing",
+        "3" | "success" | "confirmed" | "confirm" => Err(SITE.retryable_error(
+            "redirect_missing",
             "已确认登录但未取得跳转地址，请刷新二维码后重试",
-        )
-        .with_site("douyin")
-        .retryable()),
-        _ => Err(
-            AppError::new("douyin_qr_poll", "二维码登录状态异常，请刷新二维码后重试")
-                .with_site("douyin")
-                .retryable(),
-        ),
+        )),
+        _ => Err(SITE.retryable_error(
+            "poll",
+            "二维码登录状态异常，请刷新二维码后重试",
+        )),
     }
 }
 
 async fn finish_login(session: &QrSession, redirect_url: &str) -> AppResult<String> {
     let redirect_url = Url::parse(redirect_url.trim()).map_err(|_| {
-        AppError::new(
-            "douyin_qr_redirect_invalid",
+        SITE.retryable_error(
+            "redirect_invalid",
             "二维码登录跳转地址无效，请刷新二维码后重试",
         )
-        .with_site("douyin")
-        .retryable()
     })?;
-    if !is_trusted_douyin_url(&redirect_url) {
-        return Err(AppError::new(
-            "douyin_qr_redirect_invalid",
+    if !qr::is_trusted_url(&redirect_url, TRUSTED_SUFFIXES) {
+        return Err(SITE.retryable_error(
+            "redirect_invalid",
             "二维码登录跳转地址不受信任，请刷新二维码后重试",
-        )
-        .with_site("douyin")
-        .retryable());
+        ));
     }
 
     let response = session
@@ -302,22 +245,19 @@ async fn finish_login(session: &QrSession, redirect_url: &str) -> AppResult<Stri
         .header(USER_AGENT, DEFAULT_USER_AGENT)
         .send()
         .await
-        .map_err(|_| qr_network_error("douyin_qr_complete"))?;
+        .map_err(|_| SITE.network_error("douyin_qr_complete"))?;
     if !response.status().is_success() {
-        return Err(
-            AppError::new("douyin_qr_complete", "抖音登录确认失败，请刷新二维码后重试")
-                .with_site("douyin")
-                .retryable(),
-        );
+        return Err(SITE.retryable_error(
+            "complete",
+            "抖音登录确认失败，请刷新二维码后重试",
+        ));
     }
 
     cookie_from_jar(&session.jar).ok_or_else(|| {
-        AppError::new(
-            "douyin_qr_cookie_missing",
+        SITE.retryable_error(
+            "cookie_missing",
             "登录已确认，但未取得可用 Cookie；请刷新二维码后重试",
         )
-        .with_site("douyin")
-        .retryable()
     })
 }
 
@@ -326,7 +266,7 @@ fn successful_data<'a>(response: &'a Value, code: &str) -> AppResult<&'a Value> 
     // 才是 API 错误；`data.status` 是由 `parse_poll_response` 单独处理的
     // 二维码状态值。
     let api_code = optional_number_as_text(response, &["status_code", "code"])
-        .or_else(|| optional_text(response, &["status_code", "code"]));
+        .or_else(|| qr::optional_text(response, &["status_code", "code"], MAX_QR_PAYLOAD_LEN));
     if let Some(api_code) = api_code
         && api_code.trim() != "0"
         && !api_code.trim().is_empty()
@@ -339,29 +279,19 @@ fn successful_data<'a>(response: &'a Value, code: &str) -> AppResult<&'a Value> 
     }
     let data = response.get("data").unwrap_or(response);
     if !data.is_object() {
-        return Err(AppError::new(code, "抖音二维码登录服务未返回有效数据")
-            .with_site("douyin")
-            .retryable());
+        return Err(SITE.invalid_response(code));
     }
     Ok(data)
 }
 
 fn required_text(data: &Value, keys: &[&str], label: &str) -> AppResult<String> {
-    optional_text(data, keys).ok_or_else(|| {
-        AppError::new(
-            "douyin_qr_response_invalid",
+    // 抖音的错误文案需要指出缺失的字段（如「二维码地址」），
+    // 因此不能使用共享 `QrSite::invalid_response` 的固定文案。
+    qr::optional_text(data, keys, MAX_QR_PAYLOAD_LEN).ok_or_else(|| {
+        SITE.retryable_error(
+            "response_invalid",
             format!("抖音二维码服务未返回有效{label}"),
         )
-        .with_site("douyin")
-        .retryable()
-    })
-}
-
-fn optional_text(data: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        let value = data.get(*key)?.as_str()?.trim();
-        (!value.is_empty() && value.len() <= MAX_QR_PAYLOAD_LEN && !value.contains(['\r', '\n']))
-            .then(|| value.to_string())
     })
 }
 
@@ -388,79 +318,6 @@ fn cookie_from_jar(jar: &Arc<Jar>) -> Option<String> {
     has_login_session.then(|| value.to_string())
 }
 
-fn is_trusted_douyin_url(url: &Url) -> bool {
-    if url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.to_ascii_lowercase();
-    host == "douyin.com" || host.ends_with(".douyin.com")
-}
-
-fn can_follow_redirect(url: &Url, prior_redirects: usize) -> bool {
-    prior_redirects < MAX_REDIRECTS && is_trusted_douyin_url(url)
-}
-
-fn is_valid_session_key(value: &str) -> bool {
-    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn insert_session(key: String, session: QrSession) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("douyin_qr_session", "二维码登录会话初始化失败，请重试").with_site("douyin")
-    })?;
-    prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS
-        && let Some(oldest_key) = sessions
-            .iter()
-            .min_by_key(|(_, session)| session.created_at)
-            .map(|(key, _)| key.clone())
-    {
-        sessions.remove(&oldest_key);
-    }
-    sessions.insert(key, session);
-    Ok(())
-}
-
-fn get_session(key: &str) -> AppResult<QrSession> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("douyin_qr_session", "二维码登录会话读取失败，请重试").with_site("douyin")
-    })?;
-    prune_sessions(&mut sessions);
-    sessions.get(key).cloned().ok_or_else(|| {
-        AppError::new(
-            "douyin_qr_expired",
-            "二维码登录会话已过期，请刷新二维码后重试",
-        )
-        .with_site("douyin")
-    })
-}
-
-fn remove_session(key: &str) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("douyin_qr_session", "二维码登录会话清理失败，请重试").with_site("douyin")
-    })?;
-    sessions.remove(key);
-    Ok(())
-}
-
-fn prune_sessions(sessions: &mut HashMap<String, QrSession>) {
-    let now = Instant::now();
-    sessions.retain(|_, session| now.duration_since(session.created_at) < SESSION_TTL);
-}
-
-fn qr_network_error(code: &str) -> AppError {
-    AppError::new(code, "无法连接抖音二维码登录服务，请检查网络后重试")
-        .with_site("douyin")
-        .retryable()
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
@@ -472,9 +329,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PollState, build_login_client, can_follow_redirect, cookie_from_jar, is_trusted_douyin_url,
-        is_valid_session_key, parse_json_body, parse_poll_response, parse_start_response,
+        PollState, SITE, TRUSTED_SUFFIXES, cookie_from_jar, parse_json_body, parse_poll_response,
+        parse_start_response,
     };
+    use crate::account::qr;
 
     #[test]
     fn reports_a_browser_verification_page_without_echoing_its_contents() {
@@ -507,7 +365,14 @@ mod tests {
         });
 
         let proxy = format!("http://{address}");
-        let client = build_login_client(Arc::new(Jar::default()), Some(&proxy)).unwrap();
+        let client = qr::build_login_client(
+            SITE,
+            Arc::new(Jar::default()),
+            TRUSTED_SUFFIXES,
+            false,
+            Some(&proxy),
+        )
+        .unwrap();
         let response = client
             .get("http://sso.douyin.invalid/get_qrcode/")
             .send()
@@ -612,20 +477,25 @@ mod tests {
 
     #[test]
     fn only_https_douyin_redirects_are_trusted() {
-        assert!(is_trusted_douyin_url(
-            &Url::parse("https://sso.douyin.com/login").unwrap()
+        assert!(qr::is_trusted_url(
+            &Url::parse("https://sso.douyin.com/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyin_url(
-            &Url::parse("http://sso.douyin.com/login").unwrap()
+        assert!(!qr::is_trusted_url(
+            &Url::parse("http://sso.douyin.com/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyin_url(
-            &Url::parse("https://douyin.com.example.test/login").unwrap()
+        assert!(!qr::is_trusted_url(
+            &Url::parse("https://douyin.com.example.test/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyin_url(
-            &Url::parse("https://user@www.douyin.com/login").unwrap()
+        assert!(!qr::is_trusted_url(
+            &Url::parse("https://user@www.douyin.com/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyin_url(
-            &Url::parse("https://www.douyin.com:8443/login").unwrap()
+        assert!(!qr::is_trusted_url(
+            &Url::parse("https://www.douyin.com:8443/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
     }
 
@@ -634,15 +504,8 @@ mod tests {
         let trusted = Url::parse("https://sso.douyin.com/login").unwrap();
         let untrusted = Url::parse("https://example.test/login").unwrap();
 
-        assert!(can_follow_redirect(&trusted, 0));
-        assert!(!can_follow_redirect(&trusted, 8));
-        assert!(!can_follow_redirect(&untrusted, 0));
-    }
-
-    #[test]
-    fn session_handles_must_be_opaque_uuid_hex() {
-        assert!(is_valid_session_key("2b5c33979f4d44efae6a3b011fe7db12"));
-        assert!(!is_valid_session_key("not-a-session-key"));
-        assert!(!is_valid_session_key("2b5c33979f4d44efae6a3b011fe7db1"));
+        assert!(qr::can_follow_redirect(&trusted, 0, TRUSTED_SUFFIXES));
+        assert!(!qr::can_follow_redirect(&trusted, 8, TRUSTED_SUFFIXES));
+        assert!(!qr::can_follow_redirect(&untrusted, 0, TRUSTED_SUFFIXES));
     }
 }

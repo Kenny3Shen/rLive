@@ -6,9 +6,7 @@
 //! 都保持在进程内。只有校验通过的成功 Cookie header 才会返回给账号命令
 //! 用于本地持久化。
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, ORIGIN, REFERER, USER_AGENT};
@@ -16,7 +14,19 @@ use reqwest::{Client, Url};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::account::qr::{
+    build_login_client, is_trusted_url, is_valid_session_key, optional_text, value_as_i64,
+    QrSessionStore, QrSite,
+};
 use crate::error::{AppError, AppResult};
+
+pub use crate::account::qr::{QrLoginPoll, QrLoginStart};
+
+const SITE: QrSite = QrSite {
+    id: "douyu",
+    display: "斗鱼",
+};
+const TRUSTED_SUFFIXES: &[&str] = &["douyu.com"];
 
 const PASSPORT_ORIGIN: &str = "https://passport.douyu.com/";
 const WEB_ORIGIN: &str = "https://www.douyu.com/";
@@ -24,46 +34,23 @@ const QR_GENERATE_URL: &str = "https://passport.douyu.com/scan/generateCode";
 const QR_POLL_URL: &str = "https://passport.douyu.com/japi/scan/auth";
 const JSONP_CALLBACK: &str = "rlive_douyu_qr_callback";
 const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
-const MAX_ACTIVE_SESSIONS: usize = 16;
-const MAX_REDIRECTS: usize = 8;
 const MAX_QR_PAYLOAD_LEN: usize = 8 * 1024;
 const MAX_SCAN_CODE_LEN: usize = 512;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
-
-/// 客户端渲染斗鱼登录二维码所需的数据。
-pub struct QrLoginStart {
-    pub qr_code_url: String,
-    /// 不透明的进程内句柄，而不是斗鱼真正的 scan code。
-    pub qr_key: String,
-}
-
-/// 一次扫码轮询结果。Cookie 内容绝不跨出 webview 边界。
-pub enum QrLoginPoll {
-    Pending,
-    Scanned,
-    Expired,
-    Success { cookie: String },
-}
 
 #[derive(Clone)]
 struct QrSession {
     scan_code: String,
     client: Client,
     jar: Arc<Jar>,
-    created_at: Instant,
 }
 
-static ACTIVE_SESSIONS: OnceLock<Mutex<HashMap<String, QrSession>>> = OnceLock::new();
-
-fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
-    ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static DOUYU_SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 /// 启动斗鱼公开的 Web 扫码流程。
 pub async fn start() -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(Arc::clone(&jar))?;
+    let client = build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, None)?;
     let response = client
         .post(QR_GENERATE_URL)
         .form(&[("client_id", "1"), ("isMultiAccount", "0")])
@@ -75,20 +62,19 @@ pub async fn start() -> AppResult<QrLoginStart> {
         .header(USER_AGENT, USER_AGENT_VALUE)
         .send()
         .await
-        .map_err(|_| qr_network_error("douyu_qr_generate"))?;
+        .map_err(|_| SITE.network_error("douyu_qr_generate"))?;
     let body = parse_json_response(response, "douyu_qr_generate").await?;
     let (qr_code_url, scan_code) = parse_start_response(&body)?;
 
     // UI 必然会拿到用于渲染的二维码内容，但 scan code 从不作为单独的值返回。
     // 它始终与引导用的 Cookie jar 一起留在本进程内。
     let qr_key = Uuid::new_v4().simple().to_string();
-    insert_session(
+    DOUYU_SESSIONS.insert(
         qr_key.clone(),
         QrSession {
             scan_code,
             client,
             jar,
-            created_at: Instant::now(),
         },
     )?;
 
@@ -101,13 +87,13 @@ pub async fn start() -> AppResult<QrLoginStart> {
 /// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
     if !is_valid_session_key(qr_key) {
-        return Err(
-            AppError::new("douyu_qr_invalid_key", "二维码登录凭据无效，请刷新二维码")
-                .with_site("douyu"),
-        );
+        return Err(SITE.error(
+            "invalid_key",
+            "二维码登录凭据无效，请刷新二维码",
+        ));
     }
 
-    let session = get_session(qr_key)?;
+    let session = DOUYU_SESSIONS.get(qr_key)?;
     let now_ms = chrono::Utc::now().timestamp_millis().to_string();
     let response = session
         .client
@@ -123,47 +109,22 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
         .header(USER_AGENT, USER_AGENT_VALUE)
         .send()
         .await
-        .map_err(|_| qr_network_error("douyu_qr_poll"))?;
+        .map_err(|_| SITE.network_error("douyu_qr_poll"))?;
     let body = parse_json_response(response, "douyu_qr_poll").await?;
 
     match parse_poll_response(&body)? {
         PollState::Pending => Ok(QrLoginPoll::Pending),
         PollState::Scanned => Ok(QrLoginPoll::Scanned),
         PollState::Expired => {
-            remove_session(qr_key)?;
+            DOUYU_SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Expired)
         }
         PollState::Success { completion_url } => {
             let cookie = finish_login(&session, &completion_url).await?;
-            remove_session(qr_key)?;
+            DOUYU_SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Success { cookie })
         }
     }
-}
-
-fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
-    Client::builder()
-        .use_native_tls()
-        .cookie_provider(jar)
-        // 扫码认证携带的是临时登录会话。不要为它使用进程级 HTTP(S) 代理
-        // 或应用的浏览代理。
-        .no_proxy()
-        .timeout(Duration::from_secs(20))
-        .connect_timeout(Duration::from_secs(10))
-        // 登录完成过程只允许在斗鱼自有的 HTTPS 主机之间跳转，
-        // 这样服务端返回的 URL 就无法把该客户端变成
-        // 指向任意目标的已认证请求。
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if can_follow_redirect(attempt.url(), attempt.previous().len()) {
-                attempt.follow()
-            } else {
-                attempt.stop()
-            }
-        }))
-        .build()
-        .map_err(|_| {
-            AppError::new("douyu_qr_client", "二维码登录网络客户端初始化失败").with_site("douyu")
-        })
 }
 
 async fn parse_json_response(response: reqwest::Response, code: &str) -> AppResult<Value> {
@@ -185,23 +146,19 @@ fn parse_start_response(response: &Value) -> AppResult<(String, String)> {
     ensure_api_success(response, "douyu_qr_generate")?;
     let data = response
         .get("data")
-        .ok_or_else(|| invalid_response("douyu_qr_generate"))?;
+        .ok_or_else(|| SITE.invalid_response("douyu_qr_generate"))?;
     let qr_code_url = required_text(data, &["url", "qr_url", "qrcode_url"], MAX_QR_PAYLOAD_LEN)?;
     let qr_url = parse_trusted_douyu_url(&qr_code_url).ok_or_else(|| {
-        AppError::new(
-            "douyu_qr_response_invalid",
+        SITE.retryable_error(
+            "response_invalid",
             "斗鱼二维码服务返回了不受信任的二维码地址",
         )
-        .with_site("douyu")
-        .retryable()
     })?;
-    if !is_trusted_douyu_url(&qr_url) {
-        return Err(AppError::new(
-            "douyu_qr_response_invalid",
+    if !is_trusted_url(&qr_url, TRUSTED_SUFFIXES) {
+        return Err(SITE.retryable_error(
+            "response_invalid",
             "斗鱼二维码服务返回了不受信任的二维码地址",
-        )
-        .with_site("douyu")
-        .retryable());
+        ));
     }
     let scan_code = required_text(data, &["code", "scan_code"], MAX_SCAN_CODE_LEN)?;
     Ok((qr_url.to_string(), scan_code))
@@ -215,7 +172,7 @@ enum PollState {
 }
 
 fn parse_poll_response(response: &Value) -> AppResult<PollState> {
-    let error = api_error_code(response).ok_or_else(|| invalid_response("douyu_qr_poll"))?;
+    let error = api_error_code(response).ok_or_else(|| SITE.invalid_response("douyu_qr_poll"))?;
     match error {
         // 已对照当前公开 passport 页面确认：`-2` 表示 App 尚未扫码；
         // `1` 表示已扫码、等待确认；`-1` 表示二维码已过期或无效。
@@ -225,34 +182,29 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
         0 => {
             let data = response
                 .get("data")
-                .ok_or_else(|| invalid_response("douyu_qr_poll"))?;
+                .ok_or_else(|| SITE.invalid_response("douyu_qr_poll"))?;
             let completion_url = required_text(data, &["url", "login_url"], MAX_QR_PAYLOAD_LEN)?;
             Ok(PollState::Success { completion_url })
         }
-        _ => Err(
-            AppError::new("douyu_qr_poll", "二维码登录状态异常，请刷新二维码后重试")
-                .with_site("douyu")
-                .retryable(),
-        ),
+        _ => Err(SITE.retryable_error(
+            "poll",
+            "二维码登录状态异常，请刷新二维码后重试",
+        )),
     }
 }
 
 async fn finish_login(session: &QrSession, completion_url: &str) -> AppResult<String> {
     let completion_url = parse_trusted_douyu_url(completion_url).ok_or_else(|| {
-        AppError::new(
-            "douyu_qr_redirect_invalid",
+        SITE.retryable_error(
+            "redirect_invalid",
             "斗鱼登录跳转地址无效或不受信任，请刷新二维码后重试",
         )
-        .with_site("douyu")
-        .retryable()
     })?;
-    if !is_trusted_douyu_url(&completion_url) {
-        return Err(AppError::new(
-            "douyu_qr_redirect_invalid",
+    if !is_trusted_url(&completion_url, TRUSTED_SUFFIXES) {
+        return Err(SITE.retryable_error(
+            "redirect_invalid",
             "斗鱼登录跳转地址无效或不受信任，请刷新二维码后重试",
-        )
-        .with_site("douyu")
-        .retryable());
+        ));
     }
 
     let completion_url = with_jsonp_callback(completion_url);
@@ -268,32 +220,27 @@ async fn finish_login(session: &QrSession, completion_url: &str) -> AppResult<St
         .header(USER_AGENT, USER_AGENT_VALUE)
         .send()
         .await
-        .map_err(|_| qr_network_error("douyu_qr_complete"))?;
+        .map_err(|_| SITE.network_error("douyu_qr_complete"))?;
     if !response.status().is_success() {
-        return Err(
-            AppError::new("douyu_qr_complete", "斗鱼登录确认失败，请刷新二维码后重试")
-                .with_site("douyu")
-                .retryable(),
-        );
+        return Err(SITE.retryable_error(
+            "complete",
+            "斗鱼登录确认失败，请刷新二维码后重试",
+        ));
     }
     let body = response.text().await.map_err(|_| {
-        AppError::new(
-            "douyu_qr_complete",
+        SITE.retryable_error(
+            "complete",
             "斗鱼登录确认响应读取失败，请刷新二维码后重试",
         )
-        .with_site("douyu")
-        .retryable()
     })?;
     let response = parse_json_or_jsonp(&body, JSONP_CALLBACK)?;
     ensure_api_success(&response, "douyu_qr_complete")?;
 
     cookie_from_jar(&session.jar).ok_or_else(|| {
-        AppError::new(
-            "douyu_qr_cookie_missing",
+        SITE.retryable_error(
+            "cookie_missing",
             "登录已确认，但未取得可用 Cookie；请刷新二维码后重试",
         )
-        .with_site("douyu")
-        .retryable()
     })
 }
 
@@ -305,7 +252,7 @@ fn ensure_api_success(response: &Value, code: &str) -> AppResult<()> {
                 .with_site("douyu")
                 .retryable(),
         ),
-        None => Err(invalid_response(code)),
+        None => Err(SITE.invalid_response(code)),
     }
 }
 
@@ -315,23 +262,9 @@ fn api_error_code(response: &Value) -> Option<i64> {
         .find_map(|key| value_as_i64(response.get(*key)?))
 }
 
-fn value_as_i64(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
-}
-
 fn required_text(data: &Value, keys: &[&str], max_len: usize) -> AppResult<String> {
-    optional_text(data, keys, max_len).ok_or_else(|| invalid_response("douyu_qr_response_invalid"))
-}
-
-fn optional_text(data: &Value, keys: &[&str], max_len: usize) -> Option<String> {
-    keys.iter().find_map(|key| {
-        let value = data.get(*key)?.as_str()?.trim();
-        (!value.is_empty() && value.len() <= max_len && !value.contains(['\r', '\n']))
-            .then(|| value.to_string())
-    })
+    optional_text(data, keys, max_len)
+        .ok_or_else(|| SITE.invalid_response("douyu_qr_response_invalid"))
 }
 
 fn parse_json_or_jsonp(body: &str, callback: &str) -> AppResult<Value> {
@@ -351,9 +284,7 @@ fn parse_json_or_jsonp(body: &str, callback: &str) -> AppResult<Value> {
     });
     json.and_then(|json| serde_json::from_str(json).ok())
         .ok_or_else(|| {
-            AppError::new("douyu_qr_complete", "斗鱼登录确认服务返回了无法识别的数据")
-                .with_site("douyu")
-                .retryable()
+            SITE.retryable_error("complete", "斗鱼登录确认服务返回了无法识别的数据")
         })
 }
 
@@ -404,85 +335,6 @@ fn with_jsonp_callback(mut url: Url) -> Url {
     url
 }
 
-fn is_trusted_douyu_url(url: &Url) -> bool {
-    if url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.to_ascii_lowercase();
-    host == "douyu.com" || host.ends_with(".douyu.com")
-}
-
-fn can_follow_redirect(url: &Url, prior_redirects: usize) -> bool {
-    prior_redirects < MAX_REDIRECTS && is_trusted_douyu_url(url)
-}
-
-fn is_valid_session_key(value: &str) -> bool {
-    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn insert_session(key: String, session: QrSession) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("douyu_qr_session", "二维码登录会话初始化失败，请重试").with_site("douyu")
-    })?;
-    prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS
-        && let Some(oldest_key) = sessions
-            .iter()
-            .min_by_key(|(_, session)| session.created_at)
-            .map(|(key, _)| key.clone())
-    {
-        sessions.remove(&oldest_key);
-    }
-    sessions.insert(key, session);
-    Ok(())
-}
-
-fn get_session(key: &str) -> AppResult<QrSession> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("douyu_qr_session", "二维码登录会话读取失败，请重试").with_site("douyu")
-    })?;
-    prune_sessions(&mut sessions);
-    sessions.get(key).cloned().ok_or_else(|| {
-        AppError::new(
-            "douyu_qr_expired",
-            "二维码登录会话已过期，请刷新二维码后重试",
-        )
-        .with_site("douyu")
-    })
-}
-
-fn remove_session(key: &str) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("douyu_qr_session", "二维码登录会话清理失败，请重试").with_site("douyu")
-    })?;
-    sessions.remove(key);
-    Ok(())
-}
-
-fn prune_sessions(sessions: &mut HashMap<String, QrSession>) {
-    let now = Instant::now();
-    sessions.retain(|_, session| now.duration_since(session.created_at) < SESSION_TTL);
-}
-
-fn invalid_response(code: &str) -> AppError {
-    AppError::new(code, "斗鱼二维码登录服务未返回有效数据")
-        .with_site("douyu")
-        .retryable()
-}
-
-fn qr_network_error(code: &str) -> AppError {
-    AppError::new(code, "无法连接斗鱼二维码登录服务，请检查网络后重试")
-        .with_site("douyu")
-        .retryable()
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -492,10 +344,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PollState, can_follow_redirect, cookie_from_jar, is_trusted_douyu_url,
-        is_valid_session_key, parse_json_or_jsonp, parse_poll_response, parse_start_response,
-        with_jsonp_callback,
+        PollState, TRUSTED_SUFFIXES, cookie_from_jar, parse_json_or_jsonp, parse_poll_response,
+        parse_start_response, with_jsonp_callback,
     };
+    use crate::account::qr::{can_follow_redirect, is_trusted_url};
 
     #[test]
     fn parses_current_public_qr_payload() {
@@ -627,20 +479,25 @@ mod tests {
 
     #[test]
     fn only_https_douyu_redirects_are_trusted() {
-        assert!(is_trusted_douyu_url(
-            &Url::parse("https://passport.douyu.com/login").unwrap()
+        assert!(is_trusted_url(
+            &Url::parse("https://passport.douyu.com/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyu_url(
-            &Url::parse("http://passport.douyu.com/login").unwrap()
+        assert!(!is_trusted_url(
+            &Url::parse("http://passport.douyu.com/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyu_url(
-            &Url::parse("https://douyu.com.example.test/login").unwrap()
+        assert!(!is_trusted_url(
+            &Url::parse("https://douyu.com.example.test/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyu_url(
-            &Url::parse("https://user@www.douyu.com/login").unwrap()
+        assert!(!is_trusted_url(
+            &Url::parse("https://user@www.douyu.com/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
-        assert!(!is_trusted_douyu_url(
-            &Url::parse("https://www.douyu.com:8443/login").unwrap()
+        assert!(!is_trusted_url(
+            &Url::parse("https://www.douyu.com:8443/login").unwrap(),
+            TRUSTED_SUFFIXES
         ));
     }
 
@@ -649,15 +506,8 @@ mod tests {
         let trusted = Url::parse("https://passport.douyu.com/login").unwrap();
         let untrusted = Url::parse("https://example.test/login").unwrap();
 
-        assert!(can_follow_redirect(&trusted, 0));
-        assert!(!can_follow_redirect(&trusted, 8));
-        assert!(!can_follow_redirect(&untrusted, 0));
-    }
-
-    #[test]
-    fn session_handles_must_be_opaque_uuid_hex() {
-        assert!(is_valid_session_key("2b5c33979f4d44efae6a3b011fe7db12"));
-        assert!(!is_valid_session_key("not-a-session-key"));
-        assert!(!is_valid_session_key("2b5c33979f4d44efae6a3b011fe7db1"));
+        assert!(can_follow_redirect(&trusted, 0, TRUSTED_SUFFIXES));
+        assert!(!can_follow_redirect(&trusted, 8, TRUSTED_SUFFIXES));
+        assert!(!can_follow_redirect(&untrusted, 0, TRUSTED_SUFFIXES));
     }
 }

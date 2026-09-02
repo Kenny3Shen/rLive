@@ -9,10 +9,11 @@
 //! 用进程内的 cookie jar 抓取，以便保存最终的 Cookie header 供发送弹幕使用。
 //! 上游 QR id 绝不会作为单独的值离开本进程；UI 只拿到本地的不透明句柄
 //! 以及渲染二维码所需的图片 URL。
+//!
+//! 会话表、客户端构建、可信主机判定与文本提取由共享的 `super::qr` 提供，
+//! 这里只保留虎牙 UDB 协议本身。
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT};
@@ -20,7 +21,10 @@ use reqwest::{Client, Url};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::account::qr::{self, QrSessionStore, QrSite};
 use crate::error::{AppError, AppResult};
+
+pub use crate::account::qr::{QrLoginPoll, QrLoginStart};
 
 const LOGIN_ORIGIN: &str = "https://udblgn.huya.com";
 const WEB_ORIGIN: &str = "https://www.huya.com/";
@@ -36,47 +40,29 @@ const BY_PASS: &str = "3";
 const URI_GET_QR_ID: &str = "70001";
 const URI_TRY_QR_LOGIN: &str = "70003";
 
-const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
-const MAX_ACTIVE_SESSIONS: usize = 16;
-const MAX_REDIRECTS: usize = 8;
 const MAX_QR_ID_LEN: usize = 128;
 const MAX_COOKIE_LEN: usize = 16 * 1024;
 const MAX_DOMAIN_URLS: usize = 16;
 
-/// 客户端渲染虎牙登录二维码所需的数据。
-pub struct QrLoginStart {
-    /// 二维码 PNG 的 HTTPS 图片地址。设置界面用 `<img>` 渲染它。
-    pub qr_code_url: String,
-    /// 不透明的进程内句柄，而不是虎牙真正的 `qrId`。
-    pub qr_key: String,
-}
-
-/// 一次扫码轮询结果。Cookie 内容绝不跨出 webview 边界。
-pub enum QrLoginPoll {
-    Pending,
-    Scanned,
-    Expired,
-    Success { cookie: String },
-}
+const SITE: QrSite = QrSite {
+    id: "huya",
+    display: "虎牙",
+};
+const TRUSTED_SUFFIXES: &[&str] = &["huya.com", "yy.com"];
 
 #[derive(Clone)]
 struct QrSession {
     qr_id: String,
     client: Client,
     jar: Arc<Jar>,
-    created_at: Instant,
 }
 
-static ACTIVE_SESSIONS: OnceLock<Mutex<HashMap<String, QrSession>>> = OnceLock::new();
-
-fn active_sessions() -> &'static Mutex<HashMap<String, QrSession>> {
-    ACTIVE_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 /// 启动虎牙公开的 Web 扫码流程。
 pub async fn start() -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(Arc::clone(&jar))?;
+    let client = qr::build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, None)?;
     let body = udb_request(
         URI_GET_QR_ID,
         json!({
@@ -95,19 +81,18 @@ pub async fn start() -> AppResult<QrLoginStart> {
         .json(&body)
         .send()
         .await
-        .map_err(|_| qr_network_error("huya_qr_generate"))?;
+        .map_err(|_| SITE.network_error("huya_qr_generate"))?;
     let response = parse_json_response(response, "huya_qr_generate").await?;
     let qr_id = parse_qr_id(&response)?;
     let qr_code_url = format!("{GET_QR_IMG_PATH}?k={qr_id}");
 
     let qr_key = Uuid::new_v4().simple().to_string();
-    insert_session(
+    SESSIONS.insert(
         qr_key.clone(),
         QrSession {
             qr_id,
             client,
             jar,
-            created_at: Instant::now(),
         },
     )?;
 
@@ -119,14 +104,11 @@ pub async fn start() -> AppResult<QrLoginStart> {
 
 /// 轮询先前发起的扫码登录流程。
 pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
-    if !is_valid_session_key(qr_key) {
-        return Err(
-            AppError::new("huya_qr_invalid_key", "二维码登录凭据无效，请刷新二维码")
-                .with_site("huya"),
-        );
+    if !qr::is_valid_session_key(qr_key) {
+        return Err(SITE.error("invalid_key", "二维码登录凭据无效，请刷新二维码"));
     }
 
-    let session = get_session(qr_key)?;
+    let session = SESSIONS.get(qr_key)?;
     let body = udb_request(
         URI_TRY_QR_LOGIN,
         json!({
@@ -148,51 +130,28 @@ pub async fn poll(qr_key: &str) -> AppResult<QrLoginPoll> {
         .json(&body)
         .send()
         .await
-        .map_err(|_| qr_network_error("huya_qr_poll"))?;
+        .map_err(|_| SITE.network_error("huya_qr_poll"))?;
     let response = parse_json_response(response, "huya_qr_poll").await?;
 
     match parse_poll_response(&response)? {
         PollState::Pending => Ok(QrLoginPoll::Pending),
         PollState::Scanned => Ok(QrLoginPoll::Scanned),
         PollState::Expired => {
-            remove_session(qr_key)?;
+            SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Expired)
         }
         PollState::Success { domain_urls } => {
             finish_login(&session, &domain_urls).await?;
             let cookie = cookie_from_jar(&session.jar).ok_or_else(|| {
-                AppError::new(
-                    "huya_qr_cookie_missing",
+                SITE.retryable_error(
+                    "cookie_missing",
                     "登录已确认，但未取得可用 Cookie；请刷新二维码后重试",
                 )
-                .with_site("huya")
-                .retryable()
             })?;
-            remove_session(qr_key)?;
+            SESSIONS.remove(qr_key)?;
             Ok(QrLoginPoll::Success { cookie })
         }
     }
-}
-
-fn build_login_client(jar: Arc<Jar>) -> AppResult<Client> {
-    Client::builder()
-        .use_native_tls()
-        .cookie_provider(jar)
-        // 扫码认证携带的是临时登录会话。不要让它走应用的浏览代理。
-        .no_proxy()
-        .timeout(Duration::from_secs(20))
-        .connect_timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if can_follow_redirect(attempt.url(), attempt.previous().len()) {
-                attempt.follow()
-            } else {
-                attempt.stop()
-            }
-        }))
-        .build()
-        .map_err(|_| {
-            AppError::new("huya_qr_client", "二维码登录网络客户端初始化失败").with_site("huya")
-        })
 }
 
 fn udb_request(uri: &str, data: Value) -> Value {
@@ -229,10 +188,10 @@ fn parse_qr_id(response: &Value) -> AppResult<String> {
     ensure_api_success(response, "huya_qr_generate")?;
     let data = response
         .get("data")
-        .ok_or_else(|| invalid_response("huya_qr_generate"))?;
+        .ok_or_else(|| SITE.invalid_response("huya_qr_generate"))?;
     let qr_id = required_text(data, &["qrId", "qr_id"], MAX_QR_ID_LEN)?;
     if !is_safe_qr_id(&qr_id) {
-        return Err(invalid_response("huya_qr_generate"));
+        return Err(SITE.invalid_response("huya_qr_generate"));
     }
     Ok(qr_id)
 }
@@ -250,8 +209,8 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
     ensure_api_success(response, "huya_qr_poll")?;
     let data = response
         .get("data")
-        .ok_or_else(|| invalid_response("huya_qr_poll"))?;
-    let stage = value_as_i64(data.get("stage").unwrap_or(&Value::Null)).unwrap_or(-1);
+        .ok_or_else(|| SITE.invalid_response("huya_qr_poll"))?;
+    let stage = qr::value_as_i64(data.get("stage").unwrap_or(&Value::Null)).unwrap_or(-1);
     match stage {
         0 | 4 => Ok(PollState::Pending),
         1 => Ok(PollState::Scanned),
@@ -260,16 +219,8 @@ fn parse_poll_response(response: &Value) -> AppResult<PollState> {
             Ok(PollState::Success { domain_urls })
         }
         5..=7 => Ok(PollState::Expired),
-        8 => Err(
-            AppError::new("huya_qr_account", "扫码账号异常，请更换账号后重试")
-                .with_site("huya")
-                .retryable(),
-        ),
-        _ => Err(
-            AppError::new("huya_qr_poll", "二维码登录状态异常，请刷新二维码后重试")
-                .with_site("huya")
-                .retryable(),
-        ),
+        8 => Err(SITE.retryable_error("account", "扫码账号异常，请更换账号后重试")),
+        _ => Err(SITE.retryable_error("poll", "二维码登录状态异常，请刷新二维码后重试")),
     }
 }
 
@@ -287,7 +238,7 @@ fn domain_url_list(data: &Value) -> Vec<String> {
                 return None;
             }
             let url = parse_trusted_huya_url(raw)?;
-            is_trusted_huya_url(&url).then(|| url.to_string())
+            qr::is_trusted_url(&url, TRUSTED_SUFFIXES).then(|| url.to_string())
         })
         .take(MAX_DOMAIN_URLS)
         .collect()
@@ -298,20 +249,16 @@ async fn finish_login(session: &QrSession, domain_urls: &[String]) -> AppResult<
     // yyuid / udb_* 字段。这里先限制主机与协议。
     for raw in domain_urls {
         let url = parse_trusted_huya_url(raw).ok_or_else(|| {
-            AppError::new(
-                "huya_qr_redirect_invalid",
+            SITE.retryable_error(
+                "redirect_invalid",
                 "虎牙登录跳转地址无效或不受信任，请刷新二维码后重试",
             )
-            .with_site("huya")
-            .retryable()
         })?;
-        if !is_trusted_huya_url(&url) {
-            return Err(AppError::new(
-                "huya_qr_redirect_invalid",
+        if !qr::is_trusted_url(&url, TRUSTED_SUFFIXES) {
+            return Err(SITE.retryable_error(
+                "redirect_invalid",
                 "虎牙登录跳转地址无效或不受信任，请刷新二维码后重试",
-            )
-            .with_site("huya")
-            .retryable());
+            ));
         }
         let response = session
             .client
@@ -325,7 +272,7 @@ async fn finish_login(session: &QrSession, domain_urls: &[String]) -> AppResult<
             .header(USER_AGENT, USER_AGENT_VALUE)
             .send()
             .await
-            .map_err(|_| qr_network_error("huya_qr_complete"))?;
+            .map_err(|_| SITE.network_error("huya_qr_complete"))?;
         // 刻意丢弃响应 body，只有 Set-Cookie 的副作用有意义。
         let _ = response.bytes().await;
     }
@@ -333,34 +280,20 @@ async fn finish_login(session: &QrSession, domain_urls: &[String]) -> AppResult<
 }
 
 fn ensure_api_success(response: &Value, code: &str) -> AppResult<()> {
-    match value_as_i64(response.get("returnCode").unwrap_or(&Value::Null)) {
+    match qr::value_as_i64(response.get("returnCode").unwrap_or(&Value::Null)) {
         Some(0) => Ok(()),
         Some(_) => Err(
             AppError::new(code, "虎牙二维码登录服务拒绝了请求，请刷新二维码后重试")
                 .with_site("huya")
                 .retryable(),
         ),
-        None => Err(invalid_response(code)),
+        None => Err(SITE.invalid_response(code)),
     }
 }
 
-fn value_as_i64(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
-}
-
 fn required_text(data: &Value, keys: &[&str], max_len: usize) -> AppResult<String> {
-    optional_text(data, keys, max_len).ok_or_else(|| invalid_response("huya_qr_response_invalid"))
-}
-
-fn optional_text(data: &Value, keys: &[&str], max_len: usize) -> Option<String> {
-    keys.iter().find_map(|key| {
-        let value = data.get(*key)?.as_str()?.trim();
-        (!value.is_empty() && value.len() <= max_len && !value.contains(['\r', '\n']))
-            .then(|| value.to_string())
-    })
+    qr::optional_text(data, keys, max_len)
+        .ok_or_else(|| SITE.invalid_response("huya_qr_response_invalid"))
 }
 
 fn cookie_from_jar(jar: &Arc<Jar>) -> Option<String> {
@@ -428,32 +361,6 @@ fn parse_trusted_huya_url(value: &str) -> Option<Url> {
     }
 }
 
-fn is_trusted_huya_url(url: &Url) -> bool {
-    if url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.to_ascii_lowercase();
-    host == "huya.com"
-        || host.ends_with(".huya.com")
-        || host == "yy.com"
-        || host.ends_with(".yy.com")
-}
-
-fn can_follow_redirect(url: &Url, prior_redirects: usize) -> bool {
-    prior_redirects < MAX_REDIRECTS && is_trusted_huya_url(url)
-}
-
-fn is_valid_session_key(value: &str) -> bool {
-    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 fn is_safe_qr_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_QR_ID_LEN
@@ -462,70 +369,15 @@ fn is_safe_qr_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn insert_session(key: String, session: QrSession) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("huya_qr_session", "二维码登录会话初始化失败，请重试").with_site("huya")
-    })?;
-    prune_sessions(&mut sessions);
-    if sessions.len() >= MAX_ACTIVE_SESSIONS
-        && let Some(oldest_key) = sessions
-            .iter()
-            .min_by_key(|(_, session)| session.created_at)
-            .map(|(key, _)| key.clone())
-    {
-        sessions.remove(&oldest_key);
-    }
-    sessions.insert(key, session);
-    Ok(())
-}
-
-fn get_session(key: &str) -> AppResult<QrSession> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("huya_qr_session", "二维码登录会话读取失败，请重试").with_site("huya")
-    })?;
-    prune_sessions(&mut sessions);
-    sessions.get(key).cloned().ok_or_else(|| {
-        AppError::new(
-            "huya_qr_expired",
-            "二维码登录会话已过期，请刷新二维码后重试",
-        )
-        .with_site("huya")
-    })
-}
-
-fn remove_session(key: &str) -> AppResult<()> {
-    let mut sessions = active_sessions().lock().map_err(|_| {
-        AppError::new("huya_qr_session", "二维码登录会话清理失败，请重试").with_site("huya")
-    })?;
-    sessions.remove(key);
-    Ok(())
-}
-
-fn prune_sessions(sessions: &mut HashMap<String, QrSession>) {
-    let now = Instant::now();
-    sessions.retain(|_, session| now.duration_since(session.created_at) < SESSION_TTL);
-}
-
-fn invalid_response(code: &str) -> AppError {
-    AppError::new(code, "虎牙二维码登录服务未返回有效数据")
-        .with_site("huya")
-        .retryable()
-}
-
-fn qr_network_error(code: &str) -> AppError {
-    AppError::new(code, "无法连接虎牙二维码登录服务，请检查网络后重试")
-        .with_site("huya")
-        .retryable()
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
-        PollState, has_send_credentials, is_safe_qr_id, is_trusted_huya_url, is_valid_session_key,
-        parse_poll_response, parse_qr_id, parse_trusted_huya_url,
+        PollState, TRUSTED_SUFFIXES, has_send_credentials, is_safe_qr_id, parse_poll_response,
+        parse_qr_id, parse_trusted_huya_url,
     };
+    use crate::account::qr::is_trusted_url;
 
     #[test]
     fn parses_current_public_qr_id_payload() {
@@ -591,11 +443,12 @@ mod tests {
     #[test]
     fn trusts_only_huya_and_yy_https_hosts() {
         let ok = parse_trusted_huya_url("https://udblgn.huya.com/web/x").unwrap();
-        assert!(is_trusted_huya_url(&ok));
+        assert!(is_trusted_url(&ok, TRUSTED_SUFFIXES));
         let bad = parse_trusted_huya_url("https://not-huya.example/x").unwrap();
-        assert!(!is_trusted_huya_url(&bad));
-        assert!(!is_trusted_huya_url(
-            &parse_trusted_huya_url("http://www.huya.com/").unwrap()
+        assert!(!is_trusted_url(&bad, TRUSTED_SUFFIXES));
+        assert!(!is_trusted_url(
+            &parse_trusted_huya_url("http://www.huya.com/").unwrap(),
+            TRUSTED_SUFFIXES
         ));
     }
 
@@ -608,7 +461,5 @@ mod tests {
             "udb_uid=12345; udb_biztoken=token-value; guid=test"
         ));
         assert!(!has_send_credentials("udb_uid=12345; guid=test"));
-        assert!(is_valid_session_key("0123456789abcdef0123456789abcdef"));
-        assert!(!is_valid_session_key("short"));
     }
 }

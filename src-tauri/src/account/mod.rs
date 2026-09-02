@@ -2,6 +2,7 @@ pub mod bilibili_qr;
 pub mod douyin_qr;
 pub mod douyu_qr;
 pub mod huya_qr;
+pub mod qr;
 
 use percent_encoding::percent_decode_str;
 use rusqlite::{Connection, OptionalExtension, params};
