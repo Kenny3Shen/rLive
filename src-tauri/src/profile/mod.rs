@@ -12,86 +12,12 @@ use crate::settings;
 use rusqlite::Connection;
 
 const PROFILE_VERSION: u32 = 2;
-const PROFILE_FIELDS: &[&str] = &[
-    "version",
-    "exported_at",
-    "settings",
-    "follows",
-    "iptv_favorites",
-    "iptv_favorite_groups",
-    "tags",
-    "history",
-    "danmaku_shield_words",
-    "danmaku_blocked_users",
-];
-const PROFILE_SETTINGS_FIELDS: &[&str] = &[
-    "theme",
-    "default_site",
-    "disabled_site_ids",
-    "proxy",
-    "danmaku_opacity",
-    "danmaku_font_stroke",
-    "danmaku_font_size",
-    "danmaku_speed",
-    "danmaku_area",
-    "danmaku_merge_window_seconds",
-    "danmaku_filter_gifts",
-    "super_chat_enabled",
-    "danmaku_shield_words",
-    "danmaku_blocked_users",
-    "quality_level",
-    "playback_soft_switch_enabled",
-    "room_card_preview_enabled",
-    "danmaku_send_enabled",
-    "asr_enabled",
-    "asr_provider",
-    "asr_vad_enabled",
-    "asr_punctuation_enabled",
-    "asr_speaker_diarization_enabled",
-    "asr_hotwords",
-    "asr_window_seconds",
-    "asr_font_size",
-    "asr_translation_enabled",
-    "asr_translation_from",
-    "asr_translation_to",
-    "iptv_custom_m3u_url",
-    // 接受自后台录制成为无条件行为之前写出的配置包，随后丢弃而不是应用。
-    // 它刻意不在便携（必填）字段列表中，
-    // 因此当前的导出可以省略它。
-    "recording_continue_after_leave",
-    "recording_include_danmaku",
-    "recording_auto_split_minutes",
-    "ffmpeg_rw_timeout_seconds",
-    "ffmpeg_reconnect_delay_max_seconds",
-    "ffmpeg_hls_segment_retry_count",
-    "recording_ass",
-];
-const PORTABLE_PROFILE_SETTINGS_FIELDS: &[&str] = &[
-    "theme",
-    "default_site",
-    "disabled_site_ids",
-    "proxy",
-    "danmaku_opacity",
-    "danmaku_font_stroke",
-    "danmaku_font_size",
-    "danmaku_speed",
-    "danmaku_area",
-    "danmaku_merge_window_seconds",
-    "danmaku_filter_gifts",
-    "super_chat_enabled",
-    "danmaku_shield_words",
-    "danmaku_blocked_users",
-    "quality_level",
-    "playback_soft_switch_enabled",
-    "room_card_preview_enabled",
-    "asr_font_size",
-    "recording_include_danmaku",
-    "recording_auto_split_minutes",
-    "ffmpeg_rw_timeout_seconds",
-    "ffmpeg_reconnect_delay_max_seconds",
-    "ffmpeg_hls_segment_retry_count",
-    "recording_ass",
-];
+/// 便携包不携带的本机专属设置。
+///
+/// 这份名单无法用派生宏表达：`AppSettings` 在 `settings_kv` 路径上对它们是
+/// 必填的（缺字段说明记录不是当前 schema），而在配置包里必须允许缺失。
+/// 同一个结构体两种线格式，因此导入时由 `fill_local_only_settings` 回填、
+/// 导出时由 `portable_profile_value` 剔除。
 const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_send_enabled",
     "asr_enabled",
@@ -114,6 +40,7 @@ const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
 pub(crate) const MAX_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilePackage {
     pub version: u32,
     pub exported_at: i64,
@@ -296,17 +223,10 @@ fn decode_package(text: &str) -> AppResult<ProfilePackage> {
             ),
         ));
     }
-    reject_unknown_fields(&value, "profile", PROFILE_FIELDS)?;
-    require_fields(&value, "profile", PROFILE_FIELDS)?;
-    let settings = value
-        .get("settings")
-        .ok_or_else(|| AppError::new("profile_schema_invalid", "profile.settings is required"))?;
-    reject_unknown_fields(settings, "profile.settings", PROFILE_SETTINGS_FIELDS)?;
-    require_fields(
-        settings,
-        "profile.settings",
-        PORTABLE_PROFILE_SETTINGS_FIELDS,
-    )?;
+    // 未知字段与缺失字段均由 serde 拥结：`ProfilePackage` 与 `AppSettings` 都带
+    // `deny_unknown_fields`，且除 `BACKFILLED_SETTINGS_FIELDS` 与本机专属字段外均无
+    // serde default。手写字段表曾经重建过同一套规则，但它必须随
+    // `AppSettings` 手工同步，漏改就会静默改变接受面。
     fill_local_only_settings(&mut value)?;
     serde_json::from_value(value)
         .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))
@@ -340,54 +260,6 @@ fn fill_local_only_settings(value: &mut serde_json::Value) -> AppResult<()> {
             })?;
             settings.insert((*field).to_string(), default.clone());
         }
-    }
-    Ok(())
-}
-
-fn reject_unknown_fields(
-    value: &serde_json::Value,
-    path: &str,
-    allowed_fields: &[&str],
-) -> AppResult<()> {
-    let object = value.as_object().ok_or_else(|| {
-        AppError::new(
-            "profile_schema_invalid",
-            format!("{path} must be a JSON object"),
-        )
-    })?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed_fields.contains(&field.as_str()))
-    {
-        return Err(AppError::new(
-            "profile_schema_invalid",
-            format!("unknown field {path}.{field}"),
-        ));
-    }
-    Ok(())
-}
-
-/// 校验 `required_fields` 是否都存在。`BACKFILLED_SETTINGS_FIELDS` 里的字段例外：
-/// 它们比自身引入的版本更早的包里不存在，由 `AppSettings` 的 serde default 补齐。
-fn require_fields(
-    value: &serde_json::Value,
-    path: &str,
-    required_fields: &[&str],
-) -> AppResult<()> {
-    let object = value.as_object().ok_or_else(|| {
-        AppError::new(
-            "profile_schema_invalid",
-            format!("{path} must be a JSON object"),
-        )
-    })?;
-    if let Some(field) = required_fields.iter().find(|field| {
-        !object.contains_key(**field)
-            && !crate::models::settings::BACKFILLED_SETTINGS_FIELDS.contains(*field)
-    }) {
-        return Err(AppError::new(
-            "profile_schema_invalid",
-            format!("missing field {path}.{field}"),
-        ));
     }
     Ok(())
 }
@@ -533,6 +405,9 @@ mod tests {
         }
     }
 
+    /// 未知字段由 `AppSettings` 的 `deny_unknown_fields` 拦下，因此错误码是 serde
+    /// 路径的 `profile_decode_error`（先前由手写校验层报 `profile_schema_invalid`）。
+    /// 字段名仍出现在消息里，依然能定位到具体哪个字段。
     #[test]
     fn profile_rejects_removed_settings_fields() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
@@ -541,7 +416,7 @@ mod tests {
 
         let error = decode_package(&text).unwrap_err();
 
-        assert_eq!(error.code, "profile_schema_invalid");
+        assert_eq!(error.code, "profile_decode_error");
         assert!(error.message.contains("danmaku_font_weight"));
     }
 
@@ -606,7 +481,7 @@ mod tests {
 
         let error = decode_package(&text).unwrap_err();
 
-        assert_eq!(error.code, "profile_schema_invalid");
+        assert_eq!(error.code, "profile_decode_error");
         assert!(error.message.contains("recording_auto_follow"));
     }
 
@@ -631,6 +506,47 @@ mod tests {
             .remove("auto_record");
 
         assert!(decode_package(&serde_json::to_string(&value).unwrap()).is_err());
+    }
+
+    /// 等价性锚点：手写的 `require_fields(PORTABLE)` 与
+    /// `reject_unknown_fields(PROFILE_FIELDS)` 删除后，接受面必须不变。
+    ///
+    /// 三个方向各验一次：便携字段缺失仍报错、本机专属字段缺失仍接受
+    /// （由 `fill_local_only_settings` 回填）、顶层未知字段仍报错
+    /// （由 `ProfilePackage` 的 `deny_unknown_fields` 拦下）。
+    #[test]
+    fn serde_alone_keeps_the_accepted_field_surface() {
+        let strip = |field: &str, from_settings: bool| {
+            let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+            let object = if from_settings {
+                value["settings"].as_object_mut().unwrap()
+            } else {
+                value.as_object_mut().unwrap()
+            };
+            object.remove(field);
+            serde_json::to_string(&value).unwrap()
+        };
+
+        // 便携必填字段缺失 → 仍被拒绝。
+        let error = decode_package(&strip("theme", true)).unwrap_err();
+        assert_eq!(error.code, "profile_decode_error");
+        assert!(error.message.contains("theme"));
+        // 顶层必填字段缺失 → 仍被拒绝。
+        assert!(decode_package(&strip("history", false)).is_err());
+
+        // 本机专属字段缺失 → 仍然接受，且按当前默认值回填。
+        let package = decode_package(&strip("asr_enabled", true)).unwrap();
+        assert_eq!(
+            package.settings.asr_enabled,
+            AppSettings::default().asr_enabled
+        );
+
+        // 顶层未知字段 → 仍被拒绝。
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["unexpected_top_level"] = serde_json::json!(1);
+        let error = decode_package(&serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert_eq!(error.code, "profile_decode_error");
+        assert!(error.message.contains("unexpected_top_level"));
     }
 
     #[test]
