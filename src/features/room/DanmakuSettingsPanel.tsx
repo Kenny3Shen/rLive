@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import {
   AsrCaptionFontSizeField,
   AsrChunkIntervalField,
+  AsrHotwordsField,
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
@@ -37,6 +38,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
               <FieldGroup className="gap-2">
                 <AsrCaptionFontSizeField idPrefix="room" layout="panel" />
                 <AsrChunkIntervalField idPrefix="room" layout="panel" disabled={asrPending} />
+                <AsrHotwordsField idPrefix="room" layout="panel" />
               </FieldGroup>
             </CardContent>
           </Card>
