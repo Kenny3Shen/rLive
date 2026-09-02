@@ -84,11 +84,6 @@ export type PlayerMobileRoomAction = {
 /** 把视觉页签顺序与触摸导航顺序保持在同一处。 */
 export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
 
-// Android WebView 中一个 CSS 像素与密度无关。这样普通的纵向滚动或短促的手指
-// 微调就不会改变页签。
-export const ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX = 48;
-const ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO = 1.25;
-
 // Android 经原生桥控制 Activity 亮度。其他移动客户端通过合成器阴影兜底
 // 实现同样的画面局部手势。
 export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
@@ -270,32 +265,6 @@ export function playerChromeVisible(visible: boolean, fullscreenLocked: boolean)
 
 function isRoomSideTab(value: string): value is RoomSideTab {
   return ROOM_SIDE_TABS.includes(value as RoomSideTab);
-}
-
-export function isHorizontalRoomSideTabSwipe(deltaX: number, deltaY: number): boolean {
-  const horizontalDistance = Math.abs(deltaX);
-  const verticalDistance = Math.abs(deltaY);
-  return (
-    horizontalDistance >= ROOM_SIDE_TAB_SWIPE_MIN_DISTANCE_PX &&
-    horizontalDistance > verticalDistance * ROOM_SIDE_TAB_SWIPE_DIRECTION_RATIO
-  );
-}
-
-/**
- * 对刻意为之的横向滑动返回相邻页签；纵向/短促手势以及位于页签条两端时返回
- * null。向左滑动按可见顺序前进；向右滑动后退。
- */
-export function nextRoomSideTabForSwipe(
-  currentTab: RoomSideTab,
-  deltaX: number,
-  deltaY: number,
-): RoomSideTab | null {
-  if (!isHorizontalRoomSideTabSwipe(deltaX, deltaY)) return null;
-
-  const currentIndex = ROOM_SIDE_TABS.indexOf(currentTab);
-  if (currentIndex < 0) return null;
-  const direction = deltaX < 0 ? 1 : -1;
-  return ROOM_SIDE_TABS[currentIndex + direction] ?? null;
 }
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
