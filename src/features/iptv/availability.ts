@@ -24,13 +24,6 @@ export type IptvAvailabilityState =
       message: string | null;
     };
 
-export type IptvAvailabilitySummary = {
-  available: number;
-  unavailable: number;
-  checking: number;
-  unchecked: number;
-};
-
 export function availabilityStateFromResult(
   result: IptvChannelAvailability,
 ): IptvAvailabilityState {
@@ -68,22 +61,4 @@ export function filterIptvChannelsByAvailability(
     if (filter === "unchecked") return status == null || status === "checking";
     return status === filter;
   });
-}
-
-export function summarizeIptvAvailability(
-  channels: readonly IptvChannel[],
-  availability: ReadonlyMap<string, IptvAvailabilityState>,
-): IptvAvailabilitySummary {
-  const summary: IptvAvailabilitySummary = {
-    available: 0,
-    unavailable: 0,
-    checking: 0,
-    unchecked: 0,
-  };
-  for (const channel of channels) {
-    const status = availability.get(channel.url)?.status;
-    if (status) summary[status] += 1;
-    else summary.unchecked += 1;
-  }
-  return summary;
 }

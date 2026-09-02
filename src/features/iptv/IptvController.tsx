@@ -14,11 +14,9 @@ import { notify } from "@/components/ui/toast";
 import { invokeCmd } from "@/shared/api/tauri";
 import {
   filterIptvChannelsByAvailability,
-  summarizeIptvAvailability,
   type IptvAvailabilityFilter,
   type IptvAvailabilityState,
   type IptvChannelAvailability,
-  type IptvAvailabilitySummary,
 } from "./availability";
 import { useIptvAvailabilityStore } from "./availabilityStore";
 import { cancelIptvAvailabilityProbe, probeIptvAvailability } from "./availabilityProbe";
@@ -41,8 +39,6 @@ export type IptvController = {
   setAvailabilityFilter: (filter: IptvAvailabilityFilter) => void;
   availabilityByUrl: ReadonlyMap<string, IptvAvailabilityState>;
   availabilityProgress: { completed: number; total: number } | null;
-  availabilitySummary: IptvAvailabilitySummary;
-  uncheckedCount: number;
   hasFilters: boolean;
   isCheckingAvailability: boolean;
   playlistQuery: UseQueryResult<IptvChannel[], Error>;
@@ -94,10 +90,6 @@ export function IptvControllerProvider({
     () => filterIptvChannels(channels, { group: selectedGroup, query: keyword }),
     [channels, keyword, selectedGroup],
   );
-  const availabilitySummary = useMemo(
-    () => summarizeIptvAvailability(matchingChannels, availabilityByUrl),
-    [availabilityByUrl, matchingChannels],
-  );
   const filteredChannels = useMemo(
     () => filterIptvChannelsByAvailability(matchingChannels, availabilityByUrl, availabilityFilter),
     [availabilityByUrl, availabilityFilter, matchingChannels],
@@ -105,7 +97,6 @@ export function IptvControllerProvider({
   const hasFilters =
     selectedGroup !== "all" || keyword.trim().length > 0 || availabilityFilter !== "all";
   const isCheckingAvailability = availabilityProgress !== null;
-  const uncheckedCount = availabilitySummary.unchecked + availabilitySummary.checking;
 
   useEffect(() => {
     if (
@@ -207,8 +198,6 @@ export function IptvControllerProvider({
       setAvailabilityFilter,
       availabilityByUrl,
       availabilityProgress,
-      availabilitySummary,
-      uncheckedCount,
       hasFilters,
       isCheckingAvailability,
       playlistQuery,
@@ -222,7 +211,6 @@ export function IptvControllerProvider({
       availabilityByUrl,
       availabilityFilter,
       availabilityProgress,
-      availabilitySummary,
       channels,
       checkChannelAvailability,
       clearFilters,
@@ -237,7 +225,6 @@ export function IptvControllerProvider({
       playlistQuery,
       selectedGroup,
       source,
-      uncheckedCount,
       updateSource,
     ],
   );

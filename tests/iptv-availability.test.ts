@@ -3,7 +3,6 @@ import {
   availabilityStateFromResult,
   filterIptvChannelsByAvailability,
   getIptvChannelChecks,
-  summarizeIptvAvailability,
   type IptvAvailabilityState,
 } from "../src/features/iptv/availability";
 import type { IptvChannel } from "../src/features/iptv/types";
@@ -48,12 +47,6 @@ describe("IPTV availability", () => {
       channels[2],
       channels[3],
     ]);
-    expect(summarizeIptvAvailability(channels, availability)).toEqual({
-      available: 1,
-      unavailable: 1,
-      checking: 1,
-      unchecked: 1,
-    });
   });
 
   test("maps native probe results to stable UI states", () => {
