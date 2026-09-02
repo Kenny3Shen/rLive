@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Car, Cast, ChevronLeft, Ellipsis, Timer, type LucideIcon } from "lucide-react";
-import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
@@ -160,17 +159,6 @@ export function PlayerFullscreenHud({
     },
     [onOverlayInteractionChange],
   );
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    // 按一次 Back 关闭菜单，而不是退出全屏或离开房间。
-    const closeOnAndroidBack = (event: Event) => {
-      event.preventDefault();
-      setMenuOpen(false);
-    };
-    window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-    return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-  }, [menuOpen]);
 
   const hasMenu =
     roomActions.length > 0 ||

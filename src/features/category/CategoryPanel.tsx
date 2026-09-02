@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, LayoutGrid } from "lucide-react";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { useAndroidBackClose } from "@/shared/hooks/useAndroidBackClose";
 import type { LiveCategory, LiveSubCategory } from "@/shared/types/live";
 import { cn, normalizeImageUrl } from "@/lib/utils";
 import { categoryChipKey, categoryEntriesOf } from "./categorySelection";
@@ -166,9 +165,6 @@ export function CategoryPanel({
   selectedKey,
   onSelect,
 }: CategoryPanelProps) {
-  // 按一次 Android Back 先收起面板，而不是离开首页。
-  useAndroidBackClose(open, () => onOpenChange(false));
-
   function select(category: LiveSubCategory) {
     onOpenChange(false);
     onSelect(category);

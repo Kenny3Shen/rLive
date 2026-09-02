@@ -24,7 +24,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
-import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
@@ -407,18 +406,6 @@ export function PlayerControls({
     },
     [onOverlayInteractionChange],
   );
-
-  useEffect(() => {
-    if (!volumeOpen && !streamSettingsOpen && !asrSettingsOpen) return;
-    const closeOnAndroidBack = (event: Event) => {
-      event.preventDefault();
-      setVolumeOpen(false);
-      setStreamSettingsOpen(false);
-      setAsrSettingsOpen(false);
-    };
-    window.addEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-    return () => window.removeEventListener(ANDROID_BACK_EVENT, closeOnAndroidBack);
-  }, [asrSettingsOpen, streamSettingsOpen, volumeOpen]);
 
   const qualityLabel = (index: number) => {
     const label = qualities[index]?.quality?.trim();
