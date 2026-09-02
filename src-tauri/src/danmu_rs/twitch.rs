@@ -3,6 +3,7 @@
 //! Twitch 允许使用其文档中的 `justinfan` 匿名身份进行只读聊天。
 //! 接收公开频道消息无需用户 OAuth token 或已保存的 Cookie。
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -51,6 +52,9 @@ struct ConnectProxy {
 #[derive(Debug, Clone)]
 pub struct TwitchDanmakuArgs {
     pub channel_login: String,
+    /// 7TV 频道表情集按数字 Twitch 用户 ID 查询。房间详情已携带它，
+    /// 因此不需额外的 Twitch 请求。
+    pub broadcaster_id: Option<String>,
 }
 
 pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<TwitchDanmakuArgs> {
@@ -74,6 +78,14 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<TwitchDanmakuArgs>
     }
     Ok(TwitchDanmakuArgs {
         channel_login: login,
+        broadcaster_id: raw
+            .get("broadcaster_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty() && value.len() <= 20 && value.bytes().all(|b| b.is_ascii_digit())
+            })
+            .map(str::to_owned),
     })
 }
 
@@ -166,6 +178,219 @@ fn emote_spans(tags: Option<&str>, content: &str) -> Option<Vec<DanmakuContentSp
     (spans.len() <= MAX_CONTENT_SPANS).then_some(spans)
 }
 
+/// 7TV 表情名到图片 URL 的查找表。空表示第三方表情不可用；
+/// 此时消息按纯文本渲染。
+type SevenTvEmotes = HashMap<String, String>;
+
+const SEVEN_TV_GLOBAL_SET_URL: &str = "https://7tv.io/v3/emote-sets/global";
+const SEVEN_TV_CDN_PREFIX: &str = "https://cdn.7tv.app/emote/";
+/// 单个频道的表情集上限为 1000，加上全局集给一点余量。超过就不再收，
+/// 避免异常响应把内存和逐条匹配开销推高。
+const MAX_SEVEN_TV_EMOTES: usize = 2_048;
+const MAX_SEVEN_TV_NAME_BYTES: usize = 64;
+const SEVEN_TV_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 从一个 7TV emote set 负载收集 `name → url`。
+///
+/// 只接受 `host.url` 落在官方 CDN 前缀下的条目：URL 直接进 img 标签，
+/// 因此不能让响应里的任意主机名穿透过来。图片固定取 `2x.webp`（64px），
+/// 与官方表情的 2.0 档一致；WebP 也是三种可选格式里动图体积最小的一档。
+fn collect_seven_tv_set(emotes: &mut SevenTvEmotes, set: &Value) {
+    let Some(items) = set.get("emotes").and_then(Value::as_array) else {
+        return;
+    };
+    for item in items {
+        if emotes.len() >= MAX_SEVEN_TV_EMOTES {
+            return;
+        }
+        // 顶层 `name` 是该表情集里的别名，主播可以改；`data.name` 是原名。
+        // 聊天消息里出现的是别名，所以以顶层为准。
+        let Some(name) = item
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| {
+                !name.is_empty()
+                    && name.len() <= MAX_SEVEN_TV_NAME_BYTES
+                    && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+            })
+        else {
+            continue;
+        };
+        let Some(host) = item.get("data").and_then(|data| data.get("host")) else {
+            continue;
+        };
+        // `host.url` 是协议相对的（`//cdn.7tv.app/emote/<id>`）。
+        let Some(base) = host
+            .get("url")
+            .and_then(Value::as_str)
+            .map(|url| url.trim().trim_start_matches("https:").trim_start_matches("//"))
+            .map(|url| format!("https://{url}"))
+            .filter(|url| url.starts_with(SEVEN_TV_CDN_PREFIX) && !url.contains(['?', '#', '\\']))
+        else {
+            continue;
+        };
+        // 该表情实际提供哪些文件由响应决定，不能假定 2x 一定存在。
+        let has_file = |wanted: &str| {
+            host.get("files")
+                .and_then(Value::as_array)
+                .is_some_and(|files| {
+                    files.iter().any(|file| {
+                        file.get("name").and_then(Value::as_str) == Some(wanted)
+                    })
+                })
+        };
+        let file = if has_file("2x.webp") {
+            "2x.webp"
+        } else if has_file("1x.webp") {
+            "1x.webp"
+        } else {
+            continue;
+        };
+        emotes.insert(name.to_owned(), format!("{base}/{file}"));
+    }
+}
+
+/// 拉取全局表情集与该频道的表情集。
+///
+/// 两个请求都是尽力而为：7TV 是 Twitch 之外的第三方服务，任一失败只会让对应
+/// 表情退回文本显示，不影响聊天连接。多数频道没有 7TV 账号，频道集返回 404
+/// 属于正常情况。
+async fn fetch_seven_tv_emotes(
+    broadcaster_id: Option<&str>,
+    proxy: Option<&str>,
+) -> SevenTvEmotes {
+    let Ok(client) = crate::http_client::client_for_proxy(proxy) else {
+        return SevenTvEmotes::new();
+    };
+    let get = |url: String| {
+        let client = client.clone();
+        async move {
+            let response = time::timeout(SEVEN_TV_TIMEOUT, client.get(&url).send())
+                .await
+                .ok()?
+                .ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            time::timeout(SEVEN_TV_TIMEOUT, response.json::<Value>())
+                .await
+                .ok()?
+                .ok()
+        }
+    };
+
+    let channel_url =
+        broadcaster_id.map(|id| format!("https://7tv.io/v3/users/twitch/{id}"));
+    let (global, channel) = match channel_url {
+        Some(url) => {
+            let (global, channel) = tokio::join!(get(SEVEN_TV_GLOBAL_SET_URL.to_owned()), get(url));
+            (global, channel)
+        }
+        None => (get(SEVEN_TV_GLOBAL_SET_URL.to_owned()).await, None),
+    };
+
+    let mut emotes = SevenTvEmotes::new();
+    if let Some(global) = &global {
+        collect_seven_tv_set(&mut emotes, global);
+    }
+    // 频道集后收：同名时覆盖全局条目，与 7TV 客户端的优先级一致。
+    if let Some(channel) = channel.as_ref().and_then(|user| user.get("emote_set")) {
+        collect_seven_tv_set(&mut emotes, channel);
+    }
+    emotes
+}
+
+/// 把已有片段里的文本部分按空白切词，命中 7TV 表情名的整词替换为图片。
+///
+/// 7TV 表情不进 IRC 标签，只以普通单词出现在消息里，因此只能靠名字匹配。
+/// 匹配限定为完整的空白分隔词：子串匹配会把 `Kappa` 从 `Kappapride` 里
+/// 切出来。
+fn apply_seven_tv_spans(
+    spans: Vec<DanmakuContentSpan>,
+    emotes: &SevenTvEmotes,
+) -> Vec<DanmakuContentSpan> {
+    if emotes.is_empty() {
+        return spans;
+    }
+    let mut output = Vec::with_capacity(spans.len());
+    for span in spans {
+        let DanmakuContentSpan::Text { text } = &span else {
+            output.push(span);
+            continue;
+        };
+        if !text.split_whitespace().any(|word| emotes.contains_key(word)) {
+            output.push(span);
+            continue;
+        }
+        // 保留原始空白：按分隔符切开后逐词判断，未命中的词连同其前导空白
+        // 攒进当前文本片段。
+        let mut pending = String::new();
+        let mut rest = text.as_str();
+        while !rest.is_empty() {
+            let word_start = rest
+                .find(|c: char| !c.is_whitespace())
+                .unwrap_or(rest.len());
+            let (separator, after) = rest.split_at(word_start);
+            let word_end = after
+                .find(char::is_whitespace)
+                .unwrap_or(after.len());
+            let (word, tail) = after.split_at(word_end);
+            match emotes.get(word) {
+                Some(image_url) => {
+                    pending.push_str(separator);
+                    if !pending.is_empty() {
+                        output.push(DanmakuContentSpan::Text {
+                            text: std::mem::take(&mut pending),
+                        });
+                    }
+                    output.push(DanmakuContentSpan::Image {
+                        image_url: image_url.clone(),
+                    });
+                }
+                None => {
+                    pending.push_str(separator);
+                    pending.push_str(word);
+                }
+            }
+            rest = tail;
+        }
+        if !pending.is_empty() {
+            output.push(DanmakuContentSpan::Text { text: pending });
+        }
+    }
+    output.truncate(MAX_CONTENT_SPANS);
+    output
+}
+
+/// 先按官方 `emotes` 标签分段，再在剩下的文本里匹配 7TV 表情。
+///
+/// 两者叠加而非二选一：一条消息可以同时包含官方表情和 7TV 表情。官方标签
+/// 携带精确下标，因此先行；7TV 只能靠名字匹配，只在文本片段上做，不会
+/// 碰到已识别的官方表情。
+fn content_spans(
+    tags: Option<&str>,
+    content: &str,
+    seven_tv: &SevenTvEmotes,
+) -> Option<Vec<DanmakuContentSpan>> {
+    let official = emote_spans(tags, content);
+    if seven_tv.is_empty() {
+        return official;
+    }
+    // 没有官方表情时以整条文本为起点，让 7TV 匹配仍能生效。
+    let base = official.unwrap_or_else(|| {
+        vec![DanmakuContentSpan::Text {
+            text: content.to_owned(),
+        }]
+    });
+    let spans = apply_seven_tv_spans(base, seven_tv);
+    // 全是文本就不必带片段：前端会直接用 content 渲染。
+    spans
+        .iter()
+        .any(|span| matches!(span, DanmakuContentSpan::Image { .. }))
+        .then_some(spans)
+}
+
 fn safe_color(value: Option<&str>) -> Option<String> {
     let value = value?;
     (value.len() == 7
@@ -178,7 +403,7 @@ fn safe_color(value: Option<&str>) -> Option<String> {
 ///
 /// IRC 服务器可能把多条以 CRLF 分隔的行放进同一个 WebSocket 消息，
 /// 因此调用方要先拆分传输帧再交给这个解析器。
-pub fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
+pub fn parse_privmsg(line: &str, seven_tv: &SevenTvEmotes) -> Option<DanmakuEvent> {
     let line = line.trim_end_matches('\r');
     let (tags, rest) = if let Some(after_tag) = line.strip_prefix('@') {
         let (tags, rest) = after_tag.split_once(' ')?;
@@ -210,7 +435,7 @@ pub fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
             .filter(|value| !value.is_empty() && value != "0"),
         content: content.to_owned(),
         color: safe_color(tag_value(tags, "color")),
-        spans: emote_spans(tags, content),
+        spans: content_spans(tags, content, seven_tv),
         super_chat: None,
         ts: chrono::Utc::now().timestamp_millis(),
     })
@@ -432,6 +657,7 @@ async fn open_https_tunnel(
 async fn run_irc_session<S>(
     events: &DanmakuEventSender,
     args: &TwitchDanmakuArgs,
+    seven_tv: &SevenTvEmotes,
     socket: WebSocketStream<S>,
 ) -> AppResult<SessionEnd>
 where
@@ -460,7 +686,7 @@ where
                         send_irc(&mut write, format!("PONG{ping}")).await?;
                         continue;
                     }
-                    if let Some(event) = parse_privmsg(line) {
+                    if let Some(event) = parse_privmsg(line, seven_tv) {
                         message_count += 1;
                         emit_event(events, event);
                     }
@@ -500,11 +726,18 @@ pub async fn run_loop(
 ) -> AppResult<()> {
     // 代理设置格式错误属于本地配置问题：每次重试都会以同样方式失败，
     // 因此直接报错而不是进入循环。
+    let proxy_setting = proxy.clone();
     let proxy = proxy_from_setting(proxy.as_deref())?;
+
+    // 7TV 表情表每个会话取一次，重连时复用：一两小时内主播改表情集的概率很低，
+    // 不值得让每次断线重试都多背两个第三方请求。与 Twitch 请求走同一份代理
+    // 设置：需要代理才能访问 Twitch 的网络环境里，7TV 同样访问不到。
+    let seven_tv = fetch_seven_tv_emotes(args.broadcaster_id.as_deref(), proxy_setting.as_deref())
+        .await;
 
     let mut policy = ReconnectPolicy::with_defaults("twitch");
     loop {
-        let reason = match connect_and_run(&events, &args, proxy.as_ref()).await {
+        let reason = match connect_and_run(&events, &args, &seven_tv, proxy.as_ref()).await {
             Ok(end) => DisconnectReason::Dropped {
                 messages: end.messages,
                 connected_for: end.connected_for,
@@ -531,6 +764,7 @@ pub async fn run_loop(
 async fn connect_and_run(
     events: &DanmakuEventSender,
     args: &TwitchDanmakuArgs,
+    seven_tv: &SevenTvEmotes,
     proxy: Option<&ConnectProxy>,
 ) -> AppResult<SessionEnd> {
     emit_system(events, "正在连接 Twitch 弹幕服务器…");
@@ -539,7 +773,7 @@ async fn connect_and_run(
             let (socket, _) = connect_async(IRC_WS_URL)
                 .await
                 .map_err(websocket_connection_error)?;
-            run_irc_session(events, args, socket).await
+            run_irc_session(events, args, seven_tv, socket).await
         }
         Some(proxy) => match proxy.scheme {
             ProxyScheme::Http => {
@@ -551,7 +785,7 @@ async fn connect_and_run(
                 .await
                 .map_err(|_| proxy_connection_error("Twitch 弹幕 WebSocket 握手超时"))?
                 .map_err(websocket_connection_error)?;
-                run_irc_session(events, args, socket).await
+                run_irc_session(events, args, seven_tv, socket).await
             }
             ProxyScheme::Https => {
                 let stream = open_https_tunnel(proxy).await?;
@@ -562,7 +796,7 @@ async fn connect_and_run(
                 .await
                 .map_err(|_| proxy_connection_error("Twitch 弹幕 WebSocket 握手超时"))?
                 .map_err(websocket_connection_error)?;
-                run_irc_session(events, args, socket).await
+                run_irc_session(events, args, seven_tv, socket).await
             }
         },
     }
@@ -574,6 +808,11 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+
+    /// 绝大多数解析断言与第三方表情无关；用空表调用，让这些用例不必关心 7TV。
+    fn parse_privmsg(line: &str) -> Option<DanmakuEvent> {
+        super::parse_privmsg(line, &SevenTvEmotes::new())
+    }
 
     #[test]
     fn extracts_a_tagged_privmsg() {
@@ -643,11 +882,146 @@ mod tests {
         assert!(parse_privmsg(line).unwrap().color.is_none());
     }
 
+    fn seven_tv_set(name: &str, host_url: &str) -> Value {
+        serde_json::json!({
+            "emotes": [{
+                "name": name,
+                "data": {
+                    "host": {
+                        "url": host_url,
+                        "files": [
+                            { "name": "1x.webp" },
+                            { "name": "2x.webp" },
+                        ],
+                    },
+                },
+            }],
+        })
+    }
+
+    #[test]
+    fn collects_seven_tv_emotes_and_prefers_the_2x_webp_file() {
+        let mut emotes = SevenTvEmotes::new();
+        collect_seven_tv_set(&mut emotes, &seven_tv_set("GAMBA", "//cdn.7tv.app/emote/01G3"));
+        assert_eq!(
+            emotes.get("GAMBA").map(String::as_str),
+            Some("https://cdn.7tv.app/emote/01G3/2x.webp"),
+        );
+    }
+
+    #[test]
+    fn collect_seven_tv_set_rejects_foreign_hosts_and_missing_webp() {
+        // 响应里的主机名不可信：URL 直接进 img 标签。
+        for host in [
+            "//evil.example/emote/1",
+            "//cdn.7tv.app.evil.example/emote/1",
+            "https://cdn.7tv.app/emote/1?x=1",
+        ] {
+            let mut emotes = SevenTvEmotes::new();
+            collect_seven_tv_set(&mut emotes, &seven_tv_set("Evil", host));
+            assert!(emotes.is_empty(), "{host}");
+        }
+
+        // 名字带空白永远匹配不到切词结果，不收。
+        let mut emotes = SevenTvEmotes::new();
+        collect_seven_tv_set(&mut emotes, &seven_tv_set("two words", "//cdn.7tv.app/emote/1"));
+        assert!(emotes.is_empty());
+
+        // 没有可用的 webp 档时跳过该表情。
+        let mut emotes = SevenTvEmotes::new();
+        collect_seven_tv_set(
+            &mut emotes,
+            &serde_json::json!({
+                "emotes": [{
+                    "name": "OnlyGif",
+                    "data": { "host": {
+                        "url": "//cdn.7tv.app/emote/1",
+                        "files": [{ "name": "2x.gif" }],
+                    } },
+                }],
+            }),
+        );
+        assert!(emotes.is_empty());
+    }
+
+    #[test]
+    fn matches_seven_tv_emotes_as_whole_words_only() {
+        let emotes = SevenTvEmotes::from([(
+            "WideHard".to_owned(),
+            "https://cdn.7tv.app/emote/1/2x.webp".to_owned(),
+        )]);
+        let line = "@display-name=viewer :viewer!x PRIVMSG #channel :look WideHard now";
+        assert_eq!(
+            super::parse_privmsg(line, &emotes).unwrap().spans.unwrap(),
+            vec![
+                DanmakuContentSpan::Text {
+                    text: "look ".into(),
+                },
+                DanmakuContentSpan::Image {
+                    image_url: "https://cdn.7tv.app/emote/1/2x.webp".into(),
+                },
+                DanmakuContentSpan::Text {
+                    text: " now".into(),
+                },
+            ],
+        );
+
+        // 子串不算命中，因此整条消息不带片段。
+        let embedded = "@display-name=viewer :viewer!x PRIVMSG #channel :WideHardest";
+        assert!(
+            super::parse_privmsg(embedded, &emotes)
+                .unwrap()
+                .spans
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn layers_seven_tv_emotes_onto_official_emote_spans() {
+        let emotes = SevenTvEmotes::from([(
+            "GAMBA".to_owned(),
+            "https://cdn.7tv.app/emote/2/2x.webp".to_owned(),
+        )]);
+        let line =
+            "@display-name=viewer;emotes=25:0-4 :viewer!x PRIVMSG #channel :Kappa and GAMBA";
+        assert_eq!(
+            super::parse_privmsg(line, &emotes).unwrap().spans.unwrap(),
+            vec![
+                DanmakuContentSpan::Image {
+                    image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
+                },
+                DanmakuContentSpan::Text {
+                    text: " and ".into(),
+                },
+                DanmakuContentSpan::Image {
+                    image_url: "https://cdn.7tv.app/emote/2/2x.webp".into(),
+                },
+            ],
+        );
+    }
+
     #[test]
     fn gets_channel_from_room_raw() {
         let args =
             args_from_raw("fallback", &serde_json::json!({ "login": "Creator_One" })).unwrap();
         assert_eq!(args.channel_login, "creator_one");
+        assert_eq!(args.broadcaster_id, None);
+
+        // 房间详情携带的数字 ID 是 7TV 频道表情集的查询键。
+        let with_id = args_from_raw(
+            "fallback",
+            &serde_json::json!({ "login": "creator", "broadcaster_id": "71092938" }),
+        )
+        .unwrap();
+        assert_eq!(with_id.broadcaster_id.as_deref(), Some("71092938"));
+
+        // 非数字值不能拼进第三方请求路径。
+        let hostile = args_from_raw(
+            "fallback",
+            &serde_json::json!({ "login": "creator", "broadcaster_id": "../../evil" }),
+        )
+        .unwrap();
+        assert_eq!(hostile.broadcaster_id, None);
     }
 
     #[test]

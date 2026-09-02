@@ -37,6 +37,7 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
     "byteimg.com",
     "jtvnw.net",
     "twitch.tv",
+    "7tv.app",
 ];
 
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);

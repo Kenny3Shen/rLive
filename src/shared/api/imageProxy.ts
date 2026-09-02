@@ -18,6 +18,7 @@ const PROXIED_HOST_SUFFIXES = [
   "byteimg.com",
   "jtvnw.net",
   "twitch.tv",
+  "7tv.app",
 ];
 
 let proxyBase: string | null = null;
