@@ -43,8 +43,6 @@ export const SWIPE_SETTLE_EASING = EASE_OUT;
 export const PAGE_PAN_PERCENT = 110;
 
 export type MotionProfile = {
-  /** 页面平移行程占页面活动轴尺寸的百分比。 */
-  tabTravel: number;
   enter: { duration: number; ease: string };
   exit: { duration: number; ease: string };
   /**
@@ -58,8 +56,6 @@ export type MotionProfile = {
 };
 
 const DESKTOP_PROFILE: MotionProfile = {
-  // 整面平移：两页作为一个连续视口一起移动。
-  tabTravel: PAGE_PAN_PERCENT,
   enter: { duration: 0.22, ease: EASE_OUT },
   exit: { duration: 0.22, ease: EASE_OUT },
   roomZoom: { duration: 0.26, ease: EASE_OUT },
@@ -68,7 +64,6 @@ const DESKTOP_PROFILE: MotionProfile = {
 const TOUCH_PROFILE: MotionProfile = {
   // 触摸导航读作手指的延伸：整页跟随穿过视口，
   // 收尾比桌面稍快一点。
-  tabTravel: PAGE_PAN_PERCENT,
   enter: { duration: 0.2, ease: EASE_OUT },
   exit: { duration: 0.2, ease: EASE_OUT },
   roomZoom: { duration: 0.22, ease: EASE_OUT },
