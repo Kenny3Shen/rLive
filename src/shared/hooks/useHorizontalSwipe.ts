@@ -70,7 +70,6 @@ export type UseHorizontalSwipeOptions<T> = {
    * 带入下一页，适用于邻居未挂载的条带。
    */
   layout?: HorizontalSwipeLayout;
-  isEqual?: (left: T, right: T) => boolean;
 };
 
 /**
@@ -100,7 +99,6 @@ export function useHorizontalSwipe<T>({
   enabled = true,
   animate: shouldAnimate = true,
   layout = "page",
-  isEqual = Object.is,
 }: UseHorizontalSwipeOptions<T>) {
   const isTrackLayout = layout === "track";
   const pageRef = useRef<HTMLElement | null>(null);
@@ -110,7 +108,6 @@ export function useHorizontalSwipe<T>({
   const itemsRef = useRef(items);
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
-  const isEqualRef = useRef(isEqual);
   // 最近观测到的表面宽度，使释放的滑动知道整页行程到底多远。
   // 也是跟手拖拽的上限。
   const surfaceWidthRef = useRef(0);
@@ -125,7 +122,6 @@ export function useHorizontalSwipe<T>({
   itemsRef.current = items;
   valueRef.current = value;
   onChangeRef.current = onChange;
-  isEqualRef.current = isEqual;
 
   const clearCommitRollback = useCallback(() => {
     if (commitRollbackTimerRef.current === null) return;
@@ -184,7 +180,7 @@ export function useHorizontalSwipe<T>({
   const restOffsetForValue = useCallback(
     (nextValue: T) => {
       if (!isTrackLayout) return 0;
-      const index = itemsRef.current.findIndex((item) => isEqualRef.current(item, nextValue));
+      const index = itemsRef.current.findIndex((item) => Object.is(item, nextValue));
       return index >= 0 ? restOffsetForIndex(index) : 0;
     },
     [isTrackLayout, restOffsetForIndex],
@@ -289,11 +285,11 @@ export function useHorizontalSwipe<T>({
 
   useLayoutEffect(() => {
     const previousValue = renderedValueRef.current;
-    if (isEqual(previousValue, value)) return;
+    if (Object.is(previousValue, value)) return;
     renderedValueRef.current = value;
 
     const pendingCommit = pendingCommitRef.current;
-    const committedByGesture = pendingCommit !== null && isEqual(pendingCommit.value, value);
+    const committedByGesture = pendingCommit !== null && Object.is(pendingCommit.value, value);
     pendingCommitRef.current = null;
     clearCommitRollback();
     const el = pageRef.current;
@@ -303,8 +299,8 @@ export function useHorizontalSwipe<T>({
     // 收尾正在驶向该取值的静止偏移，不要打扰它。
     if (isTrackLayout && committedByGesture) return;
 
-    const previousIndex = items.findIndex((item) => isEqual(item, previousValue));
-    const nextIndex = items.findIndex((item) => isEqual(item, value));
+    const previousIndex = items.findIndex((item) => Object.is(item, previousValue));
+    const nextIndex = items.findIndex((item) => Object.is(item, value));
     const measuredSurfaceWidth = surfaceWidth();
     const profile = motionProfile();
 
@@ -349,7 +345,6 @@ export function useHorizontalSwipe<T>({
   }, [
     cancelSettle,
     clearCommitRollback,
-    isEqual,
     isTrackLayout,
     items,
     restAtValue,
@@ -397,9 +392,7 @@ export function useHorizontalSwipe<T>({
       // 在指针下方重建基准会跳动。
       if (width <= 0 || swipeRef.current?.horizontal) return;
       surfaceWidthRef.current = width;
-      const index = itemsRef.current.findIndex((item) =>
-        isEqualRef.current(item, valueRef.current),
-      );
+      const index = itemsRef.current.findIndex((item) => Object.is(item, valueRef.current));
       if (index < 0) return;
       cancelSettle();
       writeOffset(horizontalSwipeTrackOffset(index, width));
@@ -494,7 +487,7 @@ export function useHorizontalSwipe<T>({
         // 临时值：收尾可能仍在运行，其达到的偏移只到手势锁定为横向时才读取。
         startOffset: offsetRef.current,
         surfaceWidth: nextSurfaceWidth,
-        itemIndex: currentItems.findIndex((item) => isEqualRef.current(item, valueRef.current)),
+        itemIndex: currentItems.findIndex((item) => Object.is(item, valueRef.current)),
         itemCount: currentItems.length,
         reducedMotion: prefersReducedMotion(),
         horizontal: false,
@@ -592,7 +585,7 @@ export function useHorizontalSwipe<T>({
         dragOffset,
         velocity,
         swipe.surfaceWidth,
-        isEqualRef.current,
+        Object.is,
       );
       clickSuppressionUntilRef.current = Date.now() + HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS;
       event.preventDefault();
@@ -602,10 +595,8 @@ export function useHorizontalSwipe<T>({
         return;
       }
 
-      const currentIndex = itemsRef.current.findIndex((item) =>
-        isEqualRef.current(item, valueRef.current),
-      );
-      const nextIndex = itemsRef.current.findIndex((item) => isEqualRef.current(item, next));
+      const currentIndex = itemsRef.current.findIndex((item) => Object.is(item, valueRef.current));
+      const nextIndex = itemsRef.current.findIndex((item) => Object.is(item, next));
       const previousValue = valueRef.current;
       pendingCommitRef.current = {
         value: next,
@@ -628,10 +619,7 @@ export function useHorizontalSwipe<T>({
       clearCommitRollback();
       commitRollbackTimerRef.current = window.setTimeout(() => {
         commitRollbackTimerRef.current = null;
-        if (
-          pendingCommitRef.current !== null &&
-          isEqualRef.current(valueRef.current, previousValue)
-        ) {
+        if (pendingCommitRef.current !== null && Object.is(valueRef.current, previousValue)) {
           pendingCommitRef.current = null;
           settleAtRest();
         }
