@@ -12,9 +12,9 @@ use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{Local, TimeZone};
+use chrono::{Local, TimeZone, Utc};
 use futures_util::StreamExt;
 use percent_encoding::percent_decode_str;
 use reqwest::{Client, Url};
@@ -2501,11 +2501,7 @@ fn optional_text(value: Option<String>) -> Option<String> {
 }
 
 fn unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(i64::MAX as u128) as i64
+    Utc::now().timestamp_millis()
 }
 
 /// 校验录制 id，它同时也是相对于某个存储根的路径。

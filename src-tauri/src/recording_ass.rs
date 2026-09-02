@@ -48,12 +48,6 @@ enum OverflowPolicy {
     Delay,
 }
 
-#[derive(Debug, Clone)]
-enum ShieldMatcher {
-    Literals(Vec<String>),
-    Regex(RegexSet),
-}
-
 /// 一组已经归一化并完成正则编译的 ASS 导出配置。
 #[derive(Debug, Clone)]
 pub struct AssExportOptions {
@@ -79,7 +73,7 @@ pub struct AssExportOptions {
     merge_window_ms: i64,
     filter_gifts: bool,
     show_super_chat: bool,
-    shield_matcher: ShieldMatcher,
+    shield_matcher: RegexSet,
 }
 
 impl AssExportOptions {
@@ -88,14 +82,15 @@ impl AssExportOptions {
         let font_size = ass.font_size as i32;
         let line_height = (f64::from(font_size) * LINE_HEIGHT_RATIO).round();
         let shield_matcher = if ass.shield_regex {
-            ShieldMatcher::Regex(RegexSet::new(&ass.shield_rules)?)
+            RegexSet::new(&ass.shield_rules)?
         } else {
-            ShieldMatcher::Literals(
+            // 字面量规则同样编译为正则：转义后加 `(?i)`、不锚定，
+            // 保持原来的「大小写不敏感的包含匹配」语义。
+            RegexSet::new(
                 ass.shield_rules
                     .iter()
-                    .map(|rule| rule.to_lowercase())
-                    .collect(),
-            )
+                    .map(|rule| format!("(?i){}", regex::escape(rule))),
+            )?
         };
         let play_res_x = ass.resolution_width as i32;
         // 描边向两侧各扩张 outline 像素，阴影朝一个方向偏移，两者都让实际占位
@@ -150,13 +145,7 @@ impl AssExportOptions {
     }
 
     fn is_shielded(&self, content: &str) -> bool {
-        match &self.shield_matcher {
-            ShieldMatcher::Literals(rules) => {
-                let lower = content.to_lowercase();
-                rules.iter().any(|rule| lower.contains(rule))
-            }
-            ShieldMatcher::Regex(rules) => rules.is_match(content),
-        }
+        self.shield_matcher.is_match(content)
     }
 }
 
@@ -665,6 +654,31 @@ mod tests {
             1
         );
         assert!(script.contains("保留"));
+    }
+
+    #[test]
+    fn literal_shield_rules_match_substrings_case_insensitively() {
+        let mut settings = AppSettings::default();
+        settings.recording_ass.shield_rules = vec!["C++".into(), "spam".into()];
+        let options = AssExportOptions::try_from_settings(&settings).unwrap();
+
+        let (script, count) = render(
+            &[&format!(
+                r#"{{"offset_ms":0,"events":[{},{},{},{}]}}"#,
+                event("chat", "快来学c++"),
+                event("chat", "全是 SPAM 内容"),
+                event("chat", "普通弹幕"),
+                event("chat", "abc"),
+            )],
+            &options,
+        );
+
+        // 元字符按字面量处理（`+` 不吞掉普通弹幕），大小写不敏感，子串即命中。
+        assert_eq!(count, 2);
+        assert!(!script.contains("快来学c++"));
+        assert!(!script.contains("SPAM"));
+        assert!(script.contains("普通弹幕"));
+        assert!(script.contains("abc"));
     }
 
     #[test]
