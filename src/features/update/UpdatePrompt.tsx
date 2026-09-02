@@ -81,7 +81,3 @@ export function UpdateChecker() {
 
   return <UpdatePrompt />;
 }
-
-export function openReleasePage(url: string): void {
-  openExternalUrl(url);
-}
