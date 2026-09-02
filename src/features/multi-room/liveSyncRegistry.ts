@@ -116,7 +116,7 @@ export type MultiRoomLiveSyncRegistry = {
     mode: LiveSyncMode;
     offsets: Record<string, number>;
     nowMs: number;
-  }) => Record<string, number>;
+  }) => void;
   /** 释放所有校正并清空已发布的状态。 */
   reset: () => void;
   /** manual 模式偏移量，把各流对齐到最慢流的时钟。 */
@@ -170,7 +170,6 @@ export function createMultiRoomLiveSyncRegistry(): MultiRoomLiveSyncRegistry {
         clockKind: timeline.clockKind,
         epochAtMediaZeroMs: timeline.epochAtMediaZeroMs,
         offsetSeconds: offsets[key] ?? 0,
-        playbackRate: timeline.playbackRate,
       });
     }
     return samples;
@@ -208,7 +207,7 @@ export function createMultiRoomLiveSyncRegistry(): MultiRoomLiveSyncRegistry {
         previousTargetSeconds = null;
         publishSummary({ mode, targetLatencySeconds: null, activeCount: 0 });
         for (const key of statuses.keys()) publishStatus(key, null);
-        return {};
+        return;
       }
 
       const plan = planLiveSync({
@@ -219,7 +218,6 @@ export function createMultiRoomLiveSyncRegistry(): MultiRoomLiveSyncRegistry {
       });
       previousTargetSeconds = plan.targetLatencySeconds;
 
-      const applied: Record<string, number> = {};
       let activeCount = 0;
       for (const feedPlan of plan.feeds) {
         const feed = feeds.get(feedPlan.key);
@@ -237,7 +235,6 @@ export function createMultiRoomLiveSyncRegistry(): MultiRoomLiveSyncRegistry {
             feed.sync.setPlaybackRate(1);
             feed.sync.seekMediaTime(feedPlan.action.mediaTime);
             feed.lastSeekAtMs = nowMs;
-            applied[feedPlan.key] = feedPlan.action.mediaTime;
             break;
           case "rate":
             feed.sync.setPlaybackRate(feedPlan.action.rate);
@@ -248,7 +245,6 @@ export function createMultiRoomLiveSyncRegistry(): MultiRoomLiveSyncRegistry {
         }
       }
       publishSummary({ mode, targetLatencySeconds: plan.targetLatencySeconds, activeCount });
-      return applied;
     },
     reset: () => {
       previousTargetSeconds = null;
