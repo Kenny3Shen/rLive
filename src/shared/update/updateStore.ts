@@ -21,7 +21,6 @@ type UpdateStore = {
   currentVersion: string;
   status: UpdateStatus;
   release: UpdateRelease | null;
-  lastCheckedAt: number | null;
   error: string | null;
   dialogOpen: boolean;
   initialPromptShown: boolean;
@@ -156,7 +155,6 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   currentVersion: packageMetadata.version,
   status: "idle",
   release: null,
-  lastCheckedAt: null,
   error: null,
   dialogOpen: false,
   initialPromptShown: false,
@@ -175,7 +173,6 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
           currentVersion,
           status: release ? "available" : "up-to-date",
           release,
-          lastCheckedAt: Date.now(),
           error: null,
           ...(release && !get().initialPromptShown
             ? { dialogOpen: true, initialPromptShown: true }
@@ -185,7 +182,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       } catch (cause) {
         hasChecked = true;
         const error = cause instanceof Error ? cause.message : String(cause);
-        set({ status: "error", lastCheckedAt: Date.now(), error });
+        set({ status: "error", error });
         throw cause;
       } finally {
         inFlight = null;
