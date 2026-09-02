@@ -242,15 +242,15 @@ impl ModelAssets {
             &self.bpe_vocab,
         ]
         .iter()
-        .all(|path| file_is_non_empty(path))
+        .all(|path| file_len(path) > Some(0))
     }
 
     fn punctuation_is_complete(&self) -> bool {
-        file_is_non_empty(&self.punctuation)
+        file_len(&self.punctuation) > Some(0)
     }
 
     fn speaker_is_complete(&self) -> bool {
-        file_has_size(&self.speaker, SPEAKER_MODEL_SIZE_BYTES)
+        file_len(&self.speaker) == Some(SPEAKER_MODEL_SIZE_BYTES)
     }
 
     fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
@@ -736,17 +736,9 @@ impl AsrManager {
                 .fetch_add(1, Ordering::AcqRel)
                 .wrapping_add(1);
             status.state = next_state;
-            status.speaker_enabled = options.speaker_enabled;
-            status.vad_enabled = options.vad_enabled;
-            status.punctuation_enabled = options.punctuation_enabled;
-            status.hotwords_count = options.hotwords.len() as u32;
-            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = configured_download_size(&options);
+            self.apply_runtime_options(&mut status, &options);
             status.downloaded_bytes = self.downloaded_bytes(&options);
-            status.total_bytes = Some(status.model_size_bytes);
             status.threads = asr_thread_count();
-            status.provider = effective_asr_provider(&options.provider).to_string();
-            status.message = asr_provider_fallback_message(&options.provider);
             if let Ok(mut current) = self.inner.runtime_options.lock() {
                 *current = Some(options.clone());
             }
@@ -910,16 +902,9 @@ impl AsrManager {
 
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Ready;
-            status.speaker_enabled = options.speaker_enabled;
-            status.vad_enabled = options.vad_enabled;
-            status.punctuation_enabled = options.punctuation_enabled;
-            status.hotwords_count = options.hotwords.len() as u32;
-            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = configured_download_size(&options);
+            self.apply_runtime_options(status, &options);
             status.downloaded_bytes = status.model_size_bytes;
-            status.total_bytes = Some(status.model_size_bytes);
             status.provider = active_provider.clone();
-            status.message = asr_provider_fallback_message(&options.provider);
         });
     }
 
@@ -1400,20 +1385,25 @@ impl AsrManager {
         self.is_requested() && self.generation_is_current(generation)
     }
 
+    /// 把 `options` 里与会话无关的展示字段同步进状态；`state`、`downloaded_bytes`
+    /// 等随场景变化的字段由调用方自行赋值。
+    fn apply_runtime_options(&self, status: &mut AsrModelStatus, options: &AsrRuntimeOptions) {
+        status.speaker_enabled = options.speaker_enabled;
+        status.vad_enabled = options.vad_enabled;
+        status.punctuation_enabled = options.punctuation_enabled;
+        status.hotwords_count = options.hotwords.len() as u32;
+        status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
+        status.model_size_bytes = configured_download_size(options);
+        status.total_bytes = Some(status.model_size_bytes);
+        status.provider = effective_asr_provider(&options.provider).to_string();
+        status.message = asr_provider_fallback_message(&options.provider);
+    }
+
     fn set_loading_status(&self, generation: u64, options: &AsrRuntimeOptions) {
-        let total_size = configured_download_size(options);
         self.update_status_for_request(generation, |status| {
             status.state = AsrModelState::Loading;
-            status.speaker_enabled = options.speaker_enabled;
-            status.vad_enabled = options.vad_enabled;
-            status.punctuation_enabled = options.punctuation_enabled;
-            status.hotwords_count = options.hotwords.len() as u32;
-            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = total_size;
-            status.downloaded_bytes = total_size;
-            status.total_bytes = Some(total_size);
-            status.provider = effective_asr_provider(&options.provider).to_string();
-            status.message = asr_provider_fallback_message(&options.provider);
+            self.apply_runtime_options(status, options);
+            status.downloaded_bytes = status.model_size_bytes;
         });
     }
 
@@ -1739,7 +1729,7 @@ fn extract_tar_bz2(archive: &Path, destination: &Path) -> AppResult<()> {
 fn windows_runtime_is_complete(directory: &Path) -> bool {
     WINDOWS_RUNTIME_DLLS
         .iter()
-        .all(|name| file_is_non_empty(&directory.join(name)))
+        .all(|name| file_len(&directory.join(name)) > Some(0))
 }
 
 #[cfg(windows)]
@@ -1794,16 +1784,9 @@ fn preload_windows_runtime(directory: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn file_is_non_empty(path: &Path) -> bool {
-    path.metadata()
-        .map(|metadata| metadata.is_file() && metadata.len() > 0)
-        .unwrap_or(false)
-}
-
-fn file_has_size(path: &Path, expected_size: u64) -> bool {
-    path.metadata()
-        .map(|metadata| metadata.is_file() && metadata.len() == expected_size)
-        .unwrap_or(false)
+fn file_len(path: &Path) -> Option<u64> {
+    let metadata = path.metadata().ok()?;
+    metadata.is_file().then_some(metadata.len())
 }
 
 fn asr_download_client(proxy: Option<&str>) -> AppResult<reqwest::Client> {
