@@ -52,18 +52,8 @@ import {
   HistoryPlatformFilterControl,
   HistorySearchInput,
 } from "./HistoryHeaderControls";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Empty,
@@ -721,56 +711,27 @@ export function HistoryPage() {
         </Tabs>
       </div>
 
-      <AlertDialog
+      <ConfirmDialog
         open={clearOpen}
         onOpenChange={(nextOpen) => {
           if (clearPending) return;
           if (nextOpen) resetActiveClearMutation();
           setClearOpen(nextOpen);
         }}
-      >
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <Trash2 aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>
-              {activeView === "watch" ? "清空观看历史？" : "清空弹幕历史？"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {activeView === "watch"
-                ? "将删除全部观看记录，此操作无法恢复。"
-                : "将删除全部已发送弹幕记录，此操作无法恢复。"}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {clearError && (
-            <p role="alert" className="text-sm text-destructive">
-              清空失败，请重试。
-            </p>
-          )}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={clearPending}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              type="button"
-              variant="destructive"
-              disabled={clearPending}
-              onClick={clearActiveHistory}
-            >
-              {clearPending ? (
-                <>
-                  <Spinner data-icon="inline-start" aria-hidden />
-                  清空中…
-                </>
-              ) : (
-                <>
-                  <Trash2 data-icon="inline-start" aria-hidden />
-                  清空
-                </>
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        icon={<Trash2 aria-hidden />}
+        title={activeView === "watch" ? "清空观看历史？" : "清空弹幕历史？"}
+        description={
+          activeView === "watch"
+            ? "将删除全部观看记录，此操作无法恢复。"
+            : "将删除全部已发送弹幕记录，此操作无法恢复。"
+        }
+        error={clearError ? "清空失败，请重试。" : null}
+        busy={clearPending}
+        busyText="清空中…"
+        actionIcon={<Trash2 data-icon="inline-start" aria-hidden />}
+        confirmText="清空"
+        onConfirm={clearActiveHistory}
+      />
     </PullToRefresh>
   );
 }

@@ -51,17 +51,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
@@ -511,49 +501,24 @@ export function RoomPage() {
         </div>
       )}
 
-      <AlertDialog
+      <ConfirmDialog
         open={confirmUnfollowOpen}
         onOpenChange={(open) => {
           if (followBusy) return;
           setConfirmUnfollowOpen(open);
         }}
-      >
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <UserRoundX aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>取消关注</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定不再关注 {detail.user_name} 吗？取消后将不再显示在关注列表中。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={followBusy}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              type="button"
-              variant="destructive"
-              disabled={followBusy}
-              onClick={() => {
-                setConfirmUnfollowOpen(false);
-                void toggleFollow();
-              }}
-            >
-              {followBusy ? (
-                <>
-                  <Spinner data-icon="inline-start" aria-hidden />
-                  正在取消…
-                </>
-              ) : (
-                <>
-                  <UserRoundX data-icon="inline-start" aria-hidden />
-                  取消关注
-                </>
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        icon={<UserRoundX aria-hidden />}
+        title="取消关注"
+        description={<>确定不再关注 {detail.user_name} 吗？取消后将不再显示在关注列表中。</>}
+        busy={followBusy}
+        busyText="正在取消…"
+        actionIcon={<UserRoundX data-icon="inline-start" aria-hidden />}
+        confirmText="取消关注"
+        onConfirm={() => {
+          setConfirmUnfollowOpen(false);
+          void toggleFollow();
+        }}
+      />
 
       <FollowGroupPickerDialog
         open={followGroupOpen}

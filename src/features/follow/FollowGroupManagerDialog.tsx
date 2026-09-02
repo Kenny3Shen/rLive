@@ -1,18 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Folder, FolderPlus, Pencil, Trash2, X } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogClose,
@@ -268,40 +258,19 @@ export function FollowGroupManagerDialog({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
+      <ConfirmDialog
         open={pendingDelete != null}
         onOpenChange={(nextOpen) =>
           !removeMutation.isPending && !nextOpen && setPendingDelete(null)
         }
-      >
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <Trash2 aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>删除分组</AlertDialogTitle>
-            <AlertDialogDescription>
-              删除“{pendingDelete?.name}”后，其中的主播会移至未分组。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={removeMutation.isPending}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              type="button"
-              variant="destructive"
-              disabled={removeMutation.isPending}
-              onClick={() => pendingDelete && removeMutation.mutate(pendingDelete)}
-            >
-              {removeMutation.isPending ? (
-                <Spinner data-icon="inline-start" aria-hidden />
-              ) : (
-                <Trash2 data-icon="inline-start" aria-hidden />
-              )}
-              删除分组
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        icon={<Trash2 aria-hidden />}
+        title="删除分组"
+        description={<>删除“{pendingDelete?.name}”后，其中的主播会移至未分组。</>}
+        busy={removeMutation.isPending}
+        actionIcon={<Trash2 data-icon="inline-start" aria-hidden />}
+        confirmText="删除分组"
+        onConfirm={() => pendingDelete && removeMutation.mutate(pendingDelete)}
+      />
     </>
   );
 }

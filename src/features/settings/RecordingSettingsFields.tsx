@@ -11,7 +11,7 @@ import {
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Textarea } from "@/components/ui/textarea";
 import { FieldTip } from "@/features/settings/FieldTip";
-import { Switch } from "@/components/ui/switch";
+import { SwitchField } from "@/features/settings/SwitchField";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX,
@@ -350,20 +350,13 @@ export function RecordingAssSettingsFields() {
         normalize={(value) => normalizeAssPatch(settings, { shadow: Number(value) }).shadow}
         onCommit={(shadow) => setSettings({ shadow })}
       />
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>
-            <span id="recording-ass-bold-label">字体加粗</span>
-            <FieldTip>在 ASS 样式中使用粗体字重。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="recording-ass-bold-label"
-          className="self-center"
-          checked={settings.bold}
-          onCheckedChange={(bold) => setSettings({ bold })}
-        />
-      </Field>
+      <SwitchField
+        title="字体加粗"
+        tip="在 ASS 样式中使用粗体字重。"
+        className="self-center"
+        checked={settings.bold}
+        onCheckedChange={(bold) => setSettings({ bold })}
+      />
       <NumberSettingField
         id="recording-ass-scroll-duration"
         title="滚动通过时间"
@@ -447,34 +440,20 @@ export function RecordingAssSettingsFields() {
         }
         onCommit={(merge_window_seconds) => setSettings({ merge_window_seconds })}
       />
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>
-            <span id="recording-ass-filter-gifts-label">过滤礼物消息</span>
-            <FieldTip>不把礼物消息转换为滚动弹幕。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="recording-ass-filter-gifts-label"
-          className="self-center"
-          checked={settings.filter_gifts}
-          onCheckedChange={(filter_gifts) => setSettings({ filter_gifts })}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>
-            <span id="recording-ass-super-chat-label">显示醒目留言</span>
-            <FieldTip>把醒目留言以带 SC 标记的滚动弹幕导出。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="recording-ass-super-chat-label"
-          className="self-center"
-          checked={settings.show_super_chat}
-          onCheckedChange={(show_super_chat) => setSettings({ show_super_chat })}
-        />
-      </Field>
+      <SwitchField
+        title="过滤礼物消息"
+        tip="不把礼物消息转换为滚动弹幕。"
+        className="self-center"
+        checked={settings.filter_gifts}
+        onCheckedChange={(filter_gifts) => setSettings({ filter_gifts })}
+      />
+      <SwitchField
+        title="显示醒目留言"
+        tip="把醒目留言以带 SC 标记的滚动弹幕导出。"
+        className="self-center"
+        checked={settings.show_super_chat}
+        onCheckedChange={(show_super_chat) => setSettings({ show_super_chat })}
+      />
       <Field>
         <FieldLabel htmlFor="recording-ass-shield-rules">
           屏蔽关键词
@@ -491,20 +470,13 @@ export function RecordingAssSettingsFields() {
         />
         <FieldDescription>最多 100 条，每条最多 200 个字符。</FieldDescription>
       </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>
-            <span id="recording-ass-shield-regex-label">正则表达式匹配</span>
-            <FieldTip>开启后，屏蔽关键词中的每一行都按 Rust 正则表达式匹配。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="recording-ass-shield-regex-label"
-          className="self-center"
-          checked={settings.shield_regex}
-          onCheckedChange={(shield_regex) => setSettings({ shield_regex })}
-        />
-      </Field>
+      <SwitchField
+        title="正则表达式匹配"
+        tip="开启后，屏蔽关键词中的每一行都按 Rust 正则表达式匹配。"
+        className="self-center"
+        checked={settings.shield_regex}
+        onCheckedChange={(shield_regex) => setSettings({ shield_regex })}
+      />
     </>
   );
 }
@@ -517,20 +489,13 @@ export function RecordingDefaultsFields() {
 
   return (
     <>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>
-            <span id="recording-include-danmaku-label">默认录制弹幕</span>
-            <FieldTip>直播录制默认创建同步弹幕轨，开始录制前仍可单独调整。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="recording-include-danmaku-label"
-          className="self-center"
-          checked={includeDanmaku}
-          onCheckedChange={setIncludeDanmaku}
-        />
-      </Field>
+      <SwitchField
+        title="默认录制弹幕"
+        tip="直播录制默认创建同步弹幕轨，开始录制前仍可单独调整。"
+        className="self-center"
+        checked={includeDanmaku}
+        onCheckedChange={setIncludeDanmaku}
+      />
       <NumberSettingField
         id="recording-auto-split-minutes"
         title="自动分割时长"

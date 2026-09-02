@@ -22,19 +22,9 @@ import {
   Tv,
 } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Select,
   SelectContent,
@@ -817,40 +807,23 @@ export function IptvFollowView({
         onOpenChange={setGroupManagerOpen}
       />
 
-      <AlertDialog
+      <ConfirmDialog
         open={pendingRemove != null}
         onOpenChange={(open) => {
           if (removeMutation.isPending) return;
           if (!open) setPendingRemove(null);
         }}
-      >
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <Heart aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>取消 IPTV 关注</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定不再关注 {pendingRemove?.name} 吗？取消后将不再显示在关注列表中。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={removeMutation.isPending}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              type="button"
-              variant="destructive"
-              disabled={removeMutation.isPending}
-              onClick={() => {
-                if (pendingRemove) removeMutation.mutate(pendingRemove);
-                setPendingRemove(null);
-              }}
-            >
-              <Heart data-icon="inline-start" aria-hidden />
-              取消关注
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        icon={<Heart aria-hidden />}
+        title="取消 IPTV 关注"
+        description={<>确定不再关注 {pendingRemove?.name} 吗？取消后将不再显示在关注列表中。</>}
+        disabled={removeMutation.isPending}
+        actionIcon={<Heart data-icon="inline-start" aria-hidden />}
+        confirmText="取消关注"
+        onConfirm={() => {
+          if (pendingRemove) removeMutation.mutate(pendingRemove);
+          setPendingRemove(null);
+        }}
+      />
     </>
   );
 }

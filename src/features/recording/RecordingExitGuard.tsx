@@ -1,18 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { CircleDot, LogOut } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Spinner } from "@/components/ui/spinner";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { notify } from "@/components/ui/toast";
 import {
   activeRecordingCount,
@@ -105,41 +94,20 @@ export function RecordingExitGuard() {
   }
 
   return (
-    <AlertDialog
+    <ConfirmDialog
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen && !exiting) setOpen(false);
       }}
-    >
-      <AlertDialogContent size="sm">
-        <AlertDialogHeader>
-          <AlertDialogMedia className="bg-destructive/10 text-destructive">
-            <CircleDot aria-hidden />
-          </AlertDialogMedia>
-          <AlertDialogTitle>
-            {activeCount > 0 ? `还有 ${activeCount} 项录制正在进行` : "录制仍在进行"}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            退出应用会结束所有录制任务，已录制的内容会先保存再退出。确定继续退出吗？
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={exiting}>继续录制</AlertDialogCancel>
-          <AlertDialogAction
-            type="button"
-            variant="destructive"
-            disabled={exiting}
-            onClick={() => void exitAndStopRecordings()}
-          >
-            {exiting ? (
-              <Spinner data-icon="inline-start" aria-hidden />
-            ) : (
-              <LogOut data-icon="inline-start" aria-hidden />
-            )}
-            {exiting ? "正在保存并退出…" : "结束录制并退出"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      icon={<CircleDot aria-hidden />}
+      title={activeCount > 0 ? `还有 ${activeCount} 项录制正在进行` : "录制仍在进行"}
+      description="退出应用会结束所有录制任务，已录制的内容会先保存再退出。确定继续退出吗？"
+      cancelText="继续录制"
+      busy={exiting}
+      busyText="正在保存并退出…"
+      actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
+      confirmText="结束录制并退出"
+      onConfirm={() => void exitAndStopRecordings()}
+    />
   );
 }

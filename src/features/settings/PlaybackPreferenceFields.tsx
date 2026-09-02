@@ -43,8 +43,8 @@ import {
 } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import { FieldTip } from "@/features/settings/FieldTip";
+import { SwitchField } from "@/features/settings/SwitchField";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { notify } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
@@ -657,8 +657,6 @@ export function DanmakuFilterSettingsFields({
   const setSuperChatEnabled = useSettingsStore((state) => state.setSuperChatEnabled);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
   const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
-  const giftLabelId = `${idPrefix}-danmaku-gift-filter-label`;
-  const superChatLabelId = `${idPrefix}-super-chat-enabled-label`;
 
   return (
     <>
@@ -682,36 +680,24 @@ export function DanmakuFilterSettingsFields({
           persist({ danmaku_merge_window_seconds: next });
         }}
       />
-      <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
-        <FieldContent>
-          <FieldTitle>
-            <span id={giftLabelId}>隐藏礼物信息</span>
-            {layout === "page" && <FieldTip>隐藏弹幕列表和叠加层中的礼物消息。</FieldTip>}
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby={giftLabelId}
-          checked={filterGifts}
-          onCheckedChange={(checked) => {
-            useSettingsStore.setState({ danmakuFilterGifts: checked });
-            persist({ danmaku_filter_gifts: checked });
-          }}
-        />
-      </Field>
+      <SwitchField
+        title="隐藏礼物信息"
+        tip={layout === "page" ? "隐藏弹幕列表和叠加层中的礼物消息。" : undefined}
+        fieldClassName={fieldSurfaceClass(layout)}
+        checked={filterGifts}
+        onCheckedChange={(checked) => {
+          useSettingsStore.setState({ danmakuFilterGifts: checked });
+          persist({ danmaku_filter_gifts: checked });
+        }}
+      />
       {showSuperChat && (
-        <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
-          <FieldContent>
-            <FieldTitle>
-              <span id={superChatLabelId}>显示醒目留言</span>
-              {layout === "page" && <FieldTip>显示支持平台的固定醒目留言。</FieldTip>}
-            </FieldTitle>
-          </FieldContent>
-          <Switch
-            aria-labelledby={superChatLabelId}
-            checked={superChatEnabled}
-            onCheckedChange={setSuperChatEnabled}
-          />
-        </Field>
+        <SwitchField
+          title="显示醒目留言"
+          tip={layout === "page" ? "显示支持平台的固定醒目留言。" : undefined}
+          fieldClassName={fieldSurfaceClass(layout)}
+          checked={superChatEnabled}
+          onCheckedChange={setSuperChatEnabled}
+        />
       )}
       <SettingsEntryList
         id={`${idPrefix}-danmaku-shield-words`}

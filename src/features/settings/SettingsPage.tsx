@@ -70,6 +70,7 @@ import { cn, SITE_LABELS } from "@/lib/utils";
 import { directPlayerPath } from "@/features/iptv/iptvRoute";
 import { isHttpUrl } from "@/features/iptv/playlistSource";
 import { FieldTip } from "@/features/settings/FieldTip";
+import { SwitchField } from "@/features/settings/SwitchField";
 import { ImageCacheField } from "@/features/settings/CacheSettings";
 import { AppLogField } from "@/features/settings/AppLogField";
 import { notify } from "@/components/ui/toast";
@@ -132,6 +133,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 type SettingsCategory =
   | "appearance"
@@ -686,61 +688,31 @@ function AccountCard({
               输入
             </Button>
             {hasCookie && (
-              <AlertDialog
+              <ConfirmDialog
                 open={logoutOpen}
                 onOpenChange={(open) => {
                   if (clearing) return;
                   setLogoutOpen(open);
                   setLogoutError(null);
                 }}
-              >
-                <AlertDialogTrigger
-                  render={
-                    <Button variant="destructive" size="sm">
-                      <LogOut data-icon="inline-start" aria-hidden />
-                      退出
-                    </Button>
-                  }
-                />
-                <AlertDialogContent size="sm">
-                  <AlertDialogHeader>
-                    <AlertDialogMedia className="bg-destructive/10 text-destructive">
-                      <LogOut aria-hidden />
-                    </AlertDialogMedia>
-                    <AlertDialogTitle>退出{title}登录？</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      将删除本机保存的{title}{" "}
-                      Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  {logoutError && (
-                    <p role="alert" className="text-sm text-destructive">
-                      {logoutError}
-                    </p>
-                  )}
-                  <AlertDialogFooter>
-                    <AlertDialogCancel disabled={clearing}>取消</AlertDialogCancel>
-                    <AlertDialogAction
-                      type="button"
-                      variant="destructive"
-                      disabled={clearing}
-                      onClick={() => void clearCookie()}
-                    >
-                      {clearing ? (
-                        <>
-                          <Spinner data-icon="inline-start" aria-hidden />
-                          正在退出…
-                        </>
-                      ) : (
-                        <>
-                          <LogOut data-icon="inline-start" aria-hidden />
-                          确认退出
-                        </>
-                      )}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+                trigger={
+                  <Button variant="destructive" size="sm">
+                    <LogOut data-icon="inline-start" aria-hidden />
+                    退出
+                  </Button>
+                }
+                icon={<LogOut aria-hidden />}
+                title={`退出${title}登录？`}
+                description={
+                  <>将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。</>
+                }
+                error={logoutError}
+                busy={clearing}
+                busyText="正在退出…"
+                actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
+                confirmText="确认退出"
+                onConfirm={() => void clearCookie()}
+              />
             )}
           </div>
         </FieldContent>
@@ -756,60 +728,31 @@ function AccountCard({
             手动输入
           </Button>
           {hasCookie && (
-            <AlertDialog
+            <ConfirmDialog
               open={logoutOpen}
               onOpenChange={(open) => {
                 if (clearing) return;
                 setLogoutOpen(open);
                 setLogoutError(null);
               }}
-            >
-              <AlertDialogTrigger
-                render={
-                  <Button variant="destructive" size="sm">
-                    <LogOut data-icon="inline-start" aria-hidden />
-                    退出登录
-                  </Button>
-                }
-              />
-              <AlertDialogContent size="sm">
-                <AlertDialogHeader>
-                  <AlertDialogMedia className="bg-destructive/10 text-destructive">
-                    <LogOut aria-hidden />
-                  </AlertDialogMedia>
-                  <AlertDialogTitle>退出{title}登录？</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                {logoutError && (
-                  <p role="alert" className="text-sm text-destructive">
-                    {logoutError}
-                  </p>
-                )}
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={clearing}>取消</AlertDialogCancel>
-                  <AlertDialogAction
-                    type="button"
-                    variant="destructive"
-                    disabled={clearing}
-                    onClick={() => void clearCookie()}
-                  >
-                    {clearing ? (
-                      <>
-                        <Spinner data-icon="inline-start" aria-hidden />
-                        正在退出…
-                      </>
-                    ) : (
-                      <>
-                        <LogOut data-icon="inline-start" aria-hidden />
-                        确认退出
-                      </>
-                    )}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+              trigger={
+                <Button variant="destructive" size="sm">
+                  <LogOut data-icon="inline-start" aria-hidden />
+                  退出登录
+                </Button>
+              }
+              icon={<LogOut aria-hidden />}
+              title={`退出${title}登录？`}
+              description={
+                <>将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。</>
+              }
+              error={logoutError}
+              busy={clearing}
+              busyText="正在退出…"
+              actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
+              confirmText="确认退出"
+              onConfirm={() => void clearCookie()}
+            />
           )}
         </div>
       </Field>
@@ -999,56 +942,31 @@ function PlaybackSettingsResetField() {
           )
         )}
       </FieldContent>
-      <AlertDialog
+      <ConfirmDialog
         open={confirmOpen}
         onOpenChange={(open) => {
           if (resetting) return;
           setConfirmOpen(open);
         }}
-      >
-        <AlertDialogTrigger
-          render={
-            <Button variant="outline">
-              <RotateCcw data-icon="inline-start" aria-hidden />
-              恢复默认
-            </Button>
-          }
-        />
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogMedia className="bg-destructive/10 text-destructive">
-              <RotateCcw aria-hidden />
-            </AlertDialogMedia>
-            <AlertDialogTitle>恢复默认设置？</AlertDialogTitle>
-            <AlertDialogDescription>
-              {mobileClient
-                ? "将重置本页全部设置项，包括画质、弹幕和屏蔽词。"
-                : "将重置本页全部设置项，包括画质、语音字幕、热词、弹幕和屏蔽词；已开启的语音字幕会被关闭。"}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={resetting}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              type="button"
-              variant="destructive"
-              disabled={resetting}
-              onClick={() => void resetAll()}
-            >
-              {resetting ? (
-                <>
-                  <Spinner data-icon="inline-start" aria-hidden />
-                  正在恢复…
-                </>
-              ) : (
-                <>
-                  <RotateCcw data-icon="inline-start" aria-hidden />
-                  恢复默认
-                </>
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        trigger={
+          <Button variant="outline">
+            <RotateCcw data-icon="inline-start" aria-hidden />
+            恢复默认
+          </Button>
+        }
+        icon={<RotateCcw aria-hidden />}
+        title="恢复默认设置？"
+        description={
+          mobileClient
+            ? "将重置本页全部设置项，包括画质、弹幕和屏蔽词。"
+            : "将重置本页全部设置项，包括画质、语音字幕、热词、弹幕和屏蔽词；已开启的语音字幕会被关闭。"
+        }
+        busy={resetting}
+        busyText="正在恢复…"
+        actionIcon={<RotateCcw data-icon="inline-start" aria-hidden />}
+        confirmText="恢复默认"
+        onConfirm={() => void resetAll()}
+      />
     </Field>
   );
 }
@@ -1201,20 +1119,14 @@ function AsrModelField() {
         </div>
       </Field>
 
-      <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-        <FieldContent>
-          <FieldTitle>
-            <span id="asr-vad-title">VAD（静音端点检测）</span>
-            <FieldTip>关闭后仅按最长 20 秒切分。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="asr-vad-title"
-          checked={vadEnabled}
-          disabled={!model.supported || model.isPending || pending}
-          onCheckedChange={(checked) => void applyVadEnabled(checked)}
-        />
-      </Field>
+      <SwitchField
+        title="VAD（静音端点检测）"
+        tip="关闭后仅按最长 20 秒切分。"
+        checked={vadEnabled}
+        disabled={!model.supported || model.isPending || pending}
+        fieldDisabled={!model.supported || pending}
+        onCheckedChange={(checked) => void applyVadEnabled(checked)}
+      />
 
       {isWindowsDesktop() && (
         <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
@@ -1245,35 +1157,23 @@ function AsrModelField() {
         </Field>
       )}
 
-      <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-        <FieldContent>
-          <FieldTitle>
-            <span id="asr-punctuation-title">自动标点</span>
-            <FieldTip>关闭后保留原始文本。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="asr-punctuation-title"
-          checked={punctuationEnabled}
-          disabled={!model.supported || model.isPending || pending}
-          onCheckedChange={(checked) => void applyPunctuationEnabled(checked)}
-        />
-      </Field>
+      <SwitchField
+        title="自动标点"
+        tip="关闭后保留原始文本。"
+        checked={punctuationEnabled}
+        disabled={!model.supported || model.isPending || pending}
+        fieldDisabled={!model.supported || pending}
+        onCheckedChange={(checked) => void applyPunctuationEnabled(checked)}
+      />
 
-      <Field orientation="horizontal" data-disabled={!model.supported || pending || undefined}>
-        <FieldContent>
-          <FieldTitle>
-            <span id="asr-speaker-title">说话人区分</span>
-            <FieldTip>首次启用需下载约 27 MB。</FieldTip>
-          </FieldTitle>
-        </FieldContent>
-        <Switch
-          aria-labelledby="asr-speaker-title"
-          checked={speakerEnabled}
-          disabled={!model.supported || model.isPending || pending}
-          onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
-        />
-      </Field>
+      <SwitchField
+        title="说话人区分"
+        tip="首次启用需下载约 27 MB。"
+        checked={speakerEnabled}
+        disabled={!model.supported || model.isPending || pending}
+        fieldDisabled={!model.supported || pending}
+        onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
+      />
 
       <AsrHotwordsField idPrefix="settings" layout="page" disabled={!model.supported} />
 
@@ -1945,39 +1845,21 @@ export function SettingsPage() {
               <ToggleGroupItem value="low">最低</ToggleGroupItem>
             </ToggleGroup>
           </Field>
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldTitle>
-                <span id="soft-switch-title">软切换</span>
-                <FieldTip>
-                  同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。
-                </FieldTip>
-              </FieldTitle>
-            </FieldContent>
-            <Switch
-              aria-labelledby="soft-switch-title"
-              checked={playbackSoftSwitchEnabled}
-              onCheckedChange={setPlaybackSoftSwitchEnabled}
-            />
-          </Field>
+          <SwitchField
+            title="软切换"
+            tip="同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。"
+            checked={playbackSoftSwitchEnabled}
+            onCheckedChange={setPlaybackSoftSwitchEnabled}
+          />
         </Section>
         {!mobileClient && (
           <Section title="浏览页">
-            <Field orientation="horizontal">
-              <FieldContent>
-                <FieldTitle>
-                  <span id="room-card-preview-title">悬停卡片预览</span>
-                  <FieldTip>
-                    鼠标停留在直播间卡片上时播放静音低画质预览；仅桌面端且系统未开启减少动态效果时生效。
-                  </FieldTip>
-                </FieldTitle>
-              </FieldContent>
-              <Switch
-                aria-labelledby="room-card-preview-title"
-                checked={roomCardPreviewEnabled}
-                onCheckedChange={setRoomCardPreviewEnabled}
-              />
-            </Field>
+            <SwitchField
+              title="悬停卡片预览"
+              tip="鼠标停留在直播间卡片上时播放静音低画质预览；仅桌面端且系统未开启减少动态效果时生效。"
+              checked={roomCardPreviewEnabled}
+              onCheckedChange={setRoomCardPreviewEnabled}
+            />
           </Section>
         )}
         {!mobileClient && (
