@@ -436,8 +436,6 @@ type SettingsState = {
   setSuperChatEnabled: (enabled: boolean) => void;
   /** 屏蔽一个用户；已在列表中时为无操作。 */
   blockDanmakuUser: (user: string) => void;
-  /** 解除对一个用户的屏蔽；不在列表中时为无操作。 */
-  unblockDanmakuUser: (user: string) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrProvider: (provider: AsrProvider) => Promise<void>;
@@ -544,6 +542,80 @@ function toAppSettings(state: SettingsState): AppSettings {
   };
 }
 
+/**
+ * 生成"写入状态字段并把对应后端 settings key 持久化"的薄 setter。
+ * 状态字段名与后端 key 常不同名（qualityLevel ↔ quality_level），两者都显式传入。
+ */
+function forwardedSetters(
+  set: (partial: Partial<SettingsState>) => void,
+  get: () => SettingsState,
+) {
+  const forward = <K extends keyof SettingsState, P extends keyof AppSettings>(
+    stateKey: K,
+    settingsKey: P,
+  ) =>
+    (value: SettingsState[K] & AppSettings[P]) => {
+      set({ [stateKey]: value } as Partial<SettingsState>);
+      void get().persistToBackend({ [settingsKey]: value } as Partial<AppSettings>);
+    };
+  return {
+    setTheme: forward("theme", "theme"),
+    setProxy: forward("proxy", "proxy"),
+    setQualityLevel: forward("qualityLevel", "quality_level"),
+    setPlaybackSoftSwitchEnabled: forward(
+      "playbackSoftSwitchEnabled",
+      "playback_soft_switch_enabled",
+    ),
+    setRoomCardPreviewEnabled: forward("roomCardPreviewEnabled", "room_card_preview_enabled"),
+    setSuperChatEnabled: forward("superChatEnabled", "super_chat_enabled"),
+    setAsrTranslationEnabled: forward("asrTranslationEnabled", "asr_translation_enabled"),
+    setRecordingIncludeDanmaku: forward("recordingIncludeDanmaku", "recording_include_danmaku"),
+  };
+}
+
+/**
+ * 生成 ASR 子设置（provider、VAD、标点、说话人区分）的 setter：相等早退；
+ * 持久化成功且 ASR 已启用时重启会话；失败仅当该写入仍是最新一次
+ * （epoch 未被后续 ASR 写入递增）时回滚并重新持久化，finally 同理清
+ * asrPending——否则先发请求的回滚会覆盖后发的新值。
+ */
+function asrSettingSetters(
+  set: (partial: Partial<SettingsState>) => void,
+  get: () => SettingsState,
+) {
+  const asrSetting = <K extends keyof SettingsState, P extends keyof AppSettings>(
+    stateKey: K,
+    settingsKey: P,
+  ) =>
+    async (value: SettingsState[K] & AppSettings[P]) => {
+      const previous = get()[stateKey];
+      if (value === previous) return;
+      const epoch = ++asrSettingEpoch;
+      set({ [stateKey]: value, asrPending: true } as Partial<SettingsState>);
+      try {
+        await get().persistToBackend({ [settingsKey]: value } as Partial<AppSettings>);
+        if (get().asrEnabled) await invokeCmd("asr_enable");
+      } catch (error) {
+        if (epoch === asrSettingEpoch) {
+          set({ [stateKey]: previous } as Partial<SettingsState>);
+          await get().persistToBackend({ [settingsKey]: previous } as Partial<AppSettings>);
+        }
+        throw error;
+      } finally {
+        if (epoch === asrSettingEpoch) set({ asrPending: false });
+      }
+    };
+  return {
+    setAsrProvider: asrSetting("asrProvider", "asr_provider"),
+    setAsrVadEnabled: asrSetting("asrVadEnabled", "asr_vad_enabled"),
+    setAsrPunctuationEnabled: asrSetting("asrPunctuationEnabled", "asr_punctuation_enabled"),
+    setAsrSpeakerDiarizationEnabled: asrSetting(
+      "asrSpeakerDiarizationEnabled",
+      "asr_speaker_diarization_enabled",
+    ),
+  };
+}
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
@@ -588,10 +660,8 @@ export const useSettingsStore = create<SettingsState>()(
       recordingAssSettings: RECORDING_ASS_DEFAULT_SETTINGS,
       hydratedFromBackend: false,
       settingsLoadError: null,
-      setTheme: (theme) => {
-        set({ theme });
-        void get().persistToBackend({ theme });
-      },
+      ...forwardedSetters(set, get),
+      ...asrSettingSetters(set, get),
       setSiteId: (siteId) => {
         const nextSiteId = resolveEnabledSiteId(siteId, get().disabledSiteIds);
         set({ siteId: nextSiteId });
@@ -606,45 +676,12 @@ export const useSettingsStore = create<SettingsState>()(
           disabled_site_ids: disabledSiteIds,
         });
       },
-      setProxy: (proxy) => {
-        set({ proxy });
-        void get().persistToBackend({ proxy });
-      },
-      setQualityLevel: (qualityLevel) => {
-        set({ qualityLevel });
-        void get().persistToBackend({ quality_level: qualityLevel });
-      },
-      setPlaybackSoftSwitchEnabled: (playbackSoftSwitchEnabled) => {
-        set({ playbackSoftSwitchEnabled });
-        void get().persistToBackend({
-          playback_soft_switch_enabled: playbackSoftSwitchEnabled,
-        });
-      },
-      setRoomCardPreviewEnabled: (roomCardPreviewEnabled) => {
-        set({ roomCardPreviewEnabled });
-        void get().persistToBackend({
-          room_card_preview_enabled: roomCardPreviewEnabled,
-        });
-      },
-      setSuperChatEnabled: (superChatEnabled) => {
-        set({ superChatEnabled });
-        void get().persistToBackend({ super_chat_enabled: superChatEnabled });
-      },
       blockDanmakuUser: (user) => {
         const name = user.trim();
         if (!name) return;
         const current = get().danmakuBlockedUsers;
         if (current.includes(name)) return;
         const danmakuBlockedUsers = normalizeDanmakuBlockedUsers([...current, name]);
-        set({ danmakuBlockedUsers });
-        void get().persistToBackend({ danmaku_blocked_users: danmakuBlockedUsers });
-      },
-      unblockDanmakuUser: (user) => {
-        const name = user.trim();
-        const current = get().danmakuBlockedUsers;
-        const index = current.indexOf(name);
-        if (index < 0) return;
-        const danmakuBlockedUsers = current.filter((_, i) => i !== index);
         set({ danmakuBlockedUsers });
         void get().persistToBackend({ danmaku_blocked_users: danmakuBlockedUsers });
       },
@@ -678,82 +715,6 @@ export const useSettingsStore = create<SettingsState>()(
           if (epoch === asrSettingEpoch) {
             set({ asrPending: false });
           }
-        }
-      },
-      setAsrProvider: async (asrProvider) => {
-        const previous = get().asrProvider;
-        if (asrProvider === previous) return;
-        const epoch = ++asrSettingEpoch;
-        set({ asrProvider, asrPending: true });
-        try {
-          await get().persistToBackend({ asr_provider: asrProvider });
-          if (get().asrEnabled) await invokeCmd("asr_enable");
-        } catch (error) {
-          if (epoch === asrSettingEpoch) {
-            set({ asrProvider: previous });
-            await get().persistToBackend({ asr_provider: previous });
-          }
-          throw error;
-        } finally {
-          if (epoch === asrSettingEpoch) set({ asrPending: false });
-        }
-      },
-      setAsrVadEnabled: async (asrVadEnabled) => {
-        const previous = get().asrVadEnabled;
-        if (asrVadEnabled === previous) return;
-        const epoch = ++asrSettingEpoch;
-        set({ asrVadEnabled, asrPending: true });
-        try {
-          await get().persistToBackend({ asr_vad_enabled: asrVadEnabled });
-          if (get().asrEnabled) await invokeCmd("asr_enable");
-        } catch (error) {
-          if (epoch === asrSettingEpoch) {
-            set({ asrVadEnabled: previous });
-            await get().persistToBackend({ asr_vad_enabled: previous });
-          }
-          throw error;
-        } finally {
-          if (epoch === asrSettingEpoch) set({ asrPending: false });
-        }
-      },
-      setAsrPunctuationEnabled: async (asrPunctuationEnabled) => {
-        const previous = get().asrPunctuationEnabled;
-        if (asrPunctuationEnabled === previous) return;
-        const epoch = ++asrSettingEpoch;
-        set({ asrPunctuationEnabled, asrPending: true });
-        try {
-          await get().persistToBackend({ asr_punctuation_enabled: asrPunctuationEnabled });
-          if (get().asrEnabled) await invokeCmd("asr_enable");
-        } catch (error) {
-          if (epoch === asrSettingEpoch) {
-            set({ asrPunctuationEnabled: previous });
-            await get().persistToBackend({ asr_punctuation_enabled: previous });
-          }
-          throw error;
-        } finally {
-          if (epoch === asrSettingEpoch) set({ asrPending: false });
-        }
-      },
-      setAsrSpeakerDiarizationEnabled: async (asrSpeakerDiarizationEnabled) => {
-        const previous = get().asrSpeakerDiarizationEnabled;
-        if (asrSpeakerDiarizationEnabled === previous) return;
-        const epoch = ++asrSettingEpoch;
-        set({ asrSpeakerDiarizationEnabled, asrPending: true });
-        try {
-          await get().persistToBackend({
-            asr_speaker_diarization_enabled: asrSpeakerDiarizationEnabled,
-          });
-          if (get().asrEnabled) await invokeCmd("asr_enable");
-        } catch (error) {
-          if (epoch === asrSettingEpoch) {
-            set({ asrSpeakerDiarizationEnabled: previous });
-            await get().persistToBackend({
-              asr_speaker_diarization_enabled: previous,
-            });
-          }
-          throw error;
-        } finally {
-          if (epoch === asrSettingEpoch) set({ asrPending: false });
         }
       },
       setAsrHotwords: async (asrHotwords) => {
@@ -796,12 +757,6 @@ export const useSettingsStore = create<SettingsState>()(
           throw error;
         }
       },
-      setAsrTranslationEnabled: (asrTranslationEnabled) => {
-        set({ asrTranslationEnabled });
-        void get().persistToBackend({
-          asr_translation_enabled: asrTranslationEnabled,
-        });
-      },
       setAsrTranslationFrom: (from) => {
         const normalized = normalizeCaptionTranslationFrom(from);
         const asrTranslationFrom =
@@ -832,10 +787,6 @@ export const useSettingsStore = create<SettingsState>()(
         const next = iptvCustomM3uUrl?.trim() || null;
         set({ iptvCustomM3uUrl: next });
         void get().persistToBackend({ iptv_custom_m3u_url: next });
-      },
-      setRecordingIncludeDanmaku: (recordingIncludeDanmaku) => {
-        set({ recordingIncludeDanmaku });
-        void get().persistToBackend({ recording_include_danmaku: recordingIncludeDanmaku });
       },
       setRecordingAutoSplitMinutes: (minutes) => {
         const recordingAutoSplitMinutes = parseRecordingAutoSplitMinutes(minutes);
