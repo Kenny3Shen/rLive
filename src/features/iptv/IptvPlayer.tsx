@@ -29,7 +29,7 @@ import {
   IPTV_MEDIA_LIFECYCLE_PROFILE,
   useMediaLifecycle,
 } from "@/features/room/player/useWebPlayer";
-import type { XgPlaybackKind } from "@/features/room/player/xgPlayer";
+import type { XgLivePlaybackKind } from "@/features/room/player/xgPlayer";
 import type { IptvChannel } from "./types";
 
 export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
@@ -83,7 +83,7 @@ function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
 
 export function iptvPlaybackKind(
   source: string | Pick<IptvChannel, "url" | "protocol">,
-): XgPlaybackKind {
+): XgLivePlaybackKind {
   const url = typeof source === "string" ? source : source.url;
   const protocol = typeof source === "string" ? undefined : source.protocol;
   if (protocol === "flv" || protocol === "hls" || protocol === "native") return protocol;

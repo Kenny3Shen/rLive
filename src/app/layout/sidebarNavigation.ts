@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { Heart, History, Home, PanelsTopLeft, Settings, Tv, Videotape } from "lucide-react";
+import { Clapperboard, Heart, History, Home, PanelsTopLeft, Settings, Tv, Videotape } from "lucide-react";
 
 export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",
@@ -25,6 +25,9 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   // 分类浏览已合并进首页的 sticky 分类条，不再占一个导航目的地。
   { to: "/", label: "首页", icon: Home, end: true },
   { to: "/follow", label: "关注", icon: Heart },
+  // B 站视频（VOD）。它不是直播平台中的一个，因此是自己的目的地而不是
+  // 首页平台条上的一项 —— 首页那条条带完全不动。
+  { to: "/video", label: "视频", icon: Clapperboard },
   { to: "/iptv", label: "IPTV", icon: Tv },
   {
     to: "/multi-room",
@@ -58,9 +61,14 @@ export function sidebarNavItemsFor(mobileClient: boolean): SidebarNavItem[] {
   return mobileClient ? SIDEBAR_NAV_ITEMS.filter((item) => !item.desktopOnly) : SIDEBAR_NAV_ITEMS;
 }
 
+/**
+ * 方向条带。顺序必须与 `SIDEBAR_NAV_ITEMS` 的视觉顺序一致：它决定换页平移的方向，
+ * 漏一项就会让那个目的地的进出方向错。
+ */
 const SIDEBAR_DESTINATIONS = [
   "/",
   "/follow",
+  "/video",
   "/iptv",
   "/multi-room",
   "/recordings",

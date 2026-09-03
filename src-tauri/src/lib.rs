@@ -89,6 +89,11 @@ use commands::site::{
     site_get_recommend, site_get_room_detail, site_list, site_search_rooms,
 };
 use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry};
+use commands::video::{
+    video_get_danmaku, video_get_pgc_index, video_get_pgc_zone, video_get_play_info,
+    video_get_popular, video_get_recommend, video_get_season, video_get_zone, video_stop_play,
+    video_zone_list,
+};
 use state::AppState;
 // 只有桌面端的关闭处理器会发出事件；Android 没有退出确认框。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -374,6 +379,16 @@ pub fn run() {
             stream_proxy_start,
             stream_proxy_stop,
             stream_proxy_telemetry,
+            video_get_recommend,
+            video_get_popular,
+            video_get_zone,
+            video_zone_list,
+            video_get_pgc_index,
+            video_get_pgc_zone,
+            video_get_season,
+            video_get_play_info,
+            video_get_danmaku,
+            video_stop_play,
             image_proxy_url,
             cache_usage,
             cache_clear,

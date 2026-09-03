@@ -26,6 +26,8 @@ import {
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
+  loadVideoPage,
+  loadVideoPlayerPage,
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
 import { homeCategoryPath } from "../features/category/categorySelection";
@@ -47,6 +49,8 @@ const SettingsPage = lazy(loadSettingsPage);
 const IptvPage = lazy(loadIptvPage);
 const IptvPlayerPage = lazy(loadIptvPlayerPage);
 const MultiRoomPage = lazy(loadMultiRoomPage);
+const VideoPage = lazy(loadVideoPage);
+const VideoPlayerPage = lazy(loadVideoPlayerPage);
 const RoomPage = lazy(loadRoomPage);
 
 /**
@@ -125,6 +129,10 @@ const router = createBrowserRouter(
         <Route path="recordings/play/:roomDir/:sessionDir" element={<RecordingPlaybackPage />} />
         <Route path="iptv/play" element={<IptvPlayerPage />} />
         <Route path="iptv" element={<IptvPage />} />
+        {/* 播放页在前：React Router 不会把 `/video/play` 误匹配到 `/video`，
+            但两条相邻声明让「发现页 vs 播放页」的关系一眼可读。 */}
+        <Route path="video/play" element={<VideoPlayerPage />} />
+        <Route path="video" element={<VideoPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="multi-room" element={<MultiRoomPage />} />
         <Route path="room/:siteId/:roomId" element={<EnabledRoomRoute />} />

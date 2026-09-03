@@ -776,6 +776,93 @@ pub(crate) fn emit_system(sender: &DanmakuEventSender, content: impl Into<String
     );
 }
 
+/// 最小 protobuf 读取器：按 wire type 逐字段前进，未知字段可安全跳过。
+///
+/// 抖音直播弹幕与 B 站 VOD 弹幕都是裸 protobuf，且各自只需要读少量标量字段。
+/// 两处共用这一份读取器，避免为几个字段引入代码生成与运行时依赖。
+#[derive(Debug)]
+pub(crate) enum ProtoValue<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+    Fixed32,
+    Fixed64,
+}
+
+pub(crate) struct ProtoReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> ProtoReader<'a> {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    /// 读下一个字段。返回 `Ok(None)` 表示已读完整个消息。
+    ///
+    /// 定长与变长字段都完整消费掉，因此调用方 `match` 不到的字段编号会被
+    /// 自动跳过 —— 上游新增字段不会让解析失败。
+    pub(crate) fn next_field(&mut self) -> Result<Option<(u32, ProtoValue<'a>)>, &'static str> {
+        if self.offset == self.bytes.len() {
+            return Ok(None);
+        }
+        let tag = self.read_varint()?;
+        let number = (tag >> 3) as u32;
+        if number == 0 {
+            return Err("protobuf field number is zero");
+        }
+        let value = match tag & 0x07 {
+            0 => ProtoValue::Varint(self.read_varint()?),
+            1 => {
+                self.take(8)?;
+                ProtoValue::Fixed64
+            }
+            2 => {
+                let len = usize::try_from(self.read_varint()?).map_err(|_| "protobuf length")?;
+                ProtoValue::Bytes(self.take(len)?)
+            }
+            5 => {
+                self.take(4)?;
+                ProtoValue::Fixed32
+            }
+            _ => return Err("unsupported protobuf wire type"),
+        };
+        Ok(Some((number, value)))
+    }
+
+    fn read_varint(&mut self) -> Result<u64, &'static str> {
+        let mut result = 0u64;
+        for shift in (0..64).step_by(7) {
+            let byte = *self
+                .bytes
+                .get(self.offset)
+                .ok_or("truncated protobuf varint")?;
+            self.offset += 1;
+            result |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(result);
+            }
+            if shift == 63 {
+                break;
+            }
+        }
+        Err("protobuf varint overflow")
+    }
+
+    fn take(&mut self, len: usize) -> Result<&'a [u8], &'static str> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or("protobuf length overflow")?;
+        let value = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or("truncated protobuf field")?;
+        self.offset = end;
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

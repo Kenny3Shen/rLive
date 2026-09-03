@@ -13,6 +13,8 @@ import {
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
+  loadVideoPage,
+  loadVideoPlayerPage,
   routeModuleLoaderForPath,
 } from "../src/app/routeModules";
 
@@ -64,6 +66,13 @@ describe("route module loading", () => {
     expect(routeModuleLoaderForPath("/room/bilibili/1")).toBe(loadRoomPage);
     expect(routeModuleLoaderForPath("/")).toBeNull();
     expect(routeModuleLoaderForPath("/unknown")).toBeNull();
+  });
+
+  test("resolves the video surfaces without letting the play page fall through to discovery", () => {
+    // 两条路径共一个前缀，判定顺序错了播放页就会拿到发现页的 loader。
+    expect(routeModuleLoaderForPath("/video")).toBe(loadVideoPage);
+    expect(routeModuleLoaderForPath("/video?tab=anime")).toBe(loadVideoPage);
+    expect(routeModuleLoaderForPath("/video/play?cid=123&bvid=BV1")).toBe(loadVideoPlayerPage);
   });
 
   test("resolves the desktop category page but leaves merged surfaces to the home route", () => {

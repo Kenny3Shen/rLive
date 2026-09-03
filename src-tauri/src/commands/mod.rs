@@ -23,3 +23,4 @@ pub mod recording;
 pub mod settings;
 pub mod site;
 pub mod stream_proxy;
+pub mod video;
