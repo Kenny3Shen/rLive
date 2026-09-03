@@ -668,7 +668,7 @@ export function VideoSidebar({
     >
       {/* UP 主信息块：与直播页的主播信息（RoomHostInfo）同一套画法（sideHeader
           的对应物，置于页签之上即整页右上角）—— 圆角卡片包裹、共享 Avatar、
-          分隔线统计行，差异只在指标含义与简介。 */}
+          分隔线统计行；简介仅宽屏侧栏展示，窄屏与直播页主播卡同构同高。 */}
       {!isPgc && archive && (
         <section
           className="shrink-0 border-b border-border px-2.5 py-2"
