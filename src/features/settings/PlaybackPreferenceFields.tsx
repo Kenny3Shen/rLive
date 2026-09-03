@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
 import {
   ASR_HOTWORD_MAX_LENGTH,
@@ -27,13 +27,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { Field, FieldContent, FieldError, FieldTitle } from "@/components/ui/field";
 import {
   InputGroup,
@@ -47,6 +45,7 @@ import { SwitchField } from "@/features/settings/SwitchField";
 import { Slider } from "@/components/ui/slider";
 import { notify } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { isMobileClient } from "@/shared/clientPlatform";
 
 export type PlaybackSettingsFieldLayout = "page" | "panel";
 
@@ -255,6 +254,9 @@ function SettingsEntryList({
   const [open, setOpen] = useState(false);
   const labelId = `${id}-label`;
   const dialogTitleId = `${id}-dialog-title`;
+  // 移动端底部弹出（拇指可达），桌面端右滑；关闭图标随滑出方向。判定按客户端
+  // 而不是视口宽度：桌面拖窄窗口不会变成更好的底部弹层。
+  const mobile = isMobileClient();
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
@@ -292,11 +294,30 @@ function SettingsEntryList({
       >
         管理
       </Button>
-      <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent aria-labelledby={dialogTitleId} className="max-w-md">
-          <DialogHeader>
-            <DialogTitle id={dialogTitleId}>{label}</DialogTitle>
-          </DialogHeader>
+      {/* 词表管理用抽屉而不是居中弹窗：列表逐条编辑需要更宽的版面，
+          且能叠在播放器/直播间设置抽屉之上逐层退出。 */}
+      <Drawer open={open} onOpenChange={handleOpenChange}>
+        <DrawerContent
+          side={mobile ? "bottom" : "right"}
+          aria-labelledby={dialogTitleId}
+          className={cn(
+            "flex flex-col gap-3",
+            // 桌面端右滑抽屉加宽容纳词表；移动端底部弹层用默认全宽。
+            !mobile && "w-[min(28rem,90vw)]",
+          )}
+        >
+          {/* 抽屉没有居中弹窗的系统标题栏，给显式关闭口：图标指向滑出方向
+              （桌面端 ›、移动端 ⌄），Esc/点遮罩仍可关。 */}
+          <div className="flex shrink-0 items-center justify-between gap-2">
+            <DrawerTitle id={dialogTitleId}>{label}</DrawerTitle>
+            <DrawerClose
+              render={
+                <Button variant="ghost" size="icon-sm" aria-label="关闭" />
+              }
+            >
+              {mobile ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+            </DrawerClose>
+          </div>
           <InputGroup>
             <InputGroupInput
               id={id}
@@ -351,7 +372,7 @@ function SettingsEntryList({
                               event.preventDefault();
                               saveEditing(entry);
                             }
-                            // 行内编辑时 Esc 先取消编辑而不是关掉整个弹窗。
+                            // 行内编辑时 Esc 先取消编辑而不是关掉整个抽屉。
                             if (event.key === "Escape") {
                               event.preventDefault();
                               event.stopPropagation();
@@ -414,11 +435,12 @@ function SettingsEntryList({
               ))}
             </div>
           )}
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>完成</DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          {/* 弹窗居中排版下页脚按钮靠右；抽屉内表单直接顺排即可。 */}
+          <div className="flex justify-end">
+            <DrawerClose render={<Button variant="outline" />}>完成</DrawerClose>
+          </div>
+        </DrawerContent>
+      </Drawer>
     </Field>
   );
 }
