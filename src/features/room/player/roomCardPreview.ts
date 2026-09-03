@@ -106,9 +106,11 @@ export function roomCardPreviewHlsOptions(): Record<string, unknown> {
   };
 }
 
-type PreviewSurface = { root: HTMLDivElement; video: HTMLVideoElement };
+/** 预览表面：封面上的全尺寸静音 video 容器，样式由 `.room-card-preview` 提供。 */
+export type PreviewSurface = { root: HTMLDivElement; video: HTMLVideoElement };
 
-function createPreviewSurface(): PreviewSurface {
+/** 供直播与视频卡片预览共用（视频侧见 `features/video/videoCardPreview.ts`）。 */
+export function createPreviewSurface(): PreviewSurface {
   const root = document.createElement("div");
   root.className = "room-card-preview";
   root.dataset.previewPhase = "loading";

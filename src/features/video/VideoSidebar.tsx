@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ThumbsUp } from "lucide-react";
+import { MessageSquare, MessageSquareText, Play, ThumbsUp } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
@@ -34,6 +36,12 @@ const TAB_LABELS: Record<SidebarTab, string> = {
   episodes: "分集",
   comments: "评论",
 };
+
+const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "episodes", "comments"];
+
+function isSidebarTab(value: string): value is SidebarTab {
+  return (SIDEBAR_TABS as readonly string[]).includes(value);
+}
 
 /** Unix 秒 → 「x 分钟前」。超过一个月退回日期，足够读评不用更准。 */
 function formatRelativeTime(unixSec: number): string {
@@ -531,56 +539,93 @@ export function VideoSidebar({
   const archive = archiveQuery.data;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border/80 px-2 py-1.5">
-        {tabs.map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={tab === value}
-            onClick={() => setTab(value)}
-            className={cn(
-              "rounded-full px-3 py-1 text-[13px] transition-colors",
-              tab === value
-                ? "bg-foreground text-background"
-                : "text-muted-foreground hover:bg-muted/60",
-            )}
-          >
-            {TAB_LABELS[value]}
-          </button>
-        ))}
-      </div>
-      {/* UGC 的作者/统计信息对两个页签都有意义，放页签之上方的固定头。 */}
+    // 与直播播放页右侧栏同一套结构：UP 主信息卡（sideHeader 的对应物）在页签
+    // 之上，即整页右上角；页签条是 line 变体 Tabs + h-11 条带（见 PlayerPane）。
+    <Tabs
+      value={tab}
+      className="flex h-full min-h-0 flex-col gap-0"
+      onValueChange={(value) => {
+        if (isSidebarTab(value)) setTab(value);
+      }}
+    >
+      {/* UP 主信息块：与直播页的主播信息（RoomHostInfo）同一套画法（sideHeader
+          的对应物，置于页签之上即整页右上角）—— 圆角卡片包裹、共享 Avatar、
+          分隔线统计行，差异只在指标含义与简介。 */}
       {!isPgc && archive && (
-        <div className="shrink-0 border-b border-border/60 px-3 py-2.5">
-          <div className="flex items-center gap-2.5">
-            {archive.author_face ? (
-              <img
-                src={normalizeImageUrl(archive.author_face)}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-                className="size-8 shrink-0 rounded-full object-cover"
-              />
-            ) : (
-              <div className="size-8 shrink-0 rounded-full bg-muted" aria-hidden />
-            )}
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-medium">{archive.author}</p>
-              <p className="truncate text-[11px] text-muted-foreground">
-                {formatOnline(archive.view)} 播放 · {formatOnline(archive.danmaku)} 弹幕 ·{" "}
-                {formatOnline(archive.reply)} 评论
-              </p>
+        <section
+          className="shrink-0 border-b border-border px-2.5 py-2"
+          aria-label={`UP 主信息：${archive.author}`}
+        >
+          <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Avatar size="lg" className="size-11 ring-1 ring-border/80">
+                <AvatarImage
+                  src={normalizeImageUrl(archive.author_face)}
+                  alt={`${archive.author} 的头像`}
+                  referrerPolicy="no-referrer"
+                />
+                <AvatarFallback className="font-medium">
+                  {Array.from(archive.author)[0] ?? "?"}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <p
+                  className="truncate text-sm font-semibold leading-5 tracking-tight"
+                  title={archive.author}
+                >
+                  {archive.author}
+                </p>
+                <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
+                  <div className="flex min-w-0 items-center gap-1" title={`播放：${formatOnline(archive.view)}`}>
+                    <dt className="sr-only">播放</dt>
+                    <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
+                    <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
+                      {formatOnline(archive.view)}
+                    </dd>
+                  </div>
+                  <div
+                    className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
+                    title={`弹幕：${formatOnline(archive.danmaku)}`}
+                  >
+                    <dt className="sr-only">弹幕</dt>
+                    <MessageSquare aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <dd className="font-semibold leading-4 tracking-normal tabular-nums">
+                      {formatOnline(archive.danmaku)}
+                    </dd>
+                  </div>
+                  <div
+                    className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
+                    title={`评论：${formatOnline(archive.reply)}`}
+                  >
+                    <dt className="sr-only">评论</dt>
+                    <MessageSquareText aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <dd className="font-semibold leading-4 tracking-normal tabular-nums">
+                      {formatOnline(archive.reply)}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
             </div>
+            {archive.desc && (
+              <p className="mt-2 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                {archive.desc}
+              </p>
+            )}
           </div>
-          {archive.desc && (
-            <p className="mt-1.5 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
-              {archive.desc}
-            </p>
-          )}
-        </div>
+        </section>
       )}
+      <div className="flex h-11 shrink-0 items-center border-b border-border/80">
+        <TabsList
+          variant="line"
+          className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
+        >
+          {tabs.map((value) => (
+            <TabsTrigger key={value} value={value} className="px-3 text-sm">
+              {TAB_LABELS[value]}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {tab === "comments" ? (
           resolvedAid ? (
@@ -604,6 +649,6 @@ export function VideoSidebar({
           <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
         )}
       </div>
-    </div>
+    </Tabs>
   );
 }

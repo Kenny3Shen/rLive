@@ -624,13 +624,6 @@ export function VideoPlayerPage() {
           {title}
         </p>
       </div>
-      {playInfo && (
-        <div className="absolute right-3 flex items-center gap-1.5">
-          <span className="hidden text-xs text-muted-foreground sm:inline">
-            {playInfo.quality_label}
-          </span>
-        </div>
-      )}
     </header>
   );
 
@@ -811,7 +804,14 @@ export function VideoPlayerPage() {
             />
           </div>
         </section>
-        <aside className="flex min-h-0 flex-1 flex-col border-t border-border/80 bg-background lg:w-[360px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[400px]">
+        <aside
+          className={cn(
+            // 与直播播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度，
+            // 窄屏则如直播的紧凑侧栏一样列在播放器下方。
+            "flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar",
+            "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
+          )}
+        >
           <VideoSidebar bvid={params.bvid} epId={params.epId} aid={params.aid} />
         </aside>
       </main>

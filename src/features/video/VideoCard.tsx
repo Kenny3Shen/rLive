@@ -1,9 +1,12 @@
 import { memo } from "react";
+import type { RefObject } from "react";
 import { useNavigate } from "react-router-dom";
 import { MessageSquare, Play } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
+import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
+import { useVideoCardPreview } from "./videoCardPreview";
 import { videoPlayPath } from "./videoRoute";
 
 /**
@@ -38,13 +41,19 @@ const BADGE_CLASS =
 
 /**
  * 卡片封面。`overlay` 里放角标，它们自己带绝对定位，因此堆在渐变之上。
+ * `previewMount` / `previewLoading` 由 UGC 卡片传入（悬停预览，见
+ * `videoCardPreview.ts`）；PGC 卡片不悬停预览（要先选集才能取流），不传。
  */
 function CoverImage({
   cover,
   overlay,
+  previewMount,
+  previewLoading,
 }: {
   cover: string;
   overlay?: React.ReactNode;
+  previewMount?: RefObject<HTMLDivElement | null>;
+  previewLoading?: boolean;
 }) {
   const normalized = normalizeVideoCoverUrl(cover);
   return (
@@ -63,6 +72,16 @@ function CoverImage({
           暂无封面
         </div>
       )}
+      {/* 预览盖在封面之上、渐变与角标之下（与直播卡同序）；挂载点不接收
+          指针事件，悬停与点击始终落在卡片按钮上。 */}
+      {previewMount && (
+        <div ref={previewMount} aria-hidden className="pointer-events-none absolute inset-0" />
+      )}
+      {previewLoading && (
+        <span className="pointer-events-none absolute left-2 top-2 inline-flex rounded-md bg-black/65 p-1 text-white backdrop-blur-sm">
+          <Spinner className="size-3" />
+        </span>
+      )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
       {overlay}
     </div>
@@ -76,23 +95,30 @@ export const VideoCard = memo(function VideoCard({ item }: { item: VideoItem }) 
   const playPath = playable
     ? videoPlayPath({ bvid: item.bvid, cid: item.cid!, title: item.title, aid: item.aid })
     : null;
+  const preview = useVideoCardPreview({ bvid: item.bvid, cid: item.cid });
 
   return (
     <button
       type="button"
       data-motion-press
-      // 锚点带上 cid：推荐流会重复出现同一个 bvid（轮换批次），只用 bvid 的话
-      // 返回时的锚点查找会命中第一张同名卡，把滚动恢复到错误位置。
+      // 锚点带上 cid：推荐流会重复出现同一个 bvid（轮换批次），只用 bvid 的
+      // 话返回时的锚点查找会命中第一张同名卡，把滚动恢复到错误位置。
       data-page-scroll-anchor={`video:${item.bvid}:${item.cid ?? ""}`}
       disabled={!playable}
       aria-label={`${item.title}，UP 主 ${item.author}，时长 ${formatVideoDuration(item.duration)}`}
-      onPointerEnter={() => playPath && preloadRouteModule(playPath)}
+      onPointerEnter={(event) => {
+        if (playPath) preloadRouteModule(playPath);
+        preview.onPointerEnter(event);
+      }}
+      onPointerLeave={preview.stop}
       onFocus={() => playPath && preloadRouteModule(playPath)}
       onClick={() => playPath && navigate(playPath)}
       className={cn(CARD_CLASS, !playable && "cursor-not-allowed opacity-60")}
     >
       <CoverImage
         cover={item.cover}
+        previewMount={preview.mountRef}
+        previewLoading={preview.phase === "loading"}
         overlay={
           <>
             {/* 推荐理由是平台给的运营文案（如「百万播放」），放左上与右下的时长
