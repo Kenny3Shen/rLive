@@ -7,7 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ChevronLeft } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ import { formatRecordingDuration } from "@/features/recording/recording";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
 import { videoGetDanmaku, videoGetPlayInfo, videoStopPlay } from "./videoApi";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
+import { VideoSidebar } from "./VideoSidebar";
 import {
   mergeVideoDanmakuEntries,
   videoDanmakuEntries,
@@ -96,6 +97,11 @@ export function VideoPlayerPage() {
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
+  /** 期望画质（null = 后端自选最高可用档）。切换后带着它重取播放信息。 */
+  const [qualityQn, setQualityQn] = useState<number | null>(null);
+  // 换画质时记住切换前的位置与播放状态：播放器必然重建（新的代理端口 = 新的
+  // MPD 地址），不存就会从头播。换视频（相关/分集跳转）不会碰它，天然从头播。
+  const resumeAtRef = useRef<{ position: number; playing: boolean } | null>(null);
 
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
@@ -111,19 +117,39 @@ export function VideoPlayerPage() {
    * `gcTime: 0` 让这条 query 与代理会话同生命周期。
    */
   const playInfoQuery = useQuery({
-    queryKey: ["video_play_info", cid, params?.bvid ?? "", params?.epId ?? "", playerRevision],
+    queryKey: [
+      "video_play_info",
+      cid,
+      params?.bvid ?? "",
+      params?.epId ?? "",
+      qualityQn,
+      playerRevision,
+    ],
     enabled: params !== null,
     queryFn: () =>
       videoGetPlayInfo({
         bvid: params?.bvid ?? null,
         cid,
         ep_id: params?.epId ?? null,
+        qn: qualityQn,
       }),
+    // 换画质/重试期间保留旧数据：旧播放器继续播到新信息就位，而不是先黑屏等请求。
+    placeholderData: keepPreviousData,
     staleTime: 0,
     gcTime: 0,
     retry: false,
   });
   const playInfo: VideoPlayInfo | undefined = playInfoQuery.data;
+
+  /** 切换画质：记录续播点后带着 qn 重取。 */
+  const changeQuality = useCallback((qn: number) => {
+    if (qn === qualityQn) return;
+    const media = videoRef.current;
+    if (media) {
+      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+    }
+    setQualityQn(qn);
+  }, [qualityQn]);
 
   /**
    * 离开播放页停掉三个代理会话。
@@ -335,18 +361,30 @@ export function VideoPlayerPage() {
         });
         // 进页自动起播，与直播同源：先试带声音的 play()，被自动播放策略拒绝时
         // 降级为静音起播再立刻尝试恢复声音；用户手动静音过则保持静音。
-        const recoverMutedAutoplay = () => {
-          if (mutedRef.current) return false;
-          mutedRef.current = false;
-          setMuted(false);
-          return true;
-        };
-        requestPlayerAutoplay(
-          player,
-          media,
-          () => !cancelled && playerRef.current === player,
-          recoverMutedAutoplay,
-        );
+        // 换画质重建时优先续播：恢复到切换前位置与播放状态，跳过起播策略。
+        const resume = resumeAtRef.current;
+        resumeAtRef.current = null;
+        if (resume) {
+          // 元数据就位前赋值 currentTime 会作为默认起播位置被采纳。
+          media.currentTime = resume.position;
+          setCurrentTime(resume.position);
+          if (resume.playing) {
+            void Promise.resolve(player.play()).catch(() => undefined);
+          }
+        } else {
+          const recoverMutedAutoplay = () => {
+            if (mutedRef.current) return false;
+            mutedRef.current = false;
+            setMuted(false);
+            return true;
+          };
+          requestPlayerAutoplay(
+            player,
+            media,
+            () => !cancelled && playerRef.current === player,
+            recoverMutedAutoplay,
+          );
+        }
       })
       .catch((cause) => {
         if (cancelled) return;
@@ -651,13 +689,17 @@ export function VideoPlayerPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {topBar}
-      <main className="flex min-h-0 flex-1 flex-col bg-black">
+      {/* 宽屏：播放器占满主列，右侧栏固定宽度；窄屏：播放器锁 16:9，
+          右侧栏改列在下方滚动。两种形态同一条侧栏组件。 */}
+      <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
         <section
           ref={stageRef}
           data-player-stage
           data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
           className={cn(
-            "relative flex min-w-0 flex-1 flex-col overflow-hidden bg-black",
+            "relative flex min-w-0 flex-col overflow-hidden bg-black",
+            "aspect-video w-full max-lg:max-h-[56%]",
+            "lg:aspect-auto lg:w-auto lg:flex-1",
             "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
           )}
           aria-label={`${title}；按空格或 K 播放或暂停，左右方向键快退或快进，M 静音，F 全屏`}
@@ -741,6 +783,24 @@ export function VideoPlayerPage() {
               compact={compact}
               portalContainer={stageRef}
               timeline={timeline}
+              qualities={playInfo?.accept_quality.map((quality) => ({
+                quality: quality.label,
+                // 不可用档位仍列出但置灰：匿名/非大会员能直接看出画质上限的
+                // 原因，而不是以为客户端坏了。
+                disabled: !quality.available,
+                hint: quality.available ? undefined : "登录或大会员后可用",
+              }))}
+              qualityIndex={(() => {
+                if (!playInfo) return 0;
+                const index = playInfo.accept_quality.findIndex(
+                  (quality) => quality.qn === playInfo.quality,
+                );
+                return index >= 0 ? index : 0;
+              })()}
+              onQualityChange={(index) => {
+                const quality = playInfo?.accept_quality[index];
+                if (quality?.available) changeQuality(quality.qn);
+              }}
               onOverlayInteractionChange={setOverlayInteractionOpen}
               onRefresh={retryPlayback}
               onTogglePause={togglePlayback}
@@ -751,6 +811,9 @@ export function VideoPlayerPage() {
             />
           </div>
         </section>
+        <aside className="flex min-h-0 flex-1 flex-col border-t border-border/80 bg-background lg:w-[360px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[400px]">
+          <VideoSidebar bvid={params.bvid} epId={params.epId} aid={params.aid} />
+        </aside>
       </main>
     </div>
   );

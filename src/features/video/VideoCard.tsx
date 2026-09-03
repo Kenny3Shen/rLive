@@ -74,7 +74,7 @@ export const VideoCard = memo(function VideoCard({ item }: { item: VideoItem }) 
   // 列表接口通常直接给 cid；缺失的条目点进去也取不到流，因此不给它一个会失败的链接。
   const playable = typeof item.cid === "number" && item.cid > 0;
   const playPath = playable
-    ? videoPlayPath({ bvid: item.bvid, cid: item.cid!, title: item.title })
+    ? videoPlayPath({ bvid: item.bvid, cid: item.cid!, title: item.title, aid: item.aid })
     : null;
 
   return (

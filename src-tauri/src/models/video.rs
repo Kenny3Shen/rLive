@@ -187,3 +187,67 @@ pub struct VideoPlayRequest {
     /// 否则会随机拿到 WebView 不一定能解的 av01。
     pub codec: Option<String>,
 }
+
+/// 稿件详情（`x/web-interface/view`）。
+///
+/// 播放页主要用它拿两样东西：评论区的 `oid`（aid）与稿件简介/统计，
+/// 它是 WBI 签名接口，也是 URL 直入时补齐 aid 的唯一途径。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoArchive {
+    pub bvid: String,
+    /// 见 [`VideoItem::aid`]：字符串传输，避免丢精度。
+    pub aid: String,
+    pub title: String,
+    pub desc: String,
+    pub author: String,
+    pub author_face: Option<String>,
+    pub view: i64,
+    pub danmaku: i64,
+    pub reply: i64,
+    pub pubdate: i64,
+}
+
+/// 评论内联表情（`[大哭]` 之类的占位符 → 图片 URL）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoEmote {
+    /// 占位符原文，如 `[大哭]`。
+    pub text: String,
+    pub url: String,
+}
+
+/// 一条评论（或二级回复，两者同构）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoComment {
+    pub rpid: i64,
+    /// 发布者 mid。上游是字符串，原样透传。
+    pub mid: String,
+    pub uname: String,
+    /// 头像可能缺失（部分用户没有头像字段），前端需容错。
+    pub avatar: Option<String>,
+    /// 用户等级（0-6 级，0 表示解析失败或不存在）。
+    pub level: i64,
+    pub message: String,
+    /// 文本里的内联表情。
+    pub emotes: Vec<VideoEmote>,
+    /// 图片评论的图片地址。
+    pub pictures: Vec<String>,
+    pub like: i64,
+    /// 发布时间，Unix 秒。
+    pub ctime: i64,
+    /// 二级回复总数。
+    pub rcount: i64,
+    /// 主接口附带的二级回复预览（前 2-3 条）。
+    #[serde(default)]
+    pub replies: Vec<VideoComment>,
+}
+
+/// 一页评论（游标翻页）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoCommentPage {
+    /// 评论区总条数（一级评论数，不含二级回复）。
+    pub all_count: i64,
+    /// 下一页游标（`reply/main`）；`is_end` 为 true 时不再有意义。
+    pub next: i64,
+    pub has_more: bool,
+    pub items: Vec<VideoComment>,
+}

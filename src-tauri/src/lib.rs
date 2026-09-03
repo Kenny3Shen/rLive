@@ -90,8 +90,9 @@ use commands::site::{
 };
 use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry};
 use commands::video::{
-    video_get_danmaku, video_get_pgc_index, video_get_pgc_zone, video_get_play_info,
-    video_get_popular, video_get_recommend, video_get_season, video_get_zone, video_stop_play,
+    video_get_archive, video_get_comment_replies, video_get_comments, video_get_danmaku,
+    video_get_pgc_index, video_get_pgc_zone, video_get_play_info, video_get_popular,
+    video_get_recommend, video_get_related, video_get_season, video_get_zone, video_stop_play,
     video_zone_list,
 };
 use state::AppState;
@@ -388,6 +389,10 @@ pub fn run() {
             video_get_season,
             video_get_play_info,
             video_get_danmaku,
+            video_get_related,
+            video_get_archive,
+            video_get_comments,
+            video_get_comment_replies,
             video_stop_play,
             image_proxy_url,
             cache_usage,

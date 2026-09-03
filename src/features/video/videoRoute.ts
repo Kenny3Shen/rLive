@@ -145,6 +145,8 @@ export type VideoPlayTarget = {
   /** 填了就走 PGC playurl。 */
   epId?: string | null;
   title?: string | null;
+  /** 稿件 av 号，评论区的 `oid`。列表/分集数据都有；URL 直入时由播放页补齐。 */
+  aid?: string | null;
 };
 
 /** 播放页链接。cid 是两条链路都必需的键，缺它无法取流。 */
@@ -154,6 +156,7 @@ export function videoPlayPath(target: VideoPlayTarget): string {
   if (target.bvid) params.set("bvid", target.bvid);
   if (target.epId) params.set("ep_id", target.epId);
   if (target.title) params.set("title", target.title);
+  if (target.aid) params.set("aid", target.aid);
   return `${VIDEO_PLAY_PATH}?${params.toString()}`;
 }
 
@@ -162,11 +165,13 @@ export type VideoPlayParams = {
   bvid: string | null;
   epId: string | null;
   title: string | null;
+  aid: string | null;
 };
 
 /**
  * 解析播放页参数。cid 不是正整数就返回 null，让页面渲染可读的失败态而不是拿 NaN
- * 去请求后端。
+ * 去请求后端。aid 是评论区的键，可缺省：相关视频/分集链路带着它，URL 直入时由
+ * 播放页用稿件详情补齐。
  */
 export function parseVideoPlayParams(search: URLSearchParams): VideoPlayParams | null {
   const cid = Number(search.get("cid"));
@@ -176,5 +181,6 @@ export function parseVideoPlayParams(search: URLSearchParams): VideoPlayParams |
     bvid: search.get("bvid") || null,
     epId: search.get("ep_id") || null,
     title: search.get("title") || null,
+    aid: search.get("aid") || null,
   };
 }

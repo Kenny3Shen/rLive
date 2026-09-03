@@ -103,13 +103,20 @@ describe("video paths", () => {
   test("round-trips a UGC play target", () => {
     const path = videoPlayPath({ bvid: "BV1xx", cid: 42, title: "标题" });
     const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({ cid: 42, bvid: "BV1xx", epId: null, title: "标题" });
+    expect(params).toEqual({ cid: 42, bvid: "BV1xx", epId: null, title: "标题", aid: null });
   });
 
   test("round-trips a PGC play target", () => {
     const path = videoPlayPath({ bvid: "BV2yy", cid: 7, epId: "ep99", title: "第 1 话" });
     const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({ cid: 7, bvid: "BV2yy", epId: "ep99", title: "第 1 话" });
+    expect(params).toEqual({ cid: 7, bvid: "BV2yy", epId: "ep99", title: "第 1 话", aid: null });
+  });
+
+  test("round-trips aid for the comment section", () => {
+    // aid 是评论区的 oid；列表/分集链路带着它，URL 直入时可缺省。
+    const path = videoPlayPath({ bvid: "BV3zz", cid: 9, title: "x", aid: "117075725000671" });
+    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
+    expect(params?.aid).toBe("117075725000671");
   });
 
   test("rejects play links without a usable cid", () => {

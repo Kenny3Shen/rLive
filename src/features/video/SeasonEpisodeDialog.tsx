@@ -93,6 +93,7 @@ export function SeasonEpisodeDialog({
                         cid: episode.cid,
                         epId: episode.ep_id,
                         title: episode.long_title || episode.title || season.title,
+                        aid: episode.aid,
                       }),
                     );
                   }}

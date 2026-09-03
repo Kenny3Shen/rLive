@@ -11,8 +11,8 @@ use crate::account;
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::models::video::{
-    PgcListPage, VideoDanmakuSegment, VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason,
-    VideoSessionIds,
+    PgcListPage, VideoArchive, VideoCommentPage, VideoDanmakuSegment, VideoListPage, VideoPlayInfo,
+    VideoPlayRequest, VideoSeason, VideoSessionIds,
 };
 use crate::sites::bilibili::BilibiliSite;
 use crate::state::AppState;
@@ -230,4 +230,48 @@ pub fn video_stop_play(state: State<'_, AppState>, session_ids: VideoSessionIds)
         }
     }
     Ok(())
+}
+
+/// 相关视频（UGC）。匿名可用，一次返回全部。
+#[tauri::command]
+pub async fn video_get_related(
+    state: State<'_, AppState>,
+    bvid: String,
+) -> AppResult<VideoListPage> {
+    resolve_bilibili(&state)?.video_related(&bvid).await
+}
+
+/// 稿件详情。WBI 签名接口，播放页右侧栏用它拿简介/统计与评论区的 aid。
+#[tauri::command]
+pub async fn video_get_archive(
+    state: State<'_, AppState>,
+    bvid: String,
+) -> AppResult<VideoArchive> {
+    resolve_bilibili(&state)?.video_archive(&bvid).await
+}
+
+/// 评论首页（游标翻页）。`mode`：2 按时间、3 按热度；`next` 首次传 0。
+#[tauri::command]
+pub async fn video_get_comments(
+    state: State<'_, AppState>,
+    aid: String,
+    mode: Option<u8>,
+    next: Option<i64>,
+) -> AppResult<VideoCommentPage> {
+    resolve_bilibili(&state)?
+        .video_comments(&aid, mode.unwrap_or(3), next.unwrap_or(0))
+        .await
+}
+
+/// 二级回复（pn 翻页，首传 page = 1）。
+#[tauri::command]
+pub async fn video_get_comment_replies(
+    state: State<'_, AppState>,
+    aid: String,
+    root: i64,
+    page: Option<u32>,
+) -> AppResult<VideoCommentPage> {
+    resolve_bilibili(&state)?
+        .video_comment_replies(&aid, root, page.unwrap_or(1))
+        .await
 }

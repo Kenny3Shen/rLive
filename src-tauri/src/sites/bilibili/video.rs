@@ -11,8 +11,9 @@ use serde_json::Value;
 use crate::danmu_rs::{ProtoReader, ProtoValue};
 use crate::error::{AppError, AppResult};
 use crate::models::video::{
-    DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoDanmakuSegment, VideoItem,
-    VideoListPage, VideoPlayRequest, VideoQuality, VideoSeason,
+    DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoComment, VideoCommentPage,
+    VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest, VideoQuality,
+    VideoSeason,
 };
 
 use super::BilibiliSite;
@@ -298,6 +299,222 @@ fn season_episode(episode: &Value) -> SeasonEpisode {
             .filter(|badge| !badge.is_empty()),
     }
 }
+
+/// 解析相关视频 `data[]`。
+///
+/// 与热门/分区榜同构（复用 [`video_item`]），但根下直接是数组、没有分页。
+pub fn parse_related(raw: &str) -> AppResult<VideoListPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("相关视频 json: {e}")))?;
+    let items = root
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| video_err("相关视频缺少 data 数组"))?
+        .iter()
+        .map(video_item)
+        .collect();
+    Ok(VideoListPage {
+        has_more: false,
+        items,
+    })
+}
+
+/// 解析稿件详情 `data`（WBI 签名接口 `x/web-interface/view`）。
+pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("稿件详情 json: {e}")))?;
+    let data = root
+        .get("data")
+        .ok_or_else(|| video_err("稿件详情缺少 data"))?;
+    let owner = data.get("owner");
+    let stat = data.get("stat");
+    let author_face = owner
+        .and_then(|owner| owner.get("face"))
+        .map(as_str)
+        .map(|face| avatar_thumb(&face))
+        .filter(|face| !face.is_empty());
+    Ok(VideoArchive {
+        bvid: data.get("bvid").map(as_str).unwrap_or_default(),
+        aid: data.get("aid").map(as_str).unwrap_or_default(),
+        title: data.get("title").map(as_str).unwrap_or_default(),
+        desc: data.get("desc").map(as_str).unwrap_or_default(),
+        author: owner
+            .and_then(|owner| owner.get("name"))
+            .map(as_str)
+            .unwrap_or_default(),
+        author_face,
+        view: stat
+            .and_then(|stat| stat.get("view"))
+            .map(as_i64)
+            .unwrap_or_default(),
+        danmaku: stat
+            .and_then(|stat| stat.get("danmaku"))
+            .map(as_i64)
+            .unwrap_or_default(),
+        reply: stat
+            .and_then(|stat| stat.get("reply"))
+            .map(as_i64)
+            .unwrap_or_default(),
+        pubdate: data.get("pubdate").map(as_i64).unwrap_or_default(),
+    })
+}
+
+fn comment_emotes(content: &Value) -> Vec<VideoEmote> {
+    content
+        .get("emote")
+        .and_then(Value::as_object)
+        .map(|emote| {
+            emote
+                .values()
+                .filter_map(|item| {
+                    let text = item.get("text").map(as_str)?;
+                    let url = item.get("url").map(as_str)?;
+                    (!text.is_empty() && !url.is_empty()).then_some(VideoEmote { text, url })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn comment_pictures(content: &Value) -> Vec<String> {
+    content
+        .get("pictures")
+        .and_then(Value::as_array)
+        .map(|pictures| {
+            pictures
+                .iter()
+                .filter_map(|pic| {
+                    let src = pic.get("img_src").map(as_str)?;
+                    (!src.is_empty()).then(|| video_cover(&src))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 评论与二级回复同构，递归解析；上游预览只嵌一层，但多余层级解析出来也无害。
+fn video_comment(item: &Value) -> VideoComment {
+    let member = item.get("member");
+    let content = item.get("content");
+    let avatar = member
+        .and_then(|member| member.get("avatar"))
+        .or_else(|| member.and_then(|member| member.get("face")))
+        .map(as_str)
+        .map(|face| avatar_thumb(&face))
+        .filter(|face| !face.is_empty());
+    VideoComment {
+        rpid: item.get("rpid").map(as_i64).unwrap_or_default(),
+        mid: member
+            .and_then(|member| member.get("mid"))
+            .map(as_str)
+            .unwrap_or_default(),
+        uname: member
+            .and_then(|member| member.get("uname"))
+            .map(as_str)
+            .unwrap_or_default(),
+        avatar,
+        level: member
+            .and_then(|member| member.pointer("/level_info/current_level"))
+            .map(as_i64)
+            .unwrap_or_default(),
+        message: content
+            .and_then(|content| content.get("message"))
+            .map(as_str)
+            .unwrap_or_default(),
+        emotes: content.map(comment_emotes).unwrap_or_default(),
+        pictures: content.map(comment_pictures).unwrap_or_default(),
+        like: item.get("like").map(as_i64).unwrap_or_default(),
+        ctime: item.get("ctime").map(as_i64).unwrap_or_default(),
+        rcount: item.get("rcount").map(as_i64).unwrap_or_default(),
+        replies: item
+            .get("replies")
+            .and_then(Value::as_array)
+            .map(|replies| replies.iter().map(video_comment).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// 解析评论区（游标接口 `x/v2/reply/wbi/main`）。
+///
+/// 置顶评论有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，
+/// 参考 PiliPlus 的解析），与普通列表合并去重后放在最前；
+/// `next` 是下一页游标。匿名请求不得携带 buvid（会被截断），
+/// 见 `BilibiliSite::video_comments`。
+pub fn parse_comments(raw: &str) -> AppResult<VideoCommentPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("评论 json: {e}")))?;
+    let data = root.get("data").ok_or_else(|| video_err("评论缺少 data"))?;
+    let cursor = data.get("cursor");
+    let mut items: Vec<VideoComment> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let push_comment = |reply: &Value,
+                        items: &mut Vec<VideoComment>,
+                        seen: &mut std::collections::HashSet<i64>| {
+        let comment = video_comment(reply);
+        if comment.rpid > 0 && seen.insert(comment.rpid) {
+            items.push(comment);
+        }
+    };
+    if let Some(top_replies) = data.get("top_replies").and_then(Value::as_array) {
+        for reply in top_replies {
+            push_comment(reply, &mut items, &mut seen);
+        }
+    }
+    // UP 主置顶（`top.upper`）是单个对象，与 `top_replies` 可能只给其一。
+    if let Some(upper) = data.pointer("/top/upper").filter(|upper| upper.is_object()) {
+        push_comment(upper, &mut items, &mut seen);
+    }
+    if let Some(replies) = data.get("replies").and_then(Value::as_array) {
+        for reply in replies {
+            push_comment(reply, &mut items, &mut seen);
+        }
+    }
+    Ok(VideoCommentPage {
+        all_count: cursor
+            .and_then(|cursor| cursor.get("all_count"))
+            .map(as_i64)
+            .unwrap_or(items.len() as i64),
+        next: cursor
+            .and_then(|cursor| cursor.get("next"))
+            .map(as_i64)
+            .unwrap_or_default(),
+        has_more: !cursor
+            .and_then(|cursor| cursor.get("is_end"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+            && !items.is_empty(),
+        items,
+    })
+}
+
+/// 解析二级回复（`x/v2/reply/reply`，pn 翻页实测可用）。
+pub fn parse_comment_replies(raw: &str, page: u32) -> AppResult<VideoCommentPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("二级回复 json: {e}")))?;
+    let data = root
+        .get("data")
+        .ok_or_else(|| video_err("二级回复缺少 data"))?;
+    let items: Vec<VideoComment> = data
+        .get("replies")
+        .and_then(Value::as_array)
+        .map(|replies| replies.iter().map(video_comment).collect())
+        .unwrap_or_default();
+    let all_count = data
+        .pointer("/page/count")
+        .and_then(Value::as_i64)
+        .or_else(|| data.pointer("/page/acount").and_then(Value::as_i64))
+        .unwrap_or(items.len() as i64);
+    Ok(VideoCommentPage {
+        all_count,
+        next: page as i64,
+        // 上游不给 is_end：按「本页取满且未到总数」推导。
+        has_more: (page as i64) * COMMENT_REPLIES_PAGE_SIZE < all_count,
+        items,
+    })
+}
+
+/// 二级回复每页条数（与前端哨兵约定一致）。
+pub const COMMENT_REPLIES_PAGE_SIZE: i64 = 20;
 
 // ---------------------------------------------------------------------------
 // sidx 解析与 MPD 合成
@@ -654,9 +871,16 @@ fn select_streams(
     data: &Value,
     request: &VideoPlayRequest,
 ) -> AppResult<(Value, Value, i64, String, Vec<VideoQuality>)> {
+    // PGC 付费墙：非免费分集匿名只给试看 MP4（is_preview=1、error_code=-10403），
+    // 没有可解析的 DASH。把上游状态透进报错，用户能看出「需要登录或大会员」
+    // 而不是以为客户端坏了。
+    let missing_dash_hint = match data.get("is_preview").and_then(Value::as_i64) {
+        Some(1) => "该分集需要登录或大会员（当前身份只有试看片段，无 DASH 流）",
+        _ => "playurl 缺少 dash（该稿件可能不支持 DASH 或受限）",
+    };
     let dash = data
         .get("dash")
-        .ok_or_else(|| video_err("playurl 缺少 dash（该稿件可能不支持 DASH 或受限）"))?;
+        .ok_or_else(|| video_err(missing_dash_hint))?;
     let videos = dash
         .get("video")
         .and_then(Value::as_array)
@@ -922,6 +1146,93 @@ impl BilibiliSite {
             .get_json("https://api.bilibili.com/pgc/view/web/season", &query)
             .await?;
         parse_season(&text)
+    }
+
+    /// 相关视频（`archive/related`）。匿名可用，无需 WBI。
+    pub async fn video_related(&self, bvid: &str) -> AppResult<VideoListPage> {
+        if bvid.is_empty() {
+            return Err(video_err("相关视频缺少 bvid"));
+        }
+        let text = self
+            .get_json(
+                "https://api.bilibili.com/x/web-interface/archive/related",
+                &[("bvid", bvid.to_string())],
+            )
+            .await?;
+        parse_related(&text)
+    }
+
+    /// 稿件详情（`x/web-interface/view`）。WBI 签名接口，未签名会被风控拦下。
+    pub async fn video_archive(&self, bvid: &str) -> AppResult<VideoArchive> {
+        if bvid.is_empty() {
+            return Err(video_err("稿件详情缺少 bvid"));
+        }
+        let mut params = BTreeMap::new();
+        params.insert("bvid".into(), bvid.to_string());
+        let text = self
+            .get_json_signed("https://api.bilibili.com/x/web-interface/view", params)
+            .await?;
+        parse_archive(&text)
+    }
+
+    /// 评论首页（`x/v2/reply/main`，游标翻页）。匿名可用。
+    ///
+    /// `mode`：2 按时间、3 按热度；`next` 首次传 0，之后传上一页返回的游标。
+    pub async fn video_comments(
+        &self,
+        aid: &str,
+        mode: u8,
+        next: i64,
+    ) -> AppResult<VideoCommentPage> {
+        if aid.is_empty() {
+            return Err(video_err("评论缺少 aid"));
+        }
+        // 实测：该接口对「携带 buvid3/buvid4 的匿名会话」只回 3 条左右并谎称
+        // is_end=true；未签名的裸路径在被风控盯上后一律 -352。与网页一致的
+        // `/wbi/main` + 签名路径两者都回避：匿名走无 cookie 的签名请求（get_public_json_signed），
+        // 登录态带完整 cookie（get_json_signed）。
+        let mut params = BTreeMap::new();
+        params.insert("type".into(), "1".into());
+        params.insert("oid".into(), aid.to_string());
+        params.insert("mode".into(), mode.clamp(2, 3).to_string());
+        params.insert("ps".into(), "20".into());
+        params.insert("next".into(), next.max(0).to_string());
+        let url = "https://api.bilibili.com/x/v2/reply/wbi/main";
+        let text = if self.cookie.contains("SESSDATA") {
+            self.get_json_signed(url, params).await?
+        } else {
+            self.get_public_json_signed(url, params).await?
+        };
+        parse_comments(&text)
+    }
+
+    /// 二级回复（`x/v2/reply/reply`，pn 翻页）。匿名可用。
+    pub async fn video_comment_replies(
+        &self,
+        aid: &str,
+        root: i64,
+        page: u32,
+    ) -> AppResult<VideoCommentPage> {
+        if aid.is_empty() {
+            return Err(video_err("二级回复缺少 aid"));
+        }
+        if root <= 0 {
+            return Err(video_err("二级回复缺少 root"));
+        }
+        let text = self
+            .get_json(
+                "https://api.bilibili.com/x/v2/reply/reply",
+                &[
+                    ("type", "1".to_string()),
+                    ("oid", aid.to_string()),
+                    ("root", root.to_string()),
+                    ("pn", page.max(1).to_string()),
+                    ("ps", COMMENT_REPLIES_PAGE_SIZE.to_string()),
+                    ("sort", "2".to_string()),
+                ],
+            )
+            .await?;
+        parse_comment_replies(&text, page.max(1))
     }
 
     /// 取 playurl 并解出两条轨的完整分片表。
@@ -1600,5 +1911,164 @@ mod tests {
         let broken = serde_json::json!({ "segment_base": { "initialization": "0-937", "index_range": "938" } });
         assert!(segment_base_ranges(&broken).is_err());
         assert!(segment_base_ranges(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn parse_related_maps_owner_and_stat() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": [{
+                "bvid": "BV1t5xDzKEFJ",
+                "aid": 115331263634260i64,
+                "pic": "http://i1.hdslb.com/bfs/archive/a8b83.jpg",
+                "duration": 226,
+                "title": "东北街头12元猪蹄红烧肉饭",
+                "owner": { "name": "转生成为毛毛", "face": "//i0.hdslb.com/bfs/face/1f.jpg" },
+                "stat": { "view": 1385636, "danmaku": 5870 }
+            }]
+        })
+        .to_string();
+        let page = parse_related(&raw).unwrap();
+        assert!(!page.has_more);
+        assert_eq!(page.items.len(), 1);
+        let item = &page.items[0];
+        // aid 是超大整数，必须无损转成字符串。
+        assert_eq!(item.aid, "115331263634260");
+        assert_eq!(item.bvid, "BV1t5xDzKEFJ");
+        assert_eq!(item.author, "转生成为毛毛");
+        assert_eq!(item.view, 1_385_636);
+        assert!(item.cover.starts_with("https://i1.hdslb.com/"));
+        assert!(item.author_face.as_deref().unwrap().starts_with("https://"));
+
+        assert!(parse_related("{}").is_err());
+    }
+
+    #[test]
+    fn parse_archive_reads_aid_desc_and_stats() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "bvid": "BV1Ybuq6nEYq",
+                "aid": 117075725000671i64,
+                "title": "测试稿件",
+                "desc": "简介内容",
+                "owner": { "name": "UP 主", "face": "https://i0.hdslb.com/bfs/face/2f.jpg" },
+                "stat": { "view": 100, "danmaku": 5, "reply": 4986 },
+                "pubdate": 1759000000
+            }
+        })
+        .to_string();
+        let archive = parse_archive(&raw).unwrap();
+        assert_eq!(archive.aid, "117075725000671");
+        assert_eq!(archive.desc, "简介内容");
+        assert_eq!(archive.reply, 4986);
+        assert_eq!(archive.pubdate, 1759000000);
+
+        assert!(parse_archive("{}").is_err());
+    }
+
+    #[test]
+    fn parse_comments_merges_top_replies_and_emotes() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "cursor": { "is_end": false, "all_count": 4986, "next": 2 },
+                // UP 主置顶也可能出现在 top.upper（对象）而非 top_replies。
+                "top": { "upper": {
+                    "rpid": 111, "member": { "uname": "upper 置顶", "mid": "8" },
+                    "content": { "message": "另一种置顶形态" }
+                } },
+                "top_replies": [ {
+                    "rpid": 111, "like": 9, "ctime": 1759000000, "rcount": 0,
+                    "member": { "uname": "置顶", "mid": "42", "avatar": "https://i0.hdslb.com/bfs/face/noface.jpg", "level_info": { "current_level": 6 } },
+                    "content": { "message": "置顶评论" }
+                } ],
+                "replies": [ {
+                    "rpid": 313239931440i64, "like": 560, "ctime": 1786490948, "rcount": 9,
+                    "member": { "uname": "小趴菜", "mid": "493576201", "avatar": "https://i0.hdslb.com/bfs/face/x.jpg", "level_info": { "current_level": 5 } },
+                    "content": {
+                        "message": "烤鸡腿[大哭]",
+                        "emote": { "[大哭]": { "text": "[大哭]", "url": "https://i0.hdslb.com/bfs/emote/2ca.png" } },
+                        "pictures": [ { "img_src": "//i0.hdslb.com/bfs/new_dyn/1.jpg" } ]
+                    },
+                    "replies": [ {
+                        "rpid": 222, "like": 29, "ctime": 1786491000, "rcount": 0,
+                        "member": { "uname": "路人", "mid": "7", "avatar": "https://i0.hdslb.com/bfs/face/y.jpg" },
+                        "content": { "message": "转的鸡肉技术" }
+                    } ]
+                } ]
+            }
+        })
+        .to_string();
+        let page = parse_comments(&raw).unwrap();
+        assert!(page.has_more);
+        assert_eq!(page.next, 2);
+        assert_eq!(page.all_count, 4986);
+        // top.upper 与 top_replies 同 rpid 时只留先到的一条，置顶在前。
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].uname, "置顶");
+        assert_eq!(page.items[0].rpid, 111);
+        let main = &page.items[1];
+        assert_eq!(main.rpid, 313239931440);
+        assert_eq!(main.level, 5);
+        assert_eq!(main.emotes.len(), 1);
+        assert_eq!(main.emotes[0].text, "[大哭]");
+        assert!(main.pictures[0].starts_with("https://"));
+        assert_eq!(main.replies.len(), 1);
+        assert_eq!(main.replies[0].uname, "路人");
+
+        assert!(parse_comments("{}").is_err());
+    }
+
+    #[test]
+    fn parse_comments_takes_upper_pinned_when_top_replies_missing() {
+        // 上游对 UP 主置顶有两种形态：top_replies 数组与 top.upper 对象，可能只给其一。
+        let raw = serde_json::json!({
+            "data": {
+                "cursor": { "is_end": true, "all_count": 3, "next": 1 },
+                "top": { "upper": {
+                    "rpid": 888, "member": { "uname": "只有 upper", "mid": "9" },
+                    "content": { "message": "置顶在 upper 字段" }
+                } },
+                "replies": [ {
+                    "rpid": 1, "member": { "uname": "甲", "mid": "1" }, "content": { "message": "普通" }
+                } ]
+            }
+        })
+        .to_string();
+        let page = parse_comments(&raw).unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].uname, "只有 upper");
+        assert_eq!(page.items[0].rpid, 888);
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn parse_comment_replies_derives_has_more_from_page_count() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "page": { "num": 1, "size": 20, "count": 86 },
+                "replies": [ {
+                    "rpid": 1, "like": 0, "ctime": 1, "rcount": 0,
+                    "member": { "uname": "甲", "mid": "1", "avatar": "" },
+                    "content": { "message": "回复内容" }
+                } ]
+            }
+        })
+        .to_string();
+        let page = parse_comment_replies(&raw, 1).unwrap();
+        assert_eq!(page.all_count, 86);
+        assert!(page.has_more);
+        assert_eq!(page.items[0].message, "回复内容");
+        assert_eq!(page.items[0].level, 0);
+        assert!(page.items[0].avatar.is_none());
+
+        // 取满最后一页后 has_more 应为 false。
+        let last = serde_json::json!({
+            "data": { "page": { "count": 5 }, "replies": [ { "rpid": 2, "member": { "uname": "乙", "mid": "2" }, "content": { "message": "x" } } ] }
+        })
+        .to_string();
+        assert!(!parse_comment_replies(&last, 1).unwrap().has_more);
     }
 }
