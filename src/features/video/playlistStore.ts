@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { VideoItem, VideoSeasonEpisode } from "@/shared/types/video";
 
 /**
  * 播放列表项：统一 UGC 分 P、PGC 分集与合集的抽象。
@@ -18,6 +19,61 @@ export type PlaylistItem = {
   duration: number;
   cover?: string;
 };
+
+/**
+ * 把 UGC 合集分集转成播放列表项。合集自带 cid，可直接取流。
+ */
+export function playlistItemFromSeasonEpisode(
+  episode: VideoSeasonEpisode,
+  index: number,
+): PlaylistItem {
+  return {
+    id: `${episode.bvid}_${episode.cid}`,
+    bvid: episode.bvid,
+    cid: episode.cid,
+    epId: null,
+    aid: episode.aid,
+    title: episode.title,
+    index: String(index + 1),
+    duration: episode.duration,
+    cover: episode.cover,
+  };
+}
+
+/**
+ * 搜索/投稿列表跨页去重：同一 bvid 只保留首次出现。
+ *
+ * 后端按单页去重，翻页接口会把同一稿件再次返回；这两类列表的网格 key
+ * 与播放列表快照都以 bvid 为身份，重复条目会造成 key 冲突。
+ */
+export function dedupeVideoItems(items: readonly VideoItem[]): VideoItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!item.bvid || seen.has(item.bvid)) return false;
+    seen.add(item.bvid);
+    return true;
+  });
+}
+
+/**
+ * 把搜索/UP 主投稿列表的条目转成播放列表项。
+ *
+ * 这两个接口不给 cid（搜索条目尤其如此），cid 填 0：播放链接只带 bvid，
+ * 播放页用稿件详情补齐，与单卡点开是同一条链路。序号用列表中的位置。
+ */
+export function playlistItemFromVideoItem(item: VideoItem, index: number): PlaylistItem {
+  return {
+    id: `${item.bvid}_${item.cid ?? 0}`,
+    bvid: item.bvid,
+    cid: item.cid ?? 0,
+    epId: null,
+    aid: item.aid,
+    title: item.title,
+    index: String(index + 1),
+    duration: item.duration,
+    cover: item.cover,
+  };
+}
 
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */

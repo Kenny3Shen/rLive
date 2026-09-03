@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -20,7 +20,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
-import type { VideoComment } from "@/shared/types/video";
+import type { VideoComment, VideoUgcSeason } from "@/shared/types/video";
 import {
   videoGetArchive,
   videoGetCommentReplies,
@@ -41,15 +41,16 @@ import { UploaderDrawer } from "./UploaderDrawer";
  * `useInfiniteQuery` + 哨兵；相关视频与分集上游都是一次给全。
  */
 
-type SidebarTab = "related" | "episodes" | "comments";
+type SidebarTab = "related" | "episodes" | "season" | "comments";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
   episodes: "分集",
+  season: "合集",
   comments: "评论",
 };
 
-const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "episodes", "comments"];
+const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "episodes", "season", "comments"];
 
 function isSidebarTab(value: string): value is SidebarTab {
   return (SIDEBAR_TABS as readonly string[]).includes(value);
@@ -635,6 +636,75 @@ function EpisodesPanel({
   );
 }
 
+/**
+ * UGC 合集列表。合集接管播放列表后，这份列表就是当前连播列表的具象：
+ * 点任意分集即跳转，无需「播放全部」（播放页已自动把合集设为播放列表）。
+ */
+function UgcSeasonPanel({
+  season,
+  currentBvid,
+  onNavigate,
+}: {
+  season: VideoUgcSeason;
+  /** 链接可能没带 cid，以 bvid 定位当前项。 */
+  currentBvid: string;
+  onNavigate: (target: {
+    bvid: string;
+    cid: number;
+    title: string;
+    aid: string;
+    epId?: string;
+  }) => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
+        <span className="min-w-0 truncate text-xs font-medium">{season.title}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          共 {season.episodes.length} 个
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        {season.episodes.map((episode, index) => {
+          const current = episode.bvid === currentBvid;
+          return (
+            <button
+              key={episode.bvid}
+              type="button"
+              aria-current={current || undefined}
+              onClick={() =>
+                onNavigate({
+                  bvid: episode.bvid,
+                  cid: episode.cid,
+                  title: episode.title,
+                  aid: episode.aid,
+                })
+              }
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
+                current && "bg-primary/10",
+              )}
+            >
+              <span
+                className={cn(
+                  "min-w-7 shrink-0 text-center text-xs tabular-nums",
+                  current ? "font-semibold text-primary" : "text-muted-foreground",
+                )}
+              >
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px]">{episode.title}</span>
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {formatVideoDuration(episode.duration)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function VideoSidebar({
   bvid,
   epId,
@@ -648,6 +718,7 @@ export function VideoSidebar({
   const isPgc = Boolean(epId);
   const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
+  const tabTouchedRef = useRef(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
   const archiveQuery = useQuery({
@@ -678,8 +749,19 @@ export function VideoSidebar({
     navigate(videoPlayPath({ ...target, epId: target.epId ?? null }));
   };
 
-  const tabs: SidebarTab[] = isPgc ? ["episodes", "comments"] : ["related", "comments"];
   const archive = archiveQuery.data;
+  const tabs: SidebarTab[] = isPgc
+    ? ["episodes", "comments"]
+    : archive?.ugc_season
+      ? ["related", "comments", "season"]
+      : ["related", "comments"];
+
+  // 稿件属于合集时自动切到合集页签（用户手动切换过则不再干预）。
+  useEffect(() => {
+    if (!tabTouchedRef.current && tab === "related" && archive?.ugc_season) {
+      setTab("season");
+    }
+  }, [tab, archive?.ugc_season]);
 
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
@@ -694,7 +776,10 @@ export function VideoSidebar({
       value={tab}
       className="flex h-full min-h-0 flex-col gap-0"
       onValueChange={(value) => {
-        if (isSidebarTab(value)) setTab(value);
+        if (isSidebarTab(value)) {
+          tabTouchedRef.current = true;
+          setTab(value);
+        }
       }}
     >
       {/* UP 主信息块：与直播页的主播信息（RoomHostInfo）同一套画法（sideHeader
@@ -808,6 +893,12 @@ export function VideoSidebar({
           )
         ) : tab === "episodes" ? (
           <EpisodesPanel epId={epId!} onNavigate={navigateToPlay} />
+        ) : tab === "season" && archive?.ugc_season ? (
+          <UgcSeasonPanel
+            season={archive.ugc_season}
+            currentBvid={bvid ?? ""}
+            onNavigate={navigateToPlay}
+          />
         ) : (
           <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
         )}

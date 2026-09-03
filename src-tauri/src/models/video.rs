@@ -192,6 +192,25 @@ pub struct VideoPlayRequest {
 ///
 /// 播放页主要用它拿两样东西：评论区的 `oid`（aid）与稿件简介/统计，
 /// 它是 WBI 签名接口，也是 URL 直入时补齐 aid 的唯一途径。
+/// UGC 合集（`ugc_season`）的分集条目：合集连播沿这个列表走。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoSeasonEpisode {
+    pub bvid: String,
+    pub cid: i64,
+    /// 展示标题：优先 long_title，空则用稿件标题。
+    pub title: String,
+    pub aid: String,
+    pub duration: i64,
+    pub cover: String,
+}
+
+/// UGC 合集：各分区的分集按顺序展平。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoUgcSeason {
+    pub title: String,
+    pub episodes: Vec<VideoSeasonEpisode>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoArchive {
     pub bvid: String,
@@ -209,6 +228,8 @@ pub struct VideoArchive {
     pub danmaku: i64,
     pub reply: i64,
     pub pubdate: i64,
+    /// UGC 合集（ugc_season）：稿件属于合集时连播沿合集走，无合集为 None。
+    pub ugc_season: Option<VideoUgcSeason>,
 }
 
 /// 评论内联表情（`[大哭]` 之类的占位符 → 图片 URL）。

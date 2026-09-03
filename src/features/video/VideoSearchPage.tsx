@@ -16,16 +16,23 @@ import {
 import type { VideoItem } from "@/shared/types/video";
 import { videoSearch } from "./videoApi";
 import { VideoCard } from "./VideoCard";
+import { playlistItemFromVideoItem, dedupeVideoItems, type PlaylistItem } from "./playlistStore";
 import { VIDEO_SEARCH_QUERY_PARAM } from "./videoRoute";
 
 const GRID_CLASS =
   "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
 
-const VideoGrid = memo(function VideoGrid({ items }: { items: readonly VideoItem[] }) {
+const VideoGrid = memo(function VideoGrid({
+  items,
+  playlist,
+}: {
+  items: readonly VideoItem[];
+  playlist: readonly PlaylistItem[];
+}) {
   return (
     <div className={GRID_CLASS}>
       {items.map((item) => (
-        <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} />
+        <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} playlist={playlist} />
       ))}
     </div>
   );
@@ -61,7 +68,10 @@ export function VideoSearchPage() {
     isFetchNextPageError,
   });
 
-  const allItems = data?.pages.flatMap((page) => page.items) ?? [];
+  const allItems = dedupeVideoItems(data?.pages.flatMap((page) => page.items) ?? []);
+  // 点击时刻的列表快照即播放列表（搜索结果连播）。allItems 每次渲染都是新数组，
+  // 顺带计算不额外记忆化，量级最多几十条。
+  const playlistItems = allItems.map(playlistItemFromVideoItem);
   const isEmpty = !isFetching && keyword && allItems.length === 0;
 
   return (
@@ -82,7 +92,7 @@ export function VideoSearchPage() {
         </Empty>
       ) : allItems.length > 0 ? (
         <>
-          <VideoGrid items={allItems} />
+          <VideoGrid items={allItems} playlist={playlistItems} />
           {hasNextPage && (
             <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
               {isFetchingNextPage && (

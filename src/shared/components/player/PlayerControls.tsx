@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Settings,
   Shrink,
+  SkipForward,
   VideoOff,
   Volume2,
   VolumeX,
@@ -218,6 +219,8 @@ export type PlayerControlsProps = {
   refreshDisabled?: boolean;
   loadError?: string | null;
   onRefresh?: () => void;
+  /** 播放下一个（播放列表上下文）。传入才渲染该按钮。 */
+  onNext?: () => void;
   onTogglePause: () => void;
   onVolume: (v: number) => void;
   onToggleMute: () => void;
@@ -341,6 +344,7 @@ export function PlayerControls({
   refreshDisabled = disabled,
   loadError,
   onRefresh,
+  onNext,
   onTogglePause,
   onVolume,
   onToggleMute,
@@ -719,6 +723,19 @@ export function PlayerControls({
           >
             {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
           </ControlButton>
+
+          {onNext && (
+            <ControlButton
+              label="播放下一个"
+              className={overlayButtonClass}
+              tooltipContainer={portalContainer}
+              disabled={disabled}
+              onClick={onNext}
+              tooltip={!compact}
+            >
+              <SkipForward />
+            </ControlButton>
+          )}
 
           {showVolumeControl && (
             <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>

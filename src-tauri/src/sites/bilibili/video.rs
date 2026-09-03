@@ -13,7 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::video::{
     DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoComment, VideoCommentPage,
     VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest, VideoQuality,
-    VideoSeason,
+    VideoSeason, VideoSeasonEpisode, VideoUgcSeason,
 };
 
 use super::BilibiliSite;
@@ -457,6 +457,58 @@ pub fn parse_uploader_videos(raw: &str) -> AppResult<VideoListPage> {
     })
 }
 
+/**
+ * 解析 UGC 合集（`ugc_season`）：各分区分集展平。
+ *
+ * 少于 2 集不成连播列表，返回 None。条目里没有的分集跳过。
+ */
+fn parse_ugc_season(data: &Value) -> Option<VideoUgcSeason> {
+    let season = data.get("ugc_season")?;
+    let title = season.get("title").map(as_str).unwrap_or_default();
+    let mut episodes = Vec::new();
+    let sections = season.get("sections").and_then(Value::as_array)?;
+    for section in sections {
+        let section_episodes = section.get("episodes").and_then(Value::as_array);
+        for episode in section_episodes.into_iter().flatten() {
+            let bvid = episode.get("bvid").map(as_str).unwrap_or_default();
+            let cid = episode
+                .get("cid")
+                .and_then(Value::as_i64)
+                .or_else(|| episode.pointer("/page/cid").and_then(Value::as_i64))
+                .unwrap_or(0);
+            if bvid.is_empty() || cid <= 0 {
+                continue;
+            }
+            // 展示标题：long_title（B 站客户端的长标题）空则用稿件标题。
+            let long_title = episode.get("long_title").map(as_str).unwrap_or_default();
+            let arc_title = episode
+                .pointer("/arc/title")
+                .map(as_str)
+                .unwrap_or_default();
+            episodes.push(VideoSeasonEpisode {
+                bvid,
+                cid,
+                title: if long_title.is_empty() {
+                    arc_title
+                } else {
+                    long_title
+                },
+                aid: episode.get("aid").map(as_str).unwrap_or_default(),
+                duration: episode
+                    .pointer("/arc/duration")
+                    .and_then(Value::as_i64)
+                    .or_else(|| episode.pointer("/page/duration").and_then(Value::as_i64))
+                    .unwrap_or(0),
+                cover: episode.get("cover").map(as_str).unwrap_or_default(),
+            });
+        }
+    }
+    if episodes.len() < 2 {
+        return None;
+    }
+    Some(VideoUgcSeason { title, episodes })
+}
+
 /// 解析稿件详情 `data`（WBI 签名接口 `x/web-interface/view`）。
 pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
     let root: Value =
@@ -510,6 +562,7 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
             .map(as_i64)
             .unwrap_or_default(),
         pubdate: data.get("pubdate").map(as_i64).unwrap_or_default(),
+        ugc_season: parse_ugc_season(data),
     })
 }
 
@@ -2221,6 +2274,58 @@ mod tests {
         assert!(item.author_face.as_deref().unwrap().starts_with("https://"));
 
         assert!(parse_related("{}").is_err());
+    }
+
+    #[test]
+    fn parse_archive_collects_ugc_season_episodes() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "bvid": "BV1Ybuq6nEYq",
+                "cid": 311001234i64,
+                "ugc_season": {
+                    "title": "合集标题",
+                    "sections": [
+                        {
+                            "title": "正片",
+                            "episodes": [
+                                {
+                                    "bvid": "BV1Ybuq6nEYq",
+                                    "cid": 311001234i64,
+                                    "aid": 117075725000671i64,
+                                    "title": "1",
+                                    "long_title": "",
+                                    "cover": "https://i0.hdslb.com/bfs/archive/1.jpg",
+                                    "arc": { "title": "第一话", "duration": 620 }
+                                },
+                                { "bvid": "BV1Zz421z7Cx", "cid": 311001999i64, "title": "2", "long_title": "第二话" },
+                                { "bvid": "", "cid": 5 }  // 脏数据：跳过
+                            ]
+                        }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        let archive = parse_archive(&raw).unwrap();
+        let season = archive.ugc_season.as_ref().unwrap();
+        assert_eq!(season.title, "合集标题");
+        assert_eq!(season.episodes.len(), 2);
+        // long_title 空则用 arc.title；aid 数字转字符串。
+        assert_eq!(season.episodes[0].title, "第一话");
+        assert_eq!(season.episodes[0].aid, "117075725000671");
+        assert_eq!(season.episodes[0].duration, 620);
+        assert_eq!(season.episodes[1].title, "第二话");
+
+        // 无 ugc_season 字段 → None；单集合 → 不成连播列表。
+        let plain = serde_json::json!({ "code": 0, "data": { "bvid": "BV1Ybuq6nEYq", "cid": 1 } });
+        assert!(parse_archive(&plain.to_string()).unwrap().ugc_season.is_none());
+        let single = serde_json::json!({
+            "code": 0,
+            "data": { "bvid": "BV1Ybuq6nEYq", "cid": 1,
+                "ugc_season": { "title": "t", "sections": [ { "episodes": [ { "bvid": "BV1Y", "cid": 1 } ] } ] } }
+        });
+        assert!(parse_archive(&single.to_string()).unwrap().ugc_season.is_none());
     }
 
     #[test]

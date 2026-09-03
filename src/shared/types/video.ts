@@ -174,6 +174,23 @@ export type VideoDanmakuSegment = {
 export type VideoZone = [string, number];
 
 /** 稿件详情（`x/web-interface/view`）。播放页右侧栏用它拿简介/统计与评论区的 aid。 */
+/** UGC 合集分集条目（archive.ugc_season.episodes）。 */
+export type VideoSeasonEpisode = {
+  bvid: string;
+  cid: number;
+  /** 展示标题：long_title 空则用稿件标题。 */
+  title: string;
+  aid: string;
+  duration: number;
+  cover: string;
+};
+
+/** UGC 合集：各分区分集按顺序展平。 */
+export type VideoUgcSeason = {
+  title: string;
+  episodes: VideoSeasonEpisode[];
+};
+
 export type VideoArchive = {
   bvid: string;
   /** 见 `VideoItem.aid`：字符串传输，避免丢精度。 */
@@ -190,6 +207,8 @@ export type VideoArchive = {
   danmaku: number;
   reply: number;
   pubdate: number;
+  /** UGC 合集：稿件属于合集时连播沿合集走，无合集为 null。 */
+  ugc_season: VideoUgcSeason | null;
 };
 
 /** 评论内联表情（`[大哭]` 之类的占位符 → 图片 URL）。 */
