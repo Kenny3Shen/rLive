@@ -1,12 +1,21 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { MessageSquare, MessageSquareText, Play, ThumbsUp } from "lucide-react";
+import {
+  MessageSquare,
+  MessageSquareText,
+  Play,
+  ThumbsUp,
+  ListOrdered,
+  Shuffle,
+  ListMusic,
+} from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
@@ -20,6 +29,7 @@ import {
 } from "./videoApi";
 import { formatVideoDuration } from "./VideoCard";
 import { videoPlayPath } from "./videoRoute";
+import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
 
 /**
  * 播放页右侧栏：相关视频（UGC）/ 分集（PGC）与评论区。
@@ -434,61 +444,169 @@ function EpisodesPanel({
     staleTime: 5 * 60_000,
   });
   const episodes = seasonQuery.data?.episodes ?? [];
+  const playlistStore = usePlaylistStore();
+
+  // 将分集列表转换为播放列表项
+  const playlistItems: PlaylistItem[] = episodes.map((episode) => ({
+    id: `${episode.bvid}_${episode.cid}`,
+    bvid: episode.bvid,
+    cid: episode.cid,
+    epId: episode.ep_id,
+    aid: episode.aid,
+    title: episode.long_title || episode.title,
+    index: episode.title || "",
+    duration: episode.duration,
+    cover: episode.cover,
+  }));
+
+  // 播放全部：从第一集开始
+  const handlePlayAll = () => {
+    if (playlistItems.length === 0) return;
+    const firstItem = playlistStore.reversed
+      ? playlistItems[playlistItems.length - 1]
+      : playlistItems[0];
+    if (!firstItem) return;
+    playlistStore.setPlaylist(playlistItems, firstItem.id);
+    onNavigate({
+      bvid: firstItem.bvid,
+      cid: firstItem.cid,
+      epId: firstItem.epId!,
+      title: firstItem.title,
+      aid: firstItem.aid,
+    });
+  };
+
+  // 继续播放：从当前集开始设置播放列表
+  const handleContinuePlay = () => {
+    if (playlistItems.length === 0) return;
+    const currentItem = playlistItems.find((item) => item.epId === epId);
+    if (!currentItem) return;
+    playlistStore.setPlaylist(playlistItems, currentItem.id);
+  };
 
   return (
-    <div className="px-2 pb-4">
-      {seasonQuery.isPending ? (
-        <div className="flex flex-col gap-2 pt-3">
-          {[0, 1, 2].map((index) => (
-            <Skeleton key={index} className="h-11 w-full rounded-lg" />
-          ))}
-        </div>
-      ) : seasonQuery.isError ? (
-        <ErrorState
-          error={seasonQuery.error}
-          title="分集加载失败"
-          onRetry={() => void seasonQuery.refetch()}
-        />
-      ) : (
-        episodes.map((episode) => {
-          const current = episode.ep_id === epId;
-          return (
-            <button
-              key={episode.ep_id}
-              type="button"
-              aria-current={current || undefined}
-              onClick={() =>
-                onNavigate({
-                  bvid: episode.bvid,
-                  cid: episode.cid,
-                  epId: episode.ep_id,
-                  title: episode.long_title || episode.title,
-                  aid: episode.aid,
-                })
+    <div className="flex min-h-0 flex-col">
+      {/* 播放控制栏 */}
+      {episodes.length > 1 && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-border/50 px-2 py-2">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1.5 px-2.5 text-xs"
+                  onClick={handlePlayAll}
+                >
+                  <Play className="size-3.5" />
+                  <span>播放全部</span>
+                </Button>
               }
-              className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-                current && "bg-primary/10",
-              )}
-            >
-              <span
+            />
+            <TooltipContent>从第一集开始播放</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1.5 px-2.5 text-xs"
+                  onClick={handleContinuePlay}
+                >
+                  <ListMusic className="size-3.5" />
+                  <span>加入列表</span>
+                </Button>
+              }
+            />
+            <TooltipContent>从当前集开始播放列表</TooltipContent>
+          </Tooltip>
+
+          <div className="flex-1" />
+
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className={cn(
+                    "size-8 shrink-0",
+                    playlistStore.reversed && "bg-primary/10 text-primary",
+                  )}
+                  onClick={() => playlistStore.toggleReversed()}
+                  aria-pressed={playlistStore.reversed}
+                >
+                  {playlistStore.reversed ? (
+                    <ListOrdered className="size-4" />
+                  ) : (
+                    <Shuffle className="size-4" />
+                  )}
+                </Button>
+              }
+            />
+            <TooltipContent>
+              {playlistStore.reversed ? "正序播放" : "倒序播放"}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        {seasonQuery.isPending ? (
+          <div className="flex flex-col gap-2 pt-3">
+            {[0, 1, 2].map((index) => (
+              <Skeleton key={index} className="h-11 w-full rounded-lg" />
+            ))}
+          </div>
+        ) : seasonQuery.isError ? (
+          <ErrorState
+            error={seasonQuery.error}
+            title="分集加载失败"
+            onRetry={() => void seasonQuery.refetch()}
+          />
+        ) : (
+          episodes.map((episode) => {
+            const current = episode.ep_id === epId;
+            return (
+              <button
+                key={episode.ep_id}
+                type="button"
+                aria-current={current || undefined}
+                onClick={() =>
+                  onNavigate({
+                    bvid: episode.bvid,
+                    cid: episode.cid,
+                    epId: episode.ep_id,
+                    title: episode.long_title || episode.title,
+                    aid: episode.aid,
+                  })
+                }
                 className={cn(
-                  "min-w-7 shrink-0 text-center text-xs tabular-nums",
-                  current ? "font-semibold text-primary" : "text-muted-foreground",
+                  "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
+                  current && "bg-primary/10",
                 )}
               >
-                {episode.title || "·"}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[13px]">
-                {episode.long_title || episode.title}
-              </span>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                {formatVideoDuration(episode.duration)}
-              </span>
-            </button>
-          );
-        })
-      )}
+                <span
+                  className={cn(
+                    "min-w-7 shrink-0 text-center text-xs tabular-nums",
+                    current ? "font-semibold text-primary" : "text-muted-foreground",
+                  )}
+                >
+                  {episode.title || "·"}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px]">
+                  {episode.long_title || episode.title}
+                </span>
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                  {formatVideoDuration(episode.duration)}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -607,7 +725,7 @@ export function VideoSidebar({
               </div>
             </div>
             {archive.desc && (
-              <p className="mt-2 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-2 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground max-lg:hidden">
                 {archive.desc}
               </p>
             )}

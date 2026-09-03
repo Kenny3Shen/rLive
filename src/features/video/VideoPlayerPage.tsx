@@ -39,7 +39,8 @@ import {
   videoDanmakuSegmentsFor,
   type VideoDanmakuEntry,
 } from "./videoDanmaku";
-import { VIDEO_HOME_PATH, parseVideoPlayParams } from "./videoRoute";
+import { VIDEO_HOME_PATH, parseVideoPlayParams, videoPlayPath } from "./videoRoute";
+import { usePlaylistStore } from "./playlistStore";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const SINGLE_CLICK_DELAY_MS = 220;
@@ -108,6 +109,24 @@ export function VideoPlayerPage() {
   useScreenWakeLock(!paused && !loading && !playbackError);
 
   const cid = params?.cid ?? 0;
+
+  // 播放列表状态
+  const playlistStore = usePlaylistStore();
+  const nextItem = playlistStore.getNextItem();
+  const prevItem = playlistStore.getPreviousItem();
+
+  // 当前播放项更新时同步到 store
+  useEffect(() => {
+    if (params && playlistStore.items.length > 0) {
+      const currentId = `${params.bvid || ""}_${params.cid}`;
+      if (playlistStore.currentId !== currentId) {
+        const exists = playlistStore.items.some((item) => item.id === currentId);
+        if (exists) {
+          playlistStore.setCurrentItem(currentId);
+        }
+      }
+    }
+  }, [params, playlistStore]);
 
   /**
    * 取播放信息。
@@ -315,7 +334,23 @@ export function VideoPlayerPage() {
       if (!cancelled) setWaiting(false);
     }
     function onEnded() {
-      if (!cancelled) setPaused(true);
+      if (cancelled) return;
+      setPaused(true);
+      // 自动播放下一集
+      if (playlistStore.autoPlayNext && nextItem) {
+        setTimeout(() => {
+          if (cancelled) return;
+          navigate(
+            videoPlayPath({
+              bvid: nextItem.bvid,
+              cid: nextItem.cid,
+              epId: nextItem.epId,
+              title: nextItem.title,
+              aid: nextItem.aid,
+            }),
+          );
+        }, 1_000);
+      }
     }
     function onNativeError() {
       if (cancelled || !media.error) return;
@@ -583,12 +618,34 @@ export function VideoPlayerPage() {
       } else if (key === "arrowright") {
         event.preventDefault();
         seekTo(currentTime + 5);
+      } else if ((key === "n" || key === "]") && nextItem && !event.repeat) {
+        event.preventDefault();
+        navigate(
+          videoPlayPath({
+            bvid: nextItem.bvid,
+            cid: nextItem.cid,
+            epId: nextItem.epId,
+            title: nextItem.title,
+            aid: nextItem.aid,
+          }),
+        );
+      } else if ((key === "p" || key === "[") && prevItem && !event.repeat) {
+        event.preventDefault();
+        navigate(
+          videoPlayPath({
+            bvid: prevItem.bvid,
+            cid: prevItem.cid,
+            epId: prevItem.epId,
+            title: prevItem.title,
+            aid: prevItem.aid,
+          }),
+        );
       } else {
         return;
       }
       revealControls();
     },
-    [currentTime, fullscreen, revealControls, seekTo, toggleMute, togglePlayback],
+    [currentTime, fullscreen, revealControls, seekTo, toggleMute, togglePlayback, nextItem, prevItem, navigate],
   );
 
   const goBack = useCallback(() => {
@@ -676,6 +733,86 @@ export function VideoPlayerPage() {
       </span>
     </div>
   );
+
+  const playlistPosition = playlistStore.getCurrentPosition();
+  const playlistCenterSlot =
+    playlistStore.items.length > 1 && playlistPosition ? (
+      <div className="flex shrink-0 items-center gap-1 px-1.5 text-white/75">
+        <span className="whitespace-nowrap font-mono text-[11px] tabular-nums">
+          {playlistPosition.current} / {playlistPosition.total}
+        </span>
+      </div>
+    ) : undefined;
+
+  const playlistSettings =
+    playlistStore.items.length > 1 ? (
+      <div className="flex flex-col gap-1 px-1 py-1">
+        <button
+          type="button"
+          onClick={() => playlistStore.toggleAutoPlayNext()}
+          className="flex min-h-9 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
+        >
+          <div
+            className={cn(
+              "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
+              playlistStore.autoPlayNext
+                ? "border-primary bg-primary"
+                : "border-muted-foreground/50",
+            )}
+          >
+            {playlistStore.autoPlayNext && (
+              <svg
+                viewBox="0 0 12 12"
+                fill="none"
+                className="size-3 text-primary-foreground"
+                aria-hidden="true"
+              >
+                <path
+                  d="M10 3L4.5 8.5L2 6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </div>
+          <span className="flex-1">自动播放下一集</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => playlistStore.toggleReversed()}
+          className="flex min-h-9 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
+        >
+          <div
+            className={cn(
+              "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
+              playlistStore.reversed
+                ? "border-primary bg-primary"
+                : "border-muted-foreground/50",
+            )}
+          >
+            {playlistStore.reversed && (
+              <svg
+                viewBox="0 0 12 12"
+                fill="none"
+                className="size-3 text-primary-foreground"
+                aria-hidden="true"
+              >
+                <path
+                  d="M10 3L4.5 8.5L2 6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </div>
+          <span className="flex-1">倒序播放</span>
+        </button>
+      </div>
+    ) : undefined;
 
   const fatalError = playInfoQuery.isError ? playInfoQuery.error : null;
 
@@ -775,7 +912,11 @@ export function VideoPlayerPage() {
               stackedBelowPlayer={compact}
               compact={compact}
               portalContainer={stageRef}
+              centerSlot={playlistCenterSlot}
               timeline={timeline}
+              playbackSettings={playlistSettings}
+              playbackSettingsTitle="播放列表设置"
+              playbackSettingsLabel={playlistStore.items.length > 1 ? "播放列表" : undefined}
               qualities={playInfo?.accept_quality.map((quality) => ({
                 quality: quality.label,
                 // 不可用档位仍列出但置灰：匿名/非大会员能直接看出画质上限的
