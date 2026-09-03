@@ -1,6 +1,8 @@
 import { invokeCmd } from "@/shared/api/tauri";
 import type {
   PgcListPage,
+  VideoArchive,
+  VideoCommentPage,
   VideoDanmakuSegment,
   VideoListPage,
   VideoPlayInfo,
@@ -80,4 +82,32 @@ export function videoGetDanmaku(cid: number, segmentIndex: number): Promise<Vide
  */
 export function videoStopPlay(sessionIds: VideoSessionIds): Promise<void> {
   return invokeCmd<void>("video_stop_play", { sessionIds }).catch(() => undefined);
+}
+
+/** 相关视频（UGC）。一次返回全部，无分页。 */
+export function videoGetRelated(bvid: string): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_get_related", { bvid });
+}
+
+/** 稿件详情：右侧栏的简介/统计，以及 URL 直入时补齐评论区的 aid。 */
+export function videoGetArchive(bvid: string): Promise<VideoArchive> {
+  return invokeCmd<VideoArchive>("video_get_archive", { bvid });
+}
+
+/** 评论首页（游标翻页）。mode：2 按时间、3 按热度；next 首次传 0。 */
+export function videoGetComments(
+  aid: string,
+  mode: number,
+  next: number,
+): Promise<VideoCommentPage> {
+  return invokeCmd<VideoCommentPage>("video_get_comments", { aid, mode, next });
+}
+
+/** 二级回复（pn 翻页，首传 page = 1）。 */
+export function videoGetCommentReplies(
+  aid: string,
+  root: number,
+  page: number,
+): Promise<VideoCommentPage> {
+  return invokeCmd<VideoCommentPage>("video_get_comment_replies", { aid, root, page });
 }

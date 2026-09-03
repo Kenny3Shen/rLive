@@ -172,3 +172,58 @@ export type VideoDanmakuSegment = {
 
 /** UGC 分区条目：`[名称, rid]`，由 `video_zone_list` 提供以免前端硬编码。 */
 export type VideoZone = [string, number];
+
+/** 稿件详情（`x/web-interface/view`）。播放页右侧栏用它拿简介/统计与评论区的 aid。 */
+export type VideoArchive = {
+  bvid: string;
+  /** 见 `VideoItem.aid`：字符串传输，避免丢精度。 */
+  aid: string;
+  title: string;
+  desc: string;
+  author: string;
+  author_face: string | null;
+  view: number;
+  danmaku: number;
+  reply: number;
+  pubdate: number;
+};
+
+/** 评论内联表情（`[大哭]` 之类的占位符 → 图片 URL）。 */
+export type VideoEmote = {
+  /** 占位符原文，如 `[大哭]`。 */
+  text: string;
+  url: string;
+};
+
+/** 一条评论（或二级回复，两者同构）。 */
+export type VideoComment = {
+  rpid: number;
+  /** 发布者 mid，原样透传。 */
+  mid: string;
+  uname: string;
+  /** 头像可能缺失，需容错。 */
+  avatar: string | null;
+  /** 用户等级（0-6 级，0 表示缺失）。 */
+  level: number;
+  message: string;
+  emotes: VideoEmote[];
+  /** 图片评论的图片地址。 */
+  pictures: string[];
+  like: number;
+  /** 发布时间，Unix 秒。 */
+  ctime: number;
+  /** 二级回复总数。 */
+  rcount: number;
+  /** 主接口附带的二级回复预览（前 2-3 条）。 */
+  replies: VideoComment[];
+};
+
+/** 一页评论（游标翻页）。 */
+export type VideoCommentPage = {
+  /** 评论区总条数（一级评论数，不含二级回复）。 */
+  all_count: number;
+  /** 下一页游标；`has_more` 为 false 时不再有意义。 */
+  next: number;
+  has_more: boolean;
+  items: VideoComment[];
+};

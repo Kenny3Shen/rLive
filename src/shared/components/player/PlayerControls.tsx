@@ -175,7 +175,7 @@ export type PlayerControlsProps = {
   asrTranslationBusy?: boolean;
   asrSpeakerDiarizationEnabled?: boolean;
   asrSettingsPending?: boolean;
-  qualities?: { quality: string }[];
+  qualities?: { quality: string; disabled?: boolean; hint?: string }[];
   qualityIndex?: number;
   lines?: PlayUrl[];
   lineIndex?: number;
@@ -471,13 +471,17 @@ export function PlayerControls({
                 key={`${quality.quality}-${index}`}
                 variant="ghost"
                 size="sm"
+                disabled={quality.disabled}
+                title={quality.hint}
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   overlayStreamSettingsOptionClass,
                   selected && glassOptionSelectedClass(),
+                  quality.disabled && "opacity-50",
                 )}
                 aria-pressed={selected}
                 onClick={() => {
+                  if (quality.disabled) return;
                   onQualityChange?.(index);
                   closeStreamSettings();
                 }}

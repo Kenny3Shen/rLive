@@ -436,6 +436,20 @@ impl BilibiliSite {
             .await
     }
 
+    /// WBI 签名但不携带任何 cookie（也不引导 buvid）。
+    ///
+    /// 给评论区这类「匿名 + 设备 id 会被截断成 3 条、裸请求又会吃 -352」的接口用：
+    /// 签名路径放行，无 cookie 才给全量。登录态请改用 [`Self::get_json_signed`]。
+    async fn get_public_json_signed(
+        &self,
+        url: &str,
+        params: BTreeMap<String, String>,
+    ) -> AppResult<String> {
+        let signed = self.signed_query(params).await?;
+        self.get_json_request(url, &signed, true, ResponseChecks::Standard)
+            .await
+    }
+
     /// 为房间聊天 WebSocket 解析 token 与 websocket 主机列表。
     ///
     /// `getDanmuInfo` 处于 WBI 风控之后，对所有未签名请求一律回答 `code = -352`，
